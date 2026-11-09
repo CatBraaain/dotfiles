@@ -1,134 +1,297 @@
 import assert from "node:assert/strict";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import * as fs from "node:fs/promises";
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { createServer } from "node:net";
+import { readlinkSync } from "node:fs";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, describe, it, spyOn } from "bun:test";
+import { parse } from "shell-quote";
+import { describe, it } from "bun:test";
 import {
-  getAgentDir,
+  createEventBus,
   type ExtensionAPI,
-  type ExtensionCommandContext,
   type ExtensionContext,
+  type ExtensionCommandContext,
   type ExtensionEvent,
-  type RegisteredCommand,
 } from "@earendil-works/pi-coding-agent";
 import { childInvocationArgs, subagentSessionDir } from "../agents/index.ts";
+import {
+  registerBackgroundBash,
+  type BackgroundBashOutcome as ToolExecutionOutcome,
+} from "../tools/background-bash.ts";
 import sessionStateExtension, {
-  archiveSession,
-  clearSessionState,
-  getSessionState,
   parseStore,
-  serializeStore,
-  setSessionState,
   unarchiveSession,
+  archiveSession,
+  serializeStore,
+  type SessionStateStore as ActiveSessionsStore,
   type SessionStateStore,
 } from "./index.ts";
+import { phaseOptionValue } from "./tmux.ts";
 
-const STORE_UPDATE_TIMEOUT_MS = 1_000;
+type EventHandler = (event: ExtensionEvent, ctx: ExtensionContext) => unknown;
+type KeywordResponse = (command: string) => ToolExecutionOutcome | Promise<ToolExecutionOutcome>;
 
-type EventHandler = (event: { type: string; reason?: string }, ctx: ExtensionContext) => unknown;
-type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
+const WAIT_TIMEOUT_MS = 3_000;
 
-interface SessionHarness {
-  storePath: string;
-  workspacePath: string;
-  sessionId: string;
-  commands: Map<string, Command>;
-  storeReads: ReturnType<typeof spyOn<typeof fs, "readFile">>;
-  emit(type: string): Promise<void>;
-  command(name: string): Promise<void>;
+class FakeTmuxServer {
+  readonly commands: string[] = [];
+  readonly responses: Partial<Record<string, KeywordResponse>> = {};
+  private pendingCount = 0;
+  private readonly paneOptions = new Map<string, string>();
+
+  constructor(readonly socketPath: string) {}
+
+  setPaneOption(paneId: string, value: string | undefined): void {
+    if (value === undefined) this.paneOptions.delete(paneId);
+    else this.paneOptions.set(paneId, value);
+  }
+
+  paneOptionOf(paneId: string): string | undefined {
+    return this.paneOptions.get(paneId);
+  }
+
+  hasPending(): boolean {
+    return this.pendingCount > 0;
+  }
+
+  async run(command: string): Promise<ToolExecutionOutcome> {
+    this.pendingCount++;
+    try {
+      this.commands.push(command);
+      const argv = parse(command) as string[];
+      const keyword = argv[3]!;
+      const custom = this.responses[keyword]?.(command);
+      if (custom) return await custom;
+      if (keyword === "display-message") return completedResult(this.verifiedFieldsLine());
+      if (keyword === "show-options") {
+        const paneId = argv[argv.indexOf("-t") + 1]!;
+        const value = this.paneOptions.get(paneId);
+        return completedResult(value ?? "");
+      }
+      if (keyword === "set-option") {
+        const paneId = argv[argv.indexOf("-t") + 1]!;
+        if (argv.includes("-u")) this.paneOptions.delete(paneId);
+        else this.paneOptions.set(paneId, argv.at(-1)!);
+        return completedResult("");
+      }
+      return completedResult(`unexpected tmux keyword: ${keyword}`, true);
+    } finally {
+      this.pendingCount--;
+    }
+  }
+
+  private verifiedFieldsLine(): string {
+    const fields = [
+      this.socketPath,
+      "4242",
+      "%0",
+      readlinkSync("/proc/self/fd/0"),
+      String(process.pid),
+    ];
+    return fields.join("\t");
+  }
 }
 
-async function withSessionHarness(
-  options: { agent: string; mode?: "new" | "resume" | "fork" | "vision"; customDir?: boolean },
-  test: (harness: SessionHarness) => Promise<void>,
-): Promise<void> {
-  const tempRoot = "/tmp/work/dotfiles/skip-subagent-session-state";
-  mkdirSync(tempRoot, { recursive: true });
-  const agentDir = mkdtempSync(join(tempRoot, "unit-"));
+function completedResult(text: string, isError = false): ToolExecutionOutcome {
+  return {
+    status: "completed",
+    result: {
+      content: [{ type: "text", text }],
+      details: {},
+      ...(isError ? { isError: true } : {}),
+    },
+  };
+}
+
+async function finishEventLoopTurn(): Promise<void> {
+  await setImmediate();
+}
+
+async function waitFor(label: string, predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + WAIT_TIMEOUT_MS;
+  while (!predicate()) {
+    if (Date.now() > deadline) assert.fail(`timeout waiting for ${label}`);
+    await setImmediate();
+  }
+}
+
+interface ExtensionHarness {
+  agentDir: string;
+  storePath: string;
+  commands: Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>;
+  command(name: string): Promise<void>;
+  server: FakeTmuxServer;
+  notifications: { message: string; level: string | undefined }[];
+  sessionId: string;
+  emit(type: string, fields?: Record<string, unknown>): Promise<void>;
+  disposeBashReceiver(): void;
+  restoreBashReceiver(): void;
+  restartRuntime(): void;
+  abortRun(): void;
+  close(): Promise<void>;
+}
+
+async function createExtensionHarness(
+  options: {
+    agent?: string;
+    mode?: "new" | "resume" | "fork" | "vision";
+    customDir?: boolean;
+    dedicated?: boolean;
+  } = {},
+): Promise<ExtensionHarness> {
+  await mkdir("/tmp/work/dotfiles", { recursive: true });
+  const agentDir = await mkdtemp("/tmp/work/dotfiles/session-state-extension-");
+  const stoppedKey = Symbol.for("pi.session-state.publication-stopped");
+  const previousStopped = Reflect.get(process, stoppedKey);
+  const runController = new AbortController();
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-  const previousAgentName = process.env.PI_AGENT_NAME;
   process.env.PI_CODING_AGENT_DIR = agentDir;
-  process.env.PI_AGENT_NAME = options.agent;
+
+  const runtimeDir = await mkdtemp("/tmp/work/dotfiles/session-state-runtime-");
+  const socketPath = join(runtimeDir, "pi-tmux", "server.sock");
+  await mkdir(dirname(socketPath), { recursive: true });
+  const socket = createServer();
+  await new Promise<void>((resolve, reject) => {
+    socket.once("error", reject);
+    socket.listen(socketPath, resolve);
+  });
+  const previousRuntimeEnv = {
+    XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
+    TMUX: process.env.TMUX,
+    TMUX_PANE: process.env.TMUX_PANE,
+  };
+  const agent = options.agent ?? "main";
+  process.env.XDG_RUNTIME_DIR = runtimeDir;
+  if (options.dedicated === false) {
+    process.env.TMUX = `/other/socket,4242`;
+    process.env.TMUX_PANE = "%0";
+  } else {
+    process.env.TMUX = `${socketPath},4242`;
+    process.env.TMUX_PANE = "%0";
+  }
+  const previousAgentName = process.env.PI_AGENT_NAME;
+  process.env.PI_AGENT_NAME = agent;
+
   const workspacePath = join(agentDir, "workspace: child");
-  const sessionId = "current-session";
+  const harnessSessionId = { value: "s1" };
   const childDir = subagentSessionDir(workspacePath);
   const childSession =
     options.mode === "resume" || options.mode === "fork"
       ? { path: join(childDir, "existing-session.jsonl"), fork: options.mode === "fork" }
       : undefined;
-  const args = childInvocationArgs(options.agent, "test task", workspacePath, childSession);
+  const args = childInvocationArgs(agent, "test task", workspacePath, childSession);
   const sessionDir =
     options.mode === undefined
       ? options.customDir
         ? join(agentDir, "custom", "subagents")
         : dirname(childDir)
       : `${args[args.indexOf("--session-dir") + 1]}/../subagents/`;
+
   const handlers = new Map<string, EventHandler[]>();
-  const commands = new Map<string, Command>();
-  const ctx = {
+  const bus = createEventBus();
+  const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
+  const notifications: { message: string; level: string | undefined }[] = [];
+  const server = new FakeTmuxServer(socketPath);
+  const context = {
+    signal: runController.signal,
     hasUI: true,
-    ui: { notify() {} },
     sessionManager: {
       getCwd: () => workspacePath,
-      getSessionId: () => sessionId,
+      getSessionId: () => harnessSessionId.value,
+      getSessionFile: () => undefined,
       getSessionDir: () => sessionDir,
       getHeader: () => ({ parentSession: "/ordinary/top-level-parent.jsonl" }),
     },
-  } as unknown as ExtensionCommandContext;
+    ui: {
+      notify(message: string, level?: string) {
+        notifications.push({ message, level });
+      },
+    },
+  } as unknown as ExtensionContext;
+  const events: ExtensionAPI["events"] = bus;
   const pi = {
     on(type: string, handler: EventHandler) {
       const registered = handlers.get(type) ?? [];
       registered.push(handler);
       handlers.set(type, registered);
     },
-    registerCommand(name: string, command: Command) {
+    events,
+    registerCommand(name: string, command: Parameters<ExtensionAPI["registerCommand"]>[1]) {
       commands.set(name, command);
     },
-    getFlag: () => options.agent,
   } as unknown as ExtensionAPI;
-  const storeReads = spyOn(fs, "readFile");
+
   sessionStateExtension(pi);
-  const harness: SessionHarness = {
+  function connectBashReceiver() {
+    return registerBackgroundBash(events, async (request) => {
+      const params = request.params as { command: string; timeout?: number };
+      const outcome = await server.run(params.command);
+      if (outcome.status === "completed") return outcome.result;
+      if (outcome.status === "failed" || outcome.status === "unavailable") throw outcome.error;
+      throw outcome.reason;
+    });
+  }
+  let disposeBashReceiver = connectBashReceiver();
+
+  const harness: ExtensionHarness = {
+    agentDir,
     storePath: join(agentDir, "session-state.json"),
-    workspacePath,
-    sessionId,
     commands,
-    storeReads,
-    async emit(type) {
-      for (const handler of handlers.get(type) ?? []) {
-        await handler(
-          { type, reason: options.mode === "vision" ? "startup" : (options.mode ?? "startup") },
-          ctx,
-        );
-      }
-    },
     async command(name) {
       const command = commands.get(name);
-      assert.ok(command, `command: ${name}`);
-      await command.handler("", ctx);
+      assert.ok(command);
+      await command.handler("", context as ExtensionCommandContext);
+    },
+    server,
+    notifications,
+    get sessionId() {
+      return harnessSessionId.value;
+    },
+    set sessionId(value: string) {
+      harnessSessionId.value = value;
+    },
+    async emit(type, fields = {}) {
+      const event = { type, ...fields } as ExtensionEvent;
+      for (const handler of handlers.get(type) ?? []) {
+        const result = await handler(event, context);
+        assert.equal(result, undefined);
+      }
+    },
+    disposeBashReceiver() {
+      disposeBashReceiver();
+    },
+    restoreBashReceiver() {
+      disposeBashReceiver();
+      disposeBashReceiver = connectBashReceiver();
+    },
+    restartRuntime() {
+      handlers.clear();
+      commands.clear();
+      sessionStateExtension(pi);
+    },
+    abortRun() {
+      runController.abort(new Error("run aborted"));
+    },
+    async close() {
+      await harness.emit("session_shutdown");
+      disposeBashReceiver();
+      await new Promise<void>((resolve) => socket.close(() => resolve()));
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
+      else process.env.PI_AGENT_NAME = previousAgentName;
+      for (const [key, value] of Object.entries(previousRuntimeEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      await rm(agentDir, { recursive: true, force: true });
+      await rm(runtimeDir, { recursive: true, force: true });
+      if (previousStopped === undefined) Reflect.deleteProperty(process, stoppedKey);
+      else Reflect.set(process, stoppedKey, previousStopped);
     },
   };
-  try {
-    await test(harness);
-  } finally {
-    if (commands.has("unarchive")) await harness.command("unarchive");
-    storeReads.mockRestore();
-    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-    if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
-    else process.env.PI_AGENT_NAME = previousAgentName;
-    rmSync(agentDir, { recursive: true, force: true });
-  }
+  return harness;
 }
 
 const lifecycleEvents = [
@@ -137,131 +300,804 @@ const lifecycleEvents = [
   "agent_start",
   "ui_prompt_start",
   "ui_prompt_end",
+  "message_update",
   "agent_settled",
-  "ui_prompt_end",
   "session_shutdown",
-];
+] as const;
 
 describe("sessionStateExtension in child sessions", () => {
   for (const mode of ["new", "resume", "fork", "vision"] as const) {
+    it(`leaves an absent store absent during the ${mode} child lifecycle`, async () => {
+      const h = await createExtensionHarness({
+        mode,
+        agent: mode === "vision" ? "vision" : "main",
+      });
+      try {
+        for (const event of lifecycleEvents) await h.emit(event);
+        assert.equal(existsSync(h.storePath), false);
+        assert.deepEqual([...h.commands.keys()], []);
+        assert.deepEqual(h.server.commands, []);
+      } finally {
+        await h.close();
+      }
+    });
+  }
+  for (const mode of ["new", "resume", "fork", "vision"] as const) {
     const agent = mode === "vision" ? "vision" : "main";
 
-    it(`does not create a store during the ${mode} child lifecycle`, async () => {
-      await withSessionHarness({ agent, mode }, async (harness) => {
-        for (const event of lifecycleEvents) {
-          await harness.emit(event);
-          assert.equal(harness.storeReads.mock.calls.length, 0, `event: ${event}`);
-          assert.equal(existsSync(harness.storePath), false, `event: ${event}`);
-        }
-      });
-    });
-
-    it(`preserves existing entries and store bytes during the ${mode} child lifecycle`, async () => {
-      await withSessionHarness({ agent, mode }, async (harness) => {
-        const original = JSON.stringify({
+    it(`does not update membership or publish during the ${mode} child lifecycle`, async () => {
+      const harness = await createExtensionHarness({ agent, mode });
+      try {
+        const legacy = JSON.stringify({
           "active-workspaces": {
-            [harness.workspacePath]: {
-              "active-sessions": {
-                [harness.sessionId]: { lock: true, state: "running", custom: "keep" },
-                other: { lock: false, state: "waiting-user" },
-              },
+            [join(harness.agentDir, "workspace: child")]: {
+              "active-sessions": { s1: { lock: true, state: "running", custom: "keep" } },
               pinned: true,
             },
           },
           custom: ["keep"],
         });
-        writeFileSync(harness.storePath, original);
+        writeFileSync(harness.storePath, legacy);
         const before = statSync(harness.storePath, { bigint: true });
+
         for (const event of lifecycleEvents) {
           await harness.emit(event);
-          assert.equal(harness.storeReads.mock.calls.length, 0, `event: ${event}`);
-          assert.equal(readFileSync(harness.storePath, "utf8"), original, `event: ${event}`);
+          await finishEventLoopTurn();
+          assert.equal(harness.server.commands.length, 0, `event: ${event}`);
+          assert.equal(readFileSync(harness.storePath, "utf8"), legacy, `event: ${event}`);
           const after = statSync(harness.storePath, { bigint: true });
           assert.deepEqual(
             [after.ino, after.mtimeNs],
             [before.ino, before.mtimeNs],
             `event: ${event}`,
           );
+          assert.deepEqual([...harness.commands.keys()], [], `event: ${event}`);
         }
-      });
-    });
-
-    it(`does not provide archive commands in the ${mode} child`, async () => {
-      await withSessionHarness({ agent, mode }, async (harness) => {
-        await harness.emit("session_start");
-        assert.deepEqual([...harness.commands.keys()], []);
-      });
+      } finally {
+        await harness.close();
+      }
     });
   }
 });
 
 describe("sessionStateExtension in top-level sessions", () => {
   for (const agent of ["main", "senior", "junior", "vision", "chat"]) {
-    it(`preserves phase updates for a top-level ${agent} session with a parent header`, async () => {
-      await withSessionHarness({ agent, customDir: agent === "vision" }, async (harness) => {
+    it(`publishes the phase sequence for a top-level ${agent} session with a parent header`, async () => {
+      const harness = await createExtensionHarness({ agent, customDir: agent === "vision" });
+      try {
         const phases = [
           ["session_start", "waiting-user"],
           ["agent_start", "running"],
           ["ui_prompt_start", "waiting-approval"],
           ["ui_prompt_end", "running"],
           ["agent_settled", "waiting-user"],
-          ["ui_prompt_end", "waiting-user"],
+          ["input", "waiting-user"],
           ["agent_end", "waiting-user"],
-          ["session_shutdown", undefined],
         ] as const;
-        for (const [event, expectedState] of phases) {
+        for (const [event, expectedPhase] of phases) {
           await harness.emit(event);
-          await harness.command("unarchive");
-          const store = JSON.parse(readFileSync(harness.storePath, "utf8")) as SessionStateStore;
-          assert.equal(
-            getSessionState(store, harness.workspacePath, harness.sessionId),
-            expectedState,
-            `event: ${event}`,
-          );
+          await waitFor(`phase ${expectedPhase} on ${event}`, () => {
+            const value = harness.server.paneOptionOf("%0");
+            return (
+              value !== undefined && value === phaseOptionValue(harness.sessionId, expectedPhase)
+            );
+          });
         }
-      });
-    });
 
-    it(`preserves commands and automatic unarchive for a top-level ${agent} session`, async () => {
-      await withSessionHarness({ agent }, async (harness) => {
-        await harness.emit("session_start");
-        assert.deepEqual([...harness.commands.keys()].sort(), ["archive", "unarchive"]);
-        await harness.command("archive");
-        const archived = JSON.parse(readFileSync(harness.storePath, "utf8")) as SessionStateStore;
-        assert.equal(
-          archived["active-workspaces"][harness.workspacePath]?.["active-sessions"]?.[
-            harness.sessionId
-          ],
-          undefined,
-        );
-        await harness.emit("input");
-        const deadline = Date.now() + STORE_UPDATE_TIMEOUT_MS;
-        while (Date.now() < deadline) {
-          const current = JSON.parse(readFileSync(harness.storePath, "utf8")) as SessionStateStore;
-          if (
-            current["active-workspaces"][harness.workspacePath]?.["active-sessions"]?.[
-              harness.sessionId
-            ]
-          )
-            break;
-          await setImmediate();
-        }
-        const active = JSON.parse(readFileSync(harness.storePath, "utf8")) as SessionStateStore;
-        assert.deepEqual(
-          active["active-workspaces"][harness.workspacePath]?.["active-sessions"]?.[
-            harness.sessionId
-          ],
-          { lock: false },
-        );
-        await harness.command("archive");
-        await harness.command("unarchive");
-        const unarchived = JSON.parse(readFileSync(harness.storePath, "utf8")) as SessionStateStore;
-        assert.deepEqual(unarchived, active);
+        await harness.emit("session_shutdown");
+        assert.equal(harness.server.paneOptionOf("%0"), undefined);
+      } finally {
+        await harness.close();
+      }
+    });
+  }
+
+  it("detects the managed pane once per session_start and reuses the binding", async () => {
+    const harness = await createExtensionHarness();
+    try {
+      await harness.emit("session_start");
+      await waitFor("waiting-user", () => harness.server.paneOptionOf("%0") !== undefined);
+      await harness.emit("agent_start");
+      await waitFor(
+        "running",
+        () => harness.server.paneOptionOf("%0") === phaseOptionValue("s1", "running"),
+      );
+      await harness.emit("message_update");
+      await finishEventLoopTurn();
+
+      const displayCount = harness.server.commands.filter((command) =>
+        command.includes("display-message"),
+      ).length;
+      assert.equal(displayCount, 1);
+      assert.ok(harness.server.commands[0]!.includes(`-S ${harness.server.socketPath}`));
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("publishes nothing outside the managed pane and still updates membership on input", async () => {
+    const harness = await createExtensionHarness({ dedicated: false });
+    try {
+      await harness.emit("session_start");
+      await harness.emit("agent_start");
+      await finishEventLoopTurn();
+      assert.deepEqual(harness.server.commands, []);
+
+      await harness.emit("input");
+      await waitFor("membership store", () => existsSync(harness.storePath));
+      const store = JSON.parse(readFileSync(harness.storePath, "utf8")) as ActiveSessionsStore;
+      assert.deepEqual(
+        store["active-workspaces"][join(harness.agentDir, "workspace: child")]!["active-sessions"],
+        { s1: { lock: false } },
+      );
+      assert.deepEqual(harness.notifications, []);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("notifies a detection failure once and stops publishing phases", async () => {
+    const harness = await createExtensionHarness();
+    try {
+      harness.server.responses["display-message"] = () => completedResult("no such server", true);
+      await harness.emit("session_start");
+      await waitFor("detection failure notification", () =>
+        harness.notifications.some((notification) =>
+          /cannot confirm managed tmux pane/.test(notification.message),
+        ),
+      );
+
+      await harness.emit("agent_start");
+      await finishEventLoopTurn();
+      assert.equal(
+        harness.server.commands.filter((command) => command.includes("set-option")).length,
+        0,
+      );
+      assert.deepEqual(
+        harness.notifications.filter((notification) => /session phase/.test(notification.message)),
+        [],
+      );
+    } finally {
+      await harness.close();
+    }
+  });
+});
+
+const progressEvents = [
+  "session_before_compact",
+  "session_compact",
+  "session_compact_failed",
+  "context",
+  "context_with_system",
+  "before_provider_request",
+  "before_provider_headers",
+  "after_provider_response",
+  "provider_stream_event",
+  "before_agent_start",
+  "agent_end",
+  "agent_before_settle",
+  "turn_start",
+  "turn_end",
+  "message_start",
+  "message_update",
+  "message_end",
+  "tool_execution_start",
+  "tool_execution_update",
+  "tool_execution_end",
+  "tool_call",
+  "tool_result",
+] as const satisfies readonly ExtensionEvent["type"][];
+
+const unchangedEvents = [
+  "project_trust",
+  "resources_discover",
+  "session_info_changed",
+  "mcp_servers_change",
+  "model_select",
+  "thinking_level_select",
+  "session_before_switch",
+  "session_before_fork",
+  "session_before_tree",
+  "session_tree",
+  "cache_warming_decision",
+  "user_bash",
+  "input",
+] as const satisfies readonly ExtensionEvent["type"][];
+
+describe("session-state MVP phase boundaries", () => {
+  it("publishes only phase changes and never reads pane options", async () => {
+    const h = await createExtensionHarness();
+    try {
+      for (const [event, phase] of [
+        ["session_start", "waiting-user"],
+        ["agent_start", "running"],
+        ["ui_prompt_start", "waiting-approval"],
+        ["ui_prompt_end", "running"],
+        ["agent_settled", "waiting-user"],
+      ] as const) {
+        await h.emit(event);
+        await waitFor(event, () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", phase));
+        const count = h.server.commands.length;
+        await h.emit(event === "session_start" ? "ui_prompt_end" : event);
+        await finishEventLoopTurn();
+        assert.equal(h.server.commands.length, count, event);
+      }
+      assert.equal(h.server.commands.filter((c) => c.includes("display-message")).length, 1);
+      assert.equal(h.server.commands.filter((c) => c.includes("set-option")).length, 5);
+      assert.equal(
+        h.server.commands.some((c) => c.includes("show-options")),
+        false,
+      );
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("returns to waiting-user when UI ends outside a run", async () => {
+    const h = await createExtensionHarness();
+    try {
+      await h.emit("session_start");
+      await h.emit("ui_prompt_start");
+      await waitFor(
+        "approval",
+        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-approval"),
+      );
+      await h.emit("ui_prompt_end");
+      await waitFor(
+        "idle",
+        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-user"),
+      );
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("holds approval across settlement until UI closes", async () => {
+    const h = await createExtensionHarness();
+    try {
+      await h.emit("session_start");
+      await h.emit("agent_start");
+      await h.emit("ui_prompt_start");
+      await waitFor(
+        "approval",
+        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-approval"),
+      );
+      const count = h.server.commands.length;
+      for (const event of [...progressEvents, "agent_start", "agent_settled"]) await h.emit(event);
+      await finishEventLoopTurn();
+      assert.equal(h.server.commands.length, count);
+      await h.emit("ui_prompt_end");
+      await waitFor(
+        "idle",
+        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-user"),
+      );
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("ignores all progress events and external option changes", async () => {
+    const h = await createExtensionHarness();
+    try {
+      await h.emit("session_start");
+      await h.emit("agent_start");
+      await waitFor(
+        "running",
+        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "running"),
+      );
+      h.server.setPaneOption("%0", "external-value");
+      const count = h.server.commands.length;
+      for (const event of [...progressEvents, ...unchangedEvents]) await h.emit(event);
+      await h.emit("agent_start");
+      await finishEventLoopTurn();
+      assert.equal(h.server.commands.length, count);
+      assert.equal(h.server.paneOptionOf("%0"), "external-value");
+      await h.emit("agent_settled", { aborted: true });
+      await waitFor(
+        "aborted settled",
+        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-user"),
+      );
+    } finally {
+      await h.close();
+    }
+  });
+
+  for (const reason of ["startup", "reload", "new", "resume", "fork"]) {
+    it(`publishes an equal initial phase for a new ${reason} generation`, async () => {
+      const h = await createExtensionHarness();
+      try {
+        await h.emit("session_start");
+        await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+        const count = h.server.commands.length;
+        await h.emit("session_start", { reason });
+        await waitFor("new generation set", () => h.server.commands.length === count + 2);
+        assert.equal(h.server.paneOptionOf("%0"), phaseOptionValue("s1", "waiting-user"));
+      } finally {
+        await h.close();
+      }
+    });
+  }
+
+  it("preserves the latest phase after a delayed set response", async () => {
+    const h = await createExtensionHarness();
+    const pending = Promise.withResolvers<ToolExecutionOutcome>();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      h.server.responses["set-option"] = () => {
+        h.server.setPaneOption("%0", phaseOptionValue("s1", "running"));
+        return pending.promise;
+      };
+      await h.emit("agent_start");
+      await waitFor("set started", () => h.server.hasPending());
+      await h.emit("ui_prompt_start");
+      delete h.server.responses["set-option"];
+      pending.resolve(completedResult(""));
+      await waitFor(
+        "latest",
+        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-approval"),
+      );
+      await finishEventLoopTurn();
+      assert.equal(h.server.paneOptionOf("%0"), phaseOptionValue("s1", "waiting-approval"));
+      assert.deepEqual(h.notifications, []);
+    } finally {
+      pending.resolve(completedResult(""));
+      await h.close();
+    }
+  });
+
+  it("invalidates delayed old inspection on session replacement", async () => {
+    const h = await createExtensionHarness();
+    const pending = Promise.withResolvers<ToolExecutionOutcome>();
+    try {
+      h.server.responses["display-message"] = () => pending.promise;
+      await h.emit("session_start");
+      await waitFor("old inspect", () => h.server.hasPending());
+      delete h.server.responses["display-message"];
+      h.sessionId = "replacement";
+      await h.emit("session_start");
+      await finishEventLoopTurn();
+      assert.equal(h.server.commands.length, 1);
+      pending.resolve(completedResult(""));
+      await waitFor(
+        "replacement",
+        () => h.server.paneOptionOf("%0") === phaseOptionValue("replacement", "waiting-user"),
+      );
+      await waitFor("old drained", () => !h.server.hasPending());
+      assert.deepEqual(h.notifications, []);
+      assert.equal(
+        h.server.commands.some((c) => c.includes(phaseOptionValue("s1", "waiting-user"))),
+        false,
+      );
+    } finally {
+      pending.resolve(completedResult(""));
+      await h.close();
+    }
+  });
+
+  it("keeps the replacement session after an old set response arrives late", async () => {
+    const h = await createExtensionHarness();
+    const pending = Promise.withResolvers<ToolExecutionOutcome>();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      h.server.responses["set-option"] = () => {
+        h.server.setPaneOption("%0", phaseOptionValue("s1", "running"));
+        return pending.promise;
+      };
+      await h.emit("agent_start");
+      await waitFor("old set", () => h.server.hasPending());
+      delete h.server.responses["set-option"];
+      h.sessionId = "replacement";
+      await h.emit("session_start");
+      await finishEventLoopTurn();
+      assert.equal(h.server.paneOptionOf("%0"), phaseOptionValue("s1", "running"));
+      pending.resolve(completedResult(""));
+      await waitFor(
+        "replacement",
+        () => h.server.paneOptionOf("%0") === phaseOptionValue("replacement", "waiting-user"),
+      );
+      await waitFor("late response", () => !h.server.hasPending());
+      assert.equal(h.server.paneOptionOf("%0"), phaseOptionValue("replacement", "waiting-user"));
+      assert.deepEqual(h.notifications, []);
+    } finally {
+      pending.resolve(completedResult(""));
+      await h.close();
+    }
+  });
+
+  it("invalidates delayed results and unsets the option on shutdown", async () => {
+    const h = await createExtensionHarness();
+    const pending = Promise.withResolvers<ToolExecutionOutcome>();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      h.server.responses["set-option"] = () => pending.promise;
+      await h.emit("agent_start");
+      await waitFor("pending", () => h.server.hasPending());
+      delete h.server.responses["set-option"];
+      let ended = false;
+      const shutdown = h.emit("session_shutdown").then(() => {
+        ended = true;
       });
+      await finishEventLoopTurn();
+      assert.equal(ended, false);
+      pending.resolve(completedResult(""));
+      await shutdown;
+      assert.equal(h.server.paneOptionOf("%0"), undefined);
+      await waitFor("drained", () => !h.server.hasPending());
+      const count = h.server.commands.length;
+      await h.emit("agent_start");
+      await finishEventLoopTurn();
+      assert.equal(h.server.commands.length, count);
+      assert.deepEqual(h.notifications, []);
+    } finally {
+      pending.resolve(completedResult(""));
+      await h.close();
+    }
+  });
+
+  it("notifies briefly and fails closed when Tools stopped first", async () => {
+    const h = await createExtensionHarness();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      h.disposeBashReceiver();
+      await h.emit("session_shutdown");
+      assert.match(h.notifications.at(-1)!.message, /publication stopped/);
+      assert.ok(h.notifications.at(-1)!.message.length <= 220);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("reports a failed publication without retrying on progress", async () => {
+    const h = await createExtensionHarness();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      h.server.responses["set-option"] = () => completedResult("failure", true);
+      await h.emit("agent_start");
+      await waitFor("warning", () =>
+        h.notifications.some((n) => n.message.includes("cannot publish")),
+      );
+      const count = h.server.commands.length;
+      await h.emit("message_update");
+      await h.emit("agent_start");
+      await finishEventLoopTurn();
+      assert.equal(h.server.commands.length, count);
+      delete h.server.responses["set-option"];
+      await h.emit("ui_prompt_start");
+      await waitFor(
+        "next transition",
+        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-approval"),
+      );
+    } finally {
+      await h.close();
+    }
+  });
+});
+
+describe("session-state CLI execution ordering", () => {
+  it("discards an unstarted obsolete inspection behind a pending old set", async () => {
+    const h = await createExtensionHarness();
+    const finish = Promise.withResolvers<void>();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      h.server.responses["set-option"] = async () => {
+        await finish.promise;
+        h.server.setPaneOption("%0", phaseOptionValue("s1", "running"));
+        return completedResult("");
+      };
+      await h.emit("agent_start");
+      await waitFor("old set started", () => h.server.hasPending());
+      h.server.responses["display-message"] = (command) => {
+        const argv = parse(command) as string[];
+        if (argv[argv.indexOf("-t") + 1] === "%9")
+          throw new Error("obsolete inspection transport failed");
+        return completedResult(
+          [
+            h.server.socketPath,
+            "4242",
+            "%0",
+            readlinkSync("/proc/self/fd/0"),
+            String(process.pid),
+          ].join("\t"),
+        );
+      };
+      process.env.TMUX_PANE = "%9";
+      h.sessionId = "obsolete";
+      await h.emit("session_start");
+      process.env.TMUX_PANE = "%0";
+      h.sessionId = "replacement";
+      await h.emit("session_start");
+      const count = h.server.commands.length;
+      delete h.server.responses["set-option"];
+      finish.resolve();
+      await waitFor(
+        "replacement or failure",
+        () =>
+          h.notifications.length > 0 ||
+          h.server.paneOptionOf("%0") === phaseOptionValue("replacement", "waiting-user"),
+      );
+      assert.equal(
+        h.server.commands
+          .slice(count)
+          .some((command) => (parse(command) as string[]).includes("%9")),
+        false,
+      );
+      assert.equal(h.server.paneOptionOf("%0"), phaseOptionValue("replacement", "waiting-user"));
+      assert.notEqual(
+        Reflect.get(process, Symbol.for("pi.session-state.publication-stopped")),
+        true,
+      );
+      assert.deepEqual(h.notifications, []);
+    } finally {
+      process.env.TMUX_PANE = "%0";
+      finish.resolve();
+      delete h.server.responses["display-message"];
+      delete h.server.responses["set-option"];
+      await h.close();
+    }
+  });
+  for (const operation of ["set", "unset"] as const) {
+    it(`waits for the old ${operation} side effect before publishing a replacement`, async () => {
+      const h = await createExtensionHarness();
+      const finish = Promise.withResolvers<void>();
+      let shutdown: Promise<void> | undefined;
+      try {
+        await h.emit("session_start");
+        await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+        h.server.responses["set-option"] = async () => {
+          await finish.promise;
+          h.server.setPaneOption(
+            "%0",
+            operation === "unset" ? undefined : phaseOptionValue("s1", "running"),
+          );
+          return completedResult("");
+        };
+        if (operation === "set") await h.emit("agent_start");
+        else shutdown = h.emit("session_shutdown");
+        await waitFor("old command started", () => h.server.hasPending());
+        const count = h.server.commands.length;
+        h.sessionId = "replacement";
+        await h.emit("session_start");
+        await finishEventLoopTurn();
+        assert.equal(h.server.commands.length, count, "no new CLI before old execution ends");
+        assert.equal(h.server.paneOptionOf("%0"), phaseOptionValue("s1", "waiting-user"));
+        delete h.server.responses["set-option"];
+        finish.resolve();
+        await shutdown;
+        await waitFor(
+          "replacement",
+          () => h.server.paneOptionOf("%0") === phaseOptionValue("replacement", "waiting-user"),
+        );
+        await finishEventLoopTurn();
+        assert.equal(h.server.paneOptionOf("%0"), phaseOptionValue("replacement", "waiting-user"));
+        assert.deepEqual(h.notifications, []);
+      } finally {
+        finish.resolve();
+        await shutdown;
+        await h.close();
+      }
+    });
+  }
+
+  it("waits for a running CLI across run abort and then publishes settled", async () => {
+    const h = await createExtensionHarness();
+    const finish = Promise.withResolvers<void>();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      h.server.responses["set-option"] = async () => {
+        await finish.promise;
+        h.server.setPaneOption("%0", phaseOptionValue("s1", "running"));
+        return completedResult("");
+      };
+      await h.emit("agent_start");
+      await waitFor("running CLI", () => h.server.hasPending());
+      const count = h.server.commands.length;
+      h.abortRun();
+      await h.emit("agent_settled", { aborted: true });
+      await finishEventLoopTurn();
+      assert.equal(h.server.commands.length, count);
+      delete h.server.responses["set-option"];
+      finish.resolve();
+      await waitFor(
+        "settled after old CLI",
+        () =>
+          h.server.commands.length === count + 1 &&
+          h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-user"),
+      );
+      assert.equal(h.server.commands.length, count + 1);
+      assert.deepEqual(h.notifications, []);
+    } finally {
+      finish.resolve();
+      await h.close();
+    }
+  });
+
+  for (const failure of ["timeout", "receiver-stop", "throw"] as const) {
+    it(`stops all later CLI after uncertain ${failure}, including a new runtime`, async () => {
+      const h = await createExtensionHarness();
+      const finish = Promise.withResolvers<void>();
+      try {
+        await h.emit("session_start");
+        await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+        h.server.responses["set-option"] = async () => {
+          if (failure === "throw") throw new Error("transport failed");
+          await finish.promise;
+          h.server.setPaneOption("%0", phaseOptionValue("s1", "running"));
+          return completedResult("");
+        };
+        await h.emit("agent_start");
+        if (failure === "receiver-stop") {
+          await waitFor("pending CLI", () => h.server.hasPending());
+          h.disposeBashReceiver();
+        }
+        await waitFor("stopped notification", () =>
+          h.notifications.some((n) => /publication stopped/.test(n.message)),
+        );
+        const count = h.server.commands.length;
+        delete h.server.responses["set-option"];
+        h.restoreBashReceiver();
+        h.sessionId = "replacement";
+        await h.emit("session_start");
+        await h.emit("agent_start");
+        await finishEventLoopTurn();
+        assert.equal(h.server.commands.length, count);
+        h.restartRuntime();
+        await h.emit("session_start", { reason: "reload" });
+        await h.emit("ui_prompt_start");
+        await h.emit("input");
+        await h.command("unarchive");
+        await h.emit("session_shutdown");
+        assert.equal(existsSync(h.storePath), true, "input continues while publication is stopped");
+        assert.equal(h.server.commands.length, count, "new factories and cleanup remain stopped");
+        assert.equal(
+          h.notifications.filter((n) => /publication stopped/.test(n.message)).length,
+          1,
+        );
+        finish.resolve();
+        await waitFor("late execution finished", () => !h.server.hasPending());
+        assert.equal(h.server.commands.length, count);
+      } finally {
+        finish.resolve();
+        await h.close();
+      }
     });
   }
 });
 
+describe("session-state membership compatibility", () => {
+  it("keeps an absent membership store absent through phase events and shutdown", async () => {
+    const h = await createExtensionHarness();
+    try {
+      for (const event of lifecycleEvents.filter((event) => event !== "input")) await h.emit(event);
+      assert.equal(existsSync(h.storePath), false);
+    } finally {
+      await h.close();
+    }
+  });
+  it("preserves bytes, inode, old state, and unknown fields for phase-only events", async () => {
+    const h = await createExtensionHarness();
+    try {
+      const bytes = JSON.stringify({
+        "active-workspaces": {
+          [join(h.agentDir, "workspace: child")]: {
+            "active-sessions": { s1: { lock: true, state: "running", unknown: [1] } },
+            pinned: true,
+          },
+          other: { "active-sessions": { child: { state: "waiting-user" } } },
+        },
+        unknown: { state: "keep" },
+      });
+      writeFileSync(h.storePath, bytes);
+      const before = statSync(h.storePath, { bigint: true });
+      for (const [event, phase] of [
+        ["session_start", "waiting-user"],
+        ["agent_start", "running"],
+        ["ui_prompt_start", "waiting-approval"],
+        ["ui_prompt_end", "running"],
+        ["agent_settled", "waiting-user"],
+      ] as const) {
+        await h.emit(event);
+        await waitFor(event, () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", phase));
+        assert.equal(readFileSync(h.storePath, "utf8"), bytes);
+      }
+      await h.emit("session_shutdown");
+      const after = statSync(h.storePath, { bigint: true });
+      assert.deepEqual([after.ino, after.mtimeNs], [before.ino, before.mtimeNs]);
+      assert.equal(readFileSync(h.storePath, "utf8"), bytes);
+      assert.equal(existsSync(join(h.agentDir, "active-sessions.json")), false);
+      assert.equal(existsSync(join(h.agentDir, "active-sessions.json.lock")), false);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("retains an existing entry byte-for-byte on input", async () => {
+    const h = await createExtensionHarness();
+    try {
+      const bytes = JSON.stringify({
+        "active-workspaces": {
+          [join(h.agentDir, "workspace: child")]: {
+            "active-sessions": { s1: { lock: true, state: "old", custom: true } },
+          },
+        },
+      });
+      writeFileSync(h.storePath, bytes);
+      const before = statSync(h.storePath, { bigint: true });
+      await h.emit("session_start");
+      await h.emit("input");
+      await h.emit("session_shutdown");
+      assert.equal(readFileSync(h.storePath, "utf8"), bytes);
+      const after = statSync(h.storePath, { bigint: true });
+      assert.deepEqual([after.ino, after.mtimeNs], [before.ino, before.mtimeNs]);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("keeps command ordering, lock protection, notifications, and automatic unarchive", async () => {
+    const h = await createExtensionHarness();
+    try {
+      await h.emit("session_start");
+      assert.deepEqual([...h.commands.keys()].sort(), ["archive", "unarchive"]);
+      await h.command("unarchive");
+      const store = JSON.parse(readFileSync(h.storePath, "utf8"));
+      const sessions =
+        store["active-workspaces"][join(h.agentDir, "workspace: child")]["active-sessions"];
+      sessions.s1 = { lock: true, state: "keep", unknown: true };
+      sessions.other = { lock: false, state: "running" };
+      writeFileSync(h.storePath, JSON.stringify(store));
+      await h.command("archive");
+      assert.match(h.notifications.at(-1)!.message, /locked/);
+      assert.deepEqual(JSON.parse(readFileSync(h.storePath, "utf8")), store);
+      sessions.s1.lock = false;
+      writeFileSync(h.storePath, JSON.stringify(store));
+      await h.command("archive");
+      const archivedBytes = readFileSync(h.storePath, "utf8");
+      await h.command("archive");
+      assert.equal(readFileSync(h.storePath, "utf8"), archivedBytes);
+      assert.match(h.notifications.at(-1)!.message, /already archived/);
+      await h.emit("input");
+      await h.command("unarchive");
+      const active = JSON.parse(readFileSync(h.storePath, "utf8"));
+      assert.deepEqual(
+        active["active-workspaces"][join(h.agentDir, "workspace: child")]["active-sessions"],
+        { other: sessions.other, s1: { lock: false } },
+      );
+      assert.match(h.notifications.at(-1)!.message, /already active/);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("does not overwrite invalid JSON and recovers on a later input", async () => {
+    const h = await createExtensionHarness();
+    try {
+      writeFileSync(h.storePath, "{broken");
+      await h.emit("session_start");
+      await h.emit("input");
+      await h.command("unarchive");
+      assert.equal(readFileSync(h.storePath, "utf8"), "{broken");
+      assert.match(h.notifications.at(-1)!.message, /not a valid session-state store/);
+      writeFileSync(h.storePath, '{"active-workspaces":{}}');
+      await h.emit("input");
+      await h.command("unarchive");
+      assert.deepEqual(
+        JSON.parse(readFileSync(h.storePath, "utf8"))["active-workspaces"][
+          join(h.agentDir, "workspace: child")
+        ]["active-sessions"],
+        { s1: { lock: false } },
+      );
+    } finally {
+      await h.close();
+    }
+  });
+});
 describe("parseStore", () => {
   it("reads a document with active-workspaces as a valid store", () => {
     const raw = JSON.stringify({
@@ -284,7 +1120,7 @@ describe("parseStore", () => {
     });
   });
 
-  it("未知の root キーと workspace エントリの未知フィールドを保ったまま読む", () => {
+  it("preserves unknown root and workspace fields when parsing", () => {
     const raw = JSON.stringify({
       "active-workspaces": { "/tmp": { "active-sessions": { s1: { lock: false } }, pinned: true } },
       tags: ["a"],
@@ -344,12 +1180,12 @@ describe("parseStore", () => {
     }
   });
 
-  it("JSON として壊れている内容は無効", () => {
+  it("rejects invalid JSON", () => {
     assert.equal(parseStore("{oops").valid, false);
     assert.equal(parseStore("").valid, false);
   });
 
-  it("ルートがオブジェクトでない内容は無効", () => {
+  it("rejects a non-object root", () => {
     assert.equal(parseStore("[]").valid, false);
     assert.equal(parseStore("42").valid, false);
     assert.equal(parseStore("null").valid, false);
@@ -366,7 +1202,7 @@ describe("parseStore", () => {
     assert.equal(parseStore("{}").valid, false);
   });
 
-  it("active-sessions が配列の workspace エントリを持つ旧形式は無効", () => {
+  it("rejects the legacy active-sessions array format", () => {
     assert.equal(
       parseStore('{"active-workspaces":{"/w":{"active-sessions":["s1"]}}}').valid,
       false,
@@ -379,7 +1215,7 @@ describe("parseStore", () => {
 });
 
 describe("unarchiveSession", () => {
-  it("store が無いとき新規 store に自ワークスペースの entry を作る", () => {
+  it("creates its workspace entry when the store is absent", () => {
     assert.deepEqual(unarchiveSession(undefined, "/w", "s1"), {
       status: "written",
       store: {
@@ -388,7 +1224,7 @@ describe("unarchiveSession", () => {
     });
   });
 
-  it("自ワークスペースのエントリが無いときは作成し、他のワークスペースを保つ", () => {
+  it("creates its absent workspace and preserves other workspaces", () => {
     const store: SessionStateStore = {
       "active-workspaces": { "/other": { "active-sessions": { s2: { lock: false } } } },
     };
@@ -419,7 +1255,7 @@ describe("unarchiveSession", () => {
     });
   });
 
-  it("active-sessions に既に載っているときは書き込まない", () => {
+  it("skips an already listed session", () => {
     const store: SessionStateStore = {
       "active-workspaces": {
         "/w": { "active-sessions": { s1: { lock: true, state: "running" } } },
@@ -428,7 +1264,7 @@ describe("unarchiveSession", () => {
     assert.deepEqual(unarchiveSession(store, "/w", "s1"), { status: "skipped" });
   });
 
-  it("entry を追加し、active-sessions の他セッションと workspace エントリの未知フィールドを保つ", () => {
+  it("adds its entry and preserves other sessions and unknown workspace fields", () => {
     const store: SessionStateStore = {
       "active-workspaces": {
         "/w": { "active-sessions": { s2: { lock: true } }, pinned: true },
@@ -447,7 +1283,7 @@ describe("unarchiveSession", () => {
     });
   });
 
-  it("active-sessions が無い workspace エントリに active-sessions を作る", () => {
+  it("creates active-sessions in a workspace without it", () => {
     const store: SessionStateStore = {
       "active-workspaces": { "/w": { pinned: true } },
     };
@@ -459,7 +1295,7 @@ describe("unarchiveSession", () => {
     });
   });
 
-  it("active-sessions がオブジェクトでないときは新しい map で書く", () => {
+  it("replaces non-object active-sessions with a new map", () => {
     const parsed = parseStore('{"active-workspaces":{"/w":{"active-sessions":"garbage"}}}');
     assert.ok(parsed.valid);
     assert.deepEqual(unarchiveSession(parsed.store, "/w", "s1"), {
@@ -470,7 +1306,7 @@ describe("unarchiveSession", () => {
     });
   });
 
-  it("自ワークスペースのエントリがオブジェクトでないときは置き換える", () => {
+  it("replaces its non-object workspace entry", () => {
     const parsed = parseStore('{"active-workspaces":{"/w":"garbage"}}');
     assert.ok(parsed.valid);
     assert.deepEqual(unarchiveSession(parsed.store, "/w", "s1"), {
@@ -481,7 +1317,7 @@ describe("unarchiveSession", () => {
     });
   });
 
-  it("未知の root キーを保つ", () => {
+  it("preserves unknown root keys", () => {
     const store: SessionStateStore = {
       "active-workspaces": {},
       tags: ["a"],
@@ -495,7 +1331,7 @@ describe("unarchiveSession", () => {
     });
   });
 
-  it("入力の store を変更しない", () => {
+  it("does not mutate the input store", () => {
     const store: SessionStateStore = {
       "active-workspaces": {
         "/w": { "active-sessions": { s2: { lock: false }, s3: { lock: true } } },
@@ -508,36 +1344,36 @@ describe("unarchiveSession", () => {
 });
 
 describe("archiveSession", () => {
-  it("lock が true のセッションは locked を返す", () => {
+  it("returns locked for a protected session", () => {
     const store: SessionStateStore = {
       "active-workspaces": { "/w": { "active-sessions": { s1: { lock: true } } } },
     };
     assert.deepEqual(archiveSession(store, "/w", "s1"), { status: "locked" });
   });
 
-  it("active-sessions に載っていなければ書き込まない", () => {
+  it("skips a session that is not listed", () => {
     const store: SessionStateStore = {
       "active-workspaces": { "/w": { "active-sessions": { s2: { lock: false } } } },
     };
     assert.deepEqual(archiveSession(store, "/w", "s1"), { status: "skipped" });
   });
 
-  it("自ワークスペースのエントリが無いときは書き込まない", () => {
+  it("skips an absent workspace entry", () => {
     const store: SessionStateStore = { "active-workspaces": {} };
     assert.deepEqual(archiveSession(store, "/w", "s1"), { status: "skipped" });
   });
 
-  it("store が無いときも書き込まない", () => {
+  it("skips an absent store", () => {
     assert.deepEqual(archiveSession(undefined, "/w", "s1"), { status: "skipped" });
   });
 
-  it("active-sessions がオブジェクトでないときは書き込まない", () => {
+  it("skips non-object active-sessions", () => {
     const parsed = parseStore('{"active-workspaces":{"/w":{"active-sessions":"garbage"}}}');
     assert.ok(parsed.valid);
     assert.deepEqual(archiveSession(parsed.store, "/w", "s1"), { status: "skipped" });
   });
 
-  it("自セッションの entry を削除し、他のセッションと属性を保つ", () => {
+  it("removes its entry and preserves other sessions and attributes", () => {
     const store: SessionStateStore = {
       "active-workspaces": {
         "/w": {
@@ -559,7 +1395,7 @@ describe("archiveSession", () => {
     });
   });
 
-  it("削除後も空の active-sessions map を残す", () => {
+  it("preserves an empty active-sessions map after removal", () => {
     const store: SessionStateStore = {
       "active-workspaces": { "/w": { "active-sessions": { s1: { lock: false } } } },
     };
@@ -571,7 +1407,7 @@ describe("archiveSession", () => {
     });
   });
 
-  it("他のワークスペースと未知の root キーを保つ", () => {
+  it("preserves other workspaces and unknown root keys", () => {
     const store: SessionStateStore = {
       "active-workspaces": {
         "/other": { "active-sessions": { s2: { lock: false } } },
@@ -591,7 +1427,7 @@ describe("archiveSession", () => {
     });
   });
 
-  it("入力の store を変更しない", () => {
+  it("does not mutate the input store", () => {
     const store: SessionStateStore = {
       "active-workspaces": {
         "/w": { "active-sessions": { s1: { lock: false }, s2: { lock: true } } },
@@ -603,232 +1439,8 @@ describe("archiveSession", () => {
   });
 });
 
-describe("setSessionState", () => {
-  it("store が無いとき新規 store に自セッションの entry を作る", () => {
-    assert.deepEqual(setSessionState(undefined, "/w", "s1", "waiting-user"), {
-      status: "written",
-      store: {
-        "active-workspaces": { "/w": { "active-sessions": { s1: { state: "waiting-user" } } } },
-      },
-    });
-  });
-
-  it("同じ state が既に設定されているときは書き込まない", () => {
-    const store: SessionStateStore = {
-      "active-workspaces": { "/w": { "active-sessions": { s1: { state: "running" } } } },
-    };
-    assert.deepEqual(setSessionState(store, "/w", "s1", "running"), { status: "skipped" });
-  });
-
-  it("state を更新し、entry の lock と他セッションの entry を保つ", () => {
-    const store: SessionStateStore = {
-      "active-workspaces": {
-        "/w": {
-          "active-sessions": {
-            s1: { lock: true, state: "waiting-user" },
-            s2: { state: "running" },
-          },
-        },
-      },
-    };
-    assert.deepEqual(setSessionState(store, "/w", "s1", "running"), {
-      status: "written",
-      store: {
-        "active-workspaces": {
-          "/w": {
-            "active-sessions": {
-              s1: { lock: true, state: "running" },
-              s2: { state: "running" },
-            },
-          },
-        },
-      },
-    });
-  });
-
-  it("workspace エントリの未知フィールドを保つ", () => {
-    const store: SessionStateStore = {
-      "active-workspaces": { "/w": { pinned: true } },
-    };
-    assert.deepEqual(setSessionState(store, "/w", "s1", "waiting-approval"), {
-      status: "written",
-      store: {
-        "active-workspaces": {
-          "/w": {
-            pinned: true,
-            "active-sessions": { s1: { state: "waiting-approval" } },
-          },
-        },
-      },
-    });
-  });
-
-  it("active-sessions がオブジェクトでないときは置き換える", () => {
-    const parsed = parseStore('{"active-workspaces":{"/w":{"active-sessions":"garbage"}}}');
-    assert.ok(parsed.valid);
-    assert.deepEqual(setSessionState(parsed.store, "/w", "s1", "running"), {
-      status: "written",
-      store: {
-        "active-workspaces": { "/w": { "active-sessions": { s1: { state: "running" } } } },
-      },
-    });
-  });
-
-  it("entry がオブジェクトでないときは新しい entry で書く", () => {
-    const parsed = parseStore('{"active-workspaces":{"/w":{"active-sessions":{"s1":"garbage"}}}}');
-    assert.ok(parsed.valid);
-    assert.deepEqual(setSessionState(parsed.store, "/w", "s1", "running"), {
-      status: "written",
-      store: {
-        "active-workspaces": { "/w": { "active-sessions": { s1: { state: "running" } } } },
-      },
-    });
-  });
-
-  it("未知の root キーを保つ", () => {
-    const store: SessionStateStore = { "active-workspaces": {}, tags: ["a"] };
-    assert.deepEqual(setSessionState(store, "/w", "s1", "waiting-user"), {
-      status: "written",
-      store: {
-        "active-workspaces": { "/w": { "active-sessions": { s1: { state: "waiting-user" } } } },
-        tags: ["a"],
-      },
-    });
-  });
-
-  it("入力の store を変更しない", () => {
-    const store: SessionStateStore = {
-      "active-workspaces": {
-        "/w": { "active-sessions": { s1: { lock: true, state: "waiting-user" } } },
-      },
-    };
-    const snapshot = structuredClone(store);
-    setSessionState(store, "/w", "s1", "running");
-    assert.deepEqual(store, snapshot);
-  });
-});
-
-describe("getSessionState", () => {
-  it("自セッションの state を返す", () => {
-    const store: SessionStateStore = {
-      "active-workspaces": { "/w": { "active-sessions": { s1: { state: "running" } } } },
-    };
-    assert.equal(getSessionState(store, "/w", "s1"), "running");
-  });
-
-  it("store が無いときは undefined を返す", () => {
-    assert.equal(getSessionState(undefined, "/w", "s1"), undefined);
-  });
-
-  it("workspace のエントリが無いときは undefined を返す", () => {
-    const store: SessionStateStore = { "active-workspaces": {} };
-    assert.equal(getSessionState(store, "/w", "s1"), undefined);
-  });
-
-  it("active-sessions が無いときは undefined を返す", () => {
-    const store: SessionStateStore = { "active-workspaces": { "/w": { pinned: true } } };
-    assert.equal(getSessionState(store, "/w", "s1"), undefined);
-  });
-
-  it("他セッションの entry は返さない", () => {
-    const store: SessionStateStore = {
-      "active-workspaces": { "/w": { "active-sessions": { s2: { state: "running" } } } },
-    };
-    assert.equal(getSessionState(store, "/w", "s1"), undefined);
-  });
-
-  it("state が3値でない entry は undefined を返す", () => {
-    const parsed = parseStore(
-      '{"active-workspaces":{"/w":{"active-sessions":{"s1":{"state":"idle"}}}}}',
-    );
-    assert.ok(parsed.valid);
-    assert.equal(getSessionState(parsed.store, "/w", "s1"), undefined);
-  });
-
-  it("entry がオブジェクトでないときは undefined を返す", () => {
-    const parsed = parseStore('{"active-workspaces":{"/w":{"active-sessions":{"s1":"garbage"}}}}');
-    assert.ok(parsed.valid);
-    assert.equal(getSessionState(parsed.store, "/w", "s1"), undefined);
-  });
-});
-
-describe("clearSessionState", () => {
-  it("自セッションの entry から state を除き、lock と他セッションを保つ", () => {
-    const store: SessionStateStore = {
-      "active-workspaces": {
-        "/w": {
-          "active-sessions": {
-            s1: { lock: true, state: "running" },
-            s2: { state: "running" },
-          },
-        },
-      },
-    };
-    assert.deepEqual(clearSessionState(store, "/w", "s1"), {
-      status: "written",
-      store: {
-        "active-workspaces": {
-          "/w": { "active-sessions": { s1: { lock: true }, s2: { state: "running" } } },
-        },
-      },
-    });
-  });
-
-  it("state が無いときは書き込まない", () => {
-    const store: SessionStateStore = {
-      "active-workspaces": { "/w": { "active-sessions": { s1: { lock: false } } } },
-    };
-    assert.deepEqual(clearSessionState(store, "/w", "s1"), { status: "skipped" });
-  });
-
-  it("active-sessions に載っていないときは書き込まない", () => {
-    const store: SessionStateStore = {
-      "active-workspaces": { "/w": { "active-sessions": { s2: { state: "running" } } } },
-    };
-    assert.deepEqual(clearSessionState(store, "/w", "s1"), { status: "skipped" });
-  });
-
-  it("store が無いときも書き込まない", () => {
-    assert.deepEqual(clearSessionState(undefined, "/w", "s1"), { status: "skipped" });
-  });
-
-  it("workspace のエントリが無いときは書き込まない", () => {
-    const store: SessionStateStore = { "active-workspaces": {} };
-    assert.deepEqual(clearSessionState(store, "/w", "s1"), { status: "skipped" });
-  });
-
-  it("active-sessions がオブジェクトでないときは書き込まない", () => {
-    const parsed = parseStore('{"active-workspaces":{"/w":{"active-sessions":"garbage"}}}');
-    assert.ok(parsed.valid);
-    assert.deepEqual(clearSessionState(parsed.store, "/w", "s1"), { status: "skipped" });
-  });
-
-  it("preserves active-workspaces and unknown root keys", () => {
-    const store: SessionStateStore = {
-      "active-workspaces": { "/w": { "active-sessions": { s1: { state: "waiting-approval" } } } },
-      tags: ["a"],
-    };
-    assert.deepEqual(clearSessionState(store, "/w", "s1"), {
-      status: "written",
-      store: {
-        "active-workspaces": { "/w": { "active-sessions": { s1: {} } } },
-        tags: ["a"],
-      },
-    });
-  });
-
-  it("入力の store を変更しない", () => {
-    const store: SessionStateStore = {
-      "active-workspaces": { "/w": { "active-sessions": { s1: { state: "running" } } } },
-    };
-    const snapshot = structuredClone(store);
-    clearSessionState(store, "/w", "s1");
-    assert.deepEqual(store, snapshot);
-  });
-});
-
 describe("serializeStore", () => {
-  it("2 スペースの pretty JSON と末尾改行で書き出す", () => {
+  it("writes two-space pretty JSON with a final newline", () => {
     const store: SessionStateStore = {
       "active-workspaces": {
         "/w": { "active-sessions": { s1: { lock: false } } },
@@ -840,529 +1452,3 @@ describe("serializeStore", () => {
     );
   });
 });
-
-const progressEvents = [
-  "session_before_compact",
-  "session_compact",
-  "session_compact_failed",
-  "context",
-  "context_with_system",
-  "before_provider_request",
-  "before_provider_headers",
-  "after_provider_response",
-  "provider_stream_event",
-  "before_agent_start",
-  "agent_end",
-  "agent_before_settle",
-  "turn_start",
-  "turn_end",
-  "message_start",
-  "message_update",
-  "message_end",
-  "tool_execution_start",
-  "tool_execution_update",
-  "tool_execution_end",
-  "tool_call",
-  "tool_result",
-] as const satisfies readonly ExtensionEvent["type"][];
-
-const unchangedEvents = [
-  "project_trust",
-  "resources_discover",
-  "session_info_changed",
-  "mcp_servers_change",
-  "model_select",
-  "thinking_level_select",
-  "session_before_switch",
-  "session_before_fork",
-  "session_before_tree",
-  "session_tree",
-  "cache_warming_decision",
-  "user_bash",
-  "input",
-] as const satisfies readonly ExtensionEvent["type"][];
-
-describe("sessionStateExtension events", () => {
-  let fixture: Awaited<ReturnType<typeof createExtensionFixture>>;
-
-  beforeEach(async () => {
-    fixture = await createExtensionFixture();
-    assert.equal(getAgentDir(), fixture.agentDir);
-  });
-
-  afterEach(async () => {
-    await fixture.close();
-  });
-
-  for (const eventName of progressEvents) {
-    for (const externalState of ["waiting-user", undefined] as const) {
-      const overwrite = externalState ?? "removed state";
-      it(`restores running after ${overwrite} on ${eventName}`, async () => {
-        fixture.emit("agent_start");
-        await fixture.flush();
-
-        const externalStore = await fixture.readStore();
-        const entry = externalStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!;
-        entry.lock = true;
-        if (externalState === undefined) delete entry.state;
-        else entry.state = externalState;
-        await fixture.writeStore(externalStore);
-
-        assert.deepEqual(fixture.emit(eventName), [undefined]);
-        await fixture.flush();
-
-        const expectedStore = structuredClone(externalStore);
-        expectedStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state = "running";
-        assert.deepEqual(await fixture.readStore(), expectedStore);
-      });
-    }
-
-    it(`does not write ${eventName} outside a run`, async () => {
-      const before = await stat(fixture.storePath);
-      fixture.emit(eventName, { reason: "manual" });
-      await fixture.flush();
-      assert.equal(await fixture.readState(), "waiting-user");
-      assert.equal((await stat(fixture.storePath)).ino, before.ino);
-    });
-  }
-
-  for (const eventName of unchangedEvents) {
-    it(`does not update state on ${eventName} during a run`, async () => {
-      fixture.emit("agent_start");
-      await fixture.flush();
-      const externalStore = await fixture.readStore();
-      externalStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state = "waiting-user";
-      await fixture.writeStore(externalStore);
-      const before = await stat(fixture.storePath);
-
-      fixture.emit(eventName);
-      await fixture.flush();
-
-      assert.deepEqual(await fixture.readStore(), externalStore);
-      assert.equal((await stat(fixture.storePath)).ino, before.ino);
-    });
-  }
-
-  it("checks consecutive message, tool, and provider updates without throttling", async () => {
-    fixture.emit("agent_start");
-    await fixture.flush();
-    for (const eventName of [
-      "message_update",
-      "message_update",
-      "tool_execution_update",
-      "tool_execution_update",
-      "provider_stream_event",
-      "provider_stream_event",
-    ] as const) {
-      const externalStore = await fixture.readStore();
-      externalStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state = "waiting-user";
-      await fixture.writeStore(externalStore);
-      fixture.emit(eventName);
-      await fixture.flush();
-      assert.equal(await fixture.readState(), "running", eventName);
-    }
-  });
-
-  it("creates a missing entry on the next progress event", async () => {
-    fixture.emit("agent_start");
-    await fixture.flush();
-    const externalStore = await fixture.readStore();
-    delete externalStore["active-workspaces"]["/w"]!["active-sessions"]!.s1;
-    await fixture.writeStore(externalStore);
-
-    fixture.emit("context");
-    await fixture.flush();
-
-    const expectedStore = structuredClone(externalStore);
-    expectedStore["active-workspaces"]["/w"]!["active-sessions"]!.s1 = { state: "running" };
-    assert.deepEqual(await fixture.readStore(), expectedStore);
-  });
-
-  it("leaves context, provider, and boundary payloads unchanged", async () => {
-    fixture.emit("agent_start");
-    await fixture.flush();
-    const fields = {
-      messages: [{ role: "user", content: "keep", timestamp: 0 }],
-      payload: { model: "keep" },
-      headers: { authorization: "keep" },
-      data: { delta: "keep" },
-      entries: [],
-      continue: true,
-    };
-    const snapshot = structuredClone(fields);
-    for (const eventName of [
-      "context",
-      "context_with_system",
-      "before_provider_request",
-      "before_provider_headers",
-      "after_provider_response",
-      "provider_stream_event",
-      "turn_end",
-      "agent_before_settle",
-    ] as const) {
-      assert.deepEqual(fixture.emit(eventName, fields), [undefined]);
-    }
-    await fixture.flush();
-    assert.deepEqual(fields, snapshot);
-  });
-
-  it("keeps approval waiting through progress and repeated agent starts", async () => {
-    fixture.emit("agent_start");
-    fixture.emit("ui_prompt_start", { reason: "ui_prompt", kind: "confirm" });
-    await fixture.flush();
-    const before = await stat(fixture.storePath);
-
-    for (const eventName of [...progressEvents, "agent_start"] as const) {
-      fixture.emit(eventName);
-      await fixture.flush();
-      assert.equal(await fixture.readState(), "waiting-approval", eventName);
-      assert.equal((await stat(fixture.storePath)).ino, before.ino, eventName);
-    }
-    fixture.emit("ui_prompt_end");
-    await fixture.flush();
-    assert.equal(await fixture.readState(), "running");
-  });
-
-  it("clears approval waiting before rechecking the latest state", async () => {
-    fixture.emit("agent_start");
-    fixture.emit("ui_prompt_start");
-    await fixture.flush();
-    const externalStore = await fixture.readStore();
-    externalStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state = "waiting-user";
-    await fixture.writeStore(externalStore);
-
-    fixture.emit("message_update");
-    await fixture.flush();
-    assert.equal(await fixture.readState(), "waiting-user");
-
-    fixture.emit("ui_prompt_end");
-    await fixture.flush();
-    assert.equal(await fixture.readState(), "running");
-  });
-
-  it("does not write after a prompt ends outside a run", async () => {
-    fixture.emit("ui_prompt_start");
-    await fixture.flush();
-    assert.equal(await fixture.readState(), "waiting-approval");
-    const before = await stat(fixture.storePath);
-
-    fixture.emit("ui_prompt_end");
-    fixture.emit("before_agent_start");
-    await fixture.flush();
-
-    assert.equal(await fixture.readState(), "waiting-approval");
-    assert.equal((await stat(fixture.storePath)).ino, before.ino);
-
-    fixture.emit("agent_start");
-    await fixture.flush();
-    assert.equal(await fixture.readState(), "running");
-  });
-
-  for (const aborted of [false, true]) {
-    it(`keeps the run active until agent_settled with aborted=${aborted}`, async () => {
-      fixture.emit("agent_start");
-      await fixture.flush();
-      for (const eventName of [
-        "agent_end",
-        "agent_before_settle",
-        "session_compact_failed",
-      ] as const) {
-        fixture.emit(eventName, { aborted: true, reason: "overflow", willRetry: true });
-        await fixture.flush();
-        const externalStore = await fixture.readStore();
-        externalStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state = "waiting-user";
-        await fixture.writeStore(externalStore);
-        fixture.emit("message_update");
-        await fixture.flush();
-        assert.equal(await fixture.readState(), "running", eventName);
-      }
-
-      fixture.emit("agent_settled", { aborted });
-      await fixture.flush();
-      const before = await stat(fixture.storePath);
-      for (const eventName of progressEvents) fixture.emit(eventName);
-      await fixture.flush();
-      assert.equal(await fixture.readState(), "waiting-user");
-      assert.equal((await stat(fixture.storePath)).ino, before.ino);
-    });
-  }
-
-  it("includes rejected, aborted, and invalid-argument tool results as progress", async () => {
-    fixture.emit("agent_start");
-    await fixture.flush();
-    for (const message of ["Rejected", "Aborted", "Invalid arguments"]) {
-      const externalStore = await fixture.readStore();
-      delete externalStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state;
-      await fixture.writeStore(externalStore);
-      fixture.emit("tool_execution_end", {
-        isError: true,
-        result: { content: [{ type: "text", text: message }], details: {} },
-      });
-      await fixture.flush();
-      assert.equal(await fixture.readState(), "running", message);
-    }
-  });
-
-  for (const reason of ["startup", "reload", "new", "resume", "fork"]) {
-    it(`resets run and approval tracking on session_start with reason=${reason}`, async () => {
-      fixture.emit("agent_start");
-      fixture.emit("ui_prompt_start");
-      fixture.emit("session_start", { reason });
-      await fixture.flush();
-      assert.equal(await fixture.readState(), "waiting-user");
-      const before = await stat(fixture.storePath);
-      for (const eventName of progressEvents) fixture.emit(eventName);
-      await fixture.flush();
-      assert.equal((await stat(fixture.storePath)).ino, before.ino);
-
-      fixture.emit("agent_start");
-      await fixture.flush();
-      assert.equal(await fixture.readState(), "running");
-    });
-  }
-
-  it("clears state and resets both spans on shutdown", async () => {
-    fixture.emit("agent_start");
-    fixture.emit("ui_prompt_start");
-    await fixture.flush();
-    const expectedStore = await fixture.readStore();
-    delete expectedStore["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state;
-
-    fixture.emit("session_shutdown");
-    await fixture.flush();
-    assert.deepEqual(await fixture.readStore(), expectedStore);
-    const before = await stat(fixture.storePath);
-    for (const eventName of progressEvents) fixture.emit(eventName);
-    await fixture.flush();
-    assert.equal((await stat(fixture.storePath)).ino, before.ino);
-
-    fixture.emit("agent_start");
-    await fixture.flush();
-    assert.equal(await fixture.readState(), "running");
-  });
-
-  it("skips shutdown writes when state or the store is absent", async () => {
-    const store = await fixture.readStore();
-    delete store["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state;
-    await fixture.writeStore(store);
-    const before = await stat(fixture.storePath);
-    fixture.emit("session_shutdown");
-    await fixture.flush();
-    assert.equal((await stat(fixture.storePath)).ino, before.ino);
-
-    await rm(fixture.storePath);
-    fixture.emit("session_shutdown");
-    await fixture.flush();
-    await assert.rejects(stat(fixture.storePath), { code: "ENOENT" });
-  });
-
-  it("does not rewrite an already running store", async () => {
-    fixture.emit("agent_start");
-    await fixture.flush();
-    const before = await stat(fixture.storePath);
-    fixture.emit("agent_start");
-    fixture.emit("ui_prompt_end");
-    for (const eventName of progressEvents) fixture.emit(eventName);
-    await fixture.flush();
-    assert.equal(await fixture.readState(), "running");
-    assert.equal((await stat(fixture.storePath)).ino, before.ino);
-  });
-
-  it("keeps queued progress behind approval, settlement, and shutdown boundaries", async () => {
-    fixture.emit("agent_start");
-    fixture.emit("message_update");
-    fixture.emit("ui_prompt_start");
-    fixture.emit("provider_stream_event");
-    fixture.emit("agent_start");
-    await fixture.flush();
-    assert.equal(await fixture.readState(), "waiting-approval");
-
-    fixture.emit("ui_prompt_end");
-    fixture.emit("tool_execution_update");
-    fixture.emit("agent_settled", { aborted: true });
-    fixture.emit("message_update");
-    await fixture.flush();
-    assert.equal(await fixture.readState(), "waiting-user");
-
-    fixture.emit("agent_start");
-    fixture.emit("provider_stream_event");
-    fixture.emit("session_shutdown");
-    fixture.emit("tool_execution_end");
-    await fixture.flush();
-    assert.equal(await fixture.readState(), undefined);
-  });
-
-  it("unarchives input without assigning a phase", async () => {
-    await fixture.command("archive");
-    fixture.emit("input", { text: "continue", source: "interactive" });
-    await fixture.flush();
-    const store = await fixture.readStore();
-    assert.deepEqual(store["active-workspaces"]["/w"]!["active-sessions"]!.s1, { lock: false });
-  });
-
-  it("keeps archive lock protection and explicit unarchive behavior", async () => {
-    const store = await fixture.readStore();
-    store["active-workspaces"]["/w"]!["active-sessions"]!.s1!.lock = true;
-    await fixture.writeStore(store);
-    await fixture.command("archive");
-    assert.deepEqual(await fixture.readStore(), store);
-    assert.match(fixture.notifications.at(-1)!.message, /locked/);
-
-    store["active-workspaces"]["/w"]!["active-sessions"]!.s1!.lock = false;
-    await fixture.writeStore(store);
-    await fixture.command("archive");
-    await fixture.command("unarchive");
-    const restored = await fixture.readStore();
-    assert.deepEqual(restored["active-workspaces"]["/w"]!["active-sessions"]!.s1, { lock: false });
-  });
-
-  it("reports a progress write failure without blocking and recovers on the next event", async () => {
-    fixture.emit("agent_start");
-    await fixture.flush();
-    const store = await fixture.readStore();
-    store["active-workspaces"]["/w"]!["active-sessions"]!.s1!.state = "waiting-user";
-    await fixture.writeStore(store);
-    await chmod(fixture.agentDir, 0o500);
-    try {
-      assert.deepEqual(fixture.emit("provider_stream_event"), [undefined]);
-      await fixture.flush();
-      assert.equal(await fixture.readState(), "waiting-user");
-      assert.equal(fixture.notifications.at(-1)!.level, "warning");
-      assert.match(fixture.notifications.at(-1)!.message, /cannot update session-state.json/);
-    } finally {
-      await chmod(fixture.agentDir, 0o700);
-    }
-
-    fixture.emit("provider_stream_event");
-    await fixture.flush();
-    assert.equal(await fixture.readState(), "running");
-  });
-
-  it("does not overwrite an invalid store during progress", async () => {
-    fixture.emit("agent_start");
-    await fixture.flush();
-    await writeFile(fixture.storePath, "{broken", "utf8");
-    assert.deepEqual(fixture.emit("message_update"), [undefined]);
-    await fixture.flush();
-    assert.equal(await readFile(fixture.storePath, "utf8"), "{broken");
-    assert.equal(fixture.notifications.at(-1)!.level, "warning");
-    assert.match(fixture.notifications.at(-1)!.message, /not a valid session-state store/);
-  });
-});
-
-type TestEventHandler = (event: ExtensionEvent, ctx: ExtensionContext) => unknown;
-
-async function createExtensionFixture() {
-  await mkdir("/tmp/work/dotfiles", { recursive: true });
-  const agentDir = await mkdtemp("/tmp/work/dotfiles/session-state-events-");
-  const storePath = join(agentDir, "session-state.json");
-  const initialStore: SessionStateStore = {
-    "active-workspaces": {
-      "/w": {
-        "active-sessions": {
-          s1: { lock: false, state: "waiting-user", label: "keep" },
-          s2: { lock: true, state: "running" },
-        },
-        pinned: true,
-      },
-      "/other": { "active-sessions": { s3: { lock: true } }, label: "other" },
-    },
-    tags: ["keep"],
-  };
-  await writeFile(storePath, JSON.stringify(initialStore), "utf8");
-  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = agentDir;
-
-  const handlers = new Map<ExtensionEvent["type"], TestEventHandler[]>();
-  const commands = new Map<string, Omit<RegisteredCommand, "name" | "sourceInfo">>();
-  const notifications: { message: string; level: string | undefined }[] = [];
-  const context = {
-    hasUI: true,
-    sessionManager: {
-      getCwd() {
-        return "/w";
-      },
-      getSessionId() {
-        return "s1";
-      },
-      getSessionDir() {
-        return join(agentDir, "sessions", "--w--");
-      },
-    },
-    ui: {
-      notify(message: string, level?: string) {
-        notifications.push({ message, level });
-      },
-    },
-  } as unknown as ExtensionCommandContext;
-  const barrierContext = {
-    ...context,
-    sessionManager: {
-      ...context.sessionManager,
-      getSessionId() {
-        return "queue-barrier";
-      },
-    },
-    ui: { notify() {} },
-  } as unknown as ExtensionCommandContext;
-
-  sessionStateExtension({
-    on(name: ExtensionEvent["type"], handler: TestEventHandler) {
-      const registered = handlers.get(name) ?? [];
-      registered.push(handler);
-      handlers.set(name, registered);
-      return function unsubscribe() {
-        handlers.set(
-          name,
-          registered.filter((candidate) => candidate !== handler),
-        );
-      };
-    },
-    registerCommand(name: string, command: Omit<RegisteredCommand, "name" | "sourceInfo">) {
-      commands.set(name, command);
-    },
-  } as unknown as ExtensionAPI);
-
-  async function flush() {
-    await commands.get("archive")!.handler("", barrierContext);
-  }
-
-  async function readStore(): Promise<SessionStateStore> {
-    return JSON.parse(await readFile(storePath, "utf8"));
-  }
-
-  for (const handler of handlers.get("session_start") ?? []) {
-    await handler({ type: "session_start", reason: "startup" }, context);
-  }
-  await flush();
-
-  return {
-    agentDir,
-    storePath,
-    notifications,
-    emit(type: ExtensionEvent["type"], fields: Record<string, unknown> = {}) {
-      const event = { type, ...fields } as ExtensionEvent;
-      return (handlers.get(type) ?? []).map((handler) => handler(event, context));
-    },
-    async command(name: string) {
-      await commands.get(name)!.handler("", context);
-    },
-    flush,
-    readStore,
-    async readState() {
-      return getSessionState(await readStore(), "/w", "s1");
-    },
-    async writeStore(store: SessionStateStore) {
-      await writeFile(storePath, JSON.stringify(store), "utf8");
-    },
-    async close() {
-      try {
-        await flush();
-      } finally {
-        if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-        else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-        await rm(agentDir, { recursive: true, force: true });
-      }
-    },
-  };
-}

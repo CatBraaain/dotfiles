@@ -10,7 +10,7 @@ import type {
   ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { createBashTool } from "@earendil-works/pi-coding-agent";
+import { createBashTool, createEventBus } from "@earendil-works/pi-coding-agent";
 import { quote, parse } from "shell-quote";
 import piSessionsExtension from "./index";
 
@@ -431,6 +431,7 @@ describe("session_search CLI boundary", () => {
 describe("session_search sandbox fixture integration", () => {
   it("runs all registered actions through the existing sandboxed bash into a compiled fixture CLI", async () => {
     const temp = mkdtempSync(join(tmpdir(), "session-search-integration-"));
+    const events = createEventBus();
     try {
       const cwd = join(temp, "project 'space'");
       mkdirSync(cwd);
@@ -470,6 +471,7 @@ describe("session_search sandbox fixture integration", () => {
       );
       const tools = new Map<string, ToolDefinition>();
       const api = {
+        events,
         registerTool(tool: ToolDefinition) {
           tools.set(tool.name, tool);
         },
@@ -515,6 +517,7 @@ describe("session_search sandbox fixture integration", () => {
       );
       assert.equal(nestedCalls, 3);
     } finally {
+      events.clear();
       rmSync(temp, { recursive: true, force: true });
     }
   }, 30000);

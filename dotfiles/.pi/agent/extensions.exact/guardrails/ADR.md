@@ -123,13 +123,19 @@ flowchart TD
 
 1. toolsのfactoryが公開factoryを1回呼び、GuardrailとSandboxRunnerを各1個生成する。設定・glob cache・動的許可はそのGuardrailだけが所有する。
 2. 公開factoryがask_permissionとlifecycleを登録し、同じ認可状態を使うexecuteを返す。toolsは返されたAPIを7ツールへ配線する。
-3. guardrailsに独立したauto-load用index.tsは置かない。SDK上の登録元はtoolsであり、toolsを無効化するとask_permissionも登録されない。ロード順依存、共有singleton、イベント要求・応答、grantsファイルは不要となる。
+3. guardrailsに独立したauto-load用index.tsは置かない。SDK上の登録元はtoolsであり、toolsを無効化するとask_permissionも登録されない。ロード順依存、共有singleton、grantsファイルは不要となる。
 4. session_shutdownでAPIを無効化し、古いexecuteとask_permissionへの新規呼び出しを拒否する。reload時はtoolsのfactoryを再実行し、新しい状態を作る。factory外にAPIやpi/contextを保持しない。
 5. 設定不正時もtoolsの安全なwrapperを登録し、全実行を初期化エラーで拒否する。初期化例外によってwrapperが登録されず、標準ツールが残る状態を避ける。起動時には原因を通知する。
 
 画像readの認可後host処理、認可と隔離実行の順序、キャンセル、進捗通知は維持する。SandboxRunnerは同じ所有者からbind構築関数を受け取り、設定や動的許可を再読込しない。プロセス境界にはtoolNameと既存のJSON要求を渡す。呼び出し元指定のentrypointも同じ認可・画像優先・bind・環境処理・キャンセル・同時実行枠を通る。Guardrailsは汎用envelopeを扱い、workerの成功結果は組み立てない。entrypointが不在・不可視・失敗した場合もhostや既定executorへfallbackしない。GuardrailsからToolsへのimportやTools固有dispatchは置かない。
 
-依存そのものをなくす必要がないため、イベント契約と受領callbackは採用しない。設定名は `guardrails.yaml` に統一する。
+ToolsからGuardrailsへの依頼は直接APIを維持する。設定名は `guardrails.yaml` に統一する。
+
+### 背景Bash入口（2026-11-08）
+
+lifecycle/backgroundにはSDKの `executeTool` がないため、Tools配下に登録Bashと同じ実行関数へ入るBash専用のrequest/receiverを設ける。任意toolやexecutorを選ぶ窓口にはしない。登録Bashと同じGuardrailsの設定・既存承認・sandboxを使い、新しい認可UIが必要なら実行前に失敗させる。承認UI開始通知から背景公開が再び認可UIを開く再帰を防ぐためである。
+
+event busのemitはvoidで、async handlerの完了を待たない。背景入口だけが同期受領・一度だけの終端・期限・abort・停止時のpending決着を管理する。SDKのtool hooks・実行イベント・履歴は、この入口に自動付与されない。背景入口の契約は [Tools仕様](../tools/SPEC.md#背景bash入口) が所有する。
 
 ---
 

@@ -1,7 +1,7 @@
 import { COMMAND_PREVIEW_LIMIT, truncateText } from "../shared/tool-text.ts";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "bun:test";
-import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
+import { createEventBus, type ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { execFileSync, spawn } from "node:child_process";
 import {
   existsSync,
@@ -156,9 +156,15 @@ function captureRegisteredTools(
   handlers?: Map<string, (event: any, context?: any) => unknown>,
 ): Map<string, any> {
   const registered = new Map<string, any>();
-  const on = (event: string, handler: (event: any, context?: any) => unknown) =>
-    handlers?.set(event, handler);
+  function on(event: string, handler: (event: any, context?: any) => unknown): void {
+    const previous = handlers?.get(event);
+    handlers?.set(event, async (payload, context) => {
+      await previous?.(payload, context);
+      return handler(payload, context);
+    });
+  }
   const api = {
+    events: createEventBus(),
     registerTool: (tool: any) => registered.set(tool.name, tool),
     on,
   } as any;
@@ -203,6 +209,7 @@ const runSessionStart = (configYaml: string): { message: string; level: string }
     const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
     createGuardrailsAPI(
       {
+        events: createEventBus(),
         registerTool: () => {},
         on: (event: string, handler: (event: unknown, ctx: unknown) => void) =>
           handlers.set(event, handler),

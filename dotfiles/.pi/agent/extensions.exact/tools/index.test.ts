@@ -18,13 +18,15 @@ import type {
   ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { requestBackgroundBash } from "./background-bash.ts";
 import toolsExtension from "./index.ts";
 import { Guardrail } from "../guardrails/guardrail.ts";
 import { SandboxRunner } from "../guardrails/sandbox-runner.ts";
 
 describe("tools with the guardrails public API", () => {
   it(
-    "registers all tools and permission handling once without the event bus",
+    "registers all tools and permission handling once with the direct API",
     withFixture(async ({ tools, registered }) => {
       assert.deepEqual([...tools.keys()].sort(), [
         "ask_permission",
@@ -439,7 +441,9 @@ describe("tools with the guardrails public API", () => {
       writeFileSync(config, "read: invalid\n");
       const tools = new Map<string, ToolDefinition>();
       const handlers = new Map<string, (event: unknown, context: unknown) => unknown>();
+      const events = createEventBus();
       const api = {
+        events,
         registerTool(tool: ToolDefinition) {
           tools.set(tool.name, tool);
         },
@@ -456,6 +460,14 @@ describe("tools with the guardrails public API", () => {
           /guardrails.yaml.*schema violation/,
         );
       }
+      const background = await requestBackgroundBash(events, {
+        id: "invalid-background",
+        params: { command: "echo unsafe" },
+        context: { model: undefined },
+      });
+      assert.equal(background.status, "failed");
+      if (background.status === "failed")
+        assert.match(String(background.error), /guardrails.yaml.*schema violation/);
       const notifications: unknown[] = [];
       handlers.get("session_start")!(
         {},
@@ -509,11 +521,13 @@ describe("tools with the guardrails public API", () => {
     }
   });
 
-  it("depends only on the guardrails public entry and has no execution event contract", () => {
+  it("uses the direct Guardrails API and only a Bash-specific background boundary", () => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     assert.match(source, /from "\.\.\/guardrails\/api\.ts"/);
     assert.doesNotMatch(source, /guardrails\/(?:guardrail|execute|sandbox|config)\./);
-    assert.doesNotMatch(source, /guardrails:execute|\.events\.|accept\(/);
+    assert.match(source, /from "\.\/background-bash\.ts"/);
+    assert.match(source, /registerBackgroundBash/);
+    assert.doesNotMatch(source, /guardrails:execute|shared\/execution-events/);
   });
 });
 
@@ -529,6 +543,7 @@ function withFixture(test: (fixture: Fixture) => Promise<void>): () => Promise<v
       const tools = new Map<string, ToolDefinition>();
       const registered: string[] = [];
       const api = {
+        events: createEventBus(),
         registerTool(tool: ToolDefinition) {
           registered.push(tool.name);
           tools.set(tool.name, tool);

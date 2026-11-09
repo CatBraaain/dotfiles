@@ -1,77 +1,95 @@
-# session-state の実行フェーズ仕様
+# session-state の所属と実行フェーズ仕様
 
-この文書は、pi extension session-state が公開イベントに応じて実行フェーズを書き出す振る舞いを定める。読者は、この拡張の実行フェーズ通知を保守・改修する user と coding agent である。
+この文書は、pi拡張 session-state の所属ストア更新と、専用tmux paneへの実行フェーズ公開を定める。読者は、この拡張と外部の読み書き手を保守する user と coding agent である。課題・目的・重要な制約の正本は [REQUIREMENTS.md](REQUIREMENTS.md) とする。
 
-## 対象と契約
+## 適用対象
 
-対象は、[REQUIREMENTS.md「機能要件」](REQUIREMENTS.md#機能要件) で定める自セッションと自ワークスペースである。実行フェーズは、自ワークスペースの `active-sessions` にある自セッションの entry の `state` に書く。書き手は session-state、読み手はストアをウォッチして表示する vscode-pi-sessions である。
+現在の session directory が、そのcwdの subagent用directory と一致する子セッションでは、ストア更新・コマンド登録・pane公開を行わない。この判定は新規・resume・fork・vision委譲に共通し、agent名・役割・親ヘッダーの有無では変わらない。
 
-entry の構造、`state` の値と省略時の意味、保存先、更新・保持の範囲は、[REQUIREMENTS.md「メタデータストアの契約」](REQUIREMENTS.md#メタデータストアの契約) に従う。アーカイブ操作と入力による所属更新は、[REQUIREMENTS.md「機能要件」](REQUIREMENTS.md#機能要件) に従う。以下の状態更新表とイベント一覧は、実行フェーズの `state` に限る。
+| 入力・状態 | 所属ストア | pane公開 |
+| --- | --- | --- |
+| トップレベルの `input` | 自セッションの所属を追加する | 現在値を維持する |
+| トップレベルの `session_start` | 内容と有無を維持する | 管理下を照合し、`waiting-user` を公開する |
+| 実行フェーズの変化 | 内容と有無を維持する | 下記イベント表に従う |
+| `session_shutdown` | 所属を保持する | 新規公開を止め、optionの除去を試みる |
+| 専用tmux管理外のトップレベル | 所属更新とコマンドを提供する | 公開しない |
 
-## 実行の区間
+## 所属ストア
 
-- run 継続区間は、このプロセスで自セッションの `agent_start` を受けてから、`agent_settled` で確定停止するまでであり、中断による停止も含む。区間内では、リトライ・自動圧縮・キュー継続・拡張による継続で低レベルの agent run が繰り返されても、継続中として扱う。
-- `agent_end` は低レベルの run の終了であり、確定停止を表さない。
-- 承認 UI 待ちは、`ui_prompt_start` から `ui_prompt_end` までの、ブロッキングする拡張 UI プロンプトの待ち区間である。`select`・`confirm`・`input`・`editor`・`custom` が対象となる。入れ子や重複したプロンプトは、pi が通知する1つの外側の待ち区間として扱う。
-- run 継続中か、承認 UI 待ちかは、このプロセスが受けたイベントで判断する。ファイルにある `state` が別プロセスに変更されても、これらの区間の判断は変わらない。
+保存先は pi の agent directory 配下の `session-state.json` とする。所属の意味・形式・保持対象・不正なストアの条件は [メタデータストアの契約](REQUIREMENTS.md#メタデータストアの契約) に従う。
 
-## 状態更新のルール
+トップレベルのセッション開始時に `/archive`・`/unarchive` を登録する。`input` による自動アーカイブ解除と両コマンドの結果・lock・通知は [機能要件](REQUIREMENTS.md#機能要件) に従う。
 
-| 処理 | イベント |
+この拡張による所属更新は、入力・コマンドの受付順に反映する。保存は同じdirectoryの一時ファイルへ書き、renameで置換する。保存失敗時は一時ファイルを清掃する。不正なストアは上書きしない。
+
+実行フェーズのイベントではストアを読み書きしない。既存entryの `state` は所属更新時にも保持し、実行フェーズの表示入力には使わない。
+
+## 管理paneの初期照合
+
+専用socketは `${XDG_RUNTIME_DIR:-/run/user/<uid>}/pi-tmux/server.sock` の絶対パスとする。全tmux操作で `-S <絶対パス>` を指定し、既存サーバーに接続する。
+
+`TMUX` のsocketが専用pathと一致し、`TMUX_PANE` がある場合だけ候補とする。実socketをファイルシステムで確認した後、`display-message` のtab区切り応答から次の値を照合する。
+
+| 照合値 | 一致条件 |
 | --- | --- |
-| `waiting-user` を設定 | `session_start`・`agent_settled` |
-| `waiting-approval` を設定 | `ui_prompt_start` |
-| `running` を再確認 | `agent_start`・`ui_prompt_end`・実行進展イベント（下の一覧を参照） |
-| `state` を除去（無ければ書き込みを省く） | `session_shutdown` |
+| socket path | 専用socketの絶対パス |
+| server PID | `TMUX` にあるserver PID |
+| pane ID | `TMUX_PANE` |
+| pane PTY | `/proc/self/fd/0` のリンク先 |
+| pane起動PID | 現在のpiの `process.pid` |
 
-起動・新規・resume・fork・reload では、`session_start` で run継続区間外・承認 UI 待ちなしに初期化する。`agent_start` で run継続区間に入り、`ui_prompt_end` は承認 UI 待ちを解除してから再確認する。終了・セッション切替・reload では、`session_shutdown` で run と承認 UI 待ちの追跡も終える。
+全項目が一致したpaneだけを公開先にする。専用paneの子プロセスや偽マーカーを持つプロセスは、照合不一致により公開対象外になる。照合は `session_start` ごとに行い、その世代では捕捉済みの接続先を使う。
 
-### 再確認の共通条件
+## pane optionの公開契約
 
-- run継続中かつ承認 UI 待ちでない場合だけ `running` を設定し、それ以外は `state` を更新しない。
-- 最新の `state` が既に `running` なら書き込みを省く。
-- 対象イベントごとにファイル上の最新 `state` を確かめる。ストリーム更新もイベントごとに対象とする。
-- 別プロセスが `waiting-user` を設定するか `state` を除去した場合、次の対象イベントで条件を満たせば `running` に戻す。
-- entry が無い場合は、[書き込みと失敗時の扱い](#書き込みと失敗時の扱い) の規則に従って作成する。
+pane-local user option `@pi_session_state` に、次のJSON文字列を1回の `set-option -p` で設定する。
 
-## 公開イベントの扱い
+```json
+{ "version": 1, "sessionId": "<現在の会話ID>", "phase": "running" }
+```
 
-pi の `ExtensionAPI.on` が公開するイベントを、実行フェーズの `state` を再確認するものと更新しないものに分ける。状態境界イベントの処理は上の表に従う。
+`phase` は `running`・`waiting-approval`・`waiting-user` のいずれかである。JSON文字列は `JSON.stringify` で組み立て、shell引数をescapeして渡す。`-F` によるtmux format展開は行わない。
 
-### 実行進展イベント
+同じ世代では、前回要求したphaseと同じならCLIを呼ばない。世代開始時は、同じ会話ID・phaseでも初期値を公開する。公開のためにpane optionを読み取らず、外部上書きだけでは再公開しない。
 
-次の22イベントは、発火ごとに共通条件に従って `state` を再確認する。
+### 実行の区間とイベント
 
-- 圧縮: `session_before_compact`・`session_compact`・`session_compact_failed`
-- コンテキスト準備: `context`・`context_with_system`
-- provider通信: `before_provider_request`・`before_provider_headers`・`after_provider_response`・`provider_stream_event`
-- run準備・終了・継続判断: `before_agent_start`・`agent_end`・`agent_before_settle`
-- ターン: `turn_start`・`turn_end`
-- メッセージ: `message_start`・`message_update`・`message_end`
-- ツール実行: `tool_execution_start`・`tool_execution_update`・`tool_execution_end`
-- ツール処理: `tool_call`・`tool_result`
+run区間は `agent_start` から `agent_settled` までとし、中断による確定停止も含む。リトライ・自動圧縮・キュー継続をまたいで維持する。`agent_end` は確定停止を表さない。
 
-### 更新しないイベント
+承認UI待ちは `ui_prompt_start` から `ui_prompt_end` までの外側の待ち区間とする。対象はSDKの `select`・`confirm`・`input`・`editor`・`custom` によるUI待ちである。
 
-- 信頼判定・探索: `project_trust`・`resources_discover`
-- 名称・設定変更: `session_info_changed`・`mcp_servers_change`・`model_select`・`thinking_level_select`
-- セッション切替・分岐前: `session_before_switch`・`session_before_fork`
-- 履歴移動: `session_before_tree`・`session_tree`
-- idleキャッシュ判断: `cache_warming_decision`
-- user の Bash実行: `user_bash`
-- 入力: `input`
+| イベント | 処理 |
+| --- | --- |
+| `session_start` | 旧世代を失効させ、run区間外・承認待ちなしで開始して `waiting-user` を公開する |
+| `agent_start` | run区間に入り、承認待ちでなければ `running` を公開する |
+| `ui_prompt_start` | 承認待ちに入り、`waiting-approval` を公開する |
+| `ui_prompt_end` | 承認待ちを解除し、run区間内なら `running`、区間外なら `waiting-user` を公開する |
+| `agent_settled` | run区間を終了し、承認待ちでなければ `waiting-user` を公開する |
+| `session_shutdown` | 新規公開と未実行分を止め、開始済みCLIの通常終端を待ち、可能ならoptionを除去する |
 
-ここで更新しないのは `state` である。プロンプト送信時の自動アーカイブ解除は [REQUIREMENTS.md「機能要件」](REQUIREMENTS.md#機能要件) に従う。
+その他の進展イベントでは公開しない。承認待ち中は、進展・繰り返しの `agent_start`・確定停止によって表示を `running` へ戻さない。UI終了後は、その時点のrun区間に対応するphaseへ戻す。
 
-### 判断を誤る例外
+### 世代と終了
 
-- 初回の `before_agent_start` は run区間外であり、run区間外の手動圧縮も更新しない。
-- `agent_end` と `session_compact_failed` は確定停止を表さず、確定停止は `agent_settled` で判断する。
-- `tool_execution_end` は拒否・中断・不正な引数などのエラー結果も含めて対象とする。
+公開処理はrunの `ctx.signal` と独立する。会話ID・必要context・接続候補を受付時に捕捉する。世代失効では、未実行の旧公開・古い結果・古い操作の失敗通知を破棄する。
 
-## 書き込みと失敗時の扱い
+開始済みのtmux CLIは世代失効で強制中断せず、通常のtool結果が返るまで待つ。結果が `completed` なら、Bashエラーを含めその実行は終端したものとして、次の公開へ進む。古いsetやunsetの副作用が終わる前に、新世代の照合・公開を開始しない。CLI自身のtimeoutは約1秒、背景Bash要求の期限は約2秒とする。
 
-- `state` の設定・除去は、ファイルの最新内容を読み、自セッションの entry に対する read-modify-write として行う。設定値と現在値が同じなら書き込みを省く。
-- `state` の設定時に entry が無ければ作成する。作成・更新では、ストア契約に従って `lock` と未知の属性を保持する。
-- 書き込みに失敗しても pi の動作を止めず、失敗を警告で通知する。
-- 異常終了で残留した `state` の掃除は読み手側の責務である。この拡張による終了時の除去は `session_shutdown` で行い、`pid` は書かない。
+背景要求が `failed`・`unavailable`・`aborted` で終わった場合、CLI実行の終端を確証できないため、そのpiプロセスからの後続CLIを停止し、短く通知する。停止は新しい会話・reload・factoryの再生成でも解除しない。停止後もinputと所属操作は継続する。
+
+終了時は新規受付を止め、未実行分を失効させ、開始済みCLIの終端を待つ。実行終端が確定していればoptionの除去を待つ。Tools が先に停止した場合や終端が不確実な場合は、追加のcleanupを実行せず、通知とpane終了を公開終了の境界にする。paneが終了すると、pane-local optionも消滅する。
+
+## 実行経路と失敗
+
+CLI実行は [Toolsの背景Bash入口](../tools/SPEC.md#背景bash入口) に依頼し、[Guardrailsの認可・sandbox契約](../guardrails/SPEC.md) に従う。
+
+| 結果 | 扱い |
+| --- | --- |
+| `completed`、Bash成功 | 結果を用いて照合・公開を進める |
+| `completed`、`isError` または非0終了 | 操作失敗として通知する |
+| `failed` | 実行終端が不確実として通知し、後続CLIを停止する |
+| `unavailable` | 入口の不在・停止を通知し、後続CLIを停止する |
+| `aborted` | 実行終端が不確実な中断を通知し、後続CLIを停止する |
+| 出力の欠落・切り詰め・照合不一致 | 管理paneとして採用しない |
+
+所属更新・公開の失敗はTUIの短い警告で通知し、inputとpi本体の動作を継続する。UIがない場合は標準エラーへ通知する。

@@ -185,5 +185,5 @@ export type GuardrailsAPI = {
   execute(request: GuardedToolRequest): Promise<AgentToolResult<unknown>>;
 };
 
-export type { GuardedToolRequest } from "./execute.ts";
+export type { GuardedToolContext, GuardedToolRequest } from "./execute.ts";
 export { normalizeToolPath } from "./normalize-path.ts";

@@ -505,7 +505,11 @@ export class Guardrail {
     return undefined;
   }
 
-  authorizeCommand(command: string, context: ToolContext): Promise<boolean> {
+  authorizeCommand(
+    command: string,
+    context: ToolContext,
+    approvalMode: "prompt" | "existing-only" = "prompt",
+  ): Promise<boolean> {
     const { action, matched, matchSpan } = resolveCommandActionMatch(this.commandEntries, command);
     if (action === "allow") return Promise.resolve(false);
     if (action === "deny") throw new Error(`Command denied: ${command}`);
@@ -515,7 +519,8 @@ export class Guardrail {
       if (this.consumeApprovedCommand(command)) return Promise.resolve(true);
       throw new Error(`Command requires a reason: ${command}\n${COMMAND_REASON_HINT}`);
     }
-    if (!context.hasUI || !context.ui) throw new Error(`Command requires confirmation: ${command}`);
+    if (approvalMode === "existing-only" || !context.hasUI || !context.ui)
+      throw new Error(`Command requires confirmation: ${command}`);
     const ui = context.ui;
     const note = matchedPatternNote(matched);
     const display =

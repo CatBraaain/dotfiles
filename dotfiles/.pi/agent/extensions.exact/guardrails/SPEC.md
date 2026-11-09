@@ -330,6 +330,8 @@ bashコマンドの sandbox ではこのマスクを行わない。`credentials`
 
 公開APIの `execute(request)` は、ツール名・引数・呼び出しごとのcontext・AbortSignal・onUpdateを受け付ける。要求ごとに認可（§2〜§4）し、認可済みの呼び出しを1回の bwrap起動で実行する。画像readは§2.1を先に適用する。
 
+内部のBash要求では、既存承認限定の `approvalMode: existing-only` を指定できる。この場合も同じ認可状態とsandboxを使い、設定の `allow` または有効な既存承認だけで実行する。新しい確認・理由入力が必要ならUIを開かず拒否する。`deny` は通常要求と同じく拒否する。once承認の消費とturn・session承認の寿命は§2.3に従う。
+
 呼び出し元の信頼されたコードは、モデル向け引数 `params` とは別に、内部専用の `executor?: { entrypoint: string }` を渡せる。entrypointは絶対ファイルパスとし、相対パス・不正な値を拒否する。descriptorで指定できるのはentrypointだけであり、shell・環境変数・bind・sandbox modeを指定できない。認可対象とfs/bashのmodeはツール名と正規化後の引数で決まる。
 
 | 要求・状態 | 実行結果 |
@@ -349,7 +351,7 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 - `edit` は pi標準の `oldText` / `newText` 形式を使い、行ハッシュアンカー形式は使わない。
 - ツールの最終結果はコマンド完了時に一度に返る。bash では、コマンド実行中に子プロセスの stderr への書き出しを行単位で onUpdate として送出し、実行中の進捗表示に使う（描画は tool-renderer SPEC §bash）。stdout は run-tools CLI の JSON envelope に使うため、送出の対象外である。送出はツールの最終結果を変えず、最終結果は完了時に一度に返る。
 
-ツール実行で拒否された呼び出しはエラー結果となり、pi の `tool_result` イベントでも観測できる。承認・拒否の理由と結果は呼び出し元へ返り、別要求の結果と混ざらない。進捗は `onUpdate`、最終結果はツールの戻り値で返す。開始前・確認待ち後・実行枠待ち後にキャンセル済みなら、隔離実行を開始しない。実行中のキャンセルは下記の bwrap停止に従う。
+通常のSDK経路で拒否された呼び出しはエラー結果となり、pi の `tool_result` イベントでも観測できる。承認・拒否の理由と結果は呼び出し元へ返り、別要求の結果と混ざらない。進捗は `onUpdate`、最終結果はツールの戻り値で返す。開始前・確認待ち後・実行枠待ち後にキャンセル済みなら、隔離実行を開始しない。実行中のキャンセルは下記の bwrap停止に従う。
 
 停止済みの公開APIを呼び出すと、`guardrails API is no longer active` で拒否される。再読み込み後は新しい認可状態を使い、前の動的許可・コマンド承認を持ち越さない。`ask_permission` と各ツールの実行は同じ有効期間と承認状態を使う。
 

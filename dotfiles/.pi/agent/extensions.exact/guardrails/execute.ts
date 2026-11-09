@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
-import type { AgentToolResult, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
-import { Guardrail, writeApprovalNote, type PathApproval } from "./guardrail.ts";
+import type { AgentToolResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Guardrail, writeApprovalNote, type PathApproval, type ToolContext } from "./guardrail.ts";
 import { SandboxRunner } from "./sandbox-runner.ts";
 import { withNormalizedPath } from "./normalize-path.ts";
 import type { ToolName, ToolSession } from "./config.ts";
@@ -26,7 +26,11 @@ export async function executeGuardedTool(
   let approval: PathApproval | undefined;
   let commandApproved = false;
   if (toolName === "bash") {
-    commandApproved = await guardrail.authorizeCommand(params.command as string, context);
+    commandApproved = await guardrail.authorizeCommand(
+      params.command as string,
+      context,
+      request.approvalMode,
+    );
   } else {
     const path = params.path as string;
     if (toolName !== "write") await guardrail.authorizePath("read", path, context);
@@ -59,7 +63,7 @@ export async function executeGuardedTool(
   };
 }
 
-function readImage(imagePath: string, context: ExtensionToolContext): AgentToolResult<unknown> {
+function readImage(imagePath: string, context: GuardedToolContext): AgentToolResult<unknown> {
   const model = context?.model;
   if (!modelSupportsImages(model ?? {})) {
     return {
@@ -80,14 +84,20 @@ function readImage(imagePath: string, context: ExtensionToolContext): AgentToolR
   };
 }
 
+export type GuardedToolContext = Pick<ExtensionContext, "hasUI" | "model" | "thinkingLevel"> & {
+  ui?: ToolContext["ui"];
+  sessionManager?: Pick<ExtensionContext["sessionManager"], "getSessionId" | "getSessionFile">;
+};
+
 export type GuardedToolRequest = {
   id: string;
   toolName: string;
+  approvalMode?: "prompt" | "existing-only";
   params: Record<string, unknown>;
   executor?: { entrypoint: string };
   signal?: AbortSignal;
   onUpdate?: (result: AgentToolResult<unknown>) => void;
-  context: ExtensionToolContext;
+  context: GuardedToolContext;
 };
 
 const SUPPORTED_TOOLS = new Set(["read", "write", "edit", "grep", "find", "ls", "bash"]);
@@ -95,7 +105,7 @@ const COMMAND_APPROVAL_NOTE = "User approved this command via confirmation.";
 const EROFS_HINT =
   "Sandbox blocked this write. Do not rewrite the command and retry with bash. Request access with ask_permission only when the target's effective write action is ask or unset and it is not a credentials path; explicit deny cannot be granted. If the result says bash writes are unavailable, use fs tools instead.";
 
-function sessionFromContext(context: any): ToolSession {
+function sessionFromContext(context: GuardedToolContext): ToolSession {
   return {
     sessionId: context?.sessionManager?.getSessionId?.(),
     sessionFile: context?.sessionManager?.getSessionFile?.(),
