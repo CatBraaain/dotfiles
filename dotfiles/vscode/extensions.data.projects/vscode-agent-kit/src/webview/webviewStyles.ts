@@ -66,5 +66,6 @@ export const webviewStyles = `
     .empty, #status { color: var(--vscode-descriptionForeground); font-size: 12px; }
     .empty { padding: 24px 8px; text-align: center; }
     #status { min-height: 16px; margin: 0; overflow-wrap: anywhere; }
+    #status:empty { display: none; }
     #status.error { color: var(--vscode-errorForeground); }
 `;

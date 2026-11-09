@@ -733,6 +733,8 @@ export function initClient(bridge: ClientBridge): () => void {
     bridge.postMessage({ type: "addWorkspace", path });
   };
   pathInput.addEventListener("keydown", onPathInputKeyDown);
+  pathInput.addEventListener("blur", closeWorkspaceForm);
+  window.addEventListener("blur", closeWorkspaceForm);
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === "Escape" && !formElement.hidden) closeWorkspaceForm();
   };
@@ -749,6 +751,8 @@ export function initClient(bridge: ClientBridge): () => void {
     document.removeEventListener("click", onDocumentClick);
     document.removeEventListener("keydown", onKeyDown);
     pathInput.removeEventListener("keydown", onPathInputKeyDown);
+    pathInput.removeEventListener("blur", closeWorkspaceForm);
+    window.removeEventListener("blur", closeWorkspaceForm);
     root.unmount();
   };
 }

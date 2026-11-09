@@ -418,8 +418,11 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await expect.poll(() => track.getAttribute("aria-valuenow")).toBe("40");
     await track.press("ArrowUp");
     await expect.poll(() => track.getAttribute("aria-valuenow")).toBe("0");
+    const pageDownPosition = Math.min(180, Number(await track.getAttribute("aria-valuemax")));
     await track.press("PageDown");
-    await expect.poll(() => track.getAttribute("aria-valuenow")).toBe("180");
+    await expect
+      .poll(async () => Number(await track.getAttribute("aria-valuenow")))
+      .toBe(pageDownPosition);
     await track.press("Home");
     await expect.poll(() => track.getAttribute("aria-valuenow")).toBe("0");
     const thumb = await page.locator(".session-scrollbar-thumb").boundingBox();
@@ -1272,6 +1275,121 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     },
   );
 
+  it.each([320, 390])("reserves footer status space only for text at width %s", async (width) => {
+    const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 844 });
+    const status = page.locator("#status").describe("Workspace status message");
+    async function footerSpacing() {
+      return page.evaluate(() => {
+        const footer = document.querySelector(".footer")!;
+        const button = document.querySelector(".new-workspace")!;
+        const status = document.querySelector("#status")!;
+        const footerBounds = footer.getBoundingClientRect();
+        const buttonBounds = button.getBoundingClientRect();
+        const statusBounds = status.getBoundingClientRect();
+        return {
+          topGap:
+            buttonBounds.top -
+            footerBounds.top -
+            parseFloat(getComputedStyle(footer).borderTopWidth),
+          bottomGap: innerHeight - buttonBounds.bottom,
+          statusHeight: statusBounds.height,
+          statusGap: buttonBounds.top - statusBounds.bottom,
+        };
+      });
+    }
+
+    const emptySpacing = await footerSpacing();
+    expect(emptySpacing.topGap).toBe(12);
+    expect(emptySpacing.bottomGap).toBe(12);
+    expect(emptySpacing.statusHeight).toBe(0);
+
+    await status.evaluate((element) => {
+      element.textContent = "Workspace path does not exist.";
+    });
+    const messageSpacing = await footerSpacing();
+    expect(messageSpacing.statusHeight).toBeGreaterThanOrEqual(16);
+    expect(messageSpacing.statusGap).toBe(8);
+    expect(messageSpacing.bottomGap).toBe(12);
+
+    await status.evaluate((element) => {
+      element.textContent = "";
+    });
+    expect(await footerSpacing()).toEqual(emptySpacing);
+    await page.close();
+  });
+
+  it.each(
+    ["click", "focus", "Tab", "Shift+Tab", "window blur"].flatMap((activation) =>
+      ["", "/tmp/unsubmitted-workspace"].map((draft) => ({ activation, draft })),
+    ),
+  )(
+    "closes the workspace form on $activation with draft '$draft'",
+    async ({ activation, draft }) => {
+      const page = await openStory("sessions-sidebar--sample-sessions");
+      await installBridgeMessageRecorder(page);
+      const button = page.locator(".new-workspace").describe("New workspace footer button");
+      const form = page.locator("#workspace-form").describe("Workspace path form");
+      const input = page.locator("#workspace-path").describe("Workspace path input");
+      const heading = page
+        .locator(".group-title")
+        .first()
+        .describe("Workspace heading focus target");
+      const groupCountBefore = await page.locator(".group").count();
+      const headingExpanded = await heading.getAttribute("aria-expanded");
+      await button.click();
+      await input.fill(draft);
+
+      if (activation === "click") await heading.click();
+      else if (activation === "focus") await heading.focus();
+      else if (activation === "window blur") {
+        await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+      } else await input.press(activation);
+
+      await expect.poll(() => form.isHidden()).toBe(true);
+      expect(await button.isVisible()).toBe(true);
+      expect(await button.getAttribute("aria-expanded")).toBe("false");
+      expect(await input.inputValue()).toBe("");
+      expect(await page.locator(".group").count()).toBe(groupCountBefore);
+      if (activation === "click" || activation === "focus") {
+        expect(await heading.evaluate((element) => element === document.activeElement)).toBe(true);
+      }
+      if (activation === "click") {
+        expect(await heading.getAttribute("aria-expanded")).toBe(
+          headingExpanded === "true" ? "false" : "true",
+        );
+      }
+      expect(
+        await page.evaluate(() =>
+          (window as Window & { __bridgeMessages?: { type?: string }[] }).__bridgeMessages?.filter(
+            (message) => message.type === "addWorkspace",
+          ),
+        ),
+      ).toEqual([]);
+
+      await button.click();
+      expect(await input.inputValue()).toBe("");
+      expect(await input.evaluate((element) => element === document.activeElement)).toBe(true);
+      await page.close();
+    },
+  );
+
+  it("keeps the workspace draft and focus during a list refresh", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    await installBridgeMessageRecorder(page);
+    const input = page.locator("#workspace-path").describe("Workspace path draft");
+    await page.locator(".new-workspace").click();
+    await input.fill("/tmp/unsubmitted-workspace");
+    await page.evaluate(() => {
+      const refresh = (window as Window & { __refreshSessions?: () => void }).__refreshSessions;
+      if (refresh === undefined) throw new Error("Session refresh hook is missing.");
+      refresh();
+    });
+    expect(await page.locator("#workspace-form").isVisible()).toBe(true);
+    expect(await input.inputValue()).toBe("/tmp/unsubmitted-workspace");
+    expect(await input.evaluate((element) => element === document.activeElement)).toBe(true);
+    await page.close();
+  });
+
   it("adds the workspace on Enter and closes the form on Escape", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
@@ -1293,7 +1411,6 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(await form.isVisible()).toBe(true);
     await input.fill("~/projects/ime-pending");
     await input.dispatchEvent("keydown", { key: "Enter", isComposing: true });
-    await page.locator(".group-title").first().focus();
     expect(await form.isVisible()).toBe(true);
     expect(await input.inputValue()).toBe("~/projects/ime-pending");
     expect(

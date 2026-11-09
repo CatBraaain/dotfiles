@@ -572,6 +572,35 @@ test(
   "New Workspace のキャンセルと無効なパスを安全に扱える",
   { annotation: { type: "spec", description: "E2E-12" } },
   async ({ host }, testInfo) => {
+    await test.step("Discard the workspace draft when focus moves to the editor", async () => {
+      await host.page.keyboard.press("Control+N");
+      const editor = host.page
+        .locator(".editor-instance .monaco-editor")
+        .first()
+        .describe("Untitled editor focus target");
+      await expect(editor).toBeVisible();
+      const frame = await host.sessionFrame();
+      const groupsBefore = await frame.locator("section.group").count();
+      const button = frame.locator(".new-workspace").describe("New workspace footer button");
+      const input = frame.locator("#workspace-path").describe("Workspace path input");
+      await button.click({ steps: 15 });
+      await input.fill(host.sessions.Missing.cwd);
+      await editor.click({ position: { x: 80, y: 40 } });
+      await expect(frame.locator("#workspace-form")).toBeHidden();
+      await expect(button).toBeVisible();
+      await expect(input).toHaveValue("");
+      await expect(editor).toHaveClass(/focused/);
+      expect(await frame.locator("section.group").count()).toBe(groupsBefore);
+      expect(host.snapshot().terminals).toHaveLength(0);
+      await testInfo.attach("Workspace draft discarded after editor focus", {
+        body: await host.page.screenshot(),
+        contentType: "image/png",
+      });
+      await button.click({ steps: 15 });
+      await expect(input).toHaveValue("");
+      await expect(input).toBeFocused();
+      await input.press("Escape");
+    });
     await test.step("Reject a missing workspace path with a safe error", async () => {
       const frame = await host.sessionFrame();
       const groupsBefore = await frame.locator("section.group").count();
