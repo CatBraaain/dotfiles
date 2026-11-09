@@ -16,13 +16,7 @@ export const webviewStyles = `
     button:hover { background: var(--vscode-list-hoverBackground); }
     svg { flex: none; pointer-events: none; }
     #app { box-sizing: border-box; display: flex; flex-direction: column; min-height: 100dvh; padding: 12px 12px 0; }
-    header, .group-header { display: flex; align-items: center; }
-    header { justify-content: space-between; gap: 8px; min-height: 24px; margin-bottom: 12px; }
-    h1 { flex: 1; overflow: hidden; margin: 0; font-size: 13px; font-weight: 600; line-height: 24px; text-overflow: ellipsis; white-space: nowrap; }
-    .header-actions { display: flex; gap: 4px; }
-    .icon-button { min-width: 24px; height: 24px; padding: 0 8px; color: var(--vscode-descriptionForeground); }
-    .icon-button:hover { color: var(--vscode-foreground); }
-    .icon-button[data-action="refresh"] { width: 24px; padding: 0; }
+    .group-header { display: flex; align-items: center; }
     #sessions { margin-bottom: 12px; }
     .footer { position: sticky; bottom: 0; display: flex; flex-direction: column; gap: 8px; margin-top: auto; padding: 12px; border-top: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); background: var(--vscode-sideBar-background); }
     .workspace-control { position: relative; display: grid; }

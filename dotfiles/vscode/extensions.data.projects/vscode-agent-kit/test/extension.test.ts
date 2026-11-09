@@ -3,6 +3,7 @@ import type * as vscode from "vscode";
 import manifest from "../package.json";
 import { activate } from "../src/extension";
 import { TmuxRuntimeStore, tmuxSocketName } from "../src/tmux";
+import { SessionWebviewProvider } from "../src/webview/sessionWebviewProvider";
 
 const api = vi.hoisted(() => ({
   registerCommand: vi.fn(),
@@ -26,7 +27,7 @@ vi.mock("vscode", () => ({
   },
 }));
 
-describe("tmux settings command", () => {
+describe("extension commands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("PI_CODING_AGENT_DIR", "/fixture/agent");
@@ -38,7 +39,7 @@ describe("tmux settings command", () => {
     vi.unstubAllEnvs();
   });
 
-  function register() {
+  function register(commandId = "piSessions.reapplyTmuxSettings") {
     const disposable = { dispose: vi.fn() };
     api.registerCommand.mockReturnValue(disposable);
     const context = {
@@ -46,22 +47,53 @@ describe("tmux settings command", () => {
       extensionUri: { fsPath: "/extension" },
     } as unknown as vscode.ExtensionContext;
     activate(context);
-    expect(api.registerCommand).toHaveBeenCalledWith(
-      "piSessions.reapplyTmuxSettings",
-      expect.any(Function),
-    );
+    expect(api.registerCommand).toHaveBeenCalledWith(commandId, expect.any(Function));
     expect(context.subscriptions).toContain(disposable);
-    return api.registerCommand.mock.calls[0][1] as () => Promise<void>;
+    const registration = api.registerCommand.mock.calls.find(([id]) => id === commandId);
+    if (registration === undefined) throw new Error(`Command not registered: ${commandId}`);
+    return registration[1] as () => Promise<void>;
   }
 
   it("publishes the command in the Pi Sessions category", () => {
-    expect(manifest.contributes.commands).toEqual([
-      {
-        command: "piSessions.reapplyTmuxSettings",
-        category: "Pi Sessions",
-        title: "Reapply tmux Settings",
-      },
-    ]);
+    expect(manifest.contributes.commands).toContainEqual({
+      command: "piSessions.reapplyTmuxSettings",
+      category: "Pi Sessions",
+      title: "Reapply tmux Settings",
+    });
+  });
+
+  it("contributes a named refresh icon only to the Sessions view title", () => {
+    expect(manifest.contributes.commands).toContainEqual({
+      command: "piSessions.refreshSessions",
+      category: "Pi Sessions",
+      title: "Refresh Sessions",
+      icon: "$(refresh)",
+    });
+    expect(manifest.contributes.menus).toEqual({
+      "view/title": [
+        {
+          command: "piSessions.refreshSessions",
+          when: "view == piSessions.sessions",
+          group: "navigation",
+        },
+      ],
+      commandPalette: [{ command: "piSessions.refreshSessions", when: "false" }],
+    });
+    expect(manifest.contributes.viewsContainers.activitybar[0].title).toBe("Pi Sessions");
+    expect(manifest.contributes.views.piSessionViews[0].name).toBe("Sessions");
+  });
+
+  it("refreshes the registered Sessions provider from the native title command", async () => {
+    const refresh = vi.spyOn(SessionWebviewProvider.prototype, "refresh").mockResolvedValue();
+    const command = register("piSessions.refreshSessions");
+    const provider = api.registerWebviewViewProvider.mock.calls[0][1];
+
+    await command();
+
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(refresh.mock.instances[0]).toBe(provider);
+    expect(api.showInformationMessage).not.toHaveBeenCalled();
+    expect(api.showErrorMessage).not.toHaveBeenCalled();
   });
 
   it.each([

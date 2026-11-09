@@ -163,6 +163,13 @@ export class VSCodeFixture {
     throw new Error("Sessions webview did not become ready");
   }
 
+  async refreshSessions(): Promise<void> {
+    await this.page
+      .getByRole("button", { name: "Refresh Sessions", exact: true })
+      .describe("Native Sessions title refresh")
+      .click();
+  }
+
   async selectSession(key: string): Promise<void> {
     const frame = await this.sessionFrame();
     const session = this.sessions[key];

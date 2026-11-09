@@ -55,18 +55,19 @@ describe("webviewHtml", () => {
   it("keeps the fixed controls markup the client script wires up", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
-    expect(html).toContain("<h1>Sessions</h1>");
-    expect(html).toContain('data-action="refresh"');
+    expect(html).toContain("<title>Sessions</title>");
     expect(html).toContain('<section id="sessions"');
     expect(html).toContain('<p id="status"');
   });
 
-  it("describes the refresh button as a session list update", () => {
+  it("leaves the Sessions title and refresh action to the native view header", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
-    expect(html).toContain(
-      'data-action="refresh" aria-label="Refresh sessions" title="Refresh session list"',
-    );
+    expect(html).not.toContain("<header>");
+    expect(html).not.toContain("<h1>");
+    expect(html).not.toContain('data-action="refresh"');
+    expect(html).not.toContain(".header-actions");
+    expect(html).not.toContain(".icon-button");
   });
 
   it("keeps the New workspace form and footer markup for the client script", () => {

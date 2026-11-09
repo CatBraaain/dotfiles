@@ -56,7 +56,10 @@ test(
       await expect(
         host.page.locator(".monaco-workbench").describe("Entire VS Code workbench"),
       ).toBeVisible();
-      await content.locator("h1").describe("Neutral Sessions heading").hover();
+      await host.page
+        .locator(".part.sidebar .title-label")
+        .describe("Native Sessions title")
+        .hover();
       const image = await host.page.screenshot({ path: testInfo.outputPath(filename) });
       const width = image.readUInt32BE(16);
       const height = image.readUInt32BE(20);
@@ -67,6 +70,13 @@ test(
     }
 
     await test.step("Hold the first response and show loading without an empty message", async () => {
+      const refresh = host.page
+        .getByRole("button", { name: "Refresh Sessions", exact: true })
+        .describe("Native Sessions refresh action");
+      await expect(refresh).toHaveCount(1);
+      await expect(refresh).toBeVisible();
+      await expect(refresh).toHaveClass(/codicon-refresh/);
+      await expect(content.locator("header, h1, [data-action=refresh]")).toHaveCount(0);
       await expect(sessions).toHaveText("Loading sessions…");
       await expect(sessions).not.toContainText("No saved sessions");
       await expect(rows).toHaveCount(0);
@@ -112,7 +122,7 @@ test(
         .describe("Retained session names");
       const previousNames = await names.allTextContents();
       expect(previousNames.length).toBeGreaterThan(0);
-      await content.locator('[data-action="refresh"]').describe("Refresh sessions").click();
+      await host.refreshSessions();
       await expect(status).toHaveText("Refreshing sessions…");
       await expect(names).toHaveText(previousNames);
       await expect(
@@ -133,7 +143,7 @@ test(
     });
 
     await test.step("Show a retrieval error without an empty or loading message", async () => {
-      await content.locator('[data-action="refresh"]').describe("Refresh the empty list").click();
+      await host.refreshSessions();
       await expect(sessions).toHaveText("Loading sessions…");
       await receive({ type: "sessionsError", message: "Failed to read Pi sessions" });
       await expect(status).toHaveText("Failed to read Pi sessions");
@@ -184,7 +194,7 @@ async function reloadWithHeldResponses(host: VSCodeFixture): Promise<Frame> {
     })
     .toBe(true);
   if (!content) throw new Error("Controlled Sessions webview did not become ready");
-  await expect(content.locator("h1").describe("Product Sessions heading")).toHaveText("Sessions");
+  await expect(content.locator("header, h1, [data-action=refresh]")).toHaveCount(0);
   return content;
 }
 
@@ -197,8 +207,7 @@ function holdSessionResponses(): void {
     const message = (event as MessageEvent).data as ExtensionMessage & {
       sessionListInjected?: boolean;
     };
-    if (!message || !["loading", "sessions", "sessionsError", "error"].includes(message.type))
-      return;
+    if (!message || !["sessions", "sessionsError", "error"].includes(message.type)) return;
     if (message.sessionListInjected) return;
     controlled.sessionListResponses.push(message);
     event.stopImmediatePropagation();

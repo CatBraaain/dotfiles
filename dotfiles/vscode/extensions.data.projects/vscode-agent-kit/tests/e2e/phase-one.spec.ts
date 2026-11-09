@@ -68,7 +68,7 @@ test(
         "data-mode",
         "unarchived",
       );
-      await frame.locator('[data-action="refresh"]').describe("Refresh sessions").click();
+      await host.refreshSessions();
       await expect(group.locator("[data-mode-toggle]")).toHaveAttribute("data-mode", "all");
       await expect(
         group
@@ -165,7 +165,10 @@ test(
               .locator(`[data-session="${host.sessions[key].id}"]`)
               .describe(`${key} selected before capturing its Pi TUI`),
           ).toBeVisible();
-          await frame.locator("h1").describe("Neutral Sessions heading").hover();
+          await host.page
+            .locator(".part.sidebar .title-label")
+            .describe("Native Sessions title")
+            .hover();
           await expect
             .poll(() =>
               host
@@ -414,12 +417,12 @@ test(
         top: window.scrollY,
         height: document.scrollingElement!.scrollHeight,
       }));
-      const headerTop = await frame
-        .locator("header")
+      const listTop = await frame
+        .locator("#sessions")
         .evaluate((element) => element.getBoundingClientRect().top);
-      expect(headerTop).toBe(12);
+      expect(listTop).toBe(12);
       expect(await button.evaluate((element) => element.getBoundingClientRect().bottom)).toBe(
-        (await frame.evaluate(() => innerHeight)) - headerTop,
+        (await frame.evaluate(() => innerHeight)) - listTop,
       );
       await button.click({ steps: 15 });
       await expect(frame.locator("#workspace-form").describe("Workspace path form")).toBeVisible();
@@ -783,7 +786,10 @@ test(
         "color",
         await status.evaluate((element) => getComputedStyle(element).color),
       );
-      await frame.locator("h1").describe("Neutral Sessions heading").hover();
+      await host.page
+        .locator(".part.sidebar .title-label")
+        .describe("Native Sessions title")
+        .hover();
       await testInfo.attach("Archive 後（アーカイブ済み行）", {
         body: await host.page.screenshot({ path: testInfo.outputPath("archived.png") }),
         contentType: "image/png",
@@ -922,10 +928,7 @@ test(
       store["active-workspaces"] = { [workspaceCwd]: { "active-sessions": activeSessions } };
       writeFileSync(statePath, JSON.stringify(store));
       const frame = await host.sessionFrame();
-      await frame
-        .locator('[data-action="refresh"]')
-        .describe("Refresh the single workspace")
-        .click();
+      await host.refreshSessions();
       await expect(
         frame.locator("section.group").describe("Only the shared workspace"),
       ).toHaveCount(1);
@@ -1080,7 +1083,10 @@ test(
         group.locator(".session-status[data-state]").describe("Four live states in the same group"),
       ).toHaveCount(4);
       await expect.poll(() => host.snapshot().tabs).toHaveLength(0);
-      await frame.locator("h1").describe("Neutral Sessions heading").hover();
+      await host.page
+        .locator(".part.sidebar .title-label")
+        .describe("Native Sessions title")
+        .hover();
       await testInfo.attach("running / waiting-approval / unread completion / read standby", {
         body: await host.page.screenshot({
           path: testInfo.outputPath("session-list-phases.png"),

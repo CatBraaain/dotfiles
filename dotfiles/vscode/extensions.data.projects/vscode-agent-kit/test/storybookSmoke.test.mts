@@ -126,6 +126,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         __bridgeMessages?: unknown[];
         __removeWorkspace?: (cwd: string) => void;
         __reverseWorkspaces?: () => void;
+        __refreshSessions?: () => void;
       };
 
       const sessionsRoot = document.querySelector("#sessions");
@@ -168,6 +169,8 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
               };
             }
             const originalPostMessage = bridge.postMessage.bind(bridge);
+            (window as TestWindow).__refreshSessions = () =>
+              originalPostMessage({ type: "refresh" });
             bridge.postMessage = (message) => {
               bridgeMessages.push(message);
               originalPostMessage(message);
@@ -179,6 +182,14 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         if (fiber.sibling !== null) pendingFibers.push(fiber.sibling);
       }
       throw new Error("Mounted webview bridge is missing.");
+    });
+  }
+
+  async function refreshSessions(page: Awaited<ReturnType<typeof openStory>>): Promise<void> {
+    await page.evaluate(() => {
+      const refresh = (window as Window & { __refreshSessions?: () => void }).__refreshSessions;
+      if (refresh === undefined) throw new Error("Host refresh control is not installed.");
+      refresh();
     });
   }
 
@@ -235,7 +246,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   it.each([320, 390, 720])(
     "keeps row bounds unchanged when mode switching adds document overflow at %ipx",
     async (width) => {
-      const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 420 });
+      const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 384 });
       const row = page.locator(".session-row").first();
       async function rowBounds() {
         return row.evaluate((element) => {
@@ -245,19 +256,19 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       }
       const before = await rowBounds();
       expect(before).toEqual({ left: 24, right: width - 12, width: width - 36 });
-      expect(await page.evaluate(() => document.scrollingElement!.scrollHeight)).toBe(420);
+      expect(await page.evaluate(() => document.scrollingElement!.scrollHeight)).toBe(384);
       await page.click(projectModeSelector);
       await page.waitForSelector(".session-row.archived");
       expect(await page.evaluate(() => document.scrollingElement!.scrollHeight)).toBeGreaterThan(
-        420,
+        384,
       );
       expect(await rowBounds()).toEqual(before);
       await page.click(projectModeSelector);
       await expect.poll(() => page.locator(".session-row").count()).toBe(4);
       expect(await rowBounds()).toEqual(before);
-      expect(
-        await page.locator("header").evaluate((element) => getComputedStyle(element).position),
-      ).toBe("static");
+      expect(await page.locator("#app > header, #app h1, #app [data-action=refresh]").count()).toBe(
+        0,
+      );
       expect(
         await page.locator(".footer").evaluate((element) => getComputedStyle(element).position),
       ).toBe("sticky");
@@ -266,7 +277,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   );
 
   it("updates the overlay for mode, group, data, form, and viewport height changes", async () => {
-    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 420 });
+    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 384 });
     const track = page.getByRole("scrollbar", { includeHidden: true });
     await expect.poll(() => track.isHidden()).toBe(true);
     await page.click(projectModeSelector);
@@ -661,6 +672,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
 
   it("keeps same-named cwd modes independent across row changes and refresh", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
+    await installBridgeMessageRecorder(page);
     const projectMode = page.locator(projectModeSelector);
     const worktreeMode = page.locator(worktreeModeSelector);
     await page.locator(`[data-archive="${worktreeId}"]`).click();
@@ -673,7 +685,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await projectMode.press("Space");
     await expect.poll(() => page.locator(`[data-session="${atlasArchivedId}"]`).count()).toBe(0);
     expect(await page.locator(`[data-session="${worktreeId}"]`).count()).toBe(1);
-    await page.locator('[data-action="refresh"]').click();
+    await refreshSessions(page);
     expect(await projectMode.getAttribute("data-mode")).toBe("unarchived");
     expect(await worktreeMode.getAttribute("data-mode")).toBe("all");
     await page.locator(".new-workspace").click();
@@ -1015,7 +1027,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       .toBe("all");
     expect(await chevron.getAttribute("aria-expanded")).toBe("false");
     expect(await group.locator(".session-row").count()).toBe(0);
-    for (let index = 0; index < 2; index++) await page.locator('[data-action="refresh"]').click();
+    for (let index = 0; index < 2; index++) await refreshSessions(page);
     expect(await chevron.getAttribute("aria-expanded")).toBe("false");
     expect(await page.locator(projectModeSelector).getAttribute("data-mode")).toBe("all");
     await name.click();
@@ -1064,10 +1076,10 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       const input = page.locator("#workspace-path").describe("Workspace path input");
       const footer = page.locator(".footer");
       const icon = page.locator(".workspace-folder-icon").describe("Decorative workspace folder");
-      const headerTop = await page
-        .locator("header")
+      const listTop = await page
+        .locator("#sessions")
         .evaluate((element) => element.getBoundingClientRect().top);
-      expect(headerTop).toBe(12);
+      expect(listTop).toBe(12);
       async function documentBounds() {
         return page.evaluate(() => ({
           top: window.scrollY,
@@ -1091,12 +1103,12 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         const documentBefore = await documentBounds();
         expect(buttonBefore).toEqual({
           x: 24,
-          y: height - headerTop - 32,
+          y: height - listTop - 32,
           width: width - 48,
           height: 32,
         });
         expect(documentBefore.width).toBe(width);
-        expect(iconBefore).toEqual({ x: 35, y: height - headerTop - 24, width: 16, height: 16 });
+        expect(iconBefore).toEqual({ x: 35, y: height - listTop - 24, width: 16, height: 16 });
         expect(labelStart).toBe(57);
         expect(await icon.getAttribute("aria-hidden")).toBe("true");
         expect(await icon.getAttribute("focusable")).toBe("false");
@@ -1121,7 +1133,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         expect(await icon.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe(
           "none",
         );
-        await page.mouse.click(43, height - headerTop - 16);
+        await page.mouse.click(43, height - listTop - 16);
         expect(await input.evaluate((element) => element === document.activeElement)).toBe(true);
         expect(await footer.boundingBox()).toEqual(footerBefore);
         expect(await documentBounds()).toEqual(documentBefore);
@@ -1158,7 +1170,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(await form.isVisible()).toBe(true);
     await input.fill("~/projects/ime-pending");
     await input.dispatchEvent("keydown", { key: "Enter", isComposing: true });
-    await page.locator('[data-action="refresh"]').focus();
+    await page.locator(".group-title").first().focus();
     expect(await form.isVisible()).toBe(true);
     expect(await input.inputValue()).toBe("~/projects/ime-pending");
     expect(

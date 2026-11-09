@@ -1,6 +1,6 @@
 # Pi Sessions design
 
-Pi Sessions サイドバー Webview と E2E gallery の見た目の正本。Webview の対象は行・見出し・操作の寸法と色で、操作と保存の振る舞いは [SPEC.md](SPEC.md) が定める。読者はこれらの見た目を変更する実装者。Webview の値の実装先は `src/webview/webviewStyles.ts` で、stories カタログが同じスタイルを共有する。
+Pi Sessions サイドバー（VS Code 標準ビュータイトルと Webview）および E2E gallery の見た目の正本。Webview の対象は行・見出し・操作の寸法と色で、操作と保存の振る舞いは [SPEC.md](SPEC.md) が定める。読者はこれらの見た目を変更する実装者。Webview の値の実装先は `src/webview/webviewStyles.ts` で、stories カタログが同じスタイルを共有する。
 
 Webview の色は VS Code のテーマ変数だけを使い、固定色の palette と追加フォントは持たない。階層と部品構成の参照元は agent-open-ui のデザイン（`~/projects/agent-open-ui/DESIGN.md`）で、この文書はそれをテーマ変数へ対応させた値を定める。
 
@@ -24,19 +24,21 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 
 ## レイアウト
 
-Layout: New workspace フッター — 一覧が短いときも長いときも操作の下余白をヘッダーの上余白に揃える → sticky-footer の document 内下端追従版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/viewport-shell/sticky-footer.md)）; scroll owner: `html`（document）; anti-patterns: 上下で異なる外側余白、入力への切替による高さの増減、一覧だけの別スクロール領域。
+Layout: Sessions ビュータイトル — 見出しと一覧の更新操作を一行にまとめる → VS Code 標準ビュータイトル（[参照](https://code.visualstudio.com/api/references/contribution-points#contributes.menus)）; scroll owner: `html`（Webview document）; anti-patterns: Webview 内の重複した見出しと更新ツールバー。
+
+Layout: New workspace フッター — 一覧が短いときも長いときも操作の下余白を一覧の上余白に揃える → sticky-footer の document 内下端追従版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/viewport-shell/sticky-footer.md)）; scroll owner: `html`（document）; anti-patterns: 上下で異なる外側余白、入力への切替による高さの増減、一覧だけの別スクロール領域。
 
 Layout: ワークスペース見出し — 左の開閉と名前、右の補助操作を一列に配置する → split-nav の固定操作幅版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/in-line-grouping/split-nav.md)）; scroll owner: `html`（document）; anti-patterns: 操作の折り返し、名前による操作の押し出し。名前を省略して操作幅を保つ。
 
-Layout: セッション一覧 — スクロールバーを既存の余白へ重ねる → imposter の右端固定配置（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/overlay-exception/imposter.md)）; scroll owner: `html`（document）; anti-patterns: バー専用の幅予約、一覧だけの別スクロール領域、ヘッダー・フッターのフロー変更。
+Layout: セッション一覧 — スクロールバーを既存の余白へ重ねる → imposter の右端固定配置（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/overlay-exception/imposter.md)）; scroll owner: `html`（document）; anti-patterns: バー専用の幅予約、一覧だけの別スクロール領域、一覧・フッターのフロー変更。
 
 Layout: ワークスペースのコンテキストメニュー — 一覧を押し下げず起動位置に操作を重ねる → imposter の viewport 内固定配置版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/overlay-exception/imposter.md)）; scroll owner: `html`（document）; anti-patterns: 一覧幅・行位置の変化、viewport 外へのはみ出し、メニュー内の追加スクロール領域。
 
 | 対象 | 値 |
 | --- | --- |
 | 全体の余白 | 上と左右は12px。下はフッターの12pxで確保する。グループ間は12px |
-| ヘッダー | 高さ24px、下余白12px。見出し13px・600。要素間8px |
-| フッター | 一覧の下。上境界線（境界トークン）と上下・左右12pxの余白で区切る。操作の下余白は、一覧の長さとスクロール位置によらずヘッダーの上余白と同じ12pxとする |
+| ビュータイトル | VS Code 標準の `Sessions` タイトルと右側の refresh アイコン。寸法・配色・hover・focus は VS Code 標準に従う |
+| フッター | 一覧の下。上境界線（境界トークン）と上下・左右12pxの余白で区切る。操作の下余白は、一覧の長さとスクロール位置によらず一覧の上余白と同じ12pxとする |
 | 状態・エラー表示 | フッターの操作より上。高さ16px以上、操作との間隔8px |
 | フォーム（開いたとき） | New workspace と同じ位置・幅・高さ。開閉で周囲の配置とスクロール範囲を保つ |
 | グループ見出し | 高さ24px、要素間4px。見出し名14px・600・20px行で省略表示 |
@@ -66,7 +68,7 @@ New workspace フッターの主操作はワークスペースの登録。情報
 | 日時 | 等幅（`editor-font-family` 代替 `ui-monospace`）、10px・tabular-nums、右端から36pxの位置に右寄せで5文字分。行内では右側に `36px + 5ch + 8px` を予約する |
 | 行の操作（Archive・Unarchive） | 24px 四方の ghost 操作。12px の `currentColor` SVG、補助文字色、hover は本文色と hover 面。右端から4pxの位置に重ねる。Archive と Unarchive は同じ位置を占有率で切り替え、アーカイブ済みの行では Archive の代わりに Unarchive（アーカイブから取り出す矢印付きの SVG）を出す |
 
-セッション一覧の主操作はセッションを開くこと。情報の優先順はグループ、セッション名と状態、更新日時と行操作。既存の見出し・モード切替・Refresh・行操作・New workspace・フォームを保持する。スクロール位置の操作は補助操作とし、装飾や追加のツールバーは設けない。
+セッション一覧の主操作はセッションを開くこと。情報の優先順はグループ、セッション名と状態、更新日時と行操作。標準ビュータイトルの Sessions・Refresh と、Webview のグループ見出し・モード切替・行操作・New workspace・フォームを保持する。スクロール位置の操作は補助操作とし、装飾や追加のツールバーは設けない。
 
 ## Motion & Interaction
 

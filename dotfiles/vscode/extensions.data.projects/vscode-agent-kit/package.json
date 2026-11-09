@@ -40,8 +40,29 @@
         "command": "piSessions.reapplyTmuxSettings",
         "category": "Pi Sessions",
         "title": "Reapply tmux Settings"
+      },
+      {
+        "command": "piSessions.refreshSessions",
+        "category": "Pi Sessions",
+        "title": "Refresh Sessions",
+        "icon": "$(refresh)"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "piSessions.refreshSessions",
+          "when": "view == piSessions.sessions",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "piSessions.refreshSessions",
+          "when": "false"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {

@@ -714,7 +714,6 @@ export function initClient(bridge: ClientBridge): () => void {
       pathInput.focus({ preventScroll: true });
       return;
     }
-    if (actionType === "refresh") store.setLoading();
     bridge.postMessage({ type: actionType });
   };
   document.addEventListener("click", onDocumentClick);
