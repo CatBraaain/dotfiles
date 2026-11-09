@@ -4,6 +4,8 @@ pi の全built-in fsツール（read / write / edit / grep / find / ls / bash）
 
 認可・承認状態・隔離実行を公開APIで提供する。呼び出し元へ結果のPromiseを返す。起動時に設定が不正な場合の扱いは §6、停止・再読み込み時の扱いは §7 に従う。
 
+利用者自身のマシンとリポジトリでの利用を前提とする。信頼できないコードの安全な実行を保証するものではない。
+
 ---
 
 ## 1. ツールごとの扱い
@@ -232,6 +234,8 @@ flowchart TD
 
 複合コマンドは、`;` `&&` `||` `|` `|&` `&` `;;` 改行で区切られた各コマンドと、サブシェル `()`・コマンド置換 `$(...)`・プロセス置換 `<(...)` / `>(...)` の中身それぞれを判定する。全体には最も厳しいアクション（`deny` > `ask_with_reason` > `ask` > `allow`）を適用する。heredoc の本文とコメントはコマンドとして判定しない。先頭の `env` と `VAR=value` 形式の語はコマンド名の判定から読み飛ばす。事前承認の同一性は各セグメントのtoken列で比較し、`cmd "a b"` と `cmd a b` を区別する。
 
+コマンド照合は bwrap のfs境界を補う確認ゲートであり、敵対的な入力に対するセキュリティ境界ではない。backtick置換、変数展開後の実行コマンド、`bash -c` / `eval` / スクリプトの実行内容、関数呼び出し先、`nohup` 等の未対応ラッパーの内部は検査しない。
+
 | コマンドのアクション | 結果 |
 | --- | --- |
 | `allow` | そのまま実行 |
@@ -328,7 +332,9 @@ bashコマンドの sandbox ではこのマスクを行わない。`credentials`
 
 ## 7. run-tools CLI によるfs IO
 
-公開APIの `execute(request)` は、ツール名・引数・呼び出しごとのcontext・AbortSignal・onUpdateを受け付ける。要求ごとに認可（§2〜§4）し、認可済みの呼び出しを1回の bwrap起動で実行する。画像readは§2.1を先に適用する。
+公開APIは `createGuardrailsAPI(pi, configPath?)` で取得する。取得時に登録される `ask_permission` と `execute(request)` は同じ認可・承認状態を使う。
+
+`execute(request)` は、ツール名・引数・呼び出しごとのcontext・AbortSignal・onUpdateを受け付ける。要求ごとに認可（§2〜§4）し、認可済みの呼び出しを1回の bwrap起動で実行する。画像readは§2.1を先に適用する。最終ツール結果はPromiseで返し、認可・実行時の例外はrejectionで返す。
 
 内部のBash要求では、既存承認限定の `approvalMode: existing-only` を指定できる。この場合も同じ認可状態とsandboxを使い、設定の `allow` または有効な既存承認だけで実行する。新しい確認・理由入力が必要ならUIを開かず拒否する。`deny` は通常要求と同じく拒否する。once承認の消費とturn・session承認の寿命は§2.3に従う。
 
@@ -353,7 +359,7 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 
 通常のSDK経路で拒否された呼び出しはエラー結果となり、pi の `tool_result` イベントでも観測できる。承認・拒否の理由と結果は呼び出し元へ返り、別要求の結果と混ざらない。進捗は `onUpdate`、最終結果はツールの戻り値で返す。開始前・確認待ち後・実行枠待ち後にキャンセル済みなら、隔離実行を開始しない。実行中のキャンセルは下記の bwrap停止に従う。
 
-停止済みの公開APIを呼び出すと、`guardrails API is no longer active` で拒否される。再読み込み後は新しい認可状態を使い、前の動的許可・コマンド承認を持ち越さない。`ask_permission` と各ツールの実行は同じ有効期間と承認状態を使う。
+`session_shutdown` 後は、取得済みAPIの `execute` と登録済み `ask_permission` の新規呼び出しを `guardrails API is no longer active` で拒否する。再読み込み時は公開APIを新しく取得し、前の動的許可・コマンド承認を持ち越さない。`ask_permission` と各ツールの実行は同じ有効期間を持つ。
 
 ### sandbox実行の同時数の上限
 
