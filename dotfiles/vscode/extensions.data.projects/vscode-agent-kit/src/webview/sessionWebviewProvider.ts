@@ -87,14 +87,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
     const data = store.status === "ok" ? store.data : undefined;
     const storePhases = sessionPhases(data);
-    const displayedSessionId = this.deps.registry.displayedSessionId;
-    if (
-      displayedSessionId !== undefined &&
-      storePhases.get(displayedSessionId) === "waiting-user"
-    ) {
-      this.runningSessionIds.delete(displayedSessionId);
-      this.unreadSessionIds.delete(displayedSessionId);
-    }
     const activeIds = activeSessionIds(data);
     const registeredCwds = registeredWorkspaceCwds(data);
 
@@ -119,7 +111,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       archivedIds,
       storePhases,
       livePhases: phases,
-      displayedSessionId,
     });
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
     this.postState({
@@ -139,7 +130,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       archivedIds: ReadonlySet<string>;
       storePhases: ReadonlyMap<string, SessionPhase>;
       livePhases: ReadonlyMap<string, SessionPhase> | null;
-      displayedSessionId: string | undefined;
     },
   ): void {
     const runningIds = new Set<string>();
@@ -157,9 +147,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         runningIds.add(sessionId);
       }
       const isUnreadCompletion =
-        phase === "waiting-user" &&
-        sessionId !== snapshot.displayedSessionId &&
-        (hasObservedRun || this.unreadSessionIds.has(sessionId));
+        phase === "waiting-user" && (hasObservedRun || this.unreadSessionIds.has(sessionId));
       if (isUnreadCompletion) unreadIds.add(sessionId);
     }
     this.runningSessionIds = runningIds;
@@ -355,6 +343,11 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
 
     terminal.show();
+    const store = readSessionStateStore(this.deps.statePath);
+    const data = store.status === "ok" ? store.data : undefined;
+    if (sessionPhases(data).get(sessionId) === "waiting-user") {
+      this.runningSessionIds.delete(sessionId);
+    }
     this.unreadSessionIds.delete(sessionId);
     // Re-send the list so the webview's selection display follows the
     // session the shared terminal now shows.

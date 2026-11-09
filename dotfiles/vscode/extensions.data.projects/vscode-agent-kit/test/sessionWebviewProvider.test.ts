@@ -683,31 +683,61 @@ describe("SessionWebviewProvider", () => {
       expect(row().hasUnread).toBe(false);
     });
 
-    it("treats completion in the displayed terminal as read even when the list is hidden", async () => {
-      const { provider, webview, registry, terminal, setPhase, row } = await unreadFixture();
+    it.each([true, false])(
+      "preserves a displayed completion across refreshes with the list visible=%s",
+      async (visible) => {
+        const { provider, webview, registry, terminal, setPhase, row } = await unreadFixture();
+        await webview.receive({ type: "openSession", sessionId: activeSessionId });
+        webview.setVisible(visible);
+        await setPhase("running");
+        await setPhase("waiting-user");
+        expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+
+        await provider.refresh();
+        expect(row().hasUnread).toBe(true);
+        registry.onTerminalClosed(terminal as never);
+        await provider.refresh();
+        expect(row().hasUnread).toBe(true);
+      },
+    );
+
+    it("acknowledges a displayed completion when the same session is selected again", async () => {
+      const { provider, webview, setPhase, row, sentState } = await unreadFixture();
       await webview.receive({ type: "openSession", sessionId: activeSessionId });
-      webview.setVisible(false);
       await setPhase("running");
       await setPhase("waiting-user");
-      expect(row().hasUnread).toBe(false);
+      expect(row().hasUnread).toBe(true);
 
-      registry.onTerminalClosed(terminal as never);
+      await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      expect(sentState().displayedSessionId).toBe(activeSessionId);
+      expect(row().hasUnread).toBe(false);
       await provider.refresh();
       expect(row().hasUnread).toBe(false);
-    });
-
-    it("does not acknowledge a completion when opening the session fails", async () => {
-      const { mocks, webview, setPhase, row } = await unreadFixture();
       await setPhase("running");
       await setPhase("waiting-user");
-      mocks.ensure.mockRejectedValueOnce(new Error("cannot attach"));
-
-      await webview.receive({ type: "openSession", sessionId: activeSessionId });
-      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
-        expect.stringContaining("cannot attach"),
-      );
       expect(row().hasUnread).toBe(true);
     });
+
+    it.each([false, true])(
+      "does not acknowledge a completion when opening fails with displayed=%s",
+      async (displayed) => {
+        const { provider, mocks, webview, setPhase, row } = await unreadFixture();
+        if (displayed) {
+          await webview.receive({ type: "openSession", sessionId: activeSessionId });
+        }
+        await setPhase("running");
+        await setPhase("waiting-user");
+        mocks.ensure.mockRejectedValueOnce(new Error("cannot attach"));
+
+        await webview.receive({ type: "openSession", sessionId: activeSessionId });
+        expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+          expect.stringContaining("cannot attach"),
+        );
+        expect(row().hasUnread).toBe(true);
+        await provider.refresh();
+        expect(row().hasUnread).toBe(true);
+      },
+    );
 
     it("keeps completion tracking and unread when the webview is recreated", async () => {
       const { provider, setPhase, sentState } = await unreadFixture();
@@ -753,7 +783,7 @@ describe("SessionWebviewProvider", () => {
       ).toBe(false);
     });
 
-    it("keeps a completion read when its snapshot was captured before switching displays", async () => {
+    it("preserves a displayed completion when switching away during its runtime query", async () => {
       const { provider, webview, setPhase, row, holdRuntimeQuery } = await unreadFixture();
       await webview.receive({ type: "openSession", sessionId: activeSessionId });
       await setPhase("running");
@@ -764,12 +794,12 @@ describe("SessionWebviewProvider", () => {
       await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
       held.finish();
       await completion;
-      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: false });
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
       await provider.refresh();
-      expect(row().hasUnread).toBe(false);
+      expect(row().hasUnread).toBe(true);
     });
 
-    it("does not let a delayed read completion clear a newer background completion", async () => {
+    it("does not let a delayed displayed completion clear a newer background completion", async () => {
       const { webview, setPhase, row, holdRuntimeQuery } = await unreadFixture();
       await webview.receive({ type: "openSession", sessionId: activeSessionId });
       await setPhase("running");
@@ -798,6 +828,33 @@ describe("SessionWebviewProvider", () => {
       held.finish();
       await completion;
       expect(row()).toMatchObject({ state: "waiting-user", hasUnread: false });
+    });
+
+    it("consumes a completion acknowledged before its runtime query finishes", async () => {
+      const { provider, mocks, webview, setPhase, row, holdRuntimeQuery } = await unreadFixture();
+      await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      await setPhase("running");
+      const held = holdRuntimeQuery();
+      const completion = setPhase("waiting-user");
+      await held.started;
+      mocks.aliveSessionIds.mockResolvedValueOnce(null);
+
+      await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      expect(row().hasUnread).toBe(false);
+      held.finish();
+      await completion;
+      await provider.refresh();
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: false });
+    });
+
+    it("keeps tracking a running session selected during a transient tmux query failure", async () => {
+      const { mocks, webview, setPhase, row } = await unreadFixture();
+      await setPhase("running");
+      mocks.aliveSessionIds.mockResolvedValueOnce(null);
+
+      await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      await setPhase("waiting-user");
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
     });
 
     it("preserves unread through a transient tmux query failure until recovery", async () => {

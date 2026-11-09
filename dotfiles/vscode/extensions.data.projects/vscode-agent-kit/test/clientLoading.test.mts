@@ -145,6 +145,30 @@ describe("session list loading in the mounted client", () => {
     expect(await page.locator(".empty").count()).toBe(0);
   });
 
+  it("sends an open request whenever the displayed unread session is clicked again", async () => {
+    const unreadState = structuredClone(state);
+    unreadState.groups[0].sessions[0].state = "waiting-user";
+    unreadState.groups[0].sessions[0].hasUnread = true;
+    await receive({ type: "sessions", state: unreadState });
+    await expectLoaded();
+    const sessionButton = page.locator(`.selected [data-session="${sessionId}"]`);
+    expect(await sessionButton.getAttribute("title")).toContain("Unread");
+
+    await sessionButton.click();
+    await receive({ type: "sessions", state: unreadState });
+    await sessionButton.click();
+
+    const openRequests = await page.evaluate(() =>
+      (Reflect.get(window, "__requests") as { type: string }[]).filter(
+        (request) => request.type === "openSession",
+      ),
+    );
+    expect(openRequests).toEqual([
+      { type: "openSession", sessionId },
+      { type: "openSession", sessionId },
+    ]);
+  });
+
   it("shows a first-load error without presenting a successful empty list", async () => {
     await expectLoading();
     await receive({ type: "sessionsError", message: "Failed to read Pi sessions" });
