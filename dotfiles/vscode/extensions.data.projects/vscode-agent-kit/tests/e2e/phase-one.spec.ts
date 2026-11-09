@@ -50,6 +50,97 @@ test(
           exact: true,
         }),
       ).toHaveCount(0);
+      const layout = await frame.evaluate(() => {
+        function rect(element: Element) {
+          const { left, right, top, bottom, width, height } = element.getBoundingClientRect();
+          return { left, right, top, bottom, width, height };
+        }
+        const app = document.querySelector("#app")!;
+        const footer = document.querySelector(".footer")!;
+        const bodyStyle = getComputedStyle(document.body);
+        const appStyle = getComputedStyle(app);
+        return {
+          viewport: { width: innerWidth, height: innerHeight },
+          documentWidth: document.scrollingElement!.scrollWidth,
+          bodyPadding: [
+            bodyStyle.paddingTop,
+            bodyStyle.paddingRight,
+            bodyStyle.paddingBottom,
+            bodyStyle.paddingLeft,
+          ],
+          appPadding: [
+            appStyle.paddingTop,
+            appStyle.paddingRight,
+            appStyle.paddingBottom,
+            appStyle.paddingLeft,
+          ],
+          app: rect(app),
+          footer: { ...rect(footer), padding: getComputedStyle(footer).padding },
+          rows: Array.from(document.querySelectorAll(".session-row")).map((row) => ({
+            row: rect(row),
+            name: rect(row.querySelector(".session-name")!),
+            status: rect(row.querySelector(".session-status")!),
+            timestamp: rect(row.querySelector(".session-timestamp")!),
+            action: rect(row.querySelector(".archive, .unarchive")!),
+            nameFont: getComputedStyle(row.querySelector(".session-name")!).fontSize,
+            timestampFont: getComputedStyle(row.querySelector(".session-timestamp")!).fontSize,
+            indent: getComputedStyle(row).marginLeft,
+            gap: getComputedStyle(row.querySelector(".session-button")!).gap,
+          })),
+        };
+      });
+      const withHostPadding = await frame.evaluate(() => {
+        const initialPadding = document.body.style.padding;
+        try {
+          document.body.style.padding = "0 20px";
+          return Array.from(document.querySelectorAll(".session-row")).map((row) => ({
+            rowWidth: row.getBoundingClientRect().width,
+            nameWidth: row.querySelector(".session-name")!.getBoundingClientRect().width,
+          }));
+        } finally {
+          document.body.style.padding = initialPadding;
+        }
+      });
+      const geometryPath = testInfo.outputPath("sidebar-geometry.json");
+      writeFileSync(geometryPath, JSON.stringify({ layout, withHostPadding }, null, 2));
+      await testInfo.attach("Real host sidebar geometry", {
+        path: geometryPath,
+        contentType: "application/json",
+      });
+      expect(layout.bodyPadding).toEqual(["0px", "0px", "0px", "0px"]);
+      expect(layout.appPadding).toEqual(["12px", "12px", "0px", "12px"]);
+      expect(layout.app.left).toBe(0);
+      expect(layout.app.right).toBe(layout.viewport.width);
+      expect(layout.documentWidth).toBe(layout.viewport.width);
+      expect(layout.footer.padding).toBe("12px");
+      await expect(frame.locator("#app > header, #app h1, #app [data-action=refresh]")).toHaveCount(
+        0,
+      );
+      await expect(
+        host.page.getByRole("button", { name: "Refresh Sessions", exact: true }),
+      ).toHaveCount(1);
+      await expect(frame.locator(".session-scrollbar")).toHaveCSS("width", "12px");
+      for (const [index, row] of layout.rows.entries()) {
+        expect(row.row.left).toBe(16);
+        expect(row.row.right).toBe(layout.viewport.width - 12);
+        expect(row.row.height).toBe(32);
+        expect(row.row.width).toBe(withHostPadding[index].rowWidth + 40);
+        expect(row.name.width).toBe(withHostPadding[index].nameWidth + 40);
+        expect(row.indent).toBe("4px");
+        expect(row.gap).toBe("8px");
+        expect(row.nameFont).toBe("13px");
+        expect(row.timestampFont).toBe("10px");
+        expect(row.status.width).toBe(12);
+        expect(row.status.height).toBe(12);
+        expect(row.action.width).toBe(24);
+        expect(row.action.height).toBe(24);
+        expect(row.timestamp.right).toBe(row.row.right - 36);
+        expect(row.action.right).toBe(row.row.right - 4);
+        expect(row.status.right).toBeLessThanOrEqual(row.name.left);
+        expect(row.name.right).toBeLessThanOrEqual(row.timestamp.left);
+        expect(row.timestamp.right).toBeLessThanOrEqual(row.action.left);
+        expect(row.action.right).toBeLessThanOrEqual(layout.viewport.width - 12);
+      }
       await testInfo.attach("Unarchived（切替前）", {
         body: await host.page.screenshot({ path: testInfo.outputPath("unarchived.png") }),
         contentType: "image/png",

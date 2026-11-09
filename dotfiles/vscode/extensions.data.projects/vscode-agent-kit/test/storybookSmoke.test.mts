@@ -255,7 +255,18 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         });
       }
       const before = await rowBounds();
-      expect(before).toEqual({ left: 24, right: width - 12, width: width - 36 });
+      expect(before).toEqual({ left: 16, right: width - 12, width: width - 28 });
+      const nameWidths = await row.evaluate((element) => {
+        const sessionRow = element as HTMLElement;
+        const name = sessionRow.querySelector(".session-name")!;
+        const current = name.getBoundingClientRect().width;
+        const initialMarginLeft = sessionRow.style.marginLeft;
+        sessionRow.style.marginLeft = "12px";
+        const withLargerIndent = name.getBoundingClientRect().width;
+        sessionRow.style.marginLeft = initialMarginLeft;
+        return { current, withLargerIndent };
+      });
+      expect(nameWidths.current).toBe(nameWidths.withLargerIndent + 8);
       expect(await page.evaluate(() => document.scrollingElement!.scrollHeight)).toBe(384);
       await page.click(projectModeSelector);
       await page.waitForSelector(".session-row.archived");

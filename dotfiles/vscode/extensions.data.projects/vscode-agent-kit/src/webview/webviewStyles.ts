@@ -1,7 +1,7 @@
 /** Styles for the sessions webview; shared as-is by the stories catalog. */
 export const webviewStyles = `
     :root { --session-radius: 9.6px; color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
-    body { margin: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); }
+    body { margin: 0; padding: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); }
     html.session-overlay-scrollbars { scrollbar-width: none; }
     html.session-overlay-scrollbars::-webkit-scrollbar { display: none; }
     .session-scrollbar { position: fixed; top: 0; right: 0; bottom: 0; z-index: 1; width: 12px; opacity: 0; touch-action: none; user-select: none; }
@@ -42,7 +42,7 @@ export const webviewStyles = `
     .workspace-menu { position: fixed; z-index: 2; box-sizing: border-box; width: max-content; min-width: min(160px, calc(100vw - 8px)); max-width: calc(100vw - 8px); padding: 4px; border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border)); border-radius: var(--session-radius); color: var(--vscode-menu-foreground, var(--vscode-foreground)); background: var(--vscode-menu-background, var(--vscode-sideBar-background)); }
     .workspace-menu button { display: block; width: 100%; min-height: 32px; padding: 0 8px; color: inherit; font-size: 13px; text-align: left; overflow-wrap: anywhere; }
     .workspace-menu button:hover, .workspace-menu button:focus { color: var(--vscode-menu-selectionForeground, var(--vscode-foreground)); background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); }
-    .session-row { position: relative; min-width: 0; height: 32px; margin-left: 12px; border-radius: var(--session-radius); }
+    .session-row { position: relative; min-width: 0; height: 32px; margin-left: 4px; border-radius: var(--session-radius); }
     .group-header + .session-row { margin-top: 4px; }
     .session-button { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 32px; padding: 0 calc(36px + 5ch + 8px) 0 8px; border-radius: var(--session-radius); color: var(--vscode-foreground); background: transparent; text-align: left; }
     .session-button:hover { background: var(--vscode-list-hoverBackground); }
