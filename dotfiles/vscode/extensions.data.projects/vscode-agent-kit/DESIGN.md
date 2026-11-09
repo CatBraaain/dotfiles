@@ -24,6 +24,8 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 
 ## レイアウト
 
+Layout: New workspace フッター — 一覧が短いときも長いときも操作の下余白をヘッダーの上余白に揃える → sticky-footer の document 内下端追従版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/viewport-shell/sticky-footer.md)）; scroll owner: `html`（document）; anti-patterns: 上下で異なる外側余白、入力への切替による高さの増減、一覧だけの別スクロール領域。
+
 Layout: ワークスペース見出し — 左の開閉と名前、右の補助操作を一列に配置する → split-nav の固定操作幅版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/in-line-grouping/split-nav.md)）; scroll owner: `html`（document）; anti-patterns: 操作の折り返し、名前による操作の押し出し。名前を省略して操作幅を保つ。
 
 Layout: セッション一覧 — スクロールバーを既存の余白へ重ねる → imposter の右端固定配置（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/overlay-exception/imposter.md)）; scroll owner: `html`（document）; anti-patterns: バー専用の幅予約、一覧だけの別スクロール領域、ヘッダー・フッターのフロー変更。
@@ -32,10 +34,11 @@ Layout: ワークスペースのコンテキストメニュー — 一覧を押�
 
 | 対象 | 値 |
 | --- | --- |
-| 全体の余白 | 12px。グループ間も 12px |
+| 全体の余白 | 上と左右は12px。下はフッターの12pxで確保する。グループ間は12px |
 | ヘッダー | 高さ24px、下余白12px。見出し13px・600。要素間8px |
-| フッター | 一覧の下。上境界線（境界トークン）と 12px 余白で区切る。グループ間も 12px で区切るのと同じ寸法 |
-| フォーム（開いたとき） | New workspace の下、間隔8px |
+| フッター | 一覧の下。上境界線（境界トークン）と上下・左右12pxの余白で区切る。操作の下余白は、一覧の長さとスクロール位置によらずヘッダーの上余白と同じ12pxとする |
+| 状態・エラー表示 | フッターの操作より上。高さ16px以上、操作との間隔8px |
+| フォーム（開いたとき） | New workspace と同じ位置・幅・高さ。開閉で周囲の配置とスクロール範囲を保つ |
 | グループ見出し | 高さ24px、要素間4px。見出し名14px・600・20px行で省略表示 |
 | セッション行 | 高さ32px、左インデント12px、見出し直後の行は上余白4px |
 | オーバーレイスクロールバー | viewport の右端に幅12pxの透明なトラックを重ねる。つまみは幅8px・右余白2px・角丸4px。高さは表示範囲の比率に合わせ、最小24px・最大トラック高。バーの有無によらず左右12pxの全体余白と行幅を保つ |
@@ -44,6 +47,8 @@ Layout: ワークスペースのコンテキストメニュー — 一覧を押�
 
 ## 部品
 
+New workspace フッターの主操作はワークスペースの登録。情報の優先順は一覧、状態・エラー、登録操作。New workspace とフルパス入力欄は同じ領域を使い、左側の folder-plus アイコン、状態・エラー表示と入力のヒントを保持する。操作とキー入力は SPEC「New Workspace アクション」に従う。
+
 セッション一覧の主操作は会話の選択・再開。情報の優先順は表示名、実行フェーズ、更新日時。表示名・日時・フェーズのヒント・選択表示・右端の Archive / Unarchive を保持する。左端の状態アイコンは既存の線画 SVG を使い、状態との対応は SPEC「実行フェーズの表示」に従う。追加のバッジや説明行は設けない。
 
 | 部品 | 定義 |
@@ -51,8 +56,9 @@ Layout: ワークスペースのコンテキストメニュー — 一覧を押�
 | chevron | 24px 四方の領域に12px の SVG、本文色。展開で下向き、折りたたみで右向きに示す。hover は hover 面。開閉の操作と状態は SPEC「Webview の表示」に従う |
 | グループ見出しの New session | chevron と同じ 24px 四方の ghost 操作、本文色。12px の plus SVG、hover は hover 面。ホバーのヒントは `New session` |
 | グループ見出しのコンテキストメニュー | `Unregister workspace` のテキスト項目1つを持つ。固定配置で一覧に重ね、viewport 端から4px以上内側に収める。最小幅160px・最大幅は viewport 幅から8pxを除いた幅。内側余白4px、境界1px、角丸は基準角丸。メニューの色はコンテキストメニュートークン。項目は全幅・高さ32px以上・左右余白8px・13px文字・基準角丸で、長い文字は折り返す。hover・focus はメニュー項目トークン。表示層はスクロールバーより上に置く。操作は SPEC「ワークスペース登録解除」に従う |
-| フッターの New workspace | フル幅・高さ32px・角丸9.6pxの ghost 操作。16px の folder-plus SVG と 13px・500 ラベル、本文色、hover は hover 面。フォームを開いている間は `aria-expanded` を示し hover 面を敷く。構造の参照元は agent-open-ui の `SidebarFooter` |
-| ワークスペース フォーム | New workspace の下に開く。要素間8px。入力は高さ32px・角丸9.6px・入力トークン・13px 文字、placeholder は `/absolute/path`、focus は `focusBorder` の 2px ring。`Add` は高さ32px・境界付きの本文色操作、`Cancel` は境界なしの補助文字色で hover は本文色。構造の参照元は agent-open-ui の `SidebarWorkspaceForm` |
+| フッターの New workspace | フル幅・高さ32px・角丸9.6pxの ghost 操作。13px・500 ラベル、本文色、hover は hover 面。開くとアイコンの位置を保ったまま文字部分が入力へ切り替わる。構造の参照元は agent-open-ui の `SidebarFooter` |
+| フッターの folder-plus | ボタンと入力に共通する16pxの装飾SVG、本文色。操作領域の左端から11px・上端から8pxに配置する。文字先頭は操作領域の左端から33pxで、アイコンの右端との間隔は6px。入力中は入力面の左内側に置く |
+| ワークスペース フォーム | New workspace の文字部分を置き換える入力欄1つ。入力は境界を含め高さ32px・角丸9.6px・入力トークン・13px 文字、左内側余白32px・右内側余白8px、placeholder は `/absolute/path`、focus は `focusBorder` の 2px ring。構造の参照元は agent-open-ui の `SidebarWorkspaceForm` |
 | グループ見出しのモード切替 | 見出し名の右、New session の左に常時表示する。New session と同じ24px 四方の ghost 操作。16px の既存の目の SVG、補助文字色、hover は本文色と hover 面。未アーカイブ表示では斜線付きの目、All 表示では目を示す。focus は focus トークンの ring。ヒントと操作は SPEC「表示モード」に従う |
 | 状態アイコンのスロット | 全行で12px 四方の固定領域。アイコンを中央に置き、表示名との間隔は8px。空の場合も幅を保持する |
 | spinner・ベル・一時停止マーク | 既存の行内操作と同じ12px SVG、`viewBox="0 0 24 24"`、塗りなし・`currentColor` の線幅2・丸い線端と線結合。spinner は開いた円弧（`M21 12a9 9 0 1 1-6.219-8.56`）。ベルは本体（`M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9`）と下端（`M10 21a2 2 0 0 0 4 0`）の輪郭線。一時停止マークは2本の縦線（`M9 4v16`・`M15 4v16`）。色は状態アイコントークンに従う |

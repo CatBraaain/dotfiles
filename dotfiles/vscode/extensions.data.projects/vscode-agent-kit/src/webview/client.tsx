@@ -681,6 +681,7 @@ export function initClient(bridge: ClientBridge): () => void {
   const closeWorkspaceForm = (): void => {
     formElement.hidden = true;
     pathInput.value = "";
+    newWorkspaceButton.hidden = false;
     newWorkspaceButton.setAttribute("aria-expanded", "false");
     pendingAddWorkspace = false;
   };
@@ -706,10 +707,11 @@ export function initClient(bridge: ClientBridge): () => void {
     if (!(action instanceof HTMLButtonElement)) return;
     const actionType = action.dataset.action ?? "";
     if (actionType === "toggleWorkspaceForm") {
-      formElement.hidden = !formElement.hidden;
+      formElement.hidden = false;
       pathInput.value = "";
-      newWorkspaceButton.setAttribute("aria-expanded", String(!formElement.hidden));
-      if (!formElement.hidden) pathInput.focus();
+      newWorkspaceButton.hidden = true;
+      newWorkspaceButton.setAttribute("aria-expanded", "true");
+      pathInput.focus({ preventScroll: true });
       return;
     }
     if (actionType === "refresh") store.setLoading();

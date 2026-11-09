@@ -235,7 +235,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   it.each([320, 390, 720])(
     "keeps row bounds unchanged when mode switching adds document overflow at %ipx",
     async (width) => {
-      const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 440 });
+      const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 420 });
       const row = page.locator(".session-row").first();
       async function rowBounds() {
         return row.evaluate((element) => {
@@ -245,11 +245,11 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       }
       const before = await rowBounds();
       expect(before).toEqual({ left: 24, right: width - 12, width: width - 36 });
-      expect(await page.evaluate(() => document.scrollingElement!.scrollHeight)).toBe(440);
+      expect(await page.evaluate(() => document.scrollingElement!.scrollHeight)).toBe(420);
       await page.click(projectModeSelector);
       await page.waitForSelector(".session-row.archived");
       expect(await page.evaluate(() => document.scrollingElement!.scrollHeight)).toBeGreaterThan(
-        440,
+        420,
       );
       expect(await rowBounds()).toEqual(before);
       await page.click(projectModeSelector);
@@ -266,7 +266,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   );
 
   it("updates the overlay for mode, group, data, form, and viewport height changes", async () => {
-    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 440 });
+    const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 420 });
     const track = page.getByRole("scrollbar", { includeHidden: true });
     await expect.poll(() => track.isHidden()).toBe(true);
     await page.click(projectModeSelector);
@@ -288,7 +288,8 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       .toBeLessThan(originalHeight);
     const beforeForm = await track.getAttribute("aria-valuemax");
     await page.locator(".new-workspace").click();
-    await expect.poll(() => track.getAttribute("aria-valuemax")).not.toBe(beforeForm);
+    await expect.poll(() => page.locator("#workspace-path").isVisible()).toBe(true);
+    await expect.poll(() => track.getAttribute("aria-valuemax")).toBe(beforeForm);
     await page.locator("#workspace-path").press("Escape");
     await expect.poll(() => track.getAttribute("aria-valuemax")).toBe(beforeForm);
     await page.setViewportSize({ width: 320, height: 1000 });
@@ -1055,6 +1056,87 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
+  it.each([320, 390, 720].flatMap((width) => [180, 844].map((height) => ({ width, height }))))(
+    "replaces the footer button in place without scrolling at $width x $height",
+    async ({ width, height }) => {
+      const page = await openStory("sessions-sidebar--sample-sessions", { width, height });
+      const button = page.locator(".new-workspace").describe("New workspace footer button");
+      const input = page.locator("#workspace-path").describe("Workspace path input");
+      const footer = page.locator(".footer");
+      const icon = page.locator(".workspace-folder-icon").describe("Decorative workspace folder");
+      const headerTop = await page
+        .locator("header")
+        .evaluate((element) => element.getBoundingClientRect().top);
+      expect(headerTop).toBe(12);
+      async function documentBounds() {
+        return page.evaluate(() => ({
+          top: window.scrollY,
+          height: document.scrollingElement!.scrollHeight,
+          width: document.scrollingElement!.scrollWidth,
+        }));
+      }
+
+      for (const position of ["start", "end"]) {
+        await page.evaluate((position) => {
+          window.scrollTo(0, position === "start" ? 0 : document.scrollingElement!.scrollHeight);
+        }, position);
+        const buttonBefore = await button.boundingBox();
+        const iconBefore = await icon.boundingBox();
+        const labelStart = await button.evaluate((element) => {
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          return range.getBoundingClientRect().left;
+        });
+        const footerBefore = await footer.boundingBox();
+        const documentBefore = await documentBounds();
+        expect(buttonBefore).toEqual({
+          x: 24,
+          y: height - headerTop - 32,
+          width: width - 48,
+          height: 32,
+        });
+        expect(documentBefore.width).toBe(width);
+        expect(iconBefore).toEqual({ x: 35, y: height - headerTop - 24, width: 16, height: 16 });
+        expect(labelStart).toBe(57);
+        expect(await icon.getAttribute("aria-hidden")).toBe("true");
+        expect(await icon.getAttribute("focusable")).toBe("false");
+        expect(await icon.getAttribute("tabindex")).toBeNull();
+
+        await button.click();
+        await expect.poll(() => input.isVisible()).toBe(true);
+        expect(await button.isHidden()).toBe(true);
+        expect(await input.evaluate((element) => element === document.activeElement)).toBe(true);
+        expect(await input.boundingBox()).toEqual(buttonBefore);
+        expect(await icon.boundingBox()).toEqual(iconBefore);
+        expect(
+          await input.evaluate((element) => {
+            const css = getComputedStyle(element);
+            return (
+              element.getBoundingClientRect().left +
+              parseFloat(css.borderLeftWidth) +
+              parseFloat(css.paddingLeft)
+            );
+          }),
+        ).toBe(labelStart);
+        expect(await icon.evaluate((element) => getComputedStyle(element).pointerEvents)).toBe(
+          "none",
+        );
+        await page.mouse.click(43, height - headerTop - 16);
+        expect(await input.evaluate((element) => element === document.activeElement)).toBe(true);
+        expect(await footer.boundingBox()).toEqual(footerBefore);
+        expect(await documentBounds()).toEqual(documentBefore);
+
+        await input.press("Escape");
+        expect(await input.isHidden()).toBe(true);
+        expect(await button.boundingBox()).toEqual(buttonBefore);
+        expect(await icon.boundingBox()).toEqual(iconBefore);
+        expect(await footer.boundingBox()).toEqual(footerBefore);
+        expect(await documentBounds()).toEqual(documentBefore);
+      }
+      await page.close();
+    },
+  );
+
   it("adds the workspace on Enter and closes the form on Escape", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
@@ -1063,21 +1145,45 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     const input = page.locator("#workspace-path");
     const groupCountBefore = await page.locator(".group").count();
 
-    await toggle.click();
+    await toggle.focus();
+    await toggle.press("Enter");
     expect(await form.isVisible()).toBe(true);
+    expect(await toggle.isHidden()).toBe(true);
+    expect(await input.evaluate((element) => element === document.activeElement)).toBe(true);
     expect(await input.inputValue()).toBe("");
+
+    await input.fill("   ");
+    await input.press("Enter");
+    expect(await input.inputValue()).toBe("   ");
+    expect(await form.isVisible()).toBe(true);
+    await input.fill("~/projects/ime-pending");
+    await input.dispatchEvent("keydown", { key: "Enter", isComposing: true });
+    await page.locator('[data-action="refresh"]').focus();
+    expect(await form.isVisible()).toBe(true);
+    expect(await input.inputValue()).toBe("~/projects/ime-pending");
+    expect(
+      await page.evaluate(() =>
+        (window as Window & { __bridgeMessages?: { type?: string }[] }).__bridgeMessages?.filter(
+          (message) => message.type === "addWorkspace",
+        ),
+      ),
+    ).toEqual([]);
 
     await input.press("Escape");
     expect(await form.isVisible()).toBe(false);
+    expect(await toggle.isVisible()).toBe(true);
+    expect(await input.inputValue()).toBe("");
     expect(await page.locator(".group").count()).toBe(groupCountBefore);
 
     await toggle.click();
-    await input.fill("~/projects/brand-new");
+    await input.fill("  ~/projects/brand-new  ");
     await input.press("Enter");
     const added = page.locator(".group").filter({ hasText: "brand-new" });
     await expect.poll(() => page.locator(".group").count()).toBe(groupCountBefore + 1);
     expect(await added.locator(".session-row").count()).toBe(0);
-    expect(await form.isVisible()).toBe(false); // closed by the refreshed list
+    expect(await form.isVisible()).toBe(false);
+    expect(await toggle.isVisible()).toBe(true);
+    expect(await input.inputValue()).toBe("");
     expect(
       await page.evaluate(() => {
         const messages = (window as Window & { __bridgeMessages?: { type?: string }[] })

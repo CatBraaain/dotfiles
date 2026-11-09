@@ -76,6 +76,15 @@ describe("webviewHtml", () => {
     expect(html).toContain('<input id="workspace-path" type="text" placeholder="/absolute/path"');
     expect(html).toContain('data-action="toggleWorkspaceForm"');
     expect(html).toContain("New workspace");
+    expect(html).toContain(
+      '<footer class="footer">\n      <p id="status" role="status" aria-live="polite"></p>',
+    );
+    expect(html).toContain(".new-workspace[hidden] { display: none; }");
+    expect(html).toContain("#workspace-path { box-sizing: border-box; width: 100%; height: 32px;");
+    expect(html).toContain('<div class="workspace-control">');
+    expect(html.match(/class="workspace-folder-icon"/g)).toHaveLength(1);
+    expect(html).toContain('<svg class="workspace-folder-icon" width="16" height="16"');
+    expect(html).toContain('aria-hidden="true" focusable="false"');
   });
 
   it("omits the confirmation dialog markup and styles", () => {

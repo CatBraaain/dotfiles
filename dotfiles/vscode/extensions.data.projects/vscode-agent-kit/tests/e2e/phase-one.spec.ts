@@ -399,12 +399,56 @@ test(
 
     await test.step("Open the New workspace form and fill a work folder path", async () => {
       const frame = await host.sessionFrame();
-      await frame
+      const button = frame
         .locator('[data-action="toggleWorkspaceForm"]')
-        .describe("New workspace footer button")
-        .click({ steps: 15 });
+        .describe("New workspace footer button");
+      const before = await button.boundingBox();
+      const icon = frame.locator(".workspace-folder-icon").describe("Decorative workspace folder");
+      const iconBefore = await icon.boundingBox();
+      const labelStart = await button.evaluate((element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        return range.getBoundingClientRect().left;
+      });
+      const scrollBefore = await frame.evaluate(() => ({
+        top: window.scrollY,
+        height: document.scrollingElement!.scrollHeight,
+      }));
+      const headerTop = await frame
+        .locator("header")
+        .evaluate((element) => element.getBoundingClientRect().top);
+      expect(headerTop).toBe(12);
+      expect(await button.evaluate((element) => element.getBoundingClientRect().bottom)).toBe(
+        (await frame.evaluate(() => innerHeight)) - headerTop,
+      );
+      await button.click({ steps: 15 });
       await expect(frame.locator("#workspace-form").describe("Workspace path form")).toBeVisible();
-      await frame.locator("#workspace-path").describe("Workspace path input").fill(folder);
+      const input = frame.locator("#workspace-path").describe("Workspace path input");
+      await expect(button).toBeHidden();
+      await expect(input).toBeFocused();
+      expect(await input.boundingBox()).toEqual(before);
+      await expect(icon).toBeVisible();
+      expect(await icon.boundingBox()).toEqual(iconBefore);
+      await expect(icon).toHaveAttribute("aria-hidden", "true");
+      await expect(icon).toHaveAttribute("focusable", "false");
+      expect(await icon.getAttribute("tabindex")).toBeNull();
+      expect(
+        await input.evaluate((element) => {
+          const css = getComputedStyle(element);
+          return (
+            element.getBoundingClientRect().left +
+            parseFloat(css.borderLeftWidth) +
+            parseFloat(css.paddingLeft)
+          );
+        }),
+      ).toBe(labelStart);
+      expect(
+        await frame.evaluate(() => ({
+          top: window.scrollY,
+          height: document.scrollingElement!.scrollHeight,
+        })),
+      ).toEqual(scrollBefore);
+      await input.fill(folder);
       await testInfo.attach("フォーム入力", {
         body: await host.page.screenshot(),
         contentType: "image/png",
@@ -419,6 +463,9 @@ test(
         .describe("Registered work folder group");
       await expect(group).toBeVisible();
       await expect(frame.locator("#workspace-form")).not.toBeVisible();
+      await expect(frame.locator(".new-workspace")).toBeVisible();
+      await expect(frame.locator(".workspace-folder-icon")).toBeVisible();
+      await expect(frame.locator("#workspace-path")).toHaveValue("");
       await testInfo.attach("ワークスペース追加後", {
         body: await host.page.screenshot(),
         contentType: "image/png",
@@ -430,7 +477,7 @@ test(
 test(
   "New Workspace のキャンセルと無効なパスを安全に扱える",
   { annotation: { type: "spec", description: "E2E-12" } },
-  async ({ host }) => {
+  async ({ host }, testInfo) => {
     await test.step("Reject a missing workspace path with a safe error", async () => {
       const frame = await host.sessionFrame();
       const groupsBefore = await frame.locator("section.group").count();
@@ -449,6 +496,26 @@ test(
       ).toBeVisible();
       await expect(frame.locator("#workspace-form")).toBeVisible();
       await expect(frame.locator("#workspace-path")).toHaveValue(host.sessions.Missing.cwd);
+      await expect(frame.locator(".new-workspace")).toBeHidden();
+      await expect(frame.locator(".workspace-folder-icon")).toBeVisible();
+      const status = frame.locator("#status").describe("Workspace registration error");
+      await expect(status).toHaveClass("error");
+      await expect(status).toContainText(host.sessions.Missing.cwd);
+      expect(
+        await status.evaluate((element) => {
+          const status = element.getBoundingClientRect();
+          const input = document.querySelector("#workspace-path")!.getBoundingClientRect();
+          return {
+            visible: status.top >= 0,
+            aboveInput: status.bottom <= input.top,
+            gap: innerHeight - input.bottom,
+          };
+        }),
+      ).toEqual({ visible: true, aboveInput: true, gap: 12 });
+      await testInfo.attach("無効なパスと入力保持", {
+        body: await host.page.screenshot(),
+        contentType: "image/png",
+      });
       expect(await frame.locator("section.group").count()).toBe(groupsBefore);
       expect(host.snapshot().terminals).toHaveLength(0);
       expect(host.piProcesses()).toHaveLength(0);
@@ -458,6 +525,13 @@ test(
       const groupsBefore = await frame.locator("section.group").count();
       await frame.locator("#workspace-path").describe("Workspace path input").press("Escape");
       await expect(frame.locator("#workspace-form")).not.toBeVisible();
+      await expect(frame.locator(".new-workspace")).toBeVisible();
+      await expect(frame.locator(".workspace-folder-icon")).toBeVisible();
+      await expect(frame.locator("#workspace-path")).toHaveValue("");
+      await testInfo.attach("Escape後のボタン", {
+        body: await host.page.screenshot(),
+        contentType: "image/png",
+      });
       expect(await frame.locator("section.group").count()).toBe(groupsBefore);
       expect(host.snapshot().terminals).toHaveLength(0);
       expect(host.piProcesses()).toHaveLength(0);
