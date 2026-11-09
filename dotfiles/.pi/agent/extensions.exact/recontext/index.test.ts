@@ -225,14 +225,17 @@ async function runtimeHarness(withAgents = false) {
   let requestHandoff = false;
   let requestHandoffClass: string | undefined;
   function fakeStream(model: Model<Api>, context: TranscriptContext) {
-    requests.push({
-      model: model.id,
-      messages: context.messages,
-      system: getCurrentSystemPrompt(context.messages),
-      tools: getCurrentTools(context.messages),
-    });
-    const handoff = requestHandoff;
-    requestHandoff = false;
+    const system = getCurrentSystemPrompt(context.messages);
+    const isConversationRequest = system.includes("Keep this system marker.");
+    if (isConversationRequest)
+      requests.push({
+        model: model.id,
+        messages: context.messages,
+        system,
+        tools: getCurrentTools(context.messages),
+      });
+    const handoff = isConversationRequest && requestHandoff;
+    if (isConversationRequest) requestHandoff = false;
     const output = createAssistantMessageEventStream();
     const message = {
       role: "assistant" as const,
@@ -495,9 +498,7 @@ describe("real AgentSession delivery with a memory fake provider", () => {
       const continuation = JSON.stringify(h.requests.at(-1)!.messages);
       assert.doesNotMatch(continuation, /old user marker/);
       assert.match(continuation, /new phase marker/);
-      assert.ok(
-        !h.notices.some((message) => message.includes("session changed while waiting")),
-      );
+      assert.ok(!h.notices.some((message) => message.includes("session changed while waiting")));
       assert.deepEqual(h.errors, []);
     } finally {
       h.dispose();

@@ -40,6 +40,7 @@ import {
   type SettingsRule,
 } from "./routing.ts";
 import { parseCronExpression } from "./cron.ts";
+import { registerSessionTitle } from "../session-title/extension.ts";
 import {
   CLASS_CHANGE_EVENT,
   requestClassChange,
@@ -1217,12 +1218,13 @@ export default function agentsExtension(
 
   async function routeCandidates(
     candidates: readonly ModelCandidate[],
+    ctx: ExtensionContext,
     signal?: AbortSignal,
   ): Promise<readonly ModelCandidate[]> {
     let usageStdout: string | undefined;
     if (!routingUsageDisabled && candidates.length > 1) {
       try {
-        const { exitCode, stdout } = await executeUsage(signal);
+        const { exitCode, stdout } = await executeUsage(pi.events, ctx, signal);
         if (exitCode === 127) routingUsageDisabled = true;
         if (exitCode === 0) usageStdout = stdout;
       } catch {
@@ -1256,6 +1258,25 @@ export default function agentsExtension(
     return currentClass ?? config.agents[agent]?.class;
   }
 
+  registerSessionTitle(pi, resolveClassModels);
+
+  async function resolveClassModels(
+    className: string,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ): Promise<Model<Api>[]> {
+    const candidates = resolveCandidates(config.modes[currentMode]![className] ?? [], (provider) =>
+      ctx.modelRegistry.getModelsOfType("chat", provider).map((model) => model.id),
+    );
+    return pickCandidates(
+      candidates,
+      cooldowns,
+      (provider, id) => ctx.modelRegistry.find(provider, id),
+      Date.now(),
+      (survivors) => routeCandidates(survivors, ctx, signal),
+    );
+  }
+
   async function applyClassModel(
     agent: Agent,
     ctx: ExtensionContext,
@@ -1268,16 +1289,7 @@ export default function agentsExtension(
     const { signal, notifySwitch = true, reason } = options;
     const className = effectiveClass(agent);
     if (!className) return null;
-    const candidates = resolveCandidates(config.modes[currentMode]![className] ?? [], (provider) =>
-      ctx.modelRegistry.getModelsOfType("chat", provider).map((model) => model.id),
-    );
-    const models = await pickCandidates(
-      candidates,
-      cooldowns,
-      (provider, id) => ctx.modelRegistry.find(provider, id),
-      Date.now(),
-      (survivors) => routeCandidates(survivors, signal),
-    );
+    const models = await resolveClassModels(className, ctx, signal);
     if (signal?.aborted) return null;
     const currentModelKey = ctx.model ? modelKey(ctx.model) : undefined;
     const retainCurrent =

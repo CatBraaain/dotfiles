@@ -37,9 +37,9 @@ lifecycle/background処理は、Tools配下のBash専用helperから `tools:exec
 | 要求・状態 | 要求元への結果 |
 | --- | --- |
 | 実行完了 | `completed` と元のtool result。`isError`・details・structuredContentを保持する |
-| 実行がthrow、不正な結果、約2秒の期限超過 | `failed` と失敗理由 |
+| 実行がthrow、不正な結果、要求期限の超過 | `failed` と失敗理由 |
 | 開始前・実行中のabort | `aborted` と中断理由 |
 | 有効な受信口が同期的にclaimしない | emit直後に `unavailable` と不在理由 |
 | 受信側の停止 | 保留要求を `unavailable` と停止理由で決着する |
 
-最初のawait前に1つの受信口だけがclaimでき、終端は一度だけ確定する。event busのemitが非同期処理の完了を待つとは扱わない。中断・期限超過・停止では実行信号をabortし、以後の遅延応答を破棄する。停止時は受信口を解除し、再読み込み後は新しい受信口を使う。入口の不在・無効・失敗時に別の実行経路へfallbackしない。
+要求期限は約2秒とし、`params.timeout` が2秒より長ければその秒数を使う。最初のawait前に1つの受信口だけがclaimでき、終端は一度だけ確定する。event busのemitが非同期処理の完了を待つとは扱わない。中断・期限超過・停止では実行信号をabortし、以後の遅延応答を破棄する。停止時は受信口を解除し、再読み込み後は新しい受信口を使う。入口の不在・無効・失敗時に別の実行経路へfallbackしない。

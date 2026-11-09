@@ -37,6 +37,7 @@ import { renderersOf } from "../tool-renderer/index.ts";
 import { CLASS_CHANGE_EVENT, requestClassChange } from "./class-change.ts";
 import { parseCronExpression } from "./cron.ts";
 import { runUsage } from "./usage.ts";
+import { registerBackgroundBash } from "../tools/background-bash.ts";
 import { parseUsageJson } from "../provider-usage/index.ts";
 import type { ModelCandidate } from "./routing.ts";
 
@@ -170,6 +171,11 @@ interface CaptureOptions {
   setModelSucceeds?: boolean | boolean[];
   beforeSetModel?: () => Promise<void>;
   executeUsage?: typeof runUsage;
+  hasConfiguredAuth?: (model: { provider: string; id: string }) => boolean;
+  resolveAuth?: (model: {
+    provider: string;
+    id: string;
+  }) => Promise<{ ok: true } | { ok: false; error: string }>;
   branch?: ReturnType<SessionManager["getBranch"]>;
   signal?: AbortSignal;
 }
@@ -202,6 +208,8 @@ function captureAgentsExtension(
   let registeredTool: CapturedTool | undefined;
   const eventBusHandlers = new Map<string, Array<(data: unknown) => void>>();
   const classChangeRequests: unknown[] = [];
+  const titleManager = SessionManager.inMemory("/parent");
+  const titleModels: Array<{ provider: string; id: string }> = [];
 
   const originalSpawn = __spawn.current;
   __spawn.current = ((
@@ -246,6 +254,10 @@ function captureAgentsExtension(
         },
         appendEntry(customType: string, data: Record<string, unknown>) {
           appendedEntries.push({ customType, data });
+          titleManager.appendCustomEntry(customType, data);
+        },
+        setSessionName(name: string) {
+          titleManager.appendSessionInfo(name);
         },
         setActiveTools(tools: string[]) {
           activeTools.push(tools);
@@ -302,12 +314,24 @@ function captureAgentsExtension(
   };
   const context = {
     cwd: "/parent",
-    sessionManager: { getBranch: () => options.branch ?? [] },
+    sessionManager: {
+      getBranch: () => options.branch ?? titleManager.getBranch(),
+      getSessionId: () => titleManager.getSessionId(),
+      getEntries: () => titleManager.getEntries(),
+      getLeafId: () => titleManager.getLeafId(),
+    },
+    isIdle: () => true,
     signal: options.signal,
     hasUI: true,
     ui,
     model: undefined as { provider: string; id: string } | undefined,
     modelRegistry: {
+      async complete(model: { provider: string; id: string }) {
+        titleModels.push(model);
+        return { stopReason: "stop", content: [{ type: "text", text: "Generated title" }] };
+      },
+      hasConfiguredAuth: options.hasConfiguredAuth ?? (() => true),
+      getApiKeyAndHeaders: options.resolveAuth ?? (async () => ({ ok: true as const })),
       find: options.findModel ?? ((provider: string, id: string) => ({ provider, id })),
       getModelsOfType: (_type: string, provider?: string) =>
         (options.models ?? []).filter((model) => model.provider === provider),
@@ -329,6 +353,31 @@ function captureAgentsExtension(
     spawnCalls,
     appendedEntries,
     classChangeRequests,
+    events: {
+      emit(channel: string, data: unknown) {
+        for (const handler of eventBusHandlers.get(channel) ?? []) handler(data);
+      },
+      on(channel: string, handler: (data: unknown) => void) {
+        const list = eventBusHandlers.get(channel) ?? [];
+        eventBusHandlers.set(channel, [...list, handler]);
+        return () =>
+          eventBusHandlers.set(
+            channel,
+            (eventBusHandlers.get(channel) ?? []).filter((entry) => entry !== handler),
+          );
+      },
+    },
+    async retitle() {
+      if (titleManager.getBranch().length === 0)
+        titleManager.appendMessage({
+          role: "user",
+          content: "Title this conversation",
+          timestamp: Date.now(),
+        });
+      const before = titleModels.length;
+      await commands.get("retitle")!("", context as never);
+      return titleModels[before];
+    },
     restore() {
       __spawn.current = originalSpawn;
       __resetRoutingState();
@@ -1479,6 +1528,7 @@ describe("configured slash commands", () => {
         "class:vision",
         "mode:custom",
         "mode:nightly",
+        "retitle",
       ]);
       assert.ok(
         [...extension.commandDefinitions.values()].every(
@@ -7463,7 +7513,7 @@ describe("<LATEST> モデルの解決", () => {
   });
 });
 
-describe("shipped agents.yaml through the usage fixture CLI", () => {
+describe("shipped agents.yaml through the shared usage entry", () => {
   it("preserves the complete standard candidate table and configures the max roles", () => {
     const source = readFileSync(
       new URL("../../../../.agents/config.exact/agents.yaml", import.meta.url),
@@ -7545,9 +7595,6 @@ describe("shipped agents.yaml through the usage fixture CLI", () => {
   });
 
   it("parses the shipped configuration, resolves <LATEST>, and orders candidates by the observed policy", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "route-shipped-test-"));
-    const usage = join(directory, "usage");
-    const counter = join(directory, "usage-count");
     const shippedPath = fileURLToPath(
       new URL("../../../../.agents/config.exact/agents.yaml", import.meta.url),
     );
@@ -7565,20 +7612,6 @@ describe("shipped agents.yaml through the usage fixture CLI", () => {
       { provider: "openai-codex", long: 50, remainingFraction: 1 },
       { provider: "commandcode", long: 30, remainingFraction: 1 },
     ]);
-    const previousPath = process.env.PATH;
-    writeFileSync(
-      usage,
-      `#!${process.execPath}
-import { appendFileSync } from "node:fs";
-if (JSON.stringify(process.argv.slice(2)) !== '["--json"]') process.exit(2);
-appendFileSync(${JSON.stringify(counter)}, "query\\n");
-console.error("fixture warning");
-console.log(${JSON.stringify(usageJson)});
-`,
-      { mode: 0o700 },
-    );
-    process.env.PATH = `${directory}:${previousPath ?? ""}`;
-
     const extension = captureAgentsExtension(
       { config: parsed.config },
       {
@@ -7595,6 +7628,15 @@ console.log(${JSON.stringify(usageJson)});
         executeUsage: runUsage,
       },
     );
+    const requests: string[] = [];
+    const dispose = registerBackgroundBash(extension.events, async (request) => {
+      requests.push(request.params.command);
+      return {
+        content: [],
+        details: {},
+        structuredContent: { output: usageJson, exit_code: 0, truncated: false },
+      };
+    });
     const appliedModelKeys = () =>
       extension.selectedModels.map((model) => {
         const { provider, id } = model as { provider: string; id: string };
@@ -7611,7 +7653,7 @@ console.log(${JSON.stringify(usageJson)});
         "commandcode/z-ai/glm-5.3-flash",
         "zai/glm-5.3-flash",
       ]);
-      assert.equal(readFileSync(counter, "utf8"), "query\n");
+      assert.deepEqual(requests, ["usage --json 2>/dev/null"]);
 
       extension.context.model = { provider: "external", id: "x" };
       await extension.runClassCommand("high");
@@ -7621,10 +7663,249 @@ console.log(${JSON.stringify(usageJson)});
       // フラグシップ glm-<LATEST> は glm-5.3 へ解決される（最終 fallback と併存）。
       assert.deepEqual(highApplied.slice(2).sort(), ["zai/glm-5.3", "zai/glm-5.3-flash"]);
     } finally {
+      dispose();
       extension.restore();
-      if (previousPath === undefined) delete process.env.PATH;
-      else process.env.PATH = previousPath;
-      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("titles through the agents owner resolver", () => {
+  it("resolves low in the current mode without changing manual selection or parent model", async () => {
+    const extension = captureAgentsExtension({ config: modeConfig });
+    try {
+      await extension.sessionStart("startup");
+      await extension.runModeCommand("max");
+      await extension.modelSelect("set");
+      const before = [...extension.selectedModels];
+      const resolved = await extension.retitle();
+      assert.equal(resolved?.id, "sol");
+      assert.deepEqual(extension.selectedModels, before);
+      await extension.input("Manual selection remains active");
+      assert.deepEqual(extension.selectedModels, before);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("keeps the mode captured before asynchronous authentication", async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const authenticating = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const extension = captureAgentsExtension(
+      { config: modeConfig },
+      {
+        async resolveAuth() {
+          started();
+          await waiting;
+          return { ok: true };
+        },
+      },
+    );
+    try {
+      await extension.sessionStart("startup");
+      const resolving = extension.retitle();
+      await authenticating;
+      await extension.runModeCommand("max");
+      release();
+      const resolved = await resolving;
+      assert.equal(resolved?.provider, "commandcode");
+      assert.equal((await extension.retitle())?.id, "sol");
+    } finally {
+      release();
+      extension.restore();
+    }
+  });
+
+  it("uses scored candidates and skips unconfigured or failed authentication", async () => {
+    const candidates = ["unconfigured", "invalid", "valid"].map((model, index) => ({
+      provider: "test",
+      model,
+      weight: 3 - index,
+    }));
+    const injected = {
+      ...config,
+      modes: { standard: { ...config.modes.standard!, low: candidates } },
+    };
+    const extension = captureAgentsExtension(
+      { config: injected },
+      {
+        executeUsage: runUsage,
+        hasConfiguredAuth: (model) => model.id !== "unconfigured",
+        resolveAuth: async (model) =>
+          model.id === "invalid" ? { ok: false, error: "expired" } : { ok: true },
+      },
+    );
+    const requests: string[] = [];
+    const dispose = registerBackgroundBash(extension.events, async (request) => {
+      requests.push(request.params.command);
+      return {
+        content: [{ type: "text", text: "[]" }],
+        details: {},
+        structuredContent: { output: "[]", exit_code: 0, truncated: false },
+      };
+    });
+    try {
+      const resolved = await extension.retitle();
+      assert.equal(resolved?.id, "valid");
+      assert.deepEqual(requests, ["usage --json 2>/dev/null"]);
+    } finally {
+      dispose();
+      extension.restore();
+    }
+  });
+
+  it("uses the ordinary unknown-urgency scoring when the background entry is unavailable", async () => {
+    const injected = {
+      ...config,
+      modes: { standard: { ...config.modes.standard!, low: config.modes.standard!.middle! } },
+    };
+    const extension = captureAgentsExtension({ config: injected }, { executeUsage: runUsage });
+    try {
+      const resolved = await extension.retitle();
+      assert.equal(resolved?.provider, injected.modes.standard.low![0]!.provider);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("does not retain the parent model when a different candidate has a higher score", async () => {
+    const candidates = [
+      { provider: "test", model: "preferred", weight: 2 },
+      { provider: "test", model: "parent", weight: 1 },
+    ];
+    const injected = {
+      ...config,
+      modes: { standard: { ...config.modes.standard!, low: candidates } },
+    };
+    const extension = captureAgentsExtension({ config: injected });
+    const dispose = registerBackgroundBash(extension.events, async () => ({
+      content: [],
+      details: {},
+      structuredContent: { output: "[]", exit_code: 0, truncated: false },
+    }));
+    try {
+      extension.context.model = { provider: "test", id: "parent" };
+      const resolved = await extension.retitle();
+      assert.equal(resolved?.id, "preferred");
+      assert.deepEqual(extension.context.model, { provider: "test", id: "parent" });
+      assert.equal(extension.selectedModels.length, 0);
+    } finally {
+      dispose();
+      extension.restore();
+    }
+  });
+});
+
+describe("shared owner candidate selection for titles", () => {
+  it("uses one usage entrance for ordinary routing and titles after a failed query", async () => {
+    const candidates = [
+      { provider: "test", model: "preferred", weight: 2 },
+      { provider: "test", model: "other", weight: 1 },
+    ];
+    const extension = captureAgentsExtension(
+      {
+        config: {
+          ...config,
+          modes: { standard: { ...config.modes.standard!, middle: candidates, low: candidates } },
+        },
+      },
+      { executeUsage: runUsage },
+    );
+    const commands: string[] = [];
+    const dispose = registerBackgroundBash(extension.events, async (request) => {
+      commands.push(request.params.command);
+      if (commands.length === 1) throw new Error("Command requires a reason");
+      return {
+        content: [],
+        details: {},
+        structuredContent: { output: "[]", exit_code: 0, truncated: false },
+      };
+    });
+    try {
+      await extension.sessionStart();
+      assert.equal(extension.context.model?.id, "preferred");
+      const before = [...extension.selectedModels];
+      assert.equal((await extension.retitle())?.id, "preferred");
+      assert.deepEqual(commands, ["usage --json 2>/dev/null", "usage --json 2>/dev/null"]);
+      assert.deepEqual(extension.selectedModels, before);
+    } finally {
+      dispose();
+      extension.restore();
+    }
+  });
+
+  it("resolves latest and filters missing models and cooldowns before one scoring pass", async () => {
+    const models = ["version-1.2", "version-1.10", "cooling", "preferred"];
+    const candidates = [
+      { provider: "test", model: "version-<LATEST>", weight: 1 },
+      { provider: "test", model: "missing", weight: 20 },
+      { provider: "test", model: "cooling", weight: 10 },
+      { provider: "test", model: "preferred", weight: 2 },
+      { provider: "test", model: "unresolved-<LATEST>" },
+    ];
+    let queries = 0;
+    const extension = captureAgentsExtension(
+      {
+        config: {
+          ...config,
+          modes: { standard: { ...config.modes.standard!, middle: candidates, low: candidates } },
+        },
+      },
+      {
+        models: models.map((id) => ({ provider: "test", id })),
+        findModel(provider, id) {
+          return models.includes(id) ? { provider, id } : undefined;
+        },
+        async executeUsage() {
+          queries++;
+          return { exitCode: 0, stdout: "[]" };
+        },
+      },
+    );
+    try {
+      await extension.sessionStart();
+      assert.equal(extension.context.model?.id, "cooling");
+      await extension.providerResponse(429);
+      assert.equal(extension.context.model?.id, "preferred");
+      const before = queries;
+      const resolved = await extension.retitle();
+      assert.equal(resolved?.id, "preferred");
+      assert.equal(queries, before + 1);
+      assert.equal(extension.context.model?.id, "preferred");
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("excludes a single zero-score title candidate without a usage query", async () => {
+    const extension = captureAgentsExtension(
+      {
+        config: {
+          ...config,
+          modes: {
+            standard: {
+              ...config.modes.standard!,
+              low: [{ provider: "test", model: "zero", settings: [{ multiply: 0 }] }],
+            },
+          },
+        },
+      },
+      {
+        async executeUsage() {
+          throw new Error("A single candidate must not query usage");
+        },
+      },
+    );
+    try {
+      assert.equal(await extension.retitle(), undefined);
+      assert.match(extension.notifications.at(-1)!, /No available model for class low/);
+    } finally {
+      extension.restore();
     }
   });
 });

@@ -45,7 +45,7 @@ export function requestBackgroundBash(
     let emitting = true;
     const timer = setTimeout(
       () => finish({ status: "failed", error: new Error("Background Bash request timed out") }),
-      REQUEST_TIMEOUT_MS,
+      Math.max(REQUEST_TIMEOUT_MS, (request.params.timeout ?? 0) * 1_000),
     );
 
     function finish(outcome: BackgroundBashOutcome): void {

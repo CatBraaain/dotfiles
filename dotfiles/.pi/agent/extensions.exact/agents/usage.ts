@@ -1,10 +1,12 @@
-import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { requestBackgroundBash } from "../tools/background-bash.ts";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import { cronMatches } from "./cron.ts";
 import type { ModelCandidate, SettingsRule } from "./routing.ts";
 
-const USAGE_TIMEOUT_MS = 25_000;
+const USAGE_TIMEOUT_SECONDS = 25;
 
 const usageRowSchema = Type.Object({
   provider: Type.String({ minLength: 1 }),
@@ -61,26 +63,29 @@ export function scoreCandidates(
     .map(({ candidate }) => candidate);
 }
 
+const bashOutputSchema = Type.Object({
+  output: Type.String(),
+  exit_code: Type.Number(),
+  truncated: Type.Boolean(),
+});
+
 export async function runUsage(
+  events: ExtensionAPI["events"],
+  context: ExtensionContext,
   signal?: AbortSignal,
-  execute: typeof execFile = execFile,
-): Promise<{ exitCode: number | null; stdout: string }> {
-  return new Promise((resolve, reject) => {
-    execute(
-      "usage",
-      ["--json"],
-      {
-        encoding: "utf8",
-        signal,
-        timeout: USAGE_TIMEOUT_MS,
-        killSignal: "SIGKILL",
-      },
-      (error, stdout) => {
-        if (error === null) resolve({ exitCode: 0, stdout });
-        else if (error.code === "ENOENT") resolve({ exitCode: 127, stdout: "" });
-        else if (typeof error.code === "number") resolve({ exitCode: error.code, stdout });
-        else reject(error);
-      },
-    );
+): Promise<{ exitCode: number; stdout: string }> {
+  const outcome = await requestBackgroundBash(events, {
+    id: `agents-usage-${randomUUID()}`,
+    params: { command: "usage --json 2>/dev/null", timeout: USAGE_TIMEOUT_SECONDS },
+    context,
+    signal,
   });
+  if (outcome.status !== "completed") {
+    const reason = outcome.status === "aborted" ? outcome.reason : outcome.error;
+    throw new Error(`Usage query failed: ${String(reason)}`);
+  }
+  const output = outcome.result.structuredContent;
+  if (!Value.Check(bashOutputSchema, output) || output.truncated)
+    throw new Error("Usage query returned invalid or truncated Bash output");
+  return { exitCode: output.exit_code, stdout: output.output };
 }

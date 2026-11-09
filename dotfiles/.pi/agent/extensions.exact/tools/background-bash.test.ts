@@ -146,6 +146,43 @@ describe("background Bash lifetime", () => {
     });
   }
 
+  it.each([undefined, 0.01])(
+    "keeps the default request deadline for timeout %s",
+    async (timeout) => {
+      const events = createEventBus();
+      const dispose = registerBackgroundBash(events, async () => {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        return result;
+      });
+      try {
+        const outcome = await requestBackgroundBash(events, {
+          ...request,
+          params: { ...request.params, timeout },
+        });
+        assert.equal(outcome.status, "completed");
+      } finally {
+        dispose();
+      }
+    },
+  );
+
+  it("allows an explicit timeout beyond the default request deadline", async () => {
+    const events = createEventBus();
+    const dispose = registerBackgroundBash(events, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2_050));
+      return result;
+    });
+    try {
+      const outcome = await requestBackgroundBash(events, {
+        ...request,
+        params: { ...request.params, timeout: 25 },
+      });
+      assert.equal(outcome.status, "completed");
+    } finally {
+      dispose();
+    }
+  });
+
   it("times out a receiver that never responds and aborts its execution", async () => {
     const events = createEventBus();
     let signal: AbortSignal | undefined;
