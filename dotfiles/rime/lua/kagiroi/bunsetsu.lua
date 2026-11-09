@@ -411,9 +411,18 @@ local function completion_costs(starting, length, env, context, word_bonuses)
     return remaining
 end
 
-local function ranked_path(reading, env, context)
+local function ranked_path(reading, env, context, boundary)
     local length = utf8.len(reading)
     local starting = dictionary_nodes(env, reading)
+    if boundary then
+        for position = 1, boundary do
+            local nodes = {}
+            for _, node in ipairs(starting[position] or {}) do
+                if node._end <= boundary then nodes[#nodes + 1] = node end
+            end
+            starting[position] = nodes
+        end
+    end
     local remaining = completion_costs(starting, length, env, context, nil)
     local path, current, best = {}, nil, math.huge
     for _, node in ipairs(starting[1] or {}) do
@@ -766,14 +775,51 @@ local function attach_pair_routes(candidates, reading, env, starting, route_cach
     end
 end
 
-local function attach_contextual_costs(candidates, reading, env, context)
+local pos_by_id
+
+local function same_part_of_speech(first, second)
+    if first == second then return true end
+    if not pos_by_id then
+        pos_by_id = {}
+        local module_path = assert(package.searchpath("kagiroi/kagiroi", package.path))
+        local directory = assert(module_path:match("^(.*)[/\\]"))
+        for line in io.lines(directory .. "/dic/kagiroi_id.def") do
+            local id, category = line:match("^(%d+) ([^,]+,[^,]+,[^,]+,[^,]+,[^,]+,[^,]+),")
+            if id then pos_by_id[tonumber(id)] = category end
+        end
+    end
+    return pos_by_id[first] ~= nil and pos_by_id[first] == pos_by_id[second]
+end
+
+local function constrain_dictionary(starting, frame, length)
+    local allowed, position = {}, 1
+    for _, word in ipairs(frame) do
+        local last = position + utf8.len(word.surface) - 1
+        local nodes = {}
+        for _, node in ipairs(starting[position] or {}) do
+            if node._end == last and same_part_of_speech(node.left_id, word.left_id)
+                and same_part_of_speech(node.right_id, word.right_id) then
+                nodes[#nodes + 1] = node
+            end
+        end
+        allowed[position] = nodes
+        position = last + 1
+    end
+    for first = 1, length do starting[first] = allowed[first] or {} end
+end
+
+local function attach_contextual_costs(candidates, reading, env, context, frame)
     local stock_texts = {}
     for _, choice in ipairs(candidates) do stock_texts[choice.text] = true end
     candidates.stock_texts = stock_texts
     local starting = dictionary_nodes(env, reading)
+    constrain_dictionary(starting, frame, utf8.len(reading))
     attach_partial_histories(starting, env)
     local route_cache = {}
     attach_pair_routes(candidates, reading, env, starting, route_cache)
+    for index = #candidates, 1, -1 do
+        if candidates[index].entry and not candidates[index].route_words then table.remove(candidates, index) end
+    end
     context = context or { at_start = true, at_end = true }
     local enumerated = contextual_path_enum(reading, env, context, stock_texts, starting)
     if enumerated then
@@ -864,7 +910,7 @@ local function new_clause(reading, env, context, path_spec)
     end
     collect(stock.func)
     collect(variants.func)
-    if path_spec then
+    if path_spec and path_spec.text then
         local matched = false
         for _, choice in ipairs(candidates) do
             local left_id, right_id = entry_ids(choice.entry)
@@ -881,11 +927,14 @@ local function new_clause(reading, env, context, path_spec)
     if #candidates == 0 then candidates[1] = { text = reading } end
     local clause = { reading = reading, unfiltered = candidates, candidates = candidates, selected = 1 }
     if viterbi_supports_context(env) then
-        clause.starting, clause.route_cache = attach_contextual_costs(clause.unfiltered, reading, env, context)
+        clause.frame = path_spec and path_spec.words or ranked_path(reading, env,
+            context or { at_start = true, at_end = true }) or {}
+        clause.starting, clause.route_cache = attach_contextual_costs(clause.unfiltered, reading, env, context, clause.frame)
+        if #candidates == 0 then candidates[1] = { text = reading } end
         clause.own_attached = true
         clause.stock_texts = clause.unfiltered.stock_texts
         clause.discovered_contexts = { [context_key(context or { at_start = true, at_end = true })] = true }
-        if path_spec then
+        if path_spec and path_spec.text then
             for index, choice in ipairs(clause.unfiltered) do
                 if choice.text == path_spec.text and choice.left_id == path_spec.left_id
                     and choice.right_id == path_spec.right_id then
@@ -938,7 +987,7 @@ local function split_via_path(reading, env, context)
     local mapped = {}
     for _, group in ipairs(specs) do
         local texts = {}
-        local spec = { left_id = group[1].left_id, reading = "" }
+        local spec = { left_id = group[1].left_id, reading = "", words = group }
         mapped[#mapped + 1] = spec
         for _, node in ipairs(group) do
             texts[#texts + 1] = node.candidate
@@ -1190,15 +1239,36 @@ function Top.resize(context, direction)
         at_end = index == #state.clauses or (index + 1 == #state.clauses and right_reading == ""),
         prev_right_id = 0, next_left_id = 0,
     }
-    state.clauses[index] = new_clause(left_reading, env, left_context)
     local right_reshaped = right_reading ~= ""
     local right_context = {
         at_start = false, at_end = index + 1 >= #state.clauses,
         prev_right_id = 0, next_left_id = 0,
     }
+    local left_spec, right_spec
+    if state.contextual then
+        local before, after = state.clauses[index - 1], state.clauses[index + (right and 2 or 1)]
+        local before_word = before and before.frame[#before.frame]
+        local after_word = after and after.frame[1]
+        local outer_context = {
+            at_start = not before, at_end = not after,
+            prev_right_id = before_word and before_word.right_id or 0,
+            next_left_id = after_word and after_word.left_id or 0,
+        }
+        local boundary = utf8.len(left_reading)
+        local path = ranked_path(left_reading .. right_reading, env, outer_context, boundary)
+        if path then
+            left_spec, right_spec = { words = {} }, { words = {} }
+            for _, word in ipairs(path) do
+                local spec = word._end <= boundary and left_spec or right_spec
+                spec.words[#spec.words + 1] = word
+            end
+        end
+        left_context.prev_right_id, right_context.next_left_id = outer_context.prev_right_id, outer_context.next_left_id
+    end
+    state.clauses[index] = new_clause(left_reading, env, left_context, left_spec)
     if right_reading == "" then table.remove(state.clauses, index + 1)
-    elseif right then state.clauses[index + 1] = new_clause(right_reading, env, right_context)
-    else table.insert(state.clauses, index + 1, new_clause(right_reading, env, right_context)) end
+    elseif right then state.clauses[index + 1] = new_clause(right_reading, env, right_context, right_spec)
+    else table.insert(state.clauses, index + 1, new_clause(right_reading, env, right_context, right_spec)) end
     state.henkan = false
     state.first_choices = { [index] = true }
     if right_reshaped then state.first_choices[index + 1] = true end
