@@ -2,12 +2,18 @@ import { describe, expect, it } from "vitest";
 import type { SessionSummary } from "../src/sessionStore";
 import { sessionViewGroups } from "../src/webview/sessionViewData";
 
-function session(sessionId: string, cwd: string, updatedAtMs: number | null): SessionSummary {
+function session(
+  sessionId: string,
+  cwd: string,
+  createdAtMs: number | null,
+  updatedAtMs = createdAtMs,
+): SessionSummary {
   return {
     sessionId,
     filePath: `/sessions/${sessionId}.jsonl`,
     cwd,
     displayName: `Session ${sessionId}`,
+    createdAtMs,
     updatedAtMs,
   };
 }
@@ -39,20 +45,22 @@ describe("sessionViewGroups", () => {
     ]);
   });
 
-  it("carries the same update times used for sorting, including unknown dates", () => {
+  it("carries update times independently from start-time sorting, including unknown dates", () => {
     const groups = sessionViewGroups(
       [
+        session("unknown-start", "/workspace/alpha", null, 300),
         session("undated", "/workspace/alpha", null),
-        session("older", "/workspace/alpha", 100),
-        session("newer", "/workspace/alpha", 200),
+        session("older", "/workspace/alpha", 100, 500),
+        session("newer", "/workspace/alpha", 200, 100),
       ],
       view(),
     );
 
     expect(groups[0].sessions.map((item) => [item.sessionId, item.updatedAtMs])).toEqual([
-      ["newer", 200],
-      ["older", 100],
+      ["newer", 100],
+      ["older", 500],
       ["undated", null],
+      ["unknown-start", 300],
     ]);
   });
 

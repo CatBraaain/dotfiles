@@ -59,7 +59,7 @@ export function groupSessions(
   for (const accumulator of byCwd.values()) {
     accumulator.sessions.sort(
       (a, b) =>
-        compareUpdatedAt(a.updatedAtMs, b.updatedAtMs) || compareString(a.sessionId, b.sessionId),
+        compareCreatedAt(a.createdAtMs, b.createdAtMs) || compareString(a.sessionId, b.sessionId),
     );
     groups.push({
       cwd: accumulator.cwd,
@@ -76,7 +76,7 @@ export function groupSessions(
   return groups;
 }
 
-function compareUpdatedAt(a: number | null, b: number | null): number {
+function compareCreatedAt(a: number | null, b: number | null): number {
   if (a === b) return 0;
   if (a === null) return 1;
   if (b === null) return -1;

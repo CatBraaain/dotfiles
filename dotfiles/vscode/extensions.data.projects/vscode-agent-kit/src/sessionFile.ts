@@ -34,6 +34,7 @@ export interface SessionHeaderInfo {
 export interface SessionSummaryInfo {
   header: SessionHeaderInfo;
   displayName: string;
+  createdAtMs: number | null;
   updatedAtMs: number | null;
 }
 
@@ -130,6 +131,7 @@ export async function summarizeSessionFile(filePath: string): Promise<SessionSum
     return {
       header,
       displayName: displayNameFromScan(scan),
+      createdAtMs: parseTimestampMs(header.timestamp),
       updatedAtMs:
         parseTimestampMs(latestActivity?.timestamp) ?? parseTimestampMs(header.timestamp),
     };

@@ -40,6 +40,7 @@ const sampleSessions: SessionSummary[] = [
     filePath: `${PROJECT_CWD}/20260919_1f0e6f9a.jsonl`,
     cwd: PROJECT_CWD,
     displayName: "Polish the session sidebar",
+    createdAtMs: Date.UTC(2026, 8, 19, 9, 42),
     updatedAtMs: Date.UTC(2026, 8, 19, 9, 42),
   },
   {
@@ -47,6 +48,7 @@ const sampleSessions: SessionSummary[] = [
     filePath: `${PROJECT_CWD}/20260919_2c9d7e1b.jsonl`,
     cwd: PROJECT_CWD,
     displayName: "Review keyboard navigation",
+    createdAtMs: Date.UTC(2026, 8, 19, 8, 16),
     updatedAtMs: Date.UTC(2026, 8, 19, 8, 16),
   },
   {
@@ -54,6 +56,7 @@ const sampleSessions: SessionSummary[] = [
     filePath: `${PI_TOOLS_CWD}/20260918_3a8b6d2c.jsonl`,
     cwd: PI_TOOLS_CWD,
     displayName: "Add session metadata tests",
+    createdAtMs: Date.UTC(2026, 8, 18, 17, 34),
     updatedAtMs: Date.UTC(2026, 8, 18, 17, 34),
   },
   {
@@ -61,6 +64,7 @@ const sampleSessions: SessionSummary[] = [
     filePath: `${PI_TOOLS_CWD}/20260917_4d7a5e3f.jsonl`,
     cwd: PI_TOOLS_CWD,
     displayName: "Untitled",
+    createdAtMs: Date.UTC(2026, 8, 17, 13, 8),
     updatedAtMs: Date.UTC(2026, 8, 17, 13, 8),
   },
   {
@@ -68,6 +72,7 @@ const sampleSessions: SessionSummary[] = [
     filePath: `${PROJECT_WORKTREE_CWD}/20260916_5b6c4a2d.jsonl`,
     cwd: PROJECT_WORKTREE_CWD,
     displayName: "Plan the next release",
+    createdAtMs: Date.UTC(2026, 8, 16, 10, 52),
     updatedAtMs: Date.UTC(2026, 8, 16, 10, 52),
   },
 ];
@@ -152,12 +157,14 @@ export function createDemoBridge(): {
       return;
     }
     if (request.type === "newSession" && typeof request.cwd === "string") {
+      const createdAtMs = Date.now();
       const session: SessionSummary = {
         sessionId: crypto.randomUUID(),
         filePath: "",
         cwd: request.cwd,
         displayName: "New Pi session",
-        updatedAtMs: Date.now(),
+        createdAtMs,
+        updatedAtMs: createdAtMs,
       };
       store = [session, ...store];
       metadata.set(session.sessionId, UNARCHIVED);

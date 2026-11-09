@@ -26,6 +26,7 @@ export interface SessionSummary {
   filePath: string;
   cwd: string;
   displayName: string;
+  createdAtMs: number | null;
   updatedAtMs: number | null;
 }
 
@@ -129,6 +130,7 @@ export async function listSessions(
       filePath: candidates[i].filePath,
       cwd: info.header.cwd,
       displayName: info.displayName,
+      createdAtMs: info.createdAtMs,
       updatedAtMs: info.updatedAtMs,
     });
   }

@@ -3,11 +3,12 @@ import { cwdLabel, groupSessions } from "../src/grouping";
 import type { SessionSummary } from "../src/sessionStore";
 
 function session(
-  overrides: Partial<SessionSummary> & Pick<SessionSummary, "sessionId" | "cwd" | "updatedAtMs">,
+  overrides: Partial<SessionSummary> & Pick<SessionSummary, "sessionId" | "cwd" | "createdAtMs">,
 ): SessionSummary {
   return {
     filePath: `/sessions/x/${overrides.sessionId}.jsonl`,
     displayName: `name-${overrides.sessionId}`,
+    updatedAtMs: 0,
     ...overrides,
   };
 }
@@ -31,8 +32,8 @@ describe("groupSessions", () => {
 
   it("groups by cwd with the basename as label", () => {
     const groups = groupSessions([
-      session({ sessionId: "a", cwd: "/home/user/project-a", updatedAtMs: 1 }),
-      session({ sessionId: "b", cwd: "/home/user/project-b", updatedAtMs: 2 }),
+      session({ sessionId: "a", cwd: "/home/user/project-a", createdAtMs: 1 }),
+      session({ sessionId: "b", cwd: "/home/user/project-b", createdAtMs: 2 }),
     ]);
     expect(groups.map((g) => g.label)).toEqual(["project-a", "project-b"]);
     expect(groups.map((g) => g.cwd)).toEqual(["/home/user/project-a", "/home/user/project-b"]);
@@ -40,44 +41,44 @@ describe("groupSessions", () => {
 
   it("orders groups by label, ascending, case-insensitive", () => {
     const groups = groupSessions([
-      session({ sessionId: "z", cwd: "/home/user/Zeta", updatedAtMs: 100 }),
-      session({ sessionId: "m", cwd: "/home/user/midway", updatedAtMs: 300 }),
-      session({ sessionId: "a", cwd: "/home/user/Alpha", updatedAtMs: 10 }),
+      session({ sessionId: "z", cwd: "/home/user/Zeta", createdAtMs: 100 }),
+      session({ sessionId: "m", cwd: "/home/user/midway", createdAtMs: 300 }),
+      session({ sessionId: "a", cwd: "/home/user/Alpha", createdAtMs: 10 }),
     ]);
     expect(groups.map((g) => g.label)).toEqual(["Alpha", "midway", "Zeta"]);
   });
 
   it("breaks equal labels deterministically (group cwd ascending)", () => {
     const groups = groupSessions([
-      session({ sessionId: "s", cwd: "/x/second/name", updatedAtMs: 100 }),
-      session({ sessionId: "t", cwd: "/a/first/name", updatedAtMs: 100 }),
+      session({ sessionId: "s", cwd: "/x/second/name", createdAtMs: 100 }),
+      session({ sessionId: "t", cwd: "/a/first/name", createdAtMs: 100 }),
     ]);
     expect(groups.map((g) => g.cwd)).toEqual(["/a/first/name", "/x/second/name"]);
   });
 
-  it("orders sessions within a group by update time, descending", () => {
+  it("orders sessions by start time descending despite opposite update times", () => {
     const groups = groupSessions([
-      session({ sessionId: "s1", cwd: "/a", updatedAtMs: 300 }),
-      session({ sessionId: "s2", cwd: "/a", updatedAtMs: 500 }),
-      session({ sessionId: "s3", cwd: "/a", updatedAtMs: 100 }),
+      session({ sessionId: "s1", cwd: "/a", createdAtMs: 300, updatedAtMs: 900 }),
+      session({ sessionId: "s2", cwd: "/a", createdAtMs: 500, updatedAtMs: 100 }),
+      session({ sessionId: "s3", cwd: "/a", createdAtMs: 100, updatedAtMs: 1000 }),
     ]);
     expect(groups[0].sessions.map((s) => s.sessionId)).toEqual(["s2", "s1", "s3"]);
   });
 
-  it("breaks update-time ties deterministically (session id ascending)", () => {
+  it("breaks start-time ties by session id rather than update time", () => {
     const groups = groupSessions([
-      session({ sessionId: "b", cwd: "/a", updatedAtMs: 100 }),
-      session({ sessionId: "a", cwd: "/a", updatedAtMs: 100 }),
+      session({ sessionId: "b", cwd: "/a", createdAtMs: 100, updatedAtMs: 900 }),
+      session({ sessionId: "a", cwd: "/a", createdAtMs: 100, updatedAtMs: 200 }),
     ]);
     expect(groups[0].sessions.map((s) => s.sessionId)).toEqual(["a", "b"]);
   });
 
-  it("orders unknown timestamps last and breaks unknown ties by session id", () => {
+  it("orders unknown start times last and breaks unknown ties by session id", () => {
     const groups = groupSessions([
-      session({ sessionId: "unknown-b", cwd: "/a", updatedAtMs: null }),
-      session({ sessionId: "before-epoch", cwd: "/a", updatedAtMs: -1 }),
-      session({ sessionId: "unknown-a", cwd: "/a", updatedAtMs: null }),
-      session({ sessionId: "epoch", cwd: "/a", updatedAtMs: 0 }),
+      session({ sessionId: "unknown-b", cwd: "/a", createdAtMs: null, updatedAtMs: 900 }),
+      session({ sessionId: "before-epoch", cwd: "/a", createdAtMs: -1 }),
+      session({ sessionId: "unknown-a", cwd: "/a", createdAtMs: null, updatedAtMs: 900 }),
+      session({ sessionId: "epoch", cwd: "/a", createdAtMs: 0 }),
     ]);
 
     expect(groups[0].sessions.map((item) => item.sessionId)).toEqual([
@@ -90,7 +91,7 @@ describe("groupSessions", () => {
 
   it("appends a sessionless group for every registered workspace cwd", () => {
     const groups = groupSessions(
-      [session({ sessionId: "a", cwd: "/a", updatedAtMs: 1 })],
+      [session({ sessionId: "a", cwd: "/a", createdAtMs: 1 })],
       ["/registered/empty"],
     );
 
@@ -102,7 +103,7 @@ describe("groupSessions", () => {
 
   it("merges sessionless groups into the label ordering", () => {
     const groups = groupSessions(
-      [session({ sessionId: "z", cwd: "/home/user/zebra", updatedAtMs: 1 })],
+      [session({ sessionId: "z", cwd: "/home/user/zebra", createdAtMs: 1 })],
       ["/home/user/alpha"],
     );
 
@@ -111,7 +112,7 @@ describe("groupSessions", () => {
 
   it("merges a registered cwd into its session group by trailing separator", () => {
     const groups = groupSessions(
-      [session({ sessionId: "a", cwd: "/a/project", updatedAtMs: 1 })],
+      [session({ sessionId: "a", cwd: "/a/project", createdAtMs: 1 })],
       ["/a/project/"],
     );
 

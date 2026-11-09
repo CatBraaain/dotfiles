@@ -156,6 +156,37 @@ describe("summarizeSessionFile", () => {
   });
 });
 
+describe("session start timestamps", () => {
+  it.each(["2024-12-03T14:00:00.000Z", "1970-01-01T00:00:00.000Z"])(
+    "uses the first non-empty header timestamp as the start time: %s",
+    async (timestamp) => {
+      const filePath = await writeJsonl(dir, "start-time.jsonl", [
+        "",
+        "  ",
+        header({ timestamp }),
+        messageEntry("user", "Later activity", { timestamp: "2024-12-05T14:00:00.000Z" }),
+        { type: "compaction", timestamp: "2024-12-06T14:00:00.000Z" },
+        sessionInfoEntry("Later name", { timestamp: "2024-12-07T14:00:00.000Z" }),
+      ]);
+
+      expect((await summarizeSessionFile(filePath))?.createdAtMs).toBe(Date.parse(timestamp));
+    },
+  );
+
+  it.each([undefined, null, 42, "", "not-a-date"])(
+    "keeps an unknown start time despite valid activity when the header timestamp is %j",
+    async (timestamp) => {
+      const filePath = await writeJsonl(dir, "unknown-start-time.jsonl", [
+        header({ timestamp }),
+        messageEntry("assistant", [], { timestamp: "2024-12-05T14:00:00.000Z" }),
+        { type: "compaction", timestamp: "2024-12-06T14:00:00.000Z" },
+      ]);
+
+      expect((await summarizeSessionFile(filePath))?.createdAtMs).toBeNull();
+    },
+  );
+});
+
 describe("session activity timestamps", () => {
   it.each(["user", "assistant", "toolResult", "bashExecution", "custom"])(
     "uses the outer entry timestamp of a %s message",

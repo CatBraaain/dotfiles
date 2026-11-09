@@ -98,30 +98,36 @@ describe("listSessions", () => {
     expect(sessions.map((s) => s.sessionId)).toEqual(["good"]);
   });
 
-  it("keeps update times and ordering when only mtime changes", async () => {
-    const olderTimestamp = "2024-12-04T14:00:00.000Z";
-    const newerTimestamp = "2024-12-05T14:00:00.000Z";
+  it("keeps start-time ordering and update times when only mtime changes", async () => {
+    const olderStart = "2024-12-03T14:00:00.000Z";
+    const newerStart = "2024-12-04T14:00:00.000Z";
+    const olderActivity = "2024-12-06T14:00:00.000Z";
+    const newerActivity = "2024-12-05T14:00:00.000Z";
     const olderPath = await writeJsonl(groupDir("--home-a--"), "older.jsonl", [
-      header({ id: "older", cwd: "/home/a" }),
-      messageEntry("user", "older", { timestamp: olderTimestamp }),
+      header({ id: "older", cwd: "/home/a", timestamp: olderStart }),
+      messageEntry("user", "older", { timestamp: olderActivity }),
     ]);
     const newerPath = await writeJsonl(groupDir("--home-a--"), "newer.jsonl", [
-      header({ id: "newer", cwd: "/home/a" }),
-      messageEntry("assistant", [], { timestamp: newerTimestamp }),
+      header({ id: "newer", cwd: "/home/a", timestamp: newerStart }),
+      messageEntry("assistant", [], { timestamp: newerActivity }),
     ]);
     await utimes(olderPath, 1_700_000_100, 1_700_000_100);
     await utimes(newerPath, 1_700_000_000, 1_700_000_000);
     const expected = [
-      ["newer", Date.parse(newerTimestamp)],
-      ["older", Date.parse(olderTimestamp)],
+      ["newer", Date.parse(newerStart), Date.parse(newerActivity)],
+      ["older", Date.parse(olderStart), Date.parse(olderActivity)],
     ];
     const before = groupSessions(await listSessions(root))[0].sessions;
-    expect(before.map((session) => [session.sessionId, session.updatedAtMs])).toEqual(expected);
+    expect(
+      before.map((session) => [session.sessionId, session.createdAtMs, session.updatedAtMs]),
+    ).toEqual(expected);
 
     await utimes(olderPath, 1_800_000_000, 1_800_000_000);
 
     const after = groupSessions(await listSessions(root))[0].sessions;
-    expect(after.map((session) => [session.sessionId, session.updatedAtMs])).toEqual(expected);
+    expect(
+      after.map((session) => [session.sessionId, session.createdAtMs, session.updatedAtMs]),
+    ).toEqual(expected);
   });
 
   it.each([
@@ -162,14 +168,21 @@ describe("listSessions", () => {
   });
 
   it.each(["message", "compaction"])(
-    "refreshes the cached timestamp after appending %s activity",
+    "refreshes update time without reordering after appending %s activity",
     async (type) => {
+      const olderStart = "2024-12-03T14:00:00.000Z";
+      const newerStart = "2024-12-04T14:00:00.000Z";
       const filePath = await writeJsonl(groupDir("--home-a--"), "cached.jsonl", [
-        header({ id: "cached", cwd: "/home/a" }),
+        header({ id: "cached", cwd: "/home/a", timestamp: olderStart }),
       ]);
-      expect((await listSessions(root))[0].updatedAtMs).toBe(
-        Date.parse("2024-12-03T14:00:00.000Z"),
-      );
+      await writeJsonl(groupDir("--home-a--"), "newer.jsonl", [
+        header({ id: "newer", cwd: "/home/a", timestamp: newerStart }),
+      ]);
+      const before = groupSessions(await listSessions(root))[0].sessions;
+      expect(before.map((session) => [session.sessionId, session.updatedAtMs])).toEqual([
+        ["newer", Date.parse(newerStart)],
+        ["cached", Date.parse(olderStart)],
+      ]);
       const { atime, mtime } = await stat(filePath);
       const timestamp = "2024-12-05T14:00:00.000Z";
 
@@ -179,7 +192,15 @@ describe("listSessions", () => {
       );
       await utimes(filePath, atime, mtime);
 
-      expect((await listSessions(root))[0].updatedAtMs).toBe(Date.parse(timestamp));
+      const after = groupSessions(await listSessions(root))[0].sessions;
+      expect(
+        after.map((session) => [session.sessionId, session.createdAtMs, session.updatedAtMs]),
+      ).toEqual([
+        ["newer", Date.parse(newerStart), Date.parse(newerStart)],
+        ["cached", Date.parse(olderStart), Date.parse(timestamp)],
+      ]);
+      const refreshed = groupSessions(await listSessions(root))[0].sessions;
+      expect(refreshed).toEqual(after);
     },
   );
 
@@ -190,7 +211,28 @@ describe("listSessions", () => {
     ]);
 
     expect(await listSessions(root)).toMatchObject([
-      { sessionId: "unknown", displayName: "No valid date", updatedAtMs: null },
+      { sessionId: "unknown", displayName: "No valid date", createdAtMs: null, updatedAtMs: null },
+    ]);
+  });
+
+  it("keeps unknown start times last despite newer activity", async () => {
+    await writeJsonl(groupDir("--home-a--"), "unknown-b.jsonl", [
+      header({ id: "unknown-b", cwd: "/home/a", timestamp: "invalid" }),
+      messageEntry("user", "Recent activity", { timestamp: "2031-01-01T00:00:00.000Z" }),
+    ]);
+    await writeJsonl(groupDir("--home-a--"), "epoch.jsonl", [
+      header({ id: "epoch", cwd: "/home/a", timestamp: "1970-01-01T00:00:00.000Z" }),
+    ]);
+    await writeJsonl(groupDir("--home-a--"), "unknown-a.jsonl", [
+      header({ id: "unknown-a", cwd: "/home/a", timestamp: undefined }),
+      messageEntry("assistant", [], { timestamp: "2030-01-01T00:00:00.000Z" }),
+    ]);
+
+    const sessions = groupSessions(await listSessions(root))[0].sessions;
+    expect(sessions.map((session) => [session.sessionId, session.createdAtMs])).toEqual([
+      ["epoch", 0],
+      ["unknown-a", null],
+      ["unknown-b", null],
     ]);
   });
 
