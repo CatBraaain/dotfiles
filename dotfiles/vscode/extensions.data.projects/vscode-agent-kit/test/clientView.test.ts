@@ -177,6 +177,33 @@ describe("sessionListView", () => {
     expect(byClass(elementsIn(view), "group-mode-toggle")).toHaveLength(2);
   });
 
+  it("groups the two disclosure buttons outside the independent workspace actions", () => {
+    const headers = byClass(elementsIn(viewFor("all")), "group-header");
+
+    for (const header of headers) {
+      const children = (header.children ?? []).filter(
+        (child): child is ElementDescriptor => typeof child !== "string",
+      );
+      expect(children.map((child) => child.attrs?.class)).toEqual([
+        "group-toggle",
+        "group-mode-toggle",
+        "group-new-session",
+      ]);
+      const disclosure = children[0];
+      expect(disclosure.tag).toBe("div");
+      expect(disclosure.attrs).toEqual({ class: "group-toggle" });
+      const buttons = collectElements(disclosure).filter((element) => element.tag === "button");
+      expect(buttons.map((button) => button.attrs?.class)).toEqual([
+        "group-chevron",
+        "group-title",
+      ]);
+      expect(buttons.map((button) => button.attrs?.["data-toggle-group"])).toEqual([
+        header.attrs?.title,
+        header.attrs?.title,
+      ]);
+    }
+  });
+
   it("renders a mode button with its cwd and mode on empty, archived, and collapsed groups", () => {
     const stateGroups = [
       { cwd: "/workspace/empty", label: "empty", sessions: [] },

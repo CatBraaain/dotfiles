@@ -999,6 +999,118 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
+  it.each([
+    { theme: "dark", width: 320 },
+    { theme: "light", width: 320 },
+    { theme: "dark", width: 720 },
+    { theme: "light", width: 720 },
+  ])(
+    "shares a stable disclosure hover surface without highlighting workspace actions in $theme at $width px",
+    async ({ theme, width }) => {
+      const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 640 });
+      if (theme === "light") {
+        await page.addStyleTag({
+          content: ":root { --vscode-list-hoverBackground: #e8e8e8; }",
+        });
+      }
+      const header = page.locator(".group-header").first().describe("Workspace header");
+      const surface = header.locator(".group-toggle").describe("Shared disclosure background");
+      const title = header.locator(".group-title").describe("Workspace name");
+      const controls = header.locator("button").describe("Workspace header controls");
+      const hoverBackground = theme === "light" ? "rgb(232, 232, 232)" : "rgb(42, 45, 46)";
+      const transparent = "rgba(0, 0, 0, 0)";
+      const idleBounds = await controls.evaluateAll((buttons) =>
+        buttons.map((button) => button.getBoundingClientRect().toJSON()),
+      );
+      expect(await surface.evaluate((element) => getComputedStyle(element).borderRadius)).toBe(
+        "9.6px",
+      );
+      expect(
+        await surface.evaluate((element) => getComputedStyle(element).transitionDuration),
+      ).toBe("0s");
+      expect(await surface.locator(".group-mode-toggle, .group-new-session").count()).toBe(0);
+
+      for (const label of ["agenda", "workspace-with-a-long-unbroken-name-".repeat(5)]) {
+        await title.evaluate((element, text) => {
+          element.textContent = text;
+        }, label);
+        expect(
+          await title.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return [
+              style.paddingLeft,
+              style.paddingRight,
+              style.fontSize,
+              style.fontWeight,
+              style.textOverflow,
+            ];
+          }),
+        ).toEqual(["0px", "6px", "14px", "600", "ellipsis"]);
+        if (label !== "agenda") {
+          expect(await title.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(
+            true,
+          );
+        }
+
+        for (const selector of [
+          ".group-chevron",
+          ".group-title",
+          ".group-mode-toggle",
+          ".group-new-session",
+        ]) {
+          const control = header.locator(selector);
+          await control.hover();
+          const isDisclosure = selector === ".group-chevron" || selector === ".group-title";
+          expect(
+            await surface.evaluate((element) => getComputedStyle(element).backgroundColor),
+          ).toBe(isDisclosure ? hoverBackground : transparent);
+          expect(
+            await controls.evaluateAll((buttons) =>
+              buttons.map((button) => getComputedStyle(button).backgroundColor),
+            ),
+          ).toEqual([
+            transparent,
+            transparent,
+            selector === ".group-mode-toggle" ? hoverBackground : transparent,
+            selector === ".group-new-session" ? hoverBackground : transparent,
+          ]);
+          expect(
+            await controls.evaluateAll((buttons) =>
+              buttons.map((button) => button.getBoundingClientRect().toJSON()),
+            ),
+          ).toEqual(idleBounds);
+        }
+      }
+
+      await page.mouse.move(1, 1);
+      await header.locator(".group-chevron").focus();
+      await page.keyboard.press("Shift+Tab");
+      for (const selector of [
+        ".group-chevron",
+        ".group-title",
+        ".group-mode-toggle",
+        ".group-new-session",
+      ]) {
+        await page.keyboard.press("Tab");
+        expect(
+          await header.locator(selector).evaluate((element) => ({
+            focused: document.activeElement === element,
+            visible: element.matches(":focus-visible"),
+            outlineWidth: getComputedStyle(element).outlineWidth,
+            height: element.getBoundingClientRect().height,
+          })),
+        ).toEqual({ focused: true, visible: true, outlineWidth: "2px", height: 24 });
+      }
+      expect(
+        await controls.evaluateAll((buttons) =>
+          buttons.map((button) => button.getBoundingClientRect().toJSON()),
+        ),
+      ).toEqual(idleBounds);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+      await page.close();
+    },
+  );
+
   it("collapses groups from chevrons and names while the mode and refresh preserve the state", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);

@@ -126,25 +126,31 @@ function groupDescriptor(
         attrs: { class: "group-header", title: group.cwd, "data-workspace-menu": group.cwd },
         children: [
           {
-            tag: "button",
-            attrs: {
-              class: "group-chevron",
-              type: "button",
-              "data-toggle-group": group.cwd,
-              "aria-expanded": String(isExpanded),
-              "aria-label": `${isExpanded ? "Collapse" : "Expand"} ${group.label}`,
-            },
-            children: [chevronIcon(isExpanded ? "down" : "right")],
-          },
-          {
-            tag: "button",
-            attrs: {
-              class: "group-title",
-              type: "button",
-              "data-toggle-group": group.cwd,
-              "aria-expanded": String(isExpanded),
-            },
-            children: [group.label],
+            tag: "div",
+            attrs: { class: "group-toggle" },
+            children: [
+              {
+                tag: "button",
+                attrs: {
+                  class: "group-chevron",
+                  type: "button",
+                  "data-toggle-group": group.cwd,
+                  "aria-expanded": String(isExpanded),
+                  "aria-label": `${isExpanded ? "Collapse" : "Expand"} ${group.label}`,
+                },
+                children: [chevronIcon(isExpanded ? "down" : "right")],
+              },
+              {
+                tag: "button",
+                attrs: {
+                  class: "group-title",
+                  type: "button",
+                  "data-toggle-group": group.cwd,
+                  "aria-expanded": String(isExpanded),
+                },
+                children: [group.label],
+              },
+            ],
           },
           modeToggleDescriptor(group.cwd, mode),
           {

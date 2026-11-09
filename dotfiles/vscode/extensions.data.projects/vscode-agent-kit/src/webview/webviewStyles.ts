@@ -31,8 +31,11 @@ export const webviewStyles = `
     .group { min-width: 0; }
     .group + .group { margin-top: 12px; }
     .group-header { gap: 4px; min-width: 0; min-height: 24px; }
+    .group-toggle { display: flex; flex: 1; align-items: center; gap: 4px; min-width: 0; border-radius: var(--session-radius); }
+    .group-toggle:hover { background: var(--vscode-list-hoverBackground); }
+    .group-toggle > button:hover { background: transparent; }
     .group-chevron, .group-new-session, .group-mode-toggle { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-foreground); }
-    .group-title { flex: 1; overflow: hidden; min-width: 0; height: 24px; padding: 0; font-size: 14px; font-weight: 600; line-height: 20px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+    .group-title { flex: 1; overflow: hidden; min-width: 0; height: 24px; padding: 0 6px 0 0; font-size: 14px; font-weight: 600; line-height: 20px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
     .group-mode-toggle { color: var(--vscode-descriptionForeground); }
     .group-mode-toggle:hover { color: var(--vscode-foreground); }
     .group-mode-toggle svg { width: 16px; height: 16px; }
