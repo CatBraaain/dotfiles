@@ -40,6 +40,10 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private runningSessionIds = new Set<string>();
   private unreadSessionIds = new Set<string>();
   private refreshVersion = 0;
+  private pendingRefresh: Promise<void> | undefined;
+  private latestListMessage:
+    | Extract<ExtensionMessage, { type: "loading" | "sessions" | "sessionsError" }>
+    | undefined;
 
   constructor(private readonly deps: SessionWebviewDeps) {}
 
@@ -78,6 +82,16 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   /** Re-read the session state store and the registered groups' session
    * files, then send display-only data to the webview. */
   async refresh(): Promise<void> {
+    const pending = this.refreshSessions();
+    this.pendingRefresh = pending;
+    try {
+      await pending;
+    } finally {
+      if (this.pendingRefresh === pending) this.pendingRefresh = undefined;
+    }
+  }
+
+  private async refreshSessions(): Promise<void> {
     const version = ++this.refreshVersion;
     this.post({ type: "loading" });
     const store = readSessionStateStore(this.deps.statePath);
@@ -174,7 +188,12 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private async handleMessage(message: unknown): Promise<void> {
     const request = parseWebviewRequest(message);
     if (request === undefined) return;
-    if (request.type === "ready" || request.type === "refresh") {
+    if (request.type === "ready") {
+      if (this.latestListMessage !== undefined) this.post(this.latestListMessage);
+      await this.pendingRefresh;
+      return;
+    }
+    if (request.type === "refresh") {
       await this.refresh();
       return;
     }
@@ -355,6 +374,13 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   }
 
   private post(message: ExtensionMessage): void {
+    if (
+      message.type === "loading" ||
+      message.type === "sessions" ||
+      message.type === "sessionsError"
+    ) {
+      this.latestListMessage = message;
+    }
     const view = this.view;
     if (view === undefined) return;
     void view.webview.postMessage(message).then(

@@ -17,6 +17,7 @@ import { editorTerminals } from "../src/terminals";
 import { encodeCwdDirName } from "../src/paths";
 import { fakeRuntimes } from "./runtimeFixtures";
 import { SessionWebviewProvider } from "../src/webview/sessionWebviewProvider";
+import * as sessionStore from "../src/sessionStore";
 import type { SessionPhase, WebviewState } from "../src/webview/protocol";
 import { cleanup, header, tempDir, writeJsonl } from "./fixtures";
 const vscodeMocks = vi.hoisted(() => ({
@@ -60,6 +61,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await cleanup(root);
 });
@@ -256,6 +258,134 @@ async function loadingFixture() {
 }
 
 describe("SessionWebviewProvider", () => {
+  it("reuses the in-flight initial scan when the client becomes ready", async () => {
+    const listSessions = vi.spyOn(sessionStore, "listSessions");
+    const { provider } = await loadingFixture();
+    listSessions.mockClear();
+    const webview = createView();
+
+    provider.resolveWebviewView(webview.view as never);
+    await webview.receive({ type: "ready" });
+
+    expect(listSessions).toHaveBeenCalledOnce();
+    expect(webview.postMessage).toHaveBeenLastCalledWith({
+      type: "sessions",
+      state: expect.objectContaining({
+        groups: [expect.objectContaining({ cwd: root })],
+      }),
+    });
+  });
+
+  it("delivers the in-flight initial scan error to a ready client without scanning again", async () => {
+    const listSessions = vi.spyOn(sessionStore, "listSessions");
+    const { provider } = await loadingFixture();
+    listSessions.mockClear();
+    let rejectScan!: (error: Error) => void;
+    const scan = new Promise<Awaited<ReturnType<typeof sessionStore.listSessions>>>((_, reject) => {
+      rejectScan = reject;
+    });
+    listSessions.mockReturnValueOnce(scan);
+    const webview = createView();
+
+    provider.resolveWebviewView(webview.view as never);
+    const ready = webview.receive({ type: "ready" });
+    try {
+      expect(listSessions).toHaveBeenCalledOnce();
+      expect(webview.postMessage.mock.calls.every(([message]) => message.type === "loading")).toBe(
+        true,
+      );
+    } finally {
+      rejectScan(new Error("Session scan failed"));
+      await ready;
+    }
+
+    expect(listSessions).toHaveBeenCalledOnce();
+    expect(
+      webview.postMessage.mock.calls.filter(([message]) => message.type !== "loading"),
+    ).toEqual([
+      [{ type: "sessionsError", message: "Failed to read Pi sessions: Session scan failed" }],
+    ]);
+  });
+
+  it("replays the completed initial result to a ready client without scanning again", async () => {
+    const listSessions = vi.spyOn(sessionStore, "listSessions");
+    const { webview } = await loadingFixture();
+
+    await webview.receive({ type: "ready" });
+
+    expect(listSessions).toHaveBeenCalledOnce();
+    expect(webview.postMessage).toHaveBeenCalledOnce();
+    expect(webview.postMessage).toHaveBeenLastCalledWith({
+      type: "sessions",
+      state: expect.objectContaining({ groups: [expect.objectContaining({ cwd: root })] }),
+    });
+  });
+
+  it("replays the newest acquisition error rather than a stale list on ready", async () => {
+    const { provider, statePath, webview } = await loadingFixture();
+    await writeFile(statePath, "invalid json");
+    await provider.refresh();
+    const latestError = webview.postMessage.mock.lastCall?.[0];
+    webview.postMessage.mockClear();
+    vscodeMocks.showErrorMessage.mockClear();
+
+    await webview.receive({ type: "ready" });
+
+    expect(webview.postMessage.mock.calls).toEqual([[latestError]]);
+    expect(latestError.type).toBe("sessionsError");
+    expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it("still rereads on an explicit refresh after initial ready", async () => {
+    const listSessions = vi.spyOn(sessionStore, "listSessions");
+    const { webview } = await loadingFixture();
+    await webview.receive({ type: "ready" });
+    listSessions.mockClear();
+
+    await webview.receive({ type: "refresh" });
+
+    expect(listSessions).toHaveBeenCalledOnce();
+    expect(webview.postMessage.mock.calls.slice(-2).map(([message]) => message.type)).toEqual([
+      "loading",
+      "sessions",
+    ]);
+  });
+
+  it("waits for the newest explicit refresh on ready without starting a third scan", async () => {
+    const listSessions = vi.spyOn(sessionStore, "listSessions");
+    const { provider, webview, mocks } = await loadingFixture();
+    listSessions.mockClear();
+    const completions: ((ids: Set<string>) => void)[] = [];
+    mocks.aliveSessionIds.mockImplementation(
+      () => new Promise<Set<string>>((resolve) => completions.push(resolve)),
+    );
+    const firstRefresh = provider.refresh();
+    await vi.waitFor(() => expect(completions).toHaveLength(1));
+    const latestRefresh = provider.refresh();
+    await vi.waitFor(() => expect(completions).toHaveLength(2));
+    let readyFinished = false;
+    const ready = webview.receive({ type: "ready" }).then(() => {
+      readyFinished = true;
+    });
+    try {
+      completions[0](new Set());
+      await firstRefresh;
+      expect(readyFinished).toBe(false);
+      expect(listSessions).toHaveBeenCalledTimes(2);
+      expect(webview.postMessage.mock.calls.every(([message]) => message.type === "loading")).toBe(
+        true,
+      );
+    } finally {
+      for (const finish of completions) finish(new Set([activeSessionId]));
+      await Promise.all([latestRefresh, ready]);
+    }
+    expect(readyFinished).toBe(true);
+    expect(webview.postMessage).toHaveBeenLastCalledWith({
+      type: "sessions",
+      state: expect.any(Object),
+    });
+  });
+
   it("announces loading before asynchronous refresh work finishes", async () => {
     const { provider, webview, mocks } = await loadingFixture();
     let finish!: (ids: Set<string>) => void;

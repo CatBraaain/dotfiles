@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { open, stat, writeFile } from "node:fs/promises";
 import {
   summarizeSessionFile,
   parseSessionHeader,
@@ -8,6 +9,11 @@ import {
 } from "../src/sessionFile";
 import { cleanup, header, messageEntry, sessionInfoEntry, tempDir, writeJsonl } from "./fixtures";
 
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...original, open: vi.fn(original.open) };
+});
+
 let dir: string;
 
 beforeEach(async () => {
@@ -15,6 +21,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await cleanup(dir);
 });
 
@@ -297,6 +304,125 @@ describe("session activity timestamps", () => {
     ]);
 
     expect((await summarizeSessionFile(filePath))?.updatedAtMs).toBe(Date.parse(timestamp));
+  });
+});
+
+describe("summary read overhead", () => {
+  it("scans an unnamed file without large redundant header, user and activity reads", async () => {
+    const timestamp = "2024-12-05T20:00:00.000Z";
+    const filePath = await writeJsonl(dir, "unnamed.jsonl", [
+      header(),
+      messageEntry("user", "First user text"),
+      { type: "custom", content: "x".repeat(8 * 1024 * 1024) },
+      messageEntry("toolResult", [], { timestamp }),
+    ]);
+    const original = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const handle = await original.open(filePath, "r");
+    const read = handle.read.bind(handle);
+    let bytesRead = 0;
+    vi.spyOn(handle, "read").mockImplementation(async (...args) => {
+      const result = await read(...args);
+      bytesRead += result.bytesRead;
+      return result;
+    });
+    vi.mocked(open).mockResolvedValueOnce(handle);
+
+    const summary = await summarizeSessionFile(filePath);
+
+    expect(summary).toMatchObject({
+      header: {
+        id: header().id,
+        cwd: header().cwd,
+        timestamp: header().timestamp,
+      },
+      displayName: "First user text",
+      createdAtMs: Date.parse("2024-12-03T14:00:00.000Z"),
+      updatedAtMs: Date.parse(timestamp),
+    });
+    const fileBytes = (await stat(filePath)).size;
+    const maximumReadOverheadBytes = 256 * 1024;
+    expect(bytesRead).toBeLessThanOrEqual(fileBytes + maximumReadOverheadBytes);
+  });
+});
+
+describe("scan boundary metadata", () => {
+  it.each([64 * 1024, 4 * 1024 * 1024, 64 * 1024 + 4 * 1024 * 1024])(
+    "finds user text across a %i-byte boundary when a long session_info clears the name",
+    async (boundaryBytes) => {
+      const prefix = `${JSON.stringify(header())}\n{"type":"message","message":{"padding":"`;
+      const paddingLength = boundaryBytes - Buffer.byteLength(`${prefix}",`) - 6;
+      const userLines = `${prefix}${"x".repeat(paddingLength)}","role":"user","content":"Boundary text"}}`;
+      expect(Buffer.from(userLines).indexOf('"role":"user"')).toBe(boundaryBytes - 6);
+      const body = `${userLines}\n${JSON.stringify(sessionInfoEntry("Old title"))}\n${JSON.stringify(sessionInfoEntry("", { details: "x".repeat(boundaryBytes + 50) }))}\n{"type":"session_info","name":"truncated"`;
+      const filePath = await writeJsonl(dir, "boundaries.jsonl", []);
+      await writeFile(filePath, body);
+
+      const summary = await summarizeSessionFile(filePath);
+
+      expect(summary?.displayName).toBe("Boundary text");
+    },
+  );
+
+  it.each([
+    {
+      type: "session_info",
+      needle: '"type":"session_info"',
+      boundaryBytes: 4 * 1024 * 1024,
+      entry: sessionInfoEntry("Boundary title"),
+      displayName: "Boundary title",
+    },
+    {
+      type: "compaction",
+      needle: '"compaction"',
+      boundaryBytes: 64 * 1024,
+      entry: { type: "compaction", timestamp: "2024-12-05T20:00:00.000Z" },
+      displayName: "Untitled",
+    },
+  ])("finds $type across a backward scan boundary", async (testCase) => {
+    const prefix = `${JSON.stringify(header())}\n${JSON.stringify(testCase.entry)}\n{"type":"custom","padding":"`;
+    const needleOffset = Buffer.from(prefix).indexOf(testCase.needle);
+    const suffix = '"}\n';
+    const paddingLength =
+      needleOffset + 6 + testCase.boundaryBytes - Buffer.byteLength(prefix + suffix);
+    const body = `${prefix}${"x".repeat(paddingLength)}${suffix}`;
+    expect(Buffer.byteLength(body) - testCase.boundaryBytes).toBe(needleOffset + 6);
+    const filePath = await writeJsonl(dir, "backward-boundary.jsonl", []);
+    await writeFile(filePath, body);
+
+    const summary = await summarizeSessionFile(filePath);
+
+    expect(summary?.displayName).toBe(testCase.displayName);
+    const timestamp =
+      testCase.type === "compaction" ? testCase.entry.timestamp : header().timestamp;
+    expect(summary?.updatedAtMs).toBe(Date.parse(timestamp as string));
+  });
+
+  it("reads a header beyond the initial small window without accepting a partial line", async () => {
+    const filePath = await writeJsonl(dir, "late-header.jsonl", [
+      " ".repeat(70_000),
+      header({ id: "late-header", details: "x".repeat(70_000) }),
+      messageEntry("user", "Text after a long header"),
+    ]);
+
+    expect(await summarizeSessionFile(filePath)).toMatchObject({
+      header: { id: "late-header" },
+      displayName: "Text after a long header",
+    });
+  });
+
+  it("ignores empty user text and malformed nested candidates across long lines", async () => {
+    const filePath = await writeJsonl(dir, "long-candidates.jsonl", [
+      header(),
+      messageEntry("user", " \n "),
+      { type: "custom", message: { role: "user", content: "Not a user entry" } },
+      { type: "custom", nested: sessionInfoEntry("Not a title"), content: "x".repeat(5_000_000) },
+      messageEntry("user", [{ type: "text", text: "Actual first text" }]),
+      sessionInfoEntry("Old title"),
+      sessionInfoEntry(undefined),
+      '{"type":"message","message":{"role":"user"}',
+    ]);
+
+    expect((await summarizeSessionFile(filePath))?.displayName).toBe("Actual first text");
   });
 });
 

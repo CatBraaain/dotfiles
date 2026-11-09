@@ -123,7 +123,7 @@ export async function summarizeSessionFile(filePath: string): Promise<SessionSum
         (entry) => entry.type === "session_info",
       ),
       scanFirstUserText(handle, size),
-      scanLatestEntry(handle, size, ACTIVITY_NEEDLES, isTimestampedActivity),
+      scanLatestEntry(handle, size, ACTIVITY_NEEDLES, isTimestampedActivity, LINE_STEP_BYTES),
     ]);
     scan.latestSessionInfoName =
       latestSessionInfo === undefined ? undefined : sessionInfoName(latestSessionInfo);
@@ -144,42 +144,62 @@ type FileHandle = Awaited<ReturnType<typeof open>>;
 
 async function readHeader(handle: FileHandle, size: number): Promise<SessionHeaderInfo | null> {
   const length = Math.min(size, HEADER_SCAN_BYTES);
-  const buffer = Buffer.alloc(length);
-  await handle.read(buffer, 0, length, 0);
+  const buffer = Buffer.allocUnsafe(length);
+  let filled = 0;
   let start = 0;
-  while (start < buffer.length) {
-    let newline = buffer.indexOf(10, start);
-    if (newline === -1) newline = buffer.length;
-    const line = buffer.subarray(start, newline).toString("utf8").trim();
-    if (line !== "") return parseSessionHeader(line);
-    start = newline + 1;
+  while (filled < length) {
+    const { bytesRead } = await handle.read(
+      buffer,
+      filled,
+      Math.min(LINE_STEP_BYTES, length - filled),
+      filled,
+    );
+    if (bytesRead === 0) break;
+    filled += bytesRead;
+    const window = buffer.subarray(0, filled);
+    let newline = window.indexOf(10, start);
+    while (newline !== -1) {
+      const line = window.subarray(start, newline).toString("utf8").trim();
+      if (line !== "") return parseSessionHeader(line);
+      start = newline + 1;
+      newline = window.indexOf(10, start);
+    }
   }
-  return null;
+  const line = buffer.subarray(start, filled).toString("utf8").trim();
+  return line === "" ? null : parseSessionHeader(line);
 }
 
-/** Forward scan: text of the first user message (validating candidate lines). */
 async function scanFirstUserText(handle: FileHandle, size: number): Promise<string | undefined> {
   const overlap = ROLE_USER_NEEDLE.length - 1;
-  let carry: Buffer = Buffer.alloc(0); // last `overlap` bytes read, to catch needles spanning chunk boundaries
+  const buffer = Buffer.allocUnsafe(Math.min(size, CHUNK_BYTES) + overlap);
+  let carryLength = 0;
+  let chunkBytes = LINE_STEP_BYTES;
   let position = 0;
   while (position < size) {
-    const chunk = await readChunk(handle, position, size);
-    position += chunk.length;
-    const window: Buffer = carry.length === 0 ? chunk : Buffer.concat([carry, chunk]);
-    const windowStart = position - window.length;
-    // Matches fully inside the carry were already examined in the previous
-    // window; matches spanning the boundary start late enough to be caught here.
-    const searchFrom = Math.max(0, carry.length - ROLE_USER_NEEDLE.length + 1);
-    let match = window.indexOf(ROLE_USER_NEEDLE, searchFrom);
+    const { bytesRead } = await handle.read(
+      buffer,
+      carryLength,
+      Math.min(chunkBytes, size - position),
+      position,
+    );
+    if (bytesRead === 0) break;
+    const windowStart = position - carryLength;
+    position += bytesRead;
+    const window = buffer.subarray(0, carryLength + bytesRead);
+    let match = window.indexOf(ROLE_USER_NEEDLE);
     while (match !== -1) {
-      const line = await readLineContaining(handle, size, windowStart + match);
+      const line = await readLineContaining(handle, size, windowStart + match, {
+        buffer: window,
+        startAbs: windowStart,
+      });
       const scan = createNameScan();
       foldSessionEntryLine(scan, line.text);
       if (scan.firstUserText !== undefined) return scan.firstUserText;
-      // Skip past this candidate's line; the same line may hold further false hits.
       match = window.indexOf(ROLE_USER_NEEDLE, line.endAbs + 1 - windowStart);
     }
-    carry = window.subarray(Math.max(0, window.length - overlap));
+    carryLength = Math.min(overlap, window.length);
+    window.copy(buffer, 0, window.length - carryLength);
+    chunkBytes = CHUNK_BYTES;
   }
   return undefined;
 }
@@ -189,28 +209,35 @@ async function scanLatestEntry(
   size: number,
   needles: readonly Buffer[],
   matches: (entry: Record<string, unknown>) => boolean,
+  initialChunkBytes = CHUNK_BYTES,
 ): Promise<Record<string, unknown> | undefined> {
   const overlap = Math.max(...needles.map((needle) => needle.length)) - 1;
-  let head: Buffer = Buffer.alloc(0); // first `overlap` bytes of the already-read (later) region
+  const buffer = Buffer.allocUnsafe(Math.min(size, CHUNK_BYTES) + overlap);
+  let headLength = 0;
+  let chunkBytes = initialChunkBytes;
   let readEnd = size;
   while (readEnd > 0) {
-    const length = Math.min(CHUNK_BYTES, readEnd);
+    const length = Math.min(chunkBytes, readEnd);
     const chunkStart = readEnd - length;
-    const chunk = await readChunk(handle, chunkStart, readEnd);
+    buffer.copy(buffer, length, 0, headLength);
+    const { bytesRead } = await handle.read(buffer, 0, length, chunkStart);
     readEnd = chunkStart;
-    const window: Buffer = Buffer.concat([chunk, head]); // the chunk followed by its continuation
-    // Only matches starting inside this chunk are new; the head was searched
-    // together with the chunk that contains it.
-    let searchBefore = chunk.length - 1;
+    const continuationLength = bytesRead === length ? headLength : 0;
+    const window = buffer.subarray(0, bytesRead + continuationLength);
+    let searchBefore = bytesRead - 1;
     while (searchBefore >= 0) {
       const match = Math.max(...needles.map((needle) => window.lastIndexOf(needle, searchBefore)));
       if (match === -1) break;
-      const line = await readLineContaining(handle, size, chunkStart + match);
+      const line = await readLineContaining(handle, size, chunkStart + match, {
+        buffer: window,
+        startAbs: chunkStart,
+      });
       const entry = tryParseRecord(line.text);
       if (entry !== null && matches(entry)) return entry;
       searchBefore = line.startAbs - 1 - chunkStart;
     }
-    head = window.subarray(0, Math.min(overlap, window.length));
+    headLength = Math.min(overlap, bytesRead);
+    chunkBytes = CHUNK_BYTES;
   }
   return undefined;
 }
@@ -221,15 +248,32 @@ interface ExtractedLine {
   endAbs: number; // position of the terminating newline, or `size` for the last line
 }
 
-/**
- * Read the full line containing the byte at `position`, with targeted reads in
- * both directions. Never accumulates chunks, so multi-megabyte lines stay linear.
- */
+interface ScanWindow {
+  buffer: Buffer;
+  startAbs: number;
+}
+
 async function readLineContaining(
   handle: FileHandle,
   size: number,
   position: number,
+  window: ScanWindow,
 ): Promise<ExtractedLine> {
+  const offset = position - window.startAbs;
+  const previousNewline = offset === 0 ? -1 : window.buffer.lastIndexOf(10, offset - 1);
+  const nextNewline = window.buffer.indexOf(10, offset);
+  const startsInWindow = previousNewline !== -1 || window.startAbs === 0;
+  const endsInWindow = nextNewline !== -1 || window.startAbs + window.buffer.length === size;
+  if (startsInWindow && endsInWindow) {
+    const start = previousNewline + 1;
+    const end = nextNewline === -1 ? window.buffer.length : nextNewline;
+    return {
+      text: window.buffer.subarray(start, end).toString("utf8"),
+      startAbs: window.startAbs + start,
+      endAbs: window.startAbs + end,
+    };
+  }
+
   let startAbs = 0;
   let scanEnd = position;
   while (scanEnd > 0) {
@@ -260,16 +304,12 @@ async function readLineContaining(
   return { text: line.toString("utf8"), startAbs, endAbs };
 }
 
-async function readChunk(handle: FileHandle, position: number, size: number): Promise<Buffer> {
-  return readAt(handle, position, Math.min(position + CHUNK_BYTES, size));
-}
-
 async function readAt(handle: FileHandle, position: number, end: number): Promise<Buffer> {
   const length = end - position;
   if (length <= 0) return Buffer.alloc(0);
-  const buffer = Buffer.alloc(length);
-  await handle.read(buffer, 0, length, position);
-  return buffer;
+  const buffer = Buffer.allocUnsafe(length);
+  const { bytesRead } = await handle.read(buffer, 0, length, position);
+  return buffer.subarray(0, bytesRead);
 }
 
 function tryParseRecord(line: string): Record<string, unknown> | null {
