@@ -180,6 +180,9 @@ test(
   async ({ host }, testInfo) => {
     const firstPids = new Map<string, number>();
     const selections = ["A", "B", "A", "B"];
+    // B ships archived; make it active so switching away from it does not
+    // stop its Pi and the switch keeps reusing the same process.
+    await host.activateSession("B");
     for (const [index, key] of selections.entries()) {
       const isLastSelection = index === selections.length - 1;
       await test.step(`Select ${key} and open its Pi terminal`, async () => {
@@ -846,6 +849,9 @@ test(
     let sourceA = "";
     let sourceB = "";
     await test.step("Start isolated A and B Pi runtimes and an ordinary fixture tmux session", async () => {
+      // B ships archived; make it active so switching away from it keeps
+      // its Pi running while this test archives and reopens A.
+      await host.activateSession("B");
       await host.selectSession("B");
       await host.selectSession("A");
       await host.expectNativeDisplay("A");

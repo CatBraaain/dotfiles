@@ -198,12 +198,19 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "newSession") {
+      const previousSessionId = this.deps.registry.displayedSessionId;
       try {
         await requireWorkDirectory(request.cwd);
         await this.deps.startNewSession(request.cwd);
       } catch (error) {
         this.postError(`Failed to start Pi session in ${request.cwd}: ${errorMessage(error)}`);
+        return;
       }
+      // The launch replaced the shared display; stop an archived previous
+      // display the same way a switch away from it does. A separate
+      // registry.run is required because nesting it inside startNewSession's
+      // own run would wait on that run forever.
+      await this.deps.registry.run(() => this.stopArchivedDisplayedSession(previousSessionId));
       return;
     }
     if (request.type === "addWorkspace") {
@@ -336,6 +343,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   }
 
   private async openSession(sessionId: string): Promise<void> {
+    const previousSessionId = this.deps.registry.displayedSessionId;
     const session = this.sessionsById.get(sessionId);
     if (session === undefined) {
       this.postError(`Session not found: ${sessionId}`);
@@ -367,6 +375,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
 
     terminal.show();
+    await this.stopArchivedDisplayedSession(previousSessionId);
     const store = readSessionStateStore(this.deps.statePath);
     const data = store.status === "ok" ? store.data : undefined;
     if (sessionPhases(data).get(sessionId) === "waiting-user") {
@@ -376,6 +385,34 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     // Re-send the list so the webview's selection display follows the
     // session the shared terminal now shows.
     await this.refresh();
+  }
+
+  /** Stop the tmux session of the previously displayed session when it is
+   * still archived after the shared display moved to another session.
+   * Opening an archived session may keep its Pi alive while it stays
+   * displayed, but leaving it without unarchiving must not keep that Pi
+   * running. The display must have actually moved: an unchanged or lost
+   * display (failed open or launch) keeps the previous Pi. A store read
+   * error keeps it too because the archived state cannot be confirmed. */
+  private async stopArchivedDisplayedSession(previousSessionId: string | undefined): Promise<void> {
+    if (
+      previousSessionId === undefined ||
+      previousSessionId === this.deps.registry.displayedSessionId
+    ) {
+      return;
+    }
+    const store = readSessionStateStore(this.deps.statePath);
+    if (store.status === "error") return;
+    if (activeSessionIds(store.status === "ok" ? store.data : undefined).has(previousSessionId)) {
+      return;
+    }
+    try {
+      await this.deps.registry.stop(previousSessionId);
+    } catch (error) {
+      this.postError(
+        `Failed to stop archived Pi session ${previousSessionId}: ${errorMessage(error)}`,
+      );
+    }
   }
 
   private post(message: ExtensionMessage): void {

@@ -182,6 +182,24 @@ export class VSCodeFixture {
     await row.locator(".session-name").describe(`${key} session name`).click({ steps: 15 });
   }
 
+  /** Add a fixture session to its workspace's active-sessions map and reload
+   * the list. The shared display stops a still-archived previous display
+   * when it moves away, so tests that keep a fixture Pi alive across a
+   * switch must make that fixture active first. */
+  async activateSession(key: string): Promise<void> {
+    const statePath = join(this.directory, "agent/session-state.json");
+    const store = JSON.parse(readFileSync(statePath, "utf8")) as {
+      "active-workspaces": Record<string, { "active-sessions"?: Record<string, unknown> }>;
+    };
+    const session = this.sessions[key];
+    const workspace = store["active-workspaces"][session.cwd];
+    if (workspace === undefined) throw new Error(`workspace is not registered: ${session.cwd}`);
+    workspace["active-sessions"] ??= {};
+    workspace["active-sessions"][session.id] = {};
+    writeFileSync(statePath, JSON.stringify(store));
+    await this.refreshSessions();
+  }
+
   async expectPiVisible(cwd?: string): Promise<void> {
     if (cwd !== undefined) {
       await expect

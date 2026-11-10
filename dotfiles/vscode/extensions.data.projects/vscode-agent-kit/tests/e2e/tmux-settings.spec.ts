@@ -92,6 +92,8 @@ test(
 
     await test.step("Start two real Pi sessions and verify the startup settings on tmux 3.8", async () => {
       expect(host.tmux(["-V"]).trim()).toBe("tmux 3.8");
+      // B ships archived; make it active so selecting A later does not stop it.
+      await host.activateSession("B");
       for (const key of ["A", "B"]) {
         await host.selectSession(key);
         await host.expectNativeDisplay(key);

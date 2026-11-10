@@ -1229,6 +1229,181 @@ describe("SessionWebviewProvider", () => {
     expect(terminal.show).toHaveBeenCalledTimes(1);
   });
 
+  /** Fixture for archived-display switching: both sessions listed, the
+   * inactive one archived, and a reusable display terminal for the cwd. */
+  async function archivedDisplayFixture(deps: Parameters<typeof createProvider>[0] = {}) {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "second.jsonl", [
+      header({ id: inactiveSessionId, cwd: root }),
+    ]);
+    const runtimes = fakeRuntimes();
+    const registry = new TerminalRegistry(runtimes.store, editorTerminals(runtimes.store));
+    const terminal = {
+      creationOptions: { cwd: root },
+      processId: Promise.resolve(123),
+      show: vi.fn(),
+    };
+    vscodeMocks.createTerminal.mockReturnValue(terminal);
+    const { provider, statePath } = createProvider({ sessionDir, registry, ...deps });
+    setUpStore(statePath, root, [activeSessionId]); // inactiveSessionId is archived
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    return { sessionDir, runtimes, registry, terminal, provider, statePath, webview };
+  }
+
+  it("stops an archived previous display when the shared display moves away", async () => {
+    const { runtimes, statePath, webview } = await archivedDisplayFixture();
+
+    // opening the archived session keeps its tmux session alive while displayed
+    await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.live.has(inactiveSessionId)).toBe(true);
+
+    // switching to the unarchived session stops the archived one
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    expect(runtimes.mocks.stop).toHaveBeenCalledWith(inactiveSessionId);
+    expect(runtimes.live.has(inactiveSessionId)).toBe(false);
+    expect(runtimes.live.has(activeSessionId)).toBe(true);
+
+    // the stop only closes the tmux session: the store keeps the archived membership
+    expect(activeSessionIds(readStore(statePath)).has(inactiveSessionId)).toBe(false);
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.displayedSessionId).toBe(
+      activeSessionId,
+    );
+  });
+
+  it("stops an archived previous display when a new session replaces it", async () => {
+    const newSessionId = "00000000-0000-4000-8000-000000000003";
+    const { registry, runtimes, webview } = await archivedDisplayFixture({
+      startNewSession: async () => {
+        await registry.run(() => registry.open({ sessionId: newSessionId, cwd: root, args: [] }));
+      },
+    });
+
+    await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    expect(runtimes.live.has(inactiveSessionId)).toBe(true);
+
+    await webview.receive({ type: "newSession", cwd: root });
+    expect(runtimes.mocks.stop).toHaveBeenCalledWith(inactiveSessionId);
+    expect(runtimes.live.has(inactiveSessionId)).toBe(false);
+  });
+
+  it("keeps the archived display when starting a new session fails", async () => {
+    const { runtimes, webview } = await archivedDisplayFixture({
+      startNewSession: async () => {
+        throw new Error("Work folder missing");
+      },
+    });
+
+    await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    expect(runtimes.live.has(inactiveSessionId)).toBe(true);
+
+    await webview.receive({ type: "newSession", cwd: root });
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+      `Failed to start Pi session in ${root}: Work folder missing`,
+    );
+    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.live.has(inactiveSessionId)).toBe(true);
+  });
+
+  it("keeps the archived display when a failed launch closed the shared display", async () => {
+    const { registry, runtimes, terminal, webview } = await archivedDisplayFixture({
+      startNewSession: async () => {
+        // a failed launch closed the old display tab before its attach failed
+        registry.onTerminalClosed(terminal as never);
+        throw new Error("cannot attach to tmux session");
+      },
+    });
+
+    await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    expect(runtimes.live.has(inactiveSessionId)).toBe(true);
+
+    await webview.receive({ type: "newSession", cwd: root });
+    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.live.has(inactiveSessionId)).toBe(true);
+  });
+
+  it("keeps a session that came back from the archive alive when the display moves away", async () => {
+    const { runtimes, statePath, webview } = await archivedDisplayFixture();
+
+    // Unarchive displays the archived session and makes it active again
+    await webview.receive({ type: "unarchiveSession", sessionId: inactiveSessionId });
+    expect(activeSessionIds(readStore(statePath)).has(inactiveSessionId)).toBe(true);
+
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.live.has(inactiveSessionId)).toBe(true);
+  });
+
+  it("does not stop the archived display when it is selected again", async () => {
+    const { runtimes, webview } = await archivedDisplayFixture();
+
+    await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    expect(runtimes.live.has(inactiveSessionId)).toBe(true);
+
+    await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.live.has(inactiveSessionId)).toBe(true);
+  });
+
+  it("keeps the archived display when switching to the other session fails", async () => {
+    const { sessionDir, runtimes, webview } = await archivedDisplayFixture();
+
+    await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    expect(runtimes.live.has(inactiveSessionId)).toBe(true);
+
+    // the switch target lost its session file: the open fails and the
+    // display stays on the archived session, which must stay alive
+    await rm(join(sessionDir, encodeCwdDirName(root), "first.jsonl"));
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.live.has(inactiveSessionId)).toBe(true);
+  });
+
+  it("keeps the archived display when the store read cannot confirm the archive", async () => {
+    const { statePath, runtimes, webview } = await archivedDisplayFixture();
+
+    await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    expect(runtimes.live.has(inactiveSessionId)).toBe(true);
+
+    await writeFile(statePath, "not json", "utf8");
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.live.has(inactiveSessionId)).toBe(true);
+  });
+
+  it("stops the archived display when the store file is missing", async () => {
+    const { statePath, runtimes, webview } = await archivedDisplayFixture();
+
+    await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    expect(runtimes.live.has(inactiveSessionId)).toBe(true);
+
+    // a missing store reads as an empty store: every session is archived,
+    // matching the whitelist semantics of the list
+    await rm(statePath);
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    expect(runtimes.mocks.stop).toHaveBeenCalledWith(inactiveSessionId);
+  });
+
+  it("reports the failure but keeps the new display when stopping the archived display fails", async () => {
+    const { runtimes, webview } = await archivedDisplayFixture();
+
+    await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    runtimes.mocks.stop.mockRejectedValueOnce(new Error("tmux kill failed"));
+
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+      `Failed to stop archived Pi session ${inactiveSessionId}: tmux kill failed`,
+    );
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.displayedSessionId).toBe(
+      activeSessionId,
+    );
+  });
+
   it("follows the shared terminal's displayed session in the sent state", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
