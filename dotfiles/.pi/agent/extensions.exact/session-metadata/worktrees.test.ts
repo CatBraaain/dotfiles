@@ -117,6 +117,25 @@ describe("worktree command scopes", () => {
       [],
     );
   });
+
+  it("skips quoted empty git -C operands instead of throwing", () => {
+    assert.deepEqual(findWorktreeScopes('git -C "$d" status', "/repo"), []);
+    assert.deepEqual(findWorktreeScopes('git -C "$d" worktree add /a', "/repo"), []);
+    assert.deepEqual(findWorktreeScopes('git -C "" worktree add /a', "/repo"), []);
+  });
+
+  it("scans loop commands over quoted variables without throwing", () => {
+    const command =
+      'for d in ~/mirrors/github.com/*/*/; do [ -d "$d/.git" ] || continue; n=$(git -C "$d" status --porcelain 2>/dev/null | wc -l); [ "$n" -gt 0 ] && echo "$n $d"; done; echo "scan done"';
+    assert.deepEqual(findWorktreeScopes(command, "/repo"), []);
+  });
+
+  it("ignores empty worktree mutation paths instead of throwing", () => {
+    assert.deepEqual(findWorktreeScopes('git worktree add ""', "/repo"), []);
+    assert.deepEqual(findWorktreeScopes('git worktree move "" /b', "/repo"), [
+      { cwd: "/repo", actions: ["move"], paths: ["/b"] },
+    ]);
+  });
 });
 
 describe("Git snapshot changes", () => {

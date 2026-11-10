@@ -791,6 +791,22 @@ describe("session metadata extension", () => {
     assert.match(String(h.messages[0]![0].content), /No active background Bash receiver/);
   });
 
+  it("stays silent when the worktree observer cannot parse the command", async () => {
+    const h = await createHarness();
+    const command = 'git -C "$d" status';
+    await h.emit("tool_call", { toolName: "bash", toolCallId: "unparsed", input: { command } });
+    await h.emit("tool_result", {
+      toolName: "bash",
+      toolCallId: "unparsed",
+      input: { command },
+      content: [],
+      details: {},
+      isError: true,
+    });
+    assert.deepEqual(getWorkspaces(h.manager), []);
+    assert.equal(h.messages.length, 0);
+  });
+
   it("does not confuse a late old-session result with the replacement session", async () => {
     const h = await createHarness();
     const command = quote(["git", "worktree", "add", "-b", "late", join(h.directory, "late")]);

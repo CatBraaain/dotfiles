@@ -20,6 +20,7 @@ import {
   type BashQuery,
   type WorkspaceChanges,
   type WorktreeAction,
+  type WorktreeScope,
   type WorktreeSnapshot,
 } from "./worktrees.ts";
 
@@ -144,9 +145,14 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
     if (event.toolName !== "bash" || typeof event.input.command !== "string") return;
     const expected = generation;
     const sessionId = ctx.sessionManager.getSessionId();
+    let scopes: WorktreeScope[];
     try {
-      const scopes = findWorktreeScopes(event.input.command, ctx.cwd);
-      if (scopes.length === 0) return;
+      scopes = findWorktreeScopes(event.input.command, ctx.cwd);
+    } catch {
+      return;
+    }
+    if (scopes.length === 0) return;
+    try {
       const observations: Observation[] = [];
       for (const scope of scopes) {
         const known = observations.find(

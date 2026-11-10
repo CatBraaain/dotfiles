@@ -25,6 +25,11 @@ export interface WorkspaceChanges {
   removed: string[];
 }
 
+function resolveScopePath(path: string, cwd: string): string | undefined {
+  if (path.length === 0 || path.includes("\0")) return undefined;
+  return resolveWorktreePath(path, cwd);
+}
+
 export function findWorktreeScopes(command: string, cwd: string): WorktreeScope[] {
   let shellCwd = cwd;
   const scopes = new Map<string, WorktreeScope>();
@@ -39,27 +44,42 @@ export function findWorktreeScopes(command: string, cwd: string): WorktreeScope[
     if (basename(words[0] ?? "") !== "git") continue;
     let gitCwd = resolveWorktreePath(shellCwd, cwd);
     let cursor = 1;
+    let unusable = false;
     while (words[cursor]?.startsWith("-")) {
       const option = words[cursor++]!;
       if (option === "-C") {
         if (words[cursor] === undefined) break;
-        gitCwd = resolveWorktreePath(words[cursor++]!, gitCwd);
+        const next = resolveScopePath(words[cursor++]!, gitCwd);
+        if (next === undefined) {
+          unusable = true;
+          break;
+        }
+        gitCwd = next;
       } else if (option.startsWith("-C") && option.length > 2) {
-        gitCwd = resolveWorktreePath(option.slice(2), gitCwd);
+        const next = resolveScopePath(option.slice(2), gitCwd);
+        if (next === undefined) {
+          unusable = true;
+          break;
+        }
+        gitCwd = next;
       } else if (option === "-c" || option === "--git-dir" || option === "--work-tree") {
         cursor++;
       }
     }
+    if (unusable) continue;
     if (words[cursor] !== "worktree") continue;
     const action = words[cursor + 1];
     if (action !== "add" && action !== "move" && action !== "remove") continue;
-    const scope: WorktreeScope = scopes.get(gitCwd) ?? { cwd: gitCwd, actions: [], paths: [] };
-    scope.actions = [...new Set<WorktreeAction>([...scope.actions, action])];
     const operands = mutationOperands(words.slice(cursor + 2));
     const pathCount = action === "move" ? 2 : 1;
-    scope.paths.push(
-      ...operands.slice(0, pathCount).map((path) => resolveWorktreePath(path, gitCwd)),
-    );
+    const paths = operands
+      .slice(0, pathCount)
+      .map((path) => resolveScopePath(path, gitCwd))
+      .filter((path): path is string => path !== undefined);
+    if (paths.length === 0) continue;
+    const scope: WorktreeScope = scopes.get(gitCwd) ?? { cwd: gitCwd, actions: [], paths: [] };
+    scope.actions = [...new Set<WorktreeAction>([...scope.actions, action])];
+    scope.paths.push(...paths);
     scopes.set(gitCwd, scope);
   }
   return [...scopes.values()];
