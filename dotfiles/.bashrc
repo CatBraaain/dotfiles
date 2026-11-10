@@ -23,6 +23,7 @@ export PATH="$HOME/.bun/bin:$PATH"
 
 # Agent CLIs (e.g. browse).
 export PATH="$HOME/.agents/cli:$PATH"
+export PATH="$HOME/.local/cli:$PATH"
 
 export TMUX_TMPDIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 

@@ -8,6 +8,7 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | .agents |  | - | - |
 | .config |  | - | - |
 | .gitconfig.local.sample | - | - | - |
+| .local/cli |  | - | - |
 | .pi |  | - | - |
 | .playwright |  | - | - |
 | .wslconfig | - |  | - |

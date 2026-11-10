@@ -17,7 +17,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "bun:test";
 import { quote } from "shell-quote";
-import { parseOperation } from "../../../../.agents/cli.exact/pi-mux/src/main.ts";
+import { parseOperation } from "../../../../.local/cli.exact/pi-mux/src/main.ts";
 
 type Outcome = { out: string; err: string; code: number };
 type Pane = {
@@ -34,7 +34,7 @@ type Prompt = { id: string; prompt: string; images?: unknown[] };
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const CLI =
   process.env.PI_MUX_TEST_CLI ??
-  resolve(EXTENSION_DIR, "../../../../.agents/cli.exact/pi-mux/src/main.ts");
+  resolve(EXTENSION_DIR, "../../../../.local/cli.exact/pi-mux/src/main.ts");
 const CLI_COMMAND = CLI.endsWith(".ts") ? [process.execPath, CLI] : [CLI];
 const TIMEOUT_MS = 60_000;
 

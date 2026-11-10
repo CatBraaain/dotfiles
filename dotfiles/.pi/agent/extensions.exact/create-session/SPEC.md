@@ -9,7 +9,7 @@
 | `initialRequest` | 必須 | 新セッションで即実行する初期依頼。前後の空白を除いて空であってはならない |
 | `cwd` | 省略可 | 新セッションの作業ディレクトリ。省略時は呼び出し時の `ctx.cwd`。相対パスは呼び出し時の `ctx.cwd` 基準で絶対パスへ解決する |
 
-`initialRequest`・`cwd` のいずれかにNUL文字を含む呼び出し、空白のみの `initialRequest` はツールエラーになる。初期依頼の位置引数の規則は [pi-mux の仕様](../../../../.agents/cli.exact/pi-mux/SPEC.md#new) に従う。
+`initialRequest`・`cwd` のいずれかにNUL文字を含む呼び出し、空白のみの `initialRequest` はツールエラーになる。初期依頼の位置引数の規則は [pi-mux の仕様](../../../../.local/cli.exact/pi-mux/SPEC.md#new) に従う。
 
 ## 呼び出し元の制限
 
@@ -59,7 +59,7 @@ session承認も同じ置換・reloadで失効する。履歴からはどちら�
 
 `create_detached_session` は、承認後に呼び出し時点で登録されているbashツールを1回だけ呼ぶ。bashツールの権限確認・sandbox・中断・出力上限をそのまま適用する。承認の拒否・キャンセル・中断では、作成コマンドを実行しない。
 
-通常の対話起動と同じ専用サーバーを利用する。専用管理先・設定の契約は [pi-mux の仕様](../../../../.agents/cli.exact/pi-mux/SPEC.md) に従う。サーバーが未起動でも必要時に自動起動し、通常tmux のソケット・設定・稼働状態へ作用しない。`TMUX`・`TMUX_TMPDIR` によって作成先を変更しない。
+通常の対話起動と同じ専用サーバーを利用する。専用管理先・設定の契約は [pi-mux の仕様](../../../../.local/cli.exact/pi-mux/SPEC.md) に従う。サーバーが未起動でも必要時に自動起動し、通常tmux のソケット・設定・稼働状態へ作用しない。`TMUX`・`TMUX_TMPDIR` によって作成先を変更しない。
 
 | 条件 | 作成結果 |
 | --- | --- |
@@ -69,7 +69,7 @@ session承認も同じ置換・reloadで失効する。履歴からはどちら�
 
 構造化結果は `status`（`created`・`denied`・`error`）と、拒否・失敗時の `error` を持つ。作成先のwindow名は返さない。
 
-作成はdetachedで行う。呼び出し元や他の端末への自動attach・画面表示は行わない。成功結果は会話ID・piプロセス・paneを確認した作成受付を示し、全拡張の初期化完了や初期依頼の完了は待たない。初期依頼のCLI入力処理は [pi-mux の仕様](../../../../.agents/cli.exact/pi-mux/SPEC.md) に従う。
+作成はdetachedで行う。呼び出し元や他の端末への自動attach・画面表示は行わない。成功結果は会話ID・piプロセス・paneを確認した作成受付を示し、全拡張の初期化完了や初期依頼の完了は待たない。初期依頼のCLI入力処理は [pi-mux の仕様](../../../../.local/cli.exact/pi-mux/SPEC.md) に従う。
 
 ## ウィンドウで実行するコマンド
 
