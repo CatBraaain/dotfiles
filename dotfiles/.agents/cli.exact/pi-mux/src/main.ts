@@ -88,9 +88,9 @@ function configuration() {
   const agentDir = expandPath(process.env.PI_CODING_AGENT_DIR || "~/.pi/agent");
   const directory = join(runtime, "pi-tmux");
   const extension = join(agentDir, "extensions", "tmux-handoff", "index.ts");
-  const tmuxConfig = join(agentDir, "extensions", "tmux-handoff", "tmux.conf");
+  const tmuxConfig = join(homedir(), ".config", "tmux", "pi.conf");
   if (!existsSync(extension) || !existsSync(tmuxConfig))
-    throw new Error(`Missing pi-mux extension or tmux configuration in ${agentDir}`);
+    throw new Error(`Missing pi-mux extension or tmux configuration: ${extension}, ${tmuxConfig}`);
   const env = Object.fromEntries(
     Object.entries(process.env).filter(
       (entry): entry is [string, string] =>

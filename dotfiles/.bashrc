@@ -24,8 +24,6 @@ export PATH="$HOME/.bun/bin:$PATH"
 # Agent CLIs (e.g. browse).
 export PATH="$HOME/.agents/cli:$PATH"
 
-# Shared tmux socket dir: the tmux-server systemd user service and the
-# create_session tool connect through this socket directory.
 export TMUX_TMPDIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 case $- in

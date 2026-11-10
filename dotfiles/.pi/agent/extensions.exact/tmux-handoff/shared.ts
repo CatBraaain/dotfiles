@@ -1,6 +1,6 @@
 import { readlinkSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { quote } from "shell-quote";
 
@@ -14,7 +14,6 @@ export const PARENT_PI_ENV_KEYS = [
   "PI_MODEL",
   "PI_REASONING_LEVEL",
 ];
-const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 const TMUX_TIMEOUT_MS = 5_000;
 
 export function getTmuxPaths(env: NodeJS.ProcessEnv = process.env) {
@@ -24,7 +23,7 @@ export function getTmuxPaths(env: NodeJS.ProcessEnv = process.env) {
   return {
     directory,
     socketPath: join(directory, "server.sock"),
-    configPath: join(MODULE_DIR, "tmux.conf"),
+    configPath: join(homedir(), ".config", "tmux", "pi.conf"),
   };
 }
 

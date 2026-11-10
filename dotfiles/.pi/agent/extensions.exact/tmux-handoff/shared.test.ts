@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "bun:test";
 import { parse } from "shell-quote";
 import { attachCommand, getTmuxPaths, inspectManagedPane, tmuxArgs } from "./shared.ts";
@@ -13,6 +15,14 @@ describe("dedicated tmux paths", () => {
     assert.equal(paths.socketPath, "/isolated runtime/pi-tmux/server.sock");
     const args = tmuxArgs(paths, ["start-server"]);
     assert.deepEqual(args, ["-S", paths.socketPath, "-f", paths.configPath, "start-server"]);
+  });
+
+  it("uses the global config independently of PI_CODING_AGENT_DIR", () => {
+    const defaultPaths = getTmuxPaths({});
+    const customPaths = getTmuxPaths({ PI_CODING_AGENT_DIR: "/custom pi agent" });
+    const configPath = join(homedir(), ".config", "tmux", "pi.conf");
+    assert.equal(defaultPaths.configPath, configPath);
+    assert.equal(customPaths.configPath, configPath);
   });
 
   it("rejects a relative runtime directory", () => {

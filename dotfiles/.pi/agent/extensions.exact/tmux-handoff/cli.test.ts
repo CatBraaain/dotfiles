@@ -40,15 +40,27 @@ async function createFixture() {
   mkdirSync(parent, { recursive: true });
   const root = mkdtempSync(join(parent, "pi-mux-regression-"));
   const agent = join(root, "agent");
+  const home = join(root, "home");
   const runtime = join(root, "runtime");
   const bin = join(root, "bin");
   const cwdA = join(root, "cwd-a");
   const cwdB = join(root, "cwd-b");
   const outer = join(root, "outer.sock");
   const socket = join(runtime, "pi-tmux/server.sock");
-  for (const path of [join(agent, "extensions"), runtime, bin, cwdA, cwdB, join(root, "home")])
+  for (const path of [
+    join(agent, "extensions"),
+    runtime,
+    bin,
+    cwdA,
+    cwdB,
+    join(home, ".config/tmux"),
+  ])
     mkdirSync(path, { recursive: true, mode: 0o700 });
   symlinkSync(EXTENSION_DIR, join(agent, "extensions/tmux-handoff"));
+  copyFileSync(
+    resolve(EXTENSION_DIR, "../../../../tmux/pi.conf"),
+    join(home, ".config/tmux/pi.conf"),
+  );
   writeFileSync(
     join(agent, "settings.json"),
     JSON.stringify({
@@ -109,7 +121,7 @@ exec ${quote([realTmux])} "$@"
   chmodSync(join(bin, "tmux"), 0o700);
   const env = {
     PATH: bin + ":" + process.env.PATH!,
-    HOME: join(root, "home"),
+    HOME: home,
     TERM: "xterm-256color",
     LANG: "C.UTF-8",
     XDG_RUNTIME_DIR: runtime,
