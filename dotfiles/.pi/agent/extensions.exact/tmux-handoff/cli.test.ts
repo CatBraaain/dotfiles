@@ -536,6 +536,187 @@ async function publishedIdlePane(
   return { pane, metadata };
 }
 
+describe("pi-mux dedicated tmux settings", () => {
+  const expectedOptions = [
+    ["-g", "status", "off"],
+    ["-g", "prefix", "None"],
+    ["-g", "set-titles", "on"],
+    ["-g", "set-titles-string", "#{pane_title}"],
+    ["-s", "extended-keys", "on"],
+    ["-s", "extended-keys-format", "csi-u"],
+    ["-g", "mouse", "on"],
+  ] as const;
+  const shiftEnterBinding = "bind-key -T root S-Enter send-keys -H 1b 5b 31 33 3b 32 75";
+
+  it(
+    "applies the dedicated settings on detached launch without changing another server",
+    async () => {
+      await fixture(async (f) => {
+        writeFileSync(join(f.env.HOME, ".tmux.conf"), "set -g @normal-config loaded\n");
+        const outer = await f.tmux(["-f", join(f.root, "outer.conf"), "start-server"], f.outer);
+        assert.equal(outer.code, 0, outer.err);
+        const before = await f.tmux(["show-options", "-g"], f.outer);
+        const keysBefore = await f.tmux(["list-keys", "-T", "root"], f.outer);
+        const result = await f.run(["new", "--detached"]);
+        assert.equal(result.code, 0, result.err);
+        for (const [scope, option, expected] of expectedOptions) {
+          const actual = await f.tmux(["show-options", scope + "v", option]);
+          assert.equal(actual.code, 0, actual.err);
+          assert.equal(actual.out.trim(), expected, option);
+        }
+        const binding = await f.tmux(["list-keys", "-T", "root", "S-Enter"]);
+        assert.equal(binding.code, 0, binding.err);
+        assert.equal(binding.out.trim().replace(/\s+/g, " "), shiftEnterBinding);
+        assert.equal((await f.tmux(["show-options", "-gqv", "@normal-config"])).out, "");
+        assert.equal((await f.tmux(["show-options", "-g"], f.outer)).out, before.out);
+        assert.equal((await f.tmux(["list-keys", "-T", "root"], f.outer)).out, keysBefore.out);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  for (const operation of ["new", "open", "restore"]) {
+    it(
+      "reapplies settings to the existing dedicated server on " + operation,
+      async () => {
+        await fixture(async (f) => {
+          const started = await f.run(["new", "--detached"]);
+          assert.equal(started.code, 0, started.err);
+          const pane = await firstPane(f);
+          const generation = (await f.tmux(["show-options", "-gqv", "@pi-mux-generation"])).out;
+          for (const [scope, option, changed] of [
+            ["-g", "status", "on"],
+            ["-g", "prefix", "C-b"],
+            ["-g", "set-titles", "off"],
+            ["-g", "set-titles-string", "changed"],
+            ["-s", "extended-keys", "off"],
+            ["-s", "extended-keys-format", "xterm"],
+          ]) {
+            const changedOption = await f.tmux(["set-option", scope!, option!, changed!]);
+            assert.equal(changedOption.code, 0, changedOption.err);
+          }
+          assert.equal((await f.tmux(["unbind-key", "-n", "S-Enter"])).code, 0);
+          if (operation === "open") {
+            await f.client("reapply-open", ["open", pane.id]);
+            await waitFor(async () =>
+              (await f.tmux(["list-clients", "-F", "#{client_name}"])).out.trim()
+                ? true
+                : undefined,
+            );
+          } else {
+            const result = await f.run(operation === "new" ? ["new", "--detached"] : ["restore"]);
+            assert.equal(result.code, 0, result.err);
+          }
+          for (const [scope, option, expected] of expectedOptions) {
+            const actual = await f.tmux(["show-options", scope + "v", option]);
+            assert.equal(actual.code, 0, actual.err);
+            assert.equal(actual.out.trim(), expected, option);
+          }
+          const binding = await f.tmux(["list-keys", "-T", "root", "S-Enter"]);
+          assert.equal(binding.out.trim().replace(/\s+/g, " "), shiftEnterBinding);
+          assert.equal(
+            (await f.tmux(["show-options", "-gqv", "@pi-mux-generation"])).out,
+            generation,
+          );
+          if (operation === "open") {
+            await f.detachAll();
+            assert.equal(await f.exitCode("reapply-open"), 0);
+          }
+        });
+      },
+      TIMEOUT_MS,
+    );
+  }
+
+  for (const [before, after, error] of [
+    [
+      "set -sq extended-keys-format csi-u",
+      "set -sq extended-keys-format invalid",
+      "unknown value: invalid",
+    ],
+    ["set -g status off", "set -g status invalid", "unknown value: invalid"],
+    ["set -g status off", "set -g unrelated-option off", "invalid option: unrelated-option"],
+    ["bind-key -n S-Enter", "bind-key -n unrelated-key", "unknown key: unrelated-key"],
+    ["send-keys -H", "send-keys -UnsupportedFlag", "unknown flag -U"],
+  ]) {
+    it(
+      "propagates configuration errors through source-file: " + after,
+      async () => {
+        await fixture(async (f) => {
+          const config = join(f.env.HOME, ".config/tmux/pi.conf");
+          const original = readFileSync(config, "utf8");
+          assert.ok(original.includes(before!));
+          writeFileSync(config, original.replace(before!, after!));
+          const result = await f.run(["restore"]);
+          assert.equal(result.code, 1);
+          assert.ok(result.err.includes(error!), result.err);
+          assert.equal((await f.tmux(["show-options", "-gqv", "@pi-mux-generation"])).out, "");
+        });
+      },
+      TIMEOUT_MS,
+    );
+  }
+
+  for (const [version, variable, hasBinding] of [
+    ["2.9a", "PI_MUX_TEST_TMUX_29", false],
+    ["3.0a", "PI_MUX_TEST_TMUX_30", true],
+    ["3.4", "PI_MUX_TEST_TMUX_34", true],
+  ] as const) {
+    const binary = process.env[variable];
+    it.skipIf(!binary)(
+      "loads the compatibility declarations with tmux " + version,
+      async () => {
+        await fixture(async (f) => {
+          const socket = join(f.root, "legacy.sock");
+          async function legacy(args: string[]): Promise<Outcome> {
+            const child = Bun.spawn([binary!, "-S", socket, ...args], {
+              env: f.env,
+              stdout: "pipe",
+              stderr: "pipe",
+            });
+            const [out, err, code] = await Promise.all([
+              new Response(child.stdout).text(),
+              new Response(child.stderr).text(),
+              child.exited,
+            ]);
+            return { out, err, code };
+          }
+          const config = readFileSync(join(f.env.HOME, ".config/tmux/pi.conf"), "utf8");
+          const declarations = config
+            .split("\n")
+            .filter(
+              (line) =>
+                line.startsWith("set -sq extended-keys-format ") || line.startsWith("if-shell "),
+            );
+          assert.equal(declarations.length, 2);
+          const compatibility = join(f.root, "compatibility.conf");
+          writeFileSync(compatibility, declarations.join("\n") + "\n");
+          try {
+            const started = await legacy(["-f", join(f.root, "outer.conf"), "start-server"]);
+            assert.equal(started.code, 0, started.err);
+            const loaded = await legacy(["source-file", compatibility]);
+            assert.equal(loaded.code, 0, loaded.err);
+            assert.equal(loaded.err, "");
+            const options = await legacy(["show-options", "-s"]);
+            assert.equal(options.code, 0, options.err);
+            assert.ok(!options.out.includes("extended-keys-format"));
+            const bindings = await legacy(["list-keys", "-T", "root"]);
+            assert.equal(bindings.code, 0, bindings.err);
+            const binding = bindings.out.split("\n").find((line) => line.includes("S-Enter"));
+            assert.equal(
+              binding?.trim().replace(/\s+/g, " "),
+              hasBinding ? shiftEnterBinding : undefined,
+            );
+          } finally {
+            await legacy(["kill-server"]);
+          }
+        });
+      },
+      TIMEOUT_MS,
+    );
+  }
+});
+
 describe("pi-mux read-only list", () => {
   it(
     "returns an empty JSON array without creating directories or requiring launch resources",

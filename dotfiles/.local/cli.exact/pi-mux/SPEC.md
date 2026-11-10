@@ -128,6 +128,12 @@ metadataは会話ID・絶対パスのcwdとfile・pane PIDとの一致を検証�
 | 存続 | クライアントや会話がなくなってもサーバーを存続させる |
 | 設定 | 起動操作で専用設定を適用する。通常tmuxの設定を読み込まず、他のサーバーへ作用しない |
 | マウス | mouseを有効にする。rootテーブルの `C-MouseDrag1Pane`・`C-MouseDrag1Empty` だけを解除し、Ctrl+左ドラッグによるfloating pane作成を無効にする。その他のマウス操作は維持する |
+| status・prefix | `status off`・`prefix None` とし、status barを非表示、prefixキーを無効にする |
+| タイトル | `set-titles on`・`set-titles-string "#{pane_title}"` とし、paneタイトルを接続先端末へ転送する |
+| 修飾キー | `extended-keys on`・`extended-keys-format csi-u` とし、拡張キーの報告形式をCSI-uにする。`extended-keys-format` が未対応の場合は、その設定だけを飛ばす |
+| Shift+Enter | rootテーブルの `S-Enter` を、paneへCSI-uシーケンス `ESC [ 13 ; 2 u`（hex: `1b 5b 31 33 3b 32 75`）を送るbindにする。`S-Enter` キー名または `send-keys -H` が未対応の場合は、そのbindだけを飛ばす |
+
+上記の未対応による例外以外で設定の適用に失敗した場合は、起動準備のエラーとして扱う。
 
 新しいpi実体は、現在の呼び出し環境とtmux・CLIが必要とする生成値で起動する。過去の呼び出しにだけ存在した環境変数を持ち越さない。同時起動でも環境を混線させず、既に稼働しているpi実体の環境は変更しない。
 
