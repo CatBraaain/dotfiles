@@ -28,7 +28,7 @@ import {
   formatDuration,
   formatSize,
   renderersOf,
-} from "../tool-renderer/index.ts";
+} from "../entry-renderer/index.ts";
 import {
   compileCommandRuleEntries,
   defaultGuardrailConfigPath,

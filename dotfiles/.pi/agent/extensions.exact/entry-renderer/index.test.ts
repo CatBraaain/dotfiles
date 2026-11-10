@@ -28,7 +28,7 @@ const KNOWN_TOOLS = [
   "create_detached_session",
 ];
 
-describe("tool-renderer registry", () => {
+describe("entry-renderer registry", () => {
   it("returns renderers for every known tool", () => {
     function stubNext() {
       return { renderResult: () => new Text("", 0, 0) };

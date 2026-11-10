@@ -1,6 +1,11 @@
 import { homedir } from "node:os";
 import { basename, dirname, relative, resolve, sep } from "node:path";
-import { getMarkdownTheme, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
+import {
+  getMarkdownTheme,
+  type ExtensionAPI,
+  type Theme,
+  type ThemeBg,
+} from "@earendil-works/pi-coding-agent";
 import {
   Box,
   Container,
@@ -16,6 +21,8 @@ import type { WebToolDetails } from "../web-search/index.ts";
 import { isHandoffPayload, type HandoffPayload } from "../recontext/index.ts";
 import { spinnerFrame } from "../titlebar/index.ts";
 import { spinnerTimers } from "../shared/spinner-timers.ts";
+import { stampSuffix, stampTime } from "./stamp-time.ts";
+import { installMessageStamps, recordMessageStart } from "./message-stamps.ts";
 import {
   resultText,
   truncateErrorOutput,
@@ -139,30 +146,66 @@ export function renderersOf(
   return typeof entry === "function" ? entry(next) : entry;
 }
 
+const executionEndedAtMsByCallId = new Map<string, number>();
+const LEGACY_STAMP_ENTRY_TYPE = "pi-stamp";
+const EMPTY_ROW = { render: () => [] as string[], invalidate: () => {} };
+
 export default function (pi: ExtensionAPI) {
   const registerable = pi as ExtensionAPI & {
     registerToolRenderer?: (resolver: ToolRendererResolver) => void;
   };
   registerable.registerToolRenderer?.((toolName, next) => renderersOf(toolName, next));
+  pi.registerEntryRenderer?.(LEGACY_STAMP_ENTRY_TYPE, () => EMPTY_ROW);
   let dispose: (() => void) | undefined;
   pi.on?.("session_start", (_event, ctx) => {
     dispose?.();
     dispose = undefined;
+    executionEndedAtMsByCallId.clear();
     if (ctx.mode === "tui") {
-      dispose = installToolRowFolding((row) => formatCollapsedToolRow(row, ctx.ui.theme));
+      const theme = ctx.ui.theme;
+      const disposeToolRows = installToolRowFolding((row, width) =>
+        formatCollapsedToolRow(row, theme, width),
+      );
+      const disposeStamps = installMessageStamps(theme);
+      dispose = () => {
+        disposeToolRows();
+        disposeStamps();
+      };
     }
+  });
+  pi.on?.("tool_execution_end", (event) => {
+    executionEndedAtMsByCallId.set(event.toolCallId, Date.now());
+  });
+  pi.on?.("message_start", (event) => {
+    recordMessageStart(event.message);
   });
   pi.on?.("session_shutdown", () => {
     dispose?.();
     dispose = undefined;
+    executionEndedAtMsByCallId.clear();
   });
 }
 
-export function formatCollapsedToolRow(row: ToolRowState, theme: Theme): string {
+export function formatCollapsedToolRow(row: ToolRowState, theme: Theme, width: number): string {
   const args = row.args ?? {};
   const call = formatRowCall(row.toolName, args, row.cwd, theme);
   const summary = formatRowSummary(row, theme);
-  return summary ? `${call} — ${summary}` : call;
+  const line = (summary ? `${call} — ${summary}` : call).replace(/[\r\n\t\u2028\u2029]/g, " ");
+  return theme.bg(rowBackground(row), stampSuffix(line, rowStamp(row), width));
+}
+
+function rowBackground(row: ToolRowState): ThemeBg {
+  if (!row.result || row.isPartial) return "toolPendingBg";
+  return row.result.isError ? "toolErrorBg" : "toolSuccessBg";
+}
+
+function rowStamp(row: ToolRowState): string {
+  if (row.isPartial) return "";
+  const timestamp =
+    typeof row.result?.timestamp === "number"
+      ? row.result.timestamp
+      : executionEndedAtMsByCallId.get(row.toolCallId);
+  return stampTime(timestamp);
 }
 
 function formatRowCall(name: string, args: Record<string, any>, cwd: string, theme: Theme): string {

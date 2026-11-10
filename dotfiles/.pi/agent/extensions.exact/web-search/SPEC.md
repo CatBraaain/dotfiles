@@ -69,7 +69,7 @@ camoufox server の表示モード（Linux既定の Xvfb `:99` 上の headed と
 
 ## 表示（TUI）
 
-ツールの表示（コール行・結果行）は tool-renderer 拡張が単一で担う。表示仕様の正本は `../tool-renderer/SPEC.md` を参照。本拡張は `details` と本文の生成だけを行い、失敗時も `onUpdate` でエラーdetails を通知して結果行に失敗を表示できるようにする。
+ツールの表示（コール行・結果行）は entry-renderer 拡張が単一で担う。表示仕様の正本は `../entry-renderer/SPEC.md` を参照。本拡張は `details` と本文の生成だけを行い、失敗時も `onUpdate` でエラーdetails を通知して結果行に失敗を表示できるようにする。
 
 ## 環境変数
 

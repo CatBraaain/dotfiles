@@ -1,5 +1,5 @@
 /**
- * Time seam shared by the agents animation loop and the tool-renderer pending
+ * Time seam shared by the agents animation loop and the entry-renderer pending
  * row. Tests replace members of this object to make spinner frames
  * deterministic; both consumers must observe the same stubbed instance.
  */

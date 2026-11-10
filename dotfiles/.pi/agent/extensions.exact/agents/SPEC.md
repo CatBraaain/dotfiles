@@ -595,7 +595,7 @@ subagentツールで起動した子エージェントには、指定されたage
 
 ## subagent実行中の表示フォーマット
 
-呼び出し行、結果ブロック（Task / Actions / Output / session行）、Actions の行形式、待機スピナーの表示は tool-renderer 拡張が担う。表示形式の正本は `../tool-renderer/SPEC.md` を参照。本拡張は子エージェントのイベントの受領・記録と、onUpdate 送出の間引き（0.15秒に1回）を担う。
+呼び出し行、結果ブロック（Task / Actions / Output / session行）、Actions の行形式、待機スピナーの表示は entry-renderer 拡張が担う。表示形式の正本は `../entry-renderer/SPEC.md` を参照。本拡張は子エージェントのイベントの受領・記録と、onUpdate 送出の間引き（0.15秒に1回）を担う。
 
 subagent完了時に親エージェントへ渡すのは、最終結果・作業要点・成果物情報であり、子の中間ログは親へ渡さない。
 

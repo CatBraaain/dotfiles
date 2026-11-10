@@ -31,6 +31,7 @@ import { installToolRowFolding } from "./tool-rows.ts";
 const plainTheme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
+  bg: (_color: string, text: string) => text,
 } as Theme;
 const fakeTui = { requestRender() {} } as unknown as TUI;
 const toolNames = [
@@ -128,7 +129,7 @@ function clickHeader(row: ToolExecutionComponent): void {
 let dispose: () => void;
 beforeEach(() => {
   initTheme("dark", false);
-  dispose = installToolRowFolding((row) => formatCollapsedToolRow(row, plainTheme));
+  dispose = installToolRowFolding((row, width) => formatCollapsedToolRow(row, plainTheme, width));
 });
 afterEach(() => {
   dispose();
@@ -655,5 +656,59 @@ describe("headless fullscreen layout", () => {
     } finally {
       active.stop();
     }
+  });
+});
+
+describe("collapsed row stamp and background", () => {
+  afterEach(() => {
+    resetCapabilitiesCache();
+  });
+
+  it("right-aligns the result time on a finished row", () => {
+    const row = createRow("read");
+    row.updateResult({
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+      timestamp: new Date(2025, 0, 1, 21, 30, 3).getTime(),
+    } as Parameters<ToolExecutionComponent["updateResult"]>[0]);
+    const line = row.render(80)[0]!;
+    const plain = stripTerminalSequences(line);
+    assert.equal(visibleWidth(line), 80);
+    assert.match(plain, /1 lines\s+21:30:03$/);
+  });
+
+  it("omits the stamp while running or without a known time", () => {
+    const row = createRow("read");
+    assert.ok(!stripTerminalSequences(row.render(80)[0]!).includes("21:30:03"));
+    row.updateResult({
+      content: [{ type: "text", text: "output" }],
+      isError: false,
+    });
+    assert.ok(!stripTerminalSequences(row.render(80)[0]!).includes("21:30:03"));
+  });
+
+  it("applies pending, success and error backgrounds to collapsed rows", () => {
+    const backgrounds: string[] = [];
+    const recording = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+      bg: (color: string, text: string) => {
+        backgrounds.push(color);
+        return text;
+      },
+    } as Theme;
+    const disposeRecording = installToolRowFolding((row, width) =>
+      formatCollapsedToolRow(row, recording, width),
+    );
+    const row = createRow("read");
+    row.render(80);
+    assert.deepEqual(backgrounds, ["toolPendingBg"]);
+    row.updateResult({ content: [{ type: "text", text: "output" }], isError: false });
+    row.render(80);
+    assert.deepEqual(backgrounds, ["toolPendingBg", "toolSuccessBg"]);
+    row.updateResult({ content: [{ type: "text", text: "output" }], isError: true });
+    row.render(80);
+    assert.equal(backgrounds.at(-1), "toolErrorBg");
+    disposeRecording();
   });
 });

@@ -283,7 +283,7 @@ describe("codemode resource ownership through the standard loader", () => {
         assert.equal(definition.exposure, "model-only");
         session.setActiveToolsByName(["codemode"]);
         assert.ok(session.getActiveToolNames().includes("codemode"));
-        // Shortening moved to the tool-renderer extension (resolver-based, pi
+        // Shortening moved to the entry-renderer extension (resolver-based, pi
         // 1.4+). Under the pinned runner without it, codemode always renders
         // with the standard renderer regardless of guardrail ownership.
         const lines = renderLines(definition, result);

@@ -37,5 +37,5 @@
     "openrouter/**/*:free"
   ],
   "extensions": ["extensions/tmux-handoff", "-builtin:codemode"],
-  "packages": ["npm:@narumitw/pi-stamp"]
+  "packages": ["npm:pi-commandcode-provider"]
 }

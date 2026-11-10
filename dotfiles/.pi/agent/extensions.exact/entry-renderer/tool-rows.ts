@@ -8,6 +8,7 @@ import {
 
 export type ToolRowState = {
   toolName: string;
+  toolCallId: string;
   args: Record<string, unknown>;
   cwd: string;
   expanded: boolean;
@@ -18,11 +19,14 @@ export type ToolRowState = {
     details?: any;
     isError: boolean;
     durationMs?: number;
+    timestamp?: number;
   };
   ui: TUI;
 };
 
-export function installToolRowFolding(summary: (row: ToolRowState) => string): () => void {
+export function installToolRowFolding(
+  compose: (row: ToolRowState, width: number) => string,
+): () => void {
   const prototype = ToolExecutionComponent.prototype;
   const originalRender = prototype.render;
   const originalHandleMouse = prototype.handleMouse;
@@ -41,8 +45,7 @@ export function installToolRowFolding(summary: (row: ToolRowState) => string): (
 
   function renderSummary(row: ToolRowState, width: number): string[] {
     try {
-      const line = summary(row).replace(/[\r\n\t\u2028\u2029]/g, " ");
-      return [truncateToWidth(line, width)];
+      return [compose(row, width)];
     } catch {
       return [truncateToWidth(`${row.toolName} — [render error]`, width)];
     }

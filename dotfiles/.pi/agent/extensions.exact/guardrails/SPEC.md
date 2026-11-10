@@ -16,7 +16,7 @@ pi の全built-in fsツール（read / write / edit / grep / find / ls / bash）
 | `bash` | 置き換え | あり | 開放 |
 | LLM API / piプロセス本体 | 対象外 | — | 開放 |
 | `ask_permission` | 追加 | あり | — |
-| `codemode` | 登録のみ。結果表示の変更は tool-renderer 拡張（§8） | 呼び出したツールに従う | 呼び出したツールに従う |
+| `codemode` | 登録のみ。結果表示の変更は entry-renderer 拡張（§8） | 呼び出したツールに従う | 呼び出したツールに従う |
 
 置き換え対象は pi の **全built-in fsツール**（`read` `write` `edit` `grep` `find` `ls` `bash`）。`read` は画像ファイルを Vision入力として返す（§2.1）。
 
@@ -355,7 +355,7 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 - **出力**: stdout にJSON envelope（`{ ok: true, result }` または `{ ok: false, error }`）を返す。成功時は終了コード0とし、失敗時は非0で終了する。Guardrailsはenvelopeを検査して結果またはエラーを伝達し、workerの成功結果を組み立てない。
 - 既定executorでは、標準tool definition が担当する処理（offset/limit、`oldText` / `newText` 置換、diff、結果の truncation、glob結果整形、rg実行、shell実行と timeout）は本拡張で再実装しない。
 - `edit` は pi標準の `oldText` / `newText` 形式を使い、行ハッシュアンカー形式は使わない。
-- ツールの最終結果はコマンド完了時に一度に返る。bash では、コマンド実行中に子プロセスの stderr への書き出しを行単位で onUpdate として送出し、実行中の進捗表示に使う（描画は tool-renderer SPEC §bash）。stdout は run-tools CLI の JSON envelope に使うため、送出の対象外である。送出はツールの最終結果を変えず、最終結果は完了時に一度に返る。
+- ツールの最終結果はコマンド完了時に一度に返る。bash では、コマンド実行中に子プロセスの stderr への書き出しを行単位で onUpdate として送出し、実行中の進捗表示に使う（描画は entry-renderer SPEC §bash）。stdout は run-tools CLI の JSON envelope に使うため、送出の対象外である。送出はツールの最終結果を変えず、最終結果は完了時に一度に返る。
 
 通常のSDK経路で拒否された呼び出しはエラー結果となり、pi の `tool_result` イベントでも観測できる。承認・拒否の理由と結果は呼び出し元へ返り、別要求の結果と混ざらない。進捗は `onUpdate`、最終結果はツールの戻り値で返す。開始前・確認待ち後・実行枠待ち後にキャンセル済みなら、隔離実行を開始しない。実行中のキャンセルは下記の bwrap停止に従う。
 
@@ -389,4 +389,4 @@ WSL上で bwrap を起動するとき、sandboxed child process に渡す `PATH`
 
 ## 8. 表示
 
-ツールの描画（コール行・実行中表示・エラー表示・折りたたみサマリー・`codemode` の短縮表示）は tool-renderer 拡張が単一で担う。表示仕様の正本は `../tool-renderer/SPEC.md` であり、本拡張はツールの実行結果を変更しない。bash の実行中の stderr 進捗表示は、本拡張が onUpdate で送出した行を tool-renderer が描画する構成である（§7）。
+ツールの描画（コール行・実行中表示・エラー表示・折りたたみサマリー・`codemode` の短縮表示）は entry-renderer 拡張が単一で担う。表示仕様の正本は `../entry-renderer/SPEC.md` であり、本拡張はツールの実行結果を変更しない。bash の実行中の stderr 進捗表示は、本拡張が onUpdate で送出した行を entry-renderer が描画する構成である（§7）。

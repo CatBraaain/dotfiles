@@ -40,7 +40,7 @@ import agentsExtension from "../agents/index.ts";
 import { KeybindingsManager, setKeybindings, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
 import recontextExtension from "./index";
 import { projectPendingMessages } from "./projection.ts";
-import { renderersOf } from "../tool-renderer/index.ts";
+import { renderersOf } from "../entry-renderer/index.ts";
 
 function isHandoffEntry(
   entry: SessionEntry,
