@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "bun:test";
 import {
+  AssistantMessageComponent,
   createCodemodeExtension,
   initTheme,
+  UserMessageComponent,
   ToolExecutionComponent,
   type ExtensionAPI,
   type Theme,
@@ -129,11 +131,189 @@ function clickHeader(row: ToolExecutionComponent): void {
 let dispose: () => void;
 beforeEach(() => {
   initTheme("dark", false);
-  dispose = installToolRowFolding((row, width) => formatCollapsedToolRow(row, plainTheme, width));
+  dispose = installToolRowFolding(
+    (row, width) => formatCollapsedToolRow(row, plainTheme, width),
+    plainTheme,
+  );
 });
 afterEach(() => {
   dispose();
   resetCapabilitiesCache();
+});
+
+describe("collapsed row left alignment", () => {
+  for (const outputPad of [0, 1, 2]) {
+    it(`keeps every execution state on the outputPad=${outputPad} baseline at every width`, () => {
+      const row = createRow("bash");
+      row.setOutputPad(outputPad);
+      row.updateArgs({ command: "echo 日本語😀" });
+      const result = {
+        content: [{ type: "text", text: "日本語😀 progress" }],
+        isError: false,
+        durationMs: 1200,
+      };
+      for (const state of ["arguments", "running", "partial", "success", "error"] as const) {
+        if (state === "running") row.markExecutionStarted();
+        if (state === "partial") row.updateResult(result, true);
+        if (state === "success") row.updateResult(result);
+        if (state === "error") row.updateResult({ ...result, isError: true });
+        for (const width of [0, 1, 2, 10, 40, 120]) {
+          const lines = row.render(width);
+          const line = lines[0]!;
+          const plain = stripTerminalSequences(line);
+          const expectedPadding = Math.min(outputPad, Math.max(0, width - 1));
+          const context = `${state}, outputPad=${outputPad}, width=${width}`;
+          assert.equal(lines.length, 1, context);
+          assert.ok(visibleWidth(line) <= width, context);
+          assert.equal(plain.search(/\S/), width === 0 ? -1 : expectedPadding, context);
+        }
+      }
+    });
+  }
+
+  it("matches message and expanded tool baselines after padding changes and resize", () => {
+    const row = createRow("read");
+    row.updateResult({ content: [{ type: "text", text: "alpha\nbeta" }], isError: false });
+    const user = new UserMessageComponent("User body");
+    const assistant = new AssistantMessageComponent({
+      role: "assistant",
+      content: [{ type: "text", text: "Assistant body" }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 0,
+    });
+    for (const outputPad of [1, 0, 2, 1]) {
+      row.setOutputPad(outputPad);
+      user.setOutputPad(outputPad);
+      assistant.setOutputPad(outputPad);
+      for (const width of [120, 40, 10, 40]) {
+        for (const component of [user, assistant]) {
+          const body = component
+            .render(width)
+            .map(stripTerminalSequences)
+            .find((line) => line.trim() !== "")!;
+          assert.equal(body.search(/\S/), outputPad);
+        }
+        assert.equal(stripTerminalSequences(row.render(width)[0]!).search(/\S/), outputPad);
+        row.setExpanded(true);
+        const details = row
+          .render(width)
+          .map(stripTerminalSequences)
+          .filter((line) => line.trim() !== "");
+        assert.ok(details.length > 1);
+        assert.ok(details.every((line) => line.search(/\S/) === outputPad));
+        row.setExpanded(false);
+        assert.equal(stripTerminalSequences(row.render(width)[0]!).search(/\S/), outputPad);
+      }
+    }
+  });
+
+  for (const expanded of [false, true]) {
+    it(`keeps the fallback gutter and full-row background when expanded=${expanded}`, () => {
+      dispose();
+      const backgrounds: Array<{ color: string; text: string }> = [];
+      const theme = {
+        ...plainTheme,
+        bg(color: string, text: string) {
+          backgrounds.push({ color, text });
+          return text;
+        },
+      } as Theme;
+      dispose = installToolRowFolding(() => {
+        throw new Error("summary failed");
+      }, theme);
+      const row = createRow("mystery_tool", fakeTui, {
+        renderShell: "self",
+        renderCall: () => new Container(),
+        renderResult: () => new Container(),
+      });
+      row.setExpanded(expanded);
+      for (const outputPad of [0, 1, 2]) {
+        row.setOutputPad(outputPad);
+        for (const state of ["pending", "partial", "success", "error"] as const) {
+          if (state === "pending") {
+            row.updateResult({ content: [], isError: false }, true);
+          } else {
+            row.updateResult({ content: [], isError: state === "error" }, state === "partial");
+          }
+          for (const width of [0, 1, 2, 10, 40, 120]) {
+            const line = row.render(width)[0]!;
+            const padding = Math.min(outputPad, Math.max(0, width - 1));
+            assert.equal(stripTerminalSequences(line).search(/\S/), width === 0 ? -1 : padding);
+            assert.equal(visibleWidth(line), width);
+            assert.deepEqual(backgrounds.at(-1), {
+              color:
+                state === "error"
+                  ? "toolErrorBg"
+                  : state === "success"
+                    ? "toolSuccessBg"
+                    : "toolPendingBg",
+              text: line,
+            });
+          }
+        }
+      }
+    });
+  }
+
+  it("includes the gutter in the state background and keeps ANSI text and stamps width-bounded", () => {
+    dispose();
+    const backgrounds: Array<{ color: string; text: string }> = [];
+    const theme = {
+      ...plainTheme,
+      fg: (_color: string, text: string) => `\x1b[36m${text}\x1b[39m`,
+      bg(color: string, text: string) {
+        backgrounds.push({ color, text });
+        return text;
+      },
+    } as Theme;
+    dispose = installToolRowFolding(
+      (row, width) => formatCollapsedToolRow(row, theme, width),
+      theme,
+    );
+    const row = createRow("read");
+    row.updateArgs({ path: "日本語😀.txt" });
+    const result = {
+      content: [{ type: "text", text: "alpha" }],
+      isError: false,
+      timestamp: new Date(2025, 0, 1, 21, 30, 3).getTime(),
+    };
+    for (const state of ["pending", "partial", "success", "error"] as const) {
+      if (state !== "pending")
+        row.updateResult({ ...result, isError: state === "error" }, state === "partial");
+      for (const width of [0, 1, 2, 10, 40, 120]) {
+        const line = row.render(width)[0]!;
+        assert.equal(visibleWidth(line), width);
+        assert.equal(
+          stripTerminalSequences(line).search(/\S/),
+          width === 0 ? -1 : width === 1 ? 0 : 1,
+        );
+        assert.deepEqual(backgrounds.at(-1), {
+          color:
+            state === "error"
+              ? "toolErrorBg"
+              : state === "success"
+                ? "toolSuccessBg"
+                : "toolPendingBg",
+          text: line,
+        });
+        if ((state === "success" || state === "error") && width >= 40) {
+          assert.equal(visibleWidth(line), width);
+          assert.ok(stripTerminalSequences(line).endsWith("21:30:03"));
+        }
+      }
+    }
+  });
 });
 
 describe("single tool rows", () => {
@@ -436,16 +616,16 @@ describe("summary failure boundaries", () => {
         });
       }
       const status = phase === "before validation" ? "Running..." : "argument validation failed";
-      assert.equal(renderedText(row), `create_detached_session test — ${status}`);
+      assert.equal(renderedText(row), ` create_detached_session test — ${status}`);
     });
   }
 
   it("ignores a non-string initial request when formatting the session call", () => {
     const row = createRow("create_detached_session");
     row.updateArgs({ name: "  session label  ", initialRequest: 42 });
-    assert.equal(renderedText(row), "create_detached_session session label — Running...");
+    assert.equal(renderedText(row), " create_detached_session session label — Running...");
     row.updateArgs({ name: 42, initialRequest: 42 });
-    assert.ok(renderedText(row).startsWith("create_detached_session"));
+    assert.ok(renderedText(row).startsWith(" create_detached_session"));
     assert.equal(renderedText(row).includes("[render error]"), false);
   });
 
@@ -454,7 +634,7 @@ describe("summary failure boundaries", () => {
       dispose();
       dispose = installToolRowFolding(() => {
         throw new Error("summary failed");
-      });
+      }, plainTheme);
       const row = createRow("mystery_tool", fakeTui, {
         renderShell: "self",
         renderCall: () => new Container(),
@@ -474,7 +654,7 @@ describe("summary failure boundaries", () => {
           .render(80)
           .map(stripTerminalSequences)
           .map((line) => line.trimEnd()),
-        ["mystery_tool — [render error]", "editor remains visible"],
+        [" mystery_tool — [render error]", "editor remains visible"],
       );
     });
   }
@@ -519,7 +699,7 @@ describe("summary failure boundaries", () => {
         details: entry.details,
         isError: true,
       });
-      assert.equal(renderedText(row), entry.expected);
+      assert.equal(renderedText(row), ` ${entry.expected}`);
       assert.equal(row.render(40).length, 1);
       assert.ok(visibleWidth(row.render(40)[0]!) <= 40);
     });
@@ -528,7 +708,7 @@ describe("summary failure boundaries", () => {
   it("keeps ordinary non-WEB errors in the common summary format", () => {
     const row = createRow("read");
     row.updateResult({ content: [{ type: "text", text: "ordinary failure" }], isError: true });
-    assert.equal(renderedText(row), "read ./wide/日本語.txt — ordinary failure");
+    assert.equal(renderedText(row), " read ./wide/日本語.txt — ordinary failure");
   });
 });
 
@@ -594,7 +774,7 @@ describe("headless fullscreen layout", () => {
       await renderFrame(tui);
       const firstY = tui
         .getScreenLines()
-        .findIndex((line) => stripTerminalSequences(line).startsWith("read "));
+        .findIndex((line) => stripTerminalSequences(line).startsWith(" read "));
       assert.ok(firstY >= 0);
       terminalClick(terminal, firstY);
       await renderFrame(tui);
@@ -603,7 +783,7 @@ describe("headless fullscreen layout", () => {
       assert.equal(editor.focused, true);
       const secondY = tui
         .getScreenLines()
-        .findIndex((line) => stripTerminalSequences(line).startsWith("$ "));
+        .findIndex((line) => stripTerminalSequences(line).startsWith(" $ "));
       assert.ok(secondY > firstY);
       terminalClick(terminal, secondY);
       await renderFrame(tui);
@@ -697,8 +877,9 @@ describe("collapsed row stamp and background", () => {
         return text;
       },
     } as Theme;
-    const disposeRecording = installToolRowFolding((row, width) =>
-      formatCollapsedToolRow(row, recording, width),
+    const disposeRecording = installToolRowFolding(
+      (row, width) => formatCollapsedToolRow(row, recording, width),
+      recording,
     );
     const row = createRow("read");
     row.render(80);

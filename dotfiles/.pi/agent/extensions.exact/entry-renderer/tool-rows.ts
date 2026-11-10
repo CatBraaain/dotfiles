@@ -1,7 +1,8 @@
-import { ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
+import { ToolExecutionComponent, type Theme, type ThemeBg } from "@earendil-works/pi-coding-agent";
 import {
   stripTerminalSequences,
   truncateToWidth,
+  visibleWidth,
   type TUI,
   type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
@@ -12,6 +13,7 @@ export type ToolRowState = {
   args: Record<string, unknown>;
   cwd: string;
   expanded: boolean;
+  outputPad: number;
   isPartial: boolean;
   rendererState: Record<string, any>;
   result?: {
@@ -26,6 +28,7 @@ export type ToolRowState = {
 
 export function installToolRowFolding(
   compose: (row: ToolRowState, width: number) => string,
+  theme: Pick<Theme, "bg">,
 ): () => void {
   const prototype = ToolExecutionComponent.prototype;
   const originalRender = prototype.render;
@@ -44,11 +47,23 @@ export function installToolRowFolding(
   }
 
   function renderSummary(row: ToolRowState, width: number): string[] {
+    const padding = Math.min(row.outputPad, Math.max(0, width - 1));
+    const contentWidth = width - padding;
+    let content: string;
     try {
-      return [compose(row, width)];
+      content = compose(row, contentWidth);
     } catch {
-      return [truncateToWidth(`${row.toolName} — [render error]`, width)];
+      content = truncateToWidth(`${row.toolName} — [render error]`, contentWidth);
     }
+    const background: ThemeBg =
+      !row.result || row.isPartial
+        ? "toolPendingBg"
+        : row.result.isError
+          ? "toolErrorBg"
+          : "toolSuccessBg";
+    const line = `${" ".repeat(padding)}${content}`;
+    const rightPadding = " ".repeat(Math.max(0, width - visibleWidth(line)));
+    return [theme.bg(background, line + rightPadding)];
   }
 
   function handleMouse(

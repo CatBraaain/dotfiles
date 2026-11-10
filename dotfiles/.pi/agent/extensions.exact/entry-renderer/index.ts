@@ -1,11 +1,6 @@
 import { homedir } from "node:os";
 import { basename, dirname, relative, resolve, sep } from "node:path";
-import {
-  getMarkdownTheme,
-  type ExtensionAPI,
-  type Theme,
-  type ThemeBg,
-} from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import {
   Box,
   Container,
@@ -163,8 +158,9 @@ export default function (pi: ExtensionAPI) {
     executionEndedAtMsByCallId.clear();
     if (ctx.mode === "tui") {
       const theme = ctx.ui.theme;
-      const disposeToolRows = installToolRowFolding((row, width) =>
-        formatCollapsedToolRow(row, theme, width),
+      const disposeToolRows = installToolRowFolding(
+        (row, width) => formatCollapsedToolRow(row, theme, width),
+        theme,
       );
       const disposeStamps = installMessageStamps(theme);
       dispose = () => {
@@ -191,12 +187,7 @@ export function formatCollapsedToolRow(row: ToolRowState, theme: Theme, width: n
   const call = formatRowCall(row.toolName, args, row.cwd, theme);
   const summary = formatRowSummary(row, theme);
   const line = (summary ? `${call} — ${summary}` : call).replace(/[\r\n\t\u2028\u2029]/g, " ");
-  return theme.bg(rowBackground(row), stampSuffix(line, rowStamp(row), width));
-}
-
-function rowBackground(row: ToolRowState): ThemeBg {
-  if (!row.result || row.isPartial) return "toolPendingBg";
-  return row.result.isError ? "toolErrorBg" : "toolSuccessBg";
+  return stampSuffix(line, rowStamp(row), width);
 }
 
 function rowStamp(row: ToolRowState): string {
