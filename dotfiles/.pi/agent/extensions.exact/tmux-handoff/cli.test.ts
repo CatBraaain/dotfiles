@@ -177,7 +177,7 @@ exec ${quote([realPi])} "$@" 2>>${quote([join(root, "pi-stderr.log")])}
     join(bin, "tmux"),
     `#!/bin/sh
 case "$*" in
-  *"has-session -t =pi-empty")
+  *"has-session -t =pi-empty"*)
     if test "$TEST_PAUSE_HAS" = 1; then
       ${quote([realTmux])} "$@"; code=$?
       if test "$code" = 0 && ! test -f ${quote([join(root, "has-released")])}; then
@@ -977,12 +977,12 @@ describe("pi-mux new argument contract", () => {
 
 describe("pi-mux new connection selection", () => {
   it(
-    "reuses one empty session across concurrent detached calls and an attached call",
+    "reuses one empty session across concurrent detached calls and an attached call in the same cwd",
     async () => {
       await fixture(async (f) => {
         const results = await Promise.all([
           f.run(["new", "--detached"], f.cwdA),
-          f.run(["new", "--detached"], f.cwdB),
+          f.run(["new", "--detached"], f.cwdA),
         ]);
         const pane = await firstPane(f);
         assert.equal(pane.startup, "ready");
@@ -994,7 +994,8 @@ describe("pi-mux new connection selection", () => {
         assert.equal((await f.panes()).length, 1);
         assert.equal(existsSync(pane.file), false);
         assert.equal((await f.tmux(["list-clients"])).out.trim(), "");
-        await f.client("reuse", ["new"], pane.cwd === f.cwdA ? f.cwdB : f.cwdA);
+        assert.equal(pane.cwd, f.cwdA);
+        await f.client("reuse", ["new"], f.cwdA);
         await waitFor(async () =>
           (await f.tmux(["list-clients", "-F", "#{session_id}"])).out.trim() === pane.session
             ? true
@@ -1008,12 +1009,130 @@ describe("pi-mux new connection selection", () => {
     TIMEOUT_MS,
   );
 
+  it(
+    "keeps concurrent empty reservations separate for different cwds",
+    async () => {
+      await fixture(async (f) => {
+        const cwds = [f.cwdA, f.cwdB];
+        const results = await Promise.all(cwds.map((cwd) => f.run(["new", "--detached"], cwd)));
+        const original = await f.panes();
+        assert.equal(original.length, 2);
+        assert.notEqual(original[0]!.id, original[1]!.id);
+        assert.notEqual(original[0]!.pid, original[1]!.pid);
+        assert.notEqual(original[0]!.pane, original[1]!.pane);
+        for (const [index, cwd] of cwds.entries()) {
+          const pane = original.find((entry) => entry.cwd === cwd);
+          assert.ok(pane);
+          const result = results[index]!;
+          assert.equal(result.code, 0, result.err);
+          assert.ok(result.out.includes(pane.id));
+          assert.ok(result.out.includes(pane.session));
+          assert.equal(existsSync(pane.file), false);
+          const reused = await f.run(["new", "--detached"], cwd);
+          assert.equal(reused.code, 0, reused.err);
+          assert.ok(reused.out.includes(pane.id));
+          await f.client("reuse-" + index, ["new"], cwd);
+          await waitFor(async () =>
+            (await f.tmux(["list-clients", "-F", "#{session_id}"])).out.trim() === pane.session
+              ? true
+              : undefined,
+          );
+          assert.deepEqual(await f.panes(), original);
+          await f.detachAll();
+          assert.equal(await f.exitCode("reuse-" + index), 0);
+        }
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  for (const detached of [false, true]) {
+    it(
+      `creates a separate empty session in another cwd with detached=${detached}`,
+      async () => {
+        await fixture(async (f) => {
+          const opened = await f.run(["new", "--detached"], f.cwdA);
+          assert.equal(opened.code, 0, opened.err);
+          const original = await firstPane(f);
+          if (detached) {
+            const created = await f.run(["new", "--detached"], f.cwdB);
+            assert.equal(created.code, 0, created.err);
+          } else {
+            await f.client("other-cwd", ["new"], f.cwdB);
+          }
+          const created = await waitFor(async () =>
+            (await f.panes()).find((pane) => pane.cwd === f.cwdB),
+          );
+          assert.notEqual(created.id, original.id);
+          assert.notEqual(created.pid, original.pid);
+          assert.notEqual(created.pane, original.pane);
+          assert.equal(existsSync(created.file), false);
+          assert.equal(existsSync(original.file), false);
+          const reused = await f.run(["new", "--detached"], f.cwdA);
+          assert.equal(reused.code, 0, reused.err);
+          assert.ok(reused.out.includes(original.id));
+          assert.equal((await f.panes()).length, 2);
+          assert.deepEqual(
+            (await f.panes()).find((pane) => pane.id === original.id),
+            original,
+          );
+          if (!detached) {
+            await waitFor(async () =>
+              (await f.tmux(["list-clients", "-F", "#{session_id}"])).out.trim() === created.session
+                ? true
+                : undefined,
+            );
+            await f.detachAll();
+            assert.equal(await f.exitCode("other-cwd"), 0);
+          }
+        });
+      },
+      TIMEOUT_MS,
+    );
+  }
+
+  for (const sameCwd of [true, false]) {
+    it(
+      `reuses a legacy pi-empty session only in the same cwd: sameCwd=${sameCwd}`,
+      async () => {
+        await fixture(async (f) => {
+          const opened = await f.run(["new", "--detached"], f.cwdA);
+          assert.equal(opened.code, 0, opened.err);
+          const original = await firstPane(f);
+          const renamed = await f.tmux(["rename-session", "-t", original.session, "pi-empty"]);
+          assert.equal(renamed.code, 0, renamed.err);
+          const cwd = sameCwd ? f.cwdA : f.cwdB;
+          const result = await f.run(["new", "--detached"], cwd);
+          assert.equal(result.code, 0, result.err);
+          const panes = await f.panes();
+          assert.equal(panes.length, sameCwd ? 1 : 2);
+          assert.equal(result.out.includes(original.id), sameCwd);
+          assert.deepEqual(
+            panes.find((pane) => pane.id === original.id),
+            original,
+          );
+          assert.ok(panes.some((pane) => pane.cwd === cwd));
+          for (const pane of panes) assert.equal(existsSync(pane.file), false);
+          const name = await f.tmux([
+            "display-message",
+            "-p",
+            "-t",
+            original.pane,
+            "#{session_name}",
+          ]);
+          assert.equal(name.out.trim(), "pi-empty");
+        });
+      },
+      TIMEOUT_MS,
+    );
+  }
+
   for (const detached of [false, true]) {
     it(
       `starts an independent requested session with detached=${detached} without consuming an empty session`,
       async () => {
         await fixture(async (f) => {
-          const opened = await f.run(["new", "--detached"], f.cwdB);
+          const opened = await f.run(["new", "--detached"], f.cwdA);
           assert.equal(opened.code, 0, opened.err);
           const empty = await firstPane(f);
           const request = "fixture-initial independent request";
@@ -1083,8 +1202,8 @@ describe("pi-mux CLI boundaries", () => {
         assert.equal(await f.exitCode("initial"), 0);
 
         await Promise.all([
-          f.client("slow", ["new"], f.cwdB),
-          f.client("fast", ["new"], f.cwdB),
+          f.client("slow", ["new"], f.cwdA),
+          f.client("fast", ["new"], f.cwdA),
           f.client("open", ["open", first.id], f.cwdB),
         ]);
         await waitFor(async () => {
@@ -1092,8 +1211,16 @@ describe("pi-mux CLI boundaries", () => {
           return clients.out.trim().split("\n").length === 3 ? true : undefined;
         });
         const panes = await f.panes();
-        assert.equal(panes.filter((pane) => !existsSync(pane.file)).length, 1);
-        assert.equal(panes.find((pane) => pane.id === first.id)?.pid, first.pid);
+        const empty = panes.filter((pane) => !existsSync(pane.file));
+        assert.equal(empty.length, 1);
+        assert.equal(empty[0]!.cwd, f.cwdA);
+        assert.notEqual(empty[0]!.id, first.id);
+        assert.notEqual(empty[0]!.pid, first.pid);
+        assert.notEqual(empty[0]!.pane, first.pane);
+        assert.deepEqual(
+          panes.find((pane) => pane.id === first.id),
+          first,
+        );
         await f.detachAll();
         for (const name of ["slow", "fast", "open"]) assert.equal(await f.exitCode(name), 0, name);
       });

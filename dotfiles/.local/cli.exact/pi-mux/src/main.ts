@@ -402,21 +402,28 @@ function errorMessage(error: unknown): string {
 }
 
 async function openNew(config: Config): Promise<Pane> {
+  const cwd = process.cwd();
+  const name = `${EMPTY_SESSION}-${createHash("sha256").update(cwd).digest("hex")}`;
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const panes = await livePanes(config);
-    const empty = panes.filter((pane) => pane.name === EMPTY_SESSION && !existsSync(pane.file));
+    const empty = panes.filter(
+      (pane) =>
+        (pane.name === name || pane.name === EMPTY_SESSION) &&
+        pane.cwd === cwd &&
+        !existsSync(pane.file),
+    );
     if (empty.length > 1) throw new Error("Multiple unsaved new sessions are running");
     if (empty[0]) return empty[0];
 
-    const reserved = await hasSession(config, EMPTY_SESSION);
+    const reserved = await hasSession(config, name);
     if (reserved) {
-      const previous = (await livePanes(config)).find((pane) => pane.name === EMPTY_SESSION);
+      const previous = (await livePanes(config)).find((pane) => pane.name === name);
       if (!previous) {
         await Bun.sleep(POLL_INTERVAL_MS);
         continue;
       }
-      if (!existsSync(previous.file)) return previous;
+      if (previous.cwd === cwd && !existsSync(previous.file)) return previous;
       const renamed = await tmux(
         config,
         ["rename-session", "-t", previous.session, sessionName(previous.id)],
@@ -425,7 +432,7 @@ async function openNew(config: Config): Promise<Pane> {
       if (renamed.exitCode !== 0) continue;
     }
     const id = randomUUID();
-    const created = await createSession(config, { id, cwd: process.cwd() }, EMPTY_SESSION);
+    const created = await createSession(config, { id, cwd }, name);
     if (created) return await waitForSession(config, created, id);
   }
   throw new Error("Timed out reserving an unsaved new session");
