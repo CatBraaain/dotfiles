@@ -8,15 +8,7 @@ import type {
 import { quote } from "shell-quote";
 import { Type, type Static } from "typebox";
 import { resultText, truncateText } from "../shared/tool-text.ts";
-import {
-  attachCommand,
-  getTmuxPaths,
-  PARENT_PI_ENV_KEYS,
-  tmuxArgs,
-  type TmuxPaths,
-} from "../tmux-handoff/shared.ts";
-
-export const TMUX_SESSION_NAME = "pi";
+import { getTmuxPaths, PARENT_PI_ENV_KEYS, type TmuxPaths } from "../tmux-handoff/shared.ts";
 const MAIN_AGENT_NAME = "main";
 const REQUEST_PREVIEW_LIMIT = 80;
 
@@ -34,9 +26,6 @@ const parameters = Type.Object({
       description: "Working directory of the new session; defaults to the current cwd.",
     }),
   ),
-  name: Type.Optional(
-    Type.String({ description: "tmux window name; defaults to an automatic name (main-HHMMSS)." }),
-  ),
 });
 
 export type CreateSessionInput = Static<typeof parameters>;
@@ -44,7 +33,6 @@ type BashOutcome = Awaited<ReturnType<ExtensionToolContext["executeTool"]>>;
 
 const outputSchema = Type.Object({
   status: Type.Union([Type.Literal("created"), Type.Literal("denied"), Type.Literal("error")]),
-  window: Type.Optional(Type.String()),
   error: Type.Optional(Type.String()),
 });
 
@@ -63,8 +51,6 @@ type ApprovalUI = {
   ): Promise<string | undefined>;
 };
 
-export type CreateSessionOptions = { now?: () => Date };
-
 export function validateInput(input: CreateSessionInput): string | undefined {
   if (input.initialRequest.trim() === "")
     return "create_detached_session initialRequest must not be empty";
@@ -72,56 +58,24 @@ export function validateInput(input: CreateSessionInput): string | undefined {
     return "create_detached_session initialRequest cannot contain NUL";
   if (input.cwd !== undefined && input.cwd.includes("\0"))
     return "create_detached_session cwd cannot contain NUL";
-  if (input.name === undefined) return undefined;
-  if (input.name.includes("\0")) return "create_detached_session name cannot contain NUL";
-  if (input.name.trim() === "") return "create_detached_session name must not be blank";
-  if (/[.:]/.test(input.name)) return 'create_detached_session name cannot contain ":" or "."';
   return undefined;
 }
 
-export function autoWindowName(now: Date): string {
-  function twoDigits(value: number): string {
-    return String(value).padStart(2, "0");
-  }
-  return `main-${twoDigits(now.getHours())}${twoDigits(now.getMinutes())}${twoDigits(now.getSeconds())}`;
-}
-
 export function buildTmuxCommand(
-  input: { initialRequest: string; cwd: string; name: string },
+  input: { initialRequest: string; cwd: string },
   paths: TmuxPaths = getTmuxPaths(),
 ): string {
   const piScript = [
     `unset ${PARENT_PI_ENV_KEYS.join(" ")}`,
     `export XDG_RUNTIME_DIR=${quote([dirname(paths.directory)])}`,
     `cd -- ${quote([input.cwd])} && exec ${quote([
-      "pi",
-      "--agent",
-      MAIN_AGENT_NAME,
-      "--",
+      "pi-mux",
+      "new",
+      "--detached",
       input.initialRequest,
     ])}`,
   ].join("\n");
-  const windowArgs = ["-n", input.name, "--", "bash", "-lc", piScript];
-  const hasSession = quote([
-    "tmux",
-    ...tmuxArgs(paths, ["has-session", "-t", `=${TMUX_SESSION_NAME}`]),
-  ]);
-  const newWindow = quote([
-    "tmux",
-    ...tmuxArgs(paths, ["new-window", "-d", "-t", `=${TMUX_SESSION_NAME}:`, ...windowArgs]),
-  ]);
-  const newSession = quote([
-    "tmux",
-    ...tmuxArgs(paths, ["new-session", "-d", "-s", TMUX_SESSION_NAME, ...windowArgs]),
-  ]);
-  return [
-    `${quote(["mkdir", "-p", "-m", "700", "--", paths.directory])} || exit`,
-    `if ${hasSession} 2>/dev/null; then`,
-    `  ${newWindow}`,
-    "else",
-    `  ${newSession}`,
-    "fi",
-  ].join("\n");
+  return quote(["bash", "-lc", piScript]);
 }
 
 function deniedResult(message: string) {
@@ -133,11 +87,7 @@ function deniedResult(message: string) {
   };
 }
 
-function sessionResult(
-  outcome: BashOutcome,
-  windowName: string,
-  paths: TmuxPaths,
-): AgentToolResult<{ bash: BashOutcome["result"] }> {
+function sessionResult(outcome: BashOutcome): AgentToolResult<{ bash: BashOutcome["result"] }> {
   const bash = outcome.result;
   const envelope = bash.structuredContent as
     | { output?: unknown; exit_code?: number; truncated?: boolean }
@@ -154,26 +104,18 @@ function sessionResult(
       content: [{ type: "text", text: error }],
       details,
       isError: true,
-      structuredContent: { status: "error", window: windowName, error },
+      structuredContent: { status: "error", error },
     };
   }
-  const reconnect = attachCommand({
-    socketPath: paths.socketPath,
-    tmuxSessionId: `=${TMUX_SESSION_NAME}`,
-  });
-  const message = `Created tmux window "${TMUX_SESSION_NAME}:${windowName}" running an independent main-agent session.\nAttach with: ${reconnect}`;
+  const message = `Created an independent main-agent session.\n${text}`;
   return {
     content: [{ type: "text", text: message }],
     details,
-    structuredContent: { status: "created", window: windowName },
+    structuredContent: { status: "created" },
   };
 }
 
-export default function createSessionExtension(
-  pi: ExtensionAPI,
-  options: CreateSessionOptions = {},
-): void {
-  const now = options.now ?? (() => new Date());
+export default function createSessionExtension(pi: ExtensionAPI): void {
   let sessionApproved = false;
   let turnApproved = false;
   let turnGeneration = 0;
@@ -267,15 +209,14 @@ export default function createSessionExtension(
       }
 
       signal?.throwIfAborted();
-      const windowName = input.name?.trim() || autoWindowName(now());
       const sessionCwd = input.cwd === undefined ? resolve(ctx.cwd) : resolve(ctx.cwd, input.cwd);
       const paths = getTmuxPaths();
       const command = buildTmuxCommand(
-        { initialRequest: input.initialRequest, cwd: sessionCwd, name: windowName },
+        { initialRequest: input.initialRequest, cwd: sessionCwd },
         paths,
       );
       const bash = await ctx.executeTool("bash", { command }, { signal });
-      return sessionResult(bash, windowName, paths);
+      return sessionResult(bash);
     },
   };
   pi.registerTool(tool);

@@ -8,6 +8,8 @@ export type TmuxPaths = ReturnType<typeof getTmuxPaths>;
 export type Execute = ExtensionAPI["exec"];
 export const PARENT_PI_ENV_KEYS = [
   "PI_TMUX_SESSION_ID",
+  "PI_TMUX_STARTUP_COMMAND",
+  "PI_TMUX_STARTUP_MODE",
   "PI_SESSION_ID",
   "PI_SESSION_FILE",
   "PI_PROVIDER",

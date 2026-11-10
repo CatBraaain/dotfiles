@@ -2,9 +2,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { afterAll, beforeAll, describe, it } from "bun:test";
 import { parse } from "shell-quote";
-import { attachCommand, getTmuxPaths, PARENT_PI_ENV_KEYS } from "../tmux-handoff/shared.ts";
+import { getTmuxPaths, PARENT_PI_ENV_KEYS } from "../tmux-handoff/shared.ts";
 import createSessionExtension, {
-  autoWindowName,
   buildTmuxCommand,
   validateInput,
   type CreateSessionInput,
@@ -30,24 +29,21 @@ type ExecuteTool = (
 
 type CapturedHandlers = Map<string, (event: any, context?: any) => unknown>;
 
-function captureTool(
-  handlers?: CapturedHandlers,
-  now = () => new Date("2026-10-24T10:30:45"),
-): any {
+function captureTool(handlers?: CapturedHandlers): any {
   const tools: any[] = [];
-  createSessionExtension(
-    {
-      registerTool: (tool: any) => tools.push(tool),
-      on: (event: string, handler: (event: any, context?: any) => unknown) =>
-        handlers?.set(event, handler),
-    } as any,
-    { now },
-  );
+  createSessionExtension({
+    registerTool: (tool: any) => tools.push(tool),
+    on: (event: string, handler: (event: any, context?: any) => unknown) =>
+      handlers?.set(event, handler),
+  } as any);
   assert.equal(tools.length, 1);
   return tools[0];
 }
 
-function bashOutcome(exitCode = 0, output = "") {
+function bashOutcome(
+  exitCode = 0,
+  output = "Pi session fixture-id\nAttach with: tmux -S fixture.sock attach-session -t $7",
+) {
   return {
     isError: exitCode !== 0,
     result: {
@@ -142,125 +138,68 @@ describe("入力の検証", () => {
     assert.match(validateInput({ initialRequest: "a\0b" })!, /cannot contain NUL/);
   });
 
-  it("空白の name を拒否する", () => {
-    assert.match(validateInput({ initialRequest: "x", name: " " })!, /name must not be blank/);
+  it("rejects a working directory containing NUL", () => {
+    assert.match(validateInput({ initialRequest: "x", cwd: "/a\0b" })!, /cwd cannot contain NUL/);
   });
 
-  it("tmux ターゲット区切りの : と . を含む name を拒否する", () => {
-    assert.match(validateInput({ initialRequest: "x", name: "a:b" })!, /cannot contain/);
-    assert.match(validateInput({ initialRequest: "x", name: "a.b" })!, /cannot contain/);
-  });
-
-  it("正常な入力を通す", () => {
-    assert.equal(validateInput({ initialRequest: "x", name: "main-1", cwd: "/tmp" }), undefined);
+  it("accepts a request and working directory", () => {
+    assert.equal(validateInput({ initialRequest: "x", cwd: "/tmp" }), undefined);
   });
 });
 
-describe("ウィンドウ名の自動採番", () => {
-  it("main-HHMMSS 形式で採番する", () => {
-    assert.equal(autoWindowName(new Date("2026-10-24T09:05:07")), "main-090507");
-  });
-});
-
-describe("dedicated tmux commands", () => {
-  it("uses shared socket and config paths for every tmux operation", () => {
+describe("common independent startup command", () => {
+  it("uses the dedicated runtime and common CLI without calling tmux directly", () => {
     const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated runtime" });
-    const command = buildTmuxCommand(
-      { initialRequest: "fix it", cwd: "/repo", name: "main-1030" },
-      paths,
-    );
+    const command = buildTmuxCommand({ initialRequest: "fix it", cwd: "/repo" }, paths);
     const tokens = parse(command);
-    const tmuxIndices = tokens.flatMap((token, index) => (token === "tmux" ? [index] : []));
-    assert.equal(tmuxIndices.length, 3);
-    for (const index of tmuxIndices)
-      assert.deepEqual(tokens.slice(index + 1, index + 5), [
-        "-S",
-        paths.socketPath,
-        "-f",
-        paths.configPath,
-      ]);
-    assert.equal(command.includes("TMUX_TMPDIR"), false);
-    assert.equal(command.includes("_keeper"), false);
-  });
-
-  it("creates a detached session or a detached window in the exact pi session", () => {
-    const command = buildTmuxCommand({ initialRequest: "x", cwd: "/r", name: "w" });
-    const tokens = parse(command);
-    const sessionIndex = tokens.indexOf("new-session");
-    const windowIndex = tokens.indexOf("new-window");
-    const probeIndex = tokens.indexOf("has-session");
-    assert.deepEqual(tokens.slice(probeIndex + 1, probeIndex + 3), ["-t", "=pi"]);
-    assert.deepEqual(tokens.slice(sessionIndex + 1, sessionIndex + 6), [
-      "-d",
-      "-s",
-      "pi",
-      "-n",
-      "w",
-    ]);
-    assert.deepEqual(tokens.slice(windowIndex + 1, windowIndex + 6), [
-      "-d",
-      "-t",
-      "=pi:",
-      "-n",
-      "w",
-    ]);
-    assert.equal(tokens.includes("attach-session"), false);
-    assert.equal(tokens.includes("switch-client"), false);
-    assert.match(command, /^mkdir -p -m 700 -- /);
-  });
-
-  it("removes parent pi state without replacing the new PTY environment", () => {
-    const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated runtime" });
-    const command = buildTmuxCommand({ initialRequest: "x", cwd: "/r", name: "w" }, paths);
-    const tokens = parse(command);
-    const script = tokens[tokens.indexOf("bash") + 2] as string;
-    const paneTokens = parse(script);
-    const unsetIndex = paneTokens.indexOf("unset");
-    assert.deepEqual(paneTokens.slice(unsetIndex + 1, unsetIndex + 1 + PARENT_PI_ENV_KEYS.length), [
-      ...PARENT_PI_ENV_KEYS,
-    ]);
-    assert.ok(paneTokens.includes("XDG_RUNTIME_DIR=/isolated runtime"));
-    assert.equal(script.includes("unset TMUX"), false);
-    assert.equal(script.includes("unset TERM"), false);
-    assert.deepEqual(paneTokens.slice(paneTokens.indexOf("exec")), [
+    assert.deepEqual(tokens.slice(0, 2), ["bash", "-lc"]);
+    const script = tokens[2] as string;
+    const inner = parse(script);
+    assert.ok(inner.includes("XDG_RUNTIME_DIR=/isolated runtime"));
+    assert.deepEqual(inner.slice(inner.indexOf("exec")), [
       "exec",
-      "pi",
-      "--agent",
-      "main",
-      "--",
-      "x",
+      "pi-mux",
+      "new",
+      "--detached",
+      "fix it",
     ]);
+    assert.equal(inner.includes("tmux"), false);
+    assert.equal(inner.includes("attach-session"), false);
+    assert.equal(command.includes("TMUX_TMPDIR"), false);
+  });
+
+  it("removes parent conversation state before entering the shared launcher", () => {
+    const command = buildTmuxCommand({ initialRequest: "x", cwd: "/r" });
+    const script = parse(command)[2] as string;
+    const tokens = parse(script);
+    assert.deepEqual(tokens.slice(1, 1 + PARENT_PI_ENV_KEYS.length), [...PARENT_PI_ENV_KEYS]);
+    assert.equal(script.includes("unset TERM"), false);
   });
 
   for (const initialRequest of [
     "fix it",
     'it\'s $(x) `y` "z"',
     "--session option-like\nnext line",
+    "--detached",
+    "--",
+    "@/file with spaces.txt",
   ]) {
     it(`preserves a literal request argument: ${JSON.stringify(initialRequest)}`, () => {
       const cwd = "/dir with space/quote's\nnext line";
-      const command = buildTmuxCommand({ initialRequest, cwd, name: "w" });
-      const outer = spawnSync("bash", [
-        "-c",
-        [
-          "mkdir() { :; }",
-          'tmux() { if [ "$5" = has-session ]; then return 1; fi; printf \'%s\\0\' "$@"; }',
-          command,
-        ].join("\n"),
+      const command = buildTmuxCommand({ initialRequest, cwd });
+      const decoded = spawnSync("bash", ["-c", `bash() { printf '%s' "$2"; }\n${command}`]);
+      assert.equal(decoded.status, 0, String(decoded.stderr));
+      const script = decoded.stdout.toString();
+      const tokens = parse(script);
+      assert.deepEqual(tokens.slice(tokens.indexOf("cd") + 1, tokens.indexOf("cd") + 3), [
+        "--",
+        cwd,
       ]);
-      assert.equal(outer.status, 0, String(outer.stderr));
-      const tmuxArguments = outer.stdout.toString().split("\0").slice(0, -1);
-      const script = tmuxArguments.at(-1)!;
-      const paneTokens = parse(script);
-      assert.deepEqual(
-        paneTokens.slice(paneTokens.indexOf("cd") + 1, paneTokens.indexOf("cd") + 3),
-        ["--", cwd],
-      );
-      const piCommand = script.slice(script.indexOf("exec ") + "exec ".length);
-      const expanded = spawnSync("bash", ["-c", `set -- ${piCommand}\nprintf '%s\\0' "$@"`]);
+      const invocation = script.slice(script.indexOf("exec ") + "exec ".length);
+      const expanded = spawnSync("bash", ["-c", `set -- ${invocation}\nprintf '%s\\0' "$@"`]);
       assert.equal(expanded.status, 0, String(expanded.stderr));
-      const piArguments = expanded.stdout.toString().split("\0").slice(0, -1);
-      assert.deepEqual(piArguments, ["pi", "--agent", "main", "--", initialRequest]);
+      const argumentsPassed = expanded.stdout.toString().split("\0").slice(0, -1);
+      assert.deepEqual(argumentsPassed, ["pi-mux", "new", "--detached", initialRequest]);
     });
   }
 });
@@ -270,6 +209,8 @@ describe("ツールの登録", () => {
     const tool = captureTool();
     assert.equal(tool.name, "create_detached_session");
     assert.deepEqual(tool.reachesTools(), ["bash"]);
+    assert.deepEqual(Object.keys(tool.parameters.properties).sort(), ["cwd", "initialRequest"]);
+    assert.deepEqual(Object.keys(tool.outputSchema.properties).sort(), ["error", "status"]);
   });
 });
 
@@ -569,30 +510,57 @@ describe("呼び出し元の制限", () => {
 });
 
 describe("実行", () => {
-  it("登録済み bash を1回だけ呼び、構築したコマンドを渡す", async () => {
+  it("calls the registered bash once and keeps the CLI identity and connection guidance", async () => {
     const tool = captureTool();
     const { ui } = approvalUi({ select: "Allow once" });
     const executor = recordingExecutor();
     const result = await tool.execute(
       "t",
-      { initialRequest: "fix it", cwd: "/repo", name: "main-1" },
+      { initialRequest: "fix it", cwd: "/repo" },
       undefined,
       undefined,
       mockContext(ui, executor.executeTool),
     );
     assert.equal(executor.commands.length, 1);
-    assert.ok(executor.commands[0]!.includes(getTmuxPaths().socketPath));
-    assert.match(executor.commands[0]!, /pi --agent main/);
+    const script = parse(executor.commands[0]!)[2] as string;
+    assert.ok(script.includes("pi-mux new --detached"));
+    assert.ok(script.includes("XDG_RUNTIME_DIR="));
     assert.equal(result.structuredContent.status, "created");
-    assert.equal(result.structuredContent.window, "main-1");
-    const reconnect = attachCommand({
-      socketPath: getTmuxPaths().socketPath,
-      tmuxSessionId: "=pi",
-    });
-    assert.ok(result.content[0].text.includes(reconnect));
+    assert.deepEqual(result.structuredContent, { status: "created" });
+    assert.equal(result.content[0].text.includes("window"), false);
+    assert.ok(result.content[0].text.includes("Pi session fixture-id"));
+    assert.ok(
+      result.content[0].text.includes("Attach with: tmux -S fixture.sock attach-session -t $7"),
+    );
   });
 
-  it("cwd 省略時は ctx.cwd を使い、name 省略時は自動採番する", async () => {
+  it("passes an exact --detached request through the registered bash", async () => {
+    const tool = captureTool();
+    const { ui } = approvalUi({ select: "Allow once" });
+    const executor = recordingExecutor();
+    const input = { initialRequest: "--detached" };
+    assert.equal(validateInput(input), undefined);
+    const result = await tool.execute(
+      "t",
+      input,
+      undefined,
+      undefined,
+      mockContext(ui, executor.executeTool),
+    );
+    assert.equal(executor.commands.length, 1);
+    const script = parse(executor.commands[0]!)[2] as string;
+    const tokens = parse(script);
+    assert.deepEqual(tokens.slice(tokens.indexOf("exec")), [
+      "exec",
+      "pi-mux",
+      "new",
+      "--detached",
+      "--detached",
+    ]);
+    assert.deepEqual(result.structuredContent, { status: "created" });
+  });
+
+  it("uses ctx.cwd when cwd is omitted without generating a window name", async () => {
     const tool = captureTool();
     const { ui } = approvalUi({ select: "Allow once" });
     const executor = recordingExecutor();
@@ -603,8 +571,9 @@ describe("実行", () => {
       undefined,
       mockContext(ui, executor.executeTool, "/from/ctx"),
     );
-    assert.ok(executor.commands[0]!.includes("cd -- /from/ctx"));
-    assert.equal(result.structuredContent.window, "main-103045");
+    assert.ok((parse(executor.commands[0]!)[2] as string).includes("cd -- /from/ctx"));
+    assert.deepEqual(result.structuredContent, { status: "created" });
+    assert.equal(Object.hasOwn(result.structuredContent, "window"), false);
   });
 
   it("相対 cwd を ctx.cwd 基準で絶対パスに解決する", async () => {
@@ -619,7 +588,7 @@ describe("実行", () => {
       mockContext(ui, executor.executeTool, "/base/cwd"),
     );
     assert.ok(
-      executor.commands[0]!.includes("cd -- /base/cwd/sub/dir"),
+      (parse(executor.commands[0]!)[2] as string).includes("cd -- /base/cwd/sub/dir"),
       `resolved cwd missing: ${executor.commands[0]}`,
     );
   });
@@ -637,6 +606,7 @@ describe("実行", () => {
     );
     assert.equal(result.isError, true);
     assert.equal(result.structuredContent.status, "error");
+    assert.equal(Object.hasOwn(result.structuredContent, "window"), false);
     assert.match(result.content[0].text, /tmux command failed/);
     assert.equal(result.content[0].text.includes("systemctl"), false);
   });

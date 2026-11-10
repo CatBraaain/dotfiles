@@ -1,8 +1,10 @@
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { getTmuxPaths, inspectManagedPane, tmuxArgs } from "./shared.ts";
+import { quote } from "shell-quote";
+import { requestBackgroundBash } from "../tools/background-bash.ts";
+import { getTmuxPaths, inspectManagedPane, tmuxArgs, type Execute } from "./shared.ts";
 
-const TMUX_TIMEOUT_MS = 5_000;
+const TMUX_TIMEOUT_S = 1;
 
 export function rejectSessionChange(ctx: ExtensionContext): { cancel: true } | undefined {
   if (ctx.mode !== "tui") return;
@@ -13,28 +15,33 @@ export function rejectSessionChange(ctx: ExtensionContext): { cancel: true } | u
 export default function fixedSessionExtension(pi: ExtensionAPI): void {
   pi.on("session_before_switch", (_event, ctx) => rejectSessionChange(ctx));
   pi.on("session_before_fork", (_event, ctx) => rejectSessionChange(ctx));
-  pi.on("session_start", async (_event, ctx) => {
-    if (ctx.mode !== "tui") return;
+  const startupCommand = process.env.PI_TMUX_STARTUP_COMMAND;
+  let startupPending = true;
+  if (process.env.PI_TMUX_STARTUP_MODE === "create")
+    pi.on("resources_discover", async (_event, ctx) => publish(ctx, "accepted"));
+  else if (startupCommand)
+    pi.registerCommand(startupCommand, { handler: async (_args, ctx) => publish(ctx, "ready") });
+
+  async function publish(ctx: ExtensionContext, startup: "accepted" | "ready"): Promise<void> {
+    if (ctx.mode !== "tui" || !startupPending) return;
+    startupPending = false;
     try {
+      const execute = backgroundExecutor(pi, ctx);
       const paths = getTmuxPaths();
-      const pane = await inspectManagedPane(pi.exec, paths);
+      const pane = await inspectManagedPane(execute, paths);
       const expectedId = process.env.PI_TMUX_SESSION_ID;
       const id = ctx.sessionManager.getSessionId();
-      if (expectedId && (!pane || id !== expectedId))
+      if (!expectedId || !pane || id !== expectedId)
         throw new Error("pi-mux session identity or pane does not match the requested session");
-      if (!pane) return;
       const file = ctx.sessionManager.getSessionFile();
       if (!file) throw new Error("pi-mux requires a persistent session");
       const metadata = Buffer.from(
-        JSON.stringify({ id, file: resolve(file), cwd: ctx.cwd, pid: process.pid }),
+        JSON.stringify({ id, file: resolve(file), cwd: ctx.cwd, pid: process.pid, startup }),
       ).toString("base64");
-      const result = await pi.exec(
+      await execute(
         "tmux",
         tmuxArgs(paths, ["set-option", "-p", "-t", pane, "@pi-tmux-session", metadata]),
-        { timeout: TMUX_TIMEOUT_MS },
       );
-      if (result.code !== 0 || result.killed || ("truncated" in result && result.truncated))
-        throw new Error(`Cannot publish pi-mux session: ${result.stderr.trim()}`);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       process.stderr.write(`pi-mux: ${reason}\n`);
@@ -42,5 +49,29 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
       process.exitCode = 1;
       ctx.shutdown();
     }
-  });
+  }
+}
+
+function backgroundExecutor(pi: ExtensionAPI, ctx: ExtensionContext): Execute {
+  return async function execute(command, args) {
+    const outcome = await requestBackgroundBash(pi.events, {
+      id: "tmux-handoff-startup",
+      params: { command: quote([command, ...args]), timeout: TMUX_TIMEOUT_S },
+      context: {
+        model: ctx.model,
+        thinkingLevel: ctx.thinkingLevel,
+        sessionManager: ctx.sessionManager,
+      },
+    });
+    if (outcome.status !== "completed") {
+      const reason = outcome.status === "aborted" ? outcome.reason : outcome.error;
+      throw new Error(`Cannot execute pi-mux startup Bash (${outcome.status}): ${String(reason)}`);
+    }
+    const stdout = outcome.result.content
+      .filter((item) => item.type === "text")
+      .map((item) => item.text)
+      .join("\n");
+    if (outcome.result.isError) throw new Error(`pi-mux startup Bash failed: ${stdout}`);
+    return { stdout, stderr: "", code: 0, killed: false };
+  };
 }
