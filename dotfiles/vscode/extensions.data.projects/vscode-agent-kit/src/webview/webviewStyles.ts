@@ -44,10 +44,14 @@ export const webviewStyles = `
     .workspace-menu button:hover, .workspace-menu button:focus { color: var(--vscode-menu-selectionForeground, var(--vscode-foreground)); background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); }
     .session-row { position: relative; min-width: 0; height: 32px; margin-left: 4px; border-radius: var(--session-radius); }
     .group-header + .session-row { margin-top: 4px; }
-    .session-button { display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 32px; padding: 0 calc(36px + 5ch + 8px) 0 8px; border-radius: var(--session-radius); color: var(--vscode-foreground); background: transparent; text-align: left; }
-    .session-button:hover { background: var(--vscode-list-hoverBackground); }
-    .session-row.selected .session-button, .session-row.selected .session-button:hover { background: var(--vscode-list-inactiveSelectionBackground); }
-    .session-row.selected:focus-within .session-button { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-inactiveSelectionBackground)); }
+    .session-button { position: relative; isolation: isolate; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 32px; padding: 0 calc(36px + 5ch + 8px) 0 8px; border-radius: var(--session-radius); color: var(--vscode-foreground); background: transparent; text-align: left; }
+    .session-button::before { content: ""; position: absolute; inset: -1px -1px -1px calc(24px - 1px); border-radius: inherit; pointer-events: none; z-index: -1; }
+    .session-button:hover { background: transparent; }
+    .session-button:hover::before { background: var(--vscode-list-hoverBackground); }
+    .session-button:focus-visible { outline: none; }
+    .session-button:focus-visible::before { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
+    .session-row.selected .session-button::before, .session-row.selected .session-button:hover::before { background: var(--vscode-list-inactiveSelectionBackground); }
+    .session-row.selected:focus-within .session-button::before { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-inactiveSelectionBackground)); }
     .session-status { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 12px; height: 12px; color: var(--vscode-descriptionForeground); }
     .session-status[data-state="running"] { color: var(--vscode-testing-iconPassed, var(--vscode-descriptionForeground)); }
     .session-status[data-state="waiting-approval"], .session-status[data-unread="true"] { color: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)); }

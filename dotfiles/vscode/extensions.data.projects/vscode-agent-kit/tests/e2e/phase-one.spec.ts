@@ -55,6 +55,13 @@ test(
           const { left, right, top, bottom, width, height } = element.getBoundingClientRect();
           return { left, right, top, bottom, width, height };
         }
+        function paintRect(button: Element) {
+          const box = button.getBoundingClientRect();
+          const border = parseFloat(getComputedStyle(button).borderLeftWidth);
+          const paint = getComputedStyle(button, "::before");
+          const left = box.left + border + parseFloat(paint.left);
+          return { left, right: left + parseFloat(paint.width), height: parseFloat(paint.height) };
+        }
         const app = document.querySelector("#app")!;
         const footer = document.querySelector(".footer")!;
         const bodyStyle = getComputedStyle(document.body);
@@ -78,6 +85,9 @@ test(
           footer: { ...rect(footer), padding: getComputedStyle(footer).padding },
           rows: Array.from(document.querySelectorAll(".session-row")).map((row) => ({
             row: rect(row),
+            button: rect(row.querySelector(".session-button")!),
+            paint: paintRect(row.querySelector(".session-button")!),
+            workspaceName: rect(row.closest(".group")!.querySelector(".group-title")!),
             name: rect(row.querySelector(".session-name")!),
             status: rect(row.querySelector(".session-status")!),
             timestamp: rect(row.querySelector(".session-timestamp")!),
@@ -122,11 +132,27 @@ test(
       await expect(frame.locator(".session-scrollbar")).toHaveCSS("width", "12px");
       for (const [index, row] of layout.rows.entries()) {
         expect(row.row.left).toBe(16);
+        expect(row.button).toEqual(row.row);
+        expect(row.paint.left).toBe(40);
+        expect(row.paint.left).toBe(row.workspaceName.left);
+        expect(row.paint.right).toBe(row.button.right);
+        expect(row.paint.height).toBe(32);
         expect(row.row.right).toBe(layout.viewport.width - 12);
         expect(row.row.height).toBe(32);
         expect(row.row.width).toBe(withHostPadding[index].rowWidth + 40);
         expect(row.name.width).toBe(withHostPadding[index].nameWidth + 40);
         expect(row.indent).toBe("4px");
+        expect(row.status.left).toBe(25);
+        expect(row.name.left).toBe(45);
+        expect(row.status.right).toBeLessThan(row.paint.left);
+        if (layout.viewport.width === 299) {
+          expect(row.name.right).toBe(200.65625);
+          expect(row.timestamp.left).toBe(220.90625);
+          expect(row.timestamp.right).toBe(251);
+          expect(row.action.left).toBe(259);
+          expect(row.action.right).toBe(283);
+        }
+        expect(row.name.left).toBe(row.status.right + 8);
         expect(row.gap).toBe("8px");
         expect(row.nameFont).toBe("13px");
         expect(row.timestampFont).toBe("10px");
@@ -173,6 +199,167 @@ test(
     });
   },
 );
+
+for (const theme of ["Dark Modern", "Light Modern"]) {
+  test(
+    `Keeps session backgrounds aligned with workspace names across selection states in ${theme}`,
+    { annotation: { type: "design", description: "DESIGN.md: session row hierarchy" } },
+    async ({ host }, testInfo) => {
+      await test.step(`Check session background geometry in ${theme}`, async () => {
+        await host.page.keyboard.press("Control+Shift+P");
+        const picker = host.page.locator(".quick-input-widget input").describe("Theme picker");
+        await picker.fill(">Preferences: Color Theme");
+        await host.page.getByRole("option", { name: /Preferences: Color Theme/ }).click();
+        await picker.fill(theme);
+        await host.page.getByRole("option", { name: theme, exact: true }).click();
+        const frame = await host.sessionFrame();
+        await expect(frame.locator("body")).toHaveClass(
+          theme.includes("Light") ? /vscode-light/ : /vscode-dark/,
+        );
+        const button = frame
+          .locator(`[data-session="${host.sessions.A.id}"]`)
+          .describe("Session background and focus target");
+
+        async function appearance() {
+          return button.evaluate((element) => {
+            function rect(target: Element) {
+              const { left, right, top, bottom, width, height } = target.getBoundingClientRect();
+              return { left, right, top, bottom, width, height };
+            }
+            function tokenColor(name: string) {
+              const sample = document.createElement("span");
+              sample.style.color = `var(${name})`;
+              document.body.append(sample);
+              const color = getComputedStyle(sample).color;
+              sample.remove();
+              return color;
+            }
+            const row = element.closest(".session-row")!;
+            const style = getComputedStyle(element);
+            const paint = getComputedStyle(element, "::before");
+            const box = element.getBoundingClientRect();
+            const paintLeft = box.left + parseFloat(style.borderLeftWidth) + parseFloat(paint.left);
+            return {
+              button: rect(element),
+              paint: {
+                left: paintLeft,
+                right: paintLeft + parseFloat(paint.width),
+                height: parseFloat(paint.height),
+              },
+              workspaceName: rect(row.closest(".group")!.querySelector(".group-title")!),
+              name: rect(row.querySelector(".session-name")!),
+              status: rect(row.querySelector(".session-status")!),
+              timestamp: rect(row.querySelector(".session-timestamp")!),
+              archive: rect(row.querySelector(".archive")!),
+              buttonBackground: style.backgroundColor,
+              buttonOutline: style.outlineStyle,
+              background: paint.backgroundColor,
+              outlineStyle: paint.outlineStyle,
+              outlineWidth: paint.outlineWidth,
+              outlineOffset: paint.outlineOffset,
+              pointerEvents: paint.pointerEvents,
+              content: paint.content,
+              isolation: style.isolation,
+              zIndex: paint.zIndex,
+              hoverColor: tokenColor("--vscode-list-hoverBackground"),
+              activeColor: tokenColor("--vscode-list-activeSelectionBackground"),
+              inactiveColor: tokenColor("--vscode-list-inactiveSelectionBackground"),
+              viewportWidth: innerWidth,
+            };
+          });
+        }
+
+        await host.page.locator(".part.sidebar .title-label").hover();
+        const idle = await appearance();
+        expect(idle.button.left).toBe(16);
+        expect(idle.name.left).toBe(45);
+        expect(idle.status.left).toBe(25);
+        expect(idle.paint.left).toBe(40);
+        expect(idle.paint.left).toBe(idle.workspaceName.left);
+        expect(idle.paint.right).toBe(idle.button.right);
+        expect(idle.paint.height).toBe(32);
+        expect(idle.pointerEvents).toBe("none");
+        expect(idle.content).toBe('""');
+        expect(idle.isolation).toBe("isolate");
+        expect(idle.zIndex).toBe("-1");
+        expect(idle.button.right).toBe(idle.viewportWidth - 12);
+        expect(idle.timestamp.right).toBe(idle.button.right - 36);
+        expect(idle.archive.right).toBe(idle.button.right - 4);
+        await button.hover();
+        await expect.poll(async () => (await appearance()).background).toBe(idle.hoverColor);
+        const hover = await appearance();
+        await button.focus();
+        await host.page.keyboard.press("Tab");
+        await host.page.keyboard.press("Shift+Tab");
+        await expect(button).toBeFocused();
+        const focus = await appearance();
+        expect(focus.buttonOutline).toBe("none");
+        expect(focus.outlineStyle).toBe("solid");
+        expect(focus.outlineWidth).toBe("2px");
+        expect(focus.outlineOffset).toBe("-2px");
+        await button.press("Enter");
+        await expect(button.locator("..")).toHaveClass(/selected/);
+        await host.page.locator(".part.sidebar .title-label").hover();
+        await button.blur();
+        await expect.poll(async () => (await appearance()).background).toBe(idle.inactiveColor);
+        const selected = await appearance();
+        await button.focus();
+        await expect.poll(async () => (await appearance()).background).toBe(idle.activeColor);
+        const selectedFocus = await appearance();
+        for (const state of [hover, focus, selected, selectedFocus]) {
+          expect(state.buttonBackground).toBe("rgba(0, 0, 0, 0)");
+          expect(state.button).toEqual(idle.button);
+          expect(state.paint).toEqual(idle.paint);
+          expect(state.name).toEqual(idle.name);
+          expect(state.status).toEqual(idle.status);
+          expect(state.timestamp).toEqual(idle.timestamp);
+          expect(state.archive).toEqual(idle.archive);
+        }
+        await testInfo.attach(`${theme} session states`, {
+          body: JSON.stringify({ idle, hover, focus, selected, selectedFocus }, null, 2),
+          contentType: "application/json",
+        });
+        await testInfo.attach(`${theme} selected focus`, {
+          body: await host.page.screenshot({ path: testInfo.outputPath("selected-focus.png") }),
+          contentType: "image/png",
+        });
+        const statePath = join(host.directory, "agent/session-state.json");
+        const store = JSON.parse(readFileSync(statePath, "utf8")) as SessionStateStoreData;
+        store["active-workspaces"][host.sessions.A.cwd]["active-sessions"]![
+          host.sessions.A.id
+        ].state = "waiting-approval";
+        writeFileSync(statePath, JSON.stringify(store));
+        const status = button
+          .locator(".session-status")
+          .describe("Approval icon in the unpainted gutter");
+        await expect(status).toHaveAttribute("data-state", "waiting-approval");
+        await expect(status.locator("svg")).toBeVisible();
+        await button.focus();
+        const approval = await appearance();
+        expect(approval.status).toEqual(idle.status);
+        expect(approval.name).toEqual(idle.name);
+        expect(approval.paint).toEqual(idle.paint);
+        expect(approval.status.right).toBeLessThan(approval.paint.left);
+        expect(
+          await status.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            return (
+              document
+                .elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+                ?.closest(".session-button") === element.closest(".session-button")
+            );
+          }),
+        ).toBe(true);
+        await testInfo.attach(`${theme} approval gutter and selected focus`, {
+          body: await host.page.screenshot({
+            path: testInfo.outputPath("approval-selected-focus.png"),
+          }),
+          contentType: "image/png",
+        });
+      });
+    },
+  );
+}
 
 test(
   "Switches between A/B conversations with Pi-notified titles",

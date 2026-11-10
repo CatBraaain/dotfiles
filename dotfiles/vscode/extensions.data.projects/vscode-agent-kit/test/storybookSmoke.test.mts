@@ -256,6 +256,30 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       }
       const before = await rowBounds();
       expect(before).toEqual({ left: 16, right: width - 12, width: width - 28 });
+      const contentAndPaint = await row.evaluate((element) => {
+        const button = element.querySelector(".session-button")!;
+        const box = button.getBoundingClientRect();
+        const border = parseFloat(getComputedStyle(button).borderLeftWidth);
+        const paint = getComputedStyle(button, "::before");
+        const paintLeft = box.left + border + parseFloat(paint.left);
+        return {
+          workspaceNameLeft: element
+            .closest(".group")!
+            .querySelector(".group-title")!
+            .getBoundingClientRect().left,
+          nameLeft: element.querySelector(".session-name")!.getBoundingClientRect().left,
+          statusLeft: element.querySelector(".session-status")!.getBoundingClientRect().left,
+          paintLeft,
+          paintRight: paintLeft + parseFloat(paint.width),
+        };
+      });
+      expect(contentAndPaint).toEqual({
+        workspaceNameLeft: 40,
+        nameLeft: 45,
+        statusLeft: 25,
+        paintLeft: 40,
+        paintRight: width - 12,
+      });
       const nameWidths = await row.evaluate((element) => {
         const sessionRow = element as HTMLElement;
         const name = sessionRow.querySelector(".session-name")!;
@@ -550,7 +574,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
           }
           return Array.from(document.querySelectorAll(".session-row")).flatMap((row) => {
             const button = row.querySelector(".session-button")!;
-            const buttonBackground = getComputedStyle(button).backgroundColor;
+            const buttonBackground = getComputedStyle(button, "::before").backgroundColor;
             const background =
               buttonBackground === "rgba(0, 0, 0, 0)"
                 ? getComputedStyle(document.body).backgroundColor
