@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -12,11 +12,13 @@ import {
   registeredWorkspaceCwds,
   type SessionStateStoreData,
 } from "../src/sessionStateStore";
+import { SessionLauncher } from "../src/launcher";
 import { TerminalRegistry } from "../src/terminalRegistry";
 import { editorTerminals } from "../src/terminals";
 import { encodeCwdDirName } from "../src/paths";
 import { fakeRuntimes } from "./runtimeFixtures";
 import { SessionWebviewProvider } from "../src/webview/sessionWebviewProvider";
+import { sessionListView } from "../src/webview/client";
 import * as sessionStore from "../src/sessionStore";
 import type { SessionPhase, WebviewState } from "../src/webview/protocol";
 import { cleanup, header, tempDir, writeJsonl } from "./fixtures";
@@ -1608,6 +1610,182 @@ describe("SessionWebviewProvider", () => {
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
       `Session file no longer exists: ${activeSessionId}`,
     );
+  });
+
+  describe("selection follows the new session display", () => {
+    let fixture: Awaited<ReturnType<typeof archivedDisplayFixture>>;
+    let launcher: SessionLauncher;
+    let onSessionDetected: Mock<() => Promise<void>>;
+
+    beforeEach(async () => {
+      vi.useFakeTimers();
+      fixture = await archivedDisplayFixture({ startNewSession: (cwd) => launcher.start(cwd) });
+      onSessionDetected = vi.fn(() => fixture.provider.refresh());
+      launcher = new SessionLauncher({
+        sessionDir: fixture.sessionDir,
+        statePath: fixture.statePath,
+        registry: fixture.registry,
+        onSessionDetected,
+      });
+      await fixture.webview.receive({ type: "openSession", sessionId: activeSessionId });
+      expect(selectedRows()).toHaveLength(1);
+    });
+
+    afterEach(async () => {
+      launcher?.dispose();
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    });
+
+    function sentState(): WebviewState {
+      let state: WebviewState = { groups: [] };
+      for (const [message] of fixture.webview.postMessage.mock.calls) {
+        if (message.type === "sessions") state = message.state;
+        if (message.type === "loading" && "displayedSessionId" in message) {
+          state = { ...state, displayedSessionId: message.displayedSessionId ?? undefined };
+        }
+      }
+      return state;
+    }
+
+    function selectedRows() {
+      const state = sentState();
+      return sessionListView(state, new Map(), state.displayedSessionId)
+        .sessions.flatMap((group) => group.children ?? [])
+        .filter(
+          (row) => typeof row !== "string" && row.attrs?.class?.split(" ").includes("selected"),
+        );
+    }
+
+    it("clears the old row selection before the new session is saved", async () => {
+      await fixture.webview.receive({ type: "newSession", cwd: root });
+
+      const displayedId = fixture.registry.displayedSessionId;
+      expect(displayedId).toBeDefined();
+      expect(displayedId).not.toBe(activeSessionId);
+      expect(fixture.terminal.show).toHaveBeenCalledTimes(2);
+      expect(onSessionDetected).not.toHaveBeenCalled();
+      const listedIds = sentState().groups.flatMap((group) =>
+        group.sessions.map((session) => session.sessionId),
+      );
+      expect(listedIds).toContain(activeSessionId);
+      expect(listedIds).not.toContain(displayedId);
+      expect(selectedRows()).toHaveLength(0);
+      expect(sentState().displayedSessionId).toBe(displayedId);
+    });
+
+    it("clears the old selection while the new session list scan is pending", async () => {
+      const sessions = await sessionStore.listSessions(fixture.sessionDir, { cwds: [root] });
+      let finish!: (result: typeof sessions) => void;
+      const scan = vi.spyOn(sessionStore, "listSessions").mockReturnValueOnce(
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      );
+      const launching = fixture.webview.receive({ type: "newSession", cwd: root });
+      try {
+        await vi.waitFor(() => expect(scan).toHaveBeenCalledOnce());
+        expect(fixture.registry.displayedSessionId).not.toBe(activeSessionId);
+        expect(selectedRows()).toHaveLength(0);
+        expect(sentState().displayedSessionId).toBe(fixture.registry.displayedSessionId);
+        expect(fixture.webview.postMessage.mock.lastCall?.[0].type).toBe("loading");
+        expect(sentState().groups[0].sessions).not.toHaveLength(0);
+      } finally {
+        finish(sessions);
+        await launching;
+      }
+    });
+
+    it.each(["state store", "session list"] as const)(
+      "keeps the old row deselected when the %s cannot be read",
+      async (source) => {
+        if (source === "state store") await writeFile(fixture.statePath, "invalid json");
+        else vi.spyOn(sessionStore, "listSessions").mockRejectedValue(new Error("scan failed"));
+
+        await fixture.webview.receive({ type: "newSession", cwd: root });
+        const displayedId = fixture.registry.displayedSessionId;
+        expect(displayedId).not.toBe(activeSessionId);
+        expect(selectedRows()).toHaveLength(0);
+        expect(sentState().displayedSessionId).toBe(displayedId);
+        expect(sentState().groups[0].sessions).not.toHaveLength(0);
+        expect(fixture.webview.postMessage.mock.lastCall?.[0].type).toBe("sessionsError");
+
+        await fixture.provider.refresh();
+        expect(selectedRows()).toHaveLength(0);
+        expect(sentState().displayedSessionId).toBe(displayedId);
+        expect(fixture.webview.postMessage.mock.lastCall?.[0].type).toBe("sessionsError");
+      },
+    );
+
+    it("keeps the current display selected when an earlier new session is detected", async () => {
+      await fixture.webview.receive({ type: "newSession", cwd: root });
+      const pendingId = fixture.registry.displayedSessionId!;
+      expect(addActiveSession(fixture.statePath, root, pendingId).ok).toBe(true);
+      await fixture.webview.receive({ type: "openSession", sessionId: activeSessionId });
+      await writeJsonl(join(fixture.sessionDir, encodeCwdDirName(root)), `new_${pendingId}.jsonl`, [
+        header({ id: pendingId, cwd: root }),
+      ]);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.waitFor(() => expect(onSessionDetected).toHaveBeenCalledWith(pendingId));
+      await vi.waitFor(() =>
+        expect(
+          sentState().groups.flatMap((group) => group.sessions.map((session) => session.sessionId)),
+        ).toContain(pendingId),
+      );
+      expect(fixture.registry.displayedSessionId).toBe(activeSessionId);
+      expect(sentState().displayedSessionId).toBe(activeSessionId);
+      expect(selectedRows()).toHaveLength(1);
+    });
+
+    it("selects the displayed new session when its saved row appears", async () => {
+      await fixture.webview.receive({ type: "newSession", cwd: root });
+      const displayedId = fixture.registry.displayedSessionId!;
+      await writeJsonl(
+        join(fixture.sessionDir, encodeCwdDirName(root)),
+        `new_${displayedId}.jsonl`,
+        [header({ id: displayedId, cwd: root })],
+      );
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.waitFor(() => expect(onSessionDetected).toHaveBeenCalledWith(displayedId));
+      await vi.waitFor(() => {
+        expect(sentState().displayedSessionId).toBe(displayedId);
+        expect(selectedRows()).toHaveLength(1);
+      });
+      const newRow = sentState()
+        .groups.flatMap((group) => group.sessions)
+        .find((session) => session.sessionId === displayedId);
+      expect(newRow?.isArchived).toBe(false);
+    });
+
+    it("keeps the displayed row selected when the new launch fails", async () => {
+      const selectedBefore = selectedRows();
+      fixture.runtimes.mocks.ensure.mockRejectedValueOnce(new Error("launch failed"));
+
+      await fixture.webview.receive({ type: "newSession", cwd: root });
+
+      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining("launch failed"),
+      );
+      expect(fixture.registry.displayedSessionId).toBe(activeSessionId);
+      expect(sentState().displayedSessionId).toBe(activeSessionId);
+      expect(selectedRows()).toEqual(selectedBefore);
+    });
+
+    it("clears the old selection when reconnecting to an unsaved new session", async () => {
+      await fixture.webview.receive({ type: "newSession", cwd: root });
+      const pendingId = fixture.registry.displayedSessionId;
+      await fixture.webview.receive({ type: "openSession", sessionId: activeSessionId });
+      expect(selectedRows()).toHaveLength(1);
+
+      await fixture.webview.receive({ type: "newSession", cwd: root });
+
+      expect(fixture.registry.displayedSessionId).toBe(pendingId);
+      expect(onSessionDetected).not.toHaveBeenCalled();
+      expect(selectedRows()).toHaveLength(0);
+      expect(sentState().displayedSessionId).toBe(pendingId);
+    });
   });
 
   it("starts a new session only when the fixed protocol requests it", async () => {

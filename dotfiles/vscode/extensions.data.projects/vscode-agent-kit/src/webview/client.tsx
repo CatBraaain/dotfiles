@@ -556,7 +556,7 @@ interface ClientSnapshot {
 function createClientStore(): {
   subscribe(listener: () => void): () => void;
   getSnapshot(): ClientSnapshot;
-  setLoading(): void;
+  setLoading(displayedSessionId?: string | null): void;
   setSessions(state: ClientState): void;
   setError(message: string): void;
   setSessionsError(message: string): void;
@@ -577,9 +577,13 @@ function createClientStore(): {
       return () => listeners.delete(listener);
     },
     getSnapshot: () => snapshot,
-    setLoading: () =>
+    setLoading: (displayedSessionId) =>
       publish({
         ...snapshot,
+        state:
+          displayedSessionId === undefined
+            ? snapshot.state
+            : { ...snapshot.state, displayedSessionId: displayedSessionId ?? undefined },
         loadStatus: "loading",
         errorMessage: "",
       }),
@@ -693,7 +697,14 @@ export function initClient(bridge: ClientBridge): () => void {
   };
   bridge.onMessage((message) => {
     if (!isRecord(message)) return;
-    if (message.type === "loading") store.setLoading();
+    if (message.type === "loading") {
+      const displayedSessionId = message.displayedSessionId;
+      store.setLoading(
+        typeof displayedSessionId === "string" || displayedSessionId === null
+          ? displayedSessionId
+          : undefined,
+      );
+    }
     if (message.type === "sessions" && isClientState(message.state)) {
       store.setSessions(message.state);
       if (pendingAddWorkspace) closeWorkspaceForm();

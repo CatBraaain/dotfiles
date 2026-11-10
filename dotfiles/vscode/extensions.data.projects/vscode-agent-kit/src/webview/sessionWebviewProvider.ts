@@ -93,7 +93,10 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
 
   private async refreshSessions(): Promise<void> {
     const version = ++this.refreshVersion;
-    this.post({ type: "loading" });
+    this.post({
+      type: "loading",
+      displayedSessionId: this.deps.registry.displayedSessionId ?? null,
+    });
     const store = readSessionStateStore(this.deps.statePath);
     if (store.status === "error") {
       this.postError(store.message, "sessionsError");
@@ -211,6 +214,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       // registry.run is required because nesting it inside startNewSession's
       // own run would wait on that run forever.
       await this.deps.registry.run(() => this.stopArchivedDisplayedSession(previousSessionId));
+      await this.refresh();
       return;
     }
     if (request.type === "addWorkspace") {

@@ -203,6 +203,32 @@ describe("session list loading in the mounted client", () => {
     ).toBe("false");
   });
 
+  it("syncs the displayed session before a scan completes and retains it on failure", async () => {
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+    await receive({ type: "loading", displayedSessionId: "unsaved-session" });
+
+    await expect.poll(() => page.locator(".selected").count()).toBe(0);
+    expect(await page.locator(".session-row").count()).toBe(1);
+    expect(await page.locator("#status").textContent()).toBe("Refreshing sessions…");
+    await receive({ type: "sessionsError", message: "Could not reload sessions" });
+    await expect
+      .poll(() => page.locator("#status").textContent())
+      .toBe("Could not reload sessions");
+    expect(await page.locator(".selected").count()).toBe(0);
+    expect(await page.locator(".session-row").count()).toBe(1);
+  });
+
+  it("clears selection when loading reports no displayed session", async () => {
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+    await receive({ type: "loading", displayedSessionId: null });
+
+    await expect.poll(() => page.locator(".selected").count()).toBe(0);
+    expect(await page.locator(".session-row").count()).toBe(1);
+    expect(await page.locator("#status").textContent()).toBe("Refreshing sessions…");
+  });
+
   it("keeps the last list and selected row when a refresh fails", async () => {
     await receive({ type: "sessions", state });
     await expectLoaded();

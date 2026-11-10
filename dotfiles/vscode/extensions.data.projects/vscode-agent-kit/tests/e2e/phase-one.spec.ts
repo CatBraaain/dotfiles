@@ -859,6 +859,18 @@ test(
     const folder = join(host.directory, "registered");
     await registerWorkFolder(host, folder);
 
+    await test.step("Display a saved session before launching a new one", async () => {
+      await host.selectSession("A");
+      await host.expectPiVisible(host.sessions.A.cwd);
+      const frame = await host.sessionFrame();
+      await expect(
+        frame
+          .locator(".session-row.selected")
+          .filter({ has: frame.locator(`[data-session="${host.sessions.A.id}"]`) })
+          .describe("Displayed saved session selection"),
+      ).toHaveCount(1);
+    });
+
     await test.step("Launch Pi from the registered group plus button", async () => {
       const frame = await host.sessionFrame();
       const group = frame
@@ -873,6 +885,9 @@ test(
         .poll(() => host.piProcesses().some((process) => process.cwd === folder))
         .toBe(true);
       await host.expectPiVisible(folder);
+      await expect(
+        frame.locator(".session-row.selected").describe("Saved session selection after new launch"),
+      ).toHaveCount(0);
       await testInfo.attach("登録 cwd で起動", {
         body: await host.page.screenshot(),
         contentType: "image/png",
