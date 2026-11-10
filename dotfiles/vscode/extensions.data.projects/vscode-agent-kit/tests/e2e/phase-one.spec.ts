@@ -822,7 +822,7 @@ test(
 );
 
 test(
-  "Archives directly, stops only its Pi and resumes the saved conversation after Unarchive",
+  "Archives directly, stops only its Pi and reopens the saved conversation after Unarchive",
   { annotation: { type: "spec", description: "E2E-13" } },
   async ({ host }, testInfo) => {
     const statePath = join(host.directory, "agent/session-state.json");
@@ -842,6 +842,7 @@ test(
         .describe("Session row");
     let initialA!: ReturnType<VSCodeFixture["piProcesses"]>[number];
     let initialB!: ReturnType<VSCodeFixture["piProcesses"]>[number];
+    let unarchivedA!: ReturnType<VSCodeFixture["piProcesses"]>[number];
     let sourceA = "";
     let sourceB = "";
     await test.step("Start isolated A and B Pi runtimes and an ordinary fixture tmux session", async () => {
@@ -915,7 +916,7 @@ test(
         contentType: "image/png",
       });
     });
-    await test.step("Unarchive the row and see it back in the default list", async () => {
+    await test.step("Unarchive the row and see it reopen in the shared terminal", async () => {
       const frame = await host.sessionFrame();
       await rowIn(frame, aId)
         .locator(`[data-unarchive="${aId}"]`)
@@ -930,15 +931,23 @@ test(
       await expect(status).toHaveCSS("width", "12px");
       await expect(status).toHaveCSS("height", "12px");
       expect(aIsListed()).toBe(true);
-      expect(host.piProcesses().some((entry) => entry.target === initialA.target)).toBe(false);
+      // Unarchive opens the stored conversation: Pi starts from the saved
+      // source and the shared terminal shows it.
+      await host.expectNativeDisplay("A");
+      unarchivedA = host.piProcesses().find((entry) => entry.target === initialA.target)!;
+      expect(unarchivedA.pid).not.toBe(initialA.pid);
       expect(existsSync(`/proc/${initialA.pid}`)).toBe(false);
-      expect(host.snapshot().terminals.filter((terminal) => terminal.owned)).toHaveLength(0);
-      expect(readFileSync(host.sessions.A.session, "utf8")).toBe(sourceA);
+      expect(
+        host
+          .tmux(["display-message", "-p", "-t", unarchivedA.target, "#{pane_start_command}"])
+          .trim(),
+      ).toBe(`pi --session ${host.sessions.A.session}`);
+      expect(readFileSync(host.sessions.A.session, "utf8").startsWith(sourceA)).toBe(true);
       expect(readFileSync(host.sessions.B.session, "utf8")).toBe(sourceB);
       expect((JSON.parse(readFileSync(statePath, "utf8")) as { sentinel?: string }).sentinel).toBe(
         "preserved",
       );
-      await testInfo.attach("Unarchive 後（未アーカイブ）", {
+      await testInfo.attach("Unarchive 後（未アーカイブ・再開表示）", {
         body: await host.page.screenshot({ path: testInfo.outputPath("unarchived.png") }),
         contentType: "image/png",
       });
@@ -950,10 +959,12 @@ test(
         frame.locator(`[data-session="${aId}"]`).describe("A session back in the default view"),
       ).toBeVisible();
     });
-    await test.step("Reopen the same saved conversation in a new Pi while retaining saved history and B", async () => {
+    await test.step("Reopen the same conversation without starting Pi again while retaining saved history and B", async () => {
       await host.selectSession("A");
       await host.expectNativeDisplay("A");
       const resumed = host.piProcesses().find((entry) => entry.target === initialA.target)!;
+      // the Unarchive already started this Pi: the selection must not start it again
+      expect(resumed.pid).toBe(unarchivedA.pid);
       expect(resumed.pid).not.toBe(initialA.pid);
       expect(
         host.tmux(["display-message", "-p", "-t", resumed.target, "#{pane_start_command}"]).trim(),

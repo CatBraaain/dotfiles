@@ -1259,11 +1259,13 @@ describe("SessionWebviewProvider", () => {
     );
   });
 
-  it("unarchives a requested archived session and refreshes the list", async () => {
+  it("unarchives a requested archived session, opens it, and refreshes the list", async () => {
     const sessionDir = join(root, "sessions");
-    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
+    const filePath = await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
+    const terminal = { processId: Promise.resolve(123), show: vi.fn() };
+    vscodeMocks.createTerminal.mockReturnValue(terminal);
     const { provider, statePath } = createProvider({ sessionDir });
     setUpStore(statePath, root, [activeSessionId]);
     expect(archiveSessions(statePath, [{ sessionId: activeSessionId, cwd: root }]).ok).toBe(true);
@@ -1285,6 +1287,14 @@ describe("SessionWebviewProvider", () => {
       sessionId: activeSessionId,
       isArchived: false,
     });
+    // the session that just came back from the archive opens in the shared terminal
+    expect(vscodeMocks.createTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: { fsPath: root } }),
+    );
+    expect(terminal.show).toHaveBeenCalledTimes(1);
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.displayedSessionId).toBe(
+      activeSessionId,
+    );
   });
 
   it("rejects an unarchive request for an unknown session id without writing", async () => {
@@ -1306,6 +1316,33 @@ describe("SessionWebviewProvider", () => {
     // the failed request wrote nothing: the settings and the store keep their previous content
     expect(registeredWorkspaceCwds(readStore(statePath))).toEqual([root]);
     expect(activeSessionIds(readStore(statePath))).toEqual(new Set([activeSessionId]));
+    // the failed request does not open a terminal either
+    expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();
+  });
+
+  it("keeps the unarchived membership when the reopened session file disappeared", async () => {
+    const sessionDir = join(root, "sessions");
+    const filePath = await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    const { provider, statePath } = createProvider({ sessionDir });
+    setUpStore(statePath, root, [activeSessionId]);
+    expect(archiveSessions(statePath, [{ sessionId: activeSessionId, cwd: root }]).ok).toBe(true);
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    await rm(filePath);
+
+    await webview.receive({ type: "unarchiveSession", sessionId: activeSessionId });
+
+    // the store keeps the unarchived membership even though opening failed:
+    // the missing file drops the session from the list, so the open answers
+    // with the not-found error
+    expect(activeSessionIds(readStore(statePath))).toEqual(new Set([activeSessionId]));
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+      `Session not found: ${activeSessionId}`,
+    );
+    expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();
   });
 
   it("opens an unregistered cwd directly in Pi without workbench side effects", async () => {
@@ -1925,9 +1962,8 @@ describe("SessionWebviewProvider", () => {
 
     const startsBefore = mocks.ensure.mock.calls.length;
     await webview.receive({ type: "unarchiveSession", sessionId: activeSessionId });
-    expect(mocks.ensure).toHaveBeenCalledTimes(startsBefore);
-    expect(live.has(activeSessionId)).toBe(false);
-    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    // unarchive reopens the stored conversation: Pi starts again from the same source
+    expect(mocks.ensure).toHaveBeenCalledTimes(startsBefore + 1);
     expect(mocks.ensure).toHaveBeenLastCalledWith({
       sessionId: activeSessionId,
       cwd: root,

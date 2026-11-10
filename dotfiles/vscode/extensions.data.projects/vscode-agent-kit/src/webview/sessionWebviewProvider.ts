@@ -224,11 +224,15 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "unarchiveSession") {
-      await this.deps.registry.run(() =>
-        this.updateKnownSession(request.sessionId, (ref) =>
+      await this.deps.registry.run(async () => {
+        const unarchived = await this.updateKnownSession(request.sessionId, (ref) =>
           unarchiveSessions(this.deps.statePath, [ref]),
-        ),
-      );
+        );
+        if (!unarchived) return;
+        // Open the session right away so the session that just came back
+        // from the archive shows in the shared terminal.
+        await this.openSession(request.sessionId);
+      });
       return;
     }
   }
@@ -285,22 +289,23 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
 
   /** Run a single session's store update: validate the session id, apply the
    * update in one write, then refresh. An unknown id answers with an error
-   * and leaves the store unchanged. */
+   * and leaves the store unchanged. Resolves with whether the update applied. */
   private async updateKnownSession(
     sessionId: string,
     update: (ref: SessionRef) => SessionStateUpdateResult,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const session = this.sessionsById.get(sessionId);
     if (session === undefined) {
       this.postError(`Session not found: ${sessionId}`);
-      return;
+      return false;
     }
     const result = update({ sessionId, cwd: session.cwd });
     if (!result.ok) {
       this.postError(result.message);
-      return;
+      return false;
     }
     await this.refresh();
+    return true;
   }
 
   /** Register a workspace folder: create its store entry when the cwd has
