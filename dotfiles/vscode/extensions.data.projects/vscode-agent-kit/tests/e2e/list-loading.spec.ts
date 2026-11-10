@@ -78,7 +78,7 @@ test(
       await expect(refresh).toHaveClass(/codicon-refresh/);
       await expect(content.locator("header, h1, [data-action=refresh]")).toHaveCount(0);
       await expect(sessions).toHaveText("Loading sessions…");
-      await expect(sessions).not.toContainText("No saved sessions");
+      await expect(sessions).not.toContainText("No sessions yet");
       await expect(rows).toHaveCount(0);
       await expect(status).toHaveText("");
       await capture("初回loading", "initial-loading.png");
@@ -130,13 +130,13 @@ test(
       ).toHaveText("Fixture A");
       await expect(mode).toHaveAttribute("data-mode", "all");
       await expect(collapsed).toHaveAttribute("aria-expanded", "false");
-      await expect(sessions).not.toContainText("No saved sessions");
+      await expect(sessions).not.toContainText("No sessions yet");
       await capture("一覧保持refreshing", "refreshing.png");
     });
 
     await test.step("Show the empty message only after a successful zero-group response", async () => {
       await receive({ type: "sessions", state: { groups: [] } });
-      await expect(sessions).toHaveText("No saved sessions");
+      await expect(sessions).toHaveText("No sessions yet");
       await expect(status).toHaveText("");
       await expect(rows).toHaveCount(0);
       await capture("成功空", "successful-empty.png");

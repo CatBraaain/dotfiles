@@ -70,7 +70,7 @@ describe("session list loading in the mounted client", () => {
 
   async function expectLoading(): Promise<void> {
     await expect.poll(() => page.locator("#sessions").textContent()).toBe("Loading sessions…");
-    expect(await page.locator("#sessions").textContent()).not.toContain("No saved sessions");
+    expect(await page.locator("#sessions").textContent()).not.toContain("No sessions yet");
   }
 
   async function expectLoaded(): Promise<void> {
@@ -98,7 +98,7 @@ describe("session list loading in the mounted client", () => {
     await failWorkspaceAddition();
     await expectLoading();
     await receive({ type: "sessions", state: { groups: [] } });
-    await expect.poll(() => page.locator("#sessions").textContent()).toBe("No saved sessions");
+    await expect.poll(() => page.locator("#sessions").textContent()).toBe("No sessions yet");
     await expect.poll(() => page.locator("#status").textContent()).toBe("");
     expect(await page.locator("#status").getAttribute("class")).toBe("");
   });
@@ -119,9 +119,9 @@ describe("session list loading in the mounted client", () => {
 
   it("keeps a successful empty list visible after an unrelated operation error", async () => {
     await receive({ type: "sessions", state: { groups: [] } });
-    await expect.poll(() => page.locator("#sessions").textContent()).toBe("No saved sessions");
+    await expect.poll(() => page.locator("#sessions").textContent()).toBe("No sessions yet");
     await failWorkspaceAddition();
-    expect(await page.locator("#sessions").textContent()).toBe("No saved sessions");
+    expect(await page.locator("#sessions").textContent()).toBe("No sessions yet");
     await receive({ type: "loading" });
     await expectLoading();
     await receive({ type: "sessions", state });
@@ -132,7 +132,7 @@ describe("session list loading in the mounted client", () => {
   it("shows loading until the first successful empty response", async () => {
     await expectLoading();
     await receive({ type: "sessions", state: { groups: [] } });
-    await expect.poll(() => page.locator("#sessions").textContent()).toBe("No saved sessions");
+    await expect.poll(() => page.locator("#sessions").textContent()).toBe("No sessions yet");
     expect(await page.locator("#status").textContent()).toBe("");
   });
 
@@ -218,7 +218,7 @@ describe("session list loading in the mounted client", () => {
 
   it("replaces a successful empty list with loading during another fetch", async () => {
     await receive({ type: "sessions", state: { groups: [] } });
-    await expect.poll(() => page.locator("#sessions").textContent()).toBe("No saved sessions");
+    await expect.poll(() => page.locator("#sessions").textContent()).toBe("No sessions yet");
     await receive({ type: "loading" });
     await expectLoading();
     await receive({ type: "sessionsError", message: "Could not reload sessions" });
@@ -226,7 +226,7 @@ describe("session list loading in the mounted client", () => {
     await receive({ type: "loading" });
     await expectLoading();
     await receive({ type: "sessions", state: { groups: [] } });
-    await expect.poll(() => page.locator("#sessions").textContent()).toBe("No saved sessions");
+    await expect.poll(() => page.locator("#sessions").textContent()).toBe("No sessions yet");
     await expect.poll(() => page.locator("#status").textContent()).toBe("");
   });
 

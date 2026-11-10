@@ -153,7 +153,7 @@ describe("sessionListView", () => {
 
     expect(empty.sessions).toHaveLength(1);
     expect(empty.sessions[0].tag).toBe("p");
-    expect(text(empty.sessions[0])).toBe("No saved sessions");
+    expect(text(empty.sessions[0])).toBe("No sessions yet");
     expect(sectionsIn(allArchived)).toHaveLength(1);
     expect(allArchived.sessions[0].children).toHaveLength(1);
     expect(byClass(elementsIn(allArchived), "group-header")).toHaveLength(1);

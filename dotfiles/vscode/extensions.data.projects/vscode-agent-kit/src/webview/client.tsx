@@ -104,7 +104,7 @@ export function sessionListView(
   );
   if (groups.length > 0) return { sessions: groups };
   if (loadStatus === "error") return { sessions: [] };
-  const emptyText = loadStatus === "loading" ? "Loading sessions…" : "No saved sessions";
+  const emptyText = loadStatus === "loading" ? "Loading sessions…" : "No sessions yet";
   return { sessions: [{ tag: "p", attrs: { class: "empty" }, children: [emptyText] }] };
 }
 
