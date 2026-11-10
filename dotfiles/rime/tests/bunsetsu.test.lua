@@ -391,5 +391,55 @@ do
         "the sixth POS field constrains inflection on both sides without constraining the lexical field")
 end
 
+print("== 7. a fresh dictionary-backed engine analyzes only individual clauses")
+do
+    local dictionary = {
+        { surface = "あい", candidate = "愛", left_id = 1851, right_id = 1851, cost = 100 },
+        { surface = "う", candidate = "宇", left_id = 1841, right_id = 1841, cost = 100 },
+    }
+    local bunsetsu, context, viterbi = pos_engine(dictionary, pos_matrix({ 1851, 1841 }), {},
+        function() return true end)
+    check(next(viterbi.lattice) == nil and viterbi.eos == nil, "the engine has not analyzed any reading")
+    local analyze = viterbi.analyze
+    local analyzed = {}
+    function viterbi:analyze(reading)
+        analyzed[#analyzed + 1] = reading
+        return analyze(self, reading)
+    end
+    bunsetsu.start(context, "あいう")
+    local state = bunsetsu.state(context)
+    check(state.contextual and #state.clauses == 2 and state.clauses[1].reading == "あい"
+        and state.clauses[2].reading == "う" and bunsetsu.display(context) == "愛宇",
+        "a fresh engine determines the original clause boundaries and dictionary choices")
+    check(#analyzed == 2 and analyzed[1] == "あい" and analyzed[2] == "う",
+        "only stock candidate generation analyzes each clause, not the whole kana run")
+end
+
+print("== 8. lattice-backed fallbacks still analyze the kana run before splitting")
+do
+    local dictionary = {
+        { surface = "あい", candidate = "愛", left_id = 1851, right_id = 1851, cost = 100 },
+        { surface = "う", candidate = "宇", left_id = 1841, right_id = 1841, cost = 100 },
+    }
+    local bunsetsu, context, viterbi = pos_engine(dictionary, pos_matrix({ 1851, 1841 }), {},
+        function() return true end)
+    local analyze, lookup = viterbi.analyze, viterbi._lookup
+    local analyzed = {}
+    viterbi._lookup = false
+    function viterbi:analyze(reading)
+        analyzed[#analyzed + 1] = reading
+        self._lookup = lookup
+        analyze(self, reading)
+        self._lookup = false
+    end
+    bunsetsu.start(context, "あいう")
+    local state = bunsetsu.state(context)
+    check(state.contextual and #state.clauses == 2 and state.clauses[1].reading == "あい"
+        and state.clauses[2].reading == "う" and bunsetsu.display(context) == "愛宇",
+        "lattice fallback preserves the clause boundaries and choices without the dictionary API")
+    check(#analyzed == 3 and analyzed[1] == "あいう" and analyzed[2] == "あい" and analyzed[3] == "う",
+        "lattice fallback and stock candidates retain their required analyses")
+end
+
 print(string.format("bunsetsu: %d checks, %d failures", checks, failures))
 os.exit(failures == 0 and 0 or 1)

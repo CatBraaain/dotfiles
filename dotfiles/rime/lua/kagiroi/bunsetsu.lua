@@ -283,9 +283,10 @@ local function matrix_cost(env, right_id, left_id)
 end
 
 local function viterbi_supports_context(env)
-    return type(env.viterbi) == "table" and env.viterbi.lattice ~= nil
+    return type(env.viterbi) == "table"
         and type(env.viterbi._get_matrix_cost) == "function"
-        and env.viterbi.eos ~= nil
+        and (type(env.viterbi._lookup) == "function"
+            or (env.viterbi.lattice ~= nil and env.viterbi.eos ~= nil))
 end
 
 local function left_boundary_term(env, context, left_id)
@@ -1085,7 +1086,9 @@ local function split(reading, env)
         end
         local remaining = reading:sub(position, run_end - 1)
         if kana then
-            env.viterbi:analyze(remaining)
+            if type(env.viterbi._lookup) ~= "function" or not env.viterbi.query_dict then
+                env.viterbi:analyze(remaining)
+            end
             if viterbi_supports_context(env) then
                 local mapped = split_via_path(remaining, env, {
                     at_start = position == 1, at_end = run_end > #reading,
