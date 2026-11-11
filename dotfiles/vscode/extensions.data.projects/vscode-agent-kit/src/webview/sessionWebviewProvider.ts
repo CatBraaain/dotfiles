@@ -338,7 +338,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   }
 
   private async openSession(sessionId: string): Promise<void> {
-    const previousSessionId = this.deps.registry.displayedSessionId;
     const session = this.sessionsById.get(sessionId);
     if (session === undefined) {
       this.postError(`Session not found: ${sessionId}`);
@@ -348,6 +347,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   }
 
   private async openKnownSession(session: SessionSummary): Promise<void> {
+    const previousSessionId = this.deps.registry.displayedSessionId;
     const { sessionId } = session;
     try {
       if (
