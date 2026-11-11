@@ -10,11 +10,12 @@ local kContextualDiscoveryLimit = 30
 local kHistoryIds = "1851 1851"
 local kHistoryMarker = "\tp2"
 local kLearningScale = 10000
-local kMaximumWordDiscount = 0.9
+local kUnknownWordCost = 10000
+local kBoundaryMarker = "\tb1 "
 
 local function path_precedes(a, b)
     if a.score ~= b.score then return a.score < b.score end
-    if a.node._end ~= b.node._end then return a.node._end > b.node._end end
+    if a.node._end ~= b.node._end then return a.node._end < b.node._end end
     return a.sequence < b.sequence
 end
 
@@ -64,6 +65,18 @@ local function history_suffix(scope, route)
     return marker .. " " .. table.concat(words, ";")
 end
 
+local route_signatures = setmetatable({}, { __mode = "k" })
+
+local function route_signature(route)
+    if not route then return kHistoryMarker .. ":c" end
+    local signature = route_signatures[route]
+    if not signature then
+        signature = history_suffix("c", route)
+        route_signatures[route] = signature
+    end
+    return signature
+end
+
 local function parse_history_suffix(rest, reading, text)
     if rest == "" then return nil, true end
     if reading == "" or text == "" or not utf8.len(reading) or not utf8.len(text) then
@@ -93,16 +106,7 @@ local function parse_history_suffix(rest, reading, text)
     return route, true
 end
 
-local function word_history_key(surface, candidate, left_id, right_id)
-    return surface .. "|" .. candidate .. "|" .. left_id .. "|" .. right_id
-end
 
-local function discounted_wcost(node, word_bonuses)
-    if not word_bonuses or node.route_words then return node.wcost end
-    local bonus = word_bonuses[word_history_key(node.surface, node.candidate, node.left_id, node.right_id)]
-    if not bonus then return node.wcost end
-    return node.wcost - math.min(bonus, math.floor(math.max(0, node.wcost) * kMaximumWordDiscount))
-end
 
 local function install_userdict_reader(env)
     local mem, viterbi = env.mem, env.viterbi
@@ -305,13 +309,75 @@ local function right_boundary_term(env, context, right_id)
     return matrix_cost(env, right_id, context.next_left_id)
 end
 
+local function route_history_discount(state, active, choice)
+    local words, starts, ends, position = {}, {}, {}, 1
+    for index, clause in ipairs(state.clauses) do
+        local selected = index == active and choice or clause.candidates[clause.selected]
+        local route = not clause.override and selected.route_words
+        if route then
+            for _, word in ipairs(route) do
+                words[#words + 1] = word
+                starts[position] = #words
+                position = position + utf8.len(word.surface)
+                ends[position - 1] = #words
+            end
+        else
+            words[#words + 1] = { surface = clause.reading,
+                candidate = clause.override or selected.text }
+            position = position + utf8.len(clause.reading)
+        end
+    end
+    local matches = {}
+    for _, history in ipairs(state.histories or {}) do
+        local first, last = starts[history.first], ends[history.last]
+        if first and last and first <= last then
+            local readings, texts, matches_route = {}, {}, true
+            if history.route and #history.route ~= last - first + 1 then matches_route = false end
+            for index = first, last do
+                local word = words[index]
+                readings[#readings + 1], texts[#texts + 1] = word.surface, word.candidate
+                local saved = history.route and history.route[index - first + 1]
+                if history.route and (not saved or saved.surface ~= word.surface
+                    or saved.candidate ~= word.candidate or saved.left_id ~= word.left_id
+                    or saved.right_id ~= word.right_id) then matches_route = false end
+            end
+            if matches_route and table.concat(readings) == history.reading
+                and table.concat(texts) == history.text then
+                matches[last] = matches[last] or {}
+                matches[last][#matches[last] + 1] = { first = first, bonus = history_bonus(history.commit_count) }
+            end
+        end
+    end
+    local discounts = { [0] = 0 }
+    for index in ipairs(words) do
+        local best = discounts[index - 1]
+        for _, match in ipairs(matches[index] or {}) do
+            best = math.max(best, discounts[match.first - 1] + match.bonus)
+        end
+        discounts[index] = best
+    end
+    return discounts[#words]
+end
+
 local function contextual_score(choice, env, context)
-    if not choice.own then return nil end
+    if not choice.own and not choice.route_words then return nil end
     local left_term = left_boundary_term(env, context, choice.left_id)
     if not left_term then return nil end
     local right_term = right_boundary_term(env, context, choice.right_id)
     if not right_term then return nil end
-    return choice.own + left_term + right_term - (choice.history_discount or 0)
+    if context.state and choice.route_words then
+        if not choice.base_own then
+            local own, previous = 0, nil
+            for _, word in ipairs(choice.route_words) do
+                if previous then own = own + matrix_cost(env, previous.right_id, word.left_id) end
+                own, previous = own + word.wcost, word
+            end
+            choice.base_own = own
+        end
+        return choice.base_own + left_term + right_term
+            - route_history_discount(context.state, context.index, choice)
+    end
+    return choice.own + left_term + right_term
 end
 
 local function starting_nodes(viterbi, length)
@@ -349,7 +415,7 @@ local function dictionary_nodes(env, reading)
     local offsets = {}
     for offset in utf8.codes(reading) do offsets[#offsets + 1] = offset end
     offsets[#offsets + 1] = #reading + 1
-    local starting = { word_bonuses = {}, clause_histories = {}, partial_histories = {} }
+    local starting = { histories = {} }
     for first = 1, length do
         local nodes = {}
         for last = first, length do
@@ -363,21 +429,8 @@ local function dictionary_nodes(env, reading)
                 }
             end
             for _, history in ipairs(histories or {}) do
-                if first == 1 and last == length then
-                    starting.clause_histories[#starting.clause_histories + 1] = history
-                elseif not history.route then
-                    history.first, history.last = first, last
-                    starting.partial_histories[#starting.partial_histories + 1] = history
-                end
-                local route = history.route
-                if route and #route == 1 and (first ~= 1 or last ~= length) then
-                    local word = route[1]
-                    local key = word_history_key(surface, word.candidate, word.left_id, word.right_id)
-                    local bonus = history_bonus(history.commit_count)
-                    if not starting.word_bonuses[key] or bonus > starting.word_bonuses[key] then
-                        starting.word_bonuses[key] = bonus
-                    end
-                end
+                history.first, history.last = first, last
+                starting.histories[#starting.histories + 1] = history
             end
         end
         starting[first] = nodes
@@ -385,7 +438,7 @@ local function dictionary_nodes(env, reading)
     return starting
 end
 
-local function completion_costs(starting, length, env, context, word_bonuses)
+local function completion_costs(starting, length, env, context)
     local remaining = {}
     for position = length, 1, -1 do
         for _, node in ipairs(starting[position] or {}) do
@@ -397,7 +450,7 @@ local function completion_costs(starting, length, env, context, word_bonuses)
                     local conn = matrix_cost(env, node.right_id, successor.left_id)
                     local tail = remaining[successor]
                     if conn and tail then
-                        local cost = conn + discounted_wcost(successor, word_bonuses) + tail
+                        local cost = conn + successor.wcost + tail
                         if not best or cost < best then best = cost end
                     end
                 end
@@ -408,47 +461,9 @@ local function completion_costs(starting, length, env, context, word_bonuses)
     return remaining
 end
 
-local function ranked_path(reading, env, context, boundary)
-    local length = utf8.len(reading)
-    local starting = dictionary_nodes(env, reading)
-    if boundary then
-        for position = 1, boundary do
-            local nodes = {}
-            for _, node in ipairs(starting[position] or {}) do
-                if node._end <= boundary then nodes[#nodes + 1] = node end
-            end
-            starting[position] = nodes
-        end
-    end
-    local remaining = completion_costs(starting, length, env, context, nil)
-    local path, current, best = {}, nil, math.huge
-    for _, node in ipairs(starting[1] or {}) do
-        local left = left_boundary_term(env, context, node.left_id)
-        local tail = remaining[node]
-        if left and tail and left + node.wcost + tail < best then
-            current, best = node, left + node.wcost + tail
-        end
-    end
-    while current do
-        path[#path + 1] = current
-        if current._end == length then return path end
-        local successor, cheapest = nil, math.huge
-        for _, node in ipairs(starting[current._end + 1] or {}) do
-            local conn = matrix_cost(env, current.right_id, node.left_id)
-            local tail = remaining[node]
-            if conn and tail and conn + node.wcost + tail < cheapest then
-                successor, cheapest = node, conn + node.wcost + tail
-            end
-        end
-        current = successor
-    end
-    return nil
-end
-
 local function ranked_path_enum(reading, env, context, stock_texts, starting)
     local length = utf8.len(reading)
-    local word_bonuses = starting.word_bonuses
-    local remaining = completion_costs(starting, length, env, context, word_bonuses)
+    local remaining = completion_costs(starting, length, env, context)
     local heap, cheapest_prefix = {}, {}
     local sequence = 0
     local function offer(node, text, first_left, own, left_term)
@@ -456,10 +471,11 @@ local function ranked_path_enum(reading, env, context, stock_texts, starting)
         if not tail then return end
         local prefixes = cheapest_prefix[node] or {}
         cheapest_prefix[node] = prefixes
-        local key = text .. "|" .. first_left
+        local key = text
+        local score = left_term + own
         local previous = prefixes[key]
-        if previous and not (own < previous.own) then return end
-        local prefix = { own = own }
+        if previous and not (score < previous.score) then return end
+        local prefix = { score = score }
         prefixes[key] = prefix
         sequence = sequence + 1
         heap_push(heap, {
@@ -472,7 +488,7 @@ local function ranked_path_enum(reading, env, context, stock_texts, starting)
     for _, node in ipairs(starting[1] or {}) do
         local term = left_boundary_term(env, context, node.left_id)
         if term then
-            offer(node, node.candidate, node.left_id, discounted_wcost(node, word_bonuses), term)
+            offer(node, node.candidate, node.left_id, node.wcost, term)
         end
     end
     local results, seen = {}, {}
@@ -493,7 +509,7 @@ local function ranked_path_enum(reading, env, context, stock_texts, starting)
                     local conn = matrix_cost(env, node.right_id, successor.left_id)
                     if conn then
                         offer(successor, path.text .. successor.candidate, path.first_left_id,
-                            path.own + conn + discounted_wcost(successor, word_bonuses), path.left_term)
+                            path.own + conn + successor.wcost, path.left_term)
                     end
                 end
             end
@@ -582,41 +598,41 @@ local function exact_history_route(starting, history, matrix_cost)
     return words, own
 end
 
-local function apply_clause_histories(starting, text, pairs_by_key, matrix_cost)
-    local unspecified_discount = 0
-    for _, history in ipairs(starting.clause_histories or {}) do
-        if history.text == text then
-            if history.route then
-                local words, own = exact_history_route(starting, history, matrix_cost)
-                if words then
-                    local key = history.route[1].left_id .. " " .. history.route[#history.route].right_id
-                    local current = pairs_by_key[key]
-                    local discount = history_bonus(history.commit_count)
-                    if not current or own - discount < current.own - (current.history_discount or 0) then
-                        pairs_by_key[key] = {
-                            left_id = history.route[1].left_id,
-                            right_id = history.route[#history.route].right_id,
-                            own = own, words = words,
-                            history_discount = discount,
-                        }
-                    end
+
+
+local function advance_route_patterns(previous, node, patterns)
+    if not patterns or #patterns == 0 then return nil, "" end
+    local progress, keys = {}, {}
+    for index, pattern in ipairs(patterns) do
+        local matched = previous and previous[index]
+        if matched == nil then matched = pattern.words and 0 or "" end
+        for _, word in ipairs(node.route_words or { node }) do
+            if matched ~= false and word._end >= pattern.first and word.start <= pattern.last then
+                if word.start < pattern.first or word._end > pattern.last then
+                    matched = false
+                elseif pattern.words then
+                    local expected = pattern.words[matched + 1]
+                    if expected and word.start == expected.start and word._end == expected._end
+                        and word.surface == expected.surface and word.candidate == expected.candidate
+                        and word.left_id == expected.left_id and word.right_id == expected.right_id then
+                        matched = matched + 1
+                    else matched = false end
+                else
+                    matched = matched .. word.candidate
                 end
-            else
-                unspecified_discount = unspecified_discount + history_bonus(history.commit_count)
             end
         end
+        progress[index] = matched
+        keys[index] = matched == false and "x" or type(matched) == "number" and "p" .. matched
+            or "t" .. escape_history_field(matched)
     end
-    if unspecified_discount > 0 then
-        for _, route in pairs(pairs_by_key) do
-            route.history_discount = (route.history_discount or 0) + unspecified_discount
-        end
-    end
+    return progress, table.concat(keys, ";")
 end
 
 local function text_route_pairs(starting, length, text, matrix_cost)
     local states = { [0] = { { offset = 0 } } }
     local pairs_by_key, states_by_node = {}, {}
-    local word_bonuses = starting.word_bonuses
+    local sequence = 0
     for position = 1, length do
         for _, node in ipairs(starting[position] or {}) do
             if type(node.candidate) == "string" and node.candidate ~= "" then
@@ -628,27 +644,30 @@ local function text_route_pairs(starting, length, text, matrix_cost)
                             local conn = matrix_cost(incoming.node.right_id, node.left_id)
                             if conn then
                                 own, first_left = incoming.own + conn
-                                    + discounted_wcost(node, word_bonuses), incoming.first_left
+                                    + node.wcost, incoming.first_left
                             end
                         else
-                            own, first_left = discounted_wcost(node, word_bonuses), node.left_id
+                            own, first_left = node.wcost, node.left_id
                         end
                         if own then
                             local next_offset = from + #node.candidate - 1
+                            local progress, pattern_key = advance_route_patterns(incoming.pattern_progress,
+                                node, starting.route_patterns)
                             if node._end == length then
                                 if next_offset == #text then
-                                    local key = first_left .. " " .. node.right_id
+                                    local key = first_left .. " " .. node.right_id .. " " .. pattern_key
                                     local current = pairs_by_key[key]
                                     if not current or own < current.own then
+                                        sequence = sequence + 1
                                         pairs_by_key[key] = { left_id = first_left, right_id = node.right_id,
-                                            own = own, words = route_words_of(incoming, node) }
+                                            own = own, words = route_words_of(incoming, node), order = sequence }
                                     end
                                 end
                             else
                                 local bucket = states[node._end] or {}
                                 local node_states = states_by_node[node] or {}
                                 states_by_node[node] = node_states
-                                local key = first_left .. " " .. next_offset
+                                local key = first_left .. " " .. next_offset .. " " .. pattern_key
                                 local existing = node_states[key]
                                 if existing then
                                     if own < existing.own then
@@ -659,7 +678,7 @@ local function text_route_pairs(starting, length, text, matrix_cost)
                                         node = node,
                                         first_left = first_left,
                                         offset = next_offset,
-                                        own = own, prev = incoming,
+                                        own = own, prev = incoming, pattern_progress = progress,
                                     }
                                     bucket[#bucket + 1] = state
                                     node_states[key] = state
@@ -672,51 +691,143 @@ local function text_route_pairs(starting, length, text, matrix_cost)
             end
         end
     end
-    apply_clause_histories(starting, text, pairs_by_key, matrix_cost)
     local routes = {}
     for _, route in pairs(pairs_by_key) do routes[#routes + 1] = route end
     table.sort(routes, function(a, b)
         if a.left_id ~= b.left_id then return a.left_id < b.left_id end
-        return a.right_id < b.right_id
+        if a.right_id ~= b.right_id then return a.right_id < b.right_id end
+        return a.order < b.order
     end)
     return routes
 end
 
-local function attach_partial_histories(starting, env)
-    for _, history in ipairs(starting.partial_histories or {}) do
+local function attach_histories(starting, env)
+    for _, history in ipairs(starting.histories or {}) do
         local span = {}
         for position = history.first, history.last do
             local nodes = {}
             for _, node in ipairs(starting[position] or {}) do
-                if node._end <= history.last and not node.route_words then
+                if node._end <= history.last and not node.route_words and not node.fallback then
                     nodes[#nodes + 1] = {
                         start = position - history.first + 1, _end = node._end - history.first + 1,
                         surface = node.surface, candidate = node.candidate,
-                        left_id = node.left_id, right_id = node.right_id,
-                        wcost = discounted_wcost(node, starting.word_bonuses),
+                        left_id = node.left_id, right_id = node.right_id, wcost = node.wcost,
                     }
                 end
             end
             span[position - history.first + 1] = nodes
         end
-        local routes = text_route_pairs(span, history.last - history.first + 1, history.text,
-            function(right_id, left_id) return matrix_cost(env, right_id, left_id) end)
+        local connection = function(right_id, left_id) return matrix_cost(env, right_id, left_id) end
+        local routes
+        if history.route then
+            local words, own = exact_history_route(span, history, connection)
+            routes = words and { { words = words, own = own,
+                left_id = words[1].left_id, right_id = words[#words].right_id } } or {}
+        else
+            routes = text_route_pairs(span, history.last - history.first + 1, history.text, connection)
+        end
         for _, route in ipairs(routes) do
+            local words = {}
+            for _, word in ipairs(route.words) do
+                words[#words + 1] = {
+                    start = word.start + history.first - 1, _end = word._end + history.first - 1,
+                    surface = word.surface, candidate = word.candidate,
+                    left_id = word.left_id, right_id = word.right_id, wcost = word.wcost,
+                }
+            end
             local nodes = starting[history.first]
             nodes[#nodes + 1] = {
                 start = history.first, _end = history.last,
                 surface = history.reading, candidate = history.text,
                 left_id = route.left_id, right_id = route.right_id,
-                wcost = route.own - history_bonus(history.commit_count),
-                route_words = route.words,
+                wcost = route.own - history_bonus(history.commit_count), route_words = words,
             }
         end
     end
 end
 
+local function constrain_boundaries(starting, length, boundaries)
+    local last = length
+    for position = length, 1, -1 do
+        if boundaries and boundaries[position] then last = position end
+        local nodes = {}
+        for _, node in ipairs(starting[position] or {}) do
+            if node._end <= last then nodes[#nodes + 1] = node end
+        end
+        starting[position] = nodes
+    end
+end
+
+local function add_fallback_nodes(starting, reading, boundaries)
+    local characters = {}
+    for _, codepoint in utf8.codes(reading) do characters[#characters + 1] = utf8.char(codepoint) end
+    for position = #characters, 1, -1 do
+        if #(starting[position] or {}) == 0 then
+            local last = position
+            local codepoint = utf8.codepoint(characters[position])
+            local kana = codepoint >= 0x3040 and codepoint <= 0x30ff
+            while last < #characters and not (boundaries and boundaries[last]) do
+                local next_character = utf8.codepoint(characters[last + 1])
+                local next_kana = next_character >= 0x3040 and next_character <= 0x30ff
+                if kana ~= next_kana or #(starting[last + 1] or {}) > 0
+                    and not starting[last + 1][1].fallback then break end
+                last = last + 1
+            end
+            local surface = table.concat(characters, "", position, last)
+            starting[position] = { { start = position, _end = last, surface = surface,
+                candidate = surface, left_id = 0, right_id = 0,
+                wcost = kUnknownWordCost, fallback = true } }
+        end
+    end
+end
+
+local function ranked_path(reading, env, context, boundaries, fallback)
+    local length = utf8.len(reading)
+    local starting = dictionary_nodes(env, reading)
+    constrain_boundaries(starting, length, boundaries)
+    if fallback then add_fallback_nodes(starting, reading, boundaries) end
+    attach_histories(starting, env)
+    local remaining = completion_costs(starting, length, env, context)
+    local path, current, best = {}, nil, math.huge
+    for _, node in ipairs(starting[1] or {}) do
+        local left = left_boundary_term(env, context, node.left_id)
+        local tail = remaining[node]
+        if left and tail and left + node.wcost + tail < best then
+            current, best = node, left + node.wcost + tail
+        end
+    end
+    while current do
+        for _, word in ipairs(current.route_words or { current }) do path[#path + 1] = word end
+        if current._end == length then return path, best end
+        local successor, cheapest = nil, math.huge
+        for _, node in ipairs(starting[current._end + 1] or {}) do
+            local conn = matrix_cost(env, current.right_id, node.left_id)
+            local tail = remaining[node]
+            if conn and tail and conn + node.wcost + tail < cheapest then
+                successor, cheapest = node, conn + node.wcost + tail
+            end
+        end
+        current = successor
+    end
+    return nil
+end
+
 local function attach_pair_routes(candidates, reading, env, starting, route_cache)
     local length = utf8.len(reading)
     local rows_by_text, texts = {}, {}
+    local function pair_choices(rows, left_id, right_id)
+        local right_rows = rows[left_id]
+        if not right_rows then
+            right_rows = {}
+            rows[left_id] = right_rows
+        end
+        local choices = right_rows[right_id]
+        if not choices then
+            choices = {}
+            right_rows[right_id] = choices
+        end
+        return choices
+    end
     for _, choice in ipairs(candidates) do
         local left_id, right_id = entry_ids(choice.entry)
         choice.left_id, choice.right_id = left_id, right_id
@@ -726,7 +837,10 @@ local function attach_pair_routes(candidates, reading, env, starting, route_cach
             rows_by_text[choice.text] = rows
             texts[#texts + 1] = choice.text
         end
-        rows[#rows + 1] = choice
+        if left_id and right_id then
+            local choices = pair_choices(rows, left_id, right_id)
+            choices[#choices + 1] = choice
+        end
     end
     for _, text in ipairs(texts) do
         local rows = rows_by_text[text]
@@ -737,12 +851,14 @@ local function attach_pair_routes(candidates, reading, env, starting, route_cach
             route_cache[text] = route_pairs
         end
         for _, route in ipairs(route_pairs) do
+            local choices = pair_choices(rows, route.left_id, route.right_id)
             local matched = false
-            for _, choice in ipairs(rows) do
-                if choice.left_id == route.left_id and choice.right_id == route.right_id then
-                    choice.own = route.own
+            for _, choice in ipairs(choices) do
+                local match_pair = not choice.path_hint and not starting.route_patterns
+                if not choice.route_words or match_pair
+                    or route_signature(choice.route_words) == route_signature(route.words) then
+                    choice.own, choice.base_own = route.own, nil
                     choice.route_words = route.words
-                    choice.history_discount = route.history_discount
                     matched = true
                     break
                 end
@@ -751,7 +867,7 @@ local function attach_pair_routes(candidates, reading, env, starting, route_cach
                 local entry = DictEntry()
                 entry.text = text .. "|" .. route.left_id .. " " .. route.right_id
                 entry.custom_code = reading .. " "
-                rows[#rows + 1] = {
+                local choice = {
                     text = text,
                     comment = "",
                     source_text = entry.text,
@@ -760,59 +876,24 @@ local function attach_pair_routes(candidates, reading, env, starting, route_cach
                     right_id = route.right_id,
                     own = route.own,
                     route_words = route.words,
-                    history_discount = route.history_discount,
                 }
-                candidates[#candidates + 1] = rows[#rows]
+                choices[#choices + 1] = choice
+                candidates[#candidates + 1] = choice
             end
         end
     end
 end
 
-local pos_by_id
 
-local function same_part_of_speech(first, second)
-    if first == second then return true end
-    if not pos_by_id then
-        pos_by_id = {}
-        local module_path = assert(package.searchpath("kagiroi/kagiroi", package.path))
-        local directory = assert(module_path:match("^(.*)[/\\]"))
-        for line in io.lines(directory .. "/dic/kagiroi_id.def") do
-            local id, category = line:match("^(%d+) ([^,]+,[^,]+,[^,]+,[^,]+,[^,]+,[^,]+),")
-            if id then pos_by_id[tonumber(id)] = category end
-        end
-    end
-    return pos_by_id[first] ~= nil and pos_by_id[first] == pos_by_id[second]
-end
 
-local function constrain_dictionary(starting, frame, length)
-    local allowed, position = {}, 1
-    for _, word in ipairs(frame) do
-        local last = position + utf8.len(word.surface) - 1
-        local nodes = {}
-        for _, node in ipairs(starting[position] or {}) do
-            if node._end == last and same_part_of_speech(node.left_id, word.left_id)
-                and same_part_of_speech(node.right_id, word.right_id) then
-                nodes[#nodes + 1] = node
-            end
-        end
-        allowed[position] = nodes
-        position = last + 1
-    end
-    for first = 1, length do starting[first] = allowed[first] or {} end
-end
-
-local function attach_contextual_costs(candidates, reading, env, context, frame)
+local function attach_contextual_costs(candidates, reading, env, context)
     local stock_texts = {}
     for _, choice in ipairs(candidates) do stock_texts[choice.text] = true end
     candidates.stock_texts = stock_texts
     local starting = dictionary_nodes(env, reading)
-    constrain_dictionary(starting, frame, utf8.len(reading))
-    attach_partial_histories(starting, env)
+    attach_histories(starting, env)
     local route_cache = {}
     attach_pair_routes(candidates, reading, env, starting, route_cache)
-    for index = #candidates, 1, -1 do
-        if candidates[index].entry and not candidates[index].route_words then table.remove(candidates, index) end
-    end
     context = context or { at_start = true, at_end = true }
     local enumerated = ranked_path_enum(reading, env, context, stock_texts, starting)
     if enumerated then
@@ -822,14 +903,29 @@ local function attach_contextual_costs(candidates, reading, env, context, frame)
     return starting, route_cache
 end
 
-local function context_key(context)
+local function connection_key(context)
     if not context then return "unavailable" end
     return table.concat({ tostring(context.at_start), tostring(context.at_end),
         context.prev_right_id or 0, context.next_left_id or 0 }, ":")
 end
 
+local function context_key(context)
+    local parts = { connection_key(context) }
+    if context and context.state then
+        for index, clause in ipairs(context.state.clauses) do
+            if index ~= context.index then
+                local choice = clause.candidates[clause.selected]
+                parts[#parts + 1] = escape_history_field(clause.reading)
+                    .. ":" .. escape_history_field(clause.override or choice.text)
+                    .. history_suffix("c", not clause.override and choice.route_words or nil)
+            end
+        end
+    end
+    return table.concat(parts, ":")
+end
+
 local function reorder_contextual(clause, env, context)
-    local key = context_key(context)
+    local key = connection_key(context)
     clause.discovered_contexts = clause.discovered_contexts or {}
     if context and not clause.discovered_contexts[key] then
         local enumerated = ranked_path_enum(clause.reading, env, context, clause.stock_texts, clause.starting)
@@ -873,6 +969,27 @@ local function reorder_contextual(clause, env, context)
         end
     end
     clause.selected = 1
+end
+
+local function add_route_hint(candidates, reading, words, env)
+    local left_id, right_id = words[1].left_id, words[#words].right_id
+    local signature = route_signature(words)
+    for _, choice in ipairs(candidates) do
+        if choice.left_id == left_id and choice.right_id == right_id
+            and choice.route_words and route_signature(choice.route_words) == signature then return end
+    end
+    local own, texts = 0, {}
+    for index, word in ipairs(words) do
+        if index > 1 then own = own + matrix_cost(env, words[index - 1].right_id, word.left_id) end
+        own = own + word.wcost
+        texts[#texts + 1] = word.candidate
+    end
+    local text = table.concat(texts)
+    local entry = DictEntry()
+    entry.text = text .. "|" .. left_id .. " " .. right_id
+    entry.custom_code = reading .. " "
+    candidates[#candidates + 1] = { text = text, comment = "", entry = entry,
+        left_id = left_id, right_id = right_id, own = own, route_words = words, path_hint = true }
 end
 
 local function new_clause(reading, env, context, path_spec)
@@ -920,17 +1037,18 @@ local function new_clause(reading, env, context, path_spec)
     if #candidates == 0 then candidates[1] = { text = reading } end
     local clause = { reading = reading, unfiltered = candidates, candidates = candidates, selected = 1 }
     if viterbi_supports_context(env) then
-        clause.frame = path_spec and path_spec.words or ranked_path(reading, env,
-            context or { at_start = true, at_end = true }) or {}
-        clause.starting, clause.route_cache = attach_contextual_costs(clause.unfiltered, reading, env, context, clause.frame)
+        clause.starting, clause.route_cache = attach_contextual_costs(clause.unfiltered, reading, env, context)
         if #candidates == 0 then candidates[1] = { text = reading } end
         clause.own_attached = true
         clause.stock_texts = clause.unfiltered.stock_texts
-        clause.discovered_contexts = { [context_key(context or { at_start = true, at_end = true })] = true }
+        if path_spec and path_spec.words then add_route_hint(candidates, reading, path_spec.words, env) end
+        clause.discovered_contexts = { [connection_key(context or { at_start = true, at_end = true })] = true }
         if path_spec and path_spec.text then
+            local signature = path_spec.words and route_signature(path_spec.words)
             for index, choice in ipairs(clause.unfiltered) do
                 if choice.text == path_spec.text and choice.left_id == path_spec.left_id
-                    and choice.right_id == path_spec.right_id then
+                    and choice.right_id == path_spec.right_id
+                    and (not signature or choice.route_words and route_signature(choice.route_words) == signature) then
                     clause.selected = index
                     break
                 end
@@ -958,10 +1076,46 @@ local function best_path_nodes(viterbi)
     return path
 end
 
-local function split_via_path(reading, env, context)
+local function boundary_histories(env, reading)
+    local histories = {}
+    local mem = env.mem
+    if not (mem and mem.user_lookup and mem.iter_user) then return histories end
+    mem:user_lookup(reading .. " \t", true)
+    for entry in mem:iter_user() do
+        local prefix = reading .. "|" .. kHistoryIds .. kBoundaryMarker
+        local encoded = entry.custom_code == reading .. " " and entry.text:sub(1, #prefix) == prefix
+            and entry.text:sub(#prefix + 1):match("^[%d,]+$")
+        if encoded and not encoded:find(",,", 1, true)
+            and encoded:sub(1, 1) ~= "," and encoded:sub(-1) ~= "," then
+            local boundaries, position, valid = {}, 0, true
+            for size in encoded:gmatch("%d+") do
+                local length = math.tointeger(size)
+                if not length or length <= 0 then valid = false break end
+                position = position + length
+                boundaries[position] = true
+            end
+            if valid and position == utf8.len(reading) then
+                histories[#histories + 1] = { boundaries = boundaries,
+                    commit_count = entry.commit_count or 1 }
+            end
+        end
+    end
+    return histories
+end
+
+local function split_via_path(reading, env, context, all_reading)
     if not segmenter_loaded then return nil end
-    local path
-    if env.viterbi.query_dict then path = ranked_path(reading, env, context)
+    local path, score, boundaries
+    if env.viterbi.query_dict then
+        path, score = ranked_path(reading, env, context, nil, all_reading)
+        if all_reading and path then
+            for _, history in ipairs(boundary_histories(env, reading)) do
+                local alternative, cost = ranked_path(reading, env, context, history.boundaries, true)
+                if alternative and cost - history_bonus(history.commit_count) < score then
+                    path, score, boundaries = alternative, cost - history_bonus(history.commit_count), history.boundaries
+                end
+            end
+        end
     else path = best_path_nodes(env.viterbi) end
     if not path or #path == 0 then return nil end
     local specs = {}
@@ -971,7 +1125,10 @@ local function split_via_path(reading, env, context)
         current[#current + 1] = node
         covered = covered + #node.surface
         local next_node = path[i + 1]
-        if not next_node or segmenter.is_boundary_internal(node.right_id, next_node.left_id) then
+        local at_boundary = boundaries and boundaries[node._end]
+            or not boundaries and (not next_node or node.fallback or next_node.fallback
+                or segmenter.is_boundary_internal(node.right_id, next_node.left_id))
+        if at_boundary then
             specs[#specs + 1] = current
             current = {}
         end
@@ -980,12 +1137,14 @@ local function split_via_path(reading, env, context)
     local mapped = {}
     for _, group in ipairs(specs) do
         local texts = {}
-        local spec = { left_id = group[1].left_id, reading = "", words = group }
+        local spec = { reading = "", words = group }
+        if not group[1].fallback then spec.left_id = group[1].left_id end
         mapped[#mapped + 1] = spec
         for _, node in ipairs(group) do
             texts[#texts + 1] = node.candidate
             spec.reading = spec.reading .. node.surface
             spec.right_id = node.right_id
+            if node.fallback then spec.left_id = nil end
         end
         spec.text = table.concat(texts)
     end
@@ -1000,6 +1159,7 @@ local function clause_context(state, index)
         at_end = index == #state.clauses,
         prev_right_id = 0,
         next_left_id = 0,
+        state = state, index = index,
     }
     local prev = state.clauses[index - 1]
     local next_clause = state.clauses[index + 1]
@@ -1052,15 +1212,29 @@ local function settle_contextual(context, state, env)
         local key = context_key(score_context)
         local select_first = state.first_choices and state.first_choices[index]
         local before_left, before_right = selected_ids(clause)
+        local before_choice = clause.candidates[clause.selected]
+        local before_route = history_suffix("c", before_choice.route_words)
         if not clause.filtered or clause.ranked_context ~= key then
             if state.contextual and clause.own_attached then reorder_contextual(clause, env, score_context) end
             collect_filtered(context, state, index)
             clause.ranked_context = key
         end
-        if select_first then clause.selected = 1 end
+        if select_first then
+            if score_context then
+                local first_score = contextual_score(clause.candidates[1], env, score_context)
+                local chosen_score = contextual_score(clause.candidates[clause.selected], env, score_context)
+                if first_score and (not chosen_score or first_score < chosen_score) then clause.selected = 1 end
+            else
+                clause.selected = 1
+            end
+        end
         local after_left, after_right = selected_ids(clause)
         if before_left ~= after_left then enqueue(index - 1) end
         if before_right ~= after_right then enqueue(index + 1) end
+        local after_choice = clause.candidates[clause.selected]
+        if before_choice.text ~= after_choice.text or before_route ~= history_suffix("c", after_choice.route_words) then
+            for other in ipairs(state.clauses) do if other ~= index then enqueue(other) end end
+        end
     end
     state.first_choices = nil
 end
@@ -1069,6 +1243,13 @@ local function split(reading, env)
     local specs, clauses = {}, {}
     local contextual = false
     local position = 1
+    if type(env.viterbi._lookup) == "function" and env.viterbi.query_dict then
+        local mapped = split_via_path(reading, env, { at_start = true, at_end = true }, true)
+        if mapped then
+            specs, contextual = mapped, true
+            position = #reading + 1
+        end
+    end
     while position <= #reading do
         local kana = is_kana(utf8.codepoint(reading, position))
         local run_end = position
@@ -1117,6 +1298,50 @@ local function split(reading, env)
     return clauses, contextual
 end
 
+local function prepare_route_patterns(state, env)
+    local first = 1
+    for _, clause in ipairs(state.clauses) do
+        local last = first + utf8.len(clause.reading) - 1
+        local patterns, seen = {}, {}
+        for _, history in ipairs(state.histories or {}) do
+            if history.first <= last and history.last >= first then
+                local pattern = { first = math.max(first, history.first) - first + 1,
+                    last = math.min(last, history.last) - first + 1 }
+                local valid = true
+                if history.route then
+                    pattern.words = {}
+                    local position = history.first
+                    for _, word in ipairs(history.route) do
+                        local word_end = position + utf8.len(word.surface) - 1
+                        if position <= last and word_end >= first then
+                            if position < first or word_end > last then valid = false break end
+                            pattern.words[#pattern.words + 1] = {
+                                start = position - first + 1, _end = word_end - first + 1,
+                                surface = word.surface, candidate = word.candidate,
+                                left_id = word.left_id, right_id = word.right_id,
+                            }
+                        end
+                        position = word_end + 1
+                    end
+                end
+                local signature = pattern.first .. ":" .. pattern.last
+                    .. history_suffix("c", pattern.words)
+                if valid and not seen[signature] then
+                    seen[signature] = true
+                    patterns[#patterns + 1] = pattern
+                end
+            end
+        end
+        if clause.starting then
+            clause.starting.route_patterns = #patterns > 0 and patterns or nil
+            clause.route_cache = {}
+            attach_pair_routes(clause.unfiltered, clause.reading, env, clause.starting, clause.route_cache)
+            clause.filtered, clause.ranked_context = nil, nil
+        end
+        first = last + 1
+    end
+end
+
 function Top.start(context, reading, katakana)
     local env = session(context)
     local clauses, contextual
@@ -1128,8 +1353,10 @@ function Top.start(context, reading, katakana)
     end
     if katakana then clauses[1].override = katakana end
     env.conversion = { reading = reading, clauses = clauses, active = 1,
-        henkan = katakana ~= nil, contextual = contextual }
+        henkan = katakana ~= nil, contextual = contextual,
+        histories = contextual and dictionary_nodes(env, reading).histories or {} }
     if contextual then
+        prepare_route_patterns(env.conversion, env)
         env.conversion.first_choices = {}
         for index in ipairs(clauses) do env.conversion.first_choices[index] = true end
     end
@@ -1239,32 +1466,20 @@ function Top.resize(context, direction)
         at_start = false, at_end = index + 1 >= #state.clauses,
         prev_right_id = 0, next_left_id = 0,
     }
-    local left_spec, right_spec
-    if state.contextual then
-        local before, after = state.clauses[index - 1], state.clauses[index + (right and 2 or 1)]
-        local before_word = before and before.frame[#before.frame]
-        local after_word = after and after.frame[1]
-        local outer_context = {
-            at_start = not before, at_end = not after,
-            prev_right_id = before_word and before_word.right_id or 0,
-            next_left_id = after_word and after_word.left_id or 0,
-        }
-        local boundary = utf8.len(left_reading)
-        local path = ranked_path(left_reading .. right_reading, env, outer_context, boundary)
-        if path then
-            left_spec, right_spec = { words = {} }, { words = {} }
-            for _, word in ipairs(path) do
-                local spec = word._end <= boundary and left_spec or right_spec
-                spec.words[#spec.words + 1] = word
-            end
-        end
-        left_context.prev_right_id, right_context.next_left_id = outer_context.prev_right_id, outer_context.next_left_id
+    local before = state.clauses[index - 1]
+    local after = state.clauses[index + (right and 2 or 1)]
+    if before then
+        local _, right_id = entry_ids(before.candidates[before.selected].entry)
+        left_context.prev_right_id = right_id or 0
     end
-    state.clauses[index] = new_clause(left_reading, env, left_context, left_spec)
+    if after then right_context.next_left_id = entry_ids(after.candidates[after.selected].entry) or 0 end
+
+    state.clauses[index] = new_clause(left_reading, env, left_context)
     if right_reading == "" then table.remove(state.clauses, index + 1)
-    elseif right then state.clauses[index + 1] = new_clause(right_reading, env, right_context, right_spec)
-    else table.insert(state.clauses, index + 1, new_clause(right_reading, env, right_context, right_spec)) end
+    elseif right then state.clauses[index + 1] = new_clause(right_reading, env, right_context)
+    else table.insert(state.clauses, index + 1, new_clause(right_reading, env, right_context)) end
     state.henkan = false
+    if state.contextual then prepare_route_patterns(state, env) end
     state.first_choices = { [index] = true }
     if right_reshaped then state.first_choices[index + 1] = true end
     -- A boundary that actually moved closes a visible list and clears its
@@ -1358,6 +1573,13 @@ function Top.learn(context)
         env.mem:update_userdict(history_entry("s", table.concat(join_reading),
             table.concat(join_text), routed and route or nil), 1, "")
     end
+    local boundaries = {}
+    for _, clause in ipairs(clauses) do boundaries[#boundaries + 1] = tostring(utf8.len(clause.reading)) end
+    local reading = env.conversion.reading
+    local entry = DictEntry()
+    entry.custom_code = reading .. " "
+    entry.text = reading .. "|" .. kHistoryIds .. kBoundaryMarker .. table.concat(boundaries, ",")
+    env.mem:update_userdict(entry, 1, "")
     env.viterbi:clear()
 end
 

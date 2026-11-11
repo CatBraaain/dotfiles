@@ -220,6 +220,7 @@ static void test_registered_phrases_are_selectable(void) {
         snprintf(description, sizeof(description), "%s must produce the reading %s",
                  cases[i].input, cases[i].reading);
         check(preedit_equals(cases[i].reading), description);
+        press(kHenkan);
         press(kSpace);
         press(kSpace);
         press(kTab);
@@ -3249,6 +3250,9 @@ static void test_learning_promotes_committed_candidate(void) {
         check(False, "the menu must exist after learning");
         return;
     }
+    if (strcmp(after_first, target) != 0)
+        fprintf(stderr, "      learned target '%s', first '%s', baseline '%s', previous rank %d\n",
+                target, after_first, baseline_first, previous_rank);
     check(strcmp(after_first, target) == 0,
           "the learned word must lead the same reading in a new session");
     check(strcmp(baseline_first, target) != 0,
@@ -3996,8 +4000,8 @@ static int full_list_index_of(const char* text) {
     return index;
 }
 
-static void test_bunsetsu_candidates_keep_fixed_frame(void) {
-    static const char* const incompatible[] = { "今日葉", "馨は", "徼は", "郷は", "矯は" };
+static void test_bunsetsu_candidates_include_alternative_routes(void) {
+    static const char* const alternatives[] = { "今日葉", "馨は", "徼は", "郷は", "矯は" };
     fresh_session();
     type_text("kyouhasakana");
     press(kSpace);
@@ -4009,10 +4013,10 @@ static void test_bunsetsu_candidates_keep_fixed_frame(void) {
     press(kTab);
     for (int change = 0; change < 2; ++change) {
         check(full_list_index_of("今日は") >= 0,
-              "the fixed adverbial-noun and particle route must remain selectable");
-        for (size_t i = 0; i < sizeof(incompatible) / sizeof(incompatible[0]); ++i)
-            check(full_list_index_of(incompatible[i]) < 0,
-                  "the complete menu must exclude a changed word or part-of-speech structure");
+              "the original dictionary route must remain selectable");
+        for (size_t i = 0; i < sizeof(alternatives) / sizeof(alternatives[0]); ++i)
+            check(full_list_index_of(alternatives[i]) >= 0,
+                  "the complete menu must include changed word and part-of-speech routes");
         press(kEscape);
         press(kRight);
         press(kSpace);
@@ -4407,8 +4411,8 @@ static void test_bunsetsu_henkan_exception_and_expansion(void) {
 }
 
 static void test_bunsetsu_hidden_resize_and_hiragana(void) {
-    const char* contextual_left_first = "今日履か";
-    const char* contextual_right_first = "れー";
+    const char* contextual_left_first = "今日は過";
+    const char* contextual_right_first = "レー";
     char expected[1024], commit[1024];
     fresh_session();
     type_text("kyouhakare-12");
@@ -4480,16 +4484,60 @@ static void test_bunsetsu_contexts_keep_separate_choices(void) {
     rime->destroy_session(first);
 }
 
-static void test_reading_candidates_keep_fixed_part_of_speech(void) {
+static void test_reading_candidates_include_other_parts_of_speech(void) {
     fresh_session();
     type_text("ka");
     press(kSpace);
     press(kSpace);
     press(kTab);
     check(full_list_index_of("化") >= 0,
-          "the mechanically selected noun-suffix candidate must remain selectable");
-    check(full_list_index_of("果") < 0,
-          "a fallback proper-noun candidate must not bypass the fixed part of speech");
+          "the original noun-suffix candidate must remain selectable");
+    check(full_list_index_of("果") >= 0,
+          "a different part-of-speech route must remain selectable");
+    static const struct { const char* input; const char* text; } cases[] = {
+        { "igai", "意外" }, { "igaito", "意外と" },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        fresh_session();
+        type_text(cases[i].input);
+        press(kHenkan);
+        press(kSpace);
+        press(kSpace);
+        press(kTab);
+        check(full_list_index_of(cases[i].text) >= 0,
+              "a whole-reading clause must expose alternative POS and multiword dictionary routes");
+    }
+}
+
+static void check_learned_raw_boundaries(void) {
+    fresh_session();
+    rime->set_input(session, "vQ79");
+    press(kSpace);
+    press(kSpace);
+    check(active_reading_equals("vQ7"),
+          "saved non-dictionary boundaries must restore the first clause");
+    press(kRight);
+    press(kSpace);
+    check(active_reading_equals("9"),
+          "saved non-dictionary boundaries must restore the second clause");
+}
+
+static void test_boundary_learning_from_hidden_commits(void) {
+    static const int confirmations[] = { kReturn, kKeypadEnter, 'k', '1', '/', kKeypad1 };
+    char commit[256];
+    for (int visible = 0; visible <= 1; ++visible) {
+        for (size_t key = 0; key < sizeof(confirmations) / sizeof(confirmations[0]); ++key) {
+            fresh_session();
+            rime->set_input(session, "vQ79");
+            press(kHenkan);
+            press_shift(kLeft);
+            if (visible) press(kSpace);
+            press(confirmations[key]);
+            check(take_commit(commit, sizeof(commit)),
+                  "every confirmation path must commit resized non-dictionary clauses");
+        }
+    }
+    check_learned_raw_boundaries();
 }
 
 static void on_message(void* context_object, RimeSessionId session_id, const char* message_type, const char* message_value) {
@@ -4549,7 +4597,7 @@ int main(int argc, char* argv[]) {
          * fresh conversion and would shift the baselines below. */
         test_bunsetsu_hidden_resize_and_hiragana,
         test_bunsetsu_contexts_keep_separate_choices,
-        test_bunsetsu_candidates_keep_fixed_frame,
+        test_bunsetsu_candidates_include_alternative_routes,
         test_bunsetsu_filtered_identity,
         test_default_schema_is_kagiroi,
         test_main_dictionary_imports_managed_custom_table,
@@ -4619,10 +4667,13 @@ int main(int argc, char* argv[]) {
         test_tail_editing_after_caret_movement,
         test_off_reservation_and_fixed_text,
         test_retained_list_transitions,
-        test_reading_candidates_keep_fixed_part_of_speech,
+        test_reading_candidates_include_other_parts_of_speech,
+        test_boundary_learning_from_hidden_commits,
         test_contextual_learning_survives_engine_restart,
+        check_learned_raw_boundaries,
     };
     for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
+        if (g_verbose) fprintf(stderr, "scenario %zu/%zu\n", i + 1, sizeof(tests) / sizeof(tests[0]));
         tests[i]();
     }
 

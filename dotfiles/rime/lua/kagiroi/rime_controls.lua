@@ -79,11 +79,7 @@ end
 local function commit_unconfirmed(context, env)
     if env.conversion then
         local display = bunsetsu.display(context)
-        -- Only a commit with the candidate list open learns
-        -- (dotfiles/rime/SPEC.md, "確定と次入力").
-        if not context:get_option("_kagiroi_hide_candidates") then
-            bunsetsu.learn(context)
-        end
+        bunsetsu.learn(context)
         end_conversion(context, env, false)
         env.engine:commit_text(display)
         context.input = ""

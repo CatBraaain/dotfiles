@@ -156,7 +156,7 @@ end
 local function record_learning(bunsetsu, context, userdict)
     context.translator_env.mem.update_userdict = function(_, entry)
         for _, row in ipairs(userdict) do
-            if row.text == entry.text then
+            if row.text == entry.text and row.surface == entry.custom_code:match("^(.*) $") then
                 row.commit_count = row.commit_count + 1
                 return
             end
@@ -211,235 +211,418 @@ local function pos_engine(dictionary, matrix, userdict, boundary)
     return new_engine(dictionary, matrix, readings, false, boundary, userdict)
 end
 
-print("== 1. candidates keep the unlearned word spans and part-of-speech sequence")
+
+local function selected_route(bunsetsu, context, index)
+    local clause = bunsetsu.state(context).clauses[index or 1]
+    return clause.candidates[clause.selected].route_words
+end
+
+local function history_count(histories, text)
+    for _, history in ipairs(histories) do
+        if history.text == text then return history.commit_count end
+    end
+    return 0
+end
+
+print("== 1. candidates include different parts of speech, inflections and word spans")
 do
     local dictionary = {
-        { surface = "あいう", candidate = "全", left_id = 1851, right_id = 1851, cost = 100 },
-        { surface = "あいう", candidate = "同", left_id = 1851, right_id = 1851, cost = 300 },
-        { surface = "あいう", candidate = "異", left_id = 1841, right_id = 1841, cost = 1851 },
-        { surface = "あ", candidate = "亜", left_id = 1851, right_id = 1851, cost = 200 },
-        { surface = "いう", candidate = "伊宇", left_id = 1851, right_id = 1851, cost = 200 },
+        { surface = "いがい", candidate = "以外", left_id = 1851, right_id = 1851, cost = 100 },
+        { surface = "いがい", candidate = "意外", left_id = 1841, right_id = 701, cost = 300 },
+        { surface = "いがいと", candidate = "異該都", left_id = 1851, right_id = 1851, cost = 100 },
+        { surface = "と", candidate = "と", left_id = 368, right_id = 368, cost = 100 },
     }
-    local matrix = pos_matrix({ 1851, 1841 })
-    for _, count in ipairs({ 0, 1, 1000000 }) do
-        for _, suffix in ipairs({ "", "|1851 1851", "|1851 1851\tp2:c" }) do
-            local histories = {
-                { surface = "あ", text = "亜" .. suffix, commit_count = count },
-                { surface = "あいう", text = "異|1851 1851\tp2:c あいう,異,1841,1841", commit_count = count },
-                { surface = "あいう", text = "亜伊宇|1851 1851\tp2:c あ,亜,1851,1851;いう,伊宇,1851,1851", commit_count = count },
-            }
-            local bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
-            bunsetsu.start(context, "あいう")
-            local state = bunsetsu.state(context)
-            check(#state.clauses == 1 and state.clauses[1].reading == "あいう",
-                "history frequency preserves the initial clause boundary")
-            local clause = state.clauses[1]
-            local texts = {}
-            for _, choice in ipairs(clause.candidates) do texts[choice.text] = true end
-            check(texts["全"] and texts["同"] and not texts["異"] and not texts["亜伊宇"],
-                "the complete menu contains only the fixed single-word part of speech")
-            for _, choice in ipairs(clause.unfiltered) do
-                local words = choice.route_words
-                check(words and #words == 1 and words[1].surface == "あいう"
-                    and words[1].left_id == 1851 and words[1].right_id == 1851,
-                    "every generated dictionary route preserves the fixed span and ids")
-            end
-        end
+    local matrix = pos_matrix({ 1851, 1841, 701, 368 })
+    for _, reading in ipairs({ "いがい", "いがいと" }) do
+        local bunsetsu, context = pos_engine(dictionary, matrix, {}, function() return false end)
+        bunsetsu.start(context, reading)
+        local expected = reading == "いがい" and "意外" or "意外と"
+        check(select_clause_text(bunsetsu, context, 1, expected),
+            "different POS, inflection and word count remain selectable for " .. reading)
+        local words = selected_route(bunsetsu, context)
+        check(words and words[1].left_id == 1841 and words[1].right_id == 701,
+            "selection retains the actual route ids")
     end
 end
 
-print("== 2. equal word counts and endpoints cannot hide changed spans or middle ids")
+print("== 2. identical text keeps the best full route and learns only its middle ids")
 do
     local dictionary = {
-        { surface = "あ", candidate = "亜", left_id = 1851, right_id = 1851, cost = 100 },
-        { surface = "い", candidate = "伊", left_id = 1841, right_id = 1841, cost = 100 },
-        { surface = "い", candidate = "井", left_id = 1920, right_id = 1920, cost = 300 },
-        { surface = "うえ", candidate = "宇絵", left_id = 1909, right_id = 1909, cost = 100 },
-        { surface = "あい", candidate = "愛", left_id = 1851, right_id = 1851, cost = 300 },
-        { surface = "う", candidate = "宇", left_id = 1841, right_id = 1841, cost = 300 },
-        { surface = "え", candidate = "絵", left_id = 1909, right_id = 1909, cost = 300 },
+        { surface = "あ", candidate = "亜", left_id = 1, right_id = 1, cost = 100 },
+        { surface = "い", candidate = "伊", left_id = 2, right_id = 2, cost = 100 },
+        { surface = "い", candidate = "伊", left_id = 3, right_id = 3, cost = 500 },
+        { surface = "う", candidate = "宇", left_id = 4, right_id = 4, cost = 100 },
     }
-    local matrix = pos_matrix({ 1851, 1841, 1920, 1909 })
-    local histories = {
-        { surface = "あいうえ", text = "亜井宇絵|1851 1851\tp2:c あ,亜,1851,1851;い,井,1920,1920;うえ,宇絵,1909,1909", commit_count = 1000000 },
-        { surface = "あいうえ", text = "愛宇絵|1851 1851\tp2:c あい,愛,1851,1851;う,宇,1841,1841;え,絵,1909,1909", commit_count = 1000000 },
-    }
-    local bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
-    bunsetsu.start(context, "あいうえ")
-    local clause = bunsetsu.state(context).clauses[1]
-    check(bunsetsu.display(context) == "亜伊宇絵", "incompatible whole-clause histories cannot change the fixed route")
-    for _, choice in ipairs(clause.unfiltered) do
-        local words = choice.route_words
-        check(words and #words == 3 and words[1].surface == "あ" and words[2].surface == "い"
-            and words[3].surface == "うえ" and words[2].left_id == 1841 and words[2].right_id == 1841,
-            "all route words match the original spans and full id sequence")
-    end
-end
-
-print("== 3. learning ranks alternatives within the fixed frame and survives a new engine")
-do
-    local dictionary = {
-        { surface = "あい", candidate = "愛", left_id = 1851, right_id = 1851, cost = 100 },
-        { surface = "あい", candidate = "藍", left_id = 1851, right_id = 1851, cost = 300 },
-        { surface = "う", candidate = "宇", left_id = 1841, right_id = 1841, cost = 100 },
-    }
-    local matrix = pos_matrix({ 1851, 1841 })
-    local histories = {}
-    local boundary = function() return true end
-    local bunsetsu, context = pos_engine(dictionary, matrix, histories, boundary)
+    local saved = "亜伊宇|1851 1851\tp2:c あ,亜,1,1;い,伊,3,3;う,宇,4,4"
+    local histories = { { surface = "あいう", text = saved, commit_count = 8 } }
+    local bunsetsu, context = pos_engine(dictionary, pos_matrix({1, 2, 3, 4}), histories,
+        function() return false end)
     bunsetsu.start(context, "あいう")
-    check(bunsetsu.display(context) == "愛宇", "the initial surface follows the unlearned frame")
-    check(select_clause_text(bunsetsu, context, 1, "藍"), "a lower-ranked same-frame alternative remains selectable")
+    local clause, duplicates = bunsetsu.state(context).clauses[1], 0
+    for _, choice in ipairs(clause.candidates) do if choice.text == "亜伊宇" then duplicates = duplicates + 1 end end
+    check(duplicates == 1 and selected_route(bunsetsu, context)[2].left_id == 3,
+        "one displayed text uses the learned middle POS rather than only matching endpoints")
     record_learning(bunsetsu, context, histories)
-    check(#histories == 3 and histories[1].text == "藍|1851 1851\tp2:c あい,藍,1851,1851",
-        "learning retains the existing clause and sentence history format")
-    bunsetsu, context = pos_engine(dictionary, matrix, histories, boundary)
-    bunsetsu.start(context, "あいう")
-    local state = bunsetsu.state(context)
-    check(#state.clauses == 2 and bunsetsu.display(context) == "藍宇",
-        "a new engine uses the saved history only to rank same-frame alternatives")
-    bunsetsu.move(context, 1)
-    bunsetsu.move(context, -1)
-    check(state.active == 1 and bunsetsu.display(context) == "藍宇", "clause movement retains both selections")
+    check(history_count(histories, saved) == 9 and #histories == 2,
+        "only the selected complete route and independent boundary history are incremented")
+end
+
+print("== 3. one-word and multiword histories remain separate and change automatic segmentation")
+do
+    local dictionary = {
+        { surface = "あい", candidate = "亜伊", left_id = 1, right_id = 2, cost = 100 },
+        { surface = "あ", candidate = "亜", left_id = 1, right_id = 1, cost = 200 },
+        { surface = "い", candidate = "伊", left_id = 2, right_id = 2, cost = 200 },
+    }
+    local single = "亜伊|1851 1851\tp2:c あい,亜伊,1,2"
+    local multi = "亜伊|1851 1851\tp2:c あ,亜,1,1;い,伊,2,2"
+    local histories = {}
+    local matrix = pos_matrix({1, 2})
+    local bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return true end)
+    bunsetsu.start(context, "あい")
+    check(#bunsetsu.state(context).clauses == 1 and #selected_route(bunsetsu, context) == 1,
+        "dictionary costs initially prefer a single word")
+    record_learning(bunsetsu, context, histories)
+    histories[#histories + 1] = { surface = "あい", text = multi, commit_count = 64 }
+    bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return true end)
+    bunsetsu.start(context, "あい")
+    check(#selected_route(bunsetsu, context) == 2 and bunsetsu.display(context) == "亜伊",
+        "multiword history defeats the original one-word analysis without losing the saved boundary")
+    histories[#histories + 1] = { surface = "あい", text = "あい|1851 1851\tb1 1,1", commit_count = 64 }
+    bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return true end)
+    bunsetsu.start(context, "あい")
+    check(#bunsetsu.state(context).clauses == 2,
+        "the more frequent split boundary competes with the old single-clause boundary")
     bunsetsu.resize(context, 1)
-    check(#state.clauses == 1 and state.clauses[1].reading == "あいう",
-        "manual boundary extension reparses only the changed reading")
-    for _, choice in ipairs(state.clauses[1].unfiltered) do
-        local words = choice.route_words
-        check(not choice.entry or (words and #words == 2 and words[1].surface == "あい" and words[1].left_id == 1851
-            and words[2].surface == "う" and words[2].left_id == 1841),
-            "resized candidates preserve the newly determined unlearned frame")
-    end
-end
-
-print("== 4. lexical id differences retain the same part of speech and original route ids")
-do
-    local dictionary = {
-        { surface = "さかな", candidate = "魚", left_id = 1898, right_id = 1898, cost = 100 },
-        { surface = "さかな", candidate = "さかな", left_id = 1851, right_id = 1851, cost = 400 },
-        { surface = "さかな", candidate = "異", left_id = 1841, right_id = 1841, cost = 500 },
-    }
-    local matrix = pos_matrix({ 1851, 1898, 1841 }, { ["0 1851"] = 200 })
-    local histories = {}
-    local bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
-    bunsetsu.start(context, "さかな")
-    local clause = bunsetsu.state(context).clauses[1]
-    local offered = {}
-    for _, choice in ipairs(clause.candidates) do offered[choice.text] = choice end
-    check(offered["魚"] and offered["さかな"] and not offered["異"],
-        "the same six POS fields allow different lexical ids but exclude a different noun subclass")
-    check(clause.frame[1].left_id == 1898 and bunsetsu.display(context) == "魚",
-        "the mechanical frame retains its original lexical id")
-    check(select_clause_text(bunsetsu, context, 1, "さかな"), "the same-POS alternative with another id is selectable")
+    check(#bunsetsu.state(context).clauses == 1 and #selected_route(bunsetsu, context) == 2,
+        "manual boundaries remain fixed while candidate ranking uses the multiword history")
     record_learning(bunsetsu, context, histories)
-    check(histories[1].text == "さかな|1851 1851\tp2:c さかな,さかな,1851,1851",
-        "history stores the selected route ids, not the frame ids or a POS key")
-    bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
-    bunsetsu.start(context, "さかな")
-    clause = bunsetsu.state(context).clauses[1]
-    local choice = clause.candidates[clause.selected]
-    check(clause.frame[1].left_id == 1898 and choice.left_id == 1851 and choice.right_id == 1851
-        and bunsetsu.display(context) == "さかな",
-        "saved learning changes rank within the same POS while both ids keep their original meaning")
+    check(history_count(histories, single) == 1 and history_count(histories, multi) == 65,
+        "selecting the multiword route does not merge its count into the single-word route")
 end
 
-print("== 5. partial histories rank fixed multiword clauses without moving their boundaries")
+print("== 4. repeated commits promote changed words, parts of speech and boundaries")
 do
     local dictionary = {
-        { surface = "あい", candidate = "愛", left_id = 1851, right_id = 1851, cost = 100 },
-        { surface = "あ", candidate = "亜", left_id = 1851, right_id = 1851, cost = 40 },
-        { surface = "い", candidate = "伊", left_id = 1841, right_id = 1841, cost = 40 },
-        { surface = "う", candidate = "宇", left_id = 1920, right_id = 1920, cost = 1000 },
-        { surface = "う", candidate = "迂", left_id = 1920, right_id = 1920, cost = 5000 },
-        { surface = "え", candidate = "絵", left_id = 1909, right_id = 1909, cost = 100 },
+        { surface = "あい", candidate = "愛", left_id = 1, right_id = 1, cost = 100 },
+        { surface = "あ", candidate = "亜", left_id = 2, right_id = 2, cost = 30000 },
+        { surface = "い", candidate = "伊", left_id = 3, right_id = 3, cost = 30000 },
     }
-    local matrix = pos_matrix({ 1851, 1841, 1920, 1909 }, { ["1851 1841"] = 100 })
-    local boundary = function(right_id, left_id) return right_id == 1851 and left_id == 1920 end
-    for _, count in ipairs({ 0, 1, 1000000 }) do
-        for _, suffix in ipairs({ "", "|1851 1851", "|1851 1851\tp2:c う,迂,1920,1920" }) do
-            local histories = { { surface = "う", text = "迂" .. suffix, commit_count = count } }
-            local bunsetsu, context = pos_engine(dictionary, matrix, histories, boundary)
-            bunsetsu.start(context, "あいうえ")
-            local clauses = bunsetsu.state(context).clauses
-            check(#clauses == 2 and clauses[1].reading == "あい" and clauses[2].reading == "うえ"
-                and #clauses[1].frame == 1 and clauses[1].frame[1].left_id == 1851
-                and #clauses[2].frame == 2 and clauses[2].frame[1].surface == "う"
-                and clauses[2].frame[1].left_id == 1920 and clauses[2].frame[2].surface == "え"
-                and clauses[2].frame[2].left_id == 1909,
-                "partial learning preserves both clause boundaries and every unlearned word slot")
-            local expected = count == 0 and "愛宇絵" or "愛迂絵"
-            check(bunsetsu.display(context) == expected,
-                "typed and legacy partial histories rank alternatives inside the fixed multiword clause")
-            check(histories[1].text == "迂" .. suffix and histories[1].commit_count == count,
-                "conversion preserves the original history without rewriting or clearing it")
+    local histories, matrix = {}, pos_matrix({1, 2, 3})
+    local bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
+    bunsetsu.start(context, "あい")
+    check(bunsetsu.display(context) == "愛", "unlearned dictionary costs lead initially")
+    for round = 1, 16 do
+        bunsetsu.start(context, "あい")
+        if #bunsetsu.state(context).clauses == 1 then bunsetsu.resize(context, -1) end
+        check(select_clause_text(bunsetsu, context, 1, "亜") and select_clause_text(bunsetsu, context, 2, "伊"),
+            "both changed-POS dictionary words can be chosen in round " .. round)
+        record_learning(bunsetsu, context, histories)
+        if round == 1 then
+            bunsetsu.start(context, "あい")
+            check(bunsetsu.display(context) == "愛", "one commit need not replace the dictionary analysis")
         end
     end
+    bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
+    bunsetsu.start(context, "あい")
+    local clauses = bunsetsu.state(context).clauses
+    check(#clauses == 2 and clauses[1].reading == "あ" and bunsetsu.display(context) == "亜伊",
+        "a new engine restores the learned route, two clauses and their first candidates")
 end
 
-print("== 6. both word sides keep the fixed inflection form while lexical ids may differ")
+print("== 5. the same lexical route keeps distinct boundary histories")
 do
     local dictionary = {
-        { surface = "あ", candidate = "甲", left_id = 694, right_id = 694, cost = 100 },
-        { surface = "あ", candidate = "乙", left_id = 695, right_id = 695, cost = 200 },
-        { surface = "あ", candidate = "丙", left_id = 694, right_id = 701, cost = 300 },
-        { surface = "あ", candidate = "丁", left_id = 701, right_id = 694, cost = 300 },
+        { surface = "あ", candidate = "亜", left_id = 1, right_id = 1, cost = 100 },
+        { surface = "い", candidate = "伊", left_id = 2, right_id = 2, cost = 100 },
     }
-    local bunsetsu, context = pos_engine(dictionary, pos_matrix({ 694, 695, 701 }), {}, function() return false end)
-    bunsetsu.start(context, "あ")
-    local offered = {}
-    for _, choice in ipairs(bunsetsu.state(context).clauses[1].candidates) do offered[choice.text] = true end
-    check(offered["甲"] and offered["乙"] and not offered["丙"] and not offered["丁"],
-        "the sixth POS field constrains inflection on both sides without constraining the lexical field")
+    local histories = {}
+    local bunsetsu, context = pos_engine(dictionary, pos_matrix({1, 2}), histories, function() return false end)
+    bunsetsu.start(context, "あい")
+    record_learning(bunsetsu, context, histories)
+    bunsetsu.resize(context, -1)
+    record_learning(bunsetsu, context, histories)
+    check(history_count(histories, "あい|1851 1851\tb1 2") == 1
+        and history_count(histories, "あい|1851 1851\tb1 1,1") == 1,
+        "identical reading, text and word route do not combine different boundary counts")
+    record_learning(bunsetsu, context, histories)
+    check(history_count(histories, "あい|1851 1851\tb1 2") == 1
+        and history_count(histories, "あい|1851 1851\tb1 1,1") == 2,
+        "committing one boundary pattern increments only that boundary pattern")
 end
 
-print("== 7. a fresh dictionary-backed engine analyzes only individual clauses")
+print("== 6. non-dictionary clauses learn boundaries without new vocabulary")
 do
-    local dictionary = {
-        { surface = "あい", candidate = "愛", left_id = 1851, right_id = 1851, cost = 100 },
-        { surface = "う", candidate = "宇", left_id = 1841, right_id = 1841, cost = 100 },
-    }
-    local bunsetsu, context, viterbi = pos_engine(dictionary, pos_matrix({ 1851, 1841 }), {},
-        function() return true end)
-    check(next(viterbi.lattice) == nil and viterbi.eos == nil, "the engine has not analyzed any reading")
-    local analyze = viterbi.analyze
-    local analyzed = {}
-    function viterbi:analyze(reading)
-        analyzed[#analyzed + 1] = reading
-        return analyze(self, reading)
+    local histories = {}
+    local matrix = pos_matrix({1})
+    local bunsetsu, context = pos_engine({}, matrix, histories, function() return false end)
+    for _ = 1, 4 do
+        bunsetsu.start(context, "abcd")
+        if #bunsetsu.state(context).clauses == 1 then bunsetsu.resize(context, -1) end
+        record_learning(bunsetsu, context, histories)
     end
-    bunsetsu.start(context, "あいう")
-    local state = bunsetsu.state(context)
-    check(state.contextual and #state.clauses == 2 and state.clauses[1].reading == "あい"
-        and state.clauses[2].reading == "う" and bunsetsu.display(context) == "愛宇",
-        "a fresh engine determines the original clause boundaries and dictionary choices")
-    check(#analyzed == 2 and analyzed[1] == "あい" and analyzed[2] == "う",
-        "only stock candidate generation analyzes each clause, not the whole kana run")
+    check(#histories == 1 and history_count(histories, "abcd|1851 1851\tb1 3,1") == 4,
+        "only the boundary record is saved for raw alphabetic clauses")
+    bunsetsu, context = pos_engine({}, matrix, histories, function() return false end)
+    bunsetsu.start(context, "abcd")
+    local clauses = bunsetsu.state(context).clauses
+    check(#clauses == 2 and clauses[1].reading == "abc" and clauses[2].reading == "d",
+        "non-dictionary boundary history survives a fresh engine")
+    bunsetsu.start(context, "abcde")
+    check(#bunsetsu.state(context).clauses == 1, "boundary history is not generalized to a different full reading")
 end
 
-print("== 8. lattice-backed fallbacks still analyze the kana run before splitting")
+print("== 7. partial multiword histories affect both analysis and candidate rank")
+do
+    local dictionary = {
+        { surface = "あい", candidate = "愛", left_id = 1, right_id = 1, cost = 100 },
+        { surface = "あ", candidate = "亜", left_id = 2, right_id = 2, cost = 300 },
+        { surface = "い", candidate = "伊", left_id = 3, right_id = 3, cost = 300 },
+        { surface = "う", candidate = "宇", left_id = 4, right_id = 4, cost = 100 },
+    }
+    for _, suffix in ipairs({ "", "|1851 1851", "|1851 1851\tp2:c あ,亜,2,2;い,伊,3,3" }) do
+        local histories = { { surface = "あい", text = "亜伊" .. suffix, commit_count = 8 } }
+        local bunsetsu, context = pos_engine(dictionary, pos_matrix({1, 2, 3, 4}), histories,
+            function() return false end)
+        bunsetsu.start(context, "あいう")
+        check(bunsetsu.display(context) == "亜伊宇" and #selected_route(bunsetsu, context) == 3,
+            "typed and legacy multiword histories work inside a longer reading")
+        record_learning(bunsetsu, context, histories)
+        check(histories[1].commit_count == 8 and histories[1].text == "亜伊" .. suffix,
+            "learning a longer reading preserves the old partial record without inferred ids or boundaries")
+    end
+end
+
+print("== 8. a finite learning score can lose to a different connection context")
+do
+    local dictionary = {
+        { surface = "あ", candidate = "亜", left_id = 1, right_id = 1, cost = 100 },
+        { surface = "あ", candidate = "阿", left_id = 2, right_id = 2, cost = 300 },
+        { surface = "い", candidate = "伊", left_id = 3, right_id = 3, cost = 100 },
+    }
+    local histories = { { surface = "あ", text = "阿|1851 1851\tp2:c あ,阿,2,2", commit_count = 8 } }
+    local matrix = pos_matrix({1, 2, 3}, { ["2 3"] = 100000 })
+    local bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return true end)
+    bunsetsu.start(context, "あ")
+    check(bunsetsu.display(context) == "阿", "saved history promotes the learned word in isolation")
+    bunsetsu.start(context, "あい")
+    check(bunsetsu.display(context) == "亜伊", "connection costs can defeat a learned route in another context")
+    check(select_clause_text(bunsetsu, context, 1, "阿"), "the lower-ranked learned route remains selectable")
+end
+
+print("== 9. different POS routes with the same surface stay independently learned")
+do
+    local dictionary = {
+        { surface = "あ", candidate = "亜", left_id = 1, right_id = 1, cost = 100 },
+        { surface = "あ", candidate = "亜", left_id = 2, right_id = 2, cost = 300 },
+    }
+    local histories = { { surface = "あ", text = "亜|1851 1851\tp2:c あ,亜,2,2", commit_count = 8 } }
+    local bunsetsu, context = pos_engine(dictionary, pos_matrix({1, 2}), histories, function() return false end)
+    bunsetsu.start(context, "あ")
+    check(#bunsetsu.state(context).clauses[1].candidates == 1 and selected_route(bunsetsu, context)[1].left_id == 2,
+        "text deduplication retains the best scored POS route")
+    record_learning(bunsetsu, context, histories)
+    check(history_count(histories, "亜|1851 1851\tp2:c あ,亜,2,2") == 9
+        and history_count(histories, "亜|1851 1851\tp2:c あ,亜,1,1") == 0,
+        "only the selected POS route is incremented")
+end
+
+print("== 10. legacy records remain separate when new typed and boundary histories are saved")
+do
+    local dictionary = { { surface = "あ", candidate = "あ", left_id = 1, right_id = 1, cost = 100 } }
+    for _, old in ipairs({ "あ", "あ|1851 1851", "あ|1851 1851\tp2:c", "あ|1851 1851\tp2:s" }) do
+        local histories = { { surface = "あ", text = old, commit_count = 8 } }
+        local bunsetsu, context = pos_engine(dictionary, pos_matrix({1}), histories, function() return false end)
+        bunsetsu.start(context, "あ")
+        record_learning(bunsetsu, context, histories)
+        check(history_count(histories, old) == 8 and #histories == 3,
+            "legacy kana entries keep their original ids, scope and count")
+        check(history_count(histories, "あ|1851 1851\tp2:c あ,あ,1,1") == 1
+            and history_count(histories, "あ|1851 1851\tb1 1") == 1,
+            "new route and boundary records do not inherit the legacy commit count")
+    end
+end
+
+print("== 11. katakana overrides do not add vocabulary")
+do
+    local dictionary = { { surface = "あ", candidate = "亜", left_id = 1, right_id = 1, cost = 100 } }
+    local histories = {}
+    local bunsetsu, context = pos_engine(dictionary, pos_matrix({1}), histories, function() return false end)
+    bunsetsu.start(context, "あ", "ア")
+    record_learning(bunsetsu, context, histories)
+    check(#histories == 1 and history_count(histories, "あ|1851 1851\tb1 1") == 1,
+        "katakana conversion records only its reading boundary")
+end
+
+print("== 12. equal costs prefer shorter initial word spans and dictionary order")
+do
+    local dictionary = {
+        { surface = "あい", candidate = "愛", left_id = 1, right_id = 1, cost = 200 },
+        { surface = "あ", candidate = "亜", left_id = 1, right_id = 1, cost = 100 },
+        { surface = "あ", candidate = "阿", left_id = 1, right_id = 1, cost = 100 },
+        { surface = "い", candidate = "伊", left_id = 1, right_id = 1, cost = 100 },
+    }
+    local bunsetsu, context = pos_engine(dictionary, pos_matrix({1}), {}, function() return true end)
+    bunsetsu.start(context, "あい")
+    check(#bunsetsu.state(context).clauses == 2 and bunsetsu.display(context) == "亜伊",
+        "equal automatic paths choose shorter words first, then dictionary order")
+end
+
+print("== 13. lattice-backed engines still analyze the reading before splitting")
 do
     local dictionary = {
         { surface = "あい", candidate = "愛", left_id = 1851, right_id = 1851, cost = 100 },
         { surface = "う", candidate = "宇", left_id = 1841, right_id = 1841, cost = 100 },
     }
-    local bunsetsu, context, viterbi = pos_engine(dictionary, pos_matrix({ 1851, 1841 }), {},
-        function() return true end)
+    local bunsetsu, context, viterbi = pos_engine(dictionary, pos_matrix({1851, 1841}), {}, function() return true end)
     local analyze, lookup = viterbi.analyze, viterbi._lookup
-    local analyzed = {}
     viterbi._lookup = false
     function viterbi:analyze(reading)
-        analyzed[#analyzed + 1] = reading
         self._lookup = lookup
         analyze(self, reading)
         self._lookup = false
     end
     bunsetsu.start(context, "あいう")
-    local state = bunsetsu.state(context)
-    check(state.contextual and #state.clauses == 2 and state.clauses[1].reading == "あい"
-        and state.clauses[2].reading == "う" and bunsetsu.display(context) == "愛宇",
-        "lattice fallback preserves the clause boundaries and choices without the dictionary API")
-    check(#analyzed == 3 and analyzed[1] == "あいう" and analyzed[2] == "あい" and analyzed[3] == "う",
-        "lattice fallback and stock candidates retain their required analyses")
+    check(#bunsetsu.state(context).clauses == 2 and bunsetsu.display(context) == "愛宇",
+        "lattice-backed fallback retains dictionary choices without a lookup API")
+end
+
+print("== 14. sentence history keeps its learned route when clause candidates are reranked")
+do
+    local dictionary = {
+        { surface = "あ", candidate = "亜", left_id = 1, right_id = 1, cost = 100 },
+        { surface = "い", candidate = "伊", left_id = 2, right_id = 2, cost = 100 },
+        { surface = "い", candidate = "伊", left_id = 3, right_id = 3, cost = 500 },
+        { surface = "う", candidate = "宇", left_id = 4, right_id = 4, cost = 100 },
+        { surface = "え", candidate = "絵", left_id = 5, right_id = 5, cost = 100 },
+    }
+    local saved = "亜伊宇絵|1851 1851\tp2:s あ,亜,1,1;い,伊,3,3;う,宇,4,4;え,絵,5,5"
+    local histories = { { surface = "あいうえ", text = saved, commit_count = 8 } }
+    local bunsetsu, context = pos_engine(dictionary, pos_matrix({1, 2, 3, 4, 5}), histories,
+        function(right_id) return right_id == 4 end)
+    bunsetsu.start(context, "あいうえ")
+    check(#bunsetsu.state(context).clauses == 2 and selected_route(bunsetsu, context)[2].left_id == 3,
+        "full-sentence history retains its middle POS across a clause boundary")
+    record_learning(bunsetsu, context, histories)
+    check(history_count(histories, saved) == 9,
+        "confirmation increments the full-sentence route that actually won analysis")
+end
+
+print("== 15. mixed raw and dictionary boundaries do not create invented vocabulary routes")
+do
+    local dictionary = { { surface = "あ", candidate = "亜", left_id = 1, right_id = 1, cost = 100 } }
+    local histories = { { surface = "あq", text = "あq|1851 1851\tb1 2", commit_count = 8 } }
+    local bunsetsu, context = pos_engine(dictionary, pos_matrix({1}), histories, function() return true end)
+    bunsetsu.start(context, "あq")
+    check(#bunsetsu.state(context).clauses == 1, "saved boundaries may join dictionary and raw spans")
+    record_learning(bunsetsu, context, histories)
+    check(#histories == 1, "a mixed fallback clause records no invented full-reading dictionary route")
+end
+
+print("== 16. partial histories retain internal POS routes across resized clause boundaries")
+do
+    for _, variant_index in ipairs({ 2, 4 }) do
+        local dictionary, surfaces, texts = {}, { "あ", "い", "う", "え", "お" }, { "亜", "伊", "宇", "絵", "尾" }
+        for index, surface in ipairs(surfaces) do
+            dictionary[#dictionary + 1] = { surface = surface, candidate = texts[index],
+                left_id = index, right_id = index, cost = 100 }
+        end
+        dictionary[#dictionary + 1] = { surface = surfaces[variant_index], candidate = texts[variant_index],
+            left_id = 6, right_id = 6, cost = 500 }
+        for _, span in ipairs({ {1, 2}, {1, 3}, {3, 5}, {4, 5} }) do
+            dictionary[#dictionary + 1] = { surface = table.concat(surfaces, "", span[1], span[2]),
+                candidate = table.concat(texts, "", span[1], span[2]),
+                left_id = span[1], right_id = span[2], cost = 99999 }
+        end
+        local encoded = {}
+        for index = 2, 4 do
+            local id = index == variant_index and 6 or index
+            encoded[#encoded + 1] = surfaces[index] .. "," .. texts[index] .. "," .. id .. "," .. id
+        end
+        local saved = "伊宇絵|1851 1851\tp2:c " .. table.concat(encoded, ";")
+        local histories = { { surface = "いうえ", text = saved, commit_count = 8 } }
+        local bunsetsu, context = pos_engine(dictionary, pos_matrix({1, 2, 3, 4, 5, 6}), histories,
+            function() return false end)
+        bunsetsu.start(context, "あいうえお")
+        check(selected_route(bunsetsu, context)[variant_index].left_id == 6,
+            "partial history initially selects its learned internal POS")
+        local shifts = variant_index == 2 and 2 or 3
+        for _ = 1, shifts do bunsetsu.resize(context, -1) end
+        local clause_index, word_index = variant_index == 2 and 1 or 2, 2
+        local state = bunsetsu.state(context)
+        check(state.clauses[1].reading == (variant_index == 2 and "あいう" or "あい")
+            and state.clauses[2].reading == (variant_index == 2 and "えお" or "うえお"),
+            "manual boundaries remain unchanged when history crosses both clause edges")
+        local clause, learned_route, ordinary_route = state.clauses[clause_index], false, false
+        for _, choice in ipairs(clause.unfiltered) do
+            local word = choice.route_words and choice.route_words[word_index]
+            if word and word.left_id == 6 then learned_route = true end
+            if word and word.left_id == variant_index then ordinary_route = true end
+        end
+        check(learned_route and ordinary_route,
+            "matching endpoint ids do not discard either internal route before history evaluation")
+        check(selected_route(bunsetsu, context, clause_index)[word_index].left_id == 6,
+            "cross-boundary partial history selects its learned internal POS on either side")
+        local displayed = {}
+        for _, choice in ipairs(clause.candidates) do
+            check(not displayed[choice.text], "internal route alternatives do not duplicate displayed text")
+            displayed[choice.text] = true
+        end
+        record_learning(bunsetsu, context, histories)
+        check(history_count(histories, saved) == 8,
+            "committing resized clauses preserves the original partial history count")
+        local retained = false
+        for _, history in ipairs(histories) do
+            if history.surface == clause.reading and history.text:find(",6,6", 1, true) then retained = true end
+        end
+        check(retained, "confirmation saves the internal route selected after boundary changes")
+    end
+end
+
+print("== 17. duplicate prefix texts retain the route with the best initial connection")
+do
+    local dictionary, ids = {}, {}
+    for id = 1, 24 do
+        ids[#ids + 1] = id
+        for index, surface in ipairs({ "あ", "い", "う" }) do
+            dictionary[#dictionary + 1] = { surface = surface, candidate = ({ "亜", "伊", "宇" })[index],
+                left_id = id, right_id = id, cost = 100 }
+        end
+    end
+    local matrix = pos_matrix(ids, { ["0 24"] = -1000 })
+    local bunsetsu, context = pos_engine(dictionary, matrix, {}, function() return false end)
+    bunsetsu.start(context, "あいう")
+    local clause = bunsetsu.state(context).clauses[1]
+    check(#clause.candidates == 1 and bunsetsu.display(context) == "亜伊宇",
+        "many equivalent POS prefixes still produce one displayed candidate")
+    check(selected_route(bunsetsu, context)[1].left_id == 24,
+        "prefix deduplication compares initial connection and lexical costs together")
+end
+
+print("== 18. initial clauses retain simultaneous internal POS changes from a sentence history")
+do
+    local surfaces, texts = { "あ", "い", "う", "え", "お", "か" }, { "亜", "伊", "宇", "絵", "尾", "蚊" }
+    local dictionary = {}
+    for index, surface in ipairs(surfaces) do
+        dictionary[#dictionary + 1] = { surface = surface, candidate = texts[index],
+            left_id = index, right_id = index, cost = 100 }
+    end
+    dictionary[#dictionary + 1] = { surface = "い", candidate = "伊", left_id = 7, right_id = 7, cost = 500 }
+    dictionary[#dictionary + 1] = { surface = "お", candidate = "尾", left_id = 8, right_id = 8, cost = 500 }
+    local saved = "亜伊宇絵尾蚊|1851 1851\tp2:s あ,亜,1,1;い,伊,7,7;う,宇,3,3;え,絵,4,4;お,尾,8,8;か,蚊,6,6"
+    local histories = { { surface = "あいうえおか", text = saved, commit_count = 8 } }
+    local bunsetsu, context = pos_engine(dictionary, pos_matrix({1, 2, 3, 4, 5, 6, 7, 8}), histories,
+        function(right_id) return right_id == 3 end)
+    bunsetsu.start(context, "あいうえおか")
+    local clauses = bunsetsu.state(context).clauses
+    check(#clauses == 2 and clauses[1].reading == "あいう" and clauses[2].reading == "えおか",
+        "sentence analysis preserves the two expected clause boundaries")
+    check(selected_route(bunsetsu, context, 1)[2].left_id == 7
+        and selected_route(bunsetsu, context, 2)[2].left_id == 8,
+        "both clauses initially select the complete learned routes, not just matching endpoint ids")
+    record_learning(bunsetsu, context, histories)
+    check(history_count(histories, saved) == 9,
+        "confirmation increments the original sentence history without replacing either internal POS")
 end
 
 print("== 9. deep same-frame stock candidates follow the complete contextual order")

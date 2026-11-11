@@ -355,9 +355,6 @@ assert(context.input == "", "Enter must end composition")
 press(env, string.byte("k"))
 assert(context:get_option("_kagiroi_hide_candidates"), "the next input must start with candidates hidden")
 
--- Committing with the candidate list open learns every dictionary clause
--- and, when all clauses carry entries, the whole reading as one joined
--- entry (dotfiles/rime/SPEC.md, "確定と次入力").
 env, context = new_environment({
     { text = "下", readings = { ["か"] = true }, phrase = { text = "下|2820 2820", custom_code = "か " } },
     { text = "ネ", readings = { ["1"] = true }, phrase = { text = "ネ|2830 2830", custom_code = "1 " } },
@@ -370,7 +367,7 @@ assert(press(env, 0x20) == kAccepted, "the learning test must start with a hidde
 assert(press(env, 0x20) == kAccepted, "the learning test must open the candidate list")
 assert(press(env, 0xff0d) == kAccepted, "Enter must commit the conversion")
 assert(context.commits[1] == "下ネ", "Enter must commit the displayed clauses")
-assert(#learned == 3, "Enter must learn both clauses and their join")
+assert(#learned == 4, "Enter must learn both clauses, their join and boundaries")
 assert(learned[1].text == "下|1851 1851\tp2:c" and learned[1].custom_code == "か ",
     "each clause must learn its own entry first")
 assert(learned[2].text == "ネ|1851 1851\tp2:c" and learned[2].custom_code == "1 ",
@@ -378,9 +375,6 @@ assert(learned[2].text == "ネ|1851 1851\tp2:c" and learned[2].custom_code == "1
 assert(learned[3].text == "下ネ|1851 1851\tp2:s" and learned[3].custom_code == "か1 ",
     "the join must carry the whole reading with the generic noun ids")
 
--- Committing a hidden conversion learns nothing: only a commit with the
--- candidate list open records entries (dotfiles/rime/SPEC.md,
--- "確定と次入力").
 env, context = new_environment({
     { text = "下", readings = { ["か"] = true }, phrase = { text = "下|2820 2820", custom_code = "か " } },
     { text = "ネ", readings = { ["1"] = true }, phrase = { text = "ネ|2830 2830", custom_code = "1 " } },
@@ -392,9 +386,9 @@ context:set_option("_kagiroi_hide_candidates", true)
 assert(press(env, 0x20) == kAccepted, "the hidden-commit test must start with a hidden conversion")
 assert(press(env, 0xff0d) == kAccepted, "Enter must commit the hidden conversion")
 assert(context.commits[1] == "下ネ", "Enter must commit the displayed clauses")
-assert(#learned == 0, "a hidden conversion commit must learn nothing")
+assert(#learned == 4 and learned[4].text == "か1|1851 1851\tb1 1,1",
+    "a hidden conversion must learn the same vocabulary and boundaries as an open list")
 
--- A single clause learns only its own entry: the join would duplicate it.
 env, context = new_environment({
     { text = "下", phrase = { text = "下|2820 2820", custom_code = "かな " } },
 })
@@ -406,11 +400,10 @@ assert(press(env, 0x20) == kAccepted and press(env, 0x20) == kAccepted,
     "the single-clause test must convert and open the candidate list")
 assert(press(env, 0xff0d) == kAccepted,
     "the single-clause test must commit with the list open")
-assert(#learned == 1 and learned[1].text == "下|1851 1851\tp2:c",
-    "a single clause must learn only its own entry")
+assert(#learned == 2 and learned[1].text == "下|1851 1851\tp2:c"
+    and learned[2].text == "かな|1851 1851\tb1 2",
+    "a single clause must learn its own entry and boundary without a sentence duplicate")
 
--- A clause without a dictionary entry keeps the whole reading unlearned:
--- the join would not match what the display shows for that clause.
 env, context = new_environment({
     { text = "下", readings = { ["か"] = true } },
     { text = "ネ", readings = { ["1"] = true }, phrase = { text = "ネ|2830 2830", custom_code = "1 " } },
@@ -423,8 +416,57 @@ assert(press(env, 0x20) == kAccepted and press(env, 0x20) == kAccepted,
     "the unlearned-clause test must convert and open the candidate list")
 assert(press(env, 0xff0d) == kAccepted,
     "the unlearned-clause test must commit with the list open")
-assert(#learned == 1 and learned[1].text == "ネ|1851 1851\tp2:c",
-    "the clause without an entry must leave the join out and learn the rest only")
+assert(#learned == 2 and learned[1].text == "ネ|1851 1851\tp2:c"
+    and learned[2].text == "か1|1851 1851\tb1 1,1",
+    "a non-dictionary clause excludes the vocabulary join but not the boundary history")
+
+for _, visible in ipairs({ false, true }) do
+    for _, key in ipairs({ 0xff0d, 0xff8b, string.byte("k"), string.byte("1"), string.byte("/"), 0xffb1 }) do
+        env, context = new_environment({
+            { text = "仮名", phrase = { text = "仮名|1851 1851", custom_code = "かな " } },
+        })
+        learned = {}
+        env.mem = { update_userdict = function(_, entry) table.insert(learned, entry) end }
+        context.input = "かな"
+        press(env, 0x20)
+        if visible then press(env, 0x20) end
+        assert(#learned == 0, "conversion and selection alone must not learn")
+        press(env, key)
+        assert(#learned == 2 and learned[1].text == "仮名|1851 1851\tp2:c"
+            and learned[2].text == "かな|1851 1851\tb1 2",
+            "Enter, KP_Enter and next-input keys must learn equally with open and closed lists")
+    end
+end
+
+for _, key in ipairs({ 0xff0d, 0xff8b, 0xff1b }) do
+    env, context = new_environment()
+    learned = {}
+    env.mem = { update_userdict = function(_, entry) table.insert(learned, entry) end }
+    context.input = "かな"
+    press(env, key)
+    assert(#learned == 0, "direct reading commit or cancellation must not learn")
+end
+
+env, context = new_environment()
+learned = {}
+env.mem = { update_userdict = function(_, entry) table.insert(learned, entry) end }
+context.input = "かな"
+press(env, 0x20)
+press(env, 0xff51, { shift = true })
+assert(#learned == 0, "boundary adjustment alone must not learn")
+press(env, 0xff1b)
+press(env, 0xff0d)
+assert(#learned == 0, "cancelling conversion then directly committing the reading must not learn")
+
+env, context = new_environment()
+learned = {}
+env.mem = { update_userdict = function(_, entry) table.insert(learned, entry) end }
+context.input = "かな"
+press(env, 0x20)
+press(env, 0xff51, { shift = true })
+press(env, 0xff0d)
+assert(learned[#learned].text == "かな|1851 1851\tb1 1,1",
+    "Enter immediately after hidden boundary adjustment must save the changed boundaries")
 
 -- Tab expands without moving the selection; a second Tab does nothing and
 -- Shift+Tab collapses the expansion back to the collapsed page.
