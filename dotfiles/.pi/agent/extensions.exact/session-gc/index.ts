@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, renameSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   getAgentDir,
@@ -11,7 +11,6 @@ import {
  * every listed JSONL in full to build search text) stays fast to load.
  */
 export const KEEP_COUNT = 50;
-export const THROTTLE_MS = 24 * 60 * 60 * 1000;
 
 export interface MoveTarget {
   from: string;
@@ -21,9 +20,6 @@ export interface MoveTarget {
 export interface SessionGcDeps {
   /** Root of pi session storage (~/.pi/agent/sessions). Injectable for tests. */
   sessionsDir: () => string;
-  /** Where the last-run timestamp is stored. Injectable for tests. */
-  timestampFile: () => string;
-  now: () => number;
   /** Sessions kept per project. Defaults to KEEP_COUNT. Injectable for tests. */
   keepCount?: number;
 }
@@ -88,28 +84,11 @@ export function executeArchives(targets: MoveTarget[]): number {
 
 export function runSessionGc(event: SessionGcEvent, deps: SessionGcDeps): number {
   if (event.reason !== "startup") return 0;
-  const lastRunAt = readLastRunAt(deps.timestampFile());
-  const isThrottled = lastRunAt !== undefined && deps.now() - lastRunAt < THROTTLE_MS;
-  if (isThrottled) return 0;
-
-  const archived = executeArchives(collectArchiveTargets(deps.sessionsDir(), deps.keepCount));
-  writeFileSync(deps.timestampFile(), String(deps.now()));
-  return archived;
-}
-
-function readLastRunAt(file: string): number | undefined {
-  try {
-    const parsed = Number.parseInt(readFileSync(file, "utf8").trim(), 10);
-    return Number.isNaN(parsed) ? undefined : parsed;
-  } catch {
-    return undefined;
-  }
+  return executeArchives(collectArchiveTargets(deps.sessionsDir(), deps.keepCount));
 }
 
 const defaultDeps: SessionGcDeps = {
   sessionsDir: () => join(getAgentDir(), "sessions"),
-  timestampFile: () => join(getAgentDir(), ".session-gc-timestamp"),
-  now: Date.now,
 };
 
 export default function sessionGcExtension(pi: ExtensionAPI): void {

@@ -15,7 +15,6 @@ import { afterEach, describe, it } from "bun:test";
 import type { SessionStartEvent } from "@earendil-works/pi-coding-agent";
 import {
   KEEP_COUNT,
-  THROTTLE_MS,
   collectArchiveTargets,
   executeArchives,
   runSessionGc,
@@ -35,7 +34,7 @@ afterEach(() => {
 interface TestRig {
   deps: SessionGcDeps;
   sessionsDir: string;
-  timestampFile: string;
+  agentDir: string;
 }
 
 function rig(keepCount?: number): TestRig {
@@ -46,12 +45,10 @@ function rig(keepCount?: number): TestRig {
   return {
     deps: {
       sessionsDir: () => sessionsDir,
-      timestampFile: () => join(dir, ".session-gc-timestamp"),
-      now: () => NOW,
       keepCount,
     },
     sessionsDir,
-    timestampFile: join(dir, ".session-gc-timestamp"),
+    agentDir: dir,
   };
 }
 
@@ -169,20 +166,22 @@ describe("executeArchives", () => {
   });
 });
 
-describe("runSessionGc の実行条件", () => {
-  it("startup 以外の reason では実行せず、timestamp も書かない", () => {
-    const testRig = rig();
+describe("runSessionGc execution conditions", () => {
+  it("leaves sessions untouched for every non-startup reason", () => {
+    const testRig = rig(0);
+    const file = writeSession(testRig, "--home-u-proj--", "old.jsonl", NOW);
     const reasons = ["reload", "new", "resume", "fork"] as const;
 
     for (const reason of reasons) {
       const archivedCount = runSessionGc({ reason }, testRig.deps);
       assert.equal(archivedCount, 0, reason);
+      assert.ok(existsSync(file), reason);
     }
-    const timestampExists = existsSync(testRig.timestampFile);
-    assert.equal(timestampExists, false);
+    const projectEntries = readdirSync(join(testRig.sessionsDir, "--home-u-proj--"));
+    assert.deepEqual(projectEntries, ["old.jsonl"]);
   });
 
-  it("timestamp が無いときは実行し、実行時刻を記録する", () => {
+  it("archives on startup without creating a timestamp", () => {
     const testRig = rig(1);
     writeSession(testRig, "--home-u-proj--", "old.jsonl", NOW - 1_000);
     writeSession(testRig, "--home-u-proj--", "new.jsonl", NOW);
@@ -190,33 +189,44 @@ describe("runSessionGc の実行条件", () => {
     const archivedCount = runSessionGc(startupEvent(), testRig.deps);
 
     assert.equal(archivedCount, 1);
-    const storedTimestamp = readFileSync(testRig.timestampFile, "utf8");
-    assert.equal(storedTimestamp, String(NOW));
+    const agentEntries = readdirSync(testRig.agentDir);
+    assert.deepEqual(agentEntries, ["sessions"]);
   });
 
-  it("THROTTLE_MS 未満しか経過していないときは実行せず、記録を上書きしない", () => {
-    const testRig = rig(1);
-    const lastRunAt = NOW - THROTTLE_MS + 1_000;
-    writeFileSync(testRig.timestampFile, String(lastRunAt));
-    writeSession(testRig, "--home-u-proj--", "old.jsonl", NOW - 1_000);
-    writeSession(testRig, "--home-u-proj--", "new.jsonl", NOW);
+  it("archives newly added sessions on consecutive startups and keeps the latest 50", () => {
+    const testRig = rig();
+    for (let index = 0; index <= KEEP_COUNT; index++) {
+      writeSession(testRig, "--home-u-proj--", `s${index}.jsonl`, NOW + index * 1_000);
+    }
 
-    const archivedCount = runSessionGc(startupEvent(), testRig.deps);
+    const firstArchivedCount = runSessionGc(startupEvent(), testRig.deps);
+    assert.equal(firstArchivedCount, 1);
+    writeSession(testRig, "--home-u-proj--", "new.jsonl", NOW + (KEEP_COUNT + 1) * 1_000);
 
-    assert.equal(archivedCount, 0);
-    const storedTimestamp = readFileSync(testRig.timestampFile, "utf8");
-    assert.equal(storedTimestamp, String(lastRunAt));
+    const secondArchivedCount = runSessionGc(startupEvent(), testRig.deps);
+
+    assert.equal(secondArchivedCount, 1);
+    const projectDir = join(testRig.sessionsDir, "--home-u-proj--");
+    const remaining = readdirSync(projectDir).filter((name) => name.endsWith(".jsonl"));
+    assert.equal(remaining.length, KEEP_COUNT);
+    assert.ok(remaining.includes("new.jsonl"));
+    const archived = readdirSync(join(projectDir, "archive")).sort();
+    assert.deepEqual(archived, ["s0.jsonl", "s1.jsonl"]);
   });
 
-  it("THROTTLE_MS ちょうど経過したら実行する", () => {
+  it("ignores and preserves a legacy timestamp", () => {
     const testRig = rig(1);
-    writeFileSync(testRig.timestampFile, String(NOW - THROTTLE_MS));
+    const timestampFile = join(testRig.agentDir, ".session-gc-timestamp");
+    const legacyTimestamp = String(Date.now());
+    writeFileSync(timestampFile, legacyTimestamp);
     writeSession(testRig, "--home-u-proj--", "old.jsonl", NOW - 1_000);
     writeSession(testRig, "--home-u-proj--", "new.jsonl", NOW);
 
     const archivedCount = runSessionGc(startupEvent(), testRig.deps);
 
     assert.equal(archivedCount, 1);
+    const storedTimestamp = readFileSync(timestampFile, "utf8");
+    assert.equal(storedTimestamp, legacyTimestamp);
   });
 });
 
@@ -238,14 +248,14 @@ describe("runSessionGc の退避", () => {
     assert.deepEqual(archived, ["s0.jsonl"]);
   });
 
-  it("sessionsDir が無いときは対象ゼロで timestamp だけ記録する", () => {
+  it("returns zero without writing files when sessionsDir is missing", () => {
     const testRig = rig(2);
     rmSync(testRig.sessionsDir, { recursive: true, force: true });
 
     const archivedCount = runSessionGc(startupEvent(), testRig.deps);
 
     assert.equal(archivedCount, 0);
-    const timestampExists = existsSync(testRig.timestampFile);
-    assert.equal(timestampExists, true);
+    const agentEntries = readdirSync(testRig.agentDir);
+    assert.deepEqual(agentEntries, []);
   });
 });
