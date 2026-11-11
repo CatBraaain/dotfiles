@@ -993,7 +993,9 @@ write(summary);
 ##### after
 
 ```ts
-const valid = readInput().map(parse).filter(isValid);
+const raw = readInput();
+const data = parse(raw);
+const valid = data.filter(isValid);
 
 const label = valid.length > 1 ? "items" : "item";
 const summary = `${valid.length} ${label}`;
