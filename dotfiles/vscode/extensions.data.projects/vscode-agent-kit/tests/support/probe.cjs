@@ -32,7 +32,7 @@ exports.activate = function activate(context) {
           cwd: vscode.Uri.file(cwd),
           location: vscode.TerminalLocation.Editor,
           shellPath: "tmux",
-          shellArgs: ["-L", socketName, "-f", "/dev/null", "attach-session", "-t", target],
+          shellArgs: ["-S", socketName, "-f", "/dev/null", "attach-session", "-t", target],
           env: { PI_SESSIONS_DISPLAY_SOCKET: socketName, TMUX: null, TMUX_PANE: null },
           isTransient: false,
         })

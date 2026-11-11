@@ -2,6 +2,7 @@ import { _electron as electron, expect, test as baseTest } from "playwright/test
 import type { ElectronApplication, Frame, Page } from "playwright/test";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
@@ -9,16 +10,20 @@ import {
   readFileSync,
   readlinkSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { tmuxSocketName } from "../../src/tmux";
 import { encodeCwdDirName } from "../../src/paths";
 import { basename, dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
 const root = resolve(__dirname, "../..");
+const dotfiles = process.env.PI_REVIEW_DOTFILES ?? join(homedir(), "projects/dotfiles/dotfiles");
+const realPi = execFileSync("which", ["pi"], { encoding: "utf8" }).trim();
+const realTmux = execFileSync("which", ["tmux"], { encoding: "utf8" }).trim();
+let compiledPiMux: string | undefined;
 const executablePath =
   process.env.PI_REVIEW_VSCODE ??
   join(homedir(), ".cache/pi-sessions-screenshots/vscode-1.138.0/VSCode-linux-x64/code");
@@ -55,10 +60,26 @@ export interface Snapshot {
 
 export class VSCodeFixture {
   readonly directory = fixtureDirectory();
-  readonly tmuxSocket = tmuxSocketName(
-    join(this.directory, "agent"),
-    join(this.directory, "agent/sessions"),
-  );
+  readonly tmuxSocket = join(this.directory, "runtime/pi-tmux/server.sock");
+  readonly env: Record<string, string> = {
+    PATH: `${join(this.directory, "bin")}:${process.env.PATH ?? ""}`,
+    HOME: join(this.directory, "home"),
+    USER: "fixture",
+    LANG: "C.UTF-8",
+    TERM: "xterm-256color",
+    DISPLAY: process.env.DISPLAY ?? "",
+    XAUTHORITY: process.env.XAUTHORITY ?? "",
+    XDG_RUNTIME_DIR: join(this.directory, "runtime"),
+    XDG_CONFIG_HOME: join(this.directory, "home/.config"),
+    XDG_CACHE_HOME: join(this.directory, "cache"),
+    XDG_DATA_HOME: join(this.directory, "data"),
+    PI_CODING_AGENT_DIR: join(this.directory, "agent"),
+    PI_CODING_AGENT_SESSION_DIR: join(this.directory, "agent/sessions"),
+    PI_OFFLINE: "1",
+    PI_SKIP_VERSION_CHECK: "1",
+    PI_REVIEW_BASE: this.directory,
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
   readonly sessions: Record<string, SessionFixture> = {};
   readonly gitBefore: Record<string, string> = {};
   app!: ElectronApplication;
@@ -70,6 +91,7 @@ export class VSCodeFixture {
     this.prepareRepositories();
     this.prepareSessions();
     this.prepareHost();
+    this.preparePiMux();
   }
 
   async launch(): Promise<void> {
@@ -77,25 +99,9 @@ export class VSCodeFixture {
       throw new Error(
         `VS Code 1.138.0 is required at ${executablePath}; run bun run setup once or set PI_REVIEW_VSCODE.`,
       );
-    const env = {
-      PATH: process.env.PATH ?? "",
-      HOME: join(this.directory, "home"),
-      USER: "fixture",
-      LANG: "en_US.UTF-8",
-      TERM: "xterm-256color",
-      TMUX_TMPDIR: process.env.TMUX_TMPDIR ?? "/tmp",
-      DISPLAY: process.env.DISPLAY ?? "",
-      XAUTHORITY: process.env.XAUTHORITY ?? "",
-      XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR ?? "",
-      XDG_CONFIG_HOME: join(this.directory, "config"),
-      PI_CODING_AGENT_DIR: join(this.directory, "agent"),
-      PI_CODING_AGENT_SESSION_DIR: join(this.directory, "agent/sessions"),
-      PI_REVIEW_BASE: this.directory,
-      GIT_CONFIG_NOSYSTEM: "1",
-    };
     this.app = await electron.launch({
       executablePath,
-      env,
+      env: this.env,
       args: [
         "--no-sandbox",
         `--extensionDevelopmentPath=${root}`,
@@ -235,10 +241,7 @@ export class VSCodeFixture {
     await expect
       .poll(() => {
         const display = this.snapshot().terminals.find((terminal) => terminal.owned);
-        return this.tmux(["list-clients", "-F", "#{client_pid}\t#{session_name}"])
-          .trim()
-          .split("\n")
-          .includes(`${display?.pid}\t${runtime.target}`);
+        return this.displayClient(display?.pid)?.target === runtime.target;
       })
       .toBe(true);
     await expect
@@ -272,17 +275,59 @@ export class VSCodeFixture {
     await expect(tab.locator(".label-description")).toHaveText(basename(cwd));
     const display = this.snapshot().terminals.find((terminal) => terminal.owned)!;
     expect(readlinkSync(`/proc/${display.pid}/cwd`)).toBe(cwd);
+    if (existsSync(this.sessions[key].session)) {
+      const frame = await this.sessionFrame();
+      await expect(
+        frame
+          .locator(`.session-row.selected [data-session="${this.sessions[key].id}"]`)
+          .describe("Selected connected conversation"),
+      ).toBeVisible();
+      await expect(
+        frame
+          .getByText("Refreshing sessions…", { exact: true })
+          .describe("Pending session refresh"),
+      ).toHaveCount(0);
+    }
     return paneTitle;
   }
 
   sessionRuntime(key: string) {
-    const { cwd, session } = this.sessions[key];
-    return this.piProcesses().find(
-      (entry) =>
+    const { id, cwd } = this.sessions[key];
+    return this.piProcesses().find((entry) => {
+      const encoded = this.tmux([
+        "display-message",
+        "-p",
+        "-t",
+        entry.target,
+        "#{@pi-tmux-session}",
+      ]).trim();
+      return (
         entry.cwd === cwd &&
-        this.tmux(["display-message", "-p", "-t", entry.target, "#{pane_start_command}"]).trim() ===
-          `pi --session ${session}`,
-    );
+        encoded !== "" &&
+        JSON.parse(Buffer.from(encoded, "base64").toString("utf8")).id === id
+      );
+    });
+  }
+
+  displayClient(pid: number | undefined): { pid: number; target: string } | undefined {
+    return this.tmux(["list-clients", "-F", "#{client_pid}\t#{session_name}"])
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [clientPid, target] = line.split("\t");
+        return { pid: Number(clientPid), target };
+      })
+      .find((client) => {
+        if (client.pid === pid) return true;
+        try {
+          const status = readFileSync(`/proc/${client.pid}/status`, "utf8");
+          return Number(status.match(/^PPid:\s+(\d+)/m)?.[1]) === pid;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+          throw error;
+        }
+      });
   }
 
   async restartExtensionHost(): Promise<void> {
@@ -398,12 +443,21 @@ export class VSCodeFixture {
   }
 
   tmux(args: string[]): string {
-    const result = spawnSync("tmux", ["-L", this.tmuxSocket, "-f", "/dev/null", ...args], {
-      encoding: "utf8",
-    });
+    const result = spawnSync(
+      join(this.directory, "bin/tmux"),
+      ["-S", this.tmuxSocket, "-f", "/dev/null", ...args],
+      {
+        encoding: "utf8",
+        env: this.env,
+      },
+    );
     if (result.error) throw result.error;
     if (result.status === 0) return result.stdout;
-    if (/no server running|error connecting to .*No such file or directory/.test(result.stderr))
+    if (
+      /no server running|error connecting to .*No such file or directory|no current target|no sessions/.test(
+        result.stderr,
+      )
+    )
       return "";
     throw new Error(`Fixture tmux ${args.join(" ")} failed: ${result.stderr}`);
   }
@@ -525,6 +579,69 @@ export class VSCodeFixture {
     write(join(this.directory, "fixtures.json"), JSON.stringify(this.sessions, null, 2));
   }
 
+  private preparePiMux(): void {
+    const source = join(dotfiles, ".local/cli.exact/pi-mux/src/main.ts");
+    if (compiledPiMux === undefined) {
+      const buildDirectory = fixtureDirectory();
+      compiledPiMux = join(buildDirectory, "pi-mux");
+      execFileSync("bun", ["build", "--compile", source, "--outfile", compiledPiMux]);
+    }
+    for (const directory of [
+      "bin",
+      "runtime",
+      "home/.config/tmux",
+      "agent/extensions/tmux-handoff",
+      "agent/extensions/tools",
+    ]) {
+      mkdirSync(join(this.directory, directory), { recursive: true, mode: 0o700 });
+    }
+    symlinkSync(compiledPiMux, join(this.directory, "bin/pi-mux"));
+    symlinkSync(realPi, join(this.directory, "bin/pi"));
+    write(
+      join(this.directory, "bin/tmux"),
+      `#!/bin/sh\nif [ "$1" != -S ] || [ "$2" != '${this.tmuxSocket}' ]; then\n  echo 'Fixture rejected non-isolated tmux command' >&2\n  exit 64\nfi\nexec '${realTmux}' "$@"\n`,
+    );
+    chmodSync(join(this.directory, "bin/tmux"), 0o700);
+    copyFileSync(join(dotfiles, "tmux/pi.conf"), join(this.directory, "home/.config/tmux/pi.conf"));
+    const agentSource = join(dotfiles, ".pi/agent");
+    for (const name of ["index.ts", "shared.ts"])
+      copyFileSync(
+        join(agentSource, "extensions.exact/tmux-handoff", name),
+        join(this.directory, "agent/extensions/tmux-handoff", name),
+      );
+    copyFileSync(
+      join(agentSource, "extensions.exact/tools/background-bash.ts"),
+      join(this.directory, "agent/extensions/tools/background-bash.ts"),
+    );
+    symlinkSync(join(agentSource, "node_modules"), join(this.directory, "agent/node_modules"));
+    const guardrails = join(this.directory, "guardrails.yaml");
+    write(
+      guardrails,
+      `read:\n  - allow: "*"\nwrite:\n  - allow: ${JSON.stringify(this.directory)}\ncommands:\n  - ".*":\n      - allow: []\n`,
+    );
+    write(
+      join(this.directory, "agent/extensions/fixture-tools.ts"),
+      `import tools from ${JSON.stringify(join(agentSource, "extensions.exact/tools/index.ts"))};\nexport default function (pi) { tools(pi, ${JSON.stringify(guardrails)}); }\n`,
+    );
+    write(
+      join(this.directory, "agent/settings.json"),
+      JSON.stringify({
+        quietStartup: true,
+        defaultProjectTrust: "never",
+        compaction: { enabled: false },
+        retry: { enabled: false },
+      }),
+    );
+    write(
+      join(this.directory, "pi-mux-fixture.json"),
+      JSON.stringify(
+        { source, binary: compiledPiMux, realPi, realTmux, socket: this.tmuxSocket, env: this.env },
+        null,
+        2,
+      ),
+    );
+  }
+
   private prepareHost(): void {
     const settings = {
       "workbench.startupEditor": "none",
@@ -542,6 +659,7 @@ export class VSCodeFixture {
       "terminal.integrated.defaultProfile.linux": "fixture",
       "terminal.integrated.shellIntegration.enabled": false,
       "terminal.integrated.tabs.title": "${sequence}",
+      "terminal.integrated.confirmOnKill": "never",
     };
     write(join(this.directory, "userdata/User/settings.json"), JSON.stringify(settings));
     write(
@@ -615,12 +733,14 @@ export const test = baseTest.extend<{ host: VSCodeFixture }>({
           ).toHaveText(expectedName);
         }
       });
+      expect(host.tmux(["-V"]).trim()).toBe("tmux 3.8");
       await use(host);
     } finally {
       await testInfo.attach("fixture and public API observation", {
         body: JSON.stringify(
           {
             directory: host.directory,
+            piMux: JSON.parse(readFileSync(join(host.directory, "pi-mux-fixture.json"), "utf8")),
             sessions: host.sessions,
             snapshot: host.snapshot(),
           },

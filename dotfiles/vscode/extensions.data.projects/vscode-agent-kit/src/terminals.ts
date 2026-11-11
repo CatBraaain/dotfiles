@@ -1,11 +1,12 @@
 import * as vscode from "vscode";
-import type { PiRuntime, TmuxRuntimeStore } from "./tmux";
+import type { PiSession } from "./piMux";
+import type { TmuxRuntimeStore } from "./tmux";
 
 const OWNER_KEY = "PI_SESSIONS_DISPLAY_SOCKET";
 
 export interface DisplayTerminals {
   find(): vscode.Terminal | undefined;
-  create(runtime: PiRuntime): vscode.Terminal;
+  create(session: PiSession): vscode.Terminal;
 }
 
 export function editorTerminals(tmux: TmuxRuntimeStore): DisplayTerminals {
@@ -15,18 +16,18 @@ export function editorTerminals(tmux: TmuxRuntimeStore): DisplayTerminals {
         const options = terminal.creationOptions;
         return (
           "env" in options &&
-          options.env?.[OWNER_KEY] === tmux.socketName &&
+          options.env?.[OWNER_KEY] === tmux.socketPath &&
           terminal.exitStatus === undefined
         );
       });
     },
-    create(runtime) {
+    create(session) {
       return vscode.window.createTerminal({
-        cwd: vscode.Uri.file(runtime.cwd),
+        cwd: vscode.Uri.file(session.cwd),
         location: vscode.TerminalLocation.Editor,
-        shellPath: tmux.executable,
-        shellArgs: [...tmux.connectionArgs, "attach-session", "-t", runtime.target],
-        env: { [OWNER_KEY]: tmux.socketName, TMUX: null, TMUX_PANE: null },
+        shellPath: "pi-mux",
+        shellArgs: ["open", session.sessionId],
+        env: { [OWNER_KEY]: tmux.socketPath, TMUX: null, TMUX_PANE: null },
         isTransient: false,
       });
     },

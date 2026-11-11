@@ -1,7 +1,8 @@
 import type * as vscode from "vscode";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { DisplayTerminals } from "./terminals";
-import type { PiLaunch, PiRuntime, TmuxRuntimeStore } from "./tmux";
+import type { PiRuntime, TmuxRuntimeStore } from "./tmux";
+import { PiMux, type PiSession } from "./piMux";
 import { errorMessage } from "./guards";
 
 export class TerminalRegistry {
@@ -9,14 +10,15 @@ export class TerminalRegistry {
   private displayedSession: string | undefined;
   private pending = Promise.resolve();
   private readonly closeWaiters = new Map<vscode.Terminal, () => void>();
+  private readonly attachments = new Map<vscode.Terminal, AbortController>();
   private readonly closed = new WeakSet<vscode.Terminal>();
 
   constructor(
     readonly runtimes: TmuxRuntimeStore,
     private readonly terminals: DisplayTerminals,
+    readonly mux: PiMux = new PiMux(),
   ) {}
 
-  /** Session the shared display terminal currently shows; undefined while it shows none. */
   get displayedSessionId(): string | undefined {
     return this.displayedSession;
   }
@@ -30,11 +32,14 @@ export class TerminalRegistry {
     return next;
   }
 
-  async open(launch: PiLaunch): Promise<{ runtime: PiRuntime; terminal: vscode.Terminal }> {
+  async open(launch: PiSession): Promise<{ runtime: PiRuntime; terminal: vscode.Terminal }> {
     try {
-      const runtime = await this.runtimes.ensure(launch);
-      const terminal = await this.connect(runtime);
-      return { runtime, terminal };
+      const isAlive = (await this.mux.list()).some((session) => session.id === launch.sessionId);
+      const target = isAlive ? await this.runtimes.resolveTarget(launch.sessionId) : undefined;
+      if (isAlive && target === undefined) {
+        throw new Error(`Cannot resolve tmux target for session ${launch.sessionId}`);
+      }
+      return await this.connect(launch, target);
     } catch (error) {
       throw new Error(`Pi session ${launch.sessionId} in ${launch.cwd}: ${errorMessage(error)}`);
     }
@@ -48,10 +53,12 @@ export class TerminalRegistry {
     const restoredTarget =
       displayPid === undefined
         ? undefined
-        : (await this.runtimes.clients()).find((client) => client.pid === displayPid)?.target;
+        : (await this.runtimes.clients()).find(
+            (client) => client.pid === displayPid || client.parentPid === displayPid,
+          )?.target;
     const target = await this.runtimes.stop(sessionId);
-    if (display !== undefined && (displayedSession === sessionId || restoredTarget === target)) {
-      await this.closeDisplay(display);
+    if (displayedSession === sessionId || (target !== undefined && restoredTarget === target)) {
+      if (display !== undefined) await this.closeDisplay(display);
       this.display = undefined;
       this.displayedSession = undefined;
     }
@@ -60,35 +67,43 @@ export class TerminalRegistry {
   onTerminalClosed(closed: vscode.Terminal): void {
     if (this.display === closed) {
       this.display = undefined;
-      this.displayedSession = undefined;
     }
     this.closed.add(closed);
+    this.attachments.get(closed)?.abort(new Error("Pi display closed during attachment"));
     this.closeWaiters.get(closed)?.();
   }
 
-  private async connect(runtime: PiRuntime): Promise<vscode.Terminal> {
+  private async connect(
+    session: PiSession,
+    target: string | undefined,
+  ): Promise<{ runtime: PiRuntime; terminal: vscode.Terminal }> {
     let restored = this.display ?? this.terminals.find();
     if (restored !== undefined) {
       const options = restored.creationOptions;
       const cwd = "cwd" in options ? options.cwd : undefined;
       const displayCwd = typeof cwd === "string" ? cwd : cwd?.fsPath;
       const hasLegacyTitle = options.name === "Pi" && restored.name === "Pi";
-      if (restored.exitStatus !== undefined || displayCwd !== runtime.cwd || hasLegacyTitle) {
+      if (
+        restored.exitStatus !== undefined ||
+        displayCwd !== session.cwd ||
+        hasLegacyTitle ||
+        target === undefined
+      ) {
         await this.closeDisplay(restored);
         restored = undefined;
       }
     }
-    const terminal = restored ?? this.terminals.create(runtime);
-    this.display = terminal;
+    const terminal = restored ?? this.terminals.create(session);
     try {
-      const client = await this.waitForClient(terminal, runtime);
+      const { client, runtime } = await this.waitForClient(terminal, session, target);
       if (client.target !== runtime.target) await this.runtimes.switchClient(client, runtime);
+      this.display = terminal;
+      this.displayedSession = runtime.sessionId;
+      return { runtime, terminal };
     } catch (error) {
       if (restored === undefined) await this.closeDisplay(terminal);
       throw error;
     }
-    this.displayedSession = runtime.sessionId;
-    return terminal;
   }
 
   private async closeDisplay(terminal: vscode.Terminal): Promise<void> {
@@ -103,16 +118,57 @@ export class TerminalRegistry {
     }
   }
 
-  private async waitForClient(terminal: vscode.Terminal, runtime: PiRuntime) {
+  private async waitForClient(
+    terminal: vscode.Terminal,
+    session: PiSession,
+    target: string | undefined,
+  ) {
+    const controller = new AbortController();
+    const closed = new Promise<never>((_resolve, reject) => {
+      controller.signal.addEventListener("abort", () => reject(controller.signal.reason), {
+        once: true,
+      });
+    });
+    this.attachments.set(terminal, controller);
+    try {
+      if (this.closed.has(terminal))
+        controller.abort(new Error("Pi display closed during attachment"));
+      return await Promise.race([
+        this.pollClient(terminal, session, target, controller.signal),
+        closed,
+      ]);
+    } finally {
+      controller.abort();
+      this.attachments.delete(terminal);
+    }
+  }
+
+  private async pollClient(
+    terminal: vscode.Terminal,
+    session: PiSession,
+    target: string | undefined,
+    signal: AbortSignal,
+  ) {
     const pid = await terminal.processId;
-    const deadline = Date.now() + 5_000;
-    while (Date.now() < deadline && terminal.exitStatus === undefined) {
-      const client = (await this.runtimes.clients()).find((entry) => entry.pid === pid);
-      if (client !== undefined) return client;
-      await sleep(50);
+    signal.throwIfAborted();
+    if (pid === undefined)
+      throw new Error(`Pi display process did not start for session ${session.sessionId}`);
+    while (terminal.exitStatus === undefined) {
+      signal.throwIfAborted();
+      const [clients, resolvedTarget] = await Promise.all([
+        this.runtimes.clients(),
+        target ?? this.runtimes.resolveTarget(session.sessionId),
+      ]);
+      signal.throwIfAborted();
+      if (terminal.exitStatus !== undefined) break;
+      const client = clients.find((entry) => entry.pid === pid || entry.parentPid === pid);
+      if (client !== undefined && resolvedTarget !== undefined) {
+        return { client, runtime: { ...session, target: resolvedTarget } };
+      }
+      await sleep(50, undefined, { signal });
     }
     throw new Error(
-      `Cannot attach Pi display client pid=${pid} to session ${runtime.sessionId} (${this.runtimes.socketName})`,
+      `Pi display exited before attaching pid=${pid} to session ${session.sessionId} (${this.runtimes.socketPath})`,
     );
   }
 }

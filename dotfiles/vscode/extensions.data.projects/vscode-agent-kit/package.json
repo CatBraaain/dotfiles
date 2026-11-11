@@ -37,11 +37,6 @@
   "contributes": {
     "commands": [
       {
-        "command": "piSessions.reapplyTmuxSettings",
-        "category": "Pi Sessions",
-        "title": "Reapply tmux Settings"
-      },
-      {
         "command": "piSessions.refreshSessions",
         "category": "Pi Sessions",
         "title": "Refresh Sessions",

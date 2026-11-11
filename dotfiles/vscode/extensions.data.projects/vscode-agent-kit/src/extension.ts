@@ -1,12 +1,11 @@
 import * as vscode from "vscode";
 import { basename, dirname } from "node:path";
 import { homedir } from "node:os";
-import { errorMessage } from "./guards";
 import { SessionLauncher } from "./launcher";
 import { resolveAgentDir, resolveSessionDir, sessionStatePath } from "./paths";
 import { TerminalRegistry } from "./terminalRegistry";
 import { editorTerminals } from "./terminals";
-import { TmuxRuntimeStore, tmuxSocketName } from "./tmux";
+import { TmuxRuntimeStore, piMuxSocketPath } from "./tmux";
 import { SessionWebviewProvider, VIEW_ID } from "./webview/sessionWebviewProvider";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -14,30 +13,17 @@ export function activate(context: vscode.ExtensionContext): void {
   const agentDir = resolveAgentDir(process.env, homeDir);
   const sessionDir = resolveSessionDir(process.env, homeDir);
   const statePath = sessionStatePath(agentDir);
-  const tmux = new TmuxRuntimeStore(tmuxSocketName(agentDir, sessionDir));
+  const tmux = new TmuxRuntimeStore(piMuxSocketPath());
   const registry = new TerminalRegistry(tmux, editorTerminals(tmux));
 
   context.subscriptions.push(
     vscode.window.onDidCloseTerminal((closed) => registry.onTerminalClosed(closed)),
-    vscode.commands.registerCommand("piSessions.reapplyTmuxSettings", async () => {
-      try {
-        const count = await tmux.reapplySettings();
-        void vscode.window.showInformationMessage(
-          count === 0 ? "No tmux sessions to update." : "tmux settings reapplied.",
-        );
-      } catch (error) {
-        void vscode.window.showErrorMessage(
-          `Failed to reapply tmux settings: ${errorMessage(error)}`,
-        );
-      }
-    }),
   );
 
   const launcher: SessionLauncher = new SessionLauncher({
-    sessionDir,
     statePath,
     registry,
-    onSessionDetected: () => provider.refresh(),
+    onSessionStarted: () => provider.refresh(),
   });
   const provider = new SessionWebviewProvider({
     extensionUri: context.extensionUri.fsPath,

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as vscode from "vscode";
 import manifest from "../package.json";
 import { activate } from "../src/extension";
-import { TmuxRuntimeStore, tmuxSocketName } from "../src/tmux";
 import { SessionWebviewProvider } from "../src/webview/sessionWebviewProvider";
 
 const api = vi.hoisted(() => ({
@@ -39,7 +38,7 @@ describe("extension commands", () => {
     vi.unstubAllEnvs();
   });
 
-  function register(commandId = "piSessions.reapplyTmuxSettings") {
+  function register(commandId = "piSessions.refreshSessions") {
     const disposable = { dispose: vi.fn() };
     api.registerCommand.mockReturnValue(disposable);
     const context = {
@@ -54,12 +53,16 @@ describe("extension commands", () => {
     return registration[1] as () => Promise<void>;
   }
 
-  it("publishes the command in the Pi Sessions category", () => {
-    expect(manifest.contributes.commands).toContainEqual({
-      command: "piSessions.reapplyTmuxSettings",
-      category: "Pi Sessions",
-      title: "Reapply tmux Settings",
-    });
+  it("does not register or contribute the removed tmux settings command", () => {
+    register();
+    expect(api.registerCommand.mock.calls.map(([id]) => id)).toEqual([
+      "piSessions.refreshSessions",
+    ]);
+    expect(
+      manifest.contributes.commands.some(
+        ({ command }) => command === "piSessions.reapplyTmuxSettings",
+      ),
+    ).toBe(false);
   });
 
   it("contributes a named refresh icon only to the Sessions view title", () => {
@@ -94,38 +97,5 @@ describe("extension commands", () => {
     expect(refresh.mock.instances[0]).toBe(provider);
     expect(api.showInformationMessage).not.toHaveBeenCalled();
     expect(api.showErrorMessage).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    [0, "No tmux sessions to update."],
-    [2, "tmux settings reapplied."],
-  ])("notifies the result for %s managed sessions", async (count, message) => {
-    const reapply = vi
-      .spyOn(TmuxRuntimeStore.prototype, "reapplySettings")
-      .mockResolvedValue(count);
-    const command = register();
-
-    await command();
-
-    expect(reapply).toHaveBeenCalledOnce();
-    expect(reapply.mock.instances[0]).toMatchObject({
-      socketName: tmuxSocketName("/fixture/agent", "/fixture/sessions"),
-    });
-    expect(api.showInformationMessage).toHaveBeenCalledExactlyOnceWith(message);
-    expect(api.showErrorMessage).not.toHaveBeenCalled();
-  });
-
-  it("notifies a failure without showing a success message", async () => {
-    vi.spyOn(TmuxRuntimeStore.prototype, "reapplySettings").mockRejectedValue(
-      new Error("tmux connection lost"),
-    );
-    const command = register();
-
-    await command();
-
-    expect(api.showErrorMessage).toHaveBeenCalledExactlyOnceWith(
-      "Failed to reapply tmux settings: tmux connection lost",
-    );
-    expect(api.showInformationMessage).not.toHaveBeenCalled();
   });
 });

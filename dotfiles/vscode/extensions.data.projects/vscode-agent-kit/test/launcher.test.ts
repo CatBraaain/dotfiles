@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Mock } from "vitest";
 import type * as vscode from "vscode";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -7,289 +6,162 @@ import { SessionLauncher } from "../src/launcher";
 import { TerminalRegistry } from "../src/terminalRegistry";
 import { editorTerminals } from "../src/terminals";
 import { fakeRuntimes } from "./runtimeFixtures";
-import { encodeCwdDirName } from "../src/paths";
 import { activeSessionIds, readSessionStateStore } from "../src/sessionStateStore";
-import { cleanup, header, tempDir, writeJsonl } from "./fixtures";
+import { cleanup, tempDir } from "./fixtures";
 
-const mocks = vi.hoisted(() => ({
-  terminals: [],
-  createTerminal: vi.fn(),
-  showErrorMessage: vi.fn(),
-}));
-
+const api = vi.hoisted(() => ({ terminals: [], createTerminal: vi.fn() }));
 vi.mock("vscode", () => ({
   Uri: { file: (fsPath: string) => ({ fsPath }) },
   TerminalLocation: { Editor: 1 },
-  window: mocks,
+  window: api,
 }));
 
 let root: string;
 let launcher: SessionLauncher;
 let registry: TerminalRegistry;
-let onSessionDetected: Mock<(sessionId: string) => void>;
 let runtimes: ReturnType<typeof fakeRuntimes>;
+let onSessionStarted: ReturnType<typeof vi.fn<(sessionId: string) => void>>;
 
 beforeEach(async () => {
-  vi.useFakeTimers();
   vi.clearAllMocks();
   root = await tempDir("pi-launcher-test-");
-  mocks.createTerminal.mockImplementation((creationOptions: vscode.TerminalOptions) => {
+  runtimes = fakeRuntimes();
+  registry = new TerminalRegistry(runtimes.store, editorTerminals(runtimes.store), runtimes.mux);
+  api.createTerminal.mockImplementation((creationOptions: vscode.TerminalOptions) => {
     const terminal = {
       creationOptions,
       processId: Promise.resolve(123),
       show: vi.fn(),
-      dispose: vi.fn(),
-      exitStatus: undefined,
+      dispose: vi.fn(() => registry.onTerminalClosed(terminal as unknown as vscode.Terminal)),
     };
-    terminal.dispose.mockImplementation(() =>
-      registry.onTerminalClosed(terminal as unknown as vscode.Terminal),
-    );
+    const args = creationOptions.shellArgs as string[];
+    runtimes.mocks.open({ sessionId: args[1], cwd: (creationOptions.cwd as vscode.Uri).fsPath });
     return terminal;
   });
-  runtimes = fakeRuntimes();
-  registry = new TerminalRegistry(runtimes.store, editorTerminals(runtimes.store));
-  onSessionDetected = vi.fn();
+  onSessionStarted = vi.fn();
   launcher = new SessionLauncher({
-    sessionDir: join(root, "sessions"),
     statePath: join(root, "session-state.json"),
     registry,
-    onSessionDetected,
+    onSessionStarted,
   });
 });
 
 afterEach(async () => {
   launcher.dispose();
-  await vi.runOnlyPendingTimersAsync();
-  vi.useRealTimers();
   await cleanup(root);
 });
 
-describe("SessionLauncher launch cwd", () => {
-  it("launches Pi in the requested directory", async () => {
+function activeIds(): Set<string> {
+  const store = readSessionStateStore(join(root, "session-state.json"));
+  if (store.status !== "ok") throw new Error(`Expected state store, got ${store.status}`);
+  return activeSessionIds(store.data);
+}
+
+describe("SessionLauncher", () => {
+  it("asks pi-mux for a new ID in the selected cwd and opens that ID in the editor", async () => {
     const cwd = join(root, "selected");
     await mkdir(cwd);
-
     await launcher.start(cwd);
-
-    expect(mocks.createTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: { fsPath: cwd }, location: 1 }),
-    );
-    expect(runtimes.mocks.ensure).toHaveBeenCalledWith(
+    expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(cwd);
+    expect(api.createTerminal).toHaveBeenCalledWith(
       expect.objectContaining({
-        cwd,
-        args: [
-          "--session-id",
-          expect.any(String),
-          "--session-dir",
-          join(root, "sessions", encodeCwdDirName(cwd)),
-        ],
+        cwd: { fsPath: cwd },
+        location: 1,
+        shellPath: "pi-mux",
+        shellArgs: ["open", "new-1"],
       }),
     );
-    const terminal = mocks.createTerminal.mock.results[0].value;
-    expect(terminal.show).toHaveBeenCalledTimes(1);
+    expect(api.createTerminal.mock.results[0].value.show).toHaveBeenCalledOnce();
+    expect(registry.displayedSessionId).toBe("new-1");
   });
 
-  it("resolves the requested directory spelling before launching", async () => {
+  it("registers the returned ID before connecting without waiting for a session file", async () => {
+    const originalList = runtimes.mocks.list.getMockImplementation()!;
+    runtimes.mocks.list.mockImplementation(async () => {
+      expect(activeIds()).toEqual(new Set(["new-1"]));
+      return originalList();
+    });
+    await launcher.start(root);
+    expect(activeIds()).toEqual(new Set(["new-1"]));
+    expect(onSessionStarted).toHaveBeenCalledExactlyOnceWith("new-1");
+  });
+
+  it("normalizes the requested cwd before invoking pi-mux", async () => {
     await launcher.start(`${root}/.`);
-    const requestedCwd = runtimes.mocks.ensure.mock.calls[0][0].cwd;
-
-    expect(requestedCwd).toBe(root);
-    expect(mocks.createTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: { fsPath: root } }),
-    );
+    expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(root);
   });
 
-  it("rejects a missing launch directory before creating a terminal", async () => {
-    await expect(launcher.start(join(root, "missing"))).rejects.toThrow();
-    expect(mocks.createTerminal).not.toHaveBeenCalled();
-    expect(runtimes.mocks.ensure).not.toHaveBeenCalled();
-  });
-
-  it.each(["clients", "switchClient"] as const)(
-    "retries a failed %s connection with the same Pi before starting another new session",
-    async (method) => {
-      const statePath = join(root, "session-state.json");
-      const originalStore = JSON.stringify({ sentinel: "preserved", "active-workspaces": {} });
-      await writeFile(statePath, originalStore);
-      runtimes.mocks[method].mockRejectedValueOnce(new Error("display connection failed"));
-
-      await expect(launcher.start(root)).rejects.toThrow("display connection failed");
-
-      const failedId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
-      const failedRuntime = runtimes.live.get(failedId);
-      expect(runtimes.live.size).toBe(1);
-      const groupDir = join(root, "sessions", encodeCwdDirName(root));
-      await writeJsonl(groupDir, `new_${failedId}.jsonl`, [header({ id: failedId, cwd: root })]);
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(onSessionDetected).not.toHaveBeenCalled();
-      expect(await readFile(statePath, "utf8")).toBe(originalStore);
-
-      await launcher.start(root);
-
-      const retriedId = runtimes.mocks.ensure.mock.calls[1][0].sessionId;
-      expect(retriedId).toBe(failedId);
-      expect(runtimes.live.size).toBe(1);
-      expect(runtimes.live.get(retriedId)).toBe(failedRuntime);
-      expect(mocks.createTerminal.mock.results[0].value.dispose).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(2_000);
-      await vi.waitFor(() => expect(onSessionDetected).toHaveBeenCalledWith(failedId));
-      const store = readSessionStateStore(statePath);
-      expect(store.status === "ok" && activeSessionIds(store.data).has(failedId)).toBe(true);
-
-      await launcher.start(root);
-
-      const nextId = runtimes.mocks.ensure.mock.calls[2][0].sessionId;
-      expect(nextId).not.toBe(failedId);
-      expect(runtimes.live.size).toBe(2);
+  it.each(["relative/path", "/definitely-missing-pi-launcher-directory"])(
+    "rejects invalid cwd before any CLI call or Terminal creation: %s",
+    async (cwd) => {
+      await expect(launcher.start(cwd)).rejects.toThrow();
+      expect(runtimes.mocks.newSession).not.toHaveBeenCalled();
+      expect(api.createTerminal).not.toHaveBeenCalled();
     },
   );
 
-  it("retains a failed launch across an invalid cwd and another starting folder", async () => {
+  it("rejects a file as cwd without starting Pi", async () => {
+    const file = join(root, "file");
+    await writeFile(file, "fixture");
+    await expect(launcher.start(file)).rejects.toThrow();
+    expect(runtimes.mocks.newSession).not.toHaveBeenCalled();
+  });
+
+  it("delegates empty same-cwd conversation reuse to pi-mux on every request", async () => {
+    runtimes.mocks.newSession.mockImplementation(async (cwd) => {
+      runtimes.mocks.open({ sessionId: "empty", cwd });
+      return "empty";
+    });
+    await launcher.start(root);
+    await launcher.start(root);
+    expect(runtimes.mocks.newSession.mock.calls).toEqual([[root], [root]]);
+    expect(runtimes.live.size).toBe(1);
+    expect(api.createTerminal).toHaveBeenCalledTimes(1);
+    expect(activeIds()).toEqual(new Set(["empty"]));
+    expect(onSessionStarted).toHaveBeenCalledTimes(2);
+  });
+
+  it("serializes new sessions across workspaces and registers each returned ID immediately", async () => {
+    const other = join(root, "other");
+    await mkdir(other);
+    await Promise.all([launcher.start(root), launcher.start(other)]);
+    expect(runtimes.mocks.newSession.mock.calls).toEqual([[root], [other]]);
+    expect(activeIds()).toEqual(new Set(["new-1", "new-2"]));
+    expect(runtimes.live.size).toBe(2);
+    expect(registry.displayedSessionId).toBe("new-2");
+    expect(api.createTerminal).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves registration and refreshes when display connection fails", async () => {
     runtimes.mocks.clients.mockRejectedValueOnce(new Error("display connection failed"));
     await expect(launcher.start(root)).rejects.toThrow("display connection failed");
-    const failedId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
-    const failedRuntime = runtimes.live.get(failedId);
-
-    await expect(launcher.start(join(root, "missing"))).rejects.toThrow();
-    expect(runtimes.mocks.ensure).toHaveBeenCalledTimes(1);
-    expect(readSessionStateStore(join(root, "session-state.json")).status).toBe("empty");
-
-    const otherCwd = join(root, "other");
-    await mkdir(otherCwd);
-    await launcher.start(otherCwd);
-    const otherId = runtimes.mocks.ensure.mock.calls[1][0].sessionId;
-    expect(otherId).not.toBe(failedId);
-
-    await launcher.start(root);
-
-    expect(runtimes.mocks.ensure.mock.calls[2][0].sessionId).toBe(failedId);
-    expect(runtimes.live.get(failedId)).toBe(failedRuntime);
-    expect(runtimes.live.size).toBe(2);
-    expect(runtimes.client.target).toBe(failedRuntime?.target);
-    expect(mocks.createTerminal).toHaveBeenCalledTimes(3);
-  });
-
-  it("reuses a failed launch when another New Session request is already queued", async () => {
-    runtimes.mocks.clients.mockRejectedValueOnce(new Error("display connection failed"));
-
-    const results = await Promise.allSettled([launcher.start(root), launcher.start(root)]);
-
-    expect(results.map((result) => result.status)).toEqual(["rejected", "fulfilled"]);
-    const [failedId, retriedId] = runtimes.mocks.ensure.mock.calls.map(
-      ([request]) => request.sessionId,
-    );
-    expect(retriedId).toBe(failedId);
+    expect(activeIds()).toEqual(new Set(["new-1"]));
+    expect(onSessionStarted).toHaveBeenCalledExactlyOnceWith("new-1");
     expect(runtimes.live.size).toBe(1);
+    expect(api.createTerminal.mock.results[0].value.dispose).toHaveBeenCalledOnce();
   });
 
-  it("keeps invalid metadata unchanged after reconnecting a failed new session", async () => {
+  it("does not create a Terminal or change metadata when detached new fails", async () => {
+    runtimes.mocks.newSession.mockRejectedValueOnce(new Error("pi-mux missing"));
+    await expect(launcher.start(root)).rejects.toThrow("pi-mux missing");
+    expect(api.createTerminal).not.toHaveBeenCalled();
+    expect(onSessionStarted).not.toHaveBeenCalled();
+    expect(readSessionStateStore(join(root, "session-state.json")).status).toBe("empty");
+  });
+
+  it("reports state registration failure without overwriting invalid metadata", async () => {
     const statePath = join(root, "session-state.json");
-    const invalidStore = "{ invalid";
-    await writeFile(statePath, invalidStore);
-    runtimes.mocks.clients.mockRejectedValueOnce(new Error("display connection failed"));
-    await expect(launcher.start(root)).rejects.toThrow("display connection failed");
-    const sessionId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
-    await writeJsonl(join(root, "sessions", encodeCwdDirName(root)), `new_${sessionId}.jsonl`, [
-      header({ id: sessionId, cwd: root }),
-    ]);
-
-    await launcher.start(root);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.waitFor(() => expect(mocks.showErrorMessage).toHaveBeenCalled());
-
-    expect(await readFile(statePath, "utf8")).toBe(invalidStore);
+    await writeFile(statePath, "{ invalid");
+    await expect(launcher.start(root)).rejects.toThrow();
+    expect(await readFile(statePath, "utf8")).toBe("{ invalid");
+    expect(api.createTerminal).not.toHaveBeenCalled();
     expect(runtimes.live.size).toBe(1);
   });
 
-  it("reuses the pending launch in the same cwd instead of starting another Pi", async () => {
+  it("does not start another Pi after disposal", async () => {
+    launcher.dispose();
     await launcher.start(root);
-    const firstId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
-
-    await launcher.start(root);
-
-    const secondId = runtimes.mocks.ensure.mock.calls[1][0].sessionId;
-    expect(secondId).toBe(firstId);
-    expect(runtimes.live.size).toBe(1);
-    expect(mocks.createTerminal).toHaveBeenCalledTimes(1);
-
-    const groupDir = join(root, "sessions", encodeCwdDirName(root));
-    await writeJsonl(groupDir, `new_${firstId}.jsonl`, [header({ id: firstId, cwd: root })]);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.waitFor(() => expect(onSessionDetected).toHaveBeenCalledWith(firstId));
-
-    await launcher.start(root);
-
-    const thirdId = runtimes.mocks.ensure.mock.calls[2][0].sessionId;
-    expect(thirdId).not.toBe(firstId);
-  });
-
-  it("starts a new Pi after the pending Pi exits", async () => {
-    await launcher.start(root);
-    const firstId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
-    runtimes.live.delete(firstId);
-
-    await vi.advanceTimersByTimeAsync(2_000);
-
-    await launcher.start(root);
-
-    const nextId = runtimes.mocks.ensure.mock.calls[1][0].sessionId;
-    expect(nextId).not.toBe(firstId);
-    expect(runtimes.live.size).toBe(1);
-  });
-
-  it("associates overlapping new sessions by their own Pi IDs", async () => {
-    const otherCwd = join(root, "other");
-    await mkdir(otherCwd);
-    await Promise.all([launcher.start(root), launcher.start(otherCwd)]);
-    const [firstId, secondId] = runtimes.mocks.ensure.mock.calls.map(
-      ([request]) => request.sessionId,
-    );
-    expect(firstId).not.toBe(secondId);
-    const groupDir = join(root, "sessions", encodeCwdDirName(root));
-    const otherDir = join(root, "sessions", encodeCwdDirName(otherCwd));
-    await writeJsonl(groupDir, `new_${firstId}.jsonl`, [header({ id: firstId, cwd: root })]);
-    await writeJsonl(otherDir, `new_${secondId}.jsonl`, [header({ id: secondId, cwd: otherCwd })]);
-    await writeJsonl(groupDir, "external_other.jsonl", [header({ id: "other", cwd: root })]);
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.waitFor(() => expect(onSessionDetected).toHaveBeenCalledTimes(2));
-    expect(onSessionDetected).toHaveBeenCalledWith(firstId);
-    expect(onSessionDetected).toHaveBeenCalledWith(secondId);
-
-    await registry.run(() =>
-      registry.open({ sessionId: firstId, cwd: root, args: ["--session", "/saved.jsonl"] }),
-    );
-    expect(runtimes.live.size).toBe(2);
-  });
-
-  it("does not associate a launched ID with a mismatched header or cwd", async () => {
-    await launcher.start(root);
-    const sessionId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
-    const groupDir = join(root, "sessions", encodeCwdDirName(root));
-    await writeJsonl(groupDir, `new_${sessionId}.jsonl`, [header({ id: "other", cwd: root })]);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(onSessionDetected).not.toHaveBeenCalled();
-    await writeJsonl(groupDir, `new_${sessionId}.jsonl`, [
-      header({ id: sessionId, cwd: "/other" }),
-    ]);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(onSessionDetected).not.toHaveBeenCalled();
-    expect(readSessionStateStore(join(root, "session-state.json")).status).toBe("empty");
-  });
-
-  it("detects only the launched runtime ID even when its display is closed", async () => {
-    await launcher.start(root);
-    const sessionId = runtimes.mocks.ensure.mock.calls[0][0].sessionId;
-    registry.onTerminalClosed(mocks.createTerminal.mock.results[0].value);
-    await writeJsonl(join(root, "sessions", encodeCwdDirName(root)), `new_${sessionId}.jsonl`, [
-      header({ id: sessionId, cwd: root, timestamp: new Date().toISOString() }),
-    ]);
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.waitFor(() => expect(onSessionDetected).toHaveBeenCalledWith(sessionId));
-
-    expect(runtimes.live.has(sessionId)).toBe(true);
-    const store = readSessionStateStore(join(root, "session-state.json"));
-    expect(store.status === "ok" && activeSessionIds(store.data).has(sessionId)).toBe(true);
+    expect(runtimes.mocks.newSession).not.toHaveBeenCalled();
+    expect(api.createTerminal).not.toHaveBeenCalled();
   });
 });

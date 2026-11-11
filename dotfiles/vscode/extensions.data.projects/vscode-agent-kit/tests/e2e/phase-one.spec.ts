@@ -402,8 +402,19 @@ test(
         const startCommand = host
           .tmux(["display-message", "-p", "-t", runtime.target, "#{pane_start_command}"])
           .trim();
-        expect(startCommand).toBe(`pi --session ${host.sessions[key].session}`);
-        const sessionPath = startCommand.slice("pi --session ".length);
+        const encoded = host
+          .tmux(["display-message", "-p", "-t", runtime.target, "#{@pi-tmux-session}"])
+          .trim();
+        const metadata = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+        const sessionPath = metadata.file;
+        expect(metadata).toMatchObject({
+          id: host.sessions[key].id,
+          file: host.sessions[key].session,
+          cwd: runtime.cwd,
+          pid: runtime.pid,
+          startup: "ready",
+        });
+        expect(startCommand).toContain(host.sessions[key].session);
         const sessionHeader = JSON.parse(readFileSync(sessionPath, "utf8").split("\n")[0]);
         expect(sessionHeader).toMatchObject({
           type: "session",
@@ -530,9 +541,9 @@ test(
     await test.step("Switch same-cwd conversations without replacing the display or their Pi processes", async () => {
       await host.selectSession("A");
       await host.expectNativeDisplay("A");
-      const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
       await host.selectSession("Deleted");
       await host.expectNativeDisplay("Deleted");
+      const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
       const pids = host
         .piProcesses()
         .map((entry) => entry.pid)
@@ -553,21 +564,20 @@ test(
             .some((entry) => entry.cwd === host.sessions[key].cwd && entry.pid === pid),
         ).toBe(true);
     });
-    await test.step("Rediscover existing Pi and restore native title forwarding after extension host restart", async () => {
+    await test.step("Rediscover existing Pi and keep native title forwarding after extension host restart", async () => {
       const pids = host
         .piProcesses()
         .map((entry) => entry.pid)
         .sort();
       const runtime = host.piProcesses().find((entry) => entry.pid === firstPids.get("A"))!;
-      host.tmux(["set-option", "-t", runtime.target, "set-titles", "off"]);
       await host.restartExtensionHost();
       await host.selectSession("A");
       await host.expectNativeDisplay("A");
-      expect(host.tmux(["show-options", "-v", "-t", runtime.target, "set-titles"]).trim()).toBe(
-        "on",
-      );
       expect(
-        host.tmux(["show-options", "-v", "-t", runtime.target, "set-titles-string"]).trim(),
+        host.tmux(["show-options", "-A", "-v", "-t", runtime.target, "set-titles"]).trim(),
+      ).toBe("on");
+      expect(
+        host.tmux(["show-options", "-A", "-v", "-t", runtime.target, "set-titles-string"]).trim(),
       ).toBe("#{pane_title}");
       expect(
         host
@@ -629,6 +639,18 @@ test(
           .map((entry) => entry.pid)
           .sort(),
       ).toEqual(pids);
+    });
+    await test.step("Reconnect to live B without its saved file and do not recreate the file", async () => {
+      const runtime = host.sessionRuntime("B")!;
+      const statePath = join(host.directory, "agent/session-state.json");
+      const state = readFileSync(statePath, "utf8");
+      unlinkSync(host.sessions.B.session);
+      await host.closePiDisplay();
+      await host.selectSession("B");
+      await host.expectNativeDisplay("B");
+      expect(host.sessionRuntime("B")?.pid).toBe(runtime.pid);
+      expect(existsSync(host.sessions.B.session)).toBe(false);
+      expect(readFileSync(statePath, "utf8")).toBe(state);
     });
     await test.step("Restart only an exited selected Pi from its saved session", async () => {
       const runtime = host.piProcesses().find((entry) => entry.pid === firstPids.get("A"))!;
@@ -888,6 +910,53 @@ test(
       await expect(
         frame.locator(".session-row.selected").describe("Saved session selection after new launch"),
       ).toHaveCount(0);
+      const runtime = host.piProcesses().find((entry) => entry.cwd === folder)!;
+      const encoded = host
+        .tmux(["display-message", "-p", "-t", runtime.target, "#{@pi-tmux-session}"])
+        .trim();
+      const metadata = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+      const statePath = join(host.directory, "agent/session-state.json");
+      await expect
+        .poll(() =>
+          Object.keys(
+            JSON.parse(readFileSync(statePath, "utf8"))["active-workspaces"][folder][
+              "active-sessions"
+            ],
+          ),
+        )
+        .toEqual([metadata.id]);
+      expect(existsSync(metadata.file)).toBe(false);
+      await expect(group.locator(".session-row")).toHaveCount(0);
+      const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
+      await group.locator(".group-new-session").click();
+      await host.expectPiVisible(folder);
+      await expect
+        .poll(() => host.snapshot().terminals.find((terminal) => terminal.owned)?.pid)
+        .toBe(displayPid);
+      expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
+      expect(existsSync(metadata.file)).toBe(false);
+      const otherCwd = host.sessions.B.cwd;
+      await frame
+        .locator(`.group-header[title="${otherCwd}"] .group-new-session`)
+        .describe("Other cwd New session")
+        .click();
+      await host.expectPiVisible(otherCwd);
+      const other = host.piProcesses().find((entry) => entry.cwd === otherCwd)!;
+      expect(other.pid).not.toBe(runtime.pid);
+      expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
+      await group.locator(".group-new-session").click();
+      await host.expectPiVisible(folder);
+      expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
+      expect(existsSync(metadata.file)).toBe(false);
+      await testInfo.attach("Unsaved same-cwd session reuse", {
+        body: JSON.stringify({
+          metadata,
+          runtime,
+          snapshot: host.snapshot(),
+          state: JSON.parse(readFileSync(statePath, "utf8")),
+        }),
+        contentType: "application/json",
+      });
       await testInfo.attach("登録 cwd で起動", {
         body: await host.page.screenshot(),
         contentType: "image/png",
@@ -1146,10 +1215,8 @@ test(
       expect(unarchivedA.pid).not.toBe(initialA.pid);
       expect(existsSync(`/proc/${initialA.pid}`)).toBe(false);
       expect(
-        host
-          .tmux(["display-message", "-p", "-t", unarchivedA.target, "#{pane_start_command}"])
-          .trim(),
-      ).toBe(`pi --session ${host.sessions.A.session}`);
+        host.tmux(["display-message", "-p", "-t", unarchivedA.target, "#{pane_start_command}"]),
+      ).toContain(host.sessions.A.session);
       expect(readFileSync(host.sessions.A.session, "utf8").startsWith(sourceA)).toBe(true);
       expect(readFileSync(host.sessions.B.session, "utf8")).toBe(sourceB);
       expect((JSON.parse(readFileSync(statePath, "utf8")) as { sentinel?: string }).sentinel).toBe(
@@ -1175,8 +1242,8 @@ test(
       expect(resumed.pid).toBe(unarchivedA.pid);
       expect(resumed.pid).not.toBe(initialA.pid);
       expect(
-        host.tmux(["display-message", "-p", "-t", resumed.target, "#{pane_start_command}"]).trim(),
-      ).toBe(`pi --session ${host.sessions.A.session}`);
+        host.tmux(["display-message", "-p", "-t", resumed.target, "#{pane_start_command}"]),
+      ).toContain(host.sessions.A.session);
       expect(host.piProcesses().find((entry) => entry.target === initialB.target)?.pid).toBe(
         initialB.pid,
       );
@@ -1364,7 +1431,7 @@ test(
       await expectPhase("A", phases[2]);
     });
 
-    await test.step("Complete a displayed run as read and keep it read after switching away", async () => {
+    await test.step("Keep a displayed completion unread until its row is explicitly selected", async () => {
       await openLiveSession("A");
       for (const phase of [phases[0], phases[2]]) {
         const store = JSON.parse(readFileSync(statePath, "utf8")) as SessionStateStoreData;
@@ -1372,9 +1439,11 @@ test(
           host.sessions.A.id
         ].state = phase.state;
         writeFileSync(statePath, JSON.stringify(store));
-        await expectPhase("A", phase);
+        await expectPhase("A", { ...phase, hasUnread: phase.state === "waiting-user" });
       }
       await openLiveSession("External");
+      await expectPhase("A", { ...phases[2], hasUnread: true });
+      await openLiveSession("A");
       await expectPhase("A", phases[2]);
     });
 
@@ -1426,7 +1495,7 @@ test(
         .locator(".part.sidebar .title-label")
         .describe("Native Sessions title")
         .hover();
-      await testInfo.attach("running / waiting-approval / unread completion / read standby", {
+      await testInfo.attach("running / waiting-approval / waiting-user", {
         body: await host.page.screenshot({
           path: testInfo.outputPath("session-list-phases.png"),
         }),

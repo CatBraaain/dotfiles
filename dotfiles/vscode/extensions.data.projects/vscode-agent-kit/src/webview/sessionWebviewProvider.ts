@@ -171,16 +171,12 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     this.unreadSessionIds = unreadIds;
   }
 
-  /** Drop the phases of sessions whose Pi tmux session has no live pane
-   * (stale entries left behind by abnormally terminated Pi; the entries
-   * themselves stay in the store). When tmux cannot be queried, no phase is
-   * shown. */
   private async livePhases(
     storePhases: ReadonlyMap<string, SessionPhase>,
   ): Promise<Map<string, SessionPhase> | null> {
     const phases = new Map<string, SessionPhase>();
     if (storePhases.size === 0) return phases;
-    const aliveIds = await this.deps.registry.runtimes.aliveSessionIds([...storePhases.keys()]);
+    const aliveIds = await this.deps.registry.mux.aliveSessionIds([...storePhases.keys()]);
     if (aliveIds === null) return null;
     for (const [sessionId, phase] of storePhases) {
       if (aliveIds.has(sessionId)) phases.set(sessionId, phase);
@@ -236,13 +232,11 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
     if (request.type === "unarchiveSession") {
       await this.deps.registry.run(async () => {
-        const unarchived = await this.updateKnownSession(request.sessionId, (ref) =>
+        const session = await this.updateKnownSession(request.sessionId, (ref) =>
           unarchiveSessions(this.deps.statePath, [ref]),
         );
-        if (!unarchived) return;
-        // Open the session right away so the session that just came back
-        // from the archive shows in the shared terminal.
-        await this.openSession(request.sessionId);
+        if (session === undefined) return;
+        await this.openKnownSession(session);
       });
       return;
     }
@@ -298,25 +292,22 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     this.post({ type: "sessions", state });
   }
 
-  /** Run a single session's store update: validate the session id, apply the
-   * update in one write, then refresh. An unknown id answers with an error
-   * and leaves the store unchanged. Resolves with whether the update applied. */
   private async updateKnownSession(
     sessionId: string,
     update: (ref: SessionRef) => SessionStateUpdateResult,
-  ): Promise<boolean> {
+  ): Promise<SessionSummary | undefined> {
     const session = this.sessionsById.get(sessionId);
     if (session === undefined) {
       this.postError(`Session not found: ${sessionId}`);
-      return false;
+      return undefined;
     }
     const result = update({ sessionId, cwd: session.cwd });
     if (!result.ok) {
       this.postError(result.message);
-      return false;
+      return undefined;
     }
     await this.refresh();
-    return true;
+    return session;
   }
 
   /** Register a workspace folder: create its store entry when the cwd has
@@ -353,8 +344,16 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       this.postError(`Session not found: ${sessionId}`);
       return;
     }
+    await this.openKnownSession(session);
+  }
+
+  private async openKnownSession(session: SessionSummary): Promise<void> {
+    const { sessionId } = session;
     try {
-      if (!(await sessionFileExists(session.filePath))) {
+      if (
+        !(await sessionFileExists(session.filePath)) &&
+        !(await this.deps.registry.mux.aliveSessionIds([sessionId]))?.has(sessionId)
+      ) {
         this.postError(`Session file no longer exists: ${sessionId}`);
         return;
       }
@@ -369,7 +368,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       ({ terminal } = await this.deps.registry.open({
         sessionId,
         cwd: session.cwd,
-        args: ["--session", session.filePath],
       }));
     } catch (error) {
       this.postError(
