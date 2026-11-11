@@ -24,7 +24,8 @@ let onError: ReturnType<typeof vi.fn<(message: string) => void>>;
 let execute: ReturnType<
   typeof vi.fn<(executable: string, args: string[], cwd?: string) => Promise<string>>
 >;
-let live: Map<string, PiMuxSession>;
+let live: Map<string, PiMuxSession & { cwd: string }>;
+let registeredCwds: string[];
 let saved: Set<string>;
 let fileExists: ReturnType<typeof vi.fn<(file: string) => Promise<boolean>>>;
 let sequence: number;
@@ -34,21 +35,28 @@ beforeEach(async () => {
   statePath = join(root, "session-state.json");
   onError = vi.fn();
   live = new Map();
+  registeredCwds = [];
   saved = new Set();
   sequence = 0;
   fileExists = vi.fn(async (file) => saved.has(file));
   execute = vi.fn(async (_executable, args, cwd) => {
-    if (args[0] === "list") return JSON.stringify([...live.values()]);
+    if (args[0] === "list") return JSON.stringify(listWorkspaces());
     const physicalCwd = await realpath(cwd!);
     const existing = [...live.values()].find(
-      (session) => session.cwd === physicalCwd && !saved.has(session.file!),
+      (session) => session.cwd === physicalCwd && !saved.has(session.file),
     );
     if (existing !== undefined) return `Pi session ${existing.id}\n`;
     const id = `new-${++sequence}`;
-    live.set(id, { id, cwd: physicalCwd, file: join(root, `${id}.jsonl`), state: null });
+    live.set(id, {
+      id,
+      cwd: physicalCwd,
+      file: join(root, `${id}.jsonl`),
+      state: null,
+      title: null,
+    });
     return `Pi session ${id}\n`;
   });
-  pool = new EmptySessionPool({ statePath, mux: new PiMux(execute), fileExists, onError });
+  pool = new EmptySessionPool({ mux: new PiMux(execute), fileExists, onError });
   api.createTerminal.mockClear();
 });
 
@@ -59,13 +67,24 @@ afterEach(async () => {
 });
 
 async function register(cwds: string[]) {
+  registeredCwds = cwds;
   await writeFile(
     statePath,
     JSON.stringify({
       "active-workspaces": Object.fromEntries(cwds.map((cwd) => [cwd, { "active-sessions": {} }])),
     }),
   );
-  pool.syncWorkspaces();
+  pool.syncWorkspaces(cwds);
+}
+
+function listWorkspaces() {
+  const sessionsByCwd = new Map<string, PiMuxSession[]>();
+  for (const { cwd, ...session } of live.values()) {
+    const sessions = sessionsByCwd.get(cwd) ?? [];
+    sessions.push(session);
+    sessionsByCwd.set(cwd, sessions);
+  }
+  return [...sessionsByCwd].map(([cwd, sessions]) => ({ cwd, sessions }));
 }
 
 function newCalls() {
@@ -226,7 +245,7 @@ describe("EmptySessionPool", () => {
     await ready();
     await register([root, other]);
     await ready(2);
-    pool.syncWorkspaces();
+    pool.syncWorkspaces(registeredCwds);
     expect(newCalls().map(([, , cwd]) => cwd)).toEqual([root, other]);
   });
 
@@ -236,12 +255,13 @@ describe("EmptySessionPool", () => {
       cwd: root,
       file: join(root, "empty.jsonl"),
       state: null,
+      title: null,
     });
     await register([root]);
     await ready();
     pool.dispose();
-    pool = new EmptySessionPool({ statePath, mux: new PiMux(execute), fileExists, onError });
-    pool.syncWorkspaces();
+    pool = new EmptySessionPool({ mux: new PiMux(execute), fileExists, onError });
+    pool.syncWorkspaces(registeredCwds);
     await ready(2);
     expect([...live.keys()]).toEqual(["preexisting"]);
     expect(newCalls()).toHaveLength(2);
@@ -284,7 +304,7 @@ describe("EmptySessionPool", () => {
     const file = firstFile();
     saved.add(file);
     pool.onSessionFileChanged(file);
-    list.resolve(JSON.stringify([...live.values()]));
+    list.resolve(JSON.stringify(listWorkspaces()));
     await vi.waitFor(() => expect(newCalls()).toHaveLength(2));
     await ready(2);
     expect(onError).not.toHaveBeenCalled();
@@ -299,6 +319,7 @@ describe("EmptySessionPool", () => {
       cwd: root,
       file: join(root, "foreground.jsonl"),
       state: null,
+      title: null,
     });
     pool.observeOpened(root, "foreground");
     await ready();
@@ -313,13 +334,14 @@ describe("EmptySessionPool", () => {
     await register([root]);
     await ready();
     live.delete("new-1");
-    pool.syncWorkspaces();
+    pool.syncWorkspaces(registeredCwds);
     expect(newCalls()).toHaveLength(1);
     live.set("replacement", {
       id: "replacement",
       cwd: root,
       file: join(root, "replacement.jsonl"),
       state: null,
+      title: null,
     });
     pool.observeOpened(root, "replacement");
     await ready(2);
@@ -350,7 +372,13 @@ describe("EmptySessionPool", () => {
     await register([root]);
     await vi.waitFor(() => expect(newCalls()).toHaveLength(1));
     await register([]);
-    live.set("late", { id: "late", cwd: root, file: join(root, "late.jsonl"), state: null });
+    live.set("late", {
+      id: "late",
+      cwd: root,
+      file: join(root, "late.jsonl"),
+      state: null,
+      title: null,
+    });
     gate.resolve("Pi session late\n");
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(execute.mock.calls).toHaveLength(1);
@@ -364,7 +392,7 @@ describe("EmptySessionPool", () => {
     pool.dispose();
     saved.add(file);
     pool.onSessionFileChanged(file);
-    pool.syncWorkspaces();
+    pool.syncWorkspaces(registeredCwds);
     pool.observeOpened(root, "new-1");
     expect(newCalls()).toHaveLength(1);
     expect(live.size).toBe(1);
@@ -376,8 +404,8 @@ describe("EmptySessionPool", () => {
     await register([root]);
     await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(expect.stringContaining(root)));
     expect(onError.mock.calls[0][0]).toContain("pi-mux missing");
-    pool.syncWorkspaces();
-    pool.syncWorkspaces();
+    pool.syncWorkspaces(registeredCwds);
+    pool.syncWorkspaces(registeredCwds);
     expect(newCalls()).toHaveLength(1);
     await register([]);
     await register([root]);

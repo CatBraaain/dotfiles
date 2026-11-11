@@ -604,7 +604,7 @@ export class VSCodeFixture {
       "bin",
       "runtime",
       "home/.config/tmux",
-      "agent/extensions/tmux-handoff",
+      "agent/extensions/pi-mux-bridge",
       "agent/extensions/tools",
     ]) {
       mkdirSync(join(this.directory, directory), { recursive: true, mode: 0o700 });
@@ -620,8 +620,8 @@ export class VSCodeFixture {
     const agentSource = join(dotfiles, ".pi/agent");
     for (const name of ["index.ts", "shared.ts"])
       copyFileSync(
-        join(agentSource, "extensions.exact/tmux-handoff", name),
-        join(this.directory, "agent/extensions/tmux-handoff", name),
+        join(agentSource, "extensions.exact/pi-mux-bridge", name),
+        join(this.directory, "agent/extensions/pi-mux-bridge", name),
       );
     copyFileSync(
       join(agentSource, "extensions.exact/tools/background-bash.ts"),

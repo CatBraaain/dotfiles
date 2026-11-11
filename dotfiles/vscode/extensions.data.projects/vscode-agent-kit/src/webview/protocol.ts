@@ -36,6 +36,7 @@ export interface WebviewState {
 export type ExtensionMessage =
   | { type: "loading"; displayedSessionId?: string | null }
   | { type: "sessions"; state: WebviewState }
+  | { type: "workspaceAdded" }
   | { type: "sessionsError"; message: string }
   | { type: "error"; message: string };
 

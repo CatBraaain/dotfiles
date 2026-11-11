@@ -15,11 +15,14 @@ import { expect, test, type VSCodeFixture } from "../support/vscode";
 test.use({ trace: "on" });
 
 test(
-  "Shows saved history with workspace All when a work folder has no unarchived sessions",
+  "Shows saved history with workspace All alongside a prewarmed unsaved Pi",
   { annotation: { type: "spec", description: "E2E-1" } },
   async ({ host }, testInfo) => {
-    await test.step("Inspect the work folder groups and the empty B Unarchived group", async () => {
+    await test.step("Inspect work folder groups and prewarmed Unarchived rows", async () => {
       const frame = await host.sessionFrame();
+      await expect(frame.locator(".session-row").describe("Prewarmed unsaved Pi rows")).toHaveCount(
+        3,
+      );
       for (const key of ["A", "B"]) {
         const group = frame
           .locator("section.group")
@@ -41,7 +44,8 @@ test(
         .locator("section.group")
         .filter({ has: frame.getByTitle(host.sessions.B.cwd, { exact: true }) })
         .describe("Empty B Unarchived group");
-      await expect(emptyGroup.locator(".session-row")).toHaveCount(0);
+      await expect(emptyGroup.locator(".session-row")).toHaveCount(1);
+      await expect(emptyGroup.locator(`[data-session="${host.sessions.B.id}"]`)).toHaveCount(0);
       await expect(emptyGroup.locator(".empty")).toHaveCount(0);
       await expect(frame.locator(".group-path")).toHaveCount(0);
       await expect(frame.locator("#app header [data-mode-toggle]")).toHaveCount(0);
@@ -217,6 +221,11 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
         await expect(frame.locator("body")).toHaveClass(
           theme.includes("Light") ? /vscode-light/ : /vscode-dark/,
         );
+        const mode = frame.locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`);
+        if ((await mode.getAttribute("data-mode")) === "unarchived") await mode.click();
+        await expect(
+          frame.locator(".session-row").describe("Saved A history and prewarmed workspace rows"),
+        ).toHaveCount(5);
         const button = frame
           .locator(`[data-session="${host.sessions.A.id}"]`)
           .describe("Session background and focus target");
@@ -253,7 +262,7 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
               name: rect(row.querySelector(".session-name")!),
               status: rect(row.querySelector(".session-status")!),
               timestamp: rect(row.querySelector(".session-timestamp")!),
-              archive: rect(row.querySelector(".archive")!),
+              archive: rect(row.querySelector(".archive, .unarchive")!),
               buttonBackground: style.backgroundColor,
               buttonOutline: style.outlineStyle,
               background: paint.backgroundColor,
@@ -386,12 +395,10 @@ test(
         await host.selectSession(key);
       });
       await test.step(`Check the real ${key} Pi process cwd and PID reuse`, async () => {
-        await expect
-          .poll(() => host.piProcesses().some((process) => process.cwd === host.sessions[key].cwd))
-          .toBe(true);
+        await expect.poll(() => host.sessionRuntime(key)).toBeDefined();
         const matches = host
           .piProcesses()
-          .filter((process) => process.cwd === host.sessions[key].cwd);
+          .filter((process) => process.target === host.sessionRuntime(key)?.target);
         expect(matches).toHaveLength(1);
         const pi = matches[0];
         const priorPid = firstPids.get(key);
@@ -408,7 +415,7 @@ test(
         const terminalInput = host.page
           .getByRole("textbox", { name: /^Terminal [0-9]+/ })
           .describe("Shared Pi command input");
-        const runtime = host.piProcesses().find((entry) => entry.cwd === host.sessions[key].cwd)!;
+        const runtime = host.sessionRuntime(key)!;
         const startCommand = host
           .tmux(["display-message", "-p", "-t", runtime.target, "#{pane_start_command}"])
           .trim();
@@ -534,19 +541,16 @@ test(
       expect(
         host
           .piProcesses()
+          .filter((entry) => [...firstPids.values()].includes(entry.pid))
           .map((entry) => entry.pid)
           .sort(),
       ).toEqual([...firstPids.values()].sort());
       await host.selectSession("A");
       await host.expectNativeDisplay("A");
-      expect(host.piProcesses().find((entry) => entry.cwd === host.sessions.A.cwd)?.pid).toBe(
-        firstPids.get("A"),
-      );
+      expect(host.sessionRuntime("A")?.pid).toBe(firstPids.get("A"));
       await host.selectSession("B");
       await host.expectNativeDisplay("B");
-      expect(host.piProcesses().find((entry) => entry.cwd === host.sessions.B.cwd)?.pid).toBe(
-        firstPids.get("B"),
-      );
+      expect(host.sessionRuntime("B")?.pid).toBe(firstPids.get("B"));
     });
     await test.step("Switch same-cwd conversations without replacing the display or their Pi processes", async () => {
       await host.selectSession("A");
@@ -673,9 +677,7 @@ test(
       const restarted = host.piProcesses().filter((entry) => entry.target === runtime.target);
       expect(restarted).toHaveLength(1);
       expect(restarted[0].pid).not.toBe(firstPids.get("A"));
-      expect(host.piProcesses().find((entry) => entry.cwd === host.sessions.B.cwd)?.pid).toBe(
-        firstPids.get("B"),
-      );
+      expect(host.sessionRuntime("B")?.pid).toBe(firstPids.get("B"));
     });
   },
 );
@@ -794,6 +796,11 @@ test(
   "New Workspace のキャンセルと無効なパスを安全に扱える",
   { annotation: { type: "spec", description: "E2E-12" } },
   async ({ host }, testInfo) => {
+    await expect.poll(() => host.piProcesses().length).toBe(3);
+    const baseline = host
+      .piProcesses()
+      .map(({ pid }) => pid)
+      .sort((a, b) => a - b);
     await test.step("Discard the workspace draft when focus moves to the editor", async () => {
       await host.page.keyboard.press("Control+N");
       const editor = host.page
@@ -863,7 +870,12 @@ test(
       });
       expect(await frame.locator("section.group").count()).toBe(groupsBefore);
       expect(host.snapshot().terminals).toHaveLength(0);
-      expect(host.piProcesses()).toHaveLength(0);
+      expect(
+        host
+          .piProcesses()
+          .map(({ pid }) => pid)
+          .sort((a, b) => a - b),
+      ).toEqual(baseline);
     });
     await test.step("Cancel the New workspace form with Escape without changing the list", async () => {
       const frame = await host.sessionFrame();
@@ -879,7 +891,12 @@ test(
       });
       expect(await frame.locator("section.group").count()).toBe(groupsBefore);
       expect(host.snapshot().terminals).toHaveLength(0);
-      expect(host.piProcesses()).toHaveLength(0);
+      expect(
+        host
+          .piProcesses()
+          .map(({ pid }) => pid)
+          .sort((a, b) => a - b),
+      ).toEqual(baseline);
     });
   },
 );
@@ -918,8 +935,10 @@ test(
         .toBe(true);
       await host.expectPiVisible(folder);
       await expect(
-        frame.locator(".session-row.selected").describe("Saved session selection after new launch"),
-      ).toHaveCount(0);
+        frame
+          .locator(".session-row.selected")
+          .describe("Unsaved session selection after new launch"),
+      ).toHaveCount(1);
       const runtime = host.piProcesses().find((entry) => entry.cwd === folder)!;
       const encoded = host
         .tmux(["display-message", "-p", "-t", runtime.target, "#{@pi-tmux-session}"])
@@ -936,7 +955,7 @@ test(
         )
         .toEqual([metadata.id]);
       expect(existsSync(metadata.file)).toBe(false);
-      await expect(group.locator(".session-row")).toHaveCount(0);
+      await expect(group.locator(".session-row")).toHaveCount(1);
       const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
       await group.locator(".group-new-session").click();
       await host.expectPiVisible(folder);
@@ -1053,34 +1072,44 @@ test(
 );
 
 test(
-  "セッションのある未登録 cwd を一覧に載せず、削除済みセッションファイルの選択を安全に扱う",
+  "Excludes unregistered cwd history and automatically removes a deleted saved conversation",
   { annotation: { type: "spec", description: "E2E-7" } },
   async ({ host }) => {
+    await expect.poll(() => host.piProcesses().length).toBe(3);
+    const baseline = host
+      .piProcesses()
+      .map(({ pid }) => pid)
+      .sort((a, b) => a - b);
     await test.step("Keep sessions of unregistered work folders out of the list", async () => {
       const frame = await host.sessionFrame();
       // The Missing fixture has a saved session but no workspace registration,
       // so the whitelist list must not show its row at all.
       await expect(frame.locator(`[data-session="${host.sessions.Missing.id}"]`)).toHaveCount(0);
       expect(host.snapshot().terminals).toHaveLength(0);
-      expect(host.piProcesses()).toHaveLength(0);
+      expect(
+        host
+          .piProcesses()
+          .map(({ pid }) => pid)
+          .sort((a, b) => a - b),
+      ).toEqual(baseline);
     });
-    await test.step("Delete only the dummy session after listing it and select the stale row", async () => {
+    await test.step("Delete only the dummy saved session and observe its automatic removal", async () => {
       const frame = await host.sessionFrame();
+      const mode = frame.locator(`[data-mode-toggle="${host.sessions.Deleted.cwd}"]`);
+      if ((await mode.getAttribute("data-mode")) === "unarchived") await mode.click();
+      const row = frame
+        .locator(`[data-session="${host.sessions.Deleted.id}"]`)
+        .describe("Deleted saved conversation");
+      await expect(row).toBeVisible();
       unlinkSync(host.sessions.Deleted.session);
-      await frame
-        .locator(`[data-session="${host.sessions.Deleted.id}"] .session-name`)
-        .describe("Stale deleted session")
-        .click({ steps: 15 });
-      await expect(
-        host.page
-          .locator(".notification-list-item-message")
-          .filter({
-            hasText: `Session file no longer exists: ${host.sessions.Deleted.id}`,
-          })
-          .first(),
-      ).toBeVisible();
+      await expect(row).toHaveCount(0);
       expect(host.snapshot().terminals).toHaveLength(0);
-      expect(host.piProcesses()).toHaveLength(0);
+      expect(
+        host
+          .piProcesses()
+          .map(({ pid }) => pid)
+          .sort((a, b) => a - b),
+      ).toEqual(baseline);
     });
     await test.step("Compare dummy original files, Git index and worktree contents", async () => {
       for (const [key, session] of Object.entries(host.sessions)) {
@@ -1322,6 +1351,8 @@ test(
     ] as const;
     let sessionStateBytes = "";
     await test.step("Prepare four conversations in one workspace in update order", async () => {
+      await expect.poll(() => host.piProcesses().length).toBe(3);
+      for (const runtime of host.piProcesses()) host.tmux(["kill-session", "-t", runtime.target]);
       const store = JSON.parse(readFileSync(statePath, "utf8")) as SessionStateStoreData;
       const activeSessions = store["active-workspaces"][workspaceCwd]["active-sessions"]!;
       const sessionDirectory = dirname(host.sessions.A.session);
@@ -1347,6 +1378,8 @@ test(
       await expect(
         frame.locator("section.group").describe("Only the shared workspace"),
       ).toHaveCount(1);
+      const mode = frame.locator(`[data-mode-toggle="${workspaceCwd}"]`);
+      if ((await mode.getAttribute("data-mode")) === "unarchived") await mode.click();
       await expect(
         frame.locator(".session-row").describe("Four prepared conversations"),
       ).toHaveCount(4);

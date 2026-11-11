@@ -175,6 +175,7 @@ export function createDemoBridge(): {
       // The catalog validates no real folder: an empty-cwd group appears as is.
       if (!registeredCwds.includes(request.path))
         registeredCwds = [...registeredCwds, request.path];
+      listener?.({ type: "workspaceAdded" });
       postSessions();
       return;
     }

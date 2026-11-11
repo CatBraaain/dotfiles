@@ -22,7 +22,6 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   const emptySessions = new EmptySessionPool({
-    statePath,
     mux: registry.mux,
     onError: (message) => {
       void vscode.window.showErrorMessage(message);
@@ -40,6 +39,7 @@ export function activate(context: vscode.ExtensionContext): void {
     statePath,
     registry,
     startNewSession: (cwd) => launcher.start(cwd),
+    onWorkspaces: (cwds) => emptySessions.syncWorkspaces(cwds),
   });
 
   const stateWatcher = vscode.workspace.createFileSystemWatcher(
@@ -54,10 +54,9 @@ export function activate(context: vscode.ExtensionContext): void {
   );
   sessionWatcher.onDidCreate((uri) => emptySessions.onSessionFileChanged(uri.fsPath));
   sessionWatcher.onDidChange((uri) => emptySessions.onSessionFileChanged(uri.fsPath));
-  emptySessions.syncWorkspaces();
+  void provider.refresh();
 
   function onStateChanged(): void {
-    emptySessions.syncWorkspaces();
     void provider.refresh();
   }
 

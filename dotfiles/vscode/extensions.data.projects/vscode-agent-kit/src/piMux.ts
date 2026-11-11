@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { isAbsolute } from "node:path";
 import { errorMessage, isRecord } from "./guards";
 
 const executeFile = promisify(execFile);
@@ -11,9 +12,20 @@ export interface PiSession {
 
 export interface PiMuxSession {
   id: string;
-  cwd: string;
-  file: string | null;
+  file: string;
   state: string | null;
+  title: string | null;
+}
+
+export interface PiMuxWorkspace {
+  cwd: string;
+  sessions: PiMuxSession[];
+}
+
+export function flattenPiMuxSessions(workspaces: readonly PiMuxWorkspace[]) {
+  return workspaces.flatMap(({ cwd, sessions }) =>
+    sessions.map((session) => ({ ...session, cwd })),
+  );
 }
 
 export class PiMux {
@@ -32,18 +44,18 @@ export class PiMux {
     return match[1];
   }
 
-  async list(): Promise<PiMuxSession[]> {
+  async list(): Promise<PiMuxWorkspace[]> {
     const output = await this.command(["list"]);
-    const sessions: unknown = JSON.parse(output);
-    if (!Array.isArray(sessions) || !sessions.every(isPiMuxSession)) {
+    const workspaces: unknown = JSON.parse(output);
+    if (!Array.isArray(workspaces) || !workspaces.every(isPiMuxWorkspace)) {
       throw new Error("Invalid pi-mux list response");
     }
-    return sessions;
+    return workspaces;
   }
 
   async aliveSessionIds(sessionIds: readonly string[]): Promise<Set<string> | null> {
     try {
-      const liveIds = new Set((await this.list()).map((session) => session.id));
+      const liveIds = new Set(flattenPiMuxSessions(await this.list()).map((session) => session.id));
       return new Set(sessionIds.filter((id) => liveIds.has(id)));
     } catch {
       return null;
@@ -59,14 +71,25 @@ export class PiMux {
   }
 }
 
+function isPiMuxWorkspace(workspace: unknown): workspace is PiMuxWorkspace {
+  return (
+    isRecord(workspace) &&
+    typeof workspace.cwd === "string" &&
+    isAbsolute(workspace.cwd) &&
+    Array.isArray(workspace.sessions) &&
+    workspace.sessions.every(isPiMuxSession)
+  );
+}
+
 function isPiMuxSession(session: unknown): session is PiMuxSession {
   return (
     isRecord(session) &&
     typeof session.id === "string" &&
     session.id.length > 0 &&
-    typeof session.cwd === "string" &&
-    (session.file === null || typeof session.file === "string") &&
-    (session.state === null || typeof session.state === "string")
+    typeof session.file === "string" &&
+    isAbsolute(session.file) &&
+    (session.state === null || typeof session.state === "string") &&
+    (session.title === null || typeof session.title === "string")
   );
 }
 

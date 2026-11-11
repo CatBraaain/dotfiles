@@ -1,9 +1,8 @@
 import type * as vscode from "vscode";
-import type { PiMux } from "./piMux";
+import { flattenPiMuxSessions, type PiMux } from "./piMux";
 import { realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { errorMessage } from "./guards";
-import { readSessionStateStore, registeredWorkspaceCwds } from "./sessionStateStore";
 import { sessionFileExists } from "./sessionStore";
 import { requireWorkDirectory, sameWorkDirectory } from "./workDirectory";
 
@@ -19,7 +18,6 @@ interface WorkspaceSlot {
 }
 
 export interface EmptySessionPoolDeps {
-  statePath: string;
   mux: PiMux;
   onError: (message: string) => void;
   fileExists?: (path: string) => Promise<boolean>;
@@ -33,16 +31,9 @@ export class EmptySessionPool implements vscode.Disposable {
 
   constructor(private readonly deps: EmptySessionPoolDeps) {}
 
-  syncWorkspaces(): void {
+  syncWorkspaces(cwds: readonly string[]): void {
     if (this.disposed) return;
-    const state = readSessionStateStore(this.deps.statePath);
-    if (state.status === "error") {
-      this.deps.onError(state.message);
-      return;
-    }
-    const registered = new Set(
-      registeredWorkspaceCwds(state.status === "ok" ? state.data : undefined),
-    );
+    const registered = new Set(cwds);
     for (const cwd of this.workspaces.keys()) {
       if (!registered.has(cwd)) this.workspaces.delete(cwd);
     }
@@ -119,7 +110,9 @@ export class EmptySessionPool implements vscode.Disposable {
   private async track(slot: WorkspaceSlot, sessionId: string): Promise<void> {
     const cwd = this.registeredCwd(slot);
     if (this.consumed.has(sessionId) || cwd === undefined) return;
-    const session = (await this.deps.mux.list()).find((entry) => entry.id === sessionId);
+    const session = flattenPiMuxSessions(await this.deps.mux.list()).find(
+      (entry) => entry.id === sessionId,
+    );
     if (this.registeredCwd(slot) === undefined || this.consumed.has(sessionId)) return;
     if (
       session?.file === null ||

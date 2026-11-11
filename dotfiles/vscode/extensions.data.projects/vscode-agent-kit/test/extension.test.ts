@@ -30,6 +30,7 @@ vi.mock("vscode", () => ({
 describe("extension commands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(SessionWebviewProvider.prototype, "refresh").mockResolvedValue();
     vi.stubEnv("PI_CODING_AGENT_DIR", "/fixture/agent");
     vi.stubEnv("PI_CODING_AGENT_SESSION_DIR", "/fixture/sessions");
   });
@@ -72,14 +73,14 @@ describe("extension commands", () => {
       .mockImplementation(() => {});
     const refresh = vi.spyOn(SessionWebviewProvider.prototype, "refresh").mockResolvedValue();
     register();
-    expect(sync).toHaveBeenCalledOnce();
-    expect(refresh).not.toHaveBeenCalled();
+    expect(sync).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledOnce();
     for (const method of ["onDidCreate", "onDidChange", "onDidDelete"] as const) {
       const callback = api.watcher[method].mock.calls[0][0] as () => void;
       callback();
     }
-    expect(sync).toHaveBeenCalledTimes(4);
-    expect(refresh).toHaveBeenCalledTimes(3);
+    expect(sync).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledTimes(4);
   });
 
   it("observes session file creation and changes without relying on state or Refresh", () => {
@@ -123,6 +124,7 @@ describe("extension commands", () => {
     const refresh = vi.spyOn(SessionWebviewProvider.prototype, "refresh").mockResolvedValue();
     const command = register("piSessions.refreshSessions");
     const provider = api.registerWebviewViewProvider.mock.calls[0][1];
+    refresh.mockClear();
 
     await command();
 

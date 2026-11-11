@@ -13,7 +13,7 @@ import {
   type SessionStateStoreData,
 } from "../src/sessionStateStore";
 import { SessionLauncher } from "../src/launcher";
-import { PiMux, type PiMuxSession } from "../src/piMux";
+import { PiMux, type PiMuxWorkspace } from "../src/piMux";
 import { TerminalRegistry } from "../src/terminalRegistry";
 import { editorTerminals } from "../src/terminals";
 import { encodeCwdDirName } from "../src/paths";
@@ -115,8 +115,33 @@ function createView() {
   };
 }
 
-function createRuntimeRegistry() {
+function deferred<T>() {
+  let resolve!: (result: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((accept, fail) => {
+    resolve = accept;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+async function finishRefresh(provider: SessionWebviewProvider) {
+  await (provider as unknown as { pendingRefresh?: Promise<void> }).pendingRefresh;
+}
+
+async function tick(provider: SessionWebviewProvider, milliseconds = 1000) {
+  await vi.advanceTimersByTimeAsync(milliseconds);
+  await finishRefresh(provider);
+}
+
+function providerRuntimes() {
   const runtimes = fakeRuntimes();
+  runtimes.workspaces.add(root);
+  return runtimes;
+}
+
+function createRuntimeRegistry() {
+  const runtimes = providerRuntimes();
   return {
     ...runtimes,
     registry: new TerminalRegistry(runtimes.store, editorTerminals(runtimes.store), runtimes.mux),
@@ -176,7 +201,18 @@ async function archiveFixture() {
   await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "other.jsonl", [
     header({ id: inactiveSessionId, cwd: root }),
   ]);
-  const runtimes = fakeRuntimes();
+  const runtimes = providerRuntimes();
+  for (const id of [activeSessionId, inactiveSessionId]) {
+    runtimes.live.set(id, { sessionId: id, cwd: root, target: `pi-${id}` });
+    runtimes.files.set(
+      id,
+      join(
+        sessionDir,
+        encodeCwdDirName(root),
+        id === activeSessionId ? "active.jsonl" : "other.jsonl",
+      ),
+    );
+  }
   const registry = new TerminalRegistry(
     runtimes.store,
     editorTerminals(runtimes.store),
@@ -261,7 +297,7 @@ async function loadingFixture() {
   await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
     header({ id: activeSessionId, cwd: root }),
   ]);
-  const { store, mux, mocks } = fakeRuntimes();
+  const { store, mux, mocks } = providerRuntimes();
   const registry = new TerminalRegistry(store, editorTerminals(store), mux);
   const { provider, statePath } = createProvider({ sessionDir, registry });
   expect(
@@ -286,180 +322,106 @@ async function loadingFixture() {
 }
 
 describe("SessionWebviewProvider", () => {
-  it("reuses the in-flight initial scan when the client becomes ready", async () => {
-    const listSessions = vi.spyOn(sessionStore, "listSessions");
-    const { provider } = await loadingFixture();
-    listSessions.mockClear();
+  it("reuses the in-flight initial acquisition when the client becomes ready", async () => {
+    const { provider, mocks } = await loadingFixture();
+    const held = deferred<PiMuxWorkspace[]>();
+    mocks.list.mockReturnValueOnce(held.promise);
+    mocks.list.mockClear();
     const webview = createView();
-
-    provider.resolveWebviewView(webview.view as never);
-    await webview.receive({ type: "ready" });
-
-    expect(listSessions).toHaveBeenCalledOnce();
-    expect(webview.postMessage).toHaveBeenLastCalledWith({
-      type: "sessions",
-      state: expect.objectContaining({
-        groups: [expect.objectContaining({ cwd: root })],
-      }),
-    });
-  });
-
-  it("delivers the in-flight initial scan error to a ready client without scanning again", async () => {
-    const listSessions = vi.spyOn(sessionStore, "listSessions");
-    const { provider } = await loadingFixture();
-    listSessions.mockClear();
-    let rejectScan!: (error: Error) => void;
-    const scan = new Promise<Awaited<ReturnType<typeof sessionStore.listSessions>>>((_, reject) => {
-      rejectScan = reject;
-    });
-    listSessions.mockReturnValueOnce(scan);
-    const webview = createView();
-
     provider.resolveWebviewView(webview.view as never);
     const ready = webview.receive({ type: "ready" });
-    try {
-      expect(listSessions).toHaveBeenCalledOnce();
-      expect(webview.postMessage.mock.calls.every(([message]) => message.type === "loading")).toBe(
-        true,
-      );
-    } finally {
-      rejectScan(new Error("Session scan failed"));
-      await ready;
-    }
-
-    expect(listSessions).toHaveBeenCalledOnce();
-    expect(
-      webview.postMessage.mock.calls.filter(([message]) => message.type !== "loading"),
-    ).toEqual([
-      [{ type: "sessionsError", message: "Failed to read Pi sessions: Session scan failed" }],
-    ]);
-  });
-
-  it("replays the completed initial result to a ready client without scanning again", async () => {
-    const listSessions = vi.spyOn(sessionStore, "listSessions");
-    const { webview } = await loadingFixture();
-
-    await webview.receive({ type: "ready" });
-
-    expect(listSessions).toHaveBeenCalledOnce();
-    expect(webview.postMessage).toHaveBeenCalledOnce();
+    expect(mocks.list).toHaveBeenCalledOnce();
+    expect(webview.postMessage.mock.calls.every(([message]) => message.type === "loading")).toBe(
+      true,
+    );
+    held.resolve([{ cwd: root, sessions: [] }]);
+    await ready;
+    expect(mocks.list).toHaveBeenCalledOnce();
     expect(webview.postMessage).toHaveBeenLastCalledWith({
       type: "sessions",
       state: expect.objectContaining({ groups: [expect.objectContaining({ cwd: root })] }),
     });
   });
 
-  it("replays the newest acquisition error rather than a stale list on ready", async () => {
-    const { provider, statePath, webview } = await loadingFixture();
-    await writeFile(statePath, "invalid json");
-    await provider.refresh();
-    const latestError = webview.postMessage.mock.lastCall?.[0];
-    webview.postMessage.mockClear();
-    vscodeMocks.showErrorMessage.mockClear();
-
+  it("replays completed success and acquisition errors without another query on ready", async () => {
+    const { provider, mocks, webview } = await loadingFixture();
     await webview.receive({ type: "ready" });
-
-    expect(webview.postMessage.mock.calls).toEqual([[latestError]]);
-    expect(latestError.type).toBe("sessionsError");
-    expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
-  });
-
-  it("still rereads on an explicit refresh after initial ready", async () => {
-    const listSessions = vi.spyOn(sessionStore, "listSessions");
-    const { webview } = await loadingFixture();
-    await webview.receive({ type: "ready" });
-    listSessions.mockClear();
-
-    await webview.receive({ type: "refresh" });
-
-    expect(listSessions).toHaveBeenCalledOnce();
-    expect(webview.postMessage.mock.calls.slice(-2).map(([message]) => message.type)).toEqual([
-      "loading",
-      "sessions",
-    ]);
-  });
-
-  it("waits for the newest explicit refresh on ready without starting a third scan", async () => {
-    const listSessions = vi.spyOn(sessionStore, "listSessions");
-    const { provider, webview, mocks } = await loadingFixture();
-    listSessions.mockClear();
-    const completions: ((ids: PiMuxSession[]) => void)[] = [];
-    mocks.list.mockImplementation(
-      () => new Promise<PiMuxSession[]>((resolve) => completions.push(resolve)),
-    );
-    const firstRefresh = provider.refresh();
-    await vi.waitFor(() => expect(completions).toHaveLength(1));
-    const latestRefresh = provider.refresh();
-    await vi.waitFor(() => expect(completions).toHaveLength(2));
-    let readyFinished = false;
-    const ready = webview.receive({ type: "ready" }).then(() => {
-      readyFinished = true;
-    });
-    try {
-      completions[0]([]);
-      await firstRefresh;
-      expect(readyFinished).toBe(false);
-      expect(listSessions).toHaveBeenCalledTimes(2);
-      expect(webview.postMessage.mock.calls.every(([message]) => message.type === "loading")).toBe(
-        true,
-      );
-    } finally {
-      for (const finish of completions) finish([]);
-      await Promise.all([latestRefresh, ready]);
-    }
-    expect(readyFinished).toBe(true);
+    expect(mocks.list).not.toHaveBeenCalled();
     expect(webview.postMessage).toHaveBeenLastCalledWith({
       type: "sessions",
       state: expect.any(Object),
     });
+    mocks.list.mockRejectedValueOnce(new Error("list unavailable"));
+    await provider.refresh();
+    const last = webview.postMessage.mock.lastCall?.[0];
+    webview.postMessage.mockClear();
+    await webview.receive({ type: "ready" });
+    expect(webview.postMessage.mock.calls).toEqual([[last]]);
+    expect(last.type).toBe("sessionsError");
+    expect(mocks.list).toHaveBeenCalledOnce();
   });
 
-  it("announces loading before asynchronous refresh work finishes", async () => {
-    const { provider, webview, mocks } = await loadingFixture();
-    let finish!: (ids: PiMuxSession[]) => void;
-    const pending = new Promise<PiMuxSession[]>((resolve) => {
-      finish = resolve;
+  it("delivers initial acquisition failure to a ready client", async () => {
+    const { provider, mocks } = await loadingFixture();
+    const held = deferred<PiMuxWorkspace[]>();
+    mocks.list.mockReturnValueOnce(held.promise);
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    const ready = webview.receive({ type: "ready" });
+    held.reject(new Error("list unavailable"));
+    await ready;
+    expect(webview.postMessage).toHaveBeenLastCalledWith({
+      type: "sessionsError",
+      message: "Failed to read Pi sessions: list unavailable",
     });
-    mocks.list.mockReturnValueOnce(pending);
-
-    const refreshing = provider.refresh();
-    try {
-      await vi.waitFor(() => expect(mocks.list).toHaveBeenCalledOnce());
-      expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual(["loading"]);
-    } finally {
-      finish([]);
-      await refreshing;
-    }
-    expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
-      "loading",
-      "sessions",
-    ]);
   });
 
-  it("reports operation errors separately while a list refresh is pending", async () => {
+  it("serializes overlapping refreshes and discards the superseded reply", async () => {
     const { provider, webview, mocks } = await loadingFixture();
-    let finish!: (ids: PiMuxSession[]) => void;
-    mocks.list.mockReturnValueOnce(
-      new Promise<PiMuxSession[]>((resolve) => {
-        finish = resolve;
-      }),
+    const first = deferred<PiMuxWorkspace[]>();
+    const latest = deferred<PiMuxWorkspace[]>();
+    mocks.list.mockReturnValueOnce(first.promise).mockReturnValueOnce(latest.promise);
+    const oldRefresh = provider.refresh();
+    const newRefresh = provider.refresh();
+    const ready = webview.receive({ type: "ready" });
+    expect(mocks.list).toHaveBeenCalledOnce();
+    first.resolve([{ cwd: "/stale", sessions: [] }]);
+    await vi.waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(2));
+    expect(webview.postMessage.mock.calls.every(([message]) => message.type === "loading")).toBe(
+      true,
     );
-    const refreshing = provider.refresh();
-    try {
-      await vi.waitFor(() => expect(mocks.list).toHaveBeenCalledOnce());
-      await webview.receive({ type: "addWorkspace", path: "relative" });
-      expect(webview.postMessage).toHaveBeenLastCalledWith({
-        type: "error",
-        message: expect.stringMatching(/^Invalid workspace path: /),
-      });
-      expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
-        "loading",
-        "error",
-      ]);
-    } finally {
-      finish([]);
-      await refreshing;
-    }
+    latest.resolve([{ cwd: "/latest", sessions: [] }]);
+    await Promise.all([oldRefresh, newRefresh, ready]);
+    expect(webview.postMessage).toHaveBeenLastCalledWith({
+      type: "sessions",
+      state: expect.objectContaining({ groups: [expect.objectContaining({ cwd: "/latest" })] }),
+    });
+  });
+
+  it("keeps the latest acquisition failure after a superseded successful reply", async () => {
+    const { provider, webview, mocks } = await loadingFixture();
+    const held = deferred<PiMuxWorkspace[]>();
+    mocks.list.mockReturnValueOnce(held.promise).mockRejectedValueOnce(new Error("latest failure"));
+    const oldRefresh = provider.refresh();
+    const newRefresh = provider.refresh();
+    held.resolve([]);
+    await Promise.all([oldRefresh, newRefresh]);
+    expect(webview.postMessage).toHaveBeenLastCalledWith({
+      type: "sessionsError",
+      message: "Failed to read Pi sessions: latest failure",
+    });
+  });
+
+  it("announces loading and reports operation errors separately during acquisition", async () => {
+    const { provider, webview, mocks } = await loadingFixture();
+    const held = deferred<PiMuxWorkspace[]>();
+    mocks.list.mockReturnValueOnce(held.promise);
+    const refresh = provider.refresh();
+    expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual(["loading"]);
+    await webview.receive({ type: "addWorkspace", path: "relative" });
+    expect(webview.postMessage.mock.lastCall?.[0].type).toBe("error");
+    held.resolve([]);
+    await refresh;
     expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
       "loading",
       "error",
@@ -467,76 +429,12 @@ describe("SessionWebviewProvider", () => {
     ]);
   });
 
-  it("keeps loading until the newest overlapping refresh finishes", async () => {
-    const { provider, webview, mocks } = await loadingFixture();
-    const completions: ((ids: PiMuxSession[]) => void)[] = [];
-    mocks.list.mockImplementation(
-      () =>
-        new Promise<PiMuxSession[]>((resolve) => {
-          completions.push(resolve);
-        }),
-    );
-    const firstRefresh = provider.refresh();
-    let secondRefresh: Promise<void> | undefined;
-    try {
-      await vi.waitFor(() => expect(completions).toHaveLength(1));
-      secondRefresh = provider.refresh();
-      await vi.waitFor(() => expect(completions).toHaveLength(2));
-      completions[0]([]);
-      await firstRefresh;
-      expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
-        "loading",
-        "loading",
-      ]);
-    } finally {
-      for (const finish of completions) finish([]);
-      await Promise.all([firstRefresh, secondRefresh]);
-    }
-    expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
-      "loading",
-      "loading",
-      "sessions",
-    ]);
-  });
-
-  it("keeps the latest refresh error when an older refresh succeeds later", async () => {
-    const { provider, statePath, webview, mocks } = await loadingFixture();
-    let finish!: (ids: PiMuxSession[]) => void;
-    mocks.list.mockReturnValueOnce(
-      new Promise<PiMuxSession[]>((resolve) => {
-        finish = resolve;
-      }),
-    );
-    const refreshing = provider.refresh();
-    try {
-      await vi.waitFor(() => expect(mocks.list).toHaveBeenCalledOnce());
-      await writeFile(statePath, "invalid json");
-      await provider.refresh();
-    } finally {
-      finish([]);
-      await refreshing;
-    }
-    expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
-      "loading",
-      "loading",
-      "sessionsError",
-    ]);
-  });
-
-  it("ends loading with an error when the session state store cannot be read", async () => {
-    const { provider, statePath } = createProvider();
-    const webview = createView();
-    provider.resolveWebviewView(webview.view as never);
-    await provider.refresh();
+  it("does not read old membership when refreshing", async () => {
+    const { provider, statePath, webview } = await loadingFixture();
     await writeFile(statePath, "invalid json");
-    webview.postMessage.mockClear();
-
-    await webview.receive({ type: "refresh" });
-
-    expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
-      "loading",
-      "sessionsError",
-    ]);
+    await provider.refresh();
+    expect(webview.postMessage.mock.lastCall?.[0].type).toBe("sessions");
+    expect(await readFile(statePath, "utf8")).toBe("invalid json");
   });
 
   it("serves the client module from dist-webview with a random base64 nonce", async () => {
@@ -563,7 +461,17 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "second.jsonl", [
       header({ id: inactiveSessionId, cwd: root }),
     ]);
-    const { provider, statePath } = createProvider({ sessionDir });
+    const runtimes = providerRuntimes();
+    runtimes.live.set(activeSessionId, {
+      sessionId: activeSessionId,
+      cwd: root,
+      target: `pi-${activeSessionId}`,
+    });
+    runtimes.files.set(activeSessionId, join(sessionDir, encodeCwdDirName(root), "first.jsonl"));
+    const { provider, statePath } = createProvider({
+      sessionDir,
+      registry: new TerminalRegistry(runtimes.store, editorTerminals(runtimes.store), runtimes.mux),
+    });
     setUpStore(statePath, root, [activeSessionId]);
 
     const webview = createView();
@@ -618,7 +526,7 @@ describe("SessionWebviewProvider", () => {
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
     const row = webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0];
-    expect(row.isArchived).toBe(false);
+    expect(row.isArchived).toBe(true);
     expect(row).not.toHaveProperty("isLocked");
 
     await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
@@ -685,7 +593,7 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { store, mux, live, phases } = fakeRuntimes();
+    const { store, mux, live, phases } = providerRuntimes();
     const registry = new TerminalRegistry(store, editorTerminals(store), mux);
     live.set(activeSessionId, {
       sessionId: activeSessionId,
@@ -718,7 +626,7 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { store, mux } = fakeRuntimes();
+    const { store, mux } = providerRuntimes();
     const registry = new TerminalRegistry(store, editorTerminals(store), mux);
     const { provider, statePath } = createProvider({ sessionDir, registry });
     setUpStore(statePath, root, [activeSessionId]);
@@ -746,12 +654,12 @@ describe("SessionWebviewProvider", () => {
     });
   });
 
-  it("sends no phase when the pi-mux query fails", async () => {
+  it("reports an acquisition error when the initial pi-mux query fails", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { store, mux, mocks, live } = fakeRuntimes();
+    const { store, mux, mocks, live } = providerRuntimes();
     const registry = new TerminalRegistry(store, editorTerminals(store), mux);
     live.set(activeSessionId, {
       sessionId: activeSessionId,
@@ -774,10 +682,10 @@ describe("SessionWebviewProvider", () => {
 
     await provider.refresh();
 
-    expect(
-      webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].state,
-    ).toBeUndefined();
-    expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+    expect(webview.postMessage.mock.lastCall?.[0].type).toBe("sessionsError");
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining("lookup failed"),
+    );
   });
 
   it("projects mux phases into icons without JSON phase writes", async () => {
@@ -796,9 +704,21 @@ describe("SessionWebviewProvider", () => {
     ]);
     let phase: SessionPhase = "running";
     const execute = vi.fn(async () =>
-      JSON.stringify([{ id: activeSessionId, cwd: root, file: null, state: phase }]),
+      JSON.stringify([
+        {
+          cwd: root,
+          sessions: [
+            {
+              id: activeSessionId,
+              file: join(sessionDir, encodeCwdDirName(root), "active.jsonl"),
+              state: phase,
+              title: null,
+            },
+          ],
+        },
+      ]),
     );
-    const { store } = fakeRuntimes();
+    const { store } = providerRuntimes();
     const mux = new PiMux(execute);
     const registry = new TerminalRegistry(store, editorTerminals(store), mux);
     const { provider, statePath } = createProvider({ sessionDir, registry });
@@ -818,164 +738,148 @@ describe("SessionWebviewProvider", () => {
     expect(await readFile(statePath, "utf8")).toBe(savedState);
   });
 
-  describe("automatic phase refresh", () => {
+  describe("automatic list refresh", () => {
     beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
 
-    it("updates icons and hints after one second without scanning or changing JSON", async () => {
-      const { phases, row, sentState, statePath, mocks, webview } = await unreadFixture();
-      const savedState = await readFile(statePath, "utf8");
-      const scan = vi.spyOn(sessionStore, "listSessions");
+    it("updates membership, title, workspace and phases every second without JSON writes", async () => {
+      const fixture = await unreadFixture();
+      const { provider, phases, titles, live, workspaces, row, statePath, mocks, sentState } =
+        fixture;
+      const original = await readFile(statePath, "utf8");
       mocks.list.mockClear();
-      webview.postMessage.mockClear();
       phases.set(activeSessionId, "running");
+      titles.set(activeSessionId, "Live title");
+      workspaces.add("/new-empty");
       await vi.advanceTimersByTimeAsync(999);
       expect(mocks.list).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(row()).toMatchObject({ state: "running", hasUnread: false });
-      const runningView = JSON.stringify(sessionListView(sentState()));
-      expect(runningView).toContain("Running");
-      expect(runningView).toContain("M21 12a9 9");
-      phases.set(activeSessionId, "waiting-approval");
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(row().state).toBe("waiting-approval");
-      expect(JSON.stringify(sessionListView(sentState()))).toContain("Waiting for approval");
+      await tick(provider, 1);
+      expect(row()).toMatchObject({ state: "running", displayName: "Live title" });
+      expect(sentState().groups.some(({ cwd }) => cwd === "/new-empty")).toBe(true);
       phases.set(activeSessionId, "waiting-user");
-      await vi.advanceTimersByTimeAsync(1_000);
+      await tick(provider);
       expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
-      expect(JSON.stringify(sessionListView(sentState()))).toContain("Unread");
-      expect(scan).not.toHaveBeenCalled();
-      expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
-        "sessions",
-        "sessions",
-        "sessions",
-      ]);
-      expect(await readFile(statePath, "utf8")).toBe(savedState);
+      live.delete(activeSessionId);
+      await tick(provider);
+      expect(row()).toMatchObject({ isArchived: true, state: undefined, hasUnread: false });
+      expect(await readFile(statePath, "utf8")).toBe(original);
     });
 
-    it("retries one second after failure without losing a running observation or unread", async () => {
-      const { phases, mocks, row, setPhase } = await unreadFixture();
+    it("retries after initial and later failures without replacing the last list", async () => {
+      const { provider, mocks, webview } = await loadingFixture();
+      mocks.list.mockRejectedValueOnce(new Error("offline"));
+      await provider.refresh();
+      expect(webview.postMessage.mock.lastCall?.[0].type).toBe("sessionsError");
+      await tick(provider);
+      expect(webview.postMessage.mock.lastCall?.[0].type).toBe("sessions");
+      const { row, setPhase, phases, mocks: runtimeMocks, provider: other } = await unreadFixture();
       await setPhase("running");
-      mocks.list.mockRejectedValueOnce(new Error("unavailable"));
+      runtimeMocks.list.mockRejectedValueOnce(new Error("offline"));
       phases.set(activeSessionId, "waiting-user");
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(row()).toMatchObject({ state: undefined, hasUnread: false });
-      await vi.advanceTimersByTimeAsync(1_000);
+      await tick(other);
+      expect(row()).toMatchObject({ state: "running", hasUnread: false });
+      await tick(other);
       expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
-      mocks.list.mockRejectedValueOnce(new Error("unavailable"));
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(row()).toMatchObject({ state: undefined, hasUnread: true });
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
-      expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
     });
 
-    it.each([null, "unknown", "absent"])(
-      "resets an observed run and unread for %s",
-      async (phase) => {
-        const { phases, live, row, setPhase } = await unreadFixture();
-        await setPhase("running");
-        await setPhase("waiting-user");
-        phases.set(activeSessionId, phase);
-        if (phase === "absent") live.delete(activeSessionId);
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(row()).toMatchObject({ state: undefined, hasUnread: false });
-        live.set(activeSessionId, { sessionId: activeSessionId, cwd: root, target: "restored" });
-        phases.set(activeSessionId, "waiting-user");
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(row().hasUnread).toBe(false);
-      },
-    );
+    it("continues list acquisition while hidden without JSONL reads or UI delivery", async () => {
+      const { provider, webview, mocks, phases, row } = await unreadFixture();
+      const scan = vi.spyOn(sessionStore, "listSessionSnapshot");
+      mocks.list.mockClear();
+      webview.postMessage.mockClear();
+      webview.setVisible(false);
+      phases.set(activeSessionId, "running");
+      await tick(provider);
+      await tick(provider);
+      expect(mocks.list).toHaveBeenCalledTimes(2);
+      expect(scan).not.toHaveBeenCalled();
+      expect(webview.postMessage).not.toHaveBeenCalled();
+      phases.set(activeSessionId, "waiting-user");
+      webview.setVisible(true);
+      await webview.receive({ type: "ready" });
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+    });
 
-    it("waits for a slow query to finish before starting the next interval", async () => {
-      const { mocks, holdRuntimeQuery } = await unreadFixture();
+    it("retries an initial list failure without requiring another user action", async () => {
+      const runtime = providerRuntimes();
+      runtime.mocks.list.mockRejectedValueOnce(new Error("initial failure"));
+      const onWorkspaces = vi.fn();
+      const { provider } = createProvider({
+        registry: new TerminalRegistry(runtime.store, editorTerminals(runtime.store), runtime.mux),
+        onWorkspaces,
+      });
+      const webview = createView();
+      provider.resolveWebviewView(webview.view as never);
+      await webview.receive({ type: "ready" });
+      expect(webview.postMessage.mock.lastCall?.[0].type).toBe("sessionsError");
+      expect(onWorkspaces).not.toHaveBeenCalled();
+      await tick(provider);
+      expect(webview.postMessage.mock.lastCall?.[0].type).toBe("sessions");
+      expect(onWorkspaces).toHaveBeenCalledWith([root]);
+    });
+
+    it("publishes cwd snapshots for prewarming even before a webview exists", async () => {
+      const runtime = providerRuntimes();
+      const onWorkspaces = vi.fn();
+      const { provider } = createProvider({
+        registry: new TerminalRegistry(runtime.store, editorTerminals(runtime.store), runtime.mux),
+        onWorkspaces,
+      });
+      await provider.refresh();
+      expect(onWorkspaces).toHaveBeenLastCalledWith([root]);
+      runtime.workspaces.add("/added");
+      await tick(provider);
+      expect(onWorkspaces).toHaveBeenLastCalledWith([root, "/added"]);
+      runtime.mocks.list.mockRejectedValueOnce(new Error("offline"));
+      await tick(provider);
+      expect(onWorkspaces).toHaveBeenCalledTimes(2);
+    });
+
+    it("waits for a slow query before scheduling the next interval", async () => {
+      const { provider, mocks, holdRuntimeQuery } = await unreadFixture();
       mocks.list.mockClear();
       const held = holdRuntimeQuery();
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(1000);
       await held.started;
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(mocks.list).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(mocks.list).toHaveBeenCalledOnce();
       held.finish();
-      await vi.advanceTimersByTimeAsync(0);
+      await finishRefresh(provider);
       await vi.advanceTimersByTimeAsync(999);
-      expect(mocks.list).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
+      expect(mocks.list).toHaveBeenCalledOnce();
+      await tick(provider, 1);
       expect(mocks.list).toHaveBeenCalledTimes(2);
     });
 
-    it("stops while hidden and fetches immediately when shown again", async () => {
-      const { webview, mocks, phases, row } = await unreadFixture();
+    it.each(["view", "provider"])("drops replies after %s disposal", async (target) => {
+      const { provider, webview, mocks, holdRuntimeQuery } = await unreadFixture();
+      const held = holdRuntimeQuery();
       mocks.list.mockClear();
-      webview.setVisible(false);
-      phases.set(activeSessionId, "running");
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(mocks.list).not.toHaveBeenCalled();
-      webview.setVisible(true);
-      await webview.receive({ type: "ready" });
-      expect(row().state).toBe("running");
-      expect(mocks.list).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      await held.started;
+      if (target === "view") webview.dispose();
+      else provider.dispose();
+      webview.postMessage.mockClear();
+      held.finish();
+      await finishRefresh(provider);
+      await tick(provider);
+      expect(webview.postMessage).not.toHaveBeenCalled();
+      expect(mocks.list).toHaveBeenCalledTimes(target === "view" ? 2 : 1);
     });
 
-    it.each(["view", "provider"])(
-      "drops a pending reply and stops after %s disposal",
-      async (target) => {
-        const { provider, webview, mocks, holdRuntimeQuery } = await unreadFixture();
-        mocks.list.mockClear();
-        const held = holdRuntimeQuery();
-        await vi.advanceTimersByTimeAsync(1_000);
-        await held.started;
-        if (target === "view") webview.dispose();
-        else provider.dispose();
-        webview.postMessage.mockClear();
-        held.finish();
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(webview.postMessage).not.toHaveBeenCalled();
-        expect(mocks.list).toHaveBeenCalledTimes(1);
-      },
-    );
-
-    it("rejects a pre-hide reply after a new visible snapshot", async () => {
-      const { webview, phases, row, holdRuntimeQuery } = await unreadFixture();
+    it("rejects a pre-hide response and publishes a newly requested snapshot", async () => {
+      const { provider, webview, phases, row, holdRuntimeQuery } = await unreadFixture();
       phases.set(activeSessionId, "running");
       const held = holdRuntimeQuery();
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(1000);
       await held.started;
       webview.setVisible(false);
       phases.set(activeSessionId, "waiting-approval");
       webview.setVisible(true);
-      await webview.receive({ type: "ready" });
+      const ready = webview.receive({ type: "ready" });
+      held.finish();
+      await ready;
+      await finishRefresh(provider);
       expect(row().state).toBe("waiting-approval");
-      held.finish();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(row().state).toBe("waiting-approval");
-    });
-
-    it("does not overwrite a newer refresh or acknowledge a completion twice", async () => {
-      const { webview, phases, row, setPhase, holdRuntimeQuery } = await unreadFixture();
-      await setPhase("running");
-      phases.set(activeSessionId, "waiting-user");
-      const held = holdRuntimeQuery();
-      await vi.advanceTimersByTimeAsync(1_000);
-      await held.started;
-      await webview.receive({ type: "openSession", sessionId: activeSessionId });
-      expect(row().hasUnread).toBe(false);
-      held.finish();
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: false });
-    });
-
-    it("keeps a newer list acquisition error instead of publishing a pending phase reply", async () => {
-      const { provider, statePath, webview, holdRuntimeQuery } = await unreadFixture();
-      const held = holdRuntimeQuery();
-      await vi.advanceTimersByTimeAsync(1_000);
-      await held.started;
-      await writeFile(statePath, "invalid JSON");
-      await provider.refresh();
-      held.finish();
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(webview.postMessage).toHaveBeenLastCalledWith({
-        type: "sessionsError",
-        message: expect.any(String),
-      });
     });
   });
 
@@ -1049,6 +953,10 @@ describe("SessionWebviewProvider", () => {
         webview.setVisible(visible);
         await setPhase("running");
         await setPhase("waiting-user");
+        if (!visible) {
+          webview.setVisible(true);
+          await webview.receive({ type: "ready" });
+        }
         expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
 
         await provider.refresh();
@@ -1149,8 +1057,9 @@ describe("SessionWebviewProvider", () => {
       const completion = setPhase("waiting-user");
       await held.started;
 
-      await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+      const opening = webview.receive({ type: "openSession", sessionId: inactiveSessionId });
       held.finish();
+      await opening;
       await completion;
       expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
       await provider.refresh();
@@ -1211,11 +1120,12 @@ describe("SessionWebviewProvider", () => {
       const oldCompletion = setPhase("waiting-user");
       await held.started;
 
-      await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+      const opening = webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+      held.finish();
+      await opening;
       await setPhase("running");
       await setPhase("waiting-user");
       expect(row().hasUnread).toBe(true);
-      held.finish();
       await oldCompletion;
       expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
     });
@@ -1227,9 +1137,10 @@ describe("SessionWebviewProvider", () => {
       const completion = setPhase("waiting-user");
       await held.started;
 
-      await webview.receive({ type: "openSession", sessionId: activeSessionId });
-      await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+      const opening = webview.receive({ type: "openSession", sessionId: activeSessionId });
       held.finish();
+      await opening;
+      await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
       await completion;
       expect(row()).toMatchObject({ state: "waiting-user", hasUnread: false });
     });
@@ -1247,10 +1158,13 @@ describe("SessionWebviewProvider", () => {
         .mockResolvedValueOnce(sessions)
         .mockRejectedValueOnce(new Error("lookup failed"));
 
-      await webview.receive({ type: "openSession", sessionId: activeSessionId });
-      expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
-      expect(row().hasUnread).toBe(false);
+      const opening = webview.receive({ type: "openSession", sessionId: activeSessionId });
       held.finish();
+      await opening;
+      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+        "Failed to read Pi sessions: lookup failed",
+      );
+      expect(row().hasUnread).toBe(false);
       await completion;
       await provider.refresh();
       expect(row()).toMatchObject({ state: "waiting-user", hasUnread: false });
@@ -1276,7 +1190,7 @@ describe("SessionWebviewProvider", () => {
 
       mocks.list.mockRejectedValueOnce(new Error("lookup failed"));
       await provider.refresh();
-      expect(row()).toMatchObject({ state: undefined, hasUnread: true });
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
       await provider.refresh();
       expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
     });
@@ -1286,7 +1200,7 @@ describe("SessionWebviewProvider", () => {
       await setPhase("running");
       mocks.list.mockRejectedValueOnce(new Error("lookup failed"));
       await setPhase("waiting-user");
-      expect(row().state).toBeUndefined();
+      expect(row().state).toBe("running");
 
       await provider.refresh();
       expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
@@ -1331,10 +1245,11 @@ describe("SessionWebviewProvider", () => {
     });
 
     it("drops unread when a saved session disappears from the list", async () => {
-      const { provider, filePath, setPhase, row } = await unreadFixture();
+      const { provider, filePath, setPhase, row, live } = await unreadFixture();
       await setPhase("running");
       await setPhase("waiting-user");
       const savedSession = await readFile(filePath, "utf8");
+      live.delete(activeSessionId);
       await rm(filePath);
       await provider.refresh();
 
@@ -1346,10 +1261,10 @@ describe("SessionWebviewProvider", () => {
     it("ignores a stale refresh that finishes after a newer completion snapshot", async () => {
       const { provider, mocks, setPhase, row } = await unreadFixture();
       await setPhase("running");
-      let finishStale: ((ids: PiMuxSession[]) => void) | undefined;
+      let finishStale: ((ids: PiMuxWorkspace[]) => void) | undefined;
       mocks.list.mockImplementationOnce(
         () =>
-          new Promise<PiMuxSession[]>((resolve) => {
+          new Promise<PiMuxWorkspace[]>((resolve) => {
             finishStale = resolve;
           }),
       );
@@ -1357,8 +1272,16 @@ describe("SessionWebviewProvider", () => {
       await vi.waitFor(() => {
         expect(finishStale).toBeDefined();
       });
-      await setPhase("waiting-user");
-      finishStale!([{ id: activeSessionId, cwd: root, file: null, state: "running" }]);
+      const latest = setPhase("waiting-user");
+      finishStale!([
+        {
+          cwd: root,
+          sessions: [
+            { id: activeSessionId, file: "/saved/active.jsonl", state: "running", title: null },
+          ],
+        },
+      ]);
+      await latest;
       await stale;
 
       expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
@@ -1457,7 +1380,7 @@ describe("SessionWebviewProvider", () => {
     const original = createProvider({ sessionDir });
     setUpStore(original.statePath, root, [activeSessionId]);
     original.provider.dispose();
-    const { store, mux, mocks } = fakeRuntimes();
+    const { store, mux, mocks } = providerRuntimes();
     const registry = new TerminalRegistry(store, editorTerminals(store), mux);
     const restored = createProvider({ sessionDir, registry });
     const webview = createView();
@@ -1479,7 +1402,7 @@ describe("SessionWebviewProvider", () => {
     expect(terminal.show).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps an archived session archived when it is opened", async () => {
+  it("shows an opened saved conversation as unarchived without changing old membership", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
@@ -1490,7 +1413,7 @@ describe("SessionWebviewProvider", () => {
       sendText: vi.fn(),
       show: vi.fn(),
     };
-    const { store: runtimeStore, mux, mocks } = fakeRuntimes();
+    const { store: runtimeStore, mux, mocks } = providerRuntimes();
     const registry = new TerminalRegistry(runtimeStore, editorTerminals(runtimeStore), mux);
     mockTerminal(mocks, terminal);
     const { provider, statePath } = createProvider({ sessionDir, registry });
@@ -1509,7 +1432,7 @@ describe("SessionWebviewProvider", () => {
     // opening does not unarchive: the session stays out of the active map
     expect(activeSessionIds(store).has(activeSessionId)).toBe(false);
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isArchived).toBe(
-      true,
+      false,
     );
     expect(terminal.show).toHaveBeenCalledTimes(1);
   });
@@ -1524,7 +1447,7 @@ describe("SessionWebviewProvider", () => {
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "second.jsonl", [
       header({ id: inactiveSessionId, cwd: root }),
     ]);
-    const runtimes = fakeRuntimes();
+    const runtimes = providerRuntimes();
     const registry = new TerminalRegistry(
       runtimes.store,
       editorTerminals(runtimes.store),
@@ -1710,7 +1633,7 @@ describe("SessionWebviewProvider", () => {
       sendText: vi.fn(),
       show: vi.fn(),
     };
-    const { store: runtimeStore, mux, mocks } = fakeRuntimes();
+    const { store: runtimeStore, mux, mocks } = providerRuntimes();
     const registry = new TerminalRegistry(runtimeStore, editorTerminals(runtimeStore), mux);
     mockTerminal(mocks, terminal);
     const { provider, statePath } = createProvider({ sessionDir, registry });
@@ -1737,7 +1660,7 @@ describe("SessionWebviewProvider", () => {
       header({ id: activeSessionId, cwd: root }),
     ]);
     const terminal = { processId: Promise.resolve(123), show: vi.fn() };
-    const { store: runtimeStore, mux, mocks } = fakeRuntimes();
+    const { store: runtimeStore, mux, mocks } = providerRuntimes();
     const registry = new TerminalRegistry(runtimeStore, editorTerminals(runtimeStore), mux);
     mockTerminal(mocks, terminal);
     const { provider, statePath } = createProvider({ sessionDir, registry });
@@ -1778,12 +1701,7 @@ describe("SessionWebviewProvider", () => {
       await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
         header({ id: activeSessionId, cwd: root }),
       ]);
-      const { registry, live, mocks } = createRuntimeRegistry();
-      live.set(unknownSessionId, {
-        sessionId: unknownSessionId,
-        cwd: root,
-        target: `pi-${unknownSessionId}`,
-      });
+      const { registry, mocks } = createRuntimeRegistry();
       const { provider, statePath } = createProvider({ sessionDir, registry });
       setUpStore(statePath, root, [activeSessionId]);
       const webview = createView();
@@ -1812,7 +1730,7 @@ describe("SessionWebviewProvider", () => {
     await provider.refresh();
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0]).toMatchObject({
       sessionId: activeSessionId,
-      isArchived: true,
+      isArchived: false,
     });
     const runtime = { sessionId: activeSessionId, cwd: root, target: `pi-${activeSessionId}` };
     live.set(activeSessionId, runtime);
@@ -1846,6 +1764,7 @@ describe("SessionWebviewProvider", () => {
       expect(archiveSessions(statePath, [{ sessionId: activeSessionId, cwd: root }]).ok).toBe(true);
       await provider.refresh();
       await rm(filePath);
+      if (liveness === "absent") mocks.aliveSessionIds.mockResolvedValue(new Set());
       if (liveness === "unavailable") mocks.aliveSessionIds.mockResolvedValue(null);
       if (liveness === "error") {
         mocks.aliveSessionIds.mockRejectedValueOnce(new Error("pi-mux list failed"));
@@ -1897,7 +1816,7 @@ describe("SessionWebviewProvider", () => {
       await webview.receive({ type: "unarchiveSession", sessionId: activeSessionId });
 
       expect(await readFile(statePath, "utf8")).toBe(before);
-      expect(previousState.state.groups[0].sessions[0].isArchived).toBe(true);
+      expect(previousState.state.groups[0].sessions[0].isArchived).toBe(false);
       expect(webview.postMessage.mock.calls.some((call) => call[0].type === "sessions")).toBe(
         false,
       );
@@ -1917,7 +1836,7 @@ describe("SessionWebviewProvider", () => {
       header({ id: activeSessionId, cwd: root }),
     ]);
     const terminal = { processId: Promise.resolve(123), show: vi.fn() };
-    const { store, mux, mocks } = fakeRuntimes();
+    const { store, mux, mocks } = providerRuntimes();
     const registry = new TerminalRegistry(store, editorTerminals(store), mux);
     mockTerminal(mocks, terminal);
     const { provider, statePath } = createProvider({ sessionDir, registry });
@@ -1986,6 +1905,7 @@ describe("SessionWebviewProvider", () => {
       const { webview, statePath, filePath, mocks, registry } = await archiveFixture();
       const before = await readFile(statePath, "utf8");
       await rm(filePath);
+      if (liveness === "absent") mocks.aliveSessionIds.mockResolvedValue(new Set());
       if (liveness === "unavailable") mocks.aliveSessionIds.mockResolvedValue(null);
       if (liveness === "error") {
         mocks.aliveSessionIds.mockRejectedValueOnce(new Error("pi-mux list failed"));
@@ -2068,15 +1988,18 @@ describe("SessionWebviewProvider", () => {
         group.sessions.map((session) => session.sessionId),
       );
       expect(listedIds).toContain(activeSessionId);
-      expect(listedIds).not.toContain(displayedId);
-      expect(selectedRows()).toHaveLength(0);
+      expect(listedIds).toContain(displayedId);
+      expect(selectedRows()).toHaveLength(1);
       expect(sentState().displayedSessionId).toBe(displayedId);
     });
 
     it("clears the old selection while the new session list scan is pending", async () => {
-      const sessions = await sessionStore.listSessions(fixture.sessionDir, { cwds: [root] });
+      const sessions = await sessionStore.listSessionSnapshot(
+        fixture.sessionDir,
+        await fixture.registry.mux.list(),
+      );
       let finish!: (result: typeof sessions) => void;
-      const scan = vi.spyOn(sessionStore, "listSessions").mockReturnValueOnce(
+      const scan = vi.spyOn(sessionStore, "listSessionSnapshot").mockReturnValueOnce(
         new Promise((resolve) => {
           finish = resolve;
         }),
@@ -2104,21 +2027,25 @@ describe("SessionWebviewProvider", () => {
             await fixture.provider.refresh();
           });
         } else {
-          vi.spyOn(sessionStore, "listSessions").mockRejectedValue(new Error("scan failed"));
+          vi.spyOn(sessionStore, "listSessionSnapshot").mockRejectedValue(new Error("scan failed"));
         }
 
         await fixture.webview.receive({ type: "newSession", cwd: root });
         const displayedId = fixture.registry.displayedSessionId;
         expect(displayedId).not.toBe(activeSessionId);
-        expect(selectedRows()).toHaveLength(0);
+        expect(selectedRows()).toHaveLength(source === "state store" ? 1 : 0);
         expect(sentState().displayedSessionId).toBe(displayedId);
         expect(sentState().groups[0].sessions).not.toHaveLength(0);
-        expect(fixture.webview.postMessage.mock.lastCall?.[0].type).toBe("sessionsError");
+        expect(fixture.webview.postMessage.mock.lastCall?.[0].type).toBe(
+          source === "state store" ? "sessions" : "sessionsError",
+        );
 
         await fixture.provider.refresh();
-        expect(selectedRows()).toHaveLength(0);
+        expect(selectedRows()).toHaveLength(source === "state store" ? 1 : 0);
         expect(sentState().displayedSessionId).toBe(displayedId);
-        expect(fixture.webview.postMessage.mock.lastCall?.[0].type).toBe("sessionsError");
+        expect(fixture.webview.postMessage.mock.lastCall?.[0].type).toBe(
+          source === "state store" ? "sessions" : "sessionsError",
+        );
       },
     );
 
@@ -2184,7 +2111,7 @@ describe("SessionWebviewProvider", () => {
       expect(fixture.runtimes.mocks.newSession).toHaveBeenLastCalledWith(root);
       expect(fixture.registry.displayedSessionId).toBe(pendingId);
       expect(onSessionStarted).toHaveBeenLastCalledWith(pendingId);
-      expect(selectedRows()).toHaveLength(0);
+      expect(selectedRows()).toHaveLength(1);
       expect(sentState().displayedSessionId).toBe(pendingId);
     });
   });
@@ -2195,7 +2122,7 @@ describe("SessionWebviewProvider", () => {
       header({ id: activeSessionId, cwd: root }),
     ]);
     const terminal = { processId: Promise.resolve(123), show: vi.fn() };
-    const { store, mux, mocks, live } = fakeRuntimes();
+    const { store, mux, mocks, live } = providerRuntimes();
     const registry = new TerminalRegistry(store, editorTerminals(store), mux);
     mockTerminal(mocks, terminal);
     const { provider, statePath } = createProvider({ sessionDir, registry });
@@ -2261,7 +2188,7 @@ describe("SessionWebviewProvider", () => {
     const statePath = join(root, "session-state.json");
     setUpStore(statePath, root, []);
 
-    const { store, mocks, live } = fakeRuntimes();
+    const { store, mocks, live } = providerRuntimes();
     const fakePiMuxCommand = vi.fn(async (executable: string, args: string[], cwd?: string) => {
       expect(executable).toBe("pi-mux");
       if (args.join(" ") === "new --detached") {
@@ -2270,14 +2197,17 @@ describe("SessionWebviewProvider", () => {
         return `Pi session ${activeSessionId}\nAttach with: pi-mux open ${activeSessionId}\n`;
       }
       if (args.join(" ") === "list") {
-        return JSON.stringify(
-          [...live.values()].map((runtime) => ({
-            id: runtime.sessionId,
-            cwd: runtime.cwd,
-            file: null,
-            state: null,
-          })),
-        );
+        return JSON.stringify([
+          {
+            cwd: root,
+            sessions: [...live.values()].map((runtime) => ({
+              id: runtime.sessionId,
+              file: join(cwdDir, `2024-12-03_${runtime.sessionId}.jsonl`),
+              state: null,
+              title: null,
+            })),
+          },
+        ]);
       }
       throw new Error(`Unexpected pi-mux command: ${args.join(" ")}`);
     });
@@ -2339,8 +2269,9 @@ describe("SessionWebviewProvider", () => {
     expect(sentState().displayedSessionId).toBe(activeSessionId);
     expect(sentState().groups[0].sessions.map((session) => session.sessionId)).toEqual([
       inactiveSessionId,
+      activeSessionId,
     ]);
-    expect(renderedRows(sentState())).toEqual([]);
+    expect(renderedRows(sentState())).toHaveLength(1);
     expect(await sessionStore.listSessions(sessionDir, { cwds: [root] })).toHaveLength(1);
     const activeStoreBeforeSave = await readFile(statePath, "utf8");
 
@@ -2399,7 +2330,7 @@ describe("SessionWebviewProvider", () => {
     ).toHaveLength(sessionsBefore);
   });
 
-  it("registers a valid workspace folder and shows its empty group", async () => {
+  it("registers a valid workspace in the old store while retaining list-derived groups", async () => {
     const folder = join(root, "registered");
     await mkdir(folder, { recursive: true });
     const { provider, statePath } = createProvider({});
@@ -2412,7 +2343,7 @@ describe("SessionWebviewProvider", () => {
       .map((call) => call[0])
       .filter((message: { type?: string }) => message.type === "sessions")
       .at(-1) as { state?: { groups?: { cwd: string }[] } };
-    expect(lastSessions.state?.groups?.map((group) => group.cwd)).toEqual([folder]);
+    expect(lastSessions.state?.groups?.map((group) => group.cwd)).toEqual([root]);
     expect(registeredWorkspaceCwds(readStore(statePath))).toEqual([folder]);
   });
 
@@ -2430,7 +2361,7 @@ describe("SessionWebviewProvider", () => {
 
     expect(registeredWorkspaceCwds(readStore(statePath))).toEqual([folder]);
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups).toEqual([
-      expect.objectContaining({ cwd: folder }),
+      expect.objectContaining({ cwd: root }),
     ]);
   });
 
@@ -2449,7 +2380,7 @@ describe("SessionWebviewProvider", () => {
 
     expect(registeredWorkspaceCwds(readStore(statePath))).toEqual([folder]);
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups).toEqual([
-      expect.objectContaining({ cwd: folder }),
+      expect.objectContaining({ cwd: root }),
     ]);
   });
 
@@ -2501,7 +2432,9 @@ describe("SessionWebviewProvider", () => {
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups).toEqual([]); // the cwd is not registered yet, so its group is hidden
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups).toEqual([
+      expect.objectContaining({ cwd: root }),
+    ]); // the cwd is not registered yet, so its group is hidden
 
     await webview.receive({ type: "addWorkspace", path: `${root}/` });
 
@@ -2568,7 +2501,7 @@ describe("SessionWebviewProvider", () => {
     ).toHaveLength(writesBefore + 1); // the refreshed list closes the form
   });
 
-  it("keeps a registered sessionless workspace in the refreshed list", async () => {
+  it("does not add an old-store-only workspace to the list", async () => {
     const folder = join(root, "registered");
     const { provider, statePath } = createProvider({});
     expect(registerWorkspace(statePath, folder).ok).toBe(true);
@@ -2581,10 +2514,10 @@ describe("SessionWebviewProvider", () => {
       .map((call) => call[0])
       .filter((message: { type?: string }) => message.type === "sessions")
       .at(-1) as { state?: { groups?: { cwd: string }[] } };
-    expect(lastSessions.state?.groups?.map((group) => group.cwd)).toEqual([folder]);
+    expect(lastSessions.state?.groups?.map((group) => group.cwd)).toEqual([root]);
   });
 
-  it("unregisters a requested workspace and drops its empty group", async () => {
+  it("removes an old-store registration without overriding the list snapshot", async () => {
     const folder = join(root, "registered");
     const { provider, statePath } = createProvider({});
     expect(registerWorkspace(statePath, folder).ok).toBe(true);
@@ -2599,7 +2532,7 @@ describe("SessionWebviewProvider", () => {
       .map((call) => call[0])
       .filter((message: { type?: string }) => message.type === "sessions")
       .at(-1) as { state?: { groups?: unknown[] } };
-    expect(lastSessions.state?.groups).toEqual([]);
+    expect(lastSessions.state?.groups).toEqual([expect.objectContaining({ cwd: root })]);
   });
 
   it("answers an unregister for an unregistered cwd with the unchanged list", async () => {
@@ -2619,7 +2552,7 @@ describe("SessionWebviewProvider", () => {
     ).toHaveLength(sessionsBefore + 1); // the refreshed list still goes out
   });
 
-  it("does not open a terminal or mark active when the session cwd is missing", async () => {
+  it("does not open saved history whose header cwd is outside list workspaces", async () => {
     const sessionDir = join(root, "sessions");
     const cwd = join(root, "missing");
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "old.jsonl", [
@@ -2638,8 +2571,34 @@ describe("SessionWebviewProvider", () => {
     expect(activeSessionIds(store).has(inactiveSessionId)).toBe(false);
     expect(Object.keys(store["active-workspaces"])).toEqual([root]);
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
-      expect.stringContaining(`Failed to open session ${inactiveSessionId} in ${cwd}:`),
+      expect.stringContaining(`Session not found: ${inactiveSessionId}`),
     );
+  });
+
+  it("rejects a live list session whose cwd has disappeared without changing old membership", async () => {
+    const runtime = providerRuntimes();
+    const missing = join(root, "missing");
+    const file = await writeJsonl(join(root, "files"), "saved.jsonl", [
+      header({ id: activeSessionId, cwd: missing }),
+    ]);
+    runtime.live.set(activeSessionId, {
+      sessionId: activeSessionId,
+      cwd: missing,
+      target: "live-target",
+    });
+    runtime.files.set(activeSessionId, file);
+    const { provider, statePath } = createProvider({
+      registry: new TerminalRegistry(runtime.store, editorTerminals(runtime.store), runtime.mux),
+    });
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await webview.receive({ type: "ready" });
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining(`Failed to open session ${activeSessionId} in ${missing}:`),
+    );
+    expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();
+    expect(existsSync(statePath)).toBe(false);
   });
 
   async function selectionFixture() {
@@ -2734,13 +2693,25 @@ describe("SessionWebviewProvider", () => {
   );
 
   it("coalesces again while the previous latest selection is running", async () => {
-    const { webview, mocks, shown } = await selectionFixture();
-    const firstOpening = holdNextOpen(mocks);
+    const { webview, registry, shown } = await selectionFixture();
+    const open = registry.open.bind(registry);
+    const openSpy = vi.spyOn(registry, "open");
+    function holdSelection() {
+      const gate = deferred<void>();
+      const started = deferred<void>();
+      openSpy.mockImplementationOnce(async (session) => {
+        started.resolve();
+        await gate.promise;
+        return open(session);
+      });
+      return { started: started.promise, finish: () => gate.resolve() };
+    }
+    const firstOpening = holdSelection();
     const first = webview.receive({ type: "openSession", sessionId: activeSessionId });
     await firstOpening.started;
     const second = webview.receive({ type: "openSession", sessionId: inactiveSessionId });
     const third = webview.receive({ type: "openSession", sessionId: unknownSessionId });
-    const thirdOpening = holdNextOpen(mocks);
+    const thirdOpening = holdSelection();
     firstOpening.finish();
     await thirdOpening.started;
     expect(shown).toEqual([activeSessionId]);
@@ -2836,7 +2807,7 @@ describe("SessionWebviewProvider", () => {
       sendText: vi.fn(),
       show: vi.fn(),
     };
-    const { store, mux, mocks, live } = fakeRuntimes();
+    const { store, mux, mocks, live } = providerRuntimes();
     const registry = new TerminalRegistry(store, editorTerminals(store), mux);
     live.set(activeSessionId, {
       sessionId: activeSessionId,
@@ -2861,12 +2832,17 @@ describe("SessionWebviewProvider", () => {
     mocks.list.mockClear();
     mocks.list.mockImplementationOnce(async () => {
       await opening;
-      return [...live.values()].map((runtime) => ({
-        id: runtime.sessionId,
-        cwd: runtime.cwd,
-        file: null,
-        state: null,
-      }));
+      return [
+        {
+          cwd: root,
+          sessions: [...live.values()].map((runtime) => ({
+            id: runtime.sessionId,
+            file: "/saved/session.jsonl",
+            state: null,
+            title: null,
+          })),
+        },
+      ];
     });
 
     const first = webview.receive({ type: "openSession", sessionId: activeSessionId });
@@ -2891,7 +2867,7 @@ describe("SessionWebviewProvider", () => {
       await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "saved.jsonl", [
         header({ id: inactiveSessionId, cwd: root }),
       ]);
-      const { store, mux, mocks, live, client } = fakeRuntimes();
+      const { store, mux, mocks, live, client } = providerRuntimes();
       const registry = new TerminalRegistry(store, editorTerminals(store), mux);
       const terminal = { processId: Promise.resolve(123), show: vi.fn(), dispose: vi.fn() };
       terminal.dispose.mockImplementation(() => registry.onTerminalClosed(terminal as never));
@@ -2977,7 +2953,7 @@ describe("SessionWebviewProvider", () => {
     expect(webview.postMessage.mock.calls.some((call) => call[0].type === "sessions")).toBe(false);
   });
 
-  it("shows an error and sends no list when the metadata store is invalid", async () => {
+  it("ignores invalid old metadata when acquiring the list", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "active.jsonl", [
       header({ id: activeSessionId, cwd: root }),
@@ -2990,10 +2966,8 @@ describe("SessionWebviewProvider", () => {
 
     await provider.refresh();
 
-    expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(
-      /^session-state\.json is not valid JSON: /,
-    );
-    expect(webview.postMessage.mock.calls.some((call) => call[0].type === "sessions")).toBe(false);
+    expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+    expect(webview.postMessage.mock.calls.some((call) => call[0].type === "sessions")).toBe(true);
   });
 
   it("shows an error and keeps the list when an archive write fails", async () => {

@@ -2,6 +2,7 @@ import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { summarizeSessionFile, type SessionSummaryInfo } from "./sessionFile";
 import { encodeCwdDirName } from "./paths";
+import { flattenPiMuxSessions, type PiMuxWorkspace } from "./piMux";
 
 /**
  * Scan Pi's session directory (read-only; no VS Code API).
@@ -101,25 +102,9 @@ export async function listSessions(
   // the full file set and can tell which entries are stale.
   if (groupDirs === undefined) pruneCache(candidates);
 
-  const infos = await mapWithConcurrency(candidates, SCAN_CONCURRENCY, async (candidate) => {
-    const cached = summaryCache.get(candidate.filePath);
-    if (
-      cached !== undefined &&
-      cached.mtimeMs === candidate.mtimeMs &&
-      cached.size === candidate.size
-    ) {
-      return cached.info;
-    }
-    const info = await summarizeSessionFile(candidate.filePath);
-    if (info !== null) {
-      summaryCache.set(candidate.filePath, {
-        mtimeMs: candidate.mtimeMs,
-        size: candidate.size,
-        info,
-      });
-    }
-    return info;
-  });
+  const infos = await mapWithConcurrency(candidates, SCAN_CONCURRENCY, (candidate) =>
+    readSessionInfo(candidate.filePath),
+  );
 
   const summaries: SessionSummary[] = [];
   for (let i = 0; i < candidates.length; i++) {
@@ -135,6 +120,64 @@ export async function listSessions(
     });
   }
   return summaries;
+}
+
+export async function listSessionSnapshot(
+  sessionDir: string,
+  workspaces: readonly PiMuxWorkspace[],
+) {
+  const registeredCwds = workspaces.map(({ cwd }) => cwd);
+  const registered = new Set(registeredCwds);
+  const saved =
+    registeredCwds.length === 0 ? [] : await listSessions(sessionDir, { cwds: registeredCwds });
+  const sessionsById = new Map(
+    saved
+      .filter((session) => registered.has(session.cwd))
+      .map((session) => [session.sessionId, session]),
+  );
+  const live = flattenPiMuxSessions(workspaces);
+  const liveSummaries = await mapWithConcurrency(live, SCAN_CONCURRENCY, async (session) => {
+    const info = await readSessionInfo(session.file);
+    return {
+      sessionId: session.id,
+      cwd: session.cwd,
+      filePath: session.file,
+      displayName:
+        session.title !== null && session.title !== ""
+          ? session.title
+          : (info?.displayName ?? "Untitled"),
+      createdAtMs: info?.createdAtMs ?? null,
+      updatedAtMs: info?.updatedAtMs ?? null,
+    };
+  });
+  for (const session of liveSummaries) sessionsById.set(session.sessionId, session);
+  const liveIds = new Set(live.map(({ id }) => id));
+  const sessions = [...sessionsById.values()];
+  return {
+    sessions,
+    registeredCwds,
+    archivedIds: new Set(
+      sessions.filter(({ sessionId }) => !liveIds.has(sessionId)).map(({ sessionId }) => sessionId),
+    ),
+  };
+}
+
+async function readSessionInfo(filePath: string): Promise<SessionSummaryInfo | null> {
+  try {
+    const { mtimeMs, size } = await stat(filePath);
+    const cached = summaryCache.get(filePath);
+    if (cached !== undefined && cached.mtimeMs === mtimeMs && cached.size === size)
+      return cached.info;
+    const info = await summarizeSessionFile(filePath);
+    if (info !== null) summaryCache.set(filePath, { mtimeMs, size, info });
+    return info;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      summaryCache.delete(filePath);
+      return null;
+    }
+    throw error;
+  }
 }
 
 /** Drop cache entries for files that no longer exist. */

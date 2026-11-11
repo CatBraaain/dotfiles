@@ -761,8 +761,6 @@ export function initClient(bridge: ClientBridge): () => void {
     throw new Error("Sessions webview markup is incomplete.");
   }
   const store = createClientStore();
-  // The host closes the form by replying to an Add with a refreshed list; an
-  // invalid path answers with an error instead, so the form stays open.
   let pendingAddWorkspace = false;
   const closeWorkspaceForm = (): void => {
     formElement.hidden = true;
@@ -783,7 +781,9 @@ export function initClient(bridge: ClientBridge): () => void {
     }
     if (message.type === "sessions" && isClientState(message.state)) {
       store.setSessions(message.state);
-      if (pendingAddWorkspace) closeWorkspaceForm();
+    }
+    if (message.type === "workspaceAdded" && pendingAddWorkspace) {
+      closeWorkspaceForm();
     }
     if (message.type === "error" && typeof message.message === "string") {
       store.setError(message.message);

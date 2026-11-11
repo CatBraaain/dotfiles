@@ -1,10 +1,13 @@
 import { vi } from "vitest";
 import type { PiRuntime, TmuxClient, TmuxRuntimeStore } from "../src/tmux";
-import type { PiMux, PiMuxSession, PiSession } from "../src/piMux";
+import type { PiMux, PiMuxWorkspace, PiSession } from "../src/piMux";
 
 export function fakeRuntimes() {
   const live = new Map<string, PiRuntime>();
   const phases = new Map<string, string | null>();
+  const workspaces = new Set<string>();
+  const files = new Map<string, string>();
+  const titles = new Map<string, string | null>();
   const client = { pid: 123, name: "/dev/fixture", target: "" };
   const open = vi.fn((session: PiSession) => {
     const runtime = live.get(session.sessionId) ?? {
@@ -21,12 +24,17 @@ export function fakeRuntimes() {
       live.set(sessionId, { sessionId, cwd, target: `pi-${sessionId}` });
       return sessionId;
     }),
-    list: vi.fn(async (): Promise<PiMuxSession[]> =>
-      [...live.values()].map((runtime) => ({
-        id: runtime.sessionId,
-        cwd: runtime.cwd,
-        file: null,
-        state: phases.get(runtime.sessionId) ?? null,
+    list: vi.fn(async (): Promise<PiMuxWorkspace[]> =>
+      [...new Set([...workspaces, ...[...live.values()].map(({ cwd }) => cwd)])].map((cwd) => ({
+        cwd,
+        sessions: [...live.values()]
+          .filter((runtime) => runtime.cwd === cwd)
+          .map((runtime) => ({
+            id: runtime.sessionId,
+            file: files.get(runtime.sessionId) ?? `/sessions/${runtime.sessionId}.jsonl`,
+            state: phases.get(runtime.sessionId) ?? null,
+            title: titles.get(runtime.sessionId) ?? null,
+          })),
       })),
     ),
     aliveSessionIds: vi.fn(
@@ -58,6 +66,9 @@ export function fakeRuntimes() {
     mux: muxMocks as unknown as PiMux,
     mocks: { ...tmuxMocks, ...muxMocks, open },
     live,
+    workspaces,
+    files,
+    titles,
     phases,
     client,
   };

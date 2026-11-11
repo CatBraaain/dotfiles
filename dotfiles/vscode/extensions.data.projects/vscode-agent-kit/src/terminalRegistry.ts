@@ -2,7 +2,7 @@ import type * as vscode from "vscode";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { DisplayTerminals } from "./terminals";
 import type { PiRuntime, TmuxRuntimeStore } from "./tmux";
-import { PiMux, type PiSession } from "./piMux";
+import { PiMux, flattenPiMuxSessions, type PiSession } from "./piMux";
 import { errorMessage } from "./guards";
 import { sameWorkDirectory } from "./workDirectory";
 
@@ -96,7 +96,9 @@ export class TerminalRegistry implements vscode.Disposable {
 
   async open(launch: PiSession): Promise<{ runtime: PiRuntime; terminal: vscode.Terminal }> {
     try {
-      const isAlive = (await this.mux.list()).some((session) => session.id === launch.sessionId);
+      const isAlive = flattenPiMuxSessions(await this.mux.list()).some(
+        (session) => session.id === launch.sessionId,
+      );
       const target = isAlive ? await this.runtimes.resolveTarget(launch.sessionId) : undefined;
       if (isAlive && target === undefined) {
         throw new Error(`Cannot resolve tmux target for session ${launch.sessionId}`);

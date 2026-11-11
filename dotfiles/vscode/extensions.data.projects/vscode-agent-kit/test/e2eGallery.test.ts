@@ -183,7 +183,7 @@ describe("E2E gallery reporter", () => {
       "E2E-14",
       "E2E-15",
     ]);
-    expect(excludedIds).toEqual(["E2E-3", "E2E-7", "E2E-9", "E2E-12"]);
+    expect(excludedIds).toEqual(["E2E-3", "E2E-7", "E2E-9", "E2E-12", "E2E-16"]);
     expect(run.script).not.toContain("specSource");
     expect(run.script).not.toContain(specSource.split("\n")[0]);
   });

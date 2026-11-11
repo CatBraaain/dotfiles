@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { PiMux } from "../src/piMux";
 
-const liveSession = { id: "A", cwd: "/project", file: "/saved/A.jsonl", state: "running" };
+const liveSession = { id: "A", file: "/saved/A.jsonl", state: "running", title: "Title" };
 
 describe("PiMux", () => {
   it("runs detached new in the requested cwd and reads the first line ID", async () => {
@@ -33,7 +33,14 @@ describe("PiMux", () => {
   );
 
   it("parses the JSON live list, including unsaved sessions", async () => {
-    const sessions = [liveSession, { id: "unsaved", cwd: "/other", file: null, state: null }];
+    const sessions = [
+      { cwd: "/project", sessions: [liveSession] },
+      {
+        cwd: "/other",
+        sessions: [{ id: "unsaved", file: "/saved/unsaved.jsonl", state: null, title: null }],
+      },
+      { cwd: "/empty", sessions: [] },
+    ];
     const execute = vi.fn().mockResolvedValue(JSON.stringify(sessions));
     expect(await new PiMux(execute).list()).toEqual(sessions);
     expect(execute).toHaveBeenCalledExactlyOnceWith("pi-mux", ["list"], undefined);
@@ -59,7 +66,11 @@ describe("PiMux", () => {
 
   it("uses list membership rather than its state value for liveness", async () => {
     const mux = new PiMux(
-      vi.fn().mockResolvedValue(JSON.stringify([{ ...liveSession, state: null }])),
+      vi
+        .fn()
+        .mockResolvedValue(
+          JSON.stringify([{ cwd: "/project", sessions: [{ ...liveSession, state: null }] }]),
+        ),
     );
     expect(await mux.aliveSessionIds(["A", "B"])).toEqual(new Set(["A"]));
   });
@@ -71,11 +82,28 @@ describe("PiMux", () => {
     "[null]",
     '[{"id":"A"}]',
     '[{"id":42,"cwd":"/p","file":null,"state":null}]',
+    '[{"cwd":"relative","sessions":[]}]',
+    '[{"cwd":"/p","sessions":null}]',
+    '[{"cwd":"/p","sessions":[{"id":"A","file":null,"state":null,"title":null}]}]',
+    '[{"cwd":"/p","sessions":[{"id":"A","file":"relative","state":null,"title":null}]}]',
+    '[{"cwd":"/p","sessions":[{"id":"A","file":"/saved/A.jsonl","state":null}]}]',
+    '[{"cwd":"/p","sessions":[{"id":"A","file":"/saved/A.jsonl","state":7,"title":null}]}]',
+    '[{"cwd":"/p","sessions":[{"id":"A","file":"/saved/A.jsonl","state":null,"title":7}]}]',
   ])("rejects malformed live lists and treats liveness as unknown: %s", async (output) => {
     const mux = new PiMux(vi.fn().mockResolvedValue(output));
     await expect(mux.list()).rejects.toThrow();
     expect(await mux.aliveSessionIds(["A"])).toBeNull();
   });
+
+  it.each(["running", "waiting-approval", "waiting-user", null])(
+    "keeps independent title and state fields for %s",
+    async (state) => {
+      const workspaces = [{ cwd: "/p", sessions: [{ ...liveSession, state }] }];
+      expect(await new PiMux(vi.fn().mockResolvedValue(JSON.stringify(workspaces))).list()).toEqual(
+        workspaces,
+      );
+    },
+  );
 
   it("reports a CLI failure with operation and cwd and does not retry", async () => {
     const execute = vi.fn().mockRejectedValue(new Error("spawn pi-mux ENOENT"));

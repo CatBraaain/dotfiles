@@ -95,6 +95,25 @@ describe("session list loading in the mounted client", () => {
     expect(await page.locator("#status").getAttribute("class")).toBe("error");
   }
 
+  it("keeps workspace input across automatic snapshots until the add acknowledgement", async () => {
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+    await page.locator('[data-action="toggleWorkspaceForm"]').click();
+    const input = page.locator("#workspace-path");
+    await input.fill("/new/workspace");
+    await input.press("Enter");
+    await receive({ type: "sessions", state });
+    expect(await page.locator("#workspace-form").isVisible()).toBe(true);
+    expect(await input.inputValue()).toBe("/new/workspace");
+    await receive({ type: "error", message: "Invalid workspace path" });
+    await receive({ type: "sessions", state });
+    expect(await page.locator("#workspace-form").isVisible()).toBe(true);
+    await input.press("Enter");
+    await receive({ type: "workspaceAdded" });
+    expect(await page.locator("#workspace-form").isHidden()).toBe(true);
+    expect(await input.inputValue()).toBe("");
+  });
+
   it("keeps initial loading visible after an unrelated operation error", async () => {
     await expectLoading();
     await failWorkspaceAddition();

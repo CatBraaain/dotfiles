@@ -102,6 +102,11 @@ test(
         return response.state;
       });
       state.displayedSessionId = host.sessions.A.id;
+      const selected = state.groups
+        .flatMap((group) => group.sessions)
+        .find((session) => session.sessionId === host.sessions.A.id);
+      if (!selected) throw new Error("Missing controlled saved session");
+      selected.isArchived = false;
       await receive({ type: "sessions", state });
       await expect(
         content.locator(".group-header").describe("Registered work folders"),
