@@ -192,7 +192,24 @@ export function validateManagedKeys(raw: unknown): ManagedStorageTarget[] {
   return targets;
 }
 
-export function loadManagedKeys(baseDir: string): ManagedStorageTarget[] {
+export function validateDictionary(raw: unknown): string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw))
+    throw new HookError("INVALID_INPUT", "dictionary must be a string array");
+  const words = new Map<string, string>();
+  for (const word of raw) {
+    if (typeof word !== "string" || word.includes("\0"))
+      throw new HookError("INVALID_INPUT", "dictionary words must be strings without NUL");
+    const trimmed = word.trim();
+    const key = trimmed.toLowerCase();
+    if (trimmed && !words.has(key)) words.set(key, trimmed);
+  }
+  return [...words.values()];
+}
+
+export type ManagedConfig = { keys: ManagedStorageTarget[]; dictionary: string[] };
+
+export function loadManagedConfig(baseDir: string): ManagedConfig {
   const declarationPath = join(baseDir, MANAGED_KEYS_FILE);
   let text: string;
   try {
@@ -207,11 +224,21 @@ export function loadManagedKeys(baseDir: string): ManagedStorageTarget[] {
     if (error instanceof HookError) throw error;
     throw new HookError("INVALID_INPUT", `managed keys file is not valid YAML: ${declarationPath}`);
   }
-  return validateManagedKeys(raw);
+  const keys = validateManagedKeys(raw);
+  const dictionary = validateDictionary((raw as { dictionary?: unknown }).dictionary);
+  return { keys, dictionary };
 }
 
-export function managedKeysSha256(targets: ManagedStorageTarget[]): string {
-  return sha256Hex(targets.map((target) => `${target.key}\0${target.value}`).join("\0"));
+export function loadManagedKeys(baseDir: string): ManagedStorageTarget[] {
+  return loadManagedConfig(baseDir).keys;
+}
+
+export function managedKeysSha256(
+  targets: ManagedStorageTarget[],
+  dictionary: string[] = [],
+): string {
+  const storage = targets.map((target) => `${target.key}\0${target.value}`).join("\0");
+  return sha256Hex(dictionary.length === 0 ? storage : JSON.stringify({ storage, dictionary }));
 }
 
 export type RegistrationOutcome = {
@@ -353,6 +380,7 @@ export function buildHarnessSource(): string {
       "const profile = process.env.OW_HARNESS_PROFILE;",
       "const mode = process.env.OW_HARNESS_MODE;",
       'const targets = JSON.parse(process.env.OW_HARNESS_TARGETS_JSON || "[]");',
+      'const words = JSON.parse(process.env.OW_HARNESS_DICTIONARY_JSON || "[]");',
       `if (!profile || !nodePath.isAbsolute(profile)) process.exit(${harnessExitInvalidArguments});`,
       'if ((mode === "read" || mode === "apply") && targets.length === 0) process.exit(90);',
       "",
@@ -416,34 +444,97 @@ export function buildHarnessSource(): string {
       "      current[target.key] = { value: value, sha256: value === null ? null : sha256(value), equals: value === target.value };",
       "    }",
       '    emit({ status: "ok", current: current });',
-      '  } else if (mode === "apply") {',
-      "    const before = {};",
-      "    for (const target of targets) before[target.key] = await readKey(target.key);",
-      "    const applied = [];",
-      "    for (const target of targets) {",
-      "      if (before[target.key] === target.value) continue;",
-      "      await setKey(target.key, target.value);",
-      "      applied.push(target.key);",
-      "    }",
-      "    session.defaultSession.flushStorageData();",
-      "    const after = {};",
-      "    for (const target of targets) after[target.key] = await readKey(target.key);",
-      "    const restoreFailed = [];",
-      "    for (const target of applied) {",
-      "      const expected = targets.find((candidate) => candidate.key === target);",
-      "      if (after[target] === expected.value) continue;",
-      "      const previous = before[target];",
-      "      if (previous === null) await removeKey(target);",
-      "      else await setKey(target, previous);",
-      "      restoreFailed.push(target);",
-      "    }",
-      "    if (restoreFailed.length > 0) {",
-      "      session.defaultSession.flushStorageData();",
-      '      emit({ status: "restore-failed", before: before, restoreFailed: restoreFailed });',
-      "      app.exit(1);",
-      "      return;",
-      "    }",
-      '    emit({ status: "applied", applied: applied, before: before, after: after });',
+      `  } else if (mode === "apply") {
+    const before = Object.create(null);
+    const applied = [];
+    const restoreFailed = [];
+    let database = null;
+    let dictionary = null;
+    let missing = [];
+    let result;
+    function wordKey(word) { return word.trim().toLowerCase(); }
+    try {
+      for (const target of targets) before[target.key] = await readKey(target.key);
+      if (words.length > 0) {
+        const asar = process.env.OW_HARNESS_APP_ASAR;
+        if (!asar || !nodePath.isAbsolute(asar)) throw new Error("installed app.asar path is missing");
+        const DatabaseManager = require(nodePath.join(asar, "src", "helpers", "database.js"));
+        const SQLite = require(nodePath.join(asar, "node_modules", "better-sqlite3"));
+        if (typeof DatabaseManager.prototype.getDictionary !== "function" ||
+            typeof DatabaseManager.prototype.applyDictionaryChanges !== "function")
+          throw new Error("installed app does not support dictionary delta registration");
+        database = new SQLite(nodePath.join(profile, "transcriptions.db"), { fileMustExist: true });
+        dictionary = Object.create(DatabaseManager.prototype);
+        dictionary.db = database;
+        dictionary._dictionaryWriteStatements();
+        const existing = new Set(dictionary.getDictionary().map(wordKey));
+        missing = words.filter((word) => !existing.has(wordKey(word)));
+      }
+      const changedTargets = targets.filter((target) => before[target.key] !== target.value);
+      if (changedTargets.length === 0 && missing.length === 0) {
+        result = { status: "unchanged" };
+      } else {
+        if (missing.length > 0) database.exec("BEGIN IMMEDIATE");
+        for (const target of changedTargets) {
+          applied.push(target.key);
+          await setKey(target.key, target.value);
+        }
+        if (missing.length > 0) {
+          const delta = dictionary.applyDictionaryChanges({ add: missing });
+          if (delta.success !== true) throw new Error("dictionary delta registration failed");
+        }
+        session.defaultSession.flushStorageData();
+        for (const target of targets) {
+          if (await readKey(target.key) !== target.value)
+            throw new Error("storage verification failed for " + target.key);
+        }
+        if (dictionary) {
+          const registered = new Set(dictionary.getDictionary().map(wordKey));
+          if (!words.every((word) => registered.has(wordKey(word))))
+            throw new Error("dictionary verification failed");
+        }
+        if (database && database.inTransaction) database.exec("COMMIT");
+        result = { status: "applied", applied: applied, dictionaryAdded: missing.length };
+      }
+    } catch (error) {
+      if (database && database.inTransaction) {
+        try { database.exec("ROLLBACK"); }
+        catch (rollbackError) { restoreFailed.push("dictionary"); }
+      }
+      for (const key of applied) {
+        try {
+          if (before[key] === null) await removeKey(key);
+          else await setKey(key, before[key]);
+          if (await readKey(key) !== before[key]) restoreFailed.push(key);
+        } catch (restoreError) { restoreFailed.push(key); }
+      }
+      try { session.defaultSession.flushStorageData(); }
+      catch (flushError) { restoreFailed.push("storage"); }
+      result = {
+        status: restoreFailed.length > 0 ? "restore-failed" : "error",
+        detail: "config registration failed: " + String(error && error.message || error),
+        before: before,
+        restoreFailed: restoreFailed,
+      };
+    } finally {
+      if (database) {
+        try { database.close(); }
+        catch (closeError) {
+          if (!result) throw closeError;
+          result.detail = [result.detail, "database close failed: " + String(closeError && closeError.message || closeError)].filter(Boolean).join("; ");
+        }
+      }
+    }
+    emit(result);
+    try {
+      window.destroy();
+      app.quit();
+    } catch (shutdownError) {
+      result.detail = [result.detail, "harness shutdown failed: " + String(shutdownError && shutdownError.message || shutdownError)].filter(Boolean).join("; ");
+      emit(result);
+      app.exit(0);
+    }
+    return;`,
       "  } else {",
       `    process.exit(${harnessExitInvalidArguments});`,
       "  }",
@@ -522,6 +613,8 @@ export type HarnessMode = "read" | "apply" | "seed" | "dump" | "hold";
 
 export type HarnessPayload = {
   status: string;
+  detail?: string;
+  dictionaryAdded?: number;
   current?: Record<string, { value: string | null; sha256: string | null; equals: boolean }>;
   applied?: string[];
   restoreFailed?: string[];
@@ -563,6 +656,8 @@ export async function runHarnessMode(options: {
   profileDir: string;
   platform: PlatformName;
   targets?: ManagedStorageTarget[];
+  dictionary?: string[];
+  appDir?: string;
   seedJson?: string;
   allowDump?: boolean;
   holdMs?: number;
@@ -620,6 +715,10 @@ export async function runHarnessMode(options: {
   if (useSessionDisplay) childEnv.DISPLAY = options.env.DISPLAY!;
   if (options.targets !== undefined)
     childEnv.OW_HARNESS_TARGETS_JSON = JSON.stringify(options.targets);
+  if (options.dictionary !== undefined)
+    childEnv.OW_HARNESS_DICTIONARY_JSON = JSON.stringify(options.dictionary);
+  if (options.appDir !== undefined)
+    childEnv.OW_HARNESS_APP_ASAR = join(options.appDir, "resources", "app.asar");
   if (options.seedJson !== undefined) childEnv.OW_HARNESS_SEED_JSON = options.seedJson;
   if (options.allowDump) childEnv.OW_HARNESS_ALLOW_DUMP = "1";
   if (options.holdMs !== undefined) childEnv.OW_HARNESS_HOLD_MS = String(options.holdMs);
@@ -641,7 +740,11 @@ export async function runHarnessMode(options: {
 
   const cleanup = async () => {
     clearTimeout(timer);
-    await rm(isolatedHome, { recursive: true, force: true });
+    try {
+      await rm(isolatedHome, { recursive: true, force: true });
+    } catch (error) {
+      console.error("harness temporary cleanup failed:", error);
+    }
   };
   const parseLastLine = (): (HarnessPayload & { mode: string }) | null => {
     const lines = stdout.trim().split("\n");
@@ -678,7 +781,11 @@ export async function runHarnessMode(options: {
     child.on("close", (exitCode, signal) => {
       const payload = parseLastLine();
       if (payload?.status === "locked") return settle({ kind: "locked" });
-      if (payload) return settle({ kind: "ok", payload });
+      if (
+        payload &&
+        (exitCode === 0 || payload.status === "restore-failed" || payload.status === "error")
+      )
+        return settle({ kind: "ok", payload });
       settle({
         kind: "error",
         exitCode,
@@ -774,8 +881,8 @@ export async function manageConfig(options: {
   let keysSha256: string | null = null;
   try {
     const paths = resolvePaths(options.platform, options.env);
-    const targets = loadManagedKeys(paths.managedKeysDir);
-    keysSha256 = managedKeysSha256(targets);
+    const { keys: targets, dictionary } = loadManagedConfig(paths.managedKeysDir);
+    keysSha256 = managedKeysSha256(targets, dictionary);
     const recognizedProfile = isRecognizedProfile(paths.profileDir);
     if (recognizedProfile)
       releaseHookLock = await acquireHookLock(paths.profileDir, paths.timeouts.lockWaitMs);
@@ -788,81 +895,47 @@ export async function manageConfig(options: {
         detail: `OpenWhispr userData is not initialized: ${paths.profileDir}; launch and quit OpenWhispr, then run apply again`,
       };
     const runtimeDir = await ensureShadowRuntime(paths.appDir, paths.platform);
-    const runStorageMode = async (mode: "read" | "apply"): Promise<HarnessPayload> => {
-      const run = await runHarnessMode({
-        mode,
-        targets,
-        runtimeDir,
-        profileDir: paths.profileDir,
-        platform: paths.platform,
-        env: options.env,
-        timeoutMs: paths.timeouts.harnessMs,
-      });
-      if (run.outcome.kind === "locked")
-        throw new HookError(
-          "LOCKED",
-          mode === "read"
-            ? "the profile singleton lock is held by another process; OpenWhispr is likely running — quit it and run apply again"
-            : "the profile singleton lock was acquired during registration",
-        );
-      if (run.outcome.kind === "error")
-        throw new HookError(
-          "APPLY_FAILED",
-          mode === "read" ? "storage read failed" : "storage write failed",
-        );
-      return run.outcome.payload;
-    };
-
-    const readPayload = await runStorageMode("read");
-    const currentEntries = targets.map((target) => {
-      const observed = readPayload.current?.[target.key];
-      return {
-        key: target.key,
-        previousValue: observed?.value ?? null,
-        previousSha256: observed?.sha256 ?? null,
-      };
+    const run = await runHarnessMode({
+      mode: "apply",
+      targets,
+      dictionary,
+      appDir: paths.appDir,
+      runtimeDir,
+      profileDir: paths.profileDir,
+      platform: paths.platform,
+      env: options.env,
+      timeoutMs: paths.timeouts.harnessMs,
     });
-    const unchanged = targets.every((target) => readPayload.current?.[target.key]?.equals === true);
-    if (unchanged)
-      return {
-        status: "unchanged",
-        code: "OK",
-        keysSha256,
-      };
-    let applyPayload: HarnessPayload;
-    try {
-      applyPayload = await runStorageMode("apply");
-    } catch (error) {
-      if (error instanceof HookError && error.code === "APPLY_FAILED")
-        await writeRecoveryRecord(paths.profileDir, {
-          phase: "apply",
-          keys: currentEntries,
-          keysSha256,
-        });
-      throw error;
-    }
-    if (applyPayload.status === "restore-failed") {
+    if (run.outcome.kind === "locked")
+      throw new HookError(
+        "LOCKED",
+        "the profile singleton lock is held by another process; OpenWhispr is likely running — quit it and run apply again",
+      );
+    if (run.outcome.kind === "error")
+      throw new HookError(
+        "APPLY_FAILED",
+        `config registration harness failed: ${run.outcome.stdout}`,
+      );
+    const payload = run.outcome.payload;
+    if (payload.status === "restore-failed") {
       await writeRecoveryRecord(paths.profileDir, {
         phase: "apply",
-        keys: currentEntries,
+        keys: Object.entries(payload.before ?? {}).map(([key, previousValue]) => ({
+          key,
+          previousValue,
+          previousSha256: previousValue === null ? null : sha256Hex(previousValue),
+        })),
         keysSha256,
       });
-      throw new HookError("APPLY_FAILED", "storage write failed");
     }
-    const verifyPayload = await runStorageMode("read");
-    const verified = targets.every(
-      (target) => verifyPayload.current?.[target.key]?.equals === true,
-    );
-    if (!verified) {
-      await writeRecoveryRecord(paths.profileDir, {
-        phase: "verify",
-        keys: currentEntries,
-        keysSha256,
-      });
-      throw new HookError("APPLY_FAILED", "verified read-back did not match the managed values");
+    if (payload.status !== "applied" && payload.status !== "unchanged")
+      throw new HookError("APPLY_FAILED", payload.detail ?? "config registration failed");
+    try {
+      await clearRecoveryRecord(paths.profileDir);
+    } catch (error) {
+      console.error("recovery record cleanup failed:", error);
     }
-    await clearRecoveryRecord(paths.profileDir);
-    return { status: "applied", code: "OK", keysSha256 };
+    return { status: payload.status, code: "OK", keysSha256, detail: payload.detail };
   } catch (error) {
     const hookError =
       error instanceof HookError ? error : new HookError("APPLY_FAILED", String(error));
@@ -873,7 +946,11 @@ export async function manageConfig(options: {
       detail: hookError.message,
     };
   } finally {
-    await releaseHookLock?.();
+    try {
+      await releaseHookLock?.();
+    } catch (error) {
+      console.error("hook lock cleanup failed:", error);
+    }
   }
 }
 
