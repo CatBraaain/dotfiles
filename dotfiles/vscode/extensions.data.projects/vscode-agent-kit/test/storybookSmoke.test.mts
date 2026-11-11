@@ -255,7 +255,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         });
       }
       const before = await rowBounds();
-      expect(before).toEqual({ left: 16, right: width - 12, width: width - 28 });
+      expect(before).toEqual({ left: 4, right: width - 12, width: width - 16 });
       const contentAndPaint = await row.evaluate((element) => {
         const button = element.querySelector(".session-button")!;
         const box = button.getBoundingClientRect();
@@ -275,9 +275,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       });
       expect(contentAndPaint).toEqual({
         workspaceNameLeft: 28,
-        nameLeft: 45,
-        statusLeft: 25,
-        paintLeft: 38,
+        nameLeft: 29,
+        statusLeft: 9,
+        paintLeft: 4,
         paintRight: width - 12,
       });
       const nameWidths = await row.evaluate((element) => {
@@ -285,7 +285,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         const name = sessionRow.querySelector(".session-name")!;
         const current = name.getBoundingClientRect().width;
         const initialMarginLeft = sessionRow.style.marginLeft;
-        sessionRow.style.marginLeft = "12px";
+        sessionRow.style.marginLeft = "0px";
         const withLargerIndent = name.getBoundingClientRect().width;
         sessionRow.style.marginLeft = initialMarginLeft;
         return { current, withLargerIndent };

@@ -131,10 +131,10 @@ test(
       ).toHaveCount(1);
       await expect(frame.locator(".session-scrollbar")).toHaveCSS("width", "12px");
       for (const [index, row] of layout.rows.entries()) {
-        expect(row.row.left).toBe(16);
+        expect(row.row.left).toBe(4);
         expect(row.button).toEqual(row.row);
-        expect(row.paint.left).toBe(38);
-        expect(row.name.left - row.paint.left).toBe(7);
+        expect(row.paint.left).toBe(row.button.left);
+        expect(row.name.left).toBe(row.workspaceName.left + 1);
         expect(row.workspaceName.left).toBe(28);
         expect(row.paint.right).toBe(row.button.right);
         expect(row.paint.height).toBe(32);
@@ -142,10 +142,10 @@ test(
         expect(row.row.height).toBe(32);
         expect(row.row.width).toBe(withHostPadding[index].rowWidth + 40);
         expect(row.name.width).toBe(withHostPadding[index].nameWidth + 40);
-        expect(row.indent).toBe("4px");
-        expect(row.status.left).toBe(25);
-        expect(row.name.left).toBe(45);
-        expect(row.status.right).toBeLessThan(row.paint.left);
+        expect(row.indent).toBe("-8px");
+        expect(row.status.left).toBe(9);
+        expect(row.name.left).toBe(29);
+        expect(row.status.left).toBeGreaterThan(row.paint.left);
         if (layout.viewport.width === 299) {
           expect(row.name.right).toBe(200.65625);
           expect(row.timestamp.left).toBe(220.90625);
@@ -274,11 +274,11 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
 
         await host.page.locator(".part.sidebar .title-label").hover();
         const idle = await appearance();
-        expect(idle.button.left).toBe(16);
-        expect(idle.name.left).toBe(45);
-        expect(idle.status.left).toBe(25);
-        expect(idle.paint.left).toBe(38);
-        expect(idle.name.left - idle.paint.left).toBe(7);
+        expect(idle.button.left).toBe(4);
+        expect(idle.name.left).toBe(29);
+        expect(idle.status.left).toBe(9);
+        expect(idle.paint.left).toBe(idle.button.left);
+        expect(idle.name.left).toBe(idle.workspaceName.left + 1);
         expect(idle.workspaceName.left).toBe(28);
         expect(idle.chevron.left).toBe(4);
         expect(idle.chevron.width).toBe(24);
@@ -340,7 +340,7 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
         host.setSessionPhase("A", "waiting-approval");
         const status = button
           .locator(".session-status")
-          .describe("Approval icon in the unpainted gutter");
+          .describe("Approval icon to the left of the session name");
         await expect(status).toHaveAttribute("data-state", "waiting-approval");
         await expect(status.locator("svg")).toBeVisible();
         await button.blur();
@@ -349,7 +349,7 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
         expect(approval.status).toEqual(idle.status);
         expect(approval.name).toEqual(idle.name);
         expect(approval.paint).toEqual(idle.paint);
-        expect(approval.status.right).toBeLessThan(approval.paint.left);
+        expect(approval.status.left).toBeGreaterThan(approval.paint.left);
         expect(
           await status.evaluate((element) => {
             const box = element.getBoundingClientRect();
@@ -360,7 +360,7 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
             );
           }),
         ).toBe(true);
-        await testInfo.attach(`${theme} approval gutter and selected`, {
+        await testInfo.attach(`${theme} approval icon and selected`, {
           body: await host.page.screenshot({
             path: testInfo.outputPath("approval-selected.png"),
           }),

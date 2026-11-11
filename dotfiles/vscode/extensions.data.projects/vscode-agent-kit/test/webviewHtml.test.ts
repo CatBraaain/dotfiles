@@ -48,26 +48,24 @@ describe("webviewHtml", () => {
     );
     expect(html).toContain(".session-timestamp { pointer-events: none;");
     expect(html).not.toContain(".archive:disabled");
-    expect(html).toContain("padding: 0 calc(36px + 5ch + 8px) 0 8px;");
+    expect(html).toContain("padding: 0 calc(36px + 5ch + 8px) 0 4px;");
     expect(html).toContain("right: 36px;");
   });
 
-  it("indents only the painted surface without moving session content or its hit target", () => {
+  it("aligns session rows with group headers and paints the full hit target", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
     expect(html).toContain(
-      ".session-row { position: relative; min-width: 0; height: 32px; margin-left: 4px;",
+      ".session-row { position: relative; min-width: 0; height: 32px; margin-left: -8px;",
     );
     expect(html).toContain(".session-button { position: relative; isolation: isolate;");
-    expect(html).toContain(
-      'content: ""; position: absolute; inset: -1px -1px -1px calc(22px - 1px);',
-    );
+    expect(html).toContain('content: ""; position: absolute; inset: -1px;');
     expect(html).toContain("pointer-events: none; z-index: -1;");
     expect(html).toContain(".session-button:hover { background: transparent; }");
     expect(html).toContain(".session-button:focus-visible { outline: none; }");
     expect(html).toContain(".session-button:focus-visible::before { outline: 2px solid");
     expect(html).toContain(".session-row.selected .session-button::before");
-    expect(html).toContain("padding: 0 calc(36px + 5ch + 8px) 0 8px;");
+    expect(html).toContain("padding: 0 calc(36px + 5ch + 8px) 0 4px;");
   });
 
   it("keeps the fixed controls markup the client script wires up", () => {
