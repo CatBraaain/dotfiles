@@ -4673,7 +4673,7 @@ describe("subagent の表示", () => {
     }
   });
 
-  it("Actions をツール別の整形と結果サマリー行で表示する", () => {
+  it("renders each action as one call-summary row with a completion time", () => {
     const extension = captureAgentsExtension();
     const details = {
       results: [
@@ -4709,8 +4709,13 @@ describe("subagent の表示", () => {
         },
       );
       const lines = (rendered as Container).render(200);
-      assert.ok(lines.some((line) => line.includes("→ edit ./a.ts")));
-      assert.ok(lines.some((line) => line.includes("  edited 1 block(s)")));
+      const actionsStart = lines.findIndex((line) => line.includes("┌─── Actions"));
+      const actionRows = lines.slice(actionsStart + 1, -1);
+      const endedAt = new Date(2500);
+      const stamp = [endedAt.getHours(), endedAt.getMinutes(), endedAt.getSeconds()]
+        .map((part) => String(part).padStart(2, "0"))
+        .join(":");
+      assert.deepEqual(actionRows, ["edit ./a.ts — edited 1 block(s)".padEnd(192) + stamp]);
     } finally {
       extension.restore();
     }
@@ -4780,7 +4785,7 @@ describe("subagent の表示", () => {
     }
   });
 
-  it("結果を受け取る前のツール呼び出しは結果行を表示しない", () => {
+  it("renders unfinished child tools with Running... and no completion time", () => {
     const extension = captureAgentsExtension();
     const details = {
       results: [
@@ -4806,10 +4811,8 @@ describe("subagent の表示", () => {
         },
       );
       const lines = (rendered as Container).render(200);
-      assert.equal(
-        lines.some((line) => line.includes("edited")),
-        false,
-      );
+      const actionsStart = lines.findIndex((line) => line.includes("┌─── Actions"));
+      assert.deepEqual(lines.slice(actionsStart + 1, -1), ["edit ./a.ts — Running..."]);
     } finally {
       extension.restore();
     }

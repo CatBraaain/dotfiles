@@ -188,8 +188,12 @@ export function formatCollapsedToolRow(row: ToolRowState, theme: Theme, width: n
   const args = row.args ?? {};
   const call = formatRowCall(row.toolName, args, row.cwd, theme);
   const summary = formatRowSummary(row, theme);
+  return formatToolRowLine(call, summary, rowStamp(row), width);
+}
+
+function formatToolRowLine(call: string, summary: string, stamp: string, width: number): string {
   const line = (summary ? `${call} — ${summary}` : call).replace(/[\r\n\t\u2028\u2029]/g, " ");
-  return stampSuffix(line, rowStamp(row), width);
+  return stampSuffix(line, stamp, width);
 }
 
 function rowStamp(row: ToolRowState): string {
@@ -209,7 +213,10 @@ function formatRowCall(name: string, args: Record<string, any>, cwd: string, the
   return formatToolCall(name, args, cwd, theme);
 }
 
-function formatRowSummary(row: ToolRowState, theme: Theme): string {
+function formatRowSummary(
+  row: Pick<ToolRowState, "toolName" | "args" | "result" | "isPartial" | "rendererState">,
+  theme: Theme,
+): string {
   const { toolName, result } = row;
   if (!result || row.isPartial) {
     const progress = toolName === "bash" ? singleLine(resultText(result ?? {})) : "";
@@ -619,7 +626,6 @@ function subagentRenderers(): ToolRenderers {
       const actions = childResult.actions;
       const finalOutput = getFinalOutput(childResult.messages);
       const childCwd = childResult.cwd ?? process.cwd();
-      const toolTheme: ToolTheme = { fg: theme.fg.bind(theme), bold: theme.bold.bind(theme) };
       const container = new Container();
       container.addChild(new Text(theme.fg("muted", "┌─── Task ──────"), 0, 0));
       container.addChild(new Text(theme.fg("text", childResult.task), 0, 0));
@@ -627,23 +633,10 @@ function subagentRenderers(): ToolRenderers {
       if (actions.length > 0) {
         container.addChild(new Text(theme.fg("muted", "┌─── Actions ───"), 0, 0));
         for (const action of actions) {
-          const callText = formatToolCall(action.name, action.args, childCwd, toolTheme);
-          container.addChild(new Text(`${theme.fg("muted", "→ ")}${callText}`, 0, 0));
-          const durationMs =
-            action.startedAt !== undefined && action.endedAt !== undefined
-              ? action.endedAt - action.startedAt
-              : undefined;
-          const summary =
-            action.result !== undefined
-              ? formatToolResultSummary(
-                  action.name,
-                  action.args,
-                  action.result,
-                  { isError: action.isError, durationMs },
-                  toolTheme,
-                )
-              : undefined;
-          if (summary !== undefined) container.addChild(new Text(`  ${summary}`, 0, 0));
+          container.addChild({
+            render: (width) => [formatSubagentAction(action, childCwd, theme, width)],
+            invalidate: () => {},
+          });
         }
         container.addChild(new Text(theme.fg("muted", "└───────────────"), 0, 0));
       }
@@ -667,6 +660,42 @@ function subagentRenderers(): ToolRenderers {
       return container;
     },
   };
+}
+
+function formatSubagentAction(
+  action: AgentToolDetails["results"][number]["actions"][number],
+  cwd: string,
+  theme: Theme,
+  width: number,
+): string {
+  const durationMs =
+    action.startedAt !== undefined && action.endedAt !== undefined
+      ? action.endedAt - action.startedAt
+      : undefined;
+  const summary = formatRowSummary(
+    {
+      toolName: action.name,
+      args: action.args,
+      isPartial: action.result === undefined,
+      rendererState: {},
+      result: action.result
+        ? {
+            ...action.result,
+            content: action.result.content ?? [],
+            isError: action.isError ?? false,
+            durationMs,
+          }
+        : undefined,
+    },
+    theme,
+  );
+  const stamp = action.result === undefined ? "" : stampTime(action.endedAt);
+  return formatToolRowLine(
+    formatRowCall(action.name, action.args, cwd, theme),
+    summary,
+    stamp ? theme.fg("dim", stamp) : "",
+    width,
+  );
 }
 
 function getFinalOutput(messages: any[]): string {
