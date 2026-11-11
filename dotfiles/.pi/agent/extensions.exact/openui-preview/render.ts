@@ -6,9 +6,9 @@ import { createParser, isASTNode, type LibrarySpec, type Parser } from "@openuid
 const EXTENSION_DIR = dirname(fileURLToPath(import.meta.url));
 const parserCache = new Map<string, Parser>();
 
-export type OpuiValidationResult = { ok: true } | { ok: false; error: string };
+export type OpenuiValidationResult = { ok: true } | { ok: false; error: string };
 
-export function validateOpuiLang(source: string, dir = EXTENSION_DIR): OpuiValidationResult {
+export function validateOpenuiLang(source: string, dir = EXTENSION_DIR): OpenuiValidationResult {
   if (!source.trim()) return { ok: false, error: "no renderable root statement found" };
   const parsed = getParser(dir).parse(source);
   if (parsed.meta.incomplete) {

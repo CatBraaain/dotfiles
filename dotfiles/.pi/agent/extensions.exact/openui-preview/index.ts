@@ -3,9 +3,9 @@ import { basename, join } from "node:path";
 import type { ExtensionAPI, ThemeBg, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { Box, Image, Text, type Component } from "@earendil-works/pi-tui";
 import { requestBackgroundBash, type BackgroundBashContext } from "../tools/background-bash.ts";
-import { extractOpuiLangBlocks, stripOpuiLangBlocks, type OpuiLangBlock } from "./fence";
-import { PROMPT_SECTION_NAME, opuiInstructions } from "./prompt";
-import { validateOpuiLang } from "./render";
+import { extractOpenuiLangBlocks, stripOpenuiLangBlocks, type OpenuiLangBlock } from "./fence";
+import { PROMPT_SECTION_NAME, openuiInstructions } from "./prompt";
+import { validateOpenuiLang } from "./render";
 import { shotOpenui, type ShotOptions } from "./snapshot";
 
 export const OPENUI_CUSTOM_TYPE = "openui-preview";
@@ -38,12 +38,12 @@ async function previewBlock(
   pi: Pick<ExtensionAPI, "appendEntry">,
   deps: ExtensionDeps,
   context: BackgroundBashContext & { signal?: AbortSignal },
-  block: OpuiLangBlock,
+  block: OpenuiLangBlock,
   index: number,
 ): Promise<void> {
   if (block.unclosed)
     throw new Error(`openui-lang block at line ${block.startLine} has no closing fence`);
-  const validated = validateOpuiLang(block.source, deps.generatedDir);
+  const validated = validateOpenuiLang(block.source, deps.generatedDir);
   if (!validated.ok) throw new Error(validated.error);
   const id = `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
   const signal =
@@ -128,10 +128,10 @@ export default function openuiPreviewExtension(
     }),
   );
   pi.registerMarkdownTransformer((markdown, context) =>
-    context.messageType === "assistant" ? stripOpuiLangBlocks(markdown) : markdown,
+    context.messageType === "assistant" ? stripOpenuiLangBlocks(markdown) : markdown,
   );
   pi.on("before_agent_start", (event) => {
-    event.systemPromptOptions.sections[PROMPT_SECTION_NAME] = opuiInstructions(deps.generatedDir);
+    event.systemPromptOptions.sections[PROMPT_SECTION_NAME] = openuiInstructions(deps.generatedDir);
   });
   pi.on("session_shutdown", async () => {
     controller.abort(new Error("OpenUI preview session stopped"));
@@ -144,7 +144,7 @@ export default function openuiPreviewExtension(
       typeof content === "string"
         ? content
         : content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
-    for (const [index, block] of extractOpuiLangBlocks(text).entries()) {
+    for (const [index, block] of extractOpenuiLangBlocks(text).entries()) {
       const task = deps
         .enqueue(async () => {
           if (controller.signal.aborted || deps.signal?.aborted) return;

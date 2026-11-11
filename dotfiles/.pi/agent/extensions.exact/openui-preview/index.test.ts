@@ -17,7 +17,7 @@ import {
   type BackgroundBashRequest,
   type BackgroundBashOutcome,
 } from "../tools/background-bash";
-import { extractOpuiLangBlocks, stripOpuiLangBlocks } from "./fence";
+import { extractOpenuiLangBlocks, stripOpenuiLangBlocks } from "./fence";
 import openuiPreviewExtension, {
   createQueue,
   renderPreview,
@@ -41,10 +41,10 @@ afterAll(() => {
   rmSync(workDir, { recursive: true, force: true });
 });
 
-describe("extractOpuiLangBlocks", () => {
+describe("extractOpenuiLangBlocks", () => {
   it("extracts a single closed block", () => {
     const text = ["before", "```openui-lang", "root = Stack([])", "```", "after"].join("\n");
-    const blocks = extractOpuiLangBlocks(text);
+    const blocks = extractOpenuiLangBlocks(text);
     assert.equal(blocks.length, 1);
     assert.equal(blocks[0]?.source, "root = Stack([])");
     assert.equal(blocks[0]?.startLine, 2);
@@ -61,7 +61,7 @@ describe("extractOpuiLangBlocks", () => {
       "root = Stack([two])",
       "```",
     ].join("\n");
-    const blocks = extractOpuiLangBlocks(text);
+    const blocks = extractOpenuiLangBlocks(text);
     assert.deepEqual(
       blocks.map((block) => block.source),
       ["root = Stack([one])", "root = Stack([two])"],
@@ -70,17 +70,17 @@ describe("extractOpuiLangBlocks", () => {
 
   it("ignores other language tags", () => {
     const text = ["```html", "<p>x</p>", "```"].join("\n");
-    assert.deepEqual(extractOpuiLangBlocks(text), []);
+    assert.deepEqual(extractOpenuiLangBlocks(text), []);
   });
 
   it("does not match tags that merely start with openui-lang", () => {
     const text = ["```openui-language", "root = Stack([])", "```"].join("\n");
-    assert.deepEqual(extractOpuiLangBlocks(text), []);
+    assert.deepEqual(extractOpenuiLangBlocks(text), []);
   });
 
   it("reports an unclosed block", () => {
     const text = ["```openui-lang", "root = Stack([never-closed])"].join("\n");
-    const blocks = extractOpuiLangBlocks(text);
+    const blocks = extractOpenuiLangBlocks(text);
     assert.equal(blocks.length, 1);
     assert.equal(blocks[0]?.unclosed, true);
     assert.equal(blocks[0]?.source, "root = Stack([never-closed])");
@@ -88,30 +88,30 @@ describe("extractOpuiLangBlocks", () => {
 
   it("ignores extra tokens after the openui-lang tag", () => {
     const text = ["```openui-lang card", "root = Stack([])", "```"].join("\n");
-    const blocks = extractOpuiLangBlocks(text);
+    const blocks = extractOpenuiLangBlocks(text);
     assert.equal(blocks.length, 1);
     assert.equal(blocks[0]?.source, "root = Stack([])");
   });
 
   it("returns empty for text without fences", () => {
-    assert.deepEqual(extractOpuiLangBlocks("plain text\nno code"), []);
+    assert.deepEqual(extractOpenuiLangBlocks("plain text\nno code"), []);
   });
 });
 
-describe("stripOpuiLangBlocks", () => {
+describe("stripOpenuiLangBlocks", () => {
   it("removes closed blocks and keeps surrounding text", () => {
     const text = ["before", "```openui-lang", "root = Stack([])", "```", "after"].join("\n");
-    assert.equal(stripOpuiLangBlocks(text), "before\nafter");
+    assert.equal(stripOpenuiLangBlocks(text), "before\nafter");
   });
 
   it("removes an unclosed streaming block up to the end", () => {
     const text = ["intro", "```openui-lang", "root = Stack(["].join("\n");
-    assert.equal(stripOpuiLangBlocks(text), "intro");
+    assert.equal(stripOpenuiLangBlocks(text), "intro");
   });
 
   it("keeps other fenced languages", () => {
     const text = ["```html", "<p>x</p>", "```"].join("\n");
-    assert.equal(stripOpuiLangBlocks(text), text);
+    assert.equal(stripOpenuiLangBlocks(text), text);
   });
 });
 

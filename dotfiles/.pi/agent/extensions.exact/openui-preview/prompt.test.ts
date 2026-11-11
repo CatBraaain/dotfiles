@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, it } from "bun:test";
-import { PROMPT_SECTION_NAME, opuiInstructions } from "./prompt";
+import { PROMPT_SECTION_NAME, openuiInstructions } from "./prompt";
 
 /**
  * Minimal LibrarySpec covering the behaviors under test: interactive names
@@ -39,21 +39,21 @@ beforeAll(() => {
   writeFileSync(join(fixtureDir, "prompt-options.json"), JSON.stringify(PROMPT_OPTIONS));
 });
 
-describe("opuiInstructions", () => {
+describe("openuiInstructions", () => {
   it("embeds openui-lang fenced-block preamble", () => {
-    const prompt = opuiInstructions(fixtureDir);
+    const prompt = openuiInstructions(fixtureDir);
     assert.ok(prompt.includes("```openui-lang"));
     assert.ok(prompt.includes("answers in markdown"));
   });
 
   it("drops the built-in Action section and ActionExpression explainer", () => {
-    const prompt = opuiInstructions(fixtureDir);
+    const prompt = openuiInstructions(fixtureDir);
     assert.ok(!prompt.includes("\n## Action"));
     assert.ok(!prompt.includes("Props typed `ActionExpression`"));
   });
 
   it("replaces interactive components in signatures with never", () => {
-    const prompt = opuiInstructions(fixtureDir);
+    const prompt = openuiInstructions(fixtureDir);
     const cardLine = prompt.split("\n").find((line) => line.startsWith("Card("));
     assert.ok(cardLine, "Card signature should be present");
     assert.ok(!cardLine.includes("Buttons"));
@@ -64,18 +64,18 @@ describe("opuiInstructions", () => {
   });
 
   it("keeps display-only component names", () => {
-    const prompt = opuiInstructions(fixtureDir);
+    const prompt = openuiInstructions(fixtureDir);
     assert.ok(prompt.includes("TextContent("));
   });
 
   it("includes the prompt-options examples and rules", () => {
-    const prompt = opuiInstructions(fixtureDir);
+    const prompt = openuiInstructions(fixtureDir);
     assert.ok(prompt.includes("Example 1 — Table"));
     assert.ok(prompt.includes("realistic/plausible data"));
   });
 
   it("is stable across calls for the same directory", () => {
-    assert.equal(opuiInstructions(fixtureDir), opuiInstructions(fixtureDir));
+    assert.equal(openuiInstructions(fixtureDir), openuiInstructions(fixtureDir));
   });
 
   it("uses the openui-lang section name", () => {

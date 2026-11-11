@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, it } from "bun:test";
 import { displayLibrary } from "./library.data";
-import { validateOpuiLang } from "./render";
+import { validateOpenuiLang } from "./render";
 
 let specDir: string;
 beforeAll(() => {
@@ -16,7 +16,7 @@ afterAll(() => {
   rmSync(specDir, { recursive: true, force: true });
 });
 
-describe("validateOpuiLang", () => {
+describe("validateOpenuiLang", () => {
   for (const [name, source] of [
     ["card", 'root = Stack([Card([CardHeader("Report"), TextContent("Revenue **rose**")])])'],
     ["table", 'root = Stack([Table([Col("Name", ["A", "B"]), Col("Value", [10, 20])])])'],
@@ -44,7 +44,7 @@ describe("validateOpuiLang", () => {
     ["markup as data", 'root = Stack([TextContent("<script>throw 1</script>")])'],
   ] as const) {
     it(`accepts ${name} using the generated display-only schema`, () => {
-      assert.deepEqual(validateOpuiLang(source, specDir), { ok: true }, name);
+      assert.deepEqual(validateOpenuiLang(source, specDir), { ok: true }, name);
     });
   }
 
@@ -61,7 +61,7 @@ describe("validateOpuiLang", () => {
     ["unresolved reference", "root = Stack([missing])", /unresolved/],
   ] as const) {
     it(`rejects ${name} before browser execution`, () => {
-      const result = validateOpuiLang(source, specDir);
+      const result = validateOpenuiLang(source, specDir);
       assert.equal(result.ok, false);
       if (!result.ok) assert.match(result.error, expected);
     });

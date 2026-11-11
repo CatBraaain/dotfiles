@@ -66,7 +66,7 @@ const promptCache = new Map<string, string>();
  * generated from the generated data files (spec.json and prompt-options.json,
  * both produced by spec.apply.ts from library.data.ts). Cached per directory.
  */
-export function opuiInstructions(dir: string = EXTENSION_DIR): string {
+export function openuiInstructions(dir: string = EXTENSION_DIR): string {
   const cached = promptCache.get(dir);
   if (cached !== undefined) return cached;
   const library = JSON.parse(readFileSync(join(dir, "spec.json"), "utf8")) as LibrarySpec;

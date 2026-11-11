@@ -2,7 +2,7 @@
  * Detection and display-only removal of ```openui-lang fenced code blocks.
  */
 
-export interface OpuiLangBlock {
+export interface OpenuiLangBlock {
   /** Fence body without the opening and closing fence lines. */
   source: string;
   /** 1-based line number of the opening fence in the source text. */
@@ -15,14 +15,14 @@ const OPENING_FENCE = /^ {0,3}```openui-lang\b/;
 const CLOSING_FENCE = /^ {0,3}```\s*$/;
 
 interface ScanState {
-  blocks: OpuiLangBlock[];
+  blocks: OpenuiLangBlock[];
   /** Lines kept after removing openui-lang blocks; null while inside a block. */
   kept: (string | null)[];
 }
 
 function scan(text: string): ScanState {
   const lines = text.split("\n");
-  const blocks: OpuiLangBlock[] = [];
+  const blocks: OpenuiLangBlock[] = [];
   const kept: (string | null)[] = [];
   let current: { startLine: number; body: string[] } | null = null;
 
@@ -66,7 +66,7 @@ function scan(text: string): ScanState {
  * Other language tags are ignored. An unterminated block is returned
  * with unclosed: true and the content collected so far.
  */
-export function extractOpuiLangBlocks(text: string): OpuiLangBlock[] {
+export function extractOpenuiLangBlocks(text: string): OpenuiLangBlock[] {
   return scan(text).blocks;
 }
 
@@ -75,7 +75,7 @@ export function extractOpuiLangBlocks(text: string): OpuiLangBlock[] {
  * returns the remaining lines joined again. Only used for display; the
  * assistant message itself keeps the blocks for the LLM context.
  */
-export function stripOpuiLangBlocks(text: string): string {
+export function stripOpenuiLangBlocks(text: string): string {
   return scan(text)
     .kept.filter((line): line is string => line !== null)
     .join("\n");

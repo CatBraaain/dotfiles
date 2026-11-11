@@ -43,7 +43,7 @@ assistant出力中の ` ```openui-lang ` コードフェンスを、確定後に
 
 ## フェンスの検出
 
-検出は `fence.ts` の `extractOpuiLangBlocks` が担う。
+検出は `fence.ts` の `extractOpenuiLangBlocks` が担う。
 
 | 対象 | 取り扱い |
 | --- | --- |
@@ -53,7 +53,7 @@ assistant出力中の ` ```openui-lang ` コードフェンスを、確定後に
 | 閉じフェンスのないブロック | 解析せず、エラーカードをtranscriptに送る |
 | ネストしたフェンス | 対応しない。最初の閉じフェンスで終了する |
 
-`stripOpuiLangBlocks` は本文表示用にブロック（閉じ済み・ストリーミング中の未閉鎖の両方）を除去する。`registerMarkdownTransformer` から `context.messageType === "assistant"` のときだけ適用する。user・assistant-thinking本文・LLMコンテキストは変更しない。
+`stripOpenuiLangBlocks` は本文表示用にブロック（閉じ済み・ストリーミング中の未閉鎖の両方）を除去する。`registerMarkdownTransformer` から `context.messageType === "assistant"` のときだけ適用する。user・assistant-thinking本文・LLMコンテキストは変更しない。
 
 ## openui-lang → React描画
 

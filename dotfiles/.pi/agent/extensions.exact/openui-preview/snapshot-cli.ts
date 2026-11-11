@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { BrowserServer } from "playwright-core";
-import { validateOpuiLang } from "./render.ts";
+import { validateOpenuiLang } from "./render.ts";
 import {
   SHOT_HEIGHT,
   SHOT_WIDTH,
@@ -79,7 +79,7 @@ async function buildBundleInProcess(): Promise<{ javascript: string; css: string
 }
 
 export async function captureSnapshot(input: SnapshotInput, signal?: AbortSignal): Promise<void> {
-  const validated = validateOpuiLang(input.source, input.generatedDir);
+  const validated = validateOpenuiLang(input.source, input.generatedDir);
   if (!validated.ok) throw new Error(validated.error);
   const browserTempDir = await mkdtemp(join(tmpdir(), "ob-"));
   const previousTemp = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP };
