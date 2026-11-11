@@ -34,7 +34,9 @@ cd ~/.pi/agent && bun install
 
 依存を増やす場合はこの package.json とlockfileを更新する。
 
-`devDependencies` はテスト用とspec生成用。openui-preview拡張のapplyフックのspec生成に `@openuidev/cli`・`react-lang`・`react-ui` を使う。加え、 `@types/bun`（`bun:test` の型）と、`@earendil-works/pi-coding-agent` / `@earendil-works/pi-tui`（テスト実行時のモジュール解決用。pi を更新したらバージョンを合わせる）。テストはワークスペース側で実行する:
+openui-preview拡張はランタイム依存の `@openuidev/react-lang`・`@openuidev/react-ui`・`react`・`react-dom` でブラウザ描画し、`playwright-core` で撮影する。ブラウザ用bundleは背景Bash経由のBun専用CLIで生成する。
+
+`devDependencies` はテスト用とspec生成用。openui-preview拡張のapplyフックのspec生成に `@openuidev/cli` と上記のOpenUIライブラリを使う。加え、 `@types/bun`（`bun:test` の型）と、`@earendil-works/pi-coding-agent` / `@earendil-works/pi-tui`（テスト実行時のモジュール解決用。pi を更新したらバージョンを合わせる）。テストはワークスペース側で実行する:
 
 ```sh
 cd dotfiles/.pi/agent && bun install && bun test

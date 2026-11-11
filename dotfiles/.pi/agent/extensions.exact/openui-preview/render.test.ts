@@ -1,248 +1,69 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { beforeAll, describe, it } from "bun:test";
-import { SUPPORTED_COMPONENTS, inlineMarkdown, renderOpuiLang } from "./render";
+import { afterAll, beforeAll, describe, it } from "bun:test";
+import { displayLibrary } from "./library.data";
+import { validateOpuiLang } from "./render";
 
 let specDir: string;
+beforeAll(() => {
+  const temporaryRoot = "/tmp/work/dotfiles/openui-preview-tests";
+  mkdirSync(temporaryRoot, { recursive: true });
+  specDir = mkdtempSync(join(temporaryRoot, "validation-"));
+  writeFileSync(join(specDir, "spec.json"), JSON.stringify(displayLibrary.toSpec()));
+});
+afterAll(() => {
+  rmSync(specDir, { recursive: true, force: true });
+});
 
-beforeAll(async () => {
-  specDir = mkdtempSync(join(tmpdir(), "openui-render-test-"));
-  const agentDir = join(import.meta.dir, "..", "..");
-  const libraryPath = join(import.meta.dir, "library.data.ts");
-  assert.ok(existsSync(libraryPath), "library.data.ts should exist");
-  const generated = Bun.spawnSync(
+describe("validateOpuiLang", () => {
+  for (const [name, source] of [
+    ["card", 'root = Stack([Card([CardHeader("Report"), TextContent("Revenue **rose**")])])'],
+    ["table", 'root = Stack([Table([Col("Name", ["A", "B"]), Col("Value", [10, 20])])])'],
+    ["bar", 'root = Stack([BarChart(["A", "B"], [Series("Sales", [10, 20])])])'],
+    ["line", 'root = Stack([LineChart(["A", "B"], [Series("Sales", [10, 20])])])'],
+    ["area", 'root = Stack([AreaChart(["A", "B"], [Series("Sales", [10, 20])])])'],
     [
-      process.execPath,
-      cliEntry(agentDir),
-      "generate",
-      libraryPath,
-      "--spec",
-      "--out",
-      join(specDir, "spec.json"),
-      "--no-telemetry",
+      "horizontal bar",
+      'root = Stack([HorizontalBarChart(["A", "B"], [Series("Sales", [10, 20])])])',
     ],
-    { cwd: agentDir },
-  );
-  if (generated.exitCode !== 0) {
-    throw new Error(`openui generate failed: ${generated.stderr.toString()}`);
+    ["pie", 'root = Stack([PieChart(["A", "B"], [10, 20])])'],
+    ["radar", 'root = Stack([RadarChart(["A", "B", "C"], [Series("Sales", [10, 20, 15])])])'],
+    ["radial", 'root = Stack([RadialChart(["A", "B"], [10, 20])])'],
+    ["stacked bar", 'root = Stack([SingleStackedBarChart(["A", "B"], [10, 20])])'],
+    [
+      "scatter",
+      'root = Stack([ScatterChart([ScatterSeries("Sales", [Point(10, 20), Point(20, 30)])])])',
+    ],
+    [
+      "tabs",
+      'root = Stack([Tabs([TabItem("a", "A", [TextContent("one")]), TabItem("b", "B", [TextContent("two")])])])',
+    ],
+    ["accordion", 'root = Stack([Accordion([AccordionItem("a", "A", [TextContent("one")])])])'],
+    ["carousel", 'root = Stack([Carousel([[TextContent("one")], [TextContent("two")]])])'],
+    ["markup as data", 'root = Stack([TextContent("<script>throw 1</script>")])'],
+  ] as const) {
+    it(`accepts ${name} using the generated display-only schema`, () => {
+      assert.deepEqual(validateOpuiLang(source, specDir), { ok: true }, name);
+    });
   }
-  assert.ok(existsSync(join(specDir, "spec.json")), "spec.json should be generated");
-}, 30_000);
 
-function render(source: string) {
-  return renderOpuiLang(source, specDir);
-}
-
-describe("renderOpuiLang", () => {
-  it("renders a program with every supported component into one document", () => {
-    const source = [
-      "root = Stack([header, sep, card, callout, tcallout, tags])",
-      'header = InlineHeader("Deploy Summary", "2026-06-24 build")',
-      "sep = Separator()",
-      'card = Card([body, list, table], "sunk")',
-      'body = TextContent("Build **passed** with 0 warnings", "small")',
-      'list = ListBlock([i1, i2], "number")',
-      'i1 = ListItem("Unit tests", "42 passed")',
-      'i2 = ListItem("Type check")',
-      "table = Table([nameCol, scoreCol])",
-      'nameCol = Col("Name", ["a", "b"])',
-      'scoreCol = Col("Score", [1, 2])',
-      'callout = Callout("info", "Note", "Deployed to *staging*")',
-      'tcallout = TextCallout("success", "Done", "All checks green")',
-      'tags = TagBlock(["prod", "ok"], "sm")',
-    ].join("\n");
-
-    const result = render(source);
-    assert.equal(result.ok, true);
-    if (!result.ok) return;
-    for (const className of [
-      "opui-stack",
-      "opui-inline-header",
-      "opui-separator",
-      "opui-card--sunk",
-      "opui-text-content--small",
-      "opui-list-block",
-      "opui-list-item",
-      "opui-table",
-      "opui-callout--info",
-      "opui-text-callout--success",
-      "opui-tag--sm",
-    ]) {
-      assert.ok(result.html.includes(className), `missing ${className}`);
-    }
-    assert.ok(result.html.startsWith("<!doctype html>"));
-    assert.ok(result.html.includes("<style>"));
-    assert.ok(!result.html.includes("<script"));
-  });
-
-  it("renders Text and BoldText with subtext and metric tone", () => {
-    const source = [
-      "root = Stack([t, b])",
-      't = Text("text", "Revenue", "month to date")',
-      'b = BoldText("number", "$48,200", "+8.1%", "metric")',
-    ].join("\n");
-    const result = render(source);
-    assert.equal(result.ok, true);
-    if (!result.ok) return;
-    assert.ok(result.html.includes("opui-text-block__secondary--positive"));
-    assert.ok(result.html.includes("opui-numbers"));
-  });
-
-  it("renders EntityList rows with header and footer", () => {
-    const source = [
-      "root = Stack([list])",
-      'list = EntityList([r1, r2], "default", h, f)',
-      'h = { left: "Metric", right: "Value" }',
-      'r1 = { left: "Latency", right: "42ms", rightVariant: "text" }',
-      'r2 = { left: "Errors", right: "0", rightVariant: "number" }',
-      'f = { left: "Total", right: "3" }',
-    ].join("\n");
-    const result = render(source);
-    assert.equal(result.ok, true);
-    if (!result.ok) return;
-    assert.ok(result.html.includes("opui-entity-list__row--header"));
-    assert.ok(result.html.includes("opui-entity-list__row--footer"));
-    assert.ok(result.html.includes("opui-entity-list__cell-right--number"));
-  });
-
-  it("escapes html in text values", () => {
-    const source = 'root = Stack([TextContent("<img src=x> & <b>")])';
-    const result = render(source);
-    assert.equal(result.ok, true);
-    if (!result.ok) return;
-    assert.ok(!result.html.includes("<img"));
-    assert.ok(result.html.includes("&lt;img"));
-  });
-
-  it("rejects unsupported components with their names", () => {
-    const source = [
-      "root = Stack([tabs, pie])",
-      'tabs = Tabs([TabItem("a", "A", [TextContent("x")])])',
-      'pie = PieChart(["a"], [1])',
-    ].join("\n");
-    const result = render(source);
-    assert.equal(result.ok, false);
-    if (result.ok) return;
-    assert.ok(result.error.includes("PieChart"));
-    assert.ok(result.error.includes("TabItem"));
-    assert.ok(result.error.startsWith("preview does not support"));
-  });
-
-  it("rejects the image variant of ListBlock", () => {
-    const source = 'root = Stack([ListBlock([ListItem("a")], "image")])';
-    const result = render(source);
-    assert.equal(result.ok, false);
-    if (result.ok) return;
-    assert.ok(result.error.includes("image variant"));
-  });
-
-  it("rejects reactive expressions", () => {
-    const source = ["root = Stack([c])", 'c = Callout("info", "T", "D", $vis)', "$vis = true"].join(
-      "\n",
-    );
-    const result = render(source);
-    assert.equal(result.ok, false);
-    if (result.ok) return;
-    assert.ok(result.error.includes("reactive"));
-  });
-
-  it("rejects Query statements", () => {
-    const source = ["root = Stack([t])", "t = TextContent(q.data)", 'q = Query("tool", {})'].join(
-      "\n",
-    );
-    const result = render(source);
-    assert.equal(result.ok, false);
-    if (result.ok) return;
-    assert.ok(result.error.includes("Query"));
-  });
-
-  it("rejects unknown components", () => {
-    const source = 'root = Stack([Mystery("x")])';
-    const result = render(source);
-    assert.equal(result.ok, false);
-    if (result.ok) return;
-    assert.ok(result.error.includes("display-only library"));
-  });
-
-  it("rejects truncated programs", () => {
-    const source = 'root = Stack([TextContent("x"';
-    const result = render(source);
-    assert.equal(result.ok, false);
-    if (result.ok) return;
-    assert.ok(result.error.includes("truncated"));
-  });
-
-  it("rejects programs without a root", () => {
-    const result = render("");
-    assert.equal(result.ok, false);
-    if (result.ok) return;
-    assert.ok(result.error.includes("root"));
-  });
-
-  it("rejects programs failing prop validation", () => {
-    const source = 'root = Stack([CodeBlock("only-language")])';
-    const result = render(source);
-    assert.equal(result.ok, false);
-  });
-
-  it("supports each advertised component without rejection", () => {
-    const source = [
-      "root = Stack([c, s, u])",
-      'c = Card([ch], "card", "row", "l")',
-      'ch = CardHeader("Title", "Subtitle")',
-      's = Separator("vertical")',
-      'u = Stack([t], "column", "s")',
-      't = Tag("beta")',
-    ].join("\n");
-    const result = render(source);
-    assert.equal(result.ok, true);
-  });
+  for (const [name, source, expected] of [
+    ["unknown component", 'root = Stack([Mystery("x")])', /display-only library/],
+    ["interactive component", 'root = Stack([Button("Go")])', /display-only library/],
+    ["incomplete program", 'root = Stack([TextContent("x"', /truncated/],
+    ["missing root", "", /root/],
+    ["invalid props", 'root = Stack([CodeBlock("only-language")])', /codeString/],
+    ["query", 'root = Stack([TextContent("hello")])\nq = Query("tool", {})', /Query/],
+    ["mutation", 'root = Stack([TextContent("hello")])\nm = Mutation("tool", {})', /Mutation/],
+    ["reactive declaration", 'root = Stack([TextContent("hello")])\n$visible = true', /reactive/],
+    ["reactive binding", 'root = Stack([TextContent($title)])\n$title = "hello"', /reactive/],
+    ["unresolved reference", "root = Stack([missing])", /unresolved/],
+  ] as const) {
+    it(`rejects ${name} before browser execution`, () => {
+      const result = validateOpuiLang(source, specDir);
+      assert.equal(result.ok, false);
+      if (!result.ok) assert.match(result.error, expected);
+    });
+  }
 });
-
-describe("SUPPORTED_COMPONENTS", () => {
-  it("lists the lightweight display set", () => {
-    assert.deepEqual([...SUPPORTED_COMPONENTS].sort(), [
-      "BoldText",
-      "Callout",
-      "Card",
-      "CardHeader",
-      "CodeBlock",
-      "Col",
-      "EntityList",
-      "InlineHeader",
-      "ListBlock",
-      "ListItem",
-      "Separator",
-      "Stack",
-      "Table",
-      "Tag",
-      "TagBlock",
-      "Text",
-      "TextCallout",
-      "TextContent",
-    ]);
-  });
-});
-
-describe("inlineMarkdown", () => {
-  it("styles bold, italic, and code while escaping html", () => {
-    const html = inlineMarkdown("**b** *i* `c` <br>&");
-    assert.ok(html.includes("<strong>b</strong>"));
-    assert.ok(html.includes("<em>i</em>"));
-    assert.ok(html.includes("<code>c</code>"));
-    assert.ok(html.includes("&lt;br&gt;&amp;"));
-  });
-
-  it("keeps single newlines as breaks and blank lines as paragraphs", () => {
-    const html = inlineMarkdown("a\nb\n\nc");
-    assert.ok(html.includes("a<br>b"));
-    assert.equal(html.match(/<p>/g)?.length, 2);
-  });
-});
-
-/** Bun executes the CLI entry directly — no node shebang involved. */
-function cliEntry(agentDir: string): string {
-  return join(agentDir, "node_modules", "@openuidev", "cli", "dist", "index.js");
-}

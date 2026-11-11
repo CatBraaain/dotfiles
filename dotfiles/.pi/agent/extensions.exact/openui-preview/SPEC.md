@@ -1,6 +1,6 @@
 # openui-preview拡張Spec
 
-assistant出力中の ` ```openui-lang ` コードフェンスを、確定後にOpenUI Langとして解析・HTML化し、htmlshotでPNG化してTUI transcript内にインラインプレビュー表示する。
+assistant出力中の ` ```openui-lang ` コードフェンスを、確定後に既存のOpenUI React Rendererと部品でheadlessブラウザに描画し、専用の撮影処理で通常のPNGとして保存してTUI transcript内にインラインプレビュー表示する。読者は本拡張の利用者と保守担当である。
 
 ## トリガーと表示の経路
 
@@ -17,13 +17,13 @@ assistant出力中の ` ```openui-lang ` コードフェンスを、確定後に
 `before_agent_start` で `event.systemPromptOptions.sections["openui-lang"]` に、openui-langのdisplay-only指示を設定する。指示は `prompt.ts` が生成する:
 
 - 入力はapplyで生成した `spec.json`（58コンポーネントのLibrarySpec）と `prompt-options.json`（examples・additionalRules）。両方とも `spec.apply.ts` が `library.data.ts` から生成する
-- `library.data.ts` は正本であり、`@openuidev/react-ui` の `genui-lib` から対話コンポーネント（Button・Form等26種）を除外した `createLibrary` 結果と、`genui-lib/prompt-options` から対話系を示す語を含むexamples・rulesを除外したpromptOptionsをexportする。プロジェクト外部のリポジトリには依存しない（npmライブラリ `@openuidev/react-ui`・`react-lang`・`cli` はspec生成用のdevDependencies）
+- `library.data.ts` は正本であり、`@openuidev/react-ui` の `genui-lib` から対話コンポーネント（Button・Form等26種）を除外した `createLibrary` 結果と、`genui-lib/prompt-options` から対話系を示す語を含むexamples・rulesを除外したpromptOptionsをexportする。プロジェクト外部のリポジトリには依存しない
 - `prompt.ts` は対話コンポーネント（同26種）をsignatureから `never` 化・unionから除去し（`displayOnlySignature`）、生成promptの `## Action` セクションと `ActionExpression` の説明行を除去する（`stripInteractivePromptParts`）
 - preambleを差し替え、markdown応答内の `openui-lang` fenced blockへの埋め込みを指示する（lang-core既定の「応答全体がコード」前提は使わない）
 
 ## 生成物とapplyの前提
 
-`spec.json` と `prompt-options.json` は `spec.apply.ts`（applyフック）が `library.data.ts` から生成し、ホームの拡張フォルダに配置する。生成物はgit管理せず、apply時に更新する。事前の手動インストールは不要である。
+`spec.json` と `prompt-options.json` は `spec.apply.ts`（applyフック）が `library.data.ts` から生成し、ホームの拡張フォルダに配置する。生成物はgit管理せず、apply時に更新する。spec生成用の依存は後述の依存導入フックが準備する。
 
 `library.data.ts` は `.data.` 予約名のため差分検知・適用の対象外であり、ホームには展開されない。applyフックはスナップショット実行位置（dist側の拡張フォルダ）から `library.data.ts` と `display-only.ts` を読み、ホーム側の一時ディレクトリ `.spec-gen/` にコピーしてから読み込む。これで親を遡って `~/.pi/agent/node_modules` の依存を解決できる。`.spec-gen/` は使用後に削除する。
 
@@ -39,7 +39,7 @@ assistant出力中の ` ```openui-lang ` コードフェンスを、確定後に
 
 ## 実行条件（モード）
 
-プレビュー生成はTUIモード（`ctx.mode` が `"tui"`）だけで行う。rpc・json・printモードでは `message_end` を無視する。カスタムメッセージのレンダリングはTUIだけで行われる。system promptへの注入はモードによらず常時ON、markdown transformerもモードによらず登録する。
+プレビュー生成はTUIモード（`ctx.mode` が `"tui"`）だけで行う。rpc・json・printモードでは `message_end` を無視する。カスタムエントリのレンダリングはTUIだけで行われる。system promptへの注入はモードによらず常時ON、markdown transformerもモードによらず登録する。
 
 ## フェンスの検出
 
@@ -55,46 +55,55 @@ assistant出力中の ` ```openui-lang ` コードフェンスを、確定後に
 
 `stripOpuiLangBlocks` は本文表示用にブロック（閉じ済み・ストリーミング中の未閉鎖の両方）を除去する。`registerMarkdownTransformer` から `context.messageType === "assistant"` のときだけ適用する。user・assistant-thinking本文・LLMコンテキストは変更しない。
 
-## openui-lang → HTML レンダラ
+## openui-lang → React描画
 
-`render.ts` の `renderOpuiLang` が、`@openuidev/lang-core` のparser（`createParser` に `spec.json` のschemaとrootを渡す）でAST化し、HTML文字列を1つのHTMLドキュメントとして生成する。CSSはトークン・コンポーネント規則を `<style>` で同一ファイルに持つ（htmlshotの制約: `<script>` と外部参照は禁止）。トークンと規則はOpenUI design system（`@openuidev/react-ui` のスタイル）のlight paletteに従う。
+入力は `spec.json` のschemaとrootに従って解析する。描画には `@openuidev/react-lang` の `Renderer` と `@openuidev/react-ui/genui-lib` の既存部品を使い、生成用ライブラリと同じdisplay-onlyの部品構成を渡す。React Rendererは汎用のOpenUI Lang描画機能であり、本拡張の専用処理がブラウザへの配置と撮影を担う。
 
-対応コンポーネントは軽量セット18種: Stack, Card, CardHeader, Separator, InlineHeader, TextContent, Text, BoldText, CodeBlock, Callout, TextCallout, ListBlock, ListItem, EntityList, Table, Col, TagBlock, Tag。
+見た目は `@openuidev/react-ui/index.css` のlight paletteと既存部品のレイアウトに従う。ブラウザ内でReactを実行し、チャートを含む部品のDOM・SVGを描画する。
 
-| 保留・未対応 | 理由 |
+| 入力・部品 | 撮影する状態・結果 |
 | --- | --- |
-| chart系全種（BarChart・PieChart等、Series/Slice/Point/Scatter系） | 静的HTMLでの再現コストが大きい。案内カードで案内する |
-| Tabs・Accordion・Carousel・Steps | 対話（開閉・切替）を静的PNGで表現できない。案内カードで案内する |
-| 対話系（Button・Form等） | display-onlyライブラリに含まれない |
-| `Icon`・カードブロック（SnippetCardBlock等）・その他表示系 | 軽量セットの対象外。案内カードで案内する |
-| ListBlock `variant: "image"` | 外部画像を読めない |
-| `$variable`・`$binding`・Query()/Mutation() | 静的プレビューでは評価できない |
-| Tableの2ページ目以降 | React実装の1ページ目（10行）のみ描画する |
+| display-onlyライブラリ内の表示部品 | 既存React部品で描画する。チャートも入力データを反映した状態を撮影する |
+| Tabs・Accordion・Carousel・Steps・Tableなど状態を持つ表示部品 | 既存React部品の初期状態を撮影する。切替・開閉・ページ送りなどの操作は行わない |
+| 対話系などライブラリにない部品、不正な構文、未完の構文、描画可能なrootがない入力 | 画像を生成せず、理由をエラーカードで表示する |
+| `$variable`・`$binding`・Query()/Mutation() | データ取得・更新・動的評価を行わず、理由をエラーカードで表示する |
 
-未対応コンポーネントを含むプログラム・解析に失敗するプログラムはプレビューせず、既存のdetails `kind: "error"` の経路で案内カード（エラーメッセージ付き）を表示する。
+OpenUI Langの入力はデータとして渡し、JavaScriptやHTMLとして実行しない。実行するJavaScriptとCSSはローカルの描画用bundleに限る。ブラウザによる外部通信と、入力が指定したローカルファイルの読み取りを許可しない。外部画像など禁止された参照が必要な入力は、理由をエラーカードで表示する。
 
 ## プレビュー生成
 
 | 項目 | 値 |
 | --- | --- |
-| CLI | `~/.agents/cli/htmlshot`（`execFile` で起動する） |
-| 出力先 | `~/.agents/work/openui-preview/<id>.html.png` |
-| shot寸法 | `--width 960 --height 1280` |
-| 実行回数 | 1回のみ（strict検証。`--unsafe` での再試行はしない。DSLから生成したHTMLはscript・外部参照を持たないため） |
-| 一時HTML | shot成否後に削除する（正本HTMLはPNGに埋め込まれる） |
+| 撮影 | Playwright Coreでheadless Chromiumを制御し、描画済みページを直接PNG化する |
+| 実行入口 | 登録Bashと共用の背景Bash API（[Tools仕様](../tools/SPEC.md#背景bash入口)）から専用撮影処理を起動する |
+| 描画依存 | `@openuidev/react-lang`・`@openuidev/react-ui`・`react`・`react-dom` と既存のBunによるブラウザ用bundle生成 |
+| 出力先 | `~/.cache/pi/openui-preview/<id>.png`。HTMLやソースを埋め込まない通常のPNG |
+| 撮影領域 | 幅960 px・高さ1280 px、device scale factor 1のviewport。領域外は切り取る |
+| 撮影時点 | 初期状態で表示される内容を対象とし、React描画とフォント読み込みを待ち、入力データを反映した図形とレイアウトが安定した状態を撮影する。非表示の内容は待機対象外。固定時間の経過だけを完了条件にしない |
+| 実行回数 | 1ブロックにつき1回 |
+| 処理期限 | 1ブロックにつき最大15秒。bundle生成からブラウザ起動・描画・撮影終了までを対象とする |
+| 一時データ | 入力・HTML・bundleなどは一時領域に置き、成功・失敗の後に削除する |
 | `<id>` | `Date.now()-ブロック番号-乱数接尾辞` |
 
-shotが失敗した場合は、stderrの最終行をエラーカードでtranscriptに送る。
+Chromiumは標準のブラウザキャッシュ（`PLAYWRIGHT_BROWSERS_PATH` の指定を含む）内の既存実行ファイルを、Playwright Coreの既定リビジョンに限定せず解決する。実行時にブラウザを自動取得せず、準備済みの実行ファイルを使う。Chromiumのsandboxを有効にして実行する。成功・失敗・中断・期限超過では、撮影処理とブラウザの終了を確認してから一時データを削除する。失敗・中断したPNGは残さない。ただし、撮影CLIが完了通知を発行できないまま強制終了された場合は、一時データの削除を保証せず、未確認のPNGを公開しない。
+
+| 失敗条件 | 結果 |
+| --- | --- |
+| 背景Bash APIが不在・無効、既存の承認状態では実行不可 | 理由をエラーカードで表示する。直接プロセス起動や別のBash生成による迂回はしない |
+| 描画依存・ブラウザが不足、bundle生成・起動・描画・撮影が失敗、中断、PNGが生成されない | 対象と失敗理由をエラーカードで表示する。正常な画像として通知しない |
+| 処理期限を超過する | 撮影処理を中断し、対象と期限超過をエラーカードで表示する |
+
+外部処理は登録Bashと同じGuardrailsの認可状態・sandboxに従う。撮影失敗時に権限やブラウザのsandboxを緩めて再実行しない。
 
 ## キューイング
 
-プレビュー生成は直列キュー（`createQueue`）で1件ずつ実行する。1メッセージに複数の ` ```openui-lang ` ブロックがあっても、htmlshotの起動は同時に1プロセスまで。前件の失敗は後続の実行を止めない。
+プレビュー生成は直列キュー（`createQueue`）で1件ずつ実行する。1メッセージに複数の ` ```openui-lang ` ブロックがあっても、撮影処理の実行は同時に1件まで。前件の失敗は後続の実行を止めない。
 
 ## 表示
 
-`pi.sendMessage` でcustomType `openui-preview` のdisplay専用メッセージを送り、`pi.registerMessageRenderer` で登録したレンダラが描画する。detailsにはPNGパスのみを保持し、base64画像データはセッションに書き込まない。
+`pi.appendEntry` でcustomType `openui-preview` の表示専用カスタムエントリを保存し、`pi.registerEntryRenderer` で登録したレンダラが描画する。画像エントリのdataには種別とPNGパスを保持し、base64画像データはセッションに書き込まない。
 
-| details | 表示 |
+| data | 表示 |
 | --- | --- |
 | `kind: "image"` | `pi-tui` の `Image` コンポーネントでPNGをインライン表示する。高さは最大30セル（`MAX_HEIGHT_CELLS`） |
 | `kind: "error"` | エラーメッセージのカードを表示する |
@@ -102,10 +111,10 @@ shotが失敗した場合は、stderrの最終行をエラーカードでtranscr
 
 `Image` はKitty graphics protocol対応端末（Kitty・Ghostty・WezTerm）とiTerm2のインライン画像で描画され、非対応端末ではテキストフォールバックになる。
 
-## 送信メッセージとLLMコンテキスト
+## カスタムエントリとLLMコンテキスト
 
-`openui-preview` メッセージはdisplay専用であり、LLMのコンテキストには含まれない。markdown transformerによるブロック除去も表示専用で、assistantメッセージ本体とLLMコンテキストからブロックが消えることはない。モデルがプレビュー結果を受けて自己修正するフィードバックループは本拡張の対象外である。
+`openui-preview` カスタムエントリは表示専用であり、LLMのコンテキストには含まれない。markdown transformerによるブロック除去も表示専用で、assistantメッセージ本体とLLMコンテキストからブロックが消えることはない。モデルがプレビュー結果を受けて自己修正するフィードバックループは本拡張の対象外である。
 
 ## ライフサイクル
 
-プレビュー生成はfire-and-forgetで行い、`message_end` ハンドラはhtmlshotの完了を待たない。生成中のエラーはハンドラから漏れさせず、detailsのエラーカードとして報告する。
+プレビュー生成はfire-and-forgetで行い、`message_end` ハンドラは撮影の完了を待たない。生成中のエラーはハンドラから漏れさせず、カスタムエントリのエラーカードとして報告する。session終了時は未開始のプレビュー生成を取り消し、実行中の撮影を中断して終了処理の完了を待つ。

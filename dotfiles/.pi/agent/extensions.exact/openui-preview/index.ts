@@ -1,36 +1,15 @@
-/**
- * Openui Preview Extension
- *
- * Turns ```openui-lang fenced code blocks in finalized assistant messages into
- * PNG previews rendered inline in the TUI transcript. Blocks are parsed as
- * OpenUI Lang programs and rendered to self-contained HTML (see render.ts),
- * then shot once with the htmlshot CLI — generated DSL cannot carry scripts
- * or external references, so no unsafe retry is needed.
- *
- * Display-only markdown transformer: assistant bodies drop their
- * ```openui-lang blocks in the transcript (the preview card replaces them);
- * the message itself and the LLM context keep the blocks untouched.
- *
- * System prompt: a `openui-lang` section with display-only authoring
- * instructions is injected on every agent start (see prompt.ts).
- */
-
-import { execFile as execFileCb } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { ExtensionAPI, ThemeBg, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { Box, Image, Text, type Component } from "@earendil-works/pi-tui";
+import { requestBackgroundBash, type BackgroundBashContext } from "../tools/background-bash.ts";
 import { extractOpuiLangBlocks, stripOpuiLangBlocks, type OpuiLangBlock } from "./fence";
 import { PROMPT_SECTION_NAME, opuiInstructions } from "./prompt";
-import { renderOpuiLang } from "./render";
+import { validateOpuiLang } from "./render";
+import { shotOpenui, type ShotOptions } from "./snapshot";
 
 export const OPENUI_CUSTOM_TYPE = "openui-preview";
-/** Hard height limit for inline previews, in terminal cells. */
 export const MAX_HEIGHT_CELLS = 30;
-/** Viewport passed to htmlshot for the render. Tall enough for report-like UIs; the TUI scales it down to MAX_HEIGHT_CELLS. */
-export const SHOT_WIDTH = 960;
-export const SHOT_HEIGHT = 1280;
 
 export interface PreviewDetails {
   kind: "image" | "error";
@@ -38,42 +17,14 @@ export interface PreviewDetails {
   message?: string;
 }
 
-export type ExecFileFn = (
-  file: string,
-  args: string[],
-  callback: (error: ExecFileError | null, stdout: string, stderr: string) => void,
-) => void;
-
-export interface ExecFileError {
-  code?: number | string;
-  message: string;
-}
-
-export interface ShotOptions {
-  outDir: string;
-  htmlshotPath: string;
-  execFile: ExecFileFn;
-  width: number;
-  height: number;
-}
-
-export interface ShotResult {
-  ok: boolean;
-  pngPath?: string;
-  error?: string;
-}
-
 type EnqueueFn = <T>(task: () => Promise<T>) => Promise<T>;
-
-interface ExtensionDeps extends ShotOptions {
+interface ExtensionDeps extends Omit<ShotOptions, "context"> {
   enqueue: EnqueueFn;
-  /** Directory holding the generated spec.json / prompt-options.json. Defaults to this folder. */
-  generatedDir?: string;
 }
 
 export function createQueue(): EnqueueFn {
   let chain: Promise<void> = Promise.resolve();
-  return <T>(task: () => Promise<T>): Promise<T> => {
+  return function enqueue<T>(task: () => Promise<T>): Promise<T> {
     const result = chain.then(task, task);
     chain = result.then(
       () => {},
@@ -83,102 +34,29 @@ export function createQueue(): EnqueueFn {
   };
 }
 
-function run(
-  execFile: ExecFileFn,
-  file: string,
-  args: string[],
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    execFile(file, args, (error, stdout, stderr) => {
-      const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
-      resolve({ code, stdout, stderr });
-    });
-  });
-}
-
-function lastErrorLine(stderr: string): string {
-  const lines = stderr.trim().split("\n").filter(Boolean);
-  return lines[lines.length - 1] ?? "htmlshot failed";
-}
-
-/**
- * Renders one HTML document to <outDir>/<id>.html.png via the htmlshot CLI
- * (single strict attempt). The temporary HTML file is removed after the shot
- * because the PNG embeds the canonical HTML.
- */
-export async function shotHtml(
-  html: string,
-  id: string,
-  options: ShotOptions,
-): Promise<ShotResult> {
-  const { outDir, htmlshotPath, execFile, width, height } = options;
-  const htmlPath = join(outDir, `${id}.html`);
-  const pngPath = join(outDir, `${id}.html.png`);
-  await writeFile(htmlPath, html, "utf8");
-
-  const args = [
-    "shot",
-    htmlPath,
-    "-o",
-    pngPath,
-    "--width",
-    String(width),
-    "--height",
-    String(height),
-  ];
-
-  const outcome = await run(execFile, htmlshotPath, args);
-
-  if (outcome.code !== 0) {
-    await unlink(htmlPath).catch(() => {});
-    return { ok: false, error: lastErrorLine(outcome.stderr || outcome.stdout) };
-  }
-
-  await unlink(htmlPath).catch(() => {});
-  return { ok: true, pngPath };
-}
-
-function assistantText(content: string | Array<{ type: string; text?: string }>): string {
-  if (typeof content === "string") return content;
-  return content.map((part) => (part.type === "text" ? (part.text ?? "") : "")).join("\n");
-}
-
 async function previewBlock(
-  pi: Pick<ExtensionAPI, "sendMessage">,
+  pi: Pick<ExtensionAPI, "appendEntry">,
   deps: ExtensionDeps,
+  context: BackgroundBashContext & { signal?: AbortSignal },
   block: OpuiLangBlock,
   index: number,
 ): Promise<void> {
-  const fail = (message: string) =>
-    pi.sendMessage({
-      customType: OPENUI_CUSTOM_TYPE,
-      content: "openui preview failed",
-      display: true,
-      details: { kind: "error", message } satisfies PreviewDetails,
-    });
-
-  if (block.unclosed) {
-    await fail(`openui-lang block at line ${block.startLine} has no closing fence`);
-    return;
-  }
-
-  const rendered = renderOpuiLang(block.source, deps.generatedDir);
-  if (!rendered.ok) {
-    await fail(rendered.error);
-    return;
-  }
-
+  if (block.unclosed)
+    throw new Error(`openui-lang block at line ${block.startLine} has no closing fence`);
+  const validated = validateOpuiLang(block.source, deps.generatedDir);
+  if (!validated.ok) throw new Error(validated.error);
   const id = `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
-  const result = await shotHtml(rendered.html, id, deps);
-
-  await pi.sendMessage({
-    customType: OPENUI_CUSTOM_TYPE,
-    content: result.ok ? "openui preview" : "openui preview failed",
-    display: true,
-    details: result.ok
-      ? ({ kind: "image", pngPath: result.pngPath } satisfies PreviewDetails)
-      : ({ kind: "error", message: result.error } satisfies PreviewDetails),
-  });
+  const signal =
+    context.signal && deps.signal
+      ? AbortSignal.any([context.signal, deps.signal])
+      : (context.signal ?? deps.signal);
+  const result = await shotOpenui(block.source, id, { ...deps, context, signal });
+  pi.appendEntry<PreviewDetails>(
+    OPENUI_CUSTOM_TYPE,
+    result.ok
+      ? { kind: "image", pngPath: result.pngPath }
+      : { kind: "error", message: result.error },
+  );
 }
 
 interface PreviewTheme {
@@ -192,22 +70,26 @@ export function renderPreview(
   theme: PreviewTheme,
 ): Component {
   const box = new Box(options.outputPad, 1, (text) => theme.bg("customMessageBg", text));
-
   if (!details || details.kind === "error") {
-    const text = details?.message ?? "openui preview unavailable";
-    box.addChild(new Text(theme.fg("error", `[openui] ${text}`), 0, 0));
+    box.addChild(
+      new Text(
+        theme.fg("error", `[openui] ${details?.message ?? "openui preview unavailable"}`),
+        0,
+        0,
+      ),
+    );
     return box;
   }
-
   try {
     const png = readFileSync(details.pngPath ?? "");
-    const image = new Image(
-      png.toString("base64"),
-      "image/png",
-      { fallbackColor: (text: string) => theme.fg("dim", text) },
-      { maxHeightCells: MAX_HEIGHT_CELLS, filename: basename(details.pngPath ?? "") },
+    box.addChild(
+      new Image(
+        png.toString("base64"),
+        "image/png",
+        { fallbackColor: (text: string) => theme.fg("dim", text) },
+        { maxHeightCells: MAX_HEIGHT_CELLS, filename: basename(details.pngPath ?? "") },
+      ),
     );
-    box.addChild(image);
   } catch {
     box.addChild(
       new Text(theme.fg("dim", `[openui] preview file missing: ${details.pngPath}`), 0, 0),
@@ -218,47 +100,67 @@ export function renderPreview(
 
 export default function openuiPreviewExtension(
   pi: ExtensionAPI,
-  overrides?: Partial<
-    Pick<ExtensionDeps, "outDir" | "htmlshotPath" | "execFile" | "enqueue" | "generatedDir">
-  >,
+  overrides?: Partial<ExtensionDeps>,
 ): void {
-  const home = process.env.HOME ?? "";
+  const controller = new AbortController();
+  const pending = new Set<Promise<void>>();
   const deps: ExtensionDeps = {
-    outDir: join(home, ".agents", "work", "openui-preview"),
-    htmlshotPath: join(home, ".agents", "cli", "htmlshot"),
-    execFile: execFileCb,
+    outDir: join(process.env.HOME ?? "", ".cache", "pi", "openui-preview"),
+    requestBash: requestBackgroundBash,
     enqueue: createQueue(),
-    width: SHOT_WIDTH,
-    height: SHOT_HEIGHT,
+    signal: controller.signal,
     ...overrides,
   };
-
+  pi.registerEntryRenderer<PreviewDetails>(OPENUI_CUSTOM_TYPE, (entry, _options, theme) =>
+    renderPreview(
+      entry.data,
+      { outputPad: 0 },
+      {
+        bg: (color, text) => theme.bg(color as ThemeBg, text),
+        fg: (color, text) => theme.fg(color as ThemeColor, text),
+      },
+    ),
+  );
   pi.registerMessageRenderer<PreviewDetails>(OPENUI_CUSTOM_TYPE, (message, options, theme) =>
     renderPreview(message.details, options, {
       bg: (color, text) => theme.bg(color as ThemeBg, text),
       fg: (color, text) => theme.fg(color as ThemeColor, text),
     }),
   );
-
   pi.registerMarkdownTransformer((markdown, context) =>
     context.messageType === "assistant" ? stripOpuiLangBlocks(markdown) : markdown,
   );
-
   pi.on("before_agent_start", (event) => {
     event.systemPromptOptions.sections[PROMPT_SECTION_NAME] = opuiInstructions(deps.generatedDir);
   });
-
+  pi.on("session_shutdown", async () => {
+    controller.abort(new Error("OpenUI preview session stopped"));
+    await Promise.allSettled(pending);
+  });
   pi.on("message_end", (event, ctx) => {
-    if (ctx.mode !== "tui") return;
-    const message = event.message;
-    if (message.role !== "assistant") return;
-    const blocks = extractOpuiLangBlocks(assistantText(message.content));
-    for (const [index, block] of blocks.entries()) {
-      deps
-        .enqueue(() =>
-          mkdir(deps.outDir, { recursive: true }).then(() => previewBlock(pi, deps, block, index)),
-        )
-        .catch(() => {});
+    if (ctx.mode !== "tui" || event.message.role !== "assistant") return;
+    const content = event.message.content;
+    const text =
+      typeof content === "string"
+        ? content
+        : content.map((part) => (part.type === "text" ? part.text : "")).join("\n");
+    for (const [index, block] of extractOpuiLangBlocks(text).entries()) {
+      const task = deps
+        .enqueue(async () => {
+          if (controller.signal.aborted || deps.signal?.aborted) return;
+          await previewBlock(pi, deps, ctx, block, index);
+        })
+        .catch((error) => {
+          pi.appendEntry<PreviewDetails>(OPENUI_CUSTOM_TYPE, {
+            kind: "error",
+            message: `OpenUI block at line ${block.startLine}: ${String(error)}`,
+          });
+        });
+      pending.add(task);
+      void task.then(
+        () => pending.delete(task),
+        () => pending.delete(task),
+      );
     }
   });
 }

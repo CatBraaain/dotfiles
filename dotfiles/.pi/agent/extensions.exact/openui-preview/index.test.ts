@@ -1,99 +1,42 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, beforeAll, describe, it } from "bun:test";
-import { extractOpuiLangBlocks, stripOpuiLangBlocks } from "./fence";
 import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+import { afterAll, beforeAll, describe, it } from "bun:test";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { parse } from "shell-quote";
+import {
+  requestBackgroundBash,
+  type BackgroundBashRequest,
+  type BackgroundBashOutcome,
+} from "../tools/background-bash";
+import { extractOpuiLangBlocks, stripOpuiLangBlocks } from "./fence";
+import openuiPreviewExtension, {
   createQueue,
   renderPreview,
-  shotHtml,
   OPENUI_CUSTOM_TYPE,
-  type ExecFileFn,
   type PreviewDetails,
 } from "./index";
-
-let workDir: string;
+import { displayLibrary, displayPromptOptions } from "./library.data";
+import type { SnapshotInput } from "./snapshot";
 
 const ONE_BY_ONE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-
 const SUPPORTED_DSL = 'root = Stack([TextContent("hello")])';
-
-let promptFixtureDir: string;
-
-const ref = (name: string) => ({ $ref: "#/$defs/" + name });
-
-const PROMPT_FIXTURE_SPEC = {
-  root: "Stack",
-  components: {
-    Stack: {
-      signature: 'Stack(children: any[], direction?: "row" | "column") — Flex container',
-    },
-    TextContent: { signature: "TextContent(text: string) — Text block" },
-    Tabs: { signature: "Tabs(items: TabItem[]) — Tabbed container" },
-    TabItem: {
-      signature: "TabItem(value: string, trigger: string, content: any[]) — Tab",
-    },
-  },
-  schema: {
-    type: "object",
-    properties: {
-      Stack: ref("Stack"),
-      TextContent: ref("TextContent"),
-      Tabs: ref("Tabs"),
-      TabItem: ref("TabItem"),
-    },
-    required: ["Stack", "TextContent", "Tabs", "TabItem"],
-    additionalProperties: false,
-    $defs: {
-      Stack: {
-        type: "object",
-        properties: { children: { type: "array", items: {} } },
-        required: ["children"],
-        additionalProperties: false,
-      },
-      TextContent: {
-        type: "object",
-        properties: { text: { type: "string" } },
-        required: ["text"],
-        additionalProperties: false,
-      },
-      Tabs: {
-        type: "object",
-        properties: { items: { type: "array", items: {} } },
-        required: ["items"],
-        additionalProperties: false,
-      },
-      TabItem: {
-        type: "object",
-        properties: {
-          value: { type: "string" },
-          trigger: { type: "string" },
-          content: { type: "array", items: {} },
-        },
-        required: ["value", "trigger", "content"],
-        additionalProperties: false,
-      },
-    },
-  },
-};
-
-const PROMPT_FIXTURE_OPTIONS = {
-  examples: ["Example 1 — Table:\n\nroot = Stack([tbl])"],
-  additionalRules: ["When asked about data, generate realistic/plausible data"],
-};
-
+let workDir: string;
 beforeAll(() => {
-  workDir = mkdtempSync(join(tmpdir(), "openui-preview-test-"));
-  promptFixtureDir = mkdtempSync(join(tmpdir(), "openui-prompt-fixture-"));
-  writeFileSync(join(promptFixtureDir, "spec.json"), JSON.stringify(PROMPT_FIXTURE_SPEC));
-  writeFileSync(
-    join(promptFixtureDir, "prompt-options.json"),
-    JSON.stringify(PROMPT_FIXTURE_OPTIONS),
-  );
+  mkdirSync("/tmp/work/dotfiles/openui-preview-tests", { recursive: true });
+  workDir = mkdtempSync("/tmp/work/dotfiles/openui-preview-tests/index-");
+  writeFileSync(join(workDir, "spec.json"), JSON.stringify(displayLibrary.toSpec()));
+  writeFileSync(join(workDir, "prompt-options.json"), JSON.stringify(displayPromptOptions));
 });
-
 afterAll(() => {
   rmSync(workDir, { recursive: true, force: true });
 });
@@ -201,52 +144,6 @@ describe("createQueue", () => {
   });
 });
 
-describe("shotHtml", () => {
-  it("writes html, shots once on success, and removes the html file", async () => {
-    const calls: string[][] = [];
-    const execFile: ExecFileFn = (_file, args, callback) => {
-      calls.push([...args]);
-      callback(null, "ok", "");
-    };
-
-    const result = await shotHtml("<p>x</p>", "success-case", {
-      outDir: workDir,
-      htmlshotPath: "/bin/htmlshot",
-      execFile,
-      width: 960,
-      height: 640,
-    });
-
-    assert.equal(result.ok, true);
-    assert.equal(result.pngPath, join(workDir, "success-case.html.png"));
-    assert.equal(calls.length, 1);
-    assert.ok(calls[0]?.includes("--width"));
-    assert.equal(existsSync(join(workDir, "success-case.html")), false);
-  });
-
-  it("does not retry with --unsafe when the shot fails", async () => {
-    const calls: string[][] = [];
-    const execFile: ExecFileFn = (_file, args, callback) => {
-      calls.push([...args]);
-      callback({ code: 1, message: "rejected" }, "", "htmlshot: fatal: bad input");
-    };
-
-    const result = await shotHtml("<p>x</p>", "failure-case", {
-      outDir: workDir,
-      htmlshotPath: "/bin/htmlshot",
-      execFile,
-      width: 960,
-      height: 640,
-    });
-
-    assert.equal(result.ok, false);
-    assert.equal(result.error, "htmlshot: fatal: bad input");
-    assert.equal(calls.length, 1);
-    assert.ok(!calls[0]?.includes("--unsafe"));
-    assert.equal(existsSync(join(workDir, "failure-case.html")), false);
-  });
-});
-
 describe("renderPreview", () => {
   const theme = {
     bg: (color: string, text: string) => `bg(${color}){${text}}`,
@@ -275,248 +172,301 @@ describe("renderPreview", () => {
   });
 });
 
-interface MockPi {
-  registerMessageRenderer: (type: string) => void;
-  on: (event: string, handler: (event: unknown, ctx: unknown) => void) => () => void;
-  registerMarkdownTransformer: (
-    transformer: (markdown: string, context: unknown) => string,
-  ) => void;
-  sendMessage: (message: unknown) => Promise<void>;
-}
-
-interface Captured {
-  registeredTypes: string[];
-  registeredEvents: string[];
-  transformers: Array<(markdown: string, context: unknown) => string>;
-  sent: Array<{ customType?: string; display?: boolean; details?: PreviewDetails }>;
-  handlers: Map<string, (event: unknown, ctx: unknown) => void>;
-}
-
-function mockPi(captured: Captured): MockPi {
+type Handler = (event: unknown, context?: unknown) => unknown;
+function capture(requestBash: typeof requestBackgroundBash = successfulShot) {
+  const entries: Array<{ customType: string; data: PreviewDetails }> = [];
+  const entryRenderers: string[] = [];
+  const legacyRenderers: string[] = [];
+  const messages: unknown[] = [];
+  const handlers = new Map<string, Handler>();
+  const transformers: Array<(markdown: string, context: { messageType: string }) => string> = [];
+  const pending: Promise<unknown>[] = [];
+  const queue = createQueue();
+  openuiPreviewExtension(
+    {
+      appendEntry(customType: string, data: PreviewDetails) {
+        entries.push({ customType, data });
+      },
+      registerEntryRenderer(type: string) {
+        entryRenderers.push(type);
+      },
+      registerMessageRenderer(type: string) {
+        legacyRenderers.push(type);
+      },
+      registerMarkdownTransformer(transformer: (typeof transformers)[number]) {
+        transformers.push(transformer);
+      },
+      sendMessage(message: unknown) {
+        messages.push(message);
+      },
+      on(event: string, handler: Handler) {
+        handlers.set(event, handler);
+      },
+    } as unknown as ExtensionAPI,
+    {
+      outDir: workDir,
+      generatedDir: workDir,
+      requestBash,
+      enqueue<T>(task: () => Promise<T>): Promise<T> {
+        const result = queue(task);
+        pending.push(result);
+        return result;
+      },
+    },
+  );
+  function message(source: string, mode = "tui", role = "assistant", signal?: AbortSignal) {
+    const original = { role, content: [{ type: "text", text: source }] };
+    const result = handlers.get("message_end")?.(
+      { message: original },
+      { mode, modelRegistry: {}, signal },
+    );
+    return { original, result };
+  }
+  async function drain() {
+    await Promise.allSettled(pending);
+  }
   return {
-    registerMessageRenderer: (type: string) => {
-      captured.registeredTypes.push(type);
-    },
-    on: (event: string, handler: (event: unknown, ctx: unknown) => void) => {
-      captured.registeredEvents.push(event);
-      captured.handlers.set(event, handler);
-      return () => {};
-    },
-    registerMarkdownTransformer: (transformer) => {
-      captured.transformers.push(transformer);
-    },
-    sendMessage: async (message) => {
-      captured.sent.push(message as Captured["sent"][number]);
-    },
+    entries,
+    entryRenderers,
+    legacyRenderers,
+    messages,
+    handlers,
+    transformers,
+    message,
+    drain,
   };
 }
 
-function captureFrom(
-  extension: (pi: MockPi, overrides?: unknown) => void,
-  extraOverrides?: Record<string, unknown>,
-): Captured {
-  const captured: Captured = {
-    registeredTypes: [],
-    registeredEvents: [],
-    transformers: [],
-    sent: [],
-    handlers: new Map(),
-  };
-  extension(mockPi(captured), {
-    outDir: workDir,
-    htmlshotPath: "/bin/htmlshot",
-    ...extraOverrides,
-  });
-  return captured;
+async function successfulShot(request: BackgroundBashRequest): Promise<BackgroundBashOutcome> {
+  const inputPath = parse(request.params.command).at(-1) as string;
+  const input: SnapshotInput = JSON.parse(readFileSync(inputPath, "utf8"));
+  writeFileSync(input.pngPath, Buffer.from(ONE_BY_ONE_PNG, "base64"));
+  const directory = dirname(inputPath);
+  renameSync(join(directory, "pending"), join(directory, "running"));
+  writeFileSync(join(directory, "finished.json"), JSON.stringify({ ok: true }));
+  return { status: "completed", result: { content: [], details: {} } };
 }
 
-const shootingExecFile: ExecFileFn = (_file, args, callback) => {
-  const pngPath = args[args.indexOf("-o") + 1];
-  writeFileSync(pngPath ?? "", Buffer.from(ONE_BY_ONE_PNG, "base64"));
-  callback(null, "ok", "");
-};
+function fenced(source = SUPPORTED_DSL): string {
+  return `\`\`\`openui-lang\n${source}\n\`\`\``;
+}
 
 describe("extension wiring", () => {
-  it("registers renderer, markdown transformer, and both handlers", async () => {
-    const { default: openuiPreviewExtension } = await import("./index");
-    const captured = captureFrom(
-      openuiPreviewExtension as unknown as (pi: MockPi, overrides?: unknown) => void,
-    );
-    assert.deepEqual(captured.registeredTypes, [OPENUI_CUSTOM_TYPE]);
-    assert.deepEqual(captured.registeredEvents, ["before_agent_start", "message_end"]);
-    assert.equal(captured.transformers.length, 1);
-  });
-
-  it("injects the openui-lang prompt section on agent start", async () => {
-    const { default: openuiPreviewExtension } = await import("./index");
-    const captured = captureFrom(
-      openuiPreviewExtension as unknown as (pi: MockPi, overrides?: unknown) => void,
-      { generatedDir: promptFixtureDir },
-    );
-    const handler = captured.handlers.get("before_agent_start");
-    assert.ok(handler, "before_agent_start handler should be registered");
-    const sections: Record<string, string> = {};
-    handler({ systemPromptOptions: { sections } }, {});
-    assert.ok(sections["openui-lang"]);
-    assert.ok(sections["openui-lang"].includes("```openui-lang"));
-  });
-
-  it("strips openui-lang blocks only for assistant messages", async () => {
-    const { default: openuiPreviewExtension } = await import("./index");
-    const captured = captureFrom(
-      openuiPreviewExtension as unknown as (pi: MockPi, overrides?: unknown) => void,
-      { generatedDir: promptFixtureDir, execFile: shootingExecFile },
-    );
-    const transform = captured.transformers[0];
-    assert.ok(transform);
-    const markdown = "intro\n```openui-lang\nroot = Stack([])\n```\noutro";
-    assert.equal(
-      transform(markdown, { messageType: "assistant", isStreaming: false, availableWidth: 80 }),
-      "intro\noutro",
-    );
-    assert.equal(
-      transform(markdown, { messageType: "user", isStreaming: false, availableWidth: 80 }),
-      markdown,
-    );
-    assert.equal(
-      transform(markdown, {
-        messageType: "assistant-thinking",
-        isStreaming: false,
-        availableWidth: 80,
-      }),
-      markdown,
-    );
-  });
-
-  it("sends a preview message for an openui-lang block in an assistant message", async () => {
-    const { default: openuiPreviewExtension } = await import("./index");
-    const captured: Captured = {
-      registeredTypes: [],
-      registeredEvents: [],
-      transformers: [],
-      sent: [],
-      handlers: new Map(),
-    };
-    const errors: unknown[] = [];
-    openuiPreviewExtension(mockPi(captured) as never, {
-      outDir: workDir,
-      htmlshotPath: "/bin/htmlshot",
-      execFile: shootingExecFile,
-      generatedDir: promptFixtureDir,
-      enqueue: <T>(task: () => Promise<T>): Promise<T> =>
-        task().catch((error: unknown) => {
-          errors.push(error);
-          throw error;
-        }),
-    });
-
-    captured.handlers.get("message_end")?.(
-      {
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: `\`\`\`openui-lang\n${SUPPORTED_DSL}\n\`\`\`` }],
+  it("uses the allowed cache directory as the default output", async () => {
+    const handlers = new Map<string, Handler>();
+    let pending: Promise<unknown> = Promise.resolve();
+    let pngPath = "";
+    const previousHome = process.env.HOME;
+    const fixtureHome = join(workDir, "home");
+    process.env.HOME = fixtureHome;
+    try {
+      openuiPreviewExtension(
+        {
+          on(name: string, handler: Handler) {
+            handlers.set(name, handler);
+          },
+          appendEntry(_type: string, data: PreviewDetails) {
+            pngPath = data.pngPath ?? "";
+          },
+          registerEntryRenderer() {},
+          registerMessageRenderer() {},
+          registerMarkdownTransformer() {},
+        } as unknown as ExtensionAPI,
+        {
+          generatedDir: workDir,
+          requestBash: successfulShot,
+          enqueue<T>(task: () => Promise<T>): Promise<T> {
+            const result = task();
+            pending = result;
+            return result;
+          },
         },
-      },
-      { mode: "tui" },
-    );
-    for (let i = 0; i < 50 && captured.sent.length === 0; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      );
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
     }
-
-    assert.equal(captured.sent.length, 1);
-    assert.equal(captured.sent[0]?.customType, OPENUI_CUSTOM_TYPE);
-    assert.equal(captured.sent[0]?.display, true);
-    assert.equal(captured.sent[0]?.details?.kind, "image");
-    assert.ok(existsSync(captured.sent[0]?.details?.pngPath ?? ""));
-    assert.ok(readFileSync(captured.sent[0]?.details?.pngPath ?? "", "utf8").length > 0);
+    handlers.get("message_end")?.(
+      { message: { role: "assistant", content: [{ type: "text", text: fenced() }] } },
+      { mode: "tui", modelRegistry: {} },
+    );
+    await pending;
+    assert.equal(
+      pngPath.startsWith(join(fixtureHome, ".cache", "pi", "openui-preview") + "/"),
+      true,
+    );
   });
 
-  it("does nothing outside tui mode", async () => {
-    const { default: openuiPreviewExtension } = await import("./index");
-    const captured: Captured = {
-      registeredTypes: [],
-      registeredEvents: [],
-      transformers: [],
-      sent: [],
-      handlers: new Map(),
-    };
-    openuiPreviewExtension(mockPi(captured) as never, {
-      outDir: workDir,
-      htmlshotPath: "/bin/true",
-    });
-
-    captured.handlers.get("message_end")?.(
-      {
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: `\`\`\`openui-lang\n${SUPPORTED_DSL}\n\`\`\`` }],
-        },
-      },
-      { mode: "print" },
+  it("registers entry rendering and preserves rendering of existing message records", () => {
+    const captured = capture();
+    assert.deepEqual(captured.entryRenderers, [OPENUI_CUSTOM_TYPE]);
+    assert.deepEqual(captured.legacyRenderers, [OPENUI_CUSTOM_TYPE]);
+    assert.deepEqual(
+      [...captured.handlers.keys()],
+      ["before_agent_start", "session_shutdown", "message_end"],
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.deepEqual(captured.sent, []);
+  });
+  it("injects the existing prompt section", () => {
+    const captured = capture();
+    const sections: Record<string, string> = {};
+    captured.handlers.get("before_agent_start")?.({ systemPromptOptions: { sections } });
+    assert.match(sections["openui-lang"]!, /```openui-lang/);
+  });
+  it("removes fences only from the displayed assistant body", () => {
+    const captured = capture();
+    const transform = captured.transformers[0]!;
+    const markdown = `before\n${fenced()}\nafter`;
+    assert.equal(transform(markdown, { messageType: "assistant" }), "before\nafter");
+    for (const messageType of ["user", "assistant-thinking"]) {
+      assert.equal(transform(markdown, { messageType }), markdown);
+    }
+  });
+  it("stores only an entry and leaves the assistant message unchanged", async () => {
+    const captured = capture();
+    const text = fenced();
+    const { original, result } = captured.message(text);
+    assert.equal(result, undefined);
+    await captured.drain();
+    assert.deepEqual(original.content, [{ type: "text", text }]);
+    assert.deepEqual(captured.messages, []);
+    assert.equal(captured.entries.length, 1);
+    const entry = captured.entries[0]!;
+    assert.equal(entry.customType, OPENUI_CUSTOM_TYPE);
+    assert.deepEqual(Object.keys(entry.data).sort(), ["kind", "pngPath"]);
+    assert.equal(entry.data.kind, "image");
+    assert.ok(existsSync(entry.data.pngPath!));
+  });
+  it("does not wait for the shooting process in the message handler", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const captured = capture(async (request) => {
+      await gate;
+      return successfulShot(request);
+    });
+    assert.equal(captured.message(fenced()).result, undefined);
+    assert.equal(captured.entries.length, 0);
+    release();
+    await captured.drain();
+    assert.equal(captured.entries[0]?.data.kind, "image");
+  });
+  it("ignores non-TUI modes and non-assistant messages", async () => {
+    const captured = capture();
+    for (const mode of ["print", "json", "rpc"]) captured.message(fenced(), mode);
+    captured.message(fenced(), "tui", "user");
+    await captured.drain();
+    assert.deepEqual(captured.entries, []);
+  });
+  it("reports an unclosed fence without invoking Bash", async () => {
+    const requests: BackgroundBashRequest[] = [];
+    const captured = capture(async (request) => {
+      requests.push(request);
+      return successfulShot(request);
+    });
+    captured.message("```openui-lang\nroot = Stack([");
+    await captured.drain();
+    assert.match(captured.entries[0]?.data.message ?? "", /closing fence/);
+    assert.equal(requests.length, 0);
+  });
+  it("reports parser and missing-spec failures as entries", async () => {
+    const captured = capture();
+    captured.message(fenced('root = Stack([Mystery("x")])'));
+    await captured.drain();
+    assert.match(captured.entries[0]?.data.message ?? "", /display-only library/);
+  });
+  it("reports an unavailable background API without a process fallback", async () => {
+    const captured = capture(requestBackgroundBash);
+    captured.message(fenced());
+    await captured.drain();
+    assert.equal(captured.entries[0]?.data.kind, "error");
+    assert.match(captured.entries[0]?.data.message ?? "", /No active background Bash API/);
+  });
+  it("runs one block at a time and continues after an execution failure", async () => {
+    let active = 0;
+    let maxActive = 0;
+    let calls = 0;
+    const captured = capture(async (request) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      calls += 1;
+      try {
+        if (calls === 1) return { status: "failed", error: new Error("denied") };
+        return await successfulShot(request);
+      } finally {
+        active -= 1;
+      }
+    });
+    captured.message(`${fenced()}\n${fenced()}`);
+    await captured.drain();
+    assert.equal(maxActive, 1);
+    assert.equal(calls, 2);
+    assert.deepEqual(
+      captured.entries.map((entry) => entry.data.kind),
+      ["error", "image"],
+    );
+  });
+  it("honors the agent context interruption before publishing", async () => {
+    const controller = new AbortController();
+    const captured = capture(async (request) => {
+      const result = await successfulShot(request);
+      controller.abort(new Error("agent interrupted"));
+      return result;
+    });
+    captured.message(fenced(), "tui", "assistant", controller.signal);
+    await captured.drain();
+    assert.equal(captured.entries[0]?.data.kind, "error");
+    assert.match(captured.entries[0]?.data.message ?? "", /agent interrupted/);
   });
 
-  it("sends an error message for an unclosed block", async () => {
-    const { default: openuiPreviewExtension } = await import("./index");
-    const captured: Captured = {
-      registeredTypes: [],
-      registeredEvents: [],
-      transformers: [],
-      sent: [],
-      handlers: new Map(),
-    };
-    openuiPreviewExtension(mockPi(captured) as never, {
-      outDir: workDir,
-      htmlshotPath: "/bin/true",
+  it("waits for the active shot on shutdown and skips queued shots", async () => {
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
     });
-
-    captured.handlers.get("message_end")?.(
-      {
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "```openui-lang\nroot = Stack([" }],
-        },
-      },
-      { mode: "tui" },
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let directory = "";
+    let calls = 0;
+    const captured = capture(async (request) => {
+      calls += 1;
+      directory = dirname(parse(request.params.command).at(-1) as string);
+      assert.equal(request.signal, undefined);
+      entered();
+      await gate;
+      return successfulShot(request);
+    });
+    captured.message(`${fenced()}\n${fenced()}`);
+    await started;
+    let stopped = false;
+    const shutdown = Promise.resolve(captured.handlers.get("session_shutdown")?.({})).then(() => {
+      stopped = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(stopped, false);
+    assert.equal(existsSync(join(directory, "cancel")), true);
+    release();
+    await shutdown;
+    assert.equal(calls, 1);
+    assert.equal(existsSync(directory), false);
+    assert.equal(
+      captured.entries.some((entry) => entry.data.kind === "image"),
+      false,
     );
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    assert.equal(captured.sent.length, 1);
-    assert.equal(captured.sent[0]?.details?.kind, "error");
-    assert.ok(captured.sent[0]?.details?.message?.includes("closing fence"));
   });
 
-  it("sends a guidance card for unsupported components", async () => {
-    const { default: openuiPreviewExtension } = await import("./index");
-    const captured: Captured = {
-      registeredTypes: [],
-      registeredEvents: [],
-      transformers: [],
-      sent: [],
-      handlers: new Map(),
-    };
-    openuiPreviewExtension(mockPi(captured) as never, {
-      outDir: workDir,
-      htmlshotPath: "/bin/htmlshot",
-      generatedDir: promptFixtureDir,
+  it("does not start a queued shot after immediate shutdown", async () => {
+    let calls = 0;
+    const captured = capture(async (request) => {
+      calls += 1;
+      return successfulShot(request);
     });
-
-    const dsl = 'root = Stack([Tabs([TabItem("a", "A", [TextContent("x")])])])';
-    captured.handlers.get("message_end")?.(
-      {
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: `\`\`\`openui-lang\n${dsl}\n\`\`\`` }],
-        },
-      },
-      { mode: "tui" },
-    );
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    assert.equal(captured.sent.length, 1);
-    assert.equal(captured.sent[0]?.details?.kind, "error");
-    assert.ok(captured.sent[0]?.details?.message?.includes("preview does not support"));
+    captured.message(fenced());
+    await captured.handlers.get("session_shutdown")?.({});
+    await captured.drain();
+    assert.equal(calls, 0);
+    assert.deepEqual(captured.entries, []);
   });
 });
