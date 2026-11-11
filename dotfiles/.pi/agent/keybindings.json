@@ -1,4 +1,10 @@
 {
+  "app.exit": [],
+  "app.suspend": [],
+  "app.editor.external": [],
+  "app.model.cycleForward": [],
+  "app.model.cycleBackward": [],
+  "app.thinking.cycle": [],
   "tui.altScreen.top": [],
   "tui.altScreen.bottom": []
 }
