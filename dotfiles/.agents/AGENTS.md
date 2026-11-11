@@ -162,6 +162,7 @@ pi の read ツールは、SKILL.md に対する offset・limit を無視し、�
 
 - **Python**: `ruff format`, `ruff check`, `ty`, `pytest`
 - **JavaScript/TypeScript**: `vp fmt`, `vp lint`, `vp test`
+- **justfile**: `just --fmt --indentation '  ' --justfile <file>`（2スペースインデント）
 - **Markdown**: `~/.bun/bin/prettier --parser markdown --plugin="$HOME/.bun/install/global/node_modules/prettier-markdown-table/index.js" --write <file.md>`
 
 ## Out-of-Scope Tickets

@@ -214,6 +214,10 @@
     {
       "command": "oxfmt --stdin-filepath \"${file}\"",
       "languages": ["yaml", "json", "jsonc"]
+    },
+    {
+      "command": "just --fmt --indentation \"  \" --justfile -",
+      "languages": ["just"]
     }
   ],
   "debug.inlineValues": "on",
