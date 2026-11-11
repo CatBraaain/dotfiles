@@ -1,6 +1,6 @@
-# session-state の所属と実行フェーズ仕様
+# session-state の所属・実行フェーズ・タイトル仕様
 
-この文書は、pi拡張 session-state の所属ストア更新と、専用tmux paneへの実行フェーズ公開を定める。読者は、この拡張と外部の読み書き手を保守する user と coding agent である。課題・目的・重要な制約の正本は [REQUIREMENTS.md](REQUIREMENTS.md) とする。
+この文書は、pi拡張 session-state の所属ストア更新と、専用tmux paneへの実行フェーズ・タイトル公開を定める。読者は、この拡張と外部の読み書き手を保守する user と coding agent である。課題・目的・重要な制約の正本は [REQUIREMENTS.md](REQUIREMENTS.md) とする。
 
 ## 適用対象
 
@@ -11,7 +11,7 @@
 | トップレベルの `input` | 自セッションの所属を追加する | 現在値を維持する |
 | トップレベルの `session_start` | 内容と有無を維持する | 公開世代を開始する |
 | トップレベルの `resources_discover` | 内容と有無を維持する | 管理下を照合し、`waiting-user` を公開する |
-| 実行フェーズの変化 | 内容と有無を維持する | 下記イベント表に従う |
+| 実行フェーズ・保存名の変化 | 内容と有無を維持する | 下記イベント表に従う |
 | `session_shutdown` | 所属を保持する | 新規公開を止め、optionの除去を試みる |
 | 専用tmux管理外のトップレベル | 所属更新とコマンドを提供する | 公開しない |
 
@@ -23,7 +23,7 @@
 
 この拡張による所属更新は、入力・コマンドの受付順に反映する。保存は同じdirectoryの一時ファイルへ書き、renameで置換する。保存失敗時は一時ファイルを清掃する。不正なストアは上書きしない。
 
-実行フェーズのイベントではストアを読み書きしない。既存entryの `state` は所属更新時にも保持し、実行フェーズの表示入力には使わない。
+実行フェーズと保存名のイベントではストアを読み書きしない。既存entryの `state` は所属更新時にも保持し、実行フェーズの表示入力には使わない。
 
 ## 管理paneの初期照合
 
@@ -46,12 +46,24 @@
 pane-local user option `@pi_session_state` に、次のJSON文字列を1回の `set-option -p` で設定する。
 
 ```json
-{ "version": 1, "sessionId": "<現在の会話ID>", "state": "running" }
+{
+  "version": 1,
+  "sessionId": "<現在の会話ID>",
+  "state": "running",
+  "title": "Fix the build"
+}
 ```
 
-`state` は `running`・`waiting-approval`・`waiting-user` のいずれかである。JSON文字列は `JSON.stringify` で組み立て、shell引数をescapeして渡す。`-F` によるtmux format展開は行わない。
+| 項目 | 値 |
+| --- | --- |
+| `version` | `1` |
+| `sessionId` | 現在の会話ID |
+| `state` | `running`・`waiting-approval`・`waiting-user` のいずれか |
+| `title` | pi が保存した現在のセッション名。名前がない場合は `null` |
 
-同じ世代では、前回要求したstateと同じならCLIを呼ばない。世代開始時は、同じ会話ID・stateでも初期値を公開する。公開のためにpane optionを読み取らず、外部上書きだけでは再公開しない。
+タイトルの正本は pi の保存済みセッション名とし、pane option は共有用の値とする。JSON文字列は `JSON.stringify` で組み立て、shell引数をescapeして渡す。`-F` によるtmux format展開は行わない。
+
+同じ世代では、前回要求したstateとtitleの両方が同じならCLIを呼ばない。titleだけが変わった場合は、現在のstateと会話IDを維持して公開する。その後のstate変更でも現在のtitleを保持する。世代開始時は、同じ会話ID・state・titleでも初期値を公開する。公開のためにpane optionを読み取らず、外部上書きだけでは再公開しない。
 
 ### 実行の区間とイベント
 
@@ -61,19 +73,22 @@ run区間は `agent_start` から `agent_settled` までとし、中断による
 
 | イベント | 処理 |
 | --- | --- |
-| `session_start` | 旧世代を失効させ、run区間外・承認待ちなしで公開世代を開始する |
-| `resources_discover` | 管理paneを初期照合し、`waiting-user` を公開する |
+| `session_start` | 起動・resume・reload時に旧世代を失効させ、run区間外・承認待ちなしで公開世代を開始する。現在の保存名を取得し、titleの初期値にする |
+| `resources_discover` | 管理paneを初期照合し、`waiting-user` と現在のtitleを公開する |
+| `session_info_changed` | 保存後の `event.name` を現在のtitleとし、stateと会話IDを維持して公開する。`undefined` は `null` として公開する |
 | `agent_start` | run区間に入り、承認待ちでなければ `running` を公開する |
 | `ui_prompt_start` | 承認待ちに入り、`waiting-approval` を公開する |
 | `ui_prompt_end` | 承認待ちを解除し、run区間内なら `running`、区間外なら `waiting-user` を公開する |
 | `agent_settled` | run区間を終了し、承認待ちでなければ `waiting-user` を公開する |
 | `session_shutdown` | 新規公開と未実行分を止め、開始済みCLIの通常終端を待ち、可能ならoptionを除去する |
 
+保存名の変更は標準の `session_info_changed` で受け取る。初回リクエストのagentループ終了より遅れて保存された場合も、セッションのアクティブ化や次のstate変更を待たずに公開する。初期照合前の保存名変更はtitleの現在値に反映し、tmux CLIは `resources_discover` 以降に実行する。
+
 その他の進展イベントでは公開しない。承認待ち中は、進展・繰り返しの `agent_start`・確定停止によって表示を `running` へ戻さない。UI終了後は、その時点のrun区間に対応するstateへ戻す。
 
 ### 世代と終了
 
-公開処理はrunの `ctx.signal` と独立する。会話ID・必要context・接続候補を受付時に捕捉する。世代失効では、未実行の旧公開・古い結果・古い操作の失敗通知を破棄する。
+公開処理はrunの `ctx.signal` と独立する。会話ID・state・title・必要context・接続候補を受付時に捕捉し、実行フェーズとタイトルの公開は同じ受付順で反映する。世代失効では、未実行の旧公開・古い結果・古い操作の失敗通知を破棄する。
 
 開始済みのtmux CLIは世代失効で強制中断せず、通常のtool結果が返るまで待つ。結果が `completed` なら、Bashエラーを含めその実行は終端したものとして、次の公開へ進む。古いsetやunsetの副作用が終わる前に、新世代の照合・公開を開始しない。CLI自身のtimeoutは約1秒、背景Bash要求の期限は約2秒とする。
 

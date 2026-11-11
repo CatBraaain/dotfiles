@@ -768,7 +768,7 @@ describe("pi-mux read-only list", () => {
         const result = await f.run(["list"]);
         assert.equal(result.code, 0, result.err);
         assert.deepEqual(JSON.parse(result.out), [
-          { id: metadata.id, cwd: metadata.cwd, file: metadata.file, state: null },
+          { id: metadata.id, cwd: metadata.cwd, file: metadata.file, state: null, title: null },
         ]);
         assert.equal(readFileSync(path, "utf8"), invalid);
       });
@@ -793,7 +793,7 @@ describe("pi-mux read-only list", () => {
   );
 
   it(
-    "returns every live pi as a separate four-field record",
+    "returns every live pi as a separate five-field record",
     async () => {
       await fixture(async (f) => {
         const entries = await Promise.all([
@@ -811,6 +811,7 @@ describe("pi-mux read-only list", () => {
             cwd: metadata.cwd,
             file: metadata.file,
             state: null,
+            title: null,
           }))
           .sort((a, b) => a.id.localeCompare(b.id));
         assert.deepEqual(actual, expected);
@@ -822,7 +823,7 @@ describe("pi-mux read-only list", () => {
 
   for (const state of ["running", "waiting-approval", "waiting-user"] as const) {
     it(
-      "returns only the four public fields with state " + state,
+      "returns only the five public fields with state " + state,
       async () => {
         await fixture(async (f) => {
           const { pane, metadata } = await publishedIdlePane(f);
@@ -846,7 +847,7 @@ describe("pi-mux read-only list", () => {
           assert.equal(result.code, 0, result.err);
           assert.equal(result.err, "");
           assert.deepEqual(JSON.parse(result.out), [
-            { id: metadata.id, cwd: metadata.cwd, file: metadata.file, state },
+            { id: metadata.id, cwd: metadata.cwd, file: metadata.file, state, title: null },
           ]);
           assert.equal(existsSync(metadata.file), false);
           assert.equal(existsSync(join(f.agent, "pi-tmux")), false);
@@ -857,6 +858,64 @@ describe("pi-mux read-only list", () => {
       TIMEOUT_MS,
     );
   }
+
+  it(
+    "validates title and state independently after the common identity checks",
+    async () => {
+      await fixture(async (f) => {
+        const { pane, metadata } = await publishedIdlePane(f);
+        const cases = [
+          {
+            fields: { state: "running", title: "Saved title" },
+            state: "running",
+            title: "Saved title",
+          },
+          { fields: { state: "waiting-user", title: "" }, state: "waiting-user", title: "" },
+          {
+            fields: { state: "waiting-approval", title: "Quotes '\\\" \\n#{pane_id}" },
+            state: "waiting-approval",
+            title: "Quotes '\\\" \\n#{pane_id}",
+          },
+          { fields: { state: "running", title: null }, state: "running", title: null },
+          { fields: { state: "running", title: 42 }, state: "running", title: null },
+          { fields: { state: "running", title: {} }, state: "running", title: null },
+          { fields: { state: "running", title: ["invalid"] }, state: "running", title: null },
+          { fields: { state: "invalid", title: "Valid title" }, state: null, title: "Valid title" },
+          { fields: { title: "Without state" }, state: null, title: "Without state" },
+          {
+            fields: { version: 2, state: "running", title: "Wrong version" },
+            state: null,
+            title: null,
+          },
+          {
+            fields: { sessionId: "other-id", state: "running", title: "Other session" },
+            state: null,
+            title: null,
+          },
+        ];
+        for (const { fields, state, title } of cases) {
+          const value = JSON.stringify({ version: 1, sessionId: metadata.id, ...fields });
+          const published = await f.tmux([
+            "set-option",
+            "-p",
+            "-t",
+            pane,
+            "@pi_session_state",
+            value,
+          ]);
+          assert.equal(published.code, 0, published.err);
+          const result = await f.run(["list"]);
+          assert.equal(result.code, 0, result.err);
+          assert.deepEqual(
+            JSON.parse(result.out),
+            [{ id: metadata.id, cwd: metadata.cwd, file: metadata.file, state, title }],
+            value,
+          );
+        }
+      });
+    },
+    TIMEOUT_MS,
+  );
 
   const unavailableStates = [
     { name: "unpublished", value: undefined },
@@ -902,7 +961,7 @@ describe("pi-mux read-only list", () => {
           const result = await f.run(["list"]);
           assert.equal(result.code, 0, result.err);
           assert.deepEqual(JSON.parse(result.out), [
-            { id: metadata.id, cwd: metadata.cwd, file: metadata.file, state: null },
+            { id: metadata.id, cwd: metadata.cwd, file: metadata.file, state: null, title: null },
           ]);
         });
       },
@@ -919,7 +978,7 @@ describe("pi-mux read-only list", () => {
           const result = await f.run(["list"]);
           assert.equal(result.code, 0, result.err);
           assert.deepEqual(JSON.parse(result.out), [
-            { id: metadata.id, cwd: metadata.cwd, file: metadata.file, state: null },
+            { id: metadata.id, cwd: metadata.cwd, file: metadata.file, state: null, title: null },
           ]);
           assert.equal(existsSync(metadata.file), false);
           f.saved(metadata.id);
@@ -947,7 +1006,7 @@ describe("pi-mux read-only list", () => {
         const result = await f.run(["list"]);
         assert.equal(result.code, 0, result.err);
         assert.deepEqual(JSON.parse(result.out), [
-          { id: pane.id, cwd: pane.cwd, file: pane.file, state: null },
+          { id: pane.id, cwd: pane.cwd, file: pane.file, state: null, title: null },
         ]);
         assert.equal(existsSync(pane.file), false);
         assert.equal((await firstPane(f)).pid, pane.pid);

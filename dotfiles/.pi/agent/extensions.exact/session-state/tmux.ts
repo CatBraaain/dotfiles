@@ -34,8 +34,12 @@ export function dedicatedSocketPath(env: NodeJS.ProcessEnv = process.env): strin
   return join(runtimeDir, "pi-tmux", "server.sock");
 }
 
-export function stateOptionValue(sessionId: string, state: SessionState): string {
-  return JSON.stringify({ version: OPTION_VALUE_VERSION, sessionId, state });
+export function stateOptionValue(
+  sessionId: string,
+  state: SessionState,
+  title: string | null = null,
+): string {
+  return JSON.stringify({ version: OPTION_VALUE_VERSION, sessionId, state, title });
 }
 
 export function tmuxCommandLine(socketPath: string, args: string[]): string {
@@ -100,8 +104,9 @@ export async function publishState(
   binding: ManagedPaneBinding,
   sessionId: string,
   state: SessionState,
+  title: string | null = null,
 ): Promise<PublicationOutcome> {
-  const value = stateOptionValue(sessionId, state);
+  const value = stateOptionValue(sessionId, state, title);
   const set = await run(setStateOptionCommand(binding.socketPath, binding.paneId, value));
   return executionFailure(set) ?? { status: "published" };
 }

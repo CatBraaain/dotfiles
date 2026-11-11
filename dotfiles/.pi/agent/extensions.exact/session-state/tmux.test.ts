@@ -141,11 +141,26 @@ describe("dedicatedSocketPath", () => {
 });
 
 describe("state option value", () => {
-  it("builds one JSON object from version, sessionId, and state", () => {
+  it("builds one JSON object with a null title when no name is set", () => {
     assert.equal(
       stateOptionValue("s1", "running"),
-      '{"version":1,"sessionId":"s1","state":"running"}',
+      '{"version":1,"sessionId":"s1","state":"running","title":null}',
     );
+  });
+
+  it("preserves title text through JSON and shell escaping", async () => {
+    const title = "Quoted 'title' \"\n; $(touch /unsafe) #{pane_id}";
+    const server = new FakeTmuxServer();
+    assert.deepEqual(await publishState(server.run, verifiedBinding, "s1", "running", title), {
+      status: "published",
+    });
+    assert.deepEqual(JSON.parse(server.paneOptionOf("%0")!), {
+      version: 1,
+      sessionId: "s1",
+      state: "running",
+      title,
+    });
+    assert.equal((parse(server.commands[0]!) as string[]).includes("-F"), false);
   });
 });
 

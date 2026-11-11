@@ -546,8 +546,14 @@ async function listSessions(config: TmuxConfig) {
   const panes = await livePanes(config, "list");
   return await Promise.all(
     panes.map(async ({ id, cwd, file, pane }) => {
-      const state = await tmux(config, ["show-options", "-pqv", "-t", pane, "@pi_session_state"]);
-      return { id, cwd, file, state: parseState(state.stdout, id) };
+      const metadata = await tmux(config, [
+        "show-options",
+        "-pqv",
+        "-t",
+        pane,
+        "@pi_session_state",
+      ]);
+      return { id, cwd, file, ...parseSessionMetadata(metadata.stdout, id) };
     }),
   );
 }
@@ -602,19 +608,27 @@ async function livePanes(
     });
 }
 
-function parseState(encoded: string | undefined, id: string): SessionState | null {
-  if (!encoded) return null;
-  let metadata: { version?: unknown; sessionId?: unknown; state?: unknown } | null;
+function parseSessionMetadata(
+  encoded: string | undefined,
+  id: string,
+): { state: SessionState | null; title: string | null } {
+  const unavailable = { state: null, title: null };
+  if (!encoded) return unavailable;
+  let metadata: { version?: unknown; sessionId?: unknown; state?: unknown; title?: unknown } | null;
   try {
     metadata = JSON.parse(encoded);
   } catch {
-    return null;
+    return unavailable;
   }
-  if (metadata?.version !== 1 || metadata.sessionId !== id) return null;
+  if (metadata?.version !== 1 || metadata.sessionId !== id) return unavailable;
   const state = metadata.state;
-  return state === "running" || state === "waiting-approval" || state === "waiting-user"
-    ? state
-    : null;
+  return {
+    state:
+      state === "running" || state === "waiting-approval" || state === "waiting-user"
+        ? state
+        : null,
+    title: typeof metadata.title === "string" ? metadata.title : null,
+  };
 }
 
 async function hasSession(config: Config, name: string): Promise<boolean> {

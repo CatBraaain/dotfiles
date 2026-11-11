@@ -62,6 +62,7 @@ interface PublicationGeneration {
   initializationStarted: boolean;
   binding?: ManagedPaneBinding;
   state?: SessionState;
+  title: string | null;
   sessionId: string;
   run: BashRunner;
   environment: Pick<NodeJS.ProcessEnv, "XDG_RUNTIME_DIR" | "TMUX" | "TMUX_PANE">;
@@ -115,13 +116,18 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
     };
   }
 
-  function scheduleStatePublication(state: SessionState): void {
+  function scheduleStatePublication(
+    state: SessionState,
+    title: string | null = generation?.title ?? null,
+  ): void {
     const gen = generation;
-    if (!gen || !gen.initializationStarted || gen.state === state) return;
+    if (!gen || !gen.initializationStarted || (gen.state === state && gen.title === title)) return;
     gen.state = state;
+    gen.title = title;
+    const sessionId = gen.sessionId;
     enqueuePublication(gen, async () => {
       if (gen.controller.signal.aborted || !gen.binding) return;
-      const outcome = await publishState(gen.run, gen.binding, gen.sessionId, state);
+      const outcome = await publishState(gen.run, gen.binding, sessionId, state, title);
       if (!publicationProcess[PUBLICATION_STOPPED] && !gen.controller.signal.aborted)
         reportPublicationOutcome(gen, outcome);
     });
@@ -160,6 +166,7 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
       controller,
       initializationStarted: false,
       sessionId: ctx.sessionManager.getSessionId(),
+      title: ctx.sessionManager.getSessionName() ?? null,
       run: makeBashRunner(context, notify),
       environment,
       notify,
@@ -181,6 +188,17 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
       if (detection.status === "aborted") gen.notify("managed tmux pane check was interrupted");
     });
     scheduleStatePublication("waiting-user");
+  });
+
+  pi.on("session_info_changed", (event) => {
+    const gen = generation;
+    if (!gen) return;
+    const title = event.name ?? null;
+    if (!gen.initializationStarted) {
+      gen.title = title;
+      return;
+    }
+    scheduleStatePublication(gen.state ?? "waiting-user", title);
   });
 
   pi.on("agent_start", () => {

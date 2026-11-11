@@ -73,6 +73,7 @@ function context() {
   const manager = {
     getCwd() { return current(directory); },
     getSessionId() { return current(sessionId); },
+    getSessionName() { return current(undefined); },
     getSessionFile() { return current(undefined); },
     getSessionDir() { return current(join(directory, "sessions")); },
   };
@@ -225,7 +226,134 @@ try {
 }
 `;
 
+const SDK_TITLE_SCENARIO = String.raw`
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
+
+const directory = process.env.PI_TEST_DIRECTORY;
+const moduleDir = process.env.PI_TEST_MODULE_DIR;
+const { createAgentSession, SessionManager, SettingsManager, DefaultResourceLoader } = await import(process.env.PI_TEST_SDK_URL);
+const { fakeProvider, fakeModel, memoryRuntime } = await import(pathToFileURL(join(moduleDir, "../recontext/test-fixture.ts")));
+const { registerSessionTitle } = await import(pathToFileURL(join(moduleDir, "../session-title/extension.ts")));
+const { default: sessionStateExtension } = await import(pathToFileURL(join(moduleDir, "index.ts")));
+const { default: toolsExtension } = await import(pathToFileURL(join(moduleDir, "../tools/index.ts")));
+const { SandboxRunner } = await import(pathToFileURL(join(moduleDir, "../guardrails/sandbox-runner.ts")));
+const socket = join(process.env.XDG_RUNTIME_DIR, "pi-tmux/server.sock");
+const pane = process.env.TMUX_PANE;
+const title = "Delayed SDK title";
+const errors = [];
+const sandboxCommands = [];
+const originalRunTool = SandboxRunner.prototype.runTool;
+SandboxRunner.prototype.runTool = function(name, params, options) {
+  sandboxCommands.push(params.command);
+  return originalRunTool.call(this, name, params, options);
+};
+function cli(...args) {
+  return execFileSync("tmux", ["-S", socket, ...args], { encoding: "utf8" }).trimEnd();
+}
+function readOption() {
+  return JSON.parse(cli("show-options", "-pqv", "-t", pane, "@pi_session_state") || "null");
+}
+async function waitFor(label, predicate) {
+  const deadline = Date.now() + 15000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("timeout: " + label + "; errors=" + JSON.stringify(errors));
+    await delay(10);
+  }
+}
+const runtime = await memoryRuntime();
+const fake = fakeProvider("title-share");
+fake.state.models = ["parent", "title"].map(id => fakeModel({ provider: "title-share", id }));
+const titleStarted = Promise.withResolvers();
+const releaseTitle = Promise.withResolvers();
+const settled = Promise.withResolvers();
+fake.state.beforeReply = async (capture) => {
+  if (capture.model.id === "title") {
+    titleStarted.resolve();
+    await releaseTitle.promise;
+  }
+  fake.state.normalContent = [{ type: "text", text: capture.model.id === "title" ? title : "Normal reply" }];
+};
+runtime.registerNativeProvider(fake.provider);
+await runtime.refresh({ allowNetwork: false });
+const manager = SessionManager.create(directory, join(directory, "sessions"));
+const settings = SettingsManager.inMemory({
+  compaction: { enabled: false }, retry: { enabled: false }, cacheWarming: "off",
+  defaultTools: [], enableInstallTelemetry: false,
+});
+const guardrails = join(directory, "guardrails.yaml");
+writeFileSync(guardrails, "read:\n  - allow: \"*\"\nwrite:\n  - allow: " + directory + "\ncommands:\n  - .*:\n      - allow: []\n");
+const loader = new DefaultResourceLoader({
+  cwd: directory, agentDir: directory, settingsManager: settings,
+  noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+  extensionFactories: [
+    (pi) => {
+      sessionStateExtension(pi);
+      toolsExtension(pi, guardrails);
+      registerSessionTitle(pi, async () => [runtime.getModel("title-share", "title")]);
+      pi.on("agent_settled", () => { settled.resolve(); });
+    },
+  ],
+});
+await loader.reload();
+const { session } = await createAgentSession({
+  cwd: directory, agentDir: directory, modelRuntime: runtime,
+  model: runtime.getModel("title-share", "parent"), thinkingLevel: "off",
+  settingsManager: settings, sessionManager: manager, resourceLoader: loader, tools: [],
+});
+try {
+  await session.bindExtensions({ mode: "rpc", onError: error => errors.push(error) });
+  const identity = { id: manager.getSessionId(), cwd: directory, file: manager.getSessionFile(), pid: process.pid };
+  cli("set-option", "-p", "-t", pane, "@pi-tmux-session", Buffer.from(JSON.stringify(identity)).toString("base64"));
+  await waitFor("initial state", () => readOption()?.state === "waiting-user");
+  assert.equal(readOption().title, null);
+  const request = session.prompt("Discuss delayed session titles");
+  await settled.promise;
+  await titleStarted.promise;
+  await waitFor("settled before title", () => readOption()?.state === "waiting-user");
+  assert.equal(manager.getSessionName(), undefined);
+  assert.equal(readOption().title, null);
+  const beforeIdentity = cli("show-options", "-pqv", "-t", pane, "@pi-tmux-session");
+  const commandsBeforeTitle = sandboxCommands.length;
+  releaseTitle.resolve();
+  await request;
+  await waitFor("late title publication", () => readOption()?.title === title);
+  assert.deepEqual(readOption(), { version: 1, sessionId: identity.id, state: "waiting-user", title });
+  assert.ok(sandboxCommands.length > commandsBeforeTitle);
+  assert.equal(manager.getSessionName(), title);
+  assert.match(readFileSync(identity.file, "utf8"), /"type":"session_info".*"name":"Delayed SDK title"/);
+  const cliPath = resolve(moduleDir, "../../../../.local/cli.exact/pi-mux/src/main.ts");
+  const listed = JSON.parse(execFileSync(process.execPath, [cliPath, "list"], { encoding: "utf8" }));
+  assert.deepEqual(listed, [{ id: identity.id, cwd: identity.cwd, file: identity.file, state: "waiting-user", title }]);
+  assert.equal(cli("show-options", "-pqv", "-t", pane, "@pi-tmux-session"), beforeIdentity);
+  await session.prompt("Continue the same conversation");
+  await waitFor("later state retains title", () => readOption()?.state === "waiting-user" && readOption()?.title === title);
+  assert.deepEqual(errors, []);
+  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: true, sandboxCommands }));
+} catch (error) {
+  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: false, error: String(error.stack ?? error), sandboxCommands }));
+  process.exitCode = 1;
+} finally {
+  releaseTitle.resolve();
+  session.dispose();
+  SandboxRunner.prototype.runTool = originalRunTool;
+}
+`;
+
 describe("session-state with a dedicated headless tmux and real registered Bash", () => {
+  it(
+    "shares a title generated after real SDK settlement without activation or identity changes",
+    async () => {
+      const result = await runScenario("session-first", false, false, SDK_TITLE_SCENARIO);
+      assert.equal(result.ok, true, result.error ?? "scenario failed");
+      assert.ok(result.sandboxCommands.length > 0);
+    },
+    TEST_TIMEOUT_MS,
+  );
   it(
     "serializes a delayed real tmux set before replacement publication through the sandbox",
     async () => {
@@ -264,7 +392,12 @@ type ScenarioResult = {
   sandboxCommands: string[];
 };
 
-async function runScenario(order: string, denied: boolean, race = false): Promise<ScenarioResult> {
+async function runScenario(
+  order: string,
+  denied: boolean,
+  race = false,
+  scenario = SCENARIO,
+): Promise<ScenarioResult> {
   mkdirSync("/tmp/work/dotfiles", { recursive: true });
   const directory = mkdtempSync("/tmp/work/dotfiles/mvp-tmux-");
   const runtimeDir = join(directory, "runtime");
@@ -272,7 +405,7 @@ async function runScenario(order: string, denied: boolean, race = false): Promis
   mkdirSync(join(runtimeDir, "pi-tmux"), { recursive: true });
   const scriptPath = join(directory, "scenario.mjs");
   const reportPath = join(directory, "result.json");
-  writeFileSync(scriptPath, SCENARIO);
+  writeFileSync(scriptPath, scenario);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     XDG_RUNTIME_DIR: runtimeDir,

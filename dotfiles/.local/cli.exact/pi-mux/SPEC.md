@@ -66,7 +66,7 @@
 
 ### list
 
-`list` は専用tmuxのpane metadataから現在の稼働piだけを取得し、stdoutへ次の4項目を持つJSON配列と末尾改行を返す。空新規は会話ファイルが未作成でも含める。PID・tmux targetは内部検証に使う。
+`list` は専用tmuxのpane metadataから現在の稼働piだけを取得し、stdoutへ次の5項目を持つJSON配列と末尾改行を返す。空新規は会話ファイルが未作成でも含める。PID・tmux targetは内部検証に使う。
 
 | 項目 | 型 | 値 |
 | --- | --- | --- |
@@ -74,8 +74,16 @@
 | `cwd` | `string` | 起動cwdの絶対パス |
 | `file` | `string` | 会話ファイルの絶対パス。未作成の保存予定先も含む |
 | `state` | `string \| null` | `running`・`waiting-approval`・`waiting-user` のいずれか。確認できない場合は `null` |
+| `title` | `string \| null` | pi が保存したセッション名の共有値。未設定または確認できない場合は `null` |
 
-stateはpane option `@pi_session_state` のJSONから取得する。`version` が1、`sessionId` が同じ会話ID、`state` が上記の値の場合だけ採用する。未公開・不正JSON・不正な値・別会話の値は `null` とし、pi自体は一覧に残す。
+stateとtitleは、同じpane option `@pi_session_state` のJSONから取得する。公開形式と更新契約は [session-state のpane option公開契約](../../../.pi/agent/extensions.exact/session-state/SPEC.md#pane-optionの公開契約) に従う。接続・セッションのアクティブ化・保存会話の再読み込みを行わず、タイトル公開後の `list` に反映する。
+
+| 条件 | `state` | `title` |
+| --- | --- | --- |
+| optionが未公開、不正JSON、`version` が1でない、または `sessionId` が一覧の会話IDと一致しない | `null` | `null` |
+| `version` と `sessionId` が有効 | 上記3値のいずれかなら採用し、それ以外は `null` | 文字列ならそのまま採用し、`null`・欠落・その他の型は `null` |
+
+共通のversion・会話ID検証後はstateとtitleを独立して検証する。titleを持たない旧形式やtitleの型が不正な値でも、有効なstateは保持する。stateが不正でも有効なtitleは保持する。いずれの値が `null` でも、pi自体は一覧に残す。
 
 metadataは会話ID・絶対パスのcwdとfile・pane PIDとの一致を検証する。終了済みpaneとmetadata未公開のpaneは含めない。不正metadataはエラーとする。startupを持たないmetadataと、startupが `accepted` または `ready` のmetadataを受け付ける。一覧への掲載は復元成功を示さず、復元では `ready` を必須とする。
 

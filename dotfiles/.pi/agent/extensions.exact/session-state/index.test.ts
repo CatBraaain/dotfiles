@@ -124,6 +124,7 @@ interface ExtensionHarness {
   server: FakeTmuxServer;
   notifications: { message: string; level: string | undefined }[];
   sessionId: string;
+  sessionName: string | undefined;
   emit(type: string, fields?: Record<string, unknown>): Promise<void>;
   disposeBashReceiver(): void;
   restoreBashReceiver(): void;
@@ -175,7 +176,7 @@ async function createExtensionHarness(
   process.env.PI_AGENT_NAME = agent;
 
   const workspacePath = join(agentDir, "workspace: child");
-  const harnessSessionId = { value: "s1" };
+  const harnessSessionId = { value: "s1", name: undefined as string | undefined };
   const childDir = subagentSessionDir(workspacePath);
   const childSession =
     options.mode === "resume" || options.mode === "fork"
@@ -202,6 +203,7 @@ async function createExtensionHarness(
     sessionManager: {
       getCwd: () => workspacePath,
       getSessionId: () => harnessSessionId.value,
+      getSessionName: () => harnessSessionId.name,
       getSessionFile: () => undefined,
       getSessionDir: () => sessionDir,
       getHeader: () => ({ parentSession: "/ordinary/top-level-parent.jsonl" }),
@@ -258,7 +260,15 @@ async function createExtensionHarness(
     set sessionId(value: string) {
       harnessSessionId.value = value;
     },
+    get sessionName() {
+      return harnessSessionId.name;
+    },
+    set sessionName(value: string | undefined) {
+      harnessSessionId.name = value;
+    },
     async emit(type, fields = {}) {
+      if (type === "session_info_changed")
+        harnessSessionId.name = fields.name as string | undefined;
       const event = { type, ...fields } as ExtensionEvent;
       for (const handler of handlers.get(type) ?? []) {
         const result = await handler(event, context);
@@ -314,6 +324,7 @@ const lifecycleEvents = [
   "ui_prompt_end",
   "message_update",
   "agent_settled",
+  "session_info_changed",
   "session_shutdown",
 ] as const;
 
@@ -453,6 +464,7 @@ describe("sessionStateExtension in top-level sessions", () => {
     try {
       await harness.emit("session_start");
       await harness.emit("agent_start");
+      await harness.emit("session_info_changed", { name: "Unmanaged title" });
       await finishEventLoopTurn();
       assert.deepEqual(harness.server.commands, []);
 
@@ -536,6 +548,156 @@ const unchangedEvents = [
   "user_bash",
   "input",
 ] as const satisfies readonly ExtensionEvent["type"][];
+
+describe("session-state title publication", () => {
+  for (const reason of ["startup", "resume", "reload"]) {
+    it(`publishes the saved name on ${reason}`, async () => {
+      const h = await createExtensionHarness();
+      try {
+        h.sessionName = "Saved title";
+        await h.emit("session_start", { reason });
+        await waitFor(
+          "saved title",
+          () =>
+            h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user", "Saved title"),
+        );
+        assert.equal(existsSync(h.storePath), false);
+      } finally {
+        await h.close();
+      }
+    });
+  }
+
+  it("retains name changes before discovery without starting CLI", async () => {
+    const h = await createExtensionHarness({ deferDiscovery: true });
+    try {
+      h.sessionName = "Initial title";
+      await h.emit("session_start");
+      await h.emit("session_info_changed", { name: "Before discovery" });
+      await finishEventLoopTurn();
+      assert.deepEqual(h.server.commands, []);
+      await h.emit("resources_discover");
+      await waitFor(
+        "latest initial title",
+        () =>
+          h.server.paneOptionOf("%0") ===
+          stateOptionValue("s1", "waiting-user", "Before discovery"),
+      );
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("publishes title-only changes, deduplicates equal titles, and clears missing names", async () => {
+    const h = await createExtensionHarness();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      await h.emit("agent_start");
+      await h.emit("agent_settled");
+      await h.emit("session_info_changed", { name: "Late title" });
+      await waitFor(
+        "late title",
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user", "Late title"),
+      );
+      const count = h.server.commands.length;
+      await h.emit("session_info_changed", { name: "Late title" });
+      await finishEventLoopTurn();
+      assert.equal(h.server.commands.length, count);
+      await h.emit("agent_start");
+      await waitFor(
+        "title retained",
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "running", "Late title"),
+      );
+      await h.emit("session_info_changed", { name: undefined });
+      await waitFor(
+        "cleared title",
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "running", null),
+      );
+      assert.equal(existsSync(h.storePath), false);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("retains approval state when a title changes", async () => {
+    const h = await createExtensionHarness();
+    try {
+      await h.emit("session_start");
+      await h.emit("ui_prompt_start");
+      await h.emit("session_info_changed", { name: "Approval title" });
+      await h.emit("agent_settled");
+      await waitFor(
+        "approval title",
+        () =>
+          h.server.paneOptionOf("%0") ===
+          stateOptionValue("s1", "waiting-approval", "Approval title"),
+      );
+      await h.emit("ui_prompt_end");
+      await waitFor(
+        "idle title",
+        () =>
+          h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user", "Approval title"),
+      );
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("captures each queued title and state before a replacement invalidates old work", async () => {
+    const h = await createExtensionHarness();
+    const pending = Promise.withResolvers<ToolExecutionOutcome>();
+    const oldSet = Promise.withResolvers<ToolExecutionOutcome>();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      const count = h.server.commands.length;
+      h.server.responses["set-option"] = () => pending.promise;
+      await h.emit("session_info_changed", { name: "First title" });
+      await waitFor("pending title", () => h.server.hasPending());
+      await h.emit("agent_start");
+      await h.emit("session_info_changed", { name: "Second title" });
+      delete h.server.responses["set-option"];
+      pending.resolve(completedResult(""));
+      await waitFor(
+        "queued snapshots",
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "running", "Second title"),
+      );
+      const values = h.server.commands
+        .slice(count)
+        .map((command) => JSON.parse((parse(command) as string[]).at(-1)!));
+      assert.deepEqual(values, [
+        { version: 1, sessionId: "s1", state: "waiting-user", title: "First title" },
+        { version: 1, sessionId: "s1", state: "running", title: "First title" },
+        { version: 1, sessionId: "s1", state: "running", title: "Second title" },
+      ]);
+
+      h.server.responses["set-option"] = () => oldSet.promise;
+      await h.emit("session_info_changed", { name: "Old title" });
+      await waitFor("old title in flight", () => h.server.hasPending());
+      await h.emit("session_info_changed", { name: "Discarded title" });
+      h.sessionId = "replacement";
+      h.sessionName = "Replacement title";
+      await h.emit("session_start", { reason: "resume" });
+      delete h.server.responses["set-option"];
+      oldSet.resolve(completedResult(""));
+      await waitFor(
+        "replacement title",
+        () =>
+          h.server.paneOptionOf("%0") ===
+          stateOptionValue("replacement", "waiting-user", "Replacement title"),
+      );
+      assert.equal(
+        h.server.commands.some((command) => command.includes("Discarded title")),
+        false,
+      );
+    } finally {
+      pending.resolve(completedResult(""));
+      oldSet.resolve(completedResult(""));
+      await h.close();
+    }
+  });
+});
 
 describe("session-state MVP state boundaries", () => {
   it("publishes only state changes and never reads pane options", async () => {
@@ -761,6 +923,7 @@ describe("session-state MVP state boundaries", () => {
       await waitFor("drained", () => !h.server.hasPending());
       const count = h.server.commands.length;
       await h.emit("agent_start");
+      await h.emit("session_info_changed", { name: "After shutdown" });
       await finishEventLoopTurn();
       assert.equal(h.server.commands.length, count);
       assert.deepEqual(h.notifications, []);
