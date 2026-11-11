@@ -50,6 +50,31 @@ describe("external command environment", () => {
     expect(process.env.TMUX).toBe("/unrelated/socket,1,0");
   });
 
+  it.each([
+    { inherited: undefined, expected: "truecolor" },
+    { inherited: "", expected: "" },
+    { inherited: "24bit", expected: "24bit" },
+    { inherited: "truecolor", expected: "truecolor" },
+    { inherited: "custom", expected: "custom" },
+  ])(
+    "passes COLORTERM=$expected to detached startup for $inherited",
+    async ({ inherited, expected }) => {
+      vi.stubEnv("COLORTERM", inherited);
+      vi.stubEnv("PI_TRUE_COLOR", "0");
+      const parentEnv = { ...process.env };
+      processMock.mockResolvedValue({ stdout: "Pi session A\n" });
+
+      await new PiMux().newSession("/project");
+
+      expect(processMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["new", "--detached"], {
+        cwd: "/project",
+        timeout: 0,
+        env: expect.objectContaining({ COLORTERM: expected, PI_TRUE_COLOR: "0" }),
+      });
+      expect(process.env).toEqual(parentEnv);
+    },
+  );
+
   it("keeps list queries bounded without applying their timeout to lifecycle operations", async () => {
     processMock.mockResolvedValue({ stdout: "[]\n" });
     expect(await new PiMux().list()).toEqual([]);

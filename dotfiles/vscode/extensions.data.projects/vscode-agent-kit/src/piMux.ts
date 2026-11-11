@@ -74,7 +74,12 @@ async function executePiMux(executable: string, args: string[], cwd?: string): P
   const { stdout } = await executeFile(executable, args, {
     cwd,
     timeout: args[0] === "list" ? 10_000 : 0,
-    env: { ...process.env, TMUX: undefined, TMUX_PANE: undefined },
+    env: {
+      ...process.env,
+      COLORTERM: process.env.COLORTERM ?? "truecolor",
+      TMUX: undefined,
+      TMUX_PANE: undefined,
+    },
   });
   return stdout;
 }
