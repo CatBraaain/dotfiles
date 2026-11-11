@@ -36,6 +36,6 @@
     "commandcode/**",
     "openrouter/**/*:free"
   ],
-  "extensions": ["extensions/tmux-handoff", "-builtin:codemode"],
+  "extensions": ["extensions/pi-mux-bridge", "-builtin:codemode"],
   "packages": ["npm:pi-commandcode-provider"]
 }

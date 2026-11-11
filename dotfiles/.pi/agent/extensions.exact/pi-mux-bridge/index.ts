@@ -55,7 +55,7 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
 function backgroundExecutor(ctx: ExtensionContext): Execute {
   return async function execute(command, args) {
     const outcome = await requestBackgroundBash({
-      id: "tmux-handoff-startup",
+      id: "pi-mux-bridge-startup",
       params: { command: quote([command, ...args]), timeout: TMUX_TIMEOUT_S },
       context: ctx,
     });

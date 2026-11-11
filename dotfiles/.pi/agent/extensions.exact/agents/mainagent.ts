@@ -8,7 +8,7 @@ import type {
 import { quote } from "shell-quote";
 import { Type, type Static } from "typebox";
 import { resultText, truncateText } from "../shared/tool-text.ts";
-import { getTmuxPaths, PARENT_PI_ENV_KEYS, type TmuxPaths } from "../tmux-handoff/shared.ts";
+import { getTmuxPaths, PARENT_PI_ENV_KEYS, type TmuxPaths } from "../pi-mux-bridge/shared.ts";
 const MAIN_AGENT_NAME = "main";
 const REQUEST_PREVIEW_LIMIT = 80;
 

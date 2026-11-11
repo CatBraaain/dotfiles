@@ -73,7 +73,7 @@ async function createFixture() {
     join(home, ".config/tmux"),
   ])
     mkdirSync(path, { recursive: true, mode: 0o700 });
-  symlinkSync(EXTENSION_DIR, join(agent, "extensions/tmux-handoff"));
+  symlinkSync(EXTENSION_DIR, join(agent, "extensions/pi-mux-bridge"));
   copyFileSync(
     resolve(EXTENSION_DIR, "../../../../tmux/pi.conf"),
     join(home, ".config/tmux/pi.conf"),

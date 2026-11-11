@@ -156,7 +156,7 @@ function tmuxConfiguration() {
   if (!isAbsolute(runtime)) throw new Error("XDG_RUNTIME_DIR must be absolute");
   const agentDir = expandPath(process.env.PI_CODING_AGENT_DIR || "~/.pi/agent");
   const directory = join(runtime, "pi-tmux");
-  const extension = join(agentDir, "extensions", "tmux-handoff", "index.ts");
+  const extension = join(agentDir, "extensions", "pi-mux-bridge", "index.ts");
   const tmuxConfig = join(homedir(), ".config", "tmux", "pi.conf");
   const env = Object.fromEntries(
     Object.entries(process.env).filter(

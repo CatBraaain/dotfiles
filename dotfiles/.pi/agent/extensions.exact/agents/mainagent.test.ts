@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { afterAll, beforeAll, describe, it } from "bun:test";
 import { parse } from "shell-quote";
-import { getTmuxPaths, PARENT_PI_ENV_KEYS } from "../tmux-handoff/shared.ts";
+import { getTmuxPaths, PARENT_PI_ENV_KEYS } from "../pi-mux-bridge/shared.ts";
 import {
   registerMainagentTool,
   buildTmuxCommand,
