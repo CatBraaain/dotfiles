@@ -13,7 +13,7 @@ export interface PiMuxSession {
   id: string;
   cwd: string;
   file: string | null;
-  phase: string | null;
+  state: string | null;
 }
 
 export class PiMux {
@@ -66,7 +66,7 @@ function isPiMuxSession(session: unknown): session is PiMuxSession {
     session.id.length > 0 &&
     typeof session.cwd === "string" &&
     (session.file === null || typeof session.file === "string") &&
-    (session.phase === null || typeof session.phase === "string")
+    (session.state === null || typeof session.state === "string")
   );
 }
 

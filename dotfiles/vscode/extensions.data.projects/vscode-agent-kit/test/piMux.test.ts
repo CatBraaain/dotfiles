@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { PiMux } from "../src/piMux";
 
-const liveSession = { id: "A", cwd: "/project", file: "/saved/A.jsonl", phase: "running" };
+const liveSession = { id: "A", cwd: "/project", file: "/saved/A.jsonl", state: "running" };
 
 describe("PiMux", () => {
   it("runs detached new in the requested cwd and reads the first line ID", async () => {
@@ -33,10 +33,22 @@ describe("PiMux", () => {
   );
 
   it("parses the JSON live list, including unsaved sessions", async () => {
-    const sessions = [liveSession, { id: "unsaved", cwd: "/other", file: null, phase: null }];
+    const sessions = [liveSession, { id: "unsaved", cwd: "/other", file: null, state: null }];
     const execute = vi.fn().mockResolvedValue(JSON.stringify(sessions));
     expect(await new PiMux(execute).list()).toEqual(sessions);
     expect(execute).toHaveBeenCalledExactlyOnceWith("pi-mux", ["list"], undefined);
+  });
+
+  it("rejects a legacy phase-only response instead of using a fallback", async () => {
+    const mux = new PiMux(
+      vi
+        .fn()
+        .mockResolvedValue(
+          JSON.stringify([{ id: "A", cwd: "/project", file: null, phase: "running" }]),
+        ),
+    );
+    await expect(mux.list()).rejects.toThrow("Invalid pi-mux list response");
+    expect(await mux.aliveSessionIds(["A"])).toBeNull();
   });
 
   it("returns an empty list when the server is not running", async () => {
@@ -45,9 +57,9 @@ describe("PiMux", () => {
     expect(await mux.aliveSessionIds(["A"])).toEqual(new Set());
   });
 
-  it("uses list membership rather than its phase value for liveness", async () => {
+  it("uses list membership rather than its state value for liveness", async () => {
     const mux = new PiMux(
-      vi.fn().mockResolvedValue(JSON.stringify([{ ...liveSession, phase: null }])),
+      vi.fn().mockResolvedValue(JSON.stringify([{ ...liveSession, state: null }])),
     );
     expect(await mux.aliveSessionIds(["A", "B"])).toEqual(new Set(["A"]));
   });
@@ -58,7 +70,7 @@ describe("PiMux", () => {
     "{}",
     "[null]",
     '[{"id":"A"}]',
-    '[{"id":42,"cwd":"/p","file":null,"phase":null}]',
+    '[{"id":42,"cwd":"/p","file":null,"state":null}]',
   ])("rejects malformed live lists and treats liveness as unknown: %s", async (output) => {
     const mux = new PiMux(vi.fn().mockResolvedValue(output));
     await expect(mux.list()).rejects.toThrow();

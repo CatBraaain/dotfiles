@@ -188,6 +188,18 @@ export class VSCodeFixture {
     await row.locator(".session-name").describe(`${key} session name`).click({ steps: 15 });
   }
 
+  setSessionPhase(key: string, phase: string | null): void {
+    const runtime = this.sessionRuntime(key);
+    if (runtime === undefined) throw new Error(`Pi-mux runtime not found for session ${key}`);
+    const option = JSON.stringify({ version: 1, sessionId: this.sessions[key].id, state: phase });
+    const args = ["set-option", "-p", "-t", runtime.target];
+    if (phase === null) {
+      this.tmux([...args, "-u", "@pi_session_state"]);
+      return;
+    }
+    this.tmux([...args, "@pi_session_state", option]);
+  }
+
   /** Add a fixture session to its workspace's active-sessions map and reload
    * the list. The shared display stops a still-archived previous display
    * when it moves away, so tests that keep a fixture Pi alive across a
@@ -235,7 +247,9 @@ export class VSCodeFixture {
 
   async expectNativeDisplay(key: string): Promise<string> {
     const { cwd } = this.sessions[key];
-    await expect.poll(() => this.sessionRuntime(key)).toBeDefined();
+    await expect
+      .poll(() => this.sessionRuntime(key), { message: `Live Pi runtime for ${key}` })
+      .toBeDefined();
     const runtime = this.sessionRuntime(key)!;
     await this.expectPiVisible(cwd);
     await expect

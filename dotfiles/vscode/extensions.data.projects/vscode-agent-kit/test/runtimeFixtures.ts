@@ -1,9 +1,10 @@
 import { vi } from "vitest";
 import type { PiRuntime, TmuxClient, TmuxRuntimeStore } from "../src/tmux";
-import type { PiMux, PiSession } from "../src/piMux";
+import type { PiMux, PiMuxSession, PiSession } from "../src/piMux";
 
 export function fakeRuntimes() {
   const live = new Map<string, PiRuntime>();
+  const phases = new Map<string, string | null>();
   const client = { pid: 123, name: "/dev/fixture", target: "" };
   const open = vi.fn((session: PiSession) => {
     const runtime = live.get(session.sessionId) ?? {
@@ -20,12 +21,12 @@ export function fakeRuntimes() {
       open({ sessionId, cwd });
       return sessionId;
     }),
-    list: vi.fn(async () =>
+    list: vi.fn(async (): Promise<PiMuxSession[]> =>
       [...live.values()].map((runtime) => ({
         id: runtime.sessionId,
         cwd: runtime.cwd,
         file: null,
-        phase: null,
+        state: phases.get(runtime.sessionId) ?? null,
       })),
     ),
     aliveSessionIds: vi.fn(
@@ -51,6 +52,7 @@ export function fakeRuntimes() {
     mux: muxMocks as unknown as PiMux,
     mocks: { ...tmuxMocks, ...muxMocks, open },
     live,
+    phases,
     client,
   };
 }

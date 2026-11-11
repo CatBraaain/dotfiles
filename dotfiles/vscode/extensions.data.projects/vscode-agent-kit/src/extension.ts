@@ -33,8 +33,6 @@ export function activate(context: vscode.ExtensionContext): void {
     startNewSession: (cwd) => launcher.start(cwd),
   });
 
-  // The pi extension `session-state` rewrites the store on every sent
-  // message and phase change; watching it keeps the list live.
   const stateWatcher = vscode.workspace.createFileSystemWatcher(
     new vscode.RelativePattern(vscode.Uri.file(dirname(statePath)), basename(statePath)),
   );

@@ -123,6 +123,7 @@ test(
       const previousNames = await names.allTextContents();
       expect(previousNames.length).toBeGreaterThan(0);
       await host.refreshSessions();
+      await receive({ type: "loading", displayedSessionId: host.sessions.A.id });
       await expect(status).toHaveText("Refreshing sessions…");
       await expect(names).toHaveText(previousNames);
       await expect(
@@ -144,6 +145,7 @@ test(
 
     await test.step("Show a retrieval error without an empty or loading message", async () => {
       await host.refreshSessions();
+      await receive({ type: "loading", displayedSessionId: null });
       await expect(sessions).toHaveText("Loading sessions…");
       await receive({ type: "sessionsError", message: "Failed to read Pi sessions" });
       await expect(status).toHaveText("Failed to read Pi sessions");
@@ -207,7 +209,8 @@ function holdSessionResponses(): void {
     const message = (event as MessageEvent).data as ExtensionMessage & {
       sessionListInjected?: boolean;
     };
-    if (!message || !["sessions", "sessionsError", "error"].includes(message.type)) return;
+    if (!message || !["loading", "sessions", "sessionsError", "error"].includes(message.type))
+      return;
     if (message.sessionListInjected) return;
     controlled.sessionListResponses.push(message);
     event.stopImmediatePropagation();

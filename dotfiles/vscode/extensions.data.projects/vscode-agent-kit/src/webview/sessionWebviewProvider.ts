@@ -6,7 +6,6 @@ import {
   readSessionStateStore,
   registerWorkspace,
   registeredWorkspaceCwds,
-  sessionPhases,
   unarchiveSessions,
   unregisterWorkspace,
   type SessionPhase,
@@ -22,6 +21,7 @@ import { sessionViewGroups } from "./sessionViewData";
 import { webviewHtml } from "./webviewHtml";
 
 export const VIEW_ID = "piSessions.sessions";
+const PHASE_REFRESH_INTERVAL_MS = 1_000;
 
 export interface SessionWebviewDeps {
   extensionUri: string;
@@ -38,10 +38,14 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private sessionsById = new Map<string, SessionSummary>();
   private state: WebviewState | undefined;
   private runningSessionIds = new Set<string>();
+  private runningObservations = new Map<string, symbol>();
   private unreadSessionIds = new Set<string>();
   private refreshVersion = 0;
   private latestSelection: symbol | undefined;
   private pendingRefresh: Promise<void> | undefined;
+  private pendingPhaseRefresh: Promise<void> | undefined;
+  private phaseRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private phaseRefreshVersion = 0;
   private latestListMessage:
     | Extract<ExtensionMessage, { type: "loading" | "sessions" | "sessionsError" }>
     | undefined;
@@ -49,6 +53,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   constructor(private readonly deps: SessionWebviewDeps) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
+    this.stopPhasePolling();
     this.view = webviewView;
     const extensionUri = vscode.Uri.file(this.deps.extensionUri);
     const clientRoot = vscode.Uri.joinPath(extensionUri, "dist-webview");
@@ -60,11 +65,16 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       vscode.Uri.joinPath(clientRoot, "webview", "client.js"),
     );
     webviewView.onDidDispose(() => {
-      if (this.view === webviewView) this.view = undefined;
+      if (this.view !== webviewView) return;
+      this.stopPhasePolling();
+      this.view = undefined;
+      this.refreshVersion += 1;
     });
     webviewView.webview.onDidReceiveMessage((message: unknown) => this.handleMessage(message));
     webviewView.onDidChangeVisibility(() => {
-      if (webviewView.visible && this.view === webviewView) void this.refresh();
+      if (this.view !== webviewView) return;
+      this.stopPhasePolling();
+      if (webviewView.visible) void this.refresh();
     });
     webviewView.webview.html = webviewHtml({
       scriptUri: scriptUri.toString(),
@@ -74,8 +84,10 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   }
 
   dispose(): void {
+    this.stopPhasePolling();
     this.view = undefined;
     this.runningSessionIds.clear();
+    this.runningObservations.clear();
     this.unreadSessionIds.clear();
     this.refreshVersion += 1;
   }
@@ -83,13 +95,87 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   /** Re-read the session state store and the registered groups' session
    * files, then send display-only data to the webview. */
   async refresh(): Promise<void> {
+    this.stopPhasePolling();
     const pending = this.refreshSessions();
     this.pendingRefresh = pending;
     try {
       await pending;
     } finally {
-      if (this.pendingRefresh === pending) this.pendingRefresh = undefined;
+      if (this.pendingRefresh === pending) {
+        this.pendingRefresh = undefined;
+        this.schedulePhaseRefresh();
+      }
     }
+  }
+
+  private stopPhasePolling(): void {
+    clearTimeout(this.phaseRefreshTimer);
+    this.phaseRefreshTimer = undefined;
+    this.phaseRefreshVersion += 1;
+  }
+
+  private schedulePhaseRefresh(): void {
+    if (
+      !this.view?.visible ||
+      this.pendingRefresh !== undefined ||
+      this.pendingPhaseRefresh !== undefined ||
+      this.latestListMessage?.type !== "sessions"
+    )
+      return;
+    clearTimeout(this.phaseRefreshTimer);
+    this.phaseRefreshTimer = setTimeout(() => void this.refreshPhases(), PHASE_REFRESH_INTERVAL_MS);
+    this.phaseRefreshTimer.unref();
+  }
+
+  private async refreshPhases(): Promise<void> {
+    this.phaseRefreshTimer = undefined;
+    if (
+      !this.view?.visible ||
+      this.pendingRefresh !== undefined ||
+      this.pendingPhaseRefresh !== undefined
+    )
+      return;
+    const pending = this.updateLivePhases();
+    this.pendingPhaseRefresh = pending;
+    try {
+      await pending;
+    } finally {
+      this.pendingPhaseRefresh = undefined;
+      this.schedulePhaseRefresh();
+    }
+  }
+
+  private async updateLivePhases(): Promise<void> {
+    const state = this.state;
+    if (state === undefined) return;
+    const version = this.refreshVersion;
+    const phaseVersion = this.phaseRefreshVersion;
+    const phases = await this.livePhases();
+    if (
+      !this.view?.visible ||
+      this.state !== state ||
+      version !== this.refreshVersion ||
+      phaseVersion !== this.phaseRefreshVersion
+    )
+      return;
+    const archivedIds = new Set(
+      state.groups.flatMap((group) =>
+        group.sessions.filter((session) => session.isArchived).map((session) => session.sessionId),
+      ),
+    );
+    this.updateUnread([...this.sessionsById.values()], { archivedIds, livePhases: phases });
+    this.postState({
+      ...state,
+      groups: state.groups.map((group) => ({
+        ...group,
+        sessions: group.sessions.map((session) => ({
+          ...session,
+          state: session.isArchived ? undefined : phases?.get(session.sessionId),
+          hasUnread: this.unreadSessionIds.has(session.sessionId),
+        })),
+      })),
+      displayedSessionId: this.deps.registry.displayedSessionId,
+    });
   }
 
   private async refreshSessions(): Promise<void> {
@@ -104,7 +190,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     const data = store.status === "ok" ? store.data : undefined;
-    const storePhases = sessionPhases(data);
     const activeIds = activeSessionIds(data);
     const registeredCwds = registeredWorkspaceCwds(data);
 
@@ -123,13 +208,10 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     const archivedIds = new Set(
       sessions.map((session) => session.sessionId).filter((id) => !activeIds.has(id)),
     );
-    const phases = await this.livePhases(storePhases);
+    const phases = await this.livePhases();
     if (version !== this.refreshVersion) return;
-    this.updateUnread(sessions, {
-      archivedIds,
-      storePhases,
-      livePhases: phases,
-    });
+    for (const sessionId of archivedIds) phases?.delete(sessionId);
+    this.updateUnread(sessions, { archivedIds, livePhases: phases });
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
     this.postState({
       groups: sessionViewGroups(sessions, {
@@ -146,21 +228,25 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     sessions: readonly SessionSummary[],
     snapshot: {
       archivedIds: ReadonlySet<string>;
-      storePhases: ReadonlyMap<string, SessionPhase>;
       livePhases: ReadonlyMap<string, SessionPhase> | null;
     },
   ): void {
     const runningIds = new Set<string>();
     const unreadIds = new Set<string>();
+    const runningObservations = new Map<string, symbol>();
     for (const { sessionId } of sessions) {
       if (snapshot.archivedIds.has(sessionId)) continue;
+      const phase = snapshot.livePhases?.get(sessionId);
+      const observation = phase === "running" ? Symbol() : this.runningObservations.get(sessionId);
+      if (observation !== undefined && (phase !== undefined || snapshot.livePhases === null)) {
+        runningObservations.set(sessionId, observation);
+      }
       const hasObservedRun = this.runningSessionIds.has(sessionId);
-      if (snapshot.livePhases === null && snapshot.storePhases.has(sessionId)) {
+      if (snapshot.livePhases === null) {
         if (hasObservedRun) runningIds.add(sessionId);
         if (this.unreadSessionIds.has(sessionId)) unreadIds.add(sessionId);
         continue;
       }
-      const phase = snapshot.livePhases?.get(sessionId);
       if (phase === "running" || (phase === "waiting-approval" && hasObservedRun)) {
         runningIds.add(sessionId);
       }
@@ -169,20 +255,22 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       if (isUnreadCompletion) unreadIds.add(sessionId);
     }
     this.runningSessionIds = runningIds;
+    this.runningObservations = runningObservations;
     this.unreadSessionIds = unreadIds;
   }
 
-  private async livePhases(
-    storePhases: ReadonlyMap<string, SessionPhase>,
-  ): Promise<Map<string, SessionPhase> | null> {
-    const phases = new Map<string, SessionPhase>();
-    if (storePhases.size === 0) return phases;
-    const aliveIds = await this.deps.registry.mux.aliveSessionIds([...storePhases.keys()]);
-    if (aliveIds === null) return null;
-    for (const [sessionId, phase] of storePhases) {
-      if (aliveIds.has(sessionId)) phases.set(sessionId, phase);
+  private async livePhases(): Promise<Map<string, SessionPhase> | null> {
+    try {
+      const phases = new Map<string, SessionPhase>();
+      for (const { id, state: phase } of await this.deps.registry.mux.list()) {
+        if (phase === "running" || phase === "waiting-approval" || phase === "waiting-user") {
+          phases.set(id, phase);
+        }
+      }
+      return phases;
+    } catch {
+      return null;
     }
-    return phases;
   }
 
   private async handleMessage(message: unknown): Promise<void> {
@@ -270,6 +358,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
 
     this.refreshVersion += 1;
     this.runningSessionIds.delete(sessionId);
+    this.runningObservations.delete(sessionId);
     this.unreadSessionIds.delete(sessionId);
     if (this.state !== undefined) {
       this.postState({
@@ -384,12 +473,16 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
 
     terminal.show();
     await this.stopArchivedDisplayedSession(previousSessionId);
-    const store = readSessionStateStore(this.deps.statePath);
-    const data = store.status === "ok" ? store.data : undefined;
-    if (sessionPhases(data).get(sessionId) === "waiting-user") {
-      this.runningSessionIds.delete(sessionId);
+    this.refreshVersion += 1;
+    this.stopPhasePolling();
+    const runningObservation = this.runningObservations.get(sessionId);
+    const phases = await this.livePhases();
+    if (runningObservation === this.runningObservations.get(sessionId)) {
+      if (phases?.get(sessionId) === "waiting-user") {
+        this.runningSessionIds.delete(sessionId);
+      }
+      this.unreadSessionIds.delete(sessionId);
     }
-    this.unreadSessionIds.delete(sessionId);
     // Re-send the list so the webview's selection display follows the
     // session the shared terminal now shows.
     await this.refresh();

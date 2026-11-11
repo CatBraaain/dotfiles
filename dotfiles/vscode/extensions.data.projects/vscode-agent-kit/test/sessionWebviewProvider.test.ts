@@ -13,7 +13,7 @@ import {
   type SessionStateStoreData,
 } from "../src/sessionStateStore";
 import { SessionLauncher } from "../src/launcher";
-import { PiMux } from "../src/piMux";
+import { PiMux, type PiMuxSession } from "../src/piMux";
 import { TerminalRegistry } from "../src/terminalRegistry";
 import { editorTerminals } from "../src/terminals";
 import { encodeCwdDirName } from "../src/paths";
@@ -57,6 +57,7 @@ const activeSessionId = "00000000-0000-4000-8000-000000000001";
 const inactiveSessionId = "00000000-0000-4000-8000-000000000002";
 const unknownSessionId = "00000000-0000-4000-8000-000000000099";
 let root: string;
+const providers: SessionWebviewProvider[] = [];
 
 beforeEach(async () => {
   root = await tempDir("pi-webview-provider-test-");
@@ -64,6 +65,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  for (const provider of providers.splice(0)) provider.dispose();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await cleanup(root);
@@ -72,6 +75,7 @@ afterEach(async () => {
 function createView() {
   let receiveMessage: ((message: unknown) => Promise<void>) | undefined;
   let visibilityListener: (() => void) | undefined;
+  let disposeListener: (() => void) | undefined;
   const postMessage = vi.fn().mockResolvedValue(true);
   const view = {
     visible: true,
@@ -91,11 +95,15 @@ function createView() {
         return { dispose: () => {} };
       },
     },
-    onDidDispose: () => ({ dispose: () => {} }),
+    onDidDispose: (listener: () => void) => {
+      disposeListener = listener;
+      return { dispose: () => {} };
+    },
   };
   return {
     view,
     postMessage,
+    dispose: () => disposeListener?.(),
     setVisible: (visible: boolean) => {
       view.visible = visible;
       visibilityListener?.();
@@ -141,6 +149,7 @@ function createProvider(
     ...deps,
     statePath,
   } as ConstructorParameters<typeof SessionWebviewProvider>[0]);
+  providers.push(provider);
   return { provider, statePath };
 }
 
@@ -198,15 +207,7 @@ async function unreadFixture() {
     phase: SessionPhase | undefined,
     sessionId = activeSessionId,
   ): Promise<void> {
-    expect(
-      mutateSessionStateStore(fixture.statePath, (store) => {
-        const entry = store["active-workspaces"][root]?.["active-sessions"]?.[sessionId];
-        if (entry === undefined) throw new Error("session entry missing");
-        if (phase === undefined) delete entry.state;
-        else entry.state = phase;
-        return true;
-      }).ok,
-    ).toBe(true);
+    fixture.phases.set(sessionId, phase ?? null);
     await fixture.provider.refresh();
   }
 
@@ -230,20 +231,23 @@ async function unreadFixture() {
   }
 
   function holdRuntimeQuery() {
-    let release: ((ids: Set<string>) => void) | undefined;
+    let release: (() => void) | undefined;
     let signalStarted: (() => void) | undefined;
-    const response = new Promise<Set<string>>((resolve) => {
+    const response = new Promise<void>((resolve) => {
       release = resolve;
     });
     const started = new Promise<void>((resolve) => {
       signalStarted = resolve;
     });
-    fixture.mocks.aliveSessionIds.mockImplementationOnce(() => {
+    const list = fixture.mocks.list.getMockImplementation()!;
+    fixture.mocks.list.mockImplementationOnce(async () => {
+      const snapshot = await list();
       signalStarted!();
-      return response;
+      await response;
+      return snapshot;
     });
     function finish() {
-      release!(new Set(fixture.live.keys()));
+      release!();
     }
     return { started, finish };
   }
@@ -277,7 +281,7 @@ async function loadingFixture() {
     }),
   );
   webview.postMessage.mockClear();
-  mocks.aliveSessionIds.mockClear();
+  mocks.list.mockClear();
   return { provider, statePath, webview, mocks };
 }
 
@@ -379,9 +383,9 @@ describe("SessionWebviewProvider", () => {
     const listSessions = vi.spyOn(sessionStore, "listSessions");
     const { provider, webview, mocks } = await loadingFixture();
     listSessions.mockClear();
-    const completions: ((ids: Set<string>) => void)[] = [];
-    mocks.aliveSessionIds.mockImplementation(
-      () => new Promise<Set<string>>((resolve) => completions.push(resolve)),
+    const completions: ((ids: PiMuxSession[]) => void)[] = [];
+    mocks.list.mockImplementation(
+      () => new Promise<PiMuxSession[]>((resolve) => completions.push(resolve)),
     );
     const firstRefresh = provider.refresh();
     await vi.waitFor(() => expect(completions).toHaveLength(1));
@@ -392,7 +396,7 @@ describe("SessionWebviewProvider", () => {
       readyFinished = true;
     });
     try {
-      completions[0](new Set());
+      completions[0]([]);
       await firstRefresh;
       expect(readyFinished).toBe(false);
       expect(listSessions).toHaveBeenCalledTimes(2);
@@ -400,7 +404,7 @@ describe("SessionWebviewProvider", () => {
         true,
       );
     } finally {
-      for (const finish of completions) finish(new Set([activeSessionId]));
+      for (const finish of completions) finish([]);
       await Promise.all([latestRefresh, ready]);
     }
     expect(readyFinished).toBe(true);
@@ -412,18 +416,18 @@ describe("SessionWebviewProvider", () => {
 
   it("announces loading before asynchronous refresh work finishes", async () => {
     const { provider, webview, mocks } = await loadingFixture();
-    let finish!: (ids: Set<string>) => void;
-    const pending = new Promise<Set<string>>((resolve) => {
+    let finish!: (ids: PiMuxSession[]) => void;
+    const pending = new Promise<PiMuxSession[]>((resolve) => {
       finish = resolve;
     });
-    mocks.aliveSessionIds.mockReturnValueOnce(pending);
+    mocks.list.mockReturnValueOnce(pending);
 
     const refreshing = provider.refresh();
     try {
-      await vi.waitFor(() => expect(mocks.aliveSessionIds).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(mocks.list).toHaveBeenCalledOnce());
       expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual(["loading"]);
     } finally {
-      finish(new Set([activeSessionId]));
+      finish([]);
       await refreshing;
     }
     expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
@@ -434,15 +438,15 @@ describe("SessionWebviewProvider", () => {
 
   it("reports operation errors separately while a list refresh is pending", async () => {
     const { provider, webview, mocks } = await loadingFixture();
-    let finish!: (ids: Set<string>) => void;
-    mocks.aliveSessionIds.mockReturnValueOnce(
-      new Promise<Set<string>>((resolve) => {
+    let finish!: (ids: PiMuxSession[]) => void;
+    mocks.list.mockReturnValueOnce(
+      new Promise<PiMuxSession[]>((resolve) => {
         finish = resolve;
       }),
     );
     const refreshing = provider.refresh();
     try {
-      await vi.waitFor(() => expect(mocks.aliveSessionIds).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(mocks.list).toHaveBeenCalledOnce());
       await webview.receive({ type: "addWorkspace", path: "relative" });
       expect(webview.postMessage).toHaveBeenLastCalledWith({
         type: "error",
@@ -453,7 +457,7 @@ describe("SessionWebviewProvider", () => {
         "error",
       ]);
     } finally {
-      finish(new Set([activeSessionId]));
+      finish([]);
       await refreshing;
     }
     expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
@@ -465,10 +469,10 @@ describe("SessionWebviewProvider", () => {
 
   it("keeps loading until the newest overlapping refresh finishes", async () => {
     const { provider, webview, mocks } = await loadingFixture();
-    const completions: ((ids: Set<string>) => void)[] = [];
-    mocks.aliveSessionIds.mockImplementation(
+    const completions: ((ids: PiMuxSession[]) => void)[] = [];
+    mocks.list.mockImplementation(
       () =>
-        new Promise<Set<string>>((resolve) => {
+        new Promise<PiMuxSession[]>((resolve) => {
           completions.push(resolve);
         }),
     );
@@ -478,14 +482,14 @@ describe("SessionWebviewProvider", () => {
       await vi.waitFor(() => expect(completions).toHaveLength(1));
       secondRefresh = provider.refresh();
       await vi.waitFor(() => expect(completions).toHaveLength(2));
-      completions[0](new Set());
+      completions[0]([]);
       await firstRefresh;
       expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
         "loading",
         "loading",
       ]);
     } finally {
-      for (const finish of completions) finish(new Set([activeSessionId]));
+      for (const finish of completions) finish([]);
       await Promise.all([firstRefresh, secondRefresh]);
     }
     expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
@@ -497,19 +501,19 @@ describe("SessionWebviewProvider", () => {
 
   it("keeps the latest refresh error when an older refresh succeeds later", async () => {
     const { provider, statePath, webview, mocks } = await loadingFixture();
-    let finish!: (ids: Set<string>) => void;
-    mocks.aliveSessionIds.mockReturnValueOnce(
-      new Promise<Set<string>>((resolve) => {
+    let finish!: (ids: PiMuxSession[]) => void;
+    mocks.list.mockReturnValueOnce(
+      new Promise<PiMuxSession[]>((resolve) => {
         finish = resolve;
       }),
     );
     const refreshing = provider.refresh();
     try {
-      await vi.waitFor(() => expect(mocks.aliveSessionIds).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(mocks.list).toHaveBeenCalledOnce());
       await writeFile(statePath, "invalid json");
       await provider.refresh();
     } finally {
-      finish(new Set([activeSessionId]));
+      finish([]);
       await refreshing;
     }
     expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
@@ -676,18 +680,19 @@ describe("SessionWebviewProvider", () => {
     expect(activeSessionIds(readStore(statePath))).toEqual(new Set([activeSessionId]));
   });
 
-  it("sends the stored phase of a session listed by pi-mux", async () => {
+  it("uses the mux phase instead of a conflicting JSON phase", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),
     ]);
-    const { store, mux, live } = fakeRuntimes();
+    const { store, mux, live, phases } = fakeRuntimes();
     const registry = new TerminalRegistry(store, editorTerminals(store), mux);
     live.set(activeSessionId, {
       sessionId: activeSessionId,
       cwd: root,
       target: `pi-${activeSessionId}`,
     });
+    phases.set(activeSessionId, "waiting-approval");
     const { provider, statePath } = createProvider({ sessionDir, registry });
     setUpStore(statePath, root, [activeSessionId]);
     expect(
@@ -704,7 +709,7 @@ describe("SessionWebviewProvider", () => {
     await provider.refresh();
 
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].state).toBe(
-      "running",
+      "waiting-approval",
     );
   });
 
@@ -753,7 +758,7 @@ describe("SessionWebviewProvider", () => {
       cwd: root,
       target: `pi-${activeSessionId}`,
     });
-    mocks.aliveSessionIds.mockResolvedValue(null);
+    mocks.list.mockRejectedValue(new Error("lookup failed"));
     const { provider, statePath } = createProvider({ sessionDir, registry });
     setUpStore(statePath, root, [activeSessionId]);
     expect(
@@ -773,6 +778,205 @@ describe("SessionWebviewProvider", () => {
       webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].state,
     ).toBeUndefined();
     expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it("projects mux phases into icons without JSON phase writes", async () => {
+    const { setPhase, row, sentState, statePath } = await unreadFixture();
+    const savedState = await readFile(statePath, "utf8");
+    await setPhase("running");
+    expect(row()).toMatchObject({ state: "running", hasUnread: false });
+    expect(JSON.stringify(sessionListView(sentState()))).toContain('"data-state":"running"');
+    expect(await readFile(statePath, "utf8")).toBe(savedState);
+  });
+
+  it("projects the public state field through the real mux adapter and client", async () => {
+    const sessionDir = join(root, "sessions");
+    await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "active.jsonl", [
+      header({ id: activeSessionId, cwd: root }),
+    ]);
+    let phase: SessionPhase = "running";
+    const execute = vi.fn(async () =>
+      JSON.stringify([{ id: activeSessionId, cwd: root, file: null, state: phase }]),
+    );
+    const { store } = fakeRuntimes();
+    const mux = new PiMux(execute);
+    const registry = new TerminalRegistry(store, editorTerminals(store), mux);
+    const { provider, statePath } = createProvider({ sessionDir, registry });
+    setUpStore(statePath, root, [activeSessionId]);
+    const savedState = await readFile(statePath, "utf8");
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await webview.receive({ type: "ready" });
+    for (const next of ["running", "waiting-approval", "waiting-user"] as const) {
+      phase = next;
+      await provider.refresh();
+      const state = webview.postMessage.mock.calls.at(-1)?.[0].state as WebviewState;
+      expect(state.groups[0].sessions[0].state).toBe(phase);
+      expect(JSON.stringify(sessionListView(state))).toContain(`"data-state":"${phase}"`);
+    }
+    expect(execute).toHaveBeenCalledWith("pi-mux", ["list"], undefined);
+    expect(await readFile(statePath, "utf8")).toBe(savedState);
+  });
+
+  describe("automatic phase refresh", () => {
+    beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
+
+    it("updates icons and hints after one second without scanning or changing JSON", async () => {
+      const { phases, row, sentState, statePath, mocks, webview } = await unreadFixture();
+      const savedState = await readFile(statePath, "utf8");
+      const scan = vi.spyOn(sessionStore, "listSessions");
+      mocks.list.mockClear();
+      webview.postMessage.mockClear();
+      phases.set(activeSessionId, "running");
+      await vi.advanceTimersByTimeAsync(999);
+      expect(mocks.list).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(row()).toMatchObject({ state: "running", hasUnread: false });
+      const runningView = JSON.stringify(sessionListView(sentState()));
+      expect(runningView).toContain("Running");
+      expect(runningView).toContain("M21 12a9 9");
+      phases.set(activeSessionId, "waiting-approval");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(row().state).toBe("waiting-approval");
+      expect(JSON.stringify(sessionListView(sentState()))).toContain("Waiting for approval");
+      phases.set(activeSessionId, "waiting-user");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+      expect(JSON.stringify(sessionListView(sentState()))).toContain("Unread");
+      expect(scan).not.toHaveBeenCalled();
+      expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
+        "sessions",
+        "sessions",
+        "sessions",
+      ]);
+      expect(await readFile(statePath, "utf8")).toBe(savedState);
+    });
+
+    it("retries one second after failure without losing a running observation or unread", async () => {
+      const { phases, mocks, row, setPhase } = await unreadFixture();
+      await setPhase("running");
+      mocks.list.mockRejectedValueOnce(new Error("unavailable"));
+      phases.set(activeSessionId, "waiting-user");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(row()).toMatchObject({ state: undefined, hasUnread: false });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+      mocks.list.mockRejectedValueOnce(new Error("unavailable"));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(row()).toMatchObject({ state: undefined, hasUnread: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+      expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+    });
+
+    it.each([null, "unknown", "absent"])(
+      "resets an observed run and unread for %s",
+      async (phase) => {
+        const { phases, live, row, setPhase } = await unreadFixture();
+        await setPhase("running");
+        await setPhase("waiting-user");
+        phases.set(activeSessionId, phase);
+        if (phase === "absent") live.delete(activeSessionId);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(row()).toMatchObject({ state: undefined, hasUnread: false });
+        live.set(activeSessionId, { sessionId: activeSessionId, cwd: root, target: "restored" });
+        phases.set(activeSessionId, "waiting-user");
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(row().hasUnread).toBe(false);
+      },
+    );
+
+    it("waits for a slow query to finish before starting the next interval", async () => {
+      const { mocks, holdRuntimeQuery } = await unreadFixture();
+      mocks.list.mockClear();
+      const held = holdRuntimeQuery();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await held.started;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(mocks.list).toHaveBeenCalledTimes(1);
+      held.finish();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(mocks.list).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mocks.list).toHaveBeenCalledTimes(2);
+    });
+
+    it("stops while hidden and fetches immediately when shown again", async () => {
+      const { webview, mocks, phases, row } = await unreadFixture();
+      mocks.list.mockClear();
+      webview.setVisible(false);
+      phases.set(activeSessionId, "running");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(mocks.list).not.toHaveBeenCalled();
+      webview.setVisible(true);
+      await webview.receive({ type: "ready" });
+      expect(row().state).toBe("running");
+      expect(mocks.list).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["view", "provider"])(
+      "drops a pending reply and stops after %s disposal",
+      async (target) => {
+        const { provider, webview, mocks, holdRuntimeQuery } = await unreadFixture();
+        mocks.list.mockClear();
+        const held = holdRuntimeQuery();
+        await vi.advanceTimersByTimeAsync(1_000);
+        await held.started;
+        if (target === "view") webview.dispose();
+        else provider.dispose();
+        webview.postMessage.mockClear();
+        held.finish();
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(webview.postMessage).not.toHaveBeenCalled();
+        expect(mocks.list).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("rejects a pre-hide reply after a new visible snapshot", async () => {
+      const { webview, phases, row, holdRuntimeQuery } = await unreadFixture();
+      phases.set(activeSessionId, "running");
+      const held = holdRuntimeQuery();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await held.started;
+      webview.setVisible(false);
+      phases.set(activeSessionId, "waiting-approval");
+      webview.setVisible(true);
+      await webview.receive({ type: "ready" });
+      expect(row().state).toBe("waiting-approval");
+      held.finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(row().state).toBe("waiting-approval");
+    });
+
+    it("does not overwrite a newer refresh or acknowledge a completion twice", async () => {
+      const { webview, phases, row, setPhase, holdRuntimeQuery } = await unreadFixture();
+      await setPhase("running");
+      phases.set(activeSessionId, "waiting-user");
+      const held = holdRuntimeQuery();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await held.started;
+      await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      expect(row().hasUnread).toBe(false);
+      held.finish();
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: false });
+    });
+
+    it("keeps a newer list acquisition error instead of publishing a pending phase reply", async () => {
+      const { provider, statePath, webview, holdRuntimeQuery } = await unreadFixture();
+      const held = holdRuntimeQuery();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await held.started;
+      await writeFile(statePath, "invalid JSON");
+      await provider.refresh();
+      held.finish();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(webview.postMessage).toHaveBeenLastCalledWith({
+        type: "sessionsError",
+        message: expect.any(String),
+      });
+    });
   });
 
   describe("unread completion", () => {
@@ -953,6 +1157,52 @@ describe("SessionWebviewProvider", () => {
       expect(row().hasUnread).toBe(true);
     });
 
+    it.each(["running", "completed"] as const)(
+      "keeps a newer %s run when an older open phase query finishes",
+      async (newerRun) => {
+        const { mocks, webview, phases, setPhase, row, holdRuntimeQuery } = await unreadFixture();
+        await setPhase("running");
+        await setPhase("waiting-user");
+        const list = mocks.list.getMockImplementation()!;
+        mocks.list.mockImplementationOnce(list);
+        const held = holdRuntimeQuery();
+        const opening = webview.receive({ type: "openSession", sessionId: activeSessionId });
+        try {
+          await held.started;
+          await setPhase("running");
+          if (newerRun === "completed") await setPhase("waiting-user");
+          else phases.set(activeSessionId, "waiting-user");
+        } finally {
+          held.finish();
+          await opening;
+        }
+        expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+        expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["same-completion", "other-session"] as const)(
+      "acknowledges the selected completion after a concurrent %s refresh",
+      async (refreshKind) => {
+        const { provider, mocks, webview, setPhase, row, holdRuntimeQuery } = await unreadFixture();
+        await setPhase("running");
+        await setPhase("waiting-user");
+        const list = mocks.list.getMockImplementation()!;
+        mocks.list.mockImplementationOnce(list);
+        const held = holdRuntimeQuery();
+        const opening = webview.receive({ type: "openSession", sessionId: activeSessionId });
+        try {
+          await held.started;
+          if (refreshKind === "other-session") await setPhase("running", inactiveSessionId);
+          else await provider.refresh();
+        } finally {
+          held.finish();
+          await opening;
+        }
+        expect(row()).toMatchObject({ state: "waiting-user", hasUnread: false });
+      },
+    );
+
     it("does not let a delayed displayed completion clear a newer background completion", async () => {
       const { webview, setPhase, row, holdRuntimeQuery } = await unreadFixture();
       await webview.receive({ type: "openSession", sessionId: activeSessionId });
@@ -991,9 +1241,14 @@ describe("SessionWebviewProvider", () => {
       const held = holdRuntimeQuery();
       const completion = setPhase("waiting-user");
       await held.started;
-      mocks.aliveSessionIds.mockResolvedValueOnce(null);
+      const sessions = await mocks.list();
+      mocks.list
+        .mockResolvedValueOnce(sessions)
+        .mockResolvedValueOnce(sessions)
+        .mockRejectedValueOnce(new Error("lookup failed"));
 
       await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
       expect(row().hasUnread).toBe(false);
       held.finish();
       await completion;
@@ -1004,9 +1259,11 @@ describe("SessionWebviewProvider", () => {
     it("keeps tracking a running session selected during a transient pi-mux query failure", async () => {
       const { mocks, webview, setPhase, row } = await unreadFixture();
       await setPhase("running");
-      mocks.aliveSessionIds.mockResolvedValueOnce(null);
+      const sessions = await mocks.list();
+      mocks.list.mockResolvedValueOnce(sessions).mockRejectedValueOnce(new Error("lookup failed"));
 
       await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
       await setPhase("waiting-user");
       expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
     });
@@ -1017,7 +1274,7 @@ describe("SessionWebviewProvider", () => {
       await setPhase("waiting-user");
       expect(row().hasUnread).toBe(true);
 
-      mocks.aliveSessionIds.mockResolvedValueOnce(null);
+      mocks.list.mockRejectedValueOnce(new Error("lookup failed"));
       await provider.refresh();
       expect(row()).toMatchObject({ state: undefined, hasUnread: true });
       await provider.refresh();
@@ -1027,7 +1284,7 @@ describe("SessionWebviewProvider", () => {
     it("preserves an observed run when its completion cannot yet be checked against pi-mux", async () => {
       const { provider, mocks, setPhase, row } = await unreadFixture();
       await setPhase("running");
-      mocks.aliveSessionIds.mockResolvedValueOnce(null);
+      mocks.list.mockRejectedValueOnce(new Error("lookup failed"));
       await setPhase("waiting-user");
       expect(row().state).toBeUndefined();
 
@@ -1089,10 +1346,10 @@ describe("SessionWebviewProvider", () => {
     it("ignores a stale refresh that finishes after a newer completion snapshot", async () => {
       const { provider, mocks, setPhase, row } = await unreadFixture();
       await setPhase("running");
-      let finishStale: ((ids: Set<string>) => void) | undefined;
-      mocks.aliveSessionIds.mockImplementationOnce(
+      let finishStale: ((ids: PiMuxSession[]) => void) | undefined;
+      mocks.list.mockImplementationOnce(
         () =>
-          new Promise<Set<string>>((resolve) => {
+          new Promise<PiMuxSession[]>((resolve) => {
             finishStale = resolve;
           }),
       );
@@ -1101,7 +1358,7 @@ describe("SessionWebviewProvider", () => {
         expect(finishStale).toBeDefined();
       });
       await setPhase("waiting-user");
-      finishStale!(new Set([activeSessionId]));
+      finishStale!([{ id: activeSessionId, cwd: root, file: null, state: "running" }]);
       await stale;
 
       expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
@@ -2018,7 +2275,7 @@ describe("SessionWebviewProvider", () => {
             id: runtime.sessionId,
             cwd: runtime.cwd,
             file: null,
-            phase: null,
+            state: null,
           })),
         );
       }
@@ -2595,20 +2852,21 @@ describe("SessionWebviewProvider", () => {
     const opening = new Promise<void>((resolve) => {
       finishOpening = resolve;
     });
+    const { provider, statePath } = createProvider({ sessionDir, registry });
+    setUpStore(statePath, root, [activeSessionId]);
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    mocks.list.mockClear();
     mocks.list.mockImplementationOnce(async () => {
       await opening;
       return [...live.values()].map((runtime) => ({
         id: runtime.sessionId,
         cwd: runtime.cwd,
         file: null,
-        phase: null,
+        state: null,
       }));
     });
-    const { provider, statePath } = createProvider({ sessionDir, registry });
-    setUpStore(statePath, root, [activeSessionId]);
-    const webview = createView();
-    provider.resolveWebviewView(webview.view as never);
-    await provider.refresh();
 
     const first = webview.receive({ type: "openSession", sessionId: activeSessionId });
     await vi.waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(1));
