@@ -41,10 +41,18 @@ const { CustomEntryComponent } = await import(
   ).href
 );
 
+const { theme: activeTheme } = await import(
+  new URL(
+    "./modes/interactive/theme/theme.js",
+    import.meta.resolve("@earendil-works/pi-coding-agent"),
+  ).href
+);
+
 const plainTheme = {
   fg: (_color: string, text: string) => text,
   bold: (text: string) => text,
   bg: (_color: string, text: string) => text,
+  getBgAnsi: (_color: string) => "",
 } as Theme;
 const fakeTui = { requestRender() {} } as unknown as TUI;
 const toolNames = [
@@ -1263,9 +1271,64 @@ describe("collapsed row stamp and background", () => {
     assert.ok(!stripTerminalSequences(row.render(80)[0]!).includes("21:30:03"));
   });
 
+  for (const state of ["arguments", "running", "partial", "success", "error"] as const) {
+    it(`keeps the ${state} background through ANSI resets, ellipses, padding and timestamps`, () => {
+      dispose();
+      const theme = activeTheme;
+      dispose = installToolRowFolding(
+        (row, width) => formatCollapsedToolRow(row, theme, width),
+        theme,
+      );
+      const background =
+        state === "error" ? "toolErrorBg" : state === "success" ? "toolSuccessBg" : "toolPendingBg";
+      const backgroundAnsi = theme.getBgAnsi(background);
+      assert.notEqual(backgroundAnsi, "");
+      for (const path of ["日本語😀.txt", "日本語😀/".repeat(20) + "file.txt"]) {
+        const row = createRow("read");
+        row.updateArgs({ path });
+        if (state === "running") row.markExecutionStarted();
+        if (state !== "arguments" && state !== "running") {
+          row.updateResult(
+            {
+              content: [{ type: "text", text: "output" }],
+              isError: state === "error",
+              timestamp: new Date(2025, 0, 1, 21, 30, 3).getTime(),
+            } as Parameters<ToolExecutionComponent["updateResult"]>[0],
+            state === "partial",
+          );
+        }
+        for (const width of [0, 1, 2, 10, 40, 120]) {
+          const line = row.render(width)[0]!;
+          const plain = stripTerminalSequences(line);
+          const padding = Math.min(1, Math.max(0, width - 1));
+          const content = formatCollapsedToolRow(
+            row as unknown as Parameters<typeof formatCollapsedToolRow>[0],
+            theme,
+            width - padding,
+          );
+          const uncolored = `${" ".repeat(padding)}${content}`;
+          const expected = uncolored + " ".repeat(width - visibleWidth(uncolored)) + "\x1b[49m";
+          assert.equal(line.split(backgroundAnsi).join(""), expected);
+          assert.equal(visibleWidth(line), width);
+          assert.ok(line.startsWith(backgroundAnsi));
+          for (const segment of line.split("\x1b[0m").slice(1)) {
+            if (stripTerminalSequences(segment) !== "") {
+              assert.ok(segment.startsWith(backgroundAnsi), JSON.stringify(segment));
+            }
+          }
+          if (width >= 40 && path.includes("/")) assert.ok(plain.includes("..."));
+          if (width >= 40 && (state === "success" || state === "error")) {
+            assert.ok(plain.endsWith("21:30:03"));
+          }
+        }
+      }
+    });
+  }
+
   it("applies pending, success and error backgrounds to collapsed rows", () => {
     const backgrounds: string[] = [];
     const recording = {
+      ...plainTheme,
       fg: (_color: string, text: string) => text,
       bold: (text: string) => text,
       bg: (color: string, text: string) => {

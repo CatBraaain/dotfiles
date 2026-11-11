@@ -30,7 +30,7 @@ export type ToolRowState = {
 
 export function installToolRowFolding(
   compose: (row: ToolRowState, width: number) => string,
-  theme: Pick<Theme, "bg">,
+  theme: Pick<Theme, "bg" | "getBgAnsi">,
 ): () => void {
   const prototype = ToolExecutionComponent.prototype;
   const originalRender = prototype.render;
@@ -136,7 +136,9 @@ export function installToolRowFolding(
     headerRows.set(component, leading ? 1 : 0);
     return [
       ...(leading ? [""] : []),
-      theme.bg(background, line + rightPadding),
+      theme
+        .bg(background, line + rightPadding)
+        .replaceAll("\x1b[0m", `\x1b[0m${theme.getBgAnsi(background)}`),
       ...(trailing ? [""] : []),
     ];
   }
