@@ -115,10 +115,6 @@ export default function systemPromptExtension(
   pi: ExtensionAPI,
   { templatePath = DEFAULT_TEMPLATE_PATH }: SystemPromptExtensionOptions = {},
 ): void {
-  process.env.PI_README_PATH = getReadmePath();
-  process.env.PI_DOCS_PATH = getDocsPath();
-  process.env.PI_EXAMPLES_PATH = getExamplesPath();
-
   // Run and template state lives in the factory closure, so independent
   // instances never share it.
   let runState: RunPromptState | undefined;

@@ -19,9 +19,6 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SystemMessage, Tool } from "@earendil-works/pi-ai";
 import {
   ExtensionRunner,
-  getDocsPath,
-  getExamplesPath,
-  getReadmePath,
   type BuildSystemPromptOptions,
   type Extension,
   type NormalizedBuildSystemPromptOptions,
@@ -49,7 +46,7 @@ let originalEnvironment: Record<string, string | undefined> = {};
 
 beforeEach(() => {
   originalEnvironment = Object.fromEntries(
-    [...documentationPathNames, "PI_PACKAGE_DIR"].map((name) => [name, process.env[name]]),
+    documentationPathNames.map((name) => [name, process.env[name]]),
   );
 });
 
@@ -260,78 +257,29 @@ function transcriptFor(options: BuildSystemPromptOptions): AgentMessage[] {
 }
 
 describe("documentation asset environment", () => {
-  it("publishes host paths before template loading and before any run", () => {
+  it("leaves missing documentation path variables unset", () => {
     documentationPathNames.forEach((name) => {
       delete process.env[name];
     });
 
-    captureRegistration(() => {
-      throw new Error("Template lookup must wait for session_start");
-    });
-
-    const actualPaths = documentationPathNames.map((name) => process.env[name]);
-    const expectedPaths = [getReadmePath(), getDocsPath(), getExamplesPath()];
-    assert.deepEqual(actualPaths, expectedPaths);
-  });
-
-  it("overwrites inherited asset paths with host API paths", () => {
-    documentationPathNames.forEach((name) => {
-      process.env[name] = "/inherited/stale/path";
-    });
-
+    captureRegistration();
     captureRegistration();
 
     const actualPaths = documentationPathNames.map((name) => process.env[name]);
-    const expectedPaths = [getReadmePath(), getDocsPath(), getExamplesPath()];
-    assert.deepEqual(actualPaths, expectedPaths);
+    assert.deepEqual(actualPaths, [undefined, undefined, undefined]);
   });
 
-  it("reads current host paths again on every factory invocation", () => {
-    captureRegistration();
-    process.env.PI_PACKAGE_DIR = join(getDocsPath(), "reloaded pi package");
-    documentationPathNames.forEach((name) => {
-      process.env[name] = "/changed/after/initialization";
+  it("preserves inherited documentation path variables", () => {
+    const inheritedPaths = documentationPathNames.map((name) => `/inherited/${name}`);
+    documentationPathNames.forEach((name, index) => {
+      process.env[name] = inheritedPaths[index];
     });
 
     captureRegistration();
-
-    const actualPaths = documentationPathNames.map((name) => process.env[name]);
-    const expectedPaths = [getReadmePath(), getDocsPath(), getExamplesPath()];
-    assert.deepEqual(actualPaths, expectedPaths);
-  });
-
-  it("respects PI_PACKAGE_DIR without requiring the assets to exist", () => {
-    const tempRoot = "/tmp/work/dotfiles";
-    mkdirSync(tempRoot, { recursive: true });
-    const directory = mkdtempSync(join(tempRoot, "system-prompt-assets-"));
-    const packageDirectory = join(directory, "missing pi package");
-    try {
-      process.env.PI_PACKAGE_DIR = packageDirectory;
-
-      captureRegistration();
-
-      const actualPaths = documentationPathNames.map((name) => process.env[name]);
-      const expectedPaths = [
-        join(packageDirectory, "README.md"),
-        join(packageDirectory, "docs"),
-        join(packageDirectory, "examples"),
-      ];
-      assert.deepEqual(actualPaths, expectedPaths);
-      assert.equal(process.env.PI_PACKAGE_DIR, packageDirectory);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
-
-  it("uses the host API defaults for an empty PI_PACKAGE_DIR", () => {
-    process.env.PI_PACKAGE_DIR = "";
-
     captureRegistration();
 
     const actualPaths = documentationPathNames.map((name) => process.env[name]);
-    const expectedPaths = [getReadmePath(), getDocsPath(), getExamplesPath()];
-    assert.deepEqual(actualPaths, expectedPaths);
-    assert.equal(process.env.PI_PACKAGE_DIR, "");
+    assert.deepEqual(actualPaths, inheritedPaths);
   });
 });
 
