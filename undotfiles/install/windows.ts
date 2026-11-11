@@ -81,7 +81,6 @@ const managedDevPackages: readonly string[] = [
   // "qishibo.AnotherRedisDesktopManager"
   "AutoHotkey.AutoHotkey", // windows
   "Oven-sh.Bun",
-  "Solidiquis.Erdtree",
   "Git.Git",
   "Casey.Just",
   "RussellBanks.Komac",
