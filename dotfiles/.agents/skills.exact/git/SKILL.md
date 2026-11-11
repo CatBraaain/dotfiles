@@ -25,7 +25,7 @@ PR の作成前、および commit・branch・merge の操作前に対象リポ�
 
 1. 条件: ローカルのリポジトリに規約を述べたドキュメントがあり、今回の操作に必要な規約が特定できるか？
    行動: CONTRIBUTING.md、`.github/`（CONTRIBUTING、PULL_REQUEST_TEMPLATE、ISSUE_TEMPLATE）、`docs/`、README、`.gitmessage`、AGENTS.md から branch strategy・commit規約・PR手順を読む。
-2. 条件: ドキュメントに規約がなく、同一形式のコミット・branch名が履歴に繰り返し現れ、慣習が一貫して観測できるか？
+2. 条件: ドキュメントに規約がなく、同一形式のコミット・branch名が履歴に繰り返し現れ、慣習が一貫して観測でき、今回の操作に必要な規約を履歴だけで特定できるか？
    行動: `git log --oneline -20`、`git branch -a`、直近の merge commit から、メッセージ形式・branch命名・PR運用の実績を読む。
 3. 条件: 外部リポジトリへの contribution で、ローカルに案内がないか？
    行動: 公式の contribution guide・issue tracker から、PR受付可否、issue先行の要否、CLA/DCO署名要件、AI利用の可否と開示要件を確認する。手段の選択は research-strategy に従う。
