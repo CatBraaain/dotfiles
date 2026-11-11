@@ -982,28 +982,26 @@ test(
     const folder = join(host.directory, "registered");
     await registerWorkFolder(host, folder);
 
-    await test.step("Open and dismiss workspace actions from the keyboard", async () => {
+    await test.step("Toggle workspace actions and dismiss the context menu with the pointer", async () => {
       const frame = await host.sessionFrame();
       const group = frame
         .locator("section.group")
         .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
         .describe("Registered work folder group");
-      const title = group.locator(".group-title").describe("Workspace menu keyboard trigger");
+      const header = group.locator(".group-header").describe("Workspace context menu trigger");
+      const trigger = group.locator(".group-workspace-menu").describe("Workspace menu toggle");
       const menu = frame.getByRole("menu").describe("Workspace context menu");
-      const unregister = menu
-        .getByRole("menuitem", { name: "Unregister workspace", exact: true })
-        .describe("Workspace Unregister menu item");
-
-      for (const key of ["Shift+F10", "ContextMenu"]) {
-        await title.focus();
-        await title.press(key);
-        await expect(menu).toBeVisible();
-        await expect(unregister).toBeFocused();
-        await unregister.press("Escape");
-        await expect(menu).toBeHidden();
-        await expect(title).toBeFocused();
-        await expect(group).toHaveCount(1);
+      for (const expanded of [true, false, true]) {
+        await trigger.click();
+        await expect(menu).toHaveCount(expanded ? 1 : 0);
+        await expect(trigger).toHaveAttribute("aria-expanded", String(expanded));
       }
+      await trigger.click();
+      await header.click({ button: "right" });
+      await expect(menu).toBeVisible();
+      await frame.locator("#app").click({ position: { x: 0, y: 0 } });
+      await expect(menu).toBeHidden();
+      await expect(group).toHaveCount(1);
     });
 
     await test.step("Unregister a workspace from the list", async () => {

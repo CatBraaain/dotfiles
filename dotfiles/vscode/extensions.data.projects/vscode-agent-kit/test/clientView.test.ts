@@ -331,6 +331,7 @@ describe("sessionListView", () => {
       stateGroups.map((group) => ({
         class: "group-workspace-menu",
         type: "button",
+        tabIndex: "-1",
         "data-open-workspace-menu": group.cwd,
         title: "Workspace actions",
         "aria-label": "Workspace actions",

@@ -12,7 +12,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
 } from "react";
@@ -169,6 +168,7 @@ function groupDescriptor(
                 attrs: {
                   class: "group-workspace-menu",
                   type: "button",
+                  tabIndex: "-1",
                   "data-open-workspace-menu": group.cwd,
                   title: "Workspace actions",
                   "aria-label": "Workspace actions",
@@ -429,6 +429,7 @@ interface DescriptorActions {
   onModeToggle(cwd: string): void;
   onNewSessionClick(cwd: string): void;
   onWorkspaceMenuOpen(menu: WorkspaceMenuState): void;
+  onWorkspaceMenuToggle(menu: WorkspaceMenuState): void;
   onSessionClick(sessionId: string): void;
   onArchiveClick(sessionId: string): void;
   onUnarchiveClick(sessionId: string): void;
@@ -482,27 +483,17 @@ function descriptorToElement(
   const menuTriggerCwd = descriptor.attrs?.["data-open-workspace-menu"];
   if (menuTriggerCwd !== undefined) {
     props.onClick = (event: ReactMouseEvent<HTMLElement>) => {
-      const trigger = event.currentTarget;
-      const rect = trigger.getBoundingClientRect();
-      actions.onWorkspaceMenuOpen({ cwd: menuTriggerCwd, x: rect.left, y: rect.bottom, trigger });
+      if (event.detail === 0) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      actions.onWorkspaceMenuToggle({ cwd: menuTriggerCwd, x: rect.left, y: rect.bottom });
     };
   }
   const menuCwd = descriptor.attrs?.["data-workspace-menu"];
   if (menuCwd !== undefined) {
     props.onContextMenu = (event: ReactMouseEvent<HTMLElement>) => {
       event.preventDefault();
-      const trigger = event.currentTarget.querySelector<HTMLElement>(".group-title");
-      if (trigger !== null) {
-        actions.onWorkspaceMenuOpen({ cwd: menuCwd, x: event.clientX, y: event.clientY, trigger });
-      }
-    };
-    props.onKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
-      if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
-      if (!(event.target instanceof HTMLElement)) return;
-      event.preventDefault();
-      const trigger = event.target;
-      const rect = trigger.getBoundingClientRect();
-      actions.onWorkspaceMenuOpen({ cwd: menuCwd, x: rect.left, y: rect.bottom, trigger });
+      if (event.button !== 2) return;
+      actions.onWorkspaceMenuOpen({ cwd: menuCwd, x: event.clientX, y: event.clientY });
     };
   }
   return createElement(
@@ -563,7 +554,6 @@ interface WorkspaceMenuState {
   cwd: string;
   x: number;
   y: number;
-  trigger: HTMLElement;
 }
 
 function WorkspaceMenu({
@@ -583,12 +573,14 @@ function WorkspaceMenu({
     const viewportPadding = 4;
     element.style.left = `${Math.max(viewportPadding, Math.min(menu.x, window.innerWidth - rect.width - viewportPadding))}px`;
     element.style.top = `${Math.max(viewportPadding, Math.min(menu.y, window.innerHeight - rect.height - viewportPadding))}px`;
-    element.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
   }, [menu]);
 
   useEffect(() => {
     function onPointerDown(event: PointerEvent): void {
-      if (event.target instanceof Node && !menuRef.current?.contains(event.target)) onClose();
+      if (!(event.target instanceof Node)) return;
+      if (event.target instanceof Element && event.target.closest("[data-open-workspace-menu]"))
+        return;
+      if (!menuRef.current?.contains(event.target)) onClose();
     }
     window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("scroll", onClose, true);
@@ -602,14 +594,6 @@ function WorkspaceMenu({
     };
   }, [onClose]);
 
-  function onKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
-    if (event.key !== "Escape" && event.key !== "Tab") return;
-    if (event.key === "Escape") event.preventDefault();
-    event.stopPropagation();
-    menu.trigger.focus({ preventScroll: true });
-    onClose();
-  }
-
   return (
     <div
       ref={menuRef}
@@ -617,12 +601,13 @@ function WorkspaceMenu({
       role="menu"
       aria-label="Workspace actions"
       style={{ left: menu.x, top: menu.y }}
-      onKeyDown={onKeyDown}
     >
       <button
         type="button"
         role="menuitem"
-        onClick={() => {
+        tabIndex={-1}
+        onClick={(event) => {
+          if (event.detail === 0) return;
           onClose();
           onUnregister(menu.cwd);
         }}
@@ -724,6 +709,8 @@ function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactE
       }),
     onNewSessionClick: (cwd) => bridge.postMessage({ type: "newSession", cwd }),
     onWorkspaceMenuOpen: setWorkspaceMenu,
+    onWorkspaceMenuToggle: (menu) =>
+      setWorkspaceMenu((previous) => (previous?.cwd === menu.cwd ? null : menu)),
     onSessionClick: (sessionId) => bridge.postMessage({ type: "openSession", sessionId }),
     onArchiveClick: (sessionId) => bridge.postMessage({ type: "archiveSession", sessionId }),
     onUnarchiveClick: (sessionId) => bridge.postMessage({ type: "unarchiveSession", sessionId }),

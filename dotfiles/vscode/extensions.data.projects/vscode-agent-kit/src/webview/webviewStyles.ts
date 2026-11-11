@@ -37,12 +37,14 @@ export const webviewStyles = `
     .group-toggle > button:hover { background: transparent; }
     .group-chevron, .group-new-session, .group-mode-toggle, .group-workspace-menu { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-foreground); }
     .group-title { flex: 1; overflow: hidden; min-width: 0; height: 24px; padding: 0 6px 0 0; font-size: 14px; font-weight: 600; line-height: 20px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+    .group-workspace-menu { opacity: 0; }
+    .group-workspace-menu:hover { opacity: 1; }
     .group-mode-toggle, .group-workspace-menu { color: var(--vscode-descriptionForeground); }
     .group-mode-toggle:hover, .group-workspace-menu:hover { color: var(--vscode-foreground); }
     .group-mode-toggle svg { width: 16px; height: 16px; }
     .workspace-menu { position: fixed; z-index: 2; box-sizing: border-box; width: max-content; min-width: min(160px, calc(100vw - 8px)); max-width: calc(100vw - 8px); padding: 4px; border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border)); border-radius: var(--session-radius); color: var(--vscode-menu-foreground, var(--vscode-foreground)); background: var(--vscode-menu-background, var(--vscode-sideBar-background)); }
     .workspace-menu button { display: block; width: 100%; min-height: 32px; padding: 0 8px; color: inherit; font-size: 13px; text-align: left; overflow-wrap: anywhere; }
-    .workspace-menu button:hover, .workspace-menu button:focus { color: var(--vscode-menu-selectionForeground, var(--vscode-foreground)); background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); }
+    .workspace-menu button:hover { color: var(--vscode-menu-selectionForeground, var(--vscode-foreground)); background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground)); }
     .session-row { position: relative; min-width: 0; height: 32px; margin-left: -8px; border-radius: var(--session-radius); }
     .group-header + .session-row { margin-top: 4px; }
     .session-button { position: relative; isolation: isolate; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 32px; padding: 0 calc(36px + 5ch + 8px) 0 4px; border-radius: var(--session-radius); color: var(--vscode-foreground); background: transparent; text-align: left; }

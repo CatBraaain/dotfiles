@@ -1144,7 +1144,6 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       for (const selector of [
         ".group-chevron",
         ".group-title",
-        ".group-workspace-menu",
         ".group-mode-toggle",
         ".group-new-session",
       ]) {
@@ -1537,13 +1536,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         await expect.poll(() => page.getByRole("menuitem").count()).toBe(1);
         expect(
           await page.getByRole("menuitem").evaluate((item) => item === document.activeElement),
-        ).toBe(true);
-        await page.keyboard.press("Escape");
-        expect(
-          await header
-            .locator(".group-title")
-            .evaluate((title) => title === document.activeElement),
-        ).toBe(true);
+        ).toBe(false);
+        await page.mouse.click(0, 0);
+        expect(await page.getByRole("menu").count()).toBe(0);
         await header.locator(".group-title").press("Space");
         expect(await header.locator(".group-title").getAttribute("aria-expanded")).toBe("true");
       }
@@ -1552,7 +1547,17 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         { x: 1, y: 1 },
         { x: width - 1, y: 639 },
       ]) {
-        await firstHeader.dispatchEvent("contextmenu", { clientX: point.x, clientY: point.y });
+        await firstHeader.evaluate((element, point) => {
+          element.dispatchEvent(
+            new MouseEvent("contextmenu", {
+              bubbles: true,
+              cancelable: true,
+              clientX: point.x,
+              clientY: point.y,
+              button: 2,
+            }),
+          );
+        }, point);
         const menu = page.getByRole("menu").describe("Workspace context menu");
         const bounds = await menu.boundingBox();
         expect(bounds).not.toBeNull();
@@ -1569,7 +1574,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
             top: window.scrollY,
           })),
         ).toEqual(documentSize);
-        await page.keyboard.press("Escape");
+        await page.mouse.click(0, 0);
       }
       expect(
         await page.evaluate(
@@ -1580,13 +1585,73 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     },
   );
 
-  it.each(
-    ["click", "Enter", "Space"].flatMap((activation) =>
-      [false, true].map((collapsed) => ({ activation, collapsed })),
-    ),
-  )(
-    "opens the ellipsis menu with $activation when collapsed=$collapsed without other actions",
-    async ({ activation, collapsed }) => {
+  it("reveals workspace actions only while their own hit target is hovered", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    const header = page.locator('.group-header[title="~/projects/agenda"]');
+    const trigger = header.locator(".group-workspace-menu");
+    const before = await trigger.boundingBox();
+    await page.mouse.move(1, 1);
+    expect(await trigger.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
+    await header.locator(".group-title").hover();
+    expect(await trigger.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
+    await trigger.hover();
+    expect(await trigger.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+    await page.mouse.move(1, 1);
+    await trigger.focus();
+    expect(await trigger.evaluate((element) => getComputedStyle(element).opacity)).toBe("0");
+    expect(await trigger.boundingBox()).toEqual(before);
+    await page.close();
+  });
+
+  it("toggles workspace menus open closed and open on consecutive pointer clicks", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    const trigger = page.locator('.group-header[title="~/projects/agenda"] .group-workspace-menu');
+    for (const count of [1, 0, 1]) {
+      await trigger.click();
+      await expect.poll(() => page.getByRole("menu").count()).toBe(count);
+      expect(await trigger.getAttribute("aria-expanded")).toBe(String(count === 1));
+    }
+    await page.close();
+  });
+
+  it("keeps workspace menu controls out of keyboard navigation and ignores menu keys", async () => {
+    const page = await openStory("sessions-sidebar--sample-sessions");
+    await installBridgeMessageRecorder(page);
+    const header = page.locator('.group-header[title="~/projects/agenda"]');
+    const trigger = header.locator(".group-workspace-menu");
+    expect(await trigger.getAttribute("tabindex")).toBe("-1");
+    await header.locator(".group-title").focus();
+    await page.keyboard.press("Tab");
+    expect(
+      await header
+        .locator(".group-mode-toggle")
+        .evaluate((element) => element === document.activeElement),
+    ).toBe(true);
+    for (const key of ["Enter", "Space"]) {
+      await trigger.press(key);
+      expect(await page.getByRole("menu").count()).toBe(0);
+    }
+    await trigger.click();
+    const item = page.getByRole("menuitem");
+    expect(await item.getAttribute("tabindex")).toBe("-1");
+    expect(await item.evaluate((element) => element === document.activeElement)).toBe(false);
+    for (const key of ["Enter", "Space", "Escape", "Tab", "Shift+Tab"]) {
+      await item.press(key);
+      expect(await page.getByRole("menu").count()).toBe(1);
+    }
+    await page.mouse.click(0, 0);
+    expect(await trigger.evaluate((element) => element === document.activeElement)).toBe(false);
+    expect(
+      await page.evaluate(
+        () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
+      ),
+    ).toEqual([]);
+    await page.close();
+  });
+
+  it.each([false, true])(
+    "opens the ellipsis menu when collapsed=%s without other actions",
+    async (collapsed) => {
       const page = await openStory("sessions-sidebar--sample-sessions", {
         width: 320,
         height: 640,
@@ -1601,8 +1666,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       expect(await trigger.getAttribute("aria-haspopup")).toBe("menu");
       expect(await trigger.getAttribute("aria-expanded")).toBe("false");
       expect(await trigger.locator("svg").getAttribute("width")).toBe("12");
-      if (activation === "click") await trigger.click();
-      else await trigger.press(activation);
+      await trigger.click();
       const menu = page.getByRole("menu");
       await expect.poll(() => menu.count()).toBe(1);
       const bounds = (await menu.boundingBox())!;
@@ -1615,31 +1679,29 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       );
       expect(
         await page.getByRole("menuitem").evaluate((item) => item === document.activeElement),
-      ).toBe(true);
+      ).toBe(false);
       expect(
         await page.evaluate(
           () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
         ),
       ).toEqual([]);
-      await page.keyboard.press("Escape");
+      await page.mouse.click(0, 0);
       expect(await trigger.getAttribute("aria-expanded")).toBe("false");
-      expect(await trigger.evaluate((item) => item === document.activeElement)).toBe(true);
       expect(await trigger.boundingBox()).toEqual(before);
       await page.close();
     },
   );
 
   it.each([
-    ["click", "~/projects/agenda", 0, "pointer"],
-    ["Enter", "~/projects/agenda", 0, "Shift+F10"],
-    ["Space", "~/projects/vscode-pi-sessions", 1, "ContextMenu"],
-    ["click", "~/.agents/worktrees/vscode-pi-sessions", 1, "pointer"],
-    ["click", "~/projects/agenda", 0, "ellipsis-click"],
-    ["Enter", "~/projects/vscode-pi-sessions", 1, "ellipsis-Enter"],
-    ["Space", "~/.agents/worktrees/vscode-pi-sessions", 1, "ellipsis-Space"],
+    ["~/projects/agenda", 0, "pointer"],
+    ["~/projects/vscode-pi-sessions", 1, "pointer"],
+    ["~/.agents/worktrees/vscode-pi-sessions", 1, "pointer"],
+    ["~/projects/agenda", 0, "ellipsis"],
+    ["~/projects/vscode-pi-sessions", 1, "ellipsis"],
+    ["~/.agents/worktrees/vscode-pi-sessions", 1, "ellipsis"],
   ] as const)(
-    "unregisters directly once with %s for %s without confirmation",
-    async (activation, cwd, sessionCount, invocation) => {
+    "unregisters %s directly once with %s sessions via %s without confirmation",
+    async (cwd, sessionCount, invocation) => {
       const page = await openStory("sessions-sidebar--sample-sessions", {
         width: 320,
         height: 640,
@@ -1650,19 +1712,12 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       const groupCountBefore = await groups.count();
       expect(await group.locator(".session-row").count()).toBe(sessionCount);
       if (invocation === "pointer") await group.locator(".group-header").click({ button: "right" });
-      else if (invocation === "ellipsis-click")
-        await group.locator(".group-workspace-menu").click();
-      else if (invocation === "ellipsis-Enter")
-        await group.locator(".group-workspace-menu").press("Enter");
-      else if (invocation === "ellipsis-Space")
-        await group.locator(".group-workspace-menu").press("Space");
-      else await group.locator(".group-title").press(invocation);
+      else await group.locator(".group-workspace-menu").click();
       const unregister = page
         .getByRole("menuitem", { name: "Unregister workspace", exact: true })
         .describe("Workspace Unregister menu item");
-      expect(await unregister.evaluate((item) => item === document.activeElement)).toBe(true);
-      if (activation === "click") await unregister.click();
-      else await unregister.press(activation);
+      expect(await unregister.evaluate((item) => item === document.activeElement)).toBe(false);
+      await unregister.click();
 
       expect(await page.getByRole("menu").count()).toBe(0);
       expect(await page.getByRole("dialog").count()).toBe(0);
@@ -1680,7 +1735,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
   );
 
   it.each(
-    ["Escape", "Tab", "Shift+Tab", "pointer", "scroll", "resize", "blur"].flatMap((dismissal) =>
+    ["pointer", "scroll", "resize", "blur"].flatMap((dismissal) =>
       ["context", "ellipsis"].map((invocation) => ({ dismissal, invocation })),
     ),
   )(
@@ -1689,11 +1744,8 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       const page = await openStory("sessions-sidebar--sample-sessions");
       await installBridgeMessageRecorder(page);
       const header = page.locator('.group-header[title="~/projects/agenda"]');
-      const trigger = header.locator(
-        invocation === "ellipsis" ? ".group-workspace-menu" : ".group-mode-toggle",
-      );
-      if (invocation === "ellipsis") await trigger.click();
-      else await trigger.press("Shift+F10");
+      if (invocation === "ellipsis") await header.locator(".group-workspace-menu").click();
+      else await header.click({ button: "right" });
       await expect.poll(() => page.getByRole("menu").count()).toBe(1);
       expect(await header.locator(".group-workspace-menu").getAttribute("aria-expanded")).toBe(
         "true",
@@ -1704,22 +1756,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       else if (dismissal === "resize") await page.setViewportSize({ width: 720, height: 600 });
       else if (dismissal === "blur")
         await page.evaluate(() => window.dispatchEvent(new Event("blur")));
-      else await page.keyboard.press(dismissal);
       await expect.poll(() => page.getByRole("menu").count()).toBe(0);
-      if (dismissal === "Escape")
-        expect(await trigger.evaluate((item) => item === document.activeElement)).toBe(true);
-      if (dismissal === "Tab")
-        expect(
-          await header
-            .locator(invocation === "ellipsis" ? ".group-mode-toggle" : ".group-new-session")
-            .evaluate((item) => item === document.activeElement),
-        ).toBe(true);
-      if (dismissal === "Shift+Tab")
-        expect(
-          await header
-            .locator(invocation === "ellipsis" ? ".group-title" : ".group-workspace-menu")
-            .evaluate((item) => item === document.activeElement),
-        ).toBe(true);
       expect(await header.locator(".group-workspace-menu").getAttribute("aria-expanded")).toBe(
         "false",
       );
@@ -1739,42 +1776,47 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     },
   );
 
-  it("replaces the menu target when another same-named workspace opens its menu", async () => {
-    const page = await openStory("sessions-sidebar--sample-sessions");
-    await installBridgeMessageRecorder(page);
-    await page
-      .locator('.group-header[title="~/projects/vscode-pi-sessions"]')
-      .click({ button: "right" });
-    await page
-      .locator('.group-header[title="~/.agents/worktrees/vscode-pi-sessions"]')
-      .click({ button: "right" });
-    expect(await page.getByRole("menu").count()).toBe(1);
-    await page.getByRole("menuitem").press("Enter");
-    expect(
-      await page.evaluate(
-        () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
-      ),
-    ).toEqual([{ type: "unregisterWorkspace", cwd: "~/.agents/worktrees/vscode-pi-sessions" }]);
-    expect(await page.locator('.group-header[title="~/projects/vscode-pi-sessions"]').count()).toBe(
-      1,
-    );
-    await page.close();
-  });
+  it.each(["context", "ellipsis"])(
+    "replaces the menu target when another same-named workspace opens its %s menu",
+    async (invocation) => {
+      const page = await openStory("sessions-sidebar--sample-sessions");
+      await installBridgeMessageRecorder(page);
+      for (const cwd of [
+        "~/projects/vscode-pi-sessions",
+        "~/.agents/worktrees/vscode-pi-sessions",
+      ]) {
+        const header = page.locator(`.group-header[title="${cwd}"]`);
+        if (invocation === "context") await header.click({ button: "right" });
+        else await header.locator(".group-workspace-menu").click();
+        expect(await page.getByRole("menu").count()).toBe(1);
+        expect(await header.locator(".group-workspace-menu").getAttribute("aria-expanded")).toBe(
+          "true",
+        );
+      }
+      expect(await page.getByRole("menu").count()).toBe(1);
+      await page.getByRole("menuitem").click();
+      expect(
+        await page.evaluate(
+          () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
+        ),
+      ).toEqual([{ type: "unregisterWorkspace", cwd: "~/.agents/worktrees/vscode-pi-sessions" }]);
+      expect(
+        await page.locator('.group-header[title="~/projects/vscode-pi-sessions"]').count(),
+      ).toBe(1);
+      await page.close();
+    },
+  );
 
   it.each([
-    ["~/projects/vscode-pi-sessions", "remove preceding", "Escape"],
-    ["~/projects/vscode-pi-sessions", "remove preceding", "Tab"],
-    ["~/.agents/worktrees/vscode-pi-sessions", "remove preceding", "Escape"],
-    ["~/.agents/worktrees/vscode-pi-sessions", "remove preceding", "Tab"],
-    ["~/projects/vscode-pi-sessions", "reverse", "Escape"],
-    ["~/projects/vscode-pi-sessions", "reverse", "Tab"],
-    ["~/.agents/worktrees/vscode-pi-sessions", "reverse", "Escape"],
-    ["~/.agents/worktrees/vscode-pi-sessions", "reverse", "Tab"],
-  ] as const)("preserves menu origin for %s after %s with %s", async (cwd, update, dismissal) => {
+    ["~/projects/vscode-pi-sessions", "remove preceding"],
+    ["~/.agents/worktrees/vscode-pi-sessions", "remove preceding"],
+    ["~/projects/vscode-pi-sessions", "reverse"],
+    ["~/.agents/worktrees/vscode-pi-sessions", "reverse"],
+  ] as const)("preserves menu target for %s after %s", async (cwd, update) => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
     const header = page.locator(`.group-header[title="${cwd}"]`);
-    await header.locator(".group-mode-toggle").press("Shift+F10");
+    await header.click({ button: "right" });
     await expect.poll(() => page.getByRole("menu").count()).toBe(1);
     const lastCwd = await page.locator(".group-header").last().getAttribute("title");
     await page.evaluate((update) => {
@@ -1795,11 +1837,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         .toBe(lastCwd);
     }
     expect(await page.getByRole("menu").count()).toBe(1);
-    await page.keyboard.press(dismissal);
-    const expectedControl = header.locator(
-      dismissal === "Escape" ? ".group-mode-toggle" : ".group-new-session",
-    );
-    expect(await expectedControl.evaluate((item) => item === document.activeElement)).toBe(true);
+    await header.locator(".group-workspace-menu").click();
     expect(await page.getByRole("menu").count()).toBe(0);
     expect(
       await page.evaluate(
@@ -1837,31 +1875,30 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     ".group-workspace-menu",
     ".group-mode-toggle",
     ".group-new-session",
-  ])("opens a workspace menu from %s without activating the header control", async (selector) => {
-    const page = await openStory("sessions-sidebar--sample-sessions");
-    await installBridgeMessageRecorder(page);
-    const header = page.locator('.group-header[title="~/projects/vscode-pi-sessions"]');
-    const trigger = header.locator(selector);
-    for (const shortcut of ["Shift+F10", "ContextMenu"]) {
-      await trigger.press(shortcut);
-      await expect.poll(() => page.getByRole("menuitem").count()).toBe(1);
+  ])(
+    "ignores workspace menu shortcuts on %s without activating the header control",
+    async (selector) => {
+      const page = await openStory("sessions-sidebar--sample-sessions");
+      await installBridgeMessageRecorder(page);
+      const header = page.locator('.group-header[title="~/projects/vscode-pi-sessions"]');
+      const trigger = header.locator(selector);
+      for (const shortcut of ["Shift+F10", "ContextMenu"]) {
+        await trigger.press(shortcut);
+        expect(await page.getByRole("menu").count()).toBe(0);
+        expect(await trigger.evaluate((item) => item === document.activeElement)).toBe(true);
+        expect(await header.locator(".group-title").getAttribute("aria-expanded")).toBe("true");
+        expect(await header.locator(".group-mode-toggle").getAttribute("data-mode")).toBe(
+          "unarchived",
+        );
+      }
       expect(
-        await page.getByRole("menuitem").evaluate((item) => item === document.activeElement),
-      ).toBe(true);
-      await page.keyboard.press("Escape");
-      expect(await trigger.evaluate((item) => item === document.activeElement)).toBe(true);
-      expect(await header.locator(".group-title").getAttribute("aria-expanded")).toBe("true");
-      expect(await header.locator(".group-mode-toggle").getAttribute("data-mode")).toBe(
-        "unarchived",
-      );
-    }
-    expect(
-      await page.evaluate(
-        () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
-      ),
-    ).toEqual([]);
-    await page.close();
-  });
+        await page.evaluate(
+          () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
+        ),
+      ).toEqual([]);
+      await page.close();
+    },
+  );
 
   it("keeps the displayed session's mark across collapsing and archiving other rows", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
