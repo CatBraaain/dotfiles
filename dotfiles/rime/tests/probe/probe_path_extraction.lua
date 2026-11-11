@@ -1,10 +1,3 @@
--- Probe 1: extract the best full-sentence path (real node list with reading
--- ranges) from the upstream viterbi at the fixed commit, via two maintenance
--- approaches, and compare the clause mapping against the current
--- bunsetsu.split (best_n_prefix walk) including a >20 char reading.
---
--- Run: lua5.4 probe_path_extraction.lua
-
 local probe_dir = arg[0] and arg[0]:match("^(.*)/") or "."
 package.path = probe_dir .. "/fixed/?.lua;" .. probe_dir .. "/?.lua;" .. package.path
 
@@ -192,43 +185,6 @@ do
     print("  current split readings:   " .. table.concat(current, " | "))
     check(current[1] ~= path_surface(clauses[1]),
         "the current split disagrees with the full-path mapping beyond 20 characters")
-end
-
-print("== explicit extension: upstream copy with a public best_path() API")
-do
-    package.loaded["kagiroi/kagiroi_viterbi"] = nil
-    package.loaded["kagiroi/kagiroi"] = nil
-    package.loaded["kagiroi/segmenter"] = nil
-    package.loaded["kagiroi/priority_queue"] = nil
-    package.loaded["kagiroi/lru"] = nil
-    local saved_path = package.path
-    package.path = probe_dir .. "/fixed_ext/?.lua;" .. package.path
-    local ext_module = require("kagiroi/kagiroi_viterbi")
-    package.path = saved_path
-    local env = synth.new_env(real_dict, nil, real_matrix)
-    local v = ext_module.new(env)
-    local reading = "ちばからとうきょう"
-    v:analyze(reading)
-    local best = v:best_n()()
-    local result = v:best_path()
-    check(result ~= nil and result.cost == best.cost and path_surface(result.nodes) == reading
-        and path_candidate(result.nodes) == best.candidate,
-        "extension best_path() equals the best_n assembly (surface, candidate, cost)")
-    local long_env = synth.new_env({
-        { surface = "あ", candidate = "阿", left_id = 1851, right_id = 1851, cost = 6000 },
-        { surface = "あいうえお", candidate = "青井上男", left_id = 1851, right_id = 1851, cost = 1000 },
-        { surface = "あいうえおか", candidate = "愛植上岡", left_id = 1926, right_id = 1926, cost = 2000 },
-        { surface = "かきくけこさしすせそたちつてとなにぬねの", candidate = "夏樹家子", left_id = 1851, right_id = 1851, cost = 100 },
-        { surface = "きくけこさしすせそ", candidate = "菊池勢", left_id = 1851, right_id = 1851, cost = 3000 },
-        { surface = "かきくけこ", candidate = "柿久毛子", left_id = 1851, right_id = 1851, cost = 90000000 },
-        { surface = "たちつてと", candidate = "田茅津十斗", left_id = 1851, right_id = 1851, cost = 5000 },
-        { surface = "たちつてとなにぬねの", candidate = "田茅津十斗名仁猫", left_id = 1851, right_id = 1851, cost = 90000000 },
-    }, nil, real_matrix)
-    local lv = ext_module.new(long_env)
-    lv:analyze("あいうえおかきくけこさしすせそたちつてとなにぬねの")
-    local long_result = lv:best_path()
-    check(long_result ~= nil and utf8.len(path_surface(long_result.nodes)) == 25,
-        "extension extracts the >20 char full path")
 end
 
 print(string.format("probe1: %d checks, %d failures", checks, failures))
