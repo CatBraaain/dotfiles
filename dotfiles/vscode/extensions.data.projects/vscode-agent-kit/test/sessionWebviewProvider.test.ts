@@ -2384,7 +2384,186 @@ describe("SessionWebviewProvider", () => {
     );
   });
 
-  it("processes overlapping conversation selections in arrival order", async () => {
+  async function selectionFixture() {
+    const fixture = await archiveFixture();
+    await writeJsonl(join(root, "sessions", encodeCwdDirName(root)), "third.jsonl", [
+      header({ id: unknownSessionId, cwd: root }),
+    ]);
+    await fixture.provider.refresh();
+    const shown: (string | undefined)[] = [];
+    fixture.terminal.show.mockImplementation(() => {
+      shown.push(fixture.registry.displayedSessionId);
+    });
+    vscodeMocks.createTerminal.mockImplementation((options) => {
+      fixture.mocks.open({ sessionId: options.shellArgs[1], cwd: options.cwd.fsPath });
+      const terminal = {
+        ...fixture.terminal,
+        dispose: vi.fn(() => fixture.registry.onTerminalClosed(terminal as never)),
+      };
+      return terminal;
+    });
+    return { ...fixture, shown };
+  }
+
+  function holdNextOpen(mocks: ReturnType<typeof fakeRuntimes>["mocks"]) {
+    let finish!: () => void;
+    let signalStarted!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const list = mocks.list.getMockImplementation()!;
+    mocks.list.mockImplementationOnce(async () => {
+      signalStarted();
+      await pending;
+      return list();
+    });
+    return { started, finish };
+  }
+
+  it.each([false, true])(
+    "opens only the latest pending row without interrupting the running selection (archived=%s)",
+    async (archived) => {
+      const fixture = await selectionFixture();
+      const { webview, mocks, registry, statePath, provider, shown, filePath } = fixture;
+      const sessionIds = [activeSessionId, inactiveSessionId, unknownSessionId];
+      setUpStore(statePath, root, archived ? [] : sessionIds);
+      if (archived) {
+        expect(
+          archiveSessions(
+            statePath,
+            sessionIds.map((sessionId) => ({ sessionId, cwd: root })),
+          ).ok,
+        ).toBe(true);
+      }
+      await provider.refresh();
+      const before = await readFile(statePath, "utf8");
+      const opening = holdNextOpen(mocks);
+      const open = vi.spyOn(registry, "open");
+      const validateFile = vi.spyOn(sessionStore, "sessionFileExists");
+      const first = webview.receive({ type: "openSession", sessionId: activeSessionId });
+      await opening.started;
+      const second = webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+      const third = webview.receive({ type: "openSession", sessionId: unknownSessionId });
+      expect(shown).toEqual([]);
+      expect(mocks.open).not.toHaveBeenCalled();
+      opening.finish();
+      await Promise.all([first, second, third]);
+
+      expect(open.mock.calls.map(([session]) => session.sessionId)).toEqual([
+        activeSessionId,
+        unknownSessionId,
+      ]);
+      expect(mocks.open.mock.calls.map(([session]) => session.sessionId)).toEqual([
+        activeSessionId,
+        unknownSessionId,
+      ]);
+      expect(shown).toEqual([activeSessionId, unknownSessionId]);
+      expect(validateFile.mock.calls.map(([path]) => path)).toEqual([
+        filePath,
+        join(root, "sessions", encodeCwdDirName(root), "third.jsonl"),
+      ]);
+      const displayed = webview.postMessage.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.type === "sessions")
+        .map((message) => message.state.displayedSessionId);
+      expect(displayed).not.toContain(inactiveSessionId);
+      expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+      expect(await readFile(statePath, "utf8")).toBe(before);
+    },
+  );
+
+  it("coalesces again while the previous latest selection is running", async () => {
+    const { webview, mocks, shown } = await selectionFixture();
+    const firstOpening = holdNextOpen(mocks);
+    const first = webview.receive({ type: "openSession", sessionId: activeSessionId });
+    await firstOpening.started;
+    const second = webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    const third = webview.receive({ type: "openSession", sessionId: unknownSessionId });
+    const thirdOpening = holdNextOpen(mocks);
+    firstOpening.finish();
+    await thirdOpening.started;
+    expect(shown).toEqual([activeSessionId]);
+    const fourth = webview.receive({ type: "openSession", sessionId: activeSessionId });
+    const fifth = webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    thirdOpening.finish();
+    await Promise.all([first, second, third, fourth, fifth]);
+    expect(shown).toEqual([activeSessionId, unknownSessionId, inactiveSessionId]);
+  });
+
+  it("skips a superseded invalid selection and continues after the running open fails", async () => {
+    const { webview, mocks, shown } = await selectionFixture();
+    const opening = holdNextOpen(mocks);
+    const first = webview.receive({ type: "openSession", sessionId: activeSessionId });
+    await opening.started;
+    const invalid = webview.receive({ type: "openSession", sessionId: "missing-session" });
+    const latest = webview.receive({ type: "openSession", sessionId: unknownSessionId });
+    mocks.resolveTarget.mockRejectedValueOnce(new Error("target lookup failed"));
+    opening.finish();
+    await Promise.all([first, invalid, latest]);
+    expect(shown).toEqual([unknownSessionId]);
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledTimes(1);
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining("target lookup failed"),
+    );
+  });
+
+  it.each(["archiveSession", "unarchiveSession", "newSession"] as const)(
+    "preserves FIFO around %s when an earlier pending selection is superseded",
+    async (type) => {
+      const { registry, statePath, mocks } = await selectionFixture();
+      const run = vi.spyOn(registry, "run");
+      const events: string[] = [];
+      const open = registry.open.bind(registry);
+      vi.spyOn(registry, "open").mockImplementation(async (session) => {
+        events.push(`open:${session.sessionId}`);
+        return open(session);
+      });
+      const stop = registry.stop.bind(registry);
+      vi.spyOn(registry, "stop").mockImplementation(async (sessionId) => {
+        events.push(`stop:${sessionId}`);
+        return stop(sessionId);
+      });
+      const { provider } = createProvider({
+        registry,
+        statePath,
+        startNewSession: async () => {
+          await registry.run(async () => {
+            events.push("newSession");
+          });
+        },
+      });
+      const webview = createView();
+      provider.resolveWebviewView(webview.view as never);
+      await provider.refresh();
+      const opening = holdNextOpen(mocks);
+      const first = webview.receive({ type: "openSession", sessionId: activeSessionId });
+      await opening.started;
+      const superseded = webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+      const operation = webview.receive({ type, sessionId: inactiveSessionId, cwd: root });
+      if (type === "newSession") {
+        await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(3));
+      }
+      const latest = webview.receive({ type: "openSession", sessionId: unknownSessionId });
+      opening.finish();
+      await Promise.all([first, superseded, operation, latest]);
+      const expectedOperation =
+        type === "archiveSession"
+          ? `stop:${inactiveSessionId}`
+          : type === "unarchiveSession"
+            ? `open:${inactiveSessionId}`
+            : "newSession";
+      expect(events).toEqual([
+        `open:${activeSessionId}`,
+        expectedOperation,
+        `open:${unknownSessionId}`,
+      ]);
+    },
+  );
+
+  it("processes a running selection and the next selection in arrival order", async () => {
     const sessionDir = join(root, "sessions");
     await writeJsonl(join(sessionDir, encodeCwdDirName(root)), "first.jsonl", [
       header({ id: activeSessionId, cwd: root }),

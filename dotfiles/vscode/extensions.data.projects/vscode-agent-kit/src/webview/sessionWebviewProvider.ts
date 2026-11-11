@@ -40,6 +40,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private runningSessionIds = new Set<string>();
   private unreadSessionIds = new Set<string>();
   private refreshVersion = 0;
+  private latestSelection: symbol | undefined;
   private pendingRefresh: Promise<void> | undefined;
   private latestListMessage:
     | Extract<ExtensionMessage, { type: "loading" | "sessions" | "sessionsError" }>
@@ -223,7 +224,12 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "openSession") {
-      await this.deps.registry.run(() => this.openSession(request.sessionId));
+      const selection = Symbol();
+      this.latestSelection = selection;
+      await this.deps.registry.run(async () => {
+        if (selection !== this.latestSelection) return;
+        await this.openSession(request.sessionId);
+      });
       return;
     }
     if (request.type === "archiveSession") {
