@@ -430,6 +430,10 @@ export function formatToolCall(
   theme: ToolTheme,
 ): string {
   switch (toolName) {
+    case "codemode": {
+      const code = typeof args.code === "string" ? args.code : "";
+      return formatNamedCall("codemode", code.split(/\r\n|[\r\n\u2028\u2029]/, 1)[0] ?? "", theme);
+    }
     case "bash":
       return formatBashCall(String(args.command ?? ""), theme);
     case "read":
@@ -566,15 +570,57 @@ function failureLine(
   return errorLine(kind, details?.error ?? webResultText(result) ?? "Error");
 }
 
+type CodemodeFormat = { source: string; code?: string };
+type CodemodeRenderState = { codemodeFormat?: CodemodeFormat };
+
+async function formatCodemodeSource(source: string): Promise<string> {
+  const { format } = await import("oxfmt");
+  const result = await format("codemode.js", source);
+  return result.errors.length === 0 ? result.code : source;
+}
+
+function codemodeCallRenderer(
+  renderCall: NonNullable<ToolRenderers["renderCall"]>,
+  formatCode: (source: string) => Promise<string>,
+): NonNullable<ToolRenderers["renderCall"]> {
+  return function (args, theme, context) {
+    const state = context?.state as CodemodeRenderState | undefined;
+    if (!state) return renderCall(args, theme, context);
+
+    const source = args?.code;
+    if (state.codemodeFormat?.source !== source || !context.argsComplete) {
+      state.codemodeFormat = undefined;
+    }
+    if (!context.expanded || !context.argsComplete || typeof source !== "string") {
+      return renderCall(args, theme, context);
+    }
+
+    if (!state.codemodeFormat) {
+      const entry: CodemodeFormat = { source };
+      state.codemodeFormat = entry;
+      formatCode(source)
+        .catch(() => source)
+        .then((code) => {
+          if (state.codemodeFormat !== entry) return;
+          entry.code = code;
+          context.invalidate();
+        });
+    }
+    const displayArgs = { ...args, code: state.codemodeFormat.code ?? source };
+    return renderCall(displayArgs, theme, { ...context, args: displayArgs });
+  };
+}
+
 export function codemodeRenderers(
   next: () => ToolRenderers | undefined,
+  formatCode: (source: string) => Promise<string> = formatCodemodeSource,
 ): ToolRenderers | undefined {
   const inner = next();
   const renderResult = inner?.renderResult;
   if (!inner || !renderResult) return inner;
   return {
     renderShell: inner.renderShell,
-    renderCall: inner.renderCall,
+    renderCall: inner.renderCall ? codemodeCallRenderer(inner.renderCall, formatCode) : undefined,
     renderResult(result: any, options: any, theme: any, context: any) {
       const innerContext = { ...context, lastComponent: undefined };
       const details = result.details as { calls?: { status: string }[] } | undefined;

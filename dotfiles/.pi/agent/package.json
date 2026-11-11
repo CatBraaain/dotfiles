@@ -8,6 +8,7 @@
     "@openuidev/react-lang": "0.3.0",
     "@openuidev/react-ui": "0.16.3",
     "camoufox-js": "0.12.0",
+    "oxfmt": "0.74.0",
     "playwright-core": "1.60.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
