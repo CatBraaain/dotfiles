@@ -780,7 +780,8 @@ async function closeSession(config: TmuxConfig, id: string): Promise<void> {
       if (
         result.exitCode !== 0 &&
         !serverIsAbsent(config, result.stderr) &&
-        !result.stderr.includes("can't find session:")
+        !result.stderr.includes("can't find session:") &&
+        !result.stderr.includes("no such session:")
       )
         throw new Error(`Cannot clear managed session ${session.session}: ${result.stderr.trim()}`);
     }
