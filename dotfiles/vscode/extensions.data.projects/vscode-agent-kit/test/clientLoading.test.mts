@@ -4,6 +4,7 @@ import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ExtensionMessage, WebviewState } from "../src/webview/protocol";
 import { webviewAppMarkup } from "../src/webview/webviewHtml";
+import { webviewStyles } from "../src/webview/webviewStyles";
 
 const sessionId = "session-1";
 const state: WebviewState = {
@@ -39,6 +40,7 @@ describe("session list loading in the mounted client", () => {
   beforeEach(async () => {
     page = await browser.newPage();
     await page.setContent(webviewAppMarkup);
+    await page.addStyleTag({ content: webviewStyles });
     await page.evaluate(() => {
       const requests: unknown[] = [];
       Object.assign(window, {
@@ -168,6 +170,128 @@ describe("session list loading in the mounted client", () => {
       { type: "openSession", sessionId },
     ]);
   });
+
+  function unreadState(): WebviewState {
+    const next = structuredClone(state);
+    Object.assign(next.groups[0].sessions[0], { state: "waiting-user", hasUnread: true });
+    return next;
+  }
+
+  async function showUnread(): Promise<void> {
+    await receive({ type: "sessions", state: unreadState() });
+    await expect.poll(() => page.locator(".session-status svg").count()).toBe(1);
+  }
+
+  async function startPausedFade(): Promise<void> {
+    const next = unreadState();
+    next.groups[0].sessions[0].hasUnread = false;
+    await receive({ type: "sessions", state: next });
+    await page.waitForFunction(() => {
+      const animation = document.querySelector(".session-status svg")?.getAnimations()[0];
+      if (!animation) return false;
+      animation.pause();
+      animation.currentTime = 100;
+      return true;
+    });
+  }
+
+  it("fades the acknowledged bell for 200ms without shifting the row", async () => {
+    await showUnread();
+    const status = page.locator(".session-status");
+    const before = await status.boundingBox();
+    const nameBefore = await page.locator(".session-name").first().boundingBox();
+    await page.locator(`[data-session="${sessionId}"]`).click();
+    expect(await status.getAttribute("data-fading")).toBe("false");
+    await startPausedFade();
+    const halfway = await status.locator("svg").evaluate((svg) => {
+      const animation = svg.getAnimations()[0];
+      const timing = animation.effect?.getTiming();
+      const style = getComputedStyle(svg);
+      return { opacity: Number(style.opacity), easing: style.animationTimingFunction, timing };
+    });
+    expect(halfway.timing).toMatchObject({ duration: 200 });
+    expect(halfway.easing).toBe("ease-out");
+    expect(halfway.opacity).toBeGreaterThan(0);
+    expect(halfway.opacity).toBeLessThan(1);
+    expect(await status.boundingBox()).toEqual(before);
+    expect(await page.locator(".session-name").first().boundingBox()).toEqual(nameBefore);
+    expect(await page.locator(`[data-session="${sessionId}"]`).getAttribute("title")).not.toContain(
+      "Unread",
+    );
+    await status.locator("svg").evaluate((svg) => svg.getAnimations()[0].finish());
+    await expect.poll(() => status.locator("svg").count()).toBe(0);
+    expect(await status.boundingBox()).toEqual(before);
+    expect(await page.locator(".session-name").first().boundingBox()).toEqual(nameBefore);
+  });
+
+  it("removes the acknowledged bell immediately with reduced motion", async () => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await showUnread();
+    const next = unreadState();
+    next.groups[0].sessions[0].hasUnread = false;
+    await receive({ type: "sessions", state: next });
+    await expect.poll(() => page.locator(".session-status svg").count()).toBe(0);
+    expect(await page.locator(".session-status").getAttribute("data-fading")).toBe("false");
+  });
+
+  it("removes an in-flight fade when reduced motion is enabled", async () => {
+    await showUnread();
+    await startPausedFade();
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect.poll(() => page.locator(".session-status svg").count()).toBe(0);
+  });
+
+  it("keeps the bell visible when opening fails", async () => {
+    await showUnread();
+    await page.locator(`[data-session="${sessionId}"]`).click();
+    await receive({ type: "error", message: "Failed to open session" });
+    expect(await page.locator(".session-status svg").count()).toBe(1);
+    expect(await page.locator(".session-status").getAttribute("data-fading")).toBe("false");
+    expect(await page.locator(`[data-session="${sessionId}"]`).getAttribute("title")).toContain(
+      "Unread",
+    );
+  });
+
+  it.each([
+    { state: "running", hasUnread: false, isArchived: false, icons: 1 },
+    { state: "waiting-approval", hasUnread: false, isArchived: false, icons: 1 },
+    { state: undefined, hasUnread: false, isArchived: false, icons: 0 },
+    { state: "waiting-user", hasUnread: false, isArchived: true, icons: 0 },
+    { state: "waiting-user", hasUnread: true, isArchived: false, icons: 1 },
+  ] as const)("prioritizes the latest state over a fading bell: %j", async (update) => {
+    await showUnread();
+    await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
+    await startPausedFade();
+    const next = unreadState();
+    const { icons, ...sessionUpdate } = update;
+    Object.assign(next.groups[0].sessions[0], sessionUpdate);
+    await receive({ type: "sessions", state: next });
+    const status = page.locator(`[data-session="${sessionId}"] .session-status`);
+    await expect.poll(() => status.getAttribute("data-fading")).toBe("false");
+    expect(await status.locator("svg").count()).toBe(icons);
+    expect(await status.getAttribute("data-state")).toBe(update.state ?? null);
+  });
+
+  it.each(["running", "waiting-approval", undefined, "archived"] as const)(
+    "replaces an unread bell immediately for %s rather than fading",
+    async (phase) => {
+      await showUnread();
+      await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
+      const next = unreadState();
+      Object.assign(next.groups[0].sessions[0], {
+        state: phase === "archived" ? "waiting-user" : phase,
+        hasUnread: false,
+        isArchived: phase === "archived",
+      });
+      await receive({ type: "sessions", state: next });
+      const status = page.locator(`[data-session="${sessionId}"] .session-status`);
+      await expect.poll(() => status.getAttribute("data-unread")).toBe("false");
+      expect(await status.getAttribute("data-fading")).toBe("false");
+      expect(await status.locator("svg").count()).toBe(
+        phase === "running" || phase === "waiting-approval" ? 1 : 0,
+      );
+    },
+  );
 
   it("shows a first-load error without presenting a successful empty list", async () => {
     await expectLoading();

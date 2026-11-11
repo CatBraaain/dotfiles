@@ -74,6 +74,8 @@ New workspace フッターの主操作はワークスペースの登録。情報
 
 ## Motion & Interaction
 
+セッションを正常に開いた後の既読化では、表示中のベルを200ms・ease-outで不透明度1から0へフェードアウトして消す。変化させるのは `opacity` のみとし、行・スロット・表示名の位置と寸法を保つ。`prefers-reduced-motion: reduce` では即時に消す。
+
 ワークスペース見出しは [beui.dev の shared-layout-bg](https://beui.dev/r/shared-layout-bg/raw) の共通背景を参照し、chevron と名前で1つの hover 面を共有する。背景の切替は即時とし、アニメーションは加えない。hover・focus で文字位置・余白・寸法を変えない。
 
 ワークスペースのメニューは [beui.dev の context-menu](https://beui.dev/r/context-menu/raw) の起動元・項目フォーカス・viewport 内への位置調整を参照する。開閉と位置調整は即時とし、アニメーションは加えない。

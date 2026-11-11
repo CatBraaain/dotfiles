@@ -260,6 +260,7 @@ function sessionDescriptor(
     .join("\n");
   return {
     tag: "div",
+    key: session.sessionId,
     attrs: { class: rowClass },
     children: [
       {
@@ -311,14 +312,16 @@ function sessionStatusIcons(session: ClientSession): ElementDescriptor[] {
     ];
   }
   if (session.state === "waiting-user" && session.hasUnread) {
-    return [
-      strokeIcon([
-        { tag: "path", attrs: { d: "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" } },
-        { tag: "path", attrs: { d: "M10 21a2 2 0 0 0 4 0" } },
-      ]),
-    ];
+    return [unreadBellIcon()];
   }
   return [];
+}
+
+function unreadBellIcon(): ElementDescriptor {
+  return strokeIcon([
+    { tag: "path", attrs: { d: "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" } },
+    { tag: "path", attrs: { d: "M10 21a2 2 0 0 0 4 0" } },
+  ]);
 }
 
 /** Human-readable phase line for the session row tooltip. */
@@ -470,6 +473,9 @@ function descriptorToElement(
   descriptor: ElementDescriptor,
   actions: DescriptorActions,
 ): ReactElement {
+  if (descriptor.attrs?.class === "session-status") {
+    return <SessionStatus key={descriptor.key} descriptor={descriptor} actions={actions} />;
+  }
   const props: Record<string, unknown> = descriptorProps(descriptor);
   const onClick = descriptorOnClick(descriptor, actions);
   if (onClick !== undefined) props.onClick = onClick;
@@ -503,6 +509,51 @@ function descriptorToElement(
     descriptor.tag,
     props,
     ...(descriptor.children ?? []).map((child) =>
+      typeof child === "string" ? child : descriptorToElement(child, actions),
+    ),
+  );
+}
+
+function SessionStatus({
+  descriptor,
+  actions,
+}: {
+  descriptor: ElementDescriptor;
+  actions: DescriptorActions;
+}): ReactElement {
+  const canFade =
+    descriptor.attrs?.["data-state"] === "waiting-user" &&
+    descriptor.attrs?.["data-archived"] === "false";
+  const isUnread = canFade && descriptor.attrs?.["data-unread"] === "true";
+  const [visibility, setVisibility] = useState({ unread: isUnread, fading: false });
+  if (visibility.unread !== isUnread || (visibility.fading && !canFade)) {
+    setVisibility({
+      unread: isUnread,
+      fading:
+        visibility.unread &&
+        !isUnread &&
+        canFade &&
+        !window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    });
+  }
+  useEffect(() => {
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    function onMotionChange(): void {
+      if (motion.matches) setVisibility((previous) => ({ ...previous, fading: false }));
+    }
+    motion.addEventListener("change", onMotionChange);
+    return () => motion.removeEventListener("change", onMotionChange);
+  }, []);
+
+  const children = visibility.fading ? [unreadBellIcon()] : (descriptor.children ?? []);
+  return createElement(
+    "span",
+    {
+      ...descriptorProps(descriptor),
+      "data-fading": String(visibility.fading),
+      onAnimationEnd: () => setVisibility((previous) => ({ ...previous, fading: false })),
+    },
+    ...children.map((child) =>
       typeof child === "string" ? child : descriptorToElement(child, actions),
     ),
   );

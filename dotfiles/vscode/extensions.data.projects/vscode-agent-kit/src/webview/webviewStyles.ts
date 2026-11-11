@@ -55,10 +55,12 @@ export const webviewStyles = `
     .session-row.selected:focus-within .session-button::before { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-inactiveSelectionBackground)); }
     .session-status { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 12px; height: 12px; color: var(--vscode-descriptionForeground); }
     .session-status[data-state="running"] { color: var(--vscode-testing-iconPassed, var(--vscode-descriptionForeground)); }
-    .session-status[data-state="waiting-approval"], .session-status[data-unread="true"] { color: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)); }
+    .session-status[data-state="waiting-approval"], .session-status[data-unread="true"], .session-status[data-fading="true"] { color: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)); }
     .session-status[data-state="running"] svg { animation: session-spin 1s linear infinite; }
+    .session-status[data-fading="true"] svg { animation: session-unread-fade 200ms ease-out forwards; }
+    @keyframes session-unread-fade { from { opacity: 1; } to { opacity: 0; } }
     @keyframes session-spin { to { transform: rotate(360deg); } }
-    @media (prefers-reduced-motion: reduce) { .session-status[data-state="running"] svg { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { .session-status[data-state="running"] svg { animation: none; } .session-status[data-fading="true"] svg { display: none; } }
     .session-name { display: block; flex: 1; overflow: hidden; min-width: 0; font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
     .session-timestamp { pointer-events: none; position: absolute; top: 50%; right: 36px; overflow: hidden; width: 5ch; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 20px; text-align: right; white-space: nowrap; }
     .archive, .unarchive { position: absolute; top: 50%; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
