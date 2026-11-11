@@ -103,6 +103,7 @@ commands:
   - git:
       - allow: []
       - ask: [push]
+      - allow: [stash, push]
       - ask_with_reason: [reset, "--hard"]
       - ask_with_reason: [clean, "-[^-]*f[^-]*", "-[^-]*d[^-]*", "-[^-]*x[^-]*"]
       - ask_with_reason: ["replace|update-ref|gc|prune"]
