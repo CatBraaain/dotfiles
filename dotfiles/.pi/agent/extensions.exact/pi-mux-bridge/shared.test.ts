@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "bun:test";
@@ -39,6 +40,50 @@ describe("dedicated tmux paths", () => {
       "-t",
       "$2",
     ]);
+  });
+
+  for (const managed of [false, true]) {
+    it("recognizes a shell ancestor only for an external pi, managed=" + managed, async () => {
+      const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated" });
+      const identity = await inspectManagedPane(
+        async () => ({
+          stdout: [
+            paths.socketPath,
+            "123",
+            "%1",
+            readlinkSync("/proc/self/fd/0"),
+            String(process.ppid),
+          ].join("\t"),
+          stderr: "",
+          code: 0,
+          killed: false,
+        }),
+        paths,
+        {
+          TMUX: paths.socketPath + ",123,0",
+          TMUX_PANE: "%1",
+          ...(managed ? { PI_TMUX_SESSION_ID: "managed" } : {}),
+        },
+      );
+      assert.deepEqual(identity, managed ? undefined : { pane: "%1", pid: process.ppid });
+    });
+  }
+
+  it("does not recognize an unrelated process as the pi pane owner", async () => {
+    const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated" });
+    const identity = await inspectManagedPane(
+      async () => ({
+        stdout: [paths.socketPath, "123", "%1", readlinkSync("/proc/self/fd/0"), "2147483647"].join(
+          "\t",
+        ),
+        stderr: "",
+        code: 0,
+        killed: false,
+      }),
+      paths,
+      { TMUX: paths.socketPath + ",123,0", TMUX_PANE: "%1" },
+    );
+    assert.equal(identity, undefined);
   });
 
   it("does not inspect an unrelated server", async () => {

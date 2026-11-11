@@ -1,4 +1,4 @@
-import { readlinkSync } from "node:fs";
+import { readFileSync, readlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -41,7 +41,7 @@ export async function inspectManagedPane(
   execute: Execute,
   paths: TmuxPaths,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<string | undefined> {
+): Promise<{ pane: string; pid: number } | undefined> {
   const [socket, serverPid] = (env.TMUX ?? "").split(",");
   if (socket !== paths.socketPath || !env.TMUX_PANE) return undefined;
   const result = await execute(
@@ -63,6 +63,24 @@ export async function inspectManagedPane(
     actualServer === serverPid &&
     pane === env.TMUX_PANE &&
     tty === readlinkSync("/proc/self/fd/0") &&
-    Number(pid) === process.pid;
-  return verified ? pane : undefined;
+    (env.PI_TMUX_SESSION_ID
+      ? Number(pid) === process.pid
+      : processDescendsFrom(process.pid, Number(pid)));
+  return verified && pane ? { pane, pid: Number(pid) } : undefined;
+}
+
+function processDescendsFrom(pid: number, ancestor: number): boolean {
+  let current = pid;
+  while (current > 0) {
+    if (current === ancestor) return true;
+    let stat: string;
+    try {
+      stat = readFileSync(`/proc/${current}/stat`, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+    current = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+  }
+  return false;
 }

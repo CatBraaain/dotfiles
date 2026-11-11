@@ -11,7 +11,9 @@
 | `pi-mux` | `pi-mux new` と同じ |
 | `pi-mux new [--detached] [initial-request]` | 初期依頼の有無で会話を選び、通常はTUIへ接続する。`--detached` では会話IDと接続コマンドを返す |
 | `pi-mux open <session-id>` | 完全一致する会話IDの稼働中pi実体へ再接続する。稼働していなければ、保存会話を元のcwdで再開して接続する |
-| `pi-mux list` | 専用tmuxの稼働pi一覧をJSON配列で返す |
+| `pi-mux list` | 登録済みworkspaceを、空workspaceも含めたJSON配列で返す。専用tmuxの稼働piがあるworkspaceを自動登録する |
+| `pi-mux workspace register <cwd>` | piを起動せずworkspaceを登録する |
+| `pi-mux workspace unregister <cwd>` | 対象workspaceの稼働piを終了し、登録と復元対象を除く。保存会話ファイルは保持する |
 | `pi-mux snapshot [server-generation]` | 稼働中の専用serverから管理会話全体を採取して保存する。serverを起動せず、指定世代と異なるserverの記録は変更しない |
 | `pi-mux restore` | 専用serverを起動し、保存された会話集合を非接続で開く |
 
@@ -64,14 +66,35 @@
 | 元のcwdが存在しない | 代替cwdで起動せずエラー |
 | 同時に同じIDを `open` | 同じ会話のpi実体を重複起動しない |
 
+### workspace登録
+
+フロントエンドがpiの起動前にもworkspaceの登録状態を判定し、空workspaceへ新規会話を事前ロードできるようにする。登録の正本は `${PI_CODING_AGENT_DIR:-~/.pi/agent}/session-state.json` の `active-workspaces` mapとし、共有storeの形式・所属の意味は [session-stateの要件](../../../.pi/agent/extensions.exact/session-state/REQUIREMENTS.md) に従う。復元記録には登録を複製しない。
+
+`<cwd>` は呼び出し時のcwdから絶対パスへ解決する。registerは存在するディレクトリを受け付け、unregisterは消失済みのディレクトリも受け付ける。同じ絶対パスは1登録とする。
+
+| 状態・操作 | 結果 |
+| --- | --- |
+| 未登録workspaceをregister | 空の `active-sessions` mapを持つworkspaceを追加する。piとtmux serverを起動しない |
+| 登録済みworkspaceをregister | 既存の所属と属性を保持する |
+| `new`・`open` の起動・再接続成功 | そのcwdを登録する |
+| 専用tmux内で外部から起動したpi | paneを直接占有するpiと、paneのシェル配下のpiを、拡張が公開したmetadataから `list` が検出し、そのcwdを登録する。専用tmux外のpiは取り込まない |
+| workspaceをunregister | 全windowを対象に、そのcwdの稼働piと起動途中の管理piを終了する。終了を確認してからworkspace登録と同じcwdの復元候補を除く。他workspaceと保存会話ファイルを保持する |
+| 未登録workspaceをunregister | 稼働pi・復元候補があれば同じ終了・除去を行い、なければ成功する |
+| 対象workspaceのsessionに `lock: true` がある | pi終了と登録・復元候補の変更を行わずエラーにする |
+| 起動途中の管理piのpaneを安全に特定できない | 他paneを終了せず、workspace登録と復元候補を保持して非0で終了する |
+| 不正な共有store・復元記録、または終了の失敗 | 理由を報告して非0で終了し、workspace登録を保持する。既に終了したpiは再起動しない |
+
+共有store更新では他workspace、既存session所属、属性と `lock` を保持する。不正なstoreは上書きしない。通常のpi終了後もworkspace登録は保持する。解除後の新しい起動は再び登録対象になる。
+
 ### list
 
-`list` は専用tmuxのpane metadataから現在の稼働piだけを取得し、stdoutへ次の5項目を持つJSON配列と末尾改行を返す。空新規は会話ファイルが未作成でも含める。PID・tmux targetは内部検証に使う。
+`list` は共有storeの登録済みcwdと専用tmuxの稼働piを統合し、stdoutへ `[{"cwd":"/path/to/workspace","sessions":[{"id":"session-id","file":"/path/to/session.jsonl","state":null,"title":null}]}]` 形式のJSON配列と末尾改行を返す。workspaceの `cwd` は絶対パス、`sessions` は現在の稼働piだけの配列であり、稼働piがなければ空配列になる。共有storeの保存所属や復元候補を稼働piとして代用しない。空新規は会話ファイルが未作成でも含める。PID・tmux targetは内部検証に使う。
+
+各sessionは次の4項目を持つ。
 
 | 項目 | 型 | 値 |
 | --- | --- | --- |
 | `id` | `string` | 会話ID |
-| `cwd` | `string` | 起動cwdの絶対パス |
 | `file` | `string` | 会話ファイルの絶対パス。未作成の保存予定先も含む |
 | `state` | `string \| null` | `running`・`waiting-approval`・`waiting-user` のいずれか。確認できない場合は `null` |
 | `title` | `string \| null` | pi が保存したセッション名の共有値。未設定または確認できない場合は `null` |
@@ -85,26 +108,49 @@ stateとtitleは、同じpane option `@pi_session_state` のJSONから取得す�
 
 共通のversion・会話ID検証後はstateとtitleを独立して検証する。titleを持たない旧形式やtitleの型が不正な値でも、有効なstateは保持する。stateが不正でも有効なtitleは保持する。いずれの値が `null` でも、pi自体は一覧に残す。
 
-metadataは会話ID・絶対パスのcwdとfile・pane PIDとの一致を検証する。終了済みpaneとmetadata未公開のpaneは含めない。不正metadataはエラーとする。startupを持たないmetadataと、startupが `accepted` または `ready` のmetadataを受け付ける。一覧への掲載は復元成功を示さず、復元では `ready` を必須とする。
+metadataは会話ID・絶対パスのcwdとfileを検証する。paneを直接占有するpiは、公開したpi PIDとpane PIDの一致を検証する。シェル配下のpiは、公開したpane PIDの一致とpi PIDがその子孫であることを検証し、終了済みpiを一覧から除く。終了済みpaneとmetadata未公開のpaneは含めない。不正metadataはエラーとする。startupを持たないmetadataと、startupが `accepted` または `ready` のmetadataを受け付ける。一覧への掲載は復元成功を示さず、復元では `ready` を必須とする。
 
 | 状態 | 結果 |
 | --- | --- |
-| 専用serverが未起動、または稼働piがない | 終了コード0で `[]` を返す |
+| 専用serverが未起動、または稼働piがない | 登録済みworkspaceを空の `sessions` とともに返す。登録もなければ終了コード0で `[]` を返す |
 | tmuxからの取得に失敗 | 理由をstderrへ表示し、非0で終了する |
 
-`list` は読み取りだけを行う。server起動・復元・管理ディレクトリ作成・JSON書込みを行わず、復元記録は参照・代用しない。
+`list` は未登録の稼働cwdがある場合だけworkspace登録を書き込む。それ以外はディレクトリ作成・JSON書込みを行わない。server起動・復元は行わず、復元記録は参照しない。
 
 ### snapshotと復元
 
-復元記録は `${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-tmux/pi-mux-restore.json` に保存する。`version`・`generation`・`sessions`・`pending` を保持し、会話候補はIDとcwdだけを保存する。
+復元記録は `${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-tmux/pi-mux-restore.json` に、次のJSON形式で保存する。ワークスペースは起動cwdの絶対パスでまとめ、`sessions` は復元対象として保持する会話IDの文字列配列とする。
+
+```json
+{
+  "version": 1,
+  "generation": "server-generation",
+  "workspaces": [
+    {
+      "cwd": "/path/to/workspace",
+      "sessions": ["session-id", "retry-session-id"]
+    }
+  ]
+}
+```
+
+| 項目 | 値 |
+| --- | --- |
+| `version` | `1` |
+| `generation` | 保存対象のserver世代を表す文字列 |
+| `workspaces` | cwdごとのワークスペース配列。復元対象がない場合は空配列 |
+| `cwd` | ワークスペースの起動cwdの絶対パス |
+| `sessions` | そのcwdで復元対象として保持する会話IDの配列。稼働中・復元途中・復元失敗・初期化未完了の会話を含み、起動や復元成功だけでは除外しない |
+
+同じcwdは1つのワークスペースにまとめる。同じ会話IDに異なるcwdが指定された記録はエラーとする。
 
 `server-generation` は、専用serverの1回の生存期間を識別するCLI発行の内部IDである。CLIが専用serverを初期化するときに発行し、同じserverの生存中は同値、再起動後は別の値にする。sessionの作成・終了hookは発火元の世代を `snapshot` の引数へ渡す。CLIは現世代と照合し、旧世代の遅延処理による新世代の記録変更を防ぐ。通常の `snapshot` で引数を省略した場合は、現世代を対象とする。
 
-管理会話は、tmux session環境の `PI_TMUX_SESSION_ID` と、そのsessionの起動cwdで識別する。これらはpi起動前から設定する。snapshotはpaneに起動後公開されるmetadataを待たず、全sessionから集合を再採取する。sessionの作成・終了hookでsnapshotを実行する。
+管理会話は、tmux session環境の `PI_TMUX_SESSION_ID` と、そのsessionの起動cwdで識別する。これらはpi起動前から設定する。snapshotはpaneに起動後公開されるmetadataを待たず、全sessionから管理会話を採取し、復元途中・復元失敗・初期化未完了の候補と合わせて `sessions` に保持する。sessionの作成・終了hookでsnapshotを実行する。
 
 | 状態・操作 | 結果 |
 | --- | --- |
-| 正常稼働中にsessionを作成・終了 | 管理会話全体のID・cwdを保存する。最後の会話の通常終了では稼働集合は空になる |
+| 正常稼働中にsessionを作成・終了 | 新しい管理会話を `sessions` に加え、通常終了した会話を除く。最後の復元対象がなくなると `workspaces` は空配列になる |
 | serverが消失・接続拒否・shutdown中、または採取に失敗 | 保存完了済みの集合を保持し、失敗理由を報告する |
 | 古いserver世代のhookが遅延実行 | 新しい世代の記録を変更しない |
 | server起動または `restore` | 保存集合のうち保存会話があるものを、同じID・cwd、1会話1sessionで非接続起動する |
@@ -113,7 +159,7 @@ metadataは会話ID・絶対パスのcwdとfile・pane PIDとの一致を検証�
 | 復元するpi の拡張初期化中 | 起動成功として扱わず、その候補を次回の復元対象に保持する |
 | 拡張初期化を完了して入力待ちになったpi の通常終了 | その会話を復元対象から外す |
 | 保存先の重複・アクセス失敗・不正データ・cwd欠落・pi起動失敗・初期化中の終了・起動タイムアウト | IDと理由を報告し、その候補を次回の復元対象に残す。他の候補と通常の `new`・`open` は継続する |
-| 失敗候補が残った状態で通常snapshot | 稼働集合に加えて失敗候補を保持する |
+| 失敗候補が残った状態で通常snapshot | 稼働会話と失敗候補を同じ `sessions` に保持する |
 | 同じIDが既に稼働中 | 同じpi実体を維持し、重複起動しない |
 | snapshot・restore・new・openの同時実行、または復元処理の異常終了 | 復元途中の部分集合で候補を消さず、重複起動を防ぐ。異常終了した実行者の排他は後続処理を妨げない |
 

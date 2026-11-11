@@ -104,13 +104,14 @@ function managedPaneOutput(): string {
 }
 
 describe("fixed conversation identity", () => {
-  it("does not publish readiness from an initialization hook", () => {
-    const handlers = captureHandlers();
-    assert.equal(handlers.has("session_start"), false);
-    assert.equal(handlers.has("resources_discover"), false);
-    assert.equal(handlers.has("session_before_tree"), false);
-    assert.equal(handlers.has("session_before_compact"), false);
-    assert.equal(handlers.has("session_shutdown"), false);
+  it("does not publish managed readiness from an initialization hook", async () => {
+    await withManagedEnvironment(async () => {
+      const handlers = captureHandlers();
+      assert.equal(handlers.has("session_start"), false);
+      assert.equal(handlers.has("resources_discover"), false);
+      assert.equal(handlers.has("session_before_tree"), false);
+      assert.equal(handlers.has("session_before_compact"), false);
+    });
   });
 
   for (const reason of ["new", "resume"]) {
@@ -184,6 +185,131 @@ describe("fixed conversation identity", () => {
       });
     });
 
+  for (const phase of [
+    "confirmation",
+    "publication",
+    "committed-publication",
+    "unverifiable-publication",
+  ] as const) {
+    for (const failure of ["denied", "timeout"] as const) {
+      it(`keeps readiness consistent when ${phase} is ${failure}`, async () => {
+        await withManagedEnvironment(async () => {
+          let published = false;
+          let restoring = true;
+          const handlers = captureHandlers(async (_command, args) => {
+            const fails =
+              phase === "confirmation"
+                ? args.includes("if-shell")
+                : args.includes("@pi-tmux-session");
+            if (fails) {
+              if (phase === "committed-publication" || phase === "unverifiable-publication")
+                published = true;
+              return { stdout: "", stderr: failure, code: 1, killed: failure === "timeout" };
+            }
+            if (published && phase === "unverifiable-publication")
+              return { stdout: "", stderr: "verification unavailable", code: 1, killed: false };
+            if (args.includes("@pi-tmux-session")) published = true;
+            if (args.includes("if-shell")) restoring = false;
+            const metadata = published
+              ? Buffer.from(
+                  JSON.stringify({ id: "fixed-id", pid: process.pid, startup: "ready" }),
+                ).toString("base64")
+              : "";
+            return {
+              stdout: args.includes("#{@pi-tmux-session}")
+                ? metadata
+                : args.includes("display-message")
+                  ? managedPaneOutput()
+                  : "",
+              stderr: "",
+              code: 0,
+              killed: false,
+            };
+          });
+          const { ctx, notifications } = context();
+          let shutdowns = 0;
+          Object.assign(ctx, {
+            shutdown() {
+              shutdowns++;
+            },
+          });
+          const previousExitCode = process.exitCode;
+          try {
+            await handlers.get("startup")!("", ctx);
+            assert.equal(published, phase !== "publication");
+            assert.equal(shutdowns, phase === "publication" ? 1 : 0);
+            assert.equal(
+              notifications.length,
+              phase === "publication" || phase === "unverifiable-publication" ? 1 : 0,
+            );
+            if (phase === "unverifiable-publication")
+              assert.equal(notifications[0]?.type, "warning");
+            assert.equal(restoring, phase !== "committed-publication");
+          } finally {
+            process.exitCode = previousExitCode ?? 0;
+          }
+        });
+      });
+    }
+  }
+
+  it("confirms a retained ready session only on shutdown", async () => {
+    await withManagedEnvironment(async () => {
+      let restoring = true;
+      const commands: string[][] = [];
+      const handlers = captureHandlers(async (_command, args) => {
+        commands.push(args);
+        if (args.includes("if-shell")) restoring = false;
+        return {
+          stdout: args.includes("display-message") ? managedPaneOutput() : "",
+          stderr: "",
+          code: 0,
+          killed: false,
+        };
+      });
+      const { ctx } = context();
+      await handlers.get("startup")!("", ctx);
+      assert.equal(restoring, true);
+      await handlers.get("session_shutdown")!({}, ctx);
+      assert.equal(restoring, false);
+      const confirmed = commands.at(-1)!;
+      assert.ok(confirmed.includes("if-shell"));
+      assert.ok(confirmed.includes(`#{&&:#{==:#{pid},123},#{==:#{pane_pid},${process.pid}}}`));
+      assert.deepEqual(parse(confirmed.at(-1)!), [
+        "set-option",
+        "-gu",
+        "@pi-mux-restoring-fixed-id",
+      ]);
+    });
+  });
+
+  for (const startup of ["accepted", "ready"] as const) {
+    it(`uses existing ${startup} metadata on shutdown after an extension reload`, async () => {
+      await withManagedEnvironment(async () => {
+        let confirmations = 0;
+        const metadata = Buffer.from(
+          JSON.stringify({ id: "fixed-id", pid: process.pid, startup }),
+        ).toString("base64");
+        const handlers = captureHandlers(async (_command, args) => {
+          if (args.includes("if-shell")) confirmations++;
+          return {
+            stdout: args.includes("#{@pi-tmux-session}")
+              ? metadata
+              : args.includes("display-message")
+                ? managedPaneOutput()
+                : "",
+            stderr: "",
+            code: 0,
+            killed: false,
+          };
+        });
+        const { ctx } = context();
+        await handlers.get("session_shutdown")!({}, ctx);
+        assert.equal(confirmations, startup === "ready" ? 1 : 0);
+      });
+    });
+  }
+
   it("shuts down instead of publishing a mismatched identity", async () => {
     await withManagedEnvironment(async () => {
       let commandCount = 0;
@@ -247,13 +373,50 @@ describe("fixed conversation identity", () => {
     });
   }
 
+  it("publishes an externally launched dedicated pi without a managed session ID", async () => {
+    await withManagedEnvironment(async () => {
+      delete process.env.PI_TMUX_STARTUP_COMMAND;
+      delete process.env.PI_TMUX_SESSION_ID;
+      const commands: string[][] = [];
+      const handlers = captureHandlers(async (_command, args) => {
+        commands.push(args);
+        return {
+          stdout: args.includes("display-message") ? managedPaneOutput() : "",
+          stderr: "",
+          code: 0,
+          killed: false,
+        };
+      });
+      const { ctx } = context();
+      await handlers.get("resources_discover")!({}, ctx);
+      const metadata = JSON.parse(Buffer.from(commands.at(-1)!.at(-1)!, "base64").toString("utf8"));
+      assert.equal(metadata.id, "fixed-id");
+      assert.equal(metadata.startup, "accepted");
+      assert.equal(commands.length, 2);
+    });
+  });
+
+  it("does not inspect or publish pi outside the dedicated tmux", async () => {
+    await withManagedEnvironment(async () => {
+      delete process.env.PI_TMUX_STARTUP_COMMAND;
+      delete process.env.PI_TMUX_SESSION_ID;
+      process.env.TMUX = "/tmp/other-server.sock,123,0";
+      const handlers = captureHandlers(async () =>
+        assert.fail("Unrelated tmux must not be inspected"),
+      );
+      const { ctx, notifications } = context();
+      await handlers.get("resources_discover")!({}, ctx);
+      assert.deepEqual(notifications, []);
+    });
+  });
+
   it("does not add a startup command to an unmanaged TUI", () => {
     const previous = process.env.PI_TMUX_STARTUP_COMMAND;
     delete process.env.PI_TMUX_STARTUP_COMMAND;
     try {
       assert.deepEqual(
         [...captureHandlers().keys()],
-        ["session_before_switch", "session_before_fork"],
+        ["session_before_switch", "session_before_fork", "resources_discover"],
       );
     } finally {
       if (previous !== undefined) process.env.PI_TMUX_STARTUP_COMMAND = previous;
