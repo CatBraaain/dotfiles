@@ -185,11 +185,19 @@ describe("sessionListView", () => {
         (child): child is ElementDescriptor => typeof child !== "string",
       );
       expect(children.map((child) => child.attrs?.class)).toEqual([
-        "group-toggle",
+        "group-identity",
         "group-mode-toggle",
         "group-new-session",
       ]);
-      const disclosure = children[0];
+      const identity = children[0];
+      const identityChildren = (identity.children ?? []).filter(
+        (child): child is ElementDescriptor => typeof child !== "string",
+      );
+      expect(identityChildren.map((child) => child.attrs?.class)).toEqual([
+        "group-toggle",
+        "group-workspace-menu",
+      ]);
+      const disclosure = identityChildren[0];
       expect(disclosure.tag).toBe("div");
       expect(disclosure.attrs).toEqual({ class: "group-toggle" });
       const buttons = collectElements(disclosure).filter((element) => element.tag === "button");
@@ -302,6 +310,35 @@ describe("sessionListView", () => {
     expect(byClass(elementsIn(view), "group-unregister")).toHaveLength(0);
     expect(byClass(elementsIn(view), "group-mode-toggle")).toHaveLength(2);
     expect(byClass(elementsIn(view), "group-new-session")).toHaveLength(2);
+  });
+
+  it("offers labeled menu buttons on empty and collapsed workspaces", () => {
+    const stateGroups = [
+      { cwd: "/workspace/atlas", label: "atlas", sessions: [] },
+      { cwd: "/worktrees/atlas", label: "atlas", sessions: [atlasArchived] },
+    ];
+    const view = sessionListView(
+      { groups: stateGroups },
+      new Map(),
+      undefined,
+      new Set(["/worktrees/atlas"]),
+      "loaded",
+      "/worktrees/atlas",
+    );
+    const buttons = byClass(elementsIn(view), "group-workspace-menu");
+
+    expect(buttons.map((button) => button.attrs)).toEqual(
+      stateGroups.map((group) => ({
+        class: "group-workspace-menu",
+        type: "button",
+        "data-open-workspace-menu": group.cwd,
+        title: "Workspace actions",
+        "aria-label": "Workspace actions",
+        "aria-haspopup": "menu",
+        "aria-expanded": String(group.cwd === "/worktrees/atlas"),
+      })),
+    );
+    expect(byClass(elementsIn(view), "session-row")).toHaveLength(0);
   });
 
   it("renders a per-group New session button carrying its workspace cwd", () => {

@@ -31,13 +31,14 @@ export const webviewStyles = `
     .group { min-width: 0; }
     .group + .group { margin-top: 12px; }
     .group-header { gap: 4px; min-width: 0; min-height: 24px; }
-    .group-toggle { display: flex; flex: 1; align-items: center; gap: 0; min-width: 0; margin-left: -8px; border-radius: var(--session-radius); }
+    .group-identity { display: flex; flex: 1; align-items: center; min-width: 0; margin-left: -8px; }
+    .group-toggle { display: flex; flex: 0 1 auto; align-items: center; gap: 0; min-width: 0; border-radius: var(--session-radius); }
     .group-toggle:hover { background: var(--vscode-list-hoverBackground); }
     .group-toggle > button:hover { background: transparent; }
-    .group-chevron, .group-new-session, .group-mode-toggle { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-foreground); }
+    .group-chevron, .group-new-session, .group-mode-toggle, .group-workspace-menu { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-foreground); }
     .group-title { flex: 1; overflow: hidden; min-width: 0; height: 24px; padding: 0 6px 0 0; font-size: 14px; font-weight: 600; line-height: 20px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
-    .group-mode-toggle { color: var(--vscode-descriptionForeground); }
-    .group-mode-toggle:hover { color: var(--vscode-foreground); }
+    .group-mode-toggle, .group-workspace-menu { color: var(--vscode-descriptionForeground); }
+    .group-mode-toggle:hover, .group-workspace-menu:hover { color: var(--vscode-foreground); }
     .group-mode-toggle svg { width: 16px; height: 16px; }
     .workspace-menu { position: fixed; z-index: 2; box-sizing: border-box; width: max-content; min-width: min(160px, calc(100vw - 8px)); max-width: calc(100vw - 8px); padding: 4px; border: 1px solid var(--vscode-menu-border, var(--vscode-widget-border)); border-radius: var(--session-radius); color: var(--vscode-menu-foreground, var(--vscode-foreground)); background: var(--vscode-menu-background, var(--vscode-sideBar-background)); }
     .workspace-menu button { display: block; width: 100%; min-height: 32px; padding: 0 8px; color: inherit; font-size: 13px; text-align: left; overflow-wrap: anywhere; }

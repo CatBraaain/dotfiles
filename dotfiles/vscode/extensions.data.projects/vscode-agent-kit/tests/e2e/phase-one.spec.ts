@@ -1020,10 +1020,10 @@ test(
       ).toBeVisible();
       await expect(group.locator(".group-unregister")).toHaveCount(0);
       await group
-        .locator(".group-header")
-        .describe("Registered group context menu trigger")
-        .click({ button: "right" });
-      const menu = frame.getByRole("menu").describe("Workspace context menu");
+        .getByRole("button", { name: "Workspace actions", exact: true })
+        .describe("Registered group ellipsis menu trigger")
+        .click();
+      const menu = frame.getByRole("menu").describe("Workspace actions menu");
       const unregister = menu
         .getByRole("menuitem", { name: "Unregister workspace", exact: true })
         .describe("Workspace Unregister menu item");

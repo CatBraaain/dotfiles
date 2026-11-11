@@ -98,9 +98,16 @@ export function sessionListView(
   displayedSessionId: string | undefined = undefined,
   collapsedCwds: ReadonlySet<string> = new Set(),
   loadStatus: SessionLoadStatus = "loaded",
+  workspaceMenuCwd?: string,
 ): SessionListView {
   const groups = state.groups.map((group) =>
-    groupDescriptor(group, modes.get(group.cwd) ?? "unarchived", displayedSessionId, collapsedCwds),
+    groupDescriptor(
+      group,
+      modes.get(group.cwd) ?? "unarchived",
+      displayedSessionId,
+      collapsedCwds,
+      workspaceMenuCwd,
+    ),
   );
   if (groups.length > 0) return { sessions: groups };
   if (loadStatus === "error") return { sessions: [] };
@@ -113,6 +120,7 @@ function groupDescriptor(
   mode: ViewMode,
   displayedSessionId: string | undefined,
   collapsedCwds: ReadonlySet<string>,
+  workspaceMenuCwd: string | undefined,
 ): ElementDescriptor {
   const isExpanded = !collapsedCwds.has(group.cwd);
   const sessions = visibleGroupSessions(group, mode, collapsedCwds);
@@ -127,28 +135,49 @@ function groupDescriptor(
         children: [
           {
             tag: "div",
-            attrs: { class: "group-toggle" },
+            attrs: { class: "group-identity" },
             children: [
               {
-                tag: "button",
-                attrs: {
-                  class: "group-chevron",
-                  type: "button",
-                  "data-toggle-group": group.cwd,
-                  "aria-expanded": String(isExpanded),
-                  "aria-label": `${isExpanded ? "Collapse" : "Expand"} ${group.label}`,
-                },
-                children: [chevronIcon(isExpanded ? "down" : "right")],
+                tag: "div",
+                attrs: { class: "group-toggle" },
+                children: [
+                  {
+                    tag: "button",
+                    attrs: {
+                      class: "group-chevron",
+                      type: "button",
+                      "data-toggle-group": group.cwd,
+                      "aria-expanded": String(isExpanded),
+                      "aria-label": `${isExpanded ? "Collapse" : "Expand"} ${group.label}`,
+                    },
+                    children: [chevronIcon(isExpanded ? "down" : "right")],
+                  },
+                  {
+                    tag: "button",
+                    attrs: {
+                      class: "group-title",
+                      type: "button",
+                      "data-toggle-group": group.cwd,
+                      "aria-expanded": String(isExpanded),
+                    },
+                    children: [group.label],
+                  },
+                ],
               },
               {
                 tag: "button",
                 attrs: {
-                  class: "group-title",
+                  class: "group-workspace-menu",
                   type: "button",
-                  "data-toggle-group": group.cwd,
-                  "aria-expanded": String(isExpanded),
+                  "data-open-workspace-menu": group.cwd,
+                  title: "Workspace actions",
+                  "aria-label": "Workspace actions",
+                  "aria-haspopup": "menu",
+                  "aria-expanded": String(group.cwd === workspaceMenuCwd),
                 },
-                children: [group.label],
+                children: [
+                  strokeIcon([{ tag: "path", attrs: { d: "M5 12h.01M12 12h.01M19 12h.01" } }]),
+                ],
               },
             ],
           },
@@ -444,6 +473,14 @@ function descriptorToElement(
   const props: Record<string, unknown> = descriptorProps(descriptor);
   const onClick = descriptorOnClick(descriptor, actions);
   if (onClick !== undefined) props.onClick = onClick;
+  const menuTriggerCwd = descriptor.attrs?.["data-open-workspace-menu"];
+  if (menuTriggerCwd !== undefined) {
+    props.onClick = (event: ReactMouseEvent<HTMLElement>) => {
+      const trigger = event.currentTarget;
+      const rect = trigger.getBoundingClientRect();
+      actions.onWorkspaceMenuOpen({ cwd: menuTriggerCwd, x: rect.left, y: rect.bottom, trigger });
+    };
+  }
   const menuCwd = descriptor.attrs?.["data-workspace-menu"];
   if (menuCwd !== undefined) {
     props.onContextMenu = (event: ReactMouseEvent<HTMLElement>) => {
@@ -647,6 +684,7 @@ function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactE
     snapshot.state.displayedSessionId,
     collapsedCwds,
     snapshot.loadStatus,
+    workspaceMenu?.cwd,
   );
   return (
     <>

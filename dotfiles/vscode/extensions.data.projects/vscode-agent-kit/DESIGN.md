@@ -28,11 +28,11 @@ Layout: Sessions ビュータイトル — 見出しと一覧の更新操作を�
 
 Layout: New workspace フッター — 一覧が短いときも長いときも操作の下余白を一覧の上余白に揃える → sticky-footer の document 内下端追従版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/viewport-shell/sticky-footer.md)）; scroll owner: `html`（document）; anti-patterns: 上下で異なる外側余白、入力への切替による高さの増減、一覧だけの別スクロール領域。
 
-Layout: ワークスペース見出し — 左の開閉と名前、右の補助操作を一列に配置する → split-nav の固定操作幅版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/in-line-grouping/split-nav.md)）; scroll owner: `html`（document）; anti-patterns: 操作の折り返し、名前による操作の押し出し。名前を省略して操作幅を保つ。
+Layout: ワークスペース見出し — 左の開閉・名前・省略メニュー、右のモード切替・New session を一列に配置する → split-nav の固定操作幅版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/in-line-grouping/split-nav.md)）; scroll owner: `html`（document）; anti-patterns: 操作の折り返し、名前による操作の押し出し。名前を省略して操作幅を保つ。
 
 Layout: セッション一覧 — スクロールバーを既存の余白へ重ねる → imposter の右端固定配置（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/overlay-exception/imposter.md)）; scroll owner: `html`（document）; anti-patterns: バー専用の幅予約、一覧だけの別スクロール領域、一覧・フッターのフロー変更。
 
-Layout: ワークスペースのコンテキストメニュー — 一覧を押し下げず起動位置に操作を重ねる → imposter の viewport 内固定配置版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/overlay-exception/imposter.md)）; scroll owner: `html`（document）; anti-patterns: 一覧幅・行位置の変化、viewport 外へのはみ出し、メニュー内の追加スクロール領域。
+Layout: ワークスペースのメニュー — 一覧を押し下げず起動位置に操作を重ねる → imposter の viewport 内固定配置版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/overlay-exception/imposter.md)）; scroll owner: `html`（document）; anti-patterns: 一覧幅・行位置の変化、viewport 外へのはみ出し、メニュー内の追加スクロール領域。
 
 | 対象 | 値 |
 | --- | --- |
@@ -41,7 +41,7 @@ Layout: ワークスペースのコンテキストメニュー — 一覧を押�
 | フッター | 一覧の下。上境界線（境界トークン）と上下・左右12pxの余白で区切る。操作の下余白は、一覧の長さとスクロール位置によらず一覧の上余白と同じ12pxとする |
 | 状態・エラー表示 | 文字があるときだけフッターの操作より上に表示し、高さ16px以上、操作との間隔8pxとする。空のときは表示領域と間隔を確保せず、上境界線の下端から操作の上端まで12pxとする |
 | フォーム（開いたとき） | New workspace と同じ位置・幅・高さ。開閉で周囲の配置とスクロール範囲を保つ |
-| グループ見出し | 高さ24px、右の補助操作との間隔4px。chevron と名前の共通領域はアプリ左端の余白から8px左へ広げ、chevron ボタンと名前の間隔は0pxとする。chevron の操作領域は24px四方を保つ。見出し名の内側余白は常時左0px・右6px。文字は14px・600・20px行で省略表示。chevron と名前が残り幅を使い、右の補助操作は24px四方を保つ |
+| グループ見出し | 高さ24px、右の補助操作との間隔4px。chevron と名前の共通領域はアプリ左端の余白から8px左へ広げ、chevron ボタンと名前の間隔は0pxとする。chevron の操作領域は24px四方を保つ。見出し名の内側余白は常時左0px・右6px。文字は14px・600・20px行で省略表示。名前の直後に省略メニューボタンを常時表示し、残る空間で右端のモード切替・New session と分ける。長い名前は省略し、chevron・省略メニュー・右の補助操作は24px四方を保つ |
 | セッション行 | 高さ32px、見出し直後の行は上余白4px。行の左端はグループ見出しの開閉領域と揃え、アプリ左端の余白から8px左へ広げる。ボタンの内側の左余白は4px、アイコン・表示名の間隔は8pxとし、表示名の文字開始位置をグループ見出し名と揃える。hover・選択の背景面とfocus ringはボタン全体に描く。既存の状態アイコンは表示名の左側に置き、ボタンの一部として操作できる。文字・状態アイコン・日時・行操作の位置と幅は各状態で維持する |
 | オーバーレイスクロールバー | viewport の右端に幅12pxの透明なトラックを重ねる。つまみは幅8px・右余白2px・角丸4px。高さは表示範囲の比率に合わせ、最小24px・最大トラック高。バーの有無によらず左右12pxの全体余白と行幅を保つ |
 
@@ -55,10 +55,11 @@ New workspace フッターの主操作はワークスペースの登録。情報
 
 | 部品 | 定義 |
 | --- | --- |
-| グループ見出しの開閉領域 | chevron と名前を、基準角丸のひと続きの hover 面で囲む。どちらにホバーしても領域全体を hover 面にし、各ボタンの背景は透明に保つ。右のモード切替・New session はこの面の外に置き、個別の hover 面と focus ring を保つ。開閉ボタンそれぞれの focus は focus トークンの ring |
+| グループ見出しの開閉領域 | chevron と名前を、基準角丸のひと続きの hover 面で囲む。どちらにホバーしても領域全体を hover 面にし、各ボタンの背景は透明に保つ。名前に隣接する省略メニューと右のモード切替・New session はこの面の外に置き、個別の hover 面と focus ring を保つ。開閉ボタンそれぞれの focus は focus トークンの ring |
 | chevron | 24px 四方の領域に12px の SVG、本文色。展開で下向き、折りたたみで右向きに示す。hover は開閉領域と共用する。開閉の操作と状態は SPEC「Webview の表示」に従う |
 | グループ見出しの New session | chevron と同じ 24px 四方の ghost 操作、本文色。12px の plus SVG、hover は hover 面。ホバーのヒントは `New session` |
-| グループ見出しのコンテキストメニュー | `Unregister workspace` のテキスト項目1つを持つ。固定配置で一覧に重ね、viewport 端から4px以上内側に収める。最小幅160px・最大幅は viewport 幅から8pxを除いた幅。内側余白4px、境界1px、角丸は基準角丸。メニューの色はコンテキストメニュートークン。項目は全幅・高さ32px以上・左右余白8px・13px文字・基準角丸で、長い文字は折り返す。hover・focus はメニュー項目トークン。表示層はスクロールバーより上に置く。操作は SPEC「ワークスペース登録解除」に従う |
+| グループ見出しの省略メニューボタン | New session と同じ24px四方の ghost 操作、補助文字色、基準角丸。12px の水平三点 SVG は既存の行内操作と同じ `viewBox="0 0 24 24"`・塗りなし・`currentColor` の線幅2・丸い線端と線結合を使う。hover は本文色と hover 面、focus は focus トークンの ring。ヒントと操作は SPEC「ワークスペース登録解除」に従う |
+| グループ見出しのメニュー | 省略メニューボタンとコンテキストメニューで共用する。`Unregister workspace` のテキスト項目1つを持つ。固定配置で一覧に重ね、viewport 端から4px以上内側に収める。最小幅160px・最大幅は viewport 幅から8pxを除いた幅。内側余白4px、境界1px、角丸は基準角丸。メニューの色はコンテキストメニュートークン。項目は全幅・高さ32px以上・左右余白8px・13px文字・基準角丸で、長い文字は折り返す。hover・focus はメニュー項目トークン。表示層はスクロールバーより上に置く。操作は SPEC「ワークスペース登録解除」に従う |
 | フッターの New workspace | フル幅・高さ32px・角丸9.6pxの ghost 操作。13px・500 ラベル、本文色、hover は hover 面。開くとアイコンの位置を保ったまま文字部分が入力へ切り替わる。構造の参照元は agent-open-ui の `SidebarFooter` |
 | フッターの folder-plus | ボタンと入力に共通する16pxの装飾SVG、本文色。操作領域の左端から11px・上端から8pxに配置する。文字先頭は操作領域の左端から33pxで、アイコンの右端との間隔は6px。入力中は入力面の左内側に置く |
 | ワークスペース フォーム | New workspace の文字部分を置き換える入力欄1つ。入力は境界を含め高さ32px・角丸9.6px・入力トークン・13px 文字、左内側余白32px・右内側余白8px、placeholder は `/absolute/path`、focus は `focusBorder` の 2px ring。構造の参照元は agent-open-ui の `SidebarWorkspaceForm` |
@@ -75,7 +76,7 @@ New workspace フッターの主操作はワークスペースの登録。情報
 
 ワークスペース見出しは [beui.dev の shared-layout-bg](https://beui.dev/r/shared-layout-bg/raw) の共通背景を参照し、chevron と名前で1つの hover 面を共有する。背景の切替は即時とし、アニメーションは加えない。hover・focus で文字位置・余白・寸法を変えない。
 
-コンテキストメニューは [beui.dev の context-menu](https://beui.dev/r/context-menu/raw) の起動元・項目フォーカス・viewport 内への位置調整を参照する。開閉と位置調整は即時とし、アニメーションは加えない。
+ワークスペースのメニューは [beui.dev の context-menu](https://beui.dev/r/context-menu/raw) の起動元・項目フォーカス・viewport 内への位置調整を参照する。開閉と位置調整は即時とし、アニメーションは加えない。
 
 spinner は中心を軸に1秒・linear・無限反復で1回転する。回転は `transform` のみで行い、行やスロットの寸法を変えない。`prefers-reduced-motion` での表示は SPEC「実行フェーズの表示」に従う。
 
