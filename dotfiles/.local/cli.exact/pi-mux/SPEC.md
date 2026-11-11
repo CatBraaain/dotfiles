@@ -73,9 +73,9 @@
 | `id` | `string` | 会話ID |
 | `cwd` | `string` | 起動cwdの絶対パス |
 | `file` | `string` | 会話ファイルの絶対パス。未作成の保存予定先も含む |
-| `phase` | `string \| null` | `running`・`waiting-approval`・`waiting-user` のいずれか。確認できない場合は `null` |
+| `state` | `string \| null` | `running`・`waiting-approval`・`waiting-user` のいずれか。確認できない場合は `null` |
 
-phaseはpane option `@pi_session_state` のJSONから取得する。`version` が1、`sessionId` が同じ会話ID、`phase` が上記の値の場合だけ採用する。未公開・不正JSON・不正な値・別会話の値は `null` とし、pi自体は一覧に残す。
+stateはpane option `@pi_session_state` のJSONから取得する。`version` が1、`sessionId` が同じ会話ID、`phase` が上記の値の場合だけ採用する。未公開・不正JSON・不正な値・別会話の値は `null` とし、pi自体は一覧に残す。
 
 metadataは会話ID・絶対パスのcwdとfile・pane PIDとの一致を検証する。終了済みpaneとmetadata未公開のpaneは含めない。不正metadataはエラーとする。startupを持たないmetadataと、startupが `accepted` または `ready` のmetadataを受け付ける。一覧への掲載は復元成功を示さず、復元では `ready` を必須とする。
 

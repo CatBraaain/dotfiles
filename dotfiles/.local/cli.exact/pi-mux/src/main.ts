@@ -547,7 +547,7 @@ async function listSessions(config: TmuxConfig) {
   return await Promise.all(
     panes.map(async ({ id, cwd, file, pane }) => {
       const state = await tmux(config, ["show-options", "-pqv", "-t", pane, "@pi_session_state"]);
-      return { id, cwd, file, phase: parsePhase(state.stdout, id) };
+      return { id, cwd, file, state: parsePhase(state.stdout, id) };
     }),
   );
 }

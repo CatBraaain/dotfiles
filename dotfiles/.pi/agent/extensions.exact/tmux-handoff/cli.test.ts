@@ -768,7 +768,7 @@ describe("pi-mux read-only list", () => {
         const result = await f.run(["list"]);
         assert.equal(result.code, 0, result.err);
         assert.deepEqual(JSON.parse(result.out), [
-          { id: metadata.id, cwd: metadata.cwd, file: metadata.file, phase: null },
+          { id: metadata.id, cwd: metadata.cwd, file: metadata.file, state: null },
         ]);
         assert.equal(readFileSync(path, "utf8"), invalid);
       });
@@ -810,7 +810,7 @@ describe("pi-mux read-only list", () => {
             id: metadata.id,
             cwd: metadata.cwd,
             file: metadata.file,
-            phase: null,
+            state: null,
           }))
           .sort((a, b) => a.id.localeCompare(b.id));
         assert.deepEqual(actual, expected);
@@ -846,7 +846,7 @@ describe("pi-mux read-only list", () => {
           assert.equal(result.code, 0, result.err);
           assert.equal(result.err, "");
           assert.deepEqual(JSON.parse(result.out), [
-            { id: metadata.id, cwd: metadata.cwd, file: metadata.file, phase },
+            { id: metadata.id, cwd: metadata.cwd, file: metadata.file, state: phase },
           ]);
           assert.equal(existsSync(metadata.file), false);
           assert.equal(existsSync(join(f.agent, "pi-tmux")), false);
@@ -898,7 +898,7 @@ describe("pi-mux read-only list", () => {
           const result = await f.run(["list"]);
           assert.equal(result.code, 0, result.err);
           assert.deepEqual(JSON.parse(result.out), [
-            { id: metadata.id, cwd: metadata.cwd, file: metadata.file, phase: null },
+            { id: metadata.id, cwd: metadata.cwd, file: metadata.file, state: null },
           ]);
         });
       },
@@ -915,7 +915,7 @@ describe("pi-mux read-only list", () => {
           const result = await f.run(["list"]);
           assert.equal(result.code, 0, result.err);
           assert.deepEqual(JSON.parse(result.out), [
-            { id: metadata.id, cwd: metadata.cwd, file: metadata.file, phase: null },
+            { id: metadata.id, cwd: metadata.cwd, file: metadata.file, state: null },
           ]);
           assert.equal(existsSync(metadata.file), false);
           f.saved(metadata.id);
@@ -943,7 +943,7 @@ describe("pi-mux read-only list", () => {
         const result = await f.run(["list"]);
         assert.equal(result.code, 0, result.err);
         assert.deepEqual(JSON.parse(result.out), [
-          { id: pane.id, cwd: pane.cwd, file: pane.file, phase: null },
+          { id: pane.id, cwd: pane.cwd, file: pane.file, state: null },
         ]);
         assert.equal(existsSync(pane.file), false);
         assert.equal((await firstPane(f)).pid, pane.pid);
