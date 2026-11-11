@@ -60,6 +60,7 @@ function harness(
   let command!: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
   const queued: string[] = [];
   const notifications: string[] = [];
+  const notificationLevels: Array<string | undefined> = [];
   const names: string[] = [];
   const calls: Array<{ model: Model<Api>; context: Context; options: unknown }> = [];
   const resolutions: Resolution[] = [];
@@ -76,7 +77,12 @@ function harness(
     model: parentModel,
     thinkingLevel: "high",
     isIdle: () => idle,
-    ui: { notify: (message: string) => notifications.push(message) },
+    ui: {
+      notify(message: string, level?: string) {
+        notifications.push(message);
+        notificationLevels.push(level);
+      },
+    },
     modelRegistry: {
       hasConfiguredAuth: () => true,
       getApiKeyAndHeaders: async () => ({ ok: true }),
@@ -143,6 +149,7 @@ function harness(
     resolutions,
     queued,
     notifications,
+    notificationLevels,
     names,
     started: started.promise,
     get manager() {
@@ -526,6 +533,145 @@ describe("recontext titles", () => {
   });
 });
 
+describe("title length validation", () => {
+  it("retries a 64-character title without saving it or adding conversation messages", async () => {
+    let attempts = 0;
+    const h = harness({
+      complete: async () => {
+        attempts++;
+        return assistant("stop", attempts === 1 ? "あ".repeat(64) : "  Short\n  title \t");
+      },
+    });
+    h.user();
+    h.manager.appendSessionInfo("Keep");
+    const messagesBefore = h.manager.getEntries().filter((entry) => entry.type === "message");
+    await h.retitle();
+    assert.deepEqual(h.names, ["Short title"]);
+    assert.equal(h.calls.length, 2);
+    assert.equal(h.notifications.length, 0);
+    const correction = JSON.stringify(h.calls[1]!.context.messages);
+    assert.match(correction, /64/);
+    assert.match(correction, /25/);
+    assert.match(correction, /only the title/i);
+    const messagesAfter = h.manager.getEntries().filter((entry) => entry.type === "message");
+    assert.deepEqual(messagesAfter, messagesBefore);
+  });
+});
+
+describe("title length boundaries and retry failures", () => {
+  for (const { language, character } of [
+    { language: "English", character: "a" },
+    { language: "Japanese", character: "あ" },
+    { language: "supplementary Unicode", character: "😀" },
+  ]) {
+    it(`accepts 25 ${language} code points without retrying`, async () => {
+      const title = character.repeat(25);
+      const h = harness({ complete: async () => assistant("stop", title) });
+      h.user();
+      await h.retitle();
+      assert.deepEqual(h.names, [title]);
+      assert.equal(h.calls.length, 1);
+      assert.equal(h.notifications.length, 0);
+    });
+
+    it(`retries 26 ${language} code points with the measured length`, async () => {
+      let attempts = 0;
+      const h = harness({
+        complete: async () => {
+          attempts++;
+          return assistant("stop", character.repeat(attempts === 1 ? 26 : 25));
+        },
+      });
+      h.user();
+      await h.retitle();
+      assert.deepEqual(h.names, [character.repeat(25)]);
+      assert.equal(h.calls.length, 2);
+      assert.match(JSON.stringify(h.calls[1]!.context.messages), /26 characters/);
+      assert.equal(h.notifications.length, 0);
+    });
+  }
+
+  it("measures the title after collapsing and trimming whitespace", async () => {
+    const title = `${"a".repeat(23)} b`;
+    const h = harness({
+      complete: async () => assistant("stop", `  ${"a".repeat(23)}\n\t  b  `),
+    });
+    h.user();
+    await h.retitle();
+    assert.deepEqual(h.names, [title]);
+    assert.equal(h.calls.length, 1);
+  });
+
+  for (const failure of [
+    "overlong",
+    "empty",
+    "error",
+    "aborted",
+    "length",
+    "toolUse",
+    "throw",
+  ] as const) {
+    it(`keeps the existing name and warns once after an ${failure} retry`, async () => {
+      let attempts = 0;
+      const h = harness({
+        complete: async () => {
+          attempts++;
+          if (attempts === 1 || failure === "overlong") return assistant("stop", "a".repeat(26));
+          if (failure === "empty") return assistant("stop", " \n\t ");
+          if (failure === "throw") throw new Error("Network unavailable");
+          return assistant(failure, "Do not save");
+        },
+      });
+      h.user();
+      h.manager.appendSessionInfo("Keep");
+      await h.retitle();
+      assert.equal(h.manager.getSessionName(), "Keep");
+      assert.deepEqual(h.names, []);
+      assert.equal(h.calls.length, 2);
+      assert.equal(h.notifications.length, 1);
+      assert.deepEqual(h.notificationLevels, ["warning"]);
+      assert.match(h.notifications[0]!, /Session title was not changed/);
+      if (failure === "overlong") assert.match(h.notifications[0]!, /26.*25/);
+    });
+  }
+
+  for (const change of ["session", "tree", "shutdown", "silent-tree"] as const) {
+    it(`discards the retry result after a ${change} change`, async () => {
+      const result = deferred<AssistantMessage>();
+      const retryStarted = deferred<void>();
+      let attempts = 0;
+      const h = harness({
+        complete: async () => {
+          attempts++;
+          if (attempts === 1) return assistant("stop", "a".repeat(26));
+          retryStarted.resolve();
+          return result.promise;
+        },
+      });
+      const root = h.user();
+      h.manager.appendMessage(assistant());
+      const operation = h.retitle();
+      await retryStarted.promise;
+      if (change === "session") await h.switchSession();
+      if (change === "tree" || change === "silent-tree") {
+        h.manager.branch(root);
+        if (change === "tree") await h.emit("session_tree");
+        else h.user("Alternative branch");
+      }
+      if (change === "shutdown") await h.emit("session_shutdown");
+      const retrySignal = (h.calls[1]!.options as { signal: AbortSignal }).signal;
+      assert.equal(retrySignal.aborted, change !== "silent-tree");
+      h.manager.appendSessionInfo("Keep new target");
+      result.resolve(assistant("stop", "Wrong title"));
+      await operation;
+      assert.equal(h.manager.getSessionName(), "Keep new target");
+      assert.deepEqual(h.names, []);
+      assert.equal(h.calls.length, 2);
+      assert.equal(h.notifications.length, 0);
+    });
+  }
+});
+
 describe("title input and failures", () => {
   it("uses only raw user and assistant text, including context-edited history", async () => {
     const h = harness();
@@ -584,6 +730,7 @@ describe("title input and failures", () => {
       h.manager.appendSessionInfo("Keep");
       await h.retitle();
       assert.equal(h.manager.getSessionName(), "Keep");
+      assert.equal(h.calls.length, 1);
       assert.match(h.notifications[0]!, new RegExp(stopReason));
     });
   }
@@ -612,6 +759,7 @@ describe("title input and failures", () => {
     h.user();
     await h.retitle();
     assert.equal(h.names.length, 0);
+    assert.equal(h.calls.length, 1);
     assert.match(h.notifications[0]!, /empty title/);
   });
 
