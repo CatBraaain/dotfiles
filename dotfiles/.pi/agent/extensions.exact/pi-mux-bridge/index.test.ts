@@ -23,7 +23,9 @@ function captureHandlers(execute?: ExtensionAPI["exec"]) {
       backgroundContext,
       async (request) => {
         const [command, ...args] = parse(request.params.command) as string[];
-        const result = await execute(command!, args);
+        const result = await execute(command!, args, {
+          timeout: request.params.timeout! * 1_000,
+        });
         return {
           content: [{ type: "text", text: result.stdout || result.stderr }],
           details: {},
@@ -102,6 +104,25 @@ function managedPaneOutput(): string {
     String(process.pid),
   ].join("\t");
 }
+
+describe("startup notification timeouts", () => {
+  it("forwards the pane verification timeout and keeps the publication default", async () => {
+    await withManagedEnvironment(async () => {
+      const timeouts: Array<number | undefined> = [];
+      const handlers = captureHandlers(async (_command, args, options) => {
+        timeouts.push(options?.timeout);
+        return {
+          stdout: args.includes("display-message") ? managedPaneOutput() : "",
+          stderr: "",
+          code: 0,
+          killed: false,
+        };
+      });
+      await handlers.get("startup")!("", context().ctx);
+      assert.deepEqual(timeouts, [5_000, 1_000]);
+    });
+  });
+});
 
 describe("fixed conversation identity", () => {
   it("does not publish managed readiness from an initialization hook", async () => {

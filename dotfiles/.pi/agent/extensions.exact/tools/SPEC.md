@@ -47,4 +47,6 @@ lifecycle/background処理は、Tools配下のBash専用helperをimportし、型
 | Guardrailsの初期化が失敗したruntimeの有効なAPIへの要求 | `failed` と通常ツールと同じ初期化エラー |
 | `session_shutdown` による背景APIの停止 | 保留要求を `unavailable` と停止理由で決着する |
 
-要求期限は約2秒とし、`params.timeout` が2秒より長ければその秒数を使う。1要求につき実行は最大1回とし、終端は一度だけ確定する。中断・期限超過・停止では実行信号をabortし、以後の遅延応答を破棄する。`session_shutdown` で背景APIを停止し、そのruntimeへの新規要求を拒否する。入口の不在・無効・失敗時に別の実行経路へfallbackしない。
+`params.timeout` はBash実行の期限を秒単位で指定する。要求全体の期限は、指定がある場合はその秒数に2秒を加え、指定がない場合は2秒とする。追加の2秒はsandboxの準備・プロセス起動・結果回収の余裕とし、Bash実行の指定時間は維持する。
+
+1要求につき実行は最大1回とし、終端は一度だけ確定する。中断・期限超過・停止では実行信号をabortし、以後の遅延応答を破棄する。`session_shutdown` で背景APIを停止し、そのruntimeへの新規要求を拒否する。入口の不在・無効・失敗時に別の実行経路へfallbackしない。

@@ -200,6 +200,86 @@ describe("background Bash lifetime", () => {
     });
   }
 
+  it("adds setup time to the outer deadline while preserving the execution timeout", async () => {
+    await withControlledClock(async (advance) => {
+      const executionStarted = Promise.withResolvers<void>();
+      const dispose = registerBackgroundBash(
+        request.context,
+        async (input) => {
+          assert.equal(input.params.timeout, 0.1);
+          advance(1_980);
+          executionStarted.resolve();
+          await new Promise((resolve) => setTimeout(resolve, 70));
+          return result;
+        },
+        () => {},
+      );
+      try {
+        const pending = requestBackgroundBash({
+          ...request,
+          params: { ...request.params, timeout: 0.1 },
+        });
+        await executionStarted.promise;
+        advance(70);
+        assert.equal((await pending).status, "completed");
+      } finally {
+        dispose();
+      }
+    });
+  });
+
+  it("fails and aborts only when the outer deadline is exceeded", async () => {
+    await withControlledClock(async (advance) => {
+      let signal: AbortSignal | undefined;
+      const dispose = registerBackgroundBash(
+        request.context,
+        async (input) => {
+          signal = input.signal;
+          return new Promise(() => {});
+        },
+        () => {},
+      );
+      try {
+        const pending = requestBackgroundBash({
+          ...request,
+          params: { ...request.params, timeout: 0.1 },
+        });
+        await Promise.resolve();
+        advance(2_101);
+        const outcome = await pending;
+        assert.equal(outcome.status, "failed");
+        assert.equal(signal?.aborted, true);
+      } finally {
+        dispose();
+      }
+    });
+  });
+
+  it("rearms large deadlines without timing out at the timer limit", async () => {
+    await withControlledClock(async (advance, scheduledDelays) => {
+      const delayed = Promise.withResolvers<AgentToolResult<unknown>>();
+      const dispose = registerBackgroundBash(
+        request.context,
+        async () => delayed.promise,
+        () => {},
+      );
+      try {
+        const pending = requestBackgroundBash({
+          ...request,
+          params: { ...request.params, timeout: 2_147_483.647 },
+        });
+        await Promise.resolve();
+        assert.equal(scheduledDelays[0], 2_147_483_647);
+        advance(2_147_483_647);
+        assert.equal(scheduledDelays[1], 2_000);
+        delayed.resolve(result);
+        assert.equal((await pending).status, "completed");
+      } finally {
+        dispose();
+      }
+    });
+  });
+
   it.each([undefined, 0.01])(
     "keeps the default request deadline for timeout %s",
     async (timeout) => {
@@ -373,6 +453,48 @@ type Fixture = {
   calls: string[];
   emit(name: string): Promise<void>;
 };
+
+async function withControlledClock(
+  test: (advance: (milliseconds: number) => void, scheduledDelays: number[]) => Promise<void>,
+): Promise<void> {
+  const originalNow = Date.now;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  let now = 0;
+  let nextTimerId = 0;
+  const timers = new Map<number, { callback: () => void; dueAt: number }>();
+  const scheduledDelays: number[] = [];
+  Date.now = () => now;
+  globalThis.setTimeout = ((callback: unknown, delay = 0) => {
+    const timerId = nextTimerId++;
+    scheduledDelays.push(delay);
+    timers.set(timerId, { callback: callback as () => void, dueAt: now + delay });
+    return timerId as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((timerId: ReturnType<typeof setTimeout>) => {
+    timers.delete(timerId as unknown as number);
+  }) as typeof clearTimeout;
+  function advance(milliseconds: number): void {
+    const targetTime = now + milliseconds;
+    while (true) {
+      const nextTimer = [...timers.entries()].sort(
+        (left, right) => left[1].dueAt - right[1].dueAt,
+      )[0];
+      if (!nextTimer || nextTimer[1].dueAt > targetTime) break;
+      now = nextTimer[1].dueAt;
+      timers.delete(nextTimer[0]);
+      nextTimer[1].callback();
+    }
+    now = targetTime;
+  }
+  try {
+    await test(advance, scheduledDelays);
+  } finally {
+    Date.now = originalNow;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+}
 
 async function withTools(config: string, test: (fixture: Fixture) => Promise<void>): Promise<void> {
   mkdirSync("/tmp/work/dotfiles", { recursive: true });

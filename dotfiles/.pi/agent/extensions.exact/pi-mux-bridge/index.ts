@@ -127,10 +127,13 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
 }
 
 function backgroundExecutor(ctx: ExtensionContext): Execute {
-  return async function execute(command, args) {
+  return async function execute(command, args, options) {
     const outcome = await requestBackgroundBash({
       id: "pi-mux-bridge-startup",
-      params: { command: quote([command, ...args]), timeout: TMUX_TIMEOUT_S },
+      params: {
+        command: quote([command, ...args]),
+        timeout: options?.timeout === undefined ? TMUX_TIMEOUT_S : options.timeout / 1_000,
+      },
       context: ctx,
     });
     if (outcome.status !== "completed") {

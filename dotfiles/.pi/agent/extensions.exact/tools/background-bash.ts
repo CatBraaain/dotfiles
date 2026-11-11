@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { GuardedToolContext } from "../guardrails/api.ts";
 
 const REQUEST_TIMEOUT_MS = 2_000;
+const MAX_TIMER_MS = 2_147_483_647;
 const REGISTRY_KEY = Symbol.for("pi.tools.background-bash.v1");
 
 type RuntimeContext = { modelRegistry: object };
@@ -65,10 +66,33 @@ export function registerBackgroundBash(
       return new Promise((resolveOutcome) => {
         const controller = new AbortController();
         let settled = false;
-        const timer = setTimeout(
-          () => finish({ status: "failed", error: new Error("Background Bash request timed out") }),
-          Math.max(REQUEST_TIMEOUT_MS, (request.params?.timeout ?? 0) * 1_000),
-        );
+        const timeoutSeconds = request.params?.timeout;
+        const timeoutMs =
+          typeof timeoutSeconds === "number" &&
+          Number.isFinite(timeoutSeconds) &&
+          timeoutSeconds > 0
+            ? timeoutSeconds * 1_000 + REQUEST_TIMEOUT_MS
+            : REQUEST_TIMEOUT_MS;
+        const deadline = Date.now() + timeoutMs;
+        let timer: ReturnType<typeof setTimeout>;
+
+        function armTimeout(): void {
+          const remainingMs = deadline - Date.now();
+          if (remainingMs <= 0) {
+            finish({ status: "failed", error: new Error("Background Bash request timed out") });
+            return;
+          }
+          timer = setTimeout(
+            () => {
+              if (Date.now() < deadline) armTimeout();
+              else
+                finish({ status: "failed", error: new Error("Background Bash request timed out") });
+            },
+            Math.min(remainingMs, MAX_TIMER_MS),
+          );
+        }
+
+        armTimeout();
 
         function finish(outcome: BackgroundBashOutcome): void {
           if (settled) return;
