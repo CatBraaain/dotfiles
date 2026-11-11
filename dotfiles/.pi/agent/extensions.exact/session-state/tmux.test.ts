@@ -298,8 +298,7 @@ describe("detectManagedPane", () => {
 
       const absent = new FakeTmuxServer(
         {
-          "display-message": () =>
-            failedOutcome(new Error("No active receiver for tools:execute-bash")),
+          "display-message": () => failedOutcome(new Error("No active background Bash API")),
         },
         candidate.socketPath,
       );
@@ -307,7 +306,7 @@ describe("detectManagedPane", () => {
       assert.equal(absentDetection.status, "failed");
       assert.match(
         absentDetection.status === "failed" ? absentDetection.message : "",
-        /No active receiver/,
+        /No active background Bash API/,
       );
     } finally {
       await candidate.cleanup();

@@ -156,11 +156,12 @@ function captureRegisteredTools(
   handlers?: Map<string, (event: any, context?: any) => unknown>,
 ): Map<string, any> {
   const registered = new Map<string, any>();
+  const modelRegistry = {};
   function on(event: string, handler: (event: any, context?: any) => unknown): void {
     const previous = handlers?.get(event);
     handlers?.set(event, async (payload, context) => {
       await previous?.(payload, context);
-      return handler(payload, context);
+      return handler(payload, event === "session_start" ? { modelRegistry, ...context } : context);
     });
   }
   const api = {

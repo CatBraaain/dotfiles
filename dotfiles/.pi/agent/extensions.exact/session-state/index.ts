@@ -59,10 +59,12 @@ export type ArchiveWriteOutcome = StoreWriteOutcome | { status: "locked" };
 
 interface PublicationGeneration {
   controller: AbortController;
+  initializationStarted: boolean;
   binding?: ManagedPaneBinding;
   phase?: SessionPhase;
   sessionId: string;
   run: BashRunner;
+  environment: Pick<NodeJS.ProcessEnv, "XDG_RUNTIME_DIR" | "TMUX" | "TMUX_PANE">;
   notify: (message: string) => void;
 }
 
@@ -97,7 +99,7 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
     notify: (message: string) => void,
   ): BashRunner {
     return async function run(command) {
-      const outcome = await requestBackgroundBash(pi.events, {
+      const outcome = await requestBackgroundBash({
         id: "session-state-tmux",
         params: { command, timeout: TMUX_COMMAND_TIMEOUT_S },
         context,
@@ -115,7 +117,7 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
 
   function schedulePhasePublication(phase: SessionPhase): void {
     const gen = generation;
-    if (!gen || gen.phase === phase) return;
+    if (!gen || !gen.initializationStarted || gen.phase === phase) return;
     gen.phase = phase;
     enqueuePublication(gen, async () => {
       if (gen.controller.signal.aborted || !gen.binding) return;
@@ -156,14 +158,22 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
     const notify = makeNotifier(ctx);
     const gen: PublicationGeneration = {
       controller,
+      initializationStarted: false,
       sessionId: ctx.sessionManager.getSessionId(),
       run: makeBashRunner(context, notify),
+      environment,
       notify,
     };
     generation = gen;
+  });
+
+  pi.on("resources_discover", () => {
+    const gen = generation;
+    if (!gen || gen.initializationStarted) return;
+    gen.initializationStarted = true;
     enqueuePublication(gen, async () => {
       if (gen.controller.signal.aborted) return;
-      const detection = await detectManagedPane(gen.run, environment);
+      const detection = await detectManagedPane(gen.run, gen.environment);
       if (publicationProcess[PUBLICATION_STOPPED] || gen.controller.signal.aborted) return;
       if (detection.status === "managed") gen.binding = detection.binding;
       if (detection.status === "failed")
@@ -244,6 +254,7 @@ function captureBashContext(ctx: ExtensionContext): BackgroundBashContext {
   const sessionId = ctx.sessionManager.getSessionId();
   const sessionFile = ctx.sessionManager.getSessionFile();
   return {
+    modelRegistry: ctx.modelRegistry,
     model: ctx.model,
     thinkingLevel: ctx.thinkingLevel,
     sessionManager: { getSessionId: () => sessionId, getSessionFile: () => sessionFile },

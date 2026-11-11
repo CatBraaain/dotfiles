@@ -62,6 +62,7 @@ async function createHarness(persist = true) {
     { env: gitEnvironment, stdio: "pipe" },
   );
   const events = createEventBus();
+  const modelRegistry = {};
   const handlers = new Map<string, Handler[]>();
   const tools = new Map<string, ToolDefinition>();
   const messages: SentMessage[] = [];
@@ -101,6 +102,7 @@ async function createHarness(persist = true) {
 
   function context(): ExtensionContext {
     return {
+      modelRegistry,
       cwd: root,
       sessionManager: manager,
       hasUI: true,
@@ -137,13 +139,17 @@ async function createHarness(persist = true) {
     };
   }
 
-  const disposeReceiver = registerBackgroundBash(events, async (request) => {
-    queries.push(request.params.command);
-    await beforeQuery?.();
-    const outcome = shell(request.params.command);
-    if (outcome.isError) throw new Error(outcome.result.content[0]!.text);
-    return outcome.result;
-  });
+  const disposeReceiver = registerBackgroundBash(
+    context(),
+    async (request) => {
+      queries.push(request.params.command);
+      await beforeQuery?.();
+      const outcome = shell(request.params.command);
+      if (outcome.isError) throw new Error(outcome.result.content[0]!.text);
+      return outcome.result;
+    },
+    () => {},
+  );
   cleanup.push(disposeReceiver);
   const pi = {
     events,
@@ -788,7 +794,7 @@ describe("session metadata extension", () => {
     const result = await h.bash(quote(["git", "worktree", "add", "-b", "unobserved", path]));
     assert.equal(result.outcome.isError, false);
     assert.deepEqual(getWorkspaces(h.manager), []);
-    assert.match(String(h.messages[0]![0].content), /No active background Bash receiver/);
+    assert.match(String(h.messages[0]![0].content), /No active background Bash API/);
   });
 
   it("stays silent when the worktree observer cannot parse the command", async () => {
@@ -911,8 +917,8 @@ describe("session metadata extension", () => {
     const component = renderer({ ...message, role: "custom", timestamp: 1 }, options, theme)!;
     const rendered = component.render(100).join("\n").trim();
     assert.equal(rendered, "Worktree metadata update failed");
-    assert.doesNotMatch(rendered, /No active background Bash receiver/);
-    assert.match(String(message.content), /No active background Bash receiver/);
+    assert.doesNotMatch(rendered, /No active background Bash API/);
+    assert.match(String(message.content), /No active background Bash API/);
   });
 
   it("renders a compact TUI notice while keeping the full model-facing update", async () => {

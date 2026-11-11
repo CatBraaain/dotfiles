@@ -9,7 +9,8 @@
 | 入力・状態 | 所属ストア | pane公開 |
 | --- | --- | --- |
 | トップレベルの `input` | 自セッションの所属を追加する | 現在値を維持する |
-| トップレベルの `session_start` | 内容と有無を維持する | 管理下を照合し、`waiting-user` を公開する |
+| トップレベルの `session_start` | 内容と有無を維持する | 公開世代を開始する |
+| トップレベルの `resources_discover` | 内容と有無を維持する | 管理下を照合し、`waiting-user` を公開する |
 | 実行フェーズの変化 | 内容と有無を維持する | 下記イベント表に従う |
 | `session_shutdown` | 所属を保持する | 新規公開を止め、optionの除去を試みる |
 | 専用tmux管理外のトップレベル | 所属更新とコマンドを提供する | 公開しない |
@@ -38,7 +39,7 @@
 | pane PTY | `/proc/self/fd/0` のリンク先 |
 | pane起動PID | 現在のpiの `process.pid` |
 
-全項目が一致したpaneだけを公開先にする。専用paneの子プロセスや偽マーカーを持つプロセスは、照合不一致により公開対象外になる。照合は `session_start` ごとに行い、その世代では捕捉済みの接続先を使う。
+全項目が一致したpaneだけを公開先にする。専用paneの子プロセスや偽マーカーを持つプロセスは、照合不一致により公開対象外になる。照合は各世代の `resources_discover` で、全拡張の `session_start` 初期化が完了した後に行う。その世代では捕捉済みの接続先を使う。
 
 ## pane optionの公開契約
 
@@ -60,7 +61,8 @@ run区間は `agent_start` から `agent_settled` までとし、中断による
 
 | イベント | 処理 |
 | --- | --- |
-| `session_start` | 旧世代を失効させ、run区間外・承認待ちなしで開始して `waiting-user` を公開する |
+| `session_start` | 旧世代を失効させ、run区間外・承認待ちなしで公開世代を開始する |
+| `resources_discover` | 管理paneを初期照合し、`waiting-user` を公開する |
 | `agent_start` | run区間に入り、承認待ちでなければ `running` を公開する |
 | `ui_prompt_start` | 承認待ちに入り、`waiting-approval` を公開する |
 | `ui_prompt_end` | 承認待ちを解除し、run区間内なら `running`、区間外なら `waiting-user` を公開する |

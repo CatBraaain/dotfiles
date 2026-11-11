@@ -60,7 +60,7 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
 
   function backgroundRunner(ctx: ExtensionContext): BashQuery {
     return async function run(command) {
-      const outcome = await requestBackgroundBash(pi.events, {
+      const outcome = await requestBackgroundBash({
         id: `session-metadata:${randomUUID()}`,
         params: { command },
         context: ctx,

@@ -26,7 +26,7 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
     if (ctx.mode !== "tui" || !startupPending) return;
     startupPending = false;
     try {
-      const execute = backgroundExecutor(pi, ctx);
+      const execute = backgroundExecutor(ctx);
       const paths = getTmuxPaths();
       const pane = await inspectManagedPane(execute, paths);
       const expectedId = process.env.PI_TMUX_SESSION_ID;
@@ -52,16 +52,12 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
   }
 }
 
-function backgroundExecutor(pi: ExtensionAPI, ctx: ExtensionContext): Execute {
+function backgroundExecutor(ctx: ExtensionContext): Execute {
   return async function execute(command, args) {
-    const outcome = await requestBackgroundBash(pi.events, {
+    const outcome = await requestBackgroundBash({
       id: "tmux-handoff-startup",
       params: { command: quote([command, ...args]), timeout: TMUX_TIMEOUT_S },
-      context: {
-        model: ctx.model,
-        thinkingLevel: ctx.thinkingLevel,
-        sessionManager: ctx.sessionManager,
-      },
+      context: ctx,
     });
     if (outcome.status !== "completed") {
       const reason = outcome.status === "aborted" ? outcome.reason : outcome.error;

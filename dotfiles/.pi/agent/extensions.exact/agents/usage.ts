@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { requestBackgroundBash } from "../tools/background-bash.ts";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
@@ -70,11 +70,10 @@ const bashOutputSchema = Type.Object({
 });
 
 export async function runUsage(
-  events: ExtensionAPI["events"],
   context: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<{ exitCode: number; stdout: string }> {
-  const outcome = await requestBackgroundBash(events, {
+  const outcome = await requestBackgroundBash({
     id: `agents-usage-${randomUUID()}`,
     params: { command: "usage --json 2>/dev/null", timeout: USAGE_TIMEOUT_SECONDS },
     context,

@@ -44,19 +44,31 @@ export default function toolsExtension(pi: ExtensionAPI, configPath?: string): v
     if (definition.name !== "bash") continue;
 
     const backgroundSchema = { ...bash.parameters, additionalProperties: false };
-    const dispose = registerBackgroundBash(pi.events, async (request) => {
-      if (initializationError !== undefined) throw initializationError;
-      if (!Value.Check(backgroundSchema, request.params))
-        throw new Error("Invalid background Bash arguments: expected command and optional timeout");
-      return execute({
-        id: request.id,
-        params: request.params,
-        context: { ...request.context, hasUI: false },
-        signal: request.signal,
-        approvalMode: "existing-only",
-      });
+    let dispose: (() => void) | undefined;
+    pi.on("session_start", (_event, context) => {
+      if (dispose) return;
+      dispose = registerBackgroundBash(
+        context,
+        async (request) => {
+          if (initializationError !== undefined) throw initializationError;
+          if (!Value.Check(backgroundSchema, request.params))
+            throw new Error(
+              "Invalid background Bash arguments: expected command and optional timeout",
+            );
+          return execute({
+            id: request.id,
+            params: request.params,
+            context: { ...request.context, hasUI: false },
+            signal: request.signal,
+            approvalMode: "existing-only",
+          });
+        },
+        () => {
+          pi.getThinkingLevel();
+        },
+      );
     });
-    pi.on("session_shutdown", dispose);
+    pi.on("session_shutdown", () => dispose?.());
   }
 }
 

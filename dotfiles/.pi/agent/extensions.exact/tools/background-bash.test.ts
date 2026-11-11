@@ -7,6 +7,7 @@ import {
   createEventBus,
   type AgentToolResult,
   type ExtensionAPI,
+  type ExtensionContext,
   type ExtensionToolContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -18,69 +19,112 @@ const result: AgentToolResult<unknown> = { content: [{ type: "text", text: "done
 const request = {
   id: "background",
   params: { command: "echo test" },
-  context: { model: undefined },
+  context: { model: undefined, modelRegistry: {} } as ExtensionContext,
 };
 
 describe("background Bash lifetime", () => {
-  it("fails immediately when no receiver synchronously claims the request", async () => {
-    const events = createEventBus();
-    const outcome = await requestBackgroundBash(events, request);
+  it("fails immediately when the runtime API is not registered", async () => {
+    const outcome = await requestBackgroundBash(request);
     assert.equal(outcome.status, "unavailable");
   });
 
-  it("rejects a late asynchronous claim", async () => {
-    const events = createEventBus();
-    let lateClaim: unknown;
-    events.on("tools:execute-bash", async (data) => {
-      await setImmediate();
-      lateClaim = (data as { claim(): unknown }).claim();
-    });
-    assert.equal((await requestBackgroundBash(events, request)).status, "unavailable");
-    await setImmediate();
-    assert.equal(lateClaim, undefined);
-  });
-
-  it("allows only one receiver and retains the exact result including isError", async () => {
-    const events = createEventBus();
+  it("retains the exact result including isError", async () => {
     const expected = { ...result, isError: true, structuredContent: { exit_code: 2 } };
     let calls = 0;
-    const first = registerBackgroundBash(events, async () => {
-      calls++;
-      return expected;
-    });
-    const second = registerBackgroundBash(events, async () => {
-      calls++;
-      return result;
-    });
+    const dispose = registerBackgroundBash(
+      request.context,
+      async () => {
+        calls++;
+        return expected;
+      },
+      () => {},
+    );
     try {
-      const outcome = await requestBackgroundBash(events, request);
+      const outcome = await requestBackgroundBash(request);
       assert.equal(outcome.status, "completed");
       if (outcome.status === "completed") assert.strictEqual(outcome.result, expected);
       assert.equal(calls, 1);
     } finally {
-      first();
-      second();
+      dispose();
     }
   });
 
-  it("preserves thrown errors as execution failures", async () => {
-    const events = createEventBus();
-    const error = new Error("Bash failed");
-    const dispose = registerBackgroundBash(events, async () => {
-      throw error;
-    });
+  it("isolates runtimes even with the same session manager", async () => {
+    const other = { ...request.context, modelRegistry: {} } as ExtensionContext;
+    const dispose = registerBackgroundBash(
+      request.context,
+      async () => result,
+      () => {},
+    );
     try {
-      assert.deepEqual(await requestBackgroundBash(events, request), { status: "failed", error });
+      assert.equal(
+        (await requestBackgroundBash({ ...request, context: other })).status,
+        "unavailable",
+      );
+      assert.equal((await requestBackgroundBash(request)).status, "completed");
+    } finally {
+      dispose();
+    }
+  });
+
+  it("rejects an invalidated runtime before starting another execution", async () => {
+    let active = true;
+    let calls = 0;
+    const dispose = registerBackgroundBash(
+      request.context,
+      async () => {
+        calls++;
+        return result;
+      },
+      () => {
+        if (!active) throw new Error("stale runtime");
+      },
+    );
+    try {
+      const pending = requestBackgroundBash(request);
+      active = false;
+      assert.equal((await pending).status, "unavailable");
+      assert.equal((await requestBackgroundBash(request)).status, "unavailable");
+      assert.equal(calls, 0);
+    } finally {
+      dispose();
+    }
+  });
+
+  it("rejects a stale context getter without rejecting its outcome promise", async () => {
+    const context = {
+      get modelRegistry(): object {
+        throw new Error("stale context");
+      },
+      model: undefined,
+    };
+    assert.equal((await requestBackgroundBash({ ...request, context })).status, "unavailable");
+  });
+
+  it("preserves thrown errors as execution failures", async () => {
+    const error = new Error("Bash failed");
+    const dispose = registerBackgroundBash(
+      request.context,
+      async () => {
+        throw error;
+      },
+      () => {},
+    );
+    try {
+      assert.deepEqual(await requestBackgroundBash(request), { status: "failed", error });
     } finally {
       dispose();
     }
   });
 
   it("rejects invalid results", async () => {
-    const events = createEventBus();
-    const dispose = registerBackgroundBash(events, async () => ({}) as AgentToolResult<unknown>);
+    const dispose = registerBackgroundBash(
+      request.context,
+      async () => ({}) as AgentToolResult<unknown>,
+      () => {},
+    );
     try {
-      const outcome = await requestBackgroundBash(events, request);
+      const outcome = await requestBackgroundBash(request);
       assert.equal(outcome.status, "failed");
       if (outcome.status === "failed")
         assert.match(String(outcome.error), /Invalid background Bash result/);
@@ -90,19 +134,22 @@ describe("background Bash lifetime", () => {
   });
 
   it("does not execute an already aborted request", async () => {
-    const events = createEventBus();
     const controller = new AbortController();
     controller.abort("cancelled");
     let calls = 0;
-    const dispose = registerBackgroundBash(events, async () => {
-      calls++;
-      return result;
-    });
+    const dispose = registerBackgroundBash(
+      request.context,
+      async () => {
+        calls++;
+        return result;
+      },
+      () => {},
+    );
     try {
-      assert.deepEqual(
-        await requestBackgroundBash(events, { ...request, signal: controller.signal }),
-        { status: "aborted", reason: "cancelled" },
-      );
+      assert.deepEqual(await requestBackgroundBash({ ...request, signal: controller.signal }), {
+        status: "aborted",
+        reason: "cancelled",
+      });
       assert.equal(calls, 0);
     } finally {
       dispose();
@@ -111,16 +158,19 @@ describe("background Bash lifetime", () => {
 
   for (const boundary of ["abort", "shutdown"] as const) {
     it(`settles once on ${boundary} and discards a late result`, async () => {
-      const events = createEventBus();
       const started = Promise.withResolvers<AbortSignal>();
       const delayed = Promise.withResolvers<AgentToolResult<unknown>>();
       const controller = new AbortController();
-      const dispose = registerBackgroundBash(events, async (input) => {
-        started.resolve(input.signal!);
-        return delayed.promise;
-      });
+      const dispose = registerBackgroundBash(
+        request.context,
+        async (input) => {
+          started.resolve(input.signal!);
+          return delayed.promise;
+        },
+        () => {},
+      );
       try {
-        const pending = requestBackgroundBash(events, { ...request, signal: controller.signal });
+        const pending = requestBackgroundBash({ ...request, signal: controller.signal });
         const executionSignal = await started.promise;
         if (boundary === "abort") controller.abort("cancelled");
         else dispose();
@@ -131,10 +181,14 @@ describe("background Bash lifetime", () => {
         await setImmediate();
         assert.strictEqual(await pending, outcome);
         if (boundary === "shutdown") {
-          assert.equal((await requestBackgroundBash(events, request)).status, "unavailable");
-          const replacement = registerBackgroundBash(events, async () => result);
+          assert.equal((await requestBackgroundBash(request)).status, "unavailable");
+          const replacement = registerBackgroundBash(
+            request.context,
+            async () => result,
+            () => {},
+          );
           try {
-            assert.equal((await requestBackgroundBash(events, request)).status, "completed");
+            assert.equal((await requestBackgroundBash(request)).status, "completed");
           } finally {
             replacement();
           }
@@ -149,13 +203,16 @@ describe("background Bash lifetime", () => {
   it.each([undefined, 0.01])(
     "keeps the default request deadline for timeout %s",
     async (timeout) => {
-      const events = createEventBus();
-      const dispose = registerBackgroundBash(events, async () => {
-        await new Promise((resolve) => setTimeout(resolve, 40));
-        return result;
-      });
+      const dispose = registerBackgroundBash(
+        request.context,
+        async () => {
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          return result;
+        },
+        () => {},
+      );
       try {
-        const outcome = await requestBackgroundBash(events, {
+        const outcome = await requestBackgroundBash({
           ...request,
           params: { ...request.params, timeout },
         });
@@ -167,13 +224,16 @@ describe("background Bash lifetime", () => {
   );
 
   it("allows an explicit timeout beyond the default request deadline", async () => {
-    const events = createEventBus();
-    const dispose = registerBackgroundBash(events, async () => {
-      await new Promise((resolve) => setTimeout(resolve, 2_050));
-      return result;
-    });
+    const dispose = registerBackgroundBash(
+      request.context,
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 2_050));
+        return result;
+      },
+      () => {},
+    );
     try {
-      const outcome = await requestBackgroundBash(events, {
+      const outcome = await requestBackgroundBash({
         ...request,
         params: { ...request.params, timeout: 25 },
       });
@@ -184,14 +244,17 @@ describe("background Bash lifetime", () => {
   });
 
   it("times out a receiver that never responds and aborts its execution", async () => {
-    const events = createEventBus();
     let signal: AbortSignal | undefined;
-    const dispose = registerBackgroundBash(events, async (input) => {
-      signal = input.signal;
-      return new Promise(() => {});
-    });
+    const dispose = registerBackgroundBash(
+      request.context,
+      async (input) => {
+        signal = input.signal;
+        return new Promise(() => {});
+      },
+      () => {},
+    );
     try {
-      const outcome = await requestBackgroundBash(events, request);
+      const outcome = await requestBackgroundBash(request);
       assert.equal(outcome.status, "failed");
       if (outcome.status === "failed") assert.match(String(outcome.error), /timed out/);
       assert.equal(signal?.aborted, true);
@@ -204,14 +267,11 @@ describe("background Bash lifetime", () => {
 describe("background Bash shares registered authorization", () => {
   for (const action of ["allow", "deny", "ask", "ask_with_reason"] as const) {
     it(`uses ${action} without opening background UI`, async () => {
-      await withTools(
-        `commands:\n  - echo:\n      - ${action}: []\n`,
-        async ({ events, calls }) => {
-          const outcome = await requestBackgroundBash(events, request);
-          assert.equal(outcome.status, action === "allow" ? "completed" : "failed");
-          assert.equal(calls.length, action === "allow" ? 1 : 0);
-        },
-      );
+      await withTools(`commands:\n  - echo:\n      - ${action}: []\n`, async ({ calls }) => {
+        const outcome = await requestBackgroundBash(request);
+        assert.equal(outcome.status, action === "allow" ? "completed" : "failed");
+        assert.equal(calls.length, action === "allow" ? 1 : 0);
+      });
     });
   }
 
@@ -223,7 +283,7 @@ describe("background Bash shares registered authorization", () => {
     it(`shares ask_permission ${scope} approval with the registered Bash`, async () => {
       await withTools(
         "commands:\n  - echo:\n      - ask_with_reason: []\n",
-        async ({ events, tools, emit }) => {
+        async ({ tools, emit }) => {
           const context = {
             hasUI: true,
             ui: { select: async () => answer },
@@ -237,7 +297,7 @@ describe("background Bash shares registered authorization", () => {
               undefined,
               context,
             );
-          assert.equal((await requestBackgroundBash(events, request)).status, "completed");
+          assert.equal((await requestBackgroundBash(request)).status, "completed");
           const normal = tools.get("bash")!;
           if (scope === "once") {
             await assert.rejects(
@@ -252,7 +312,7 @@ describe("background Bash shares registered authorization", () => {
             } as ExtensionToolContext);
             await emit("input");
             assert.equal(
-              (await requestBackgroundBash(events, request)).status,
+              (await requestBackgroundBash(request)).status,
               scope === "turn" ? "failed" : "completed",
             );
           }
@@ -262,7 +322,7 @@ describe("background Bash shares registered authorization", () => {
   }
 
   it("shares normal Bash session approval and keeps normal UI behavior", async () => {
-    await withTools("commands:\n  - echo:\n      - ask: []\n", async ({ events, tools }) => {
+    await withTools("commands:\n  - echo:\n      - ask: []\n", async ({ tools }) => {
       let prompts = 0;
       const context = {
         hasUI: true,
@@ -274,13 +334,13 @@ describe("background Bash shares registered authorization", () => {
         },
       } as unknown as ExtensionToolContext;
       await tools.get("bash")!.execute("normal", request.params, undefined, undefined, context);
-      assert.equal((await requestBackgroundBash(events, request)).status, "completed");
+      assert.equal((await requestBackgroundBash(request)).status, "completed");
       assert.equal(prompts, 1);
     });
   });
 
   it("rejects malformed arguments and model-selected policy or executor before execution", async () => {
-    await withTools("commands:\n  - echo:\n      - allow: []\n", async ({ events, calls }) => {
+    await withTools("commands:\n  - echo:\n      - allow: []\n", async ({ calls }) => {
       for (const params of [
         {},
         { command: 1 },
@@ -288,7 +348,7 @@ describe("background Bash shares registered authorization", () => {
         { command: "echo test", executor: {} },
         { command: "echo test", approvalMode: "prompt" },
       ]) {
-        const outcome = await requestBackgroundBash(events, {
+        const outcome = await requestBackgroundBash({
           ...request,
           params,
         } as typeof request);
@@ -299,10 +359,10 @@ describe("background Bash shares registered authorization", () => {
   });
 
   it("invalidates the entrance and pending calls when the Tools runtime shuts down", async () => {
-    await withTools("commands:\n  - echo:\n      - allow: []\n", async ({ events, emit }) => {
-      assert.equal((await requestBackgroundBash(events, request)).status, "completed");
+    await withTools("commands:\n  - echo:\n      - allow: []\n", async ({ emit }) => {
+      assert.equal((await requestBackgroundBash(request)).status, "completed");
       await emit("session_shutdown");
-      assert.equal((await requestBackgroundBash(events, request)).status, "unavailable");
+      assert.equal((await requestBackgroundBash(request)).status, "unavailable");
     });
   });
 });
@@ -336,15 +396,20 @@ async function withTools(config: string, test: (fixture: Fixture) => Promise<voi
     registerTool(tool: ToolDefinition) {
       tools.set(tool.name, tool);
     },
+    getThinkingLevel() {
+      return "off";
+    },
     on(name: string, handler: () => unknown) {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
     },
   } as unknown as ExtensionAPI;
   async function emit(name: string): Promise<void> {
-    for (const handler of handlers.get(name) ?? []) await handler();
+    for (const handler of handlers.get(name) ?? [])
+      await (handler as (event: unknown, ctx: unknown) => unknown)({}, request.context);
   }
   try {
     toolsExtension(pi, configPath);
+    await emit("session_start");
     await test({ events, tools, calls, emit });
   } finally {
     await emit("session_shutdown");

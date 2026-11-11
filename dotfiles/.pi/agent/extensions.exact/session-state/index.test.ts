@@ -138,6 +138,7 @@ async function createExtensionHarness(
     mode?: "new" | "resume" | "fork" | "vision";
     customDir?: boolean;
     dedicated?: boolean;
+    deferDiscovery?: boolean;
   } = {},
 ): Promise<ExtensionHarness> {
   await mkdir("/tmp/work/dotfiles", { recursive: true });
@@ -193,8 +194,10 @@ async function createExtensionHarness(
   const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
   const notifications: { message: string; level: string | undefined }[] = [];
   const server = new FakeTmuxServer(socketPath);
+  const modelRegistry = {};
   const context = {
     signal: runController.signal,
+    modelRegistry,
     hasUI: true,
     sessionManager: {
       getCwd: () => workspacePath,
@@ -224,13 +227,17 @@ async function createExtensionHarness(
 
   sessionStateExtension(pi);
   function connectBashReceiver() {
-    return registerBackgroundBash(events, async (request) => {
-      const params = request.params as { command: string; timeout?: number };
-      const outcome = await server.run(params.command);
-      if (outcome.status === "completed") return outcome.result;
-      if (outcome.status === "failed" || outcome.status === "unavailable") throw outcome.error;
-      throw outcome.reason;
-    });
+    return registerBackgroundBash(
+      context,
+      async (request) => {
+        const params = request.params as { command: string; timeout?: number };
+        const outcome = await server.run(params.command);
+        if (outcome.status === "completed") return outcome.result;
+        if (outcome.status === "failed" || outcome.status === "unavailable") throw outcome.error;
+        throw outcome.reason;
+      },
+      () => {},
+    );
   }
   let disposeBashReceiver = connectBashReceiver();
 
@@ -256,6 +263,11 @@ async function createExtensionHarness(
       for (const handler of handlers.get(type) ?? []) {
         const result = await handler(event, context);
         assert.equal(result, undefined);
+      }
+      if (type === "session_start" && !options.deferDiscovery) {
+        for (const handler of handlers.get("resources_discover") ?? []) {
+          await handler({ type: "resources_discover" } as ExtensionEvent, context);
+        }
       }
     },
     disposeBashReceiver() {
@@ -361,6 +373,27 @@ describe("sessionStateExtension in child sessions", () => {
 });
 
 describe("sessionStateExtension in top-level sessions", () => {
+  it("waits for all session_start handlers before checking and publishing through later Tools", async () => {
+    const h = await createExtensionHarness({ deferDiscovery: true });
+    h.disposeBashReceiver();
+    try {
+      await h.emit("session_start");
+      await h.emit("ui_prompt_start");
+      await h.emit("ui_prompt_end");
+      await finishEventLoopTurn();
+      assert.equal(h.server.commands.length, 0);
+      assert.equal(h.notifications.length, 0);
+      h.restoreBashReceiver();
+      await h.emit("resources_discover");
+      await waitFor(
+        "initial phase after Tools initialization",
+        () => h.server.paneOptionOf("%0") === phaseOptionValue(h.sessionId, "waiting-user"),
+      );
+      assert.equal(h.notifications.length, 0);
+    } finally {
+      await h.close();
+    }
+  });
   for (const agent of ["main", "senior", "junior", "vision", "chat"]) {
     it(`publishes the phase sequence for a top-level ${agent} session with a parent header`, async () => {
       const harness = await createExtensionHarness({ agent, customDir: agent === "vision" });

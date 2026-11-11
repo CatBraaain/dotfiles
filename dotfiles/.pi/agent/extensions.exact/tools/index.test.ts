@@ -440,15 +440,18 @@ describe("tools with the guardrails public API", () => {
       const config = join(directory, "invalid.yaml");
       writeFileSync(config, "read: invalid\n");
       const tools = new Map<string, ToolDefinition>();
-      const handlers = new Map<string, (event: unknown, context: unknown) => unknown>();
+      const handlers = new Map<string, ((event: unknown, context: unknown) => unknown)[]>();
       const events = createEventBus();
       const api = {
         events,
+        getThinkingLevel() {
+          return "off";
+        },
         registerTool(tool: ToolDefinition) {
           tools.set(tool.name, tool);
         },
         on(event: string, handler: (event: unknown, context: unknown) => unknown) {
-          handlers.set(event, handler);
+          handlers.set(event, [...(handlers.get(event) ?? []), handler]);
         },
       } as unknown as ExtensionAPI;
       toolsExtension(api, config);
@@ -460,26 +463,26 @@ describe("tools with the guardrails public API", () => {
           /guardrails.yaml.*schema violation/,
         );
       }
-      const background = await requestBackgroundBash(events, {
+      const notifications: unknown[] = [];
+      const context = {
+        modelRegistry: {},
+        ui: {
+          notify(message: string) {
+            notifications.push(message);
+          },
+        },
+      } as unknown as ExtensionToolContext;
+      for (const handler of handlers.get("session_start") ?? []) await handler({}, context);
+      const background = await requestBackgroundBash({
         id: "invalid-background",
         params: { command: "echo unsafe" },
-        context: { model: undefined },
+        context,
       });
       assert.equal(background.status, "failed");
       if (background.status === "failed")
         assert.match(String(background.error), /guardrails.yaml.*schema violation/);
-      const notifications: unknown[] = [];
-      handlers.get("session_start")!(
-        {},
-        {
-          ui: {
-            notify(message: string) {
-              notifications.push(message);
-            },
-          },
-        },
-      );
       assert.equal(notifications.length, 1);
+      for (const handler of handlers.get("session_shutdown") ?? []) await handler({}, context);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

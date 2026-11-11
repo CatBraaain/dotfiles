@@ -11,20 +11,27 @@ import { registerBackgroundBash } from "../tools/background-bash.ts";
 import extension, { rejectSessionChange } from "./index.ts";
 
 type Handler = (event: any, ctx: any) => unknown;
+let modelRegistry = {} as ExtensionContext["modelRegistry"];
 
 function captureHandlers(execute?: ExtensionAPI["exec"]) {
   const handlers = new Map<string, Handler>();
   const events = createEventBus();
+  modelRegistry = {} as ExtensionContext["modelRegistry"];
+  const backgroundContext = { modelRegistry };
   if (execute)
-    registerBackgroundBash(events, async (request) => {
-      const [command, ...args] = parse(request.params.command) as string[];
-      const result = await execute(command!, args);
-      return {
-        content: [{ type: "text", text: result.stdout || result.stderr }],
-        details: {},
-        isError: result.code !== 0 || result.killed,
-      };
-    });
+    registerBackgroundBash(
+      backgroundContext,
+      async (request) => {
+        const [command, ...args] = parse(request.params.command) as string[];
+        const result = await execute(command!, args);
+        return {
+          content: [{ type: "text", text: result.stdout || result.stderr }],
+          details: {},
+          isError: result.code !== 0 || result.killed,
+        };
+      },
+      () => {},
+    );
   extension({
     events,
     on(event: string, handler: Handler) {
@@ -44,6 +51,7 @@ function captureHandlers(execute?: ExtensionAPI["exec"]) {
 function context(mode = "tui") {
   const notifications: Array<{ text: string; type: string }> = [];
   const ctx = {
+    modelRegistry,
     mode,
     hasUI: true,
     cwd: "/original cwd",

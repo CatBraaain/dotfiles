@@ -1224,7 +1224,7 @@ export default function agentsExtension(
     let usageStdout: string | undefined;
     if (!routingUsageDisabled && candidates.length > 1) {
       try {
-        const { exitCode, stdout } = await executeUsage(pi.events, ctx, signal);
+        const { exitCode, stdout } = await executeUsage(ctx, signal);
         if (exitCode === 127) routingUsageDisabled = true;
         if (exitCode === 0) usageStdout = stdout;
       } catch {
@@ -1396,7 +1396,9 @@ export default function agentsExtension(
       : config.defaultMode;
   }
 
+  let initialModelSelectionPending = false;
   pi.on("session_start", async (event, ctx) => {
+    initialModelSelectionPending = event.reason !== "reload";
     http429ModelKeys.clear();
     http429TurnFallbackDone = false;
     if (event.reason === "reload") {
@@ -1434,6 +1436,11 @@ export default function agentsExtension(
         : (takeSavedRoutingState()?.cooldowns ?? new Map());
     currentAgent = initialAgent(config, pi.getFlag("agent") as string | undefined);
     applyAgentTools(ctx, currentAgent);
+  });
+
+  pi.on("resources_discover", async (_event, ctx) => {
+    if (!initialModelSelectionPending) return;
+    initialModelSelectionPending = false;
     await applyCurrentClass(ctx);
   });
 

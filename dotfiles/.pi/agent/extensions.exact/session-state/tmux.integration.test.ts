@@ -55,7 +55,9 @@ const events = {
     bus.emit(name, data);
   },
 };
+const modelRegistry = {};
 const pi = {
+  getThinkingLevel() { return "off"; },
   events,
   on(name, handler) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
   registerTool(tool) { tools.set(tool.name, tool); },
@@ -81,6 +83,7 @@ function context() {
     input() { throw new Error("unexpected approval UI"); },
   };
   const ctx = {
+    get modelRegistry() { return current(modelRegistry); },
     get hasUI() { return current(true); },
     get model() { return current(undefined); },
     get thinkingLevel() { return current("off"); },
@@ -96,6 +99,7 @@ async function dispatch(type, fields = {}) {
     for (const handler of handlers.get(type) ?? []) {
       await handler({ type, ...fields }, currentContext.ctx);
     }
+    if (type === "session_start") for (const handler of handlers.get("resources_discover") ?? []) await handler({ type: "resources_discover" }, currentContext.ctx);
   } finally {
     currentContext.state.live = false;
   }
@@ -179,6 +183,7 @@ try {
 
     const live = context();
     const captured = {
+      modelRegistry: live.ctx.modelRegistry,
       hasUI: true,
       ui: live.ctx.ui,
       model: undefined,
@@ -186,7 +191,7 @@ try {
       sessionManager: { getSessionId: () => sessionId, getSessionFile: () => undefined },
     };
     async function run(command) {
-      return requestBackgroundBash(events, { id: "test-detect", params: { command }, context: captured });
+      return requestBackgroundBash({ id: "test-detect", params: { command }, context: captured });
     }
     const [actualSocket, actualServer] = process.env.TMUX.split(",");
     const forged = await detectManagedPane(run, { ...process.env, TMUX: actualSocket + ",99999999" });
@@ -208,8 +213,8 @@ try {
     }
     assert.equal(readFileSync(storePath, "utf8"), bytes);
   }
-  assert.ok(trace.length > 0);
-  assert.ok(trace.every(name => name === "tools:execute-bash"));
+  assert.equal(trace.length, 0);
+  if (!denied) assert.ok(sandboxCommands.length > 0);
   writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: true, trace, sandboxCommands, notifications, pane }));
 } catch (error) {
   writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: false, error: String(error.stack ?? error), notifications, trace, sandboxCommands }));

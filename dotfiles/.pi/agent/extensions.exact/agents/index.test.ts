@@ -387,6 +387,11 @@ function captureAgentsExtension(
     },
     async sessionStart(reason?: string) {
       for (const handler of handlers.get("session_start") ?? []) await handler({ reason }, context);
+      await this.resourcesDiscover();
+    },
+    async resourcesDiscover() {
+      for (const handler of handlers.get("resources_discover") ?? [])
+        await handler({ type: "resources_discover" }, context);
     },
     async sessionTree(branch: ReturnType<SessionManager["getBranch"]>) {
       const oldLeafId = options.branch?.at(-1)?.id ?? null;
@@ -7629,14 +7634,18 @@ describe("shipped agents.yaml through the shared usage entry", () => {
       },
     );
     const requests: string[] = [];
-    const dispose = registerBackgroundBash(extension.events, async (request) => {
-      requests.push(request.params.command);
-      return {
-        content: [],
-        details: {},
-        structuredContent: { output: usageJson, exit_code: 0, truncated: false },
-      };
-    });
+    const dispose = registerBackgroundBash(
+      extension.context,
+      async (request) => {
+        requests.push(request.params.command);
+        return {
+          content: [],
+          details: {},
+          structuredContent: { output: usageJson, exit_code: 0, truncated: false },
+        };
+      },
+      () => {},
+    );
     const appliedModelKeys = () =>
       extension.selectedModels.map((model) => {
         const { provider, id } = model as { provider: string; id: string };
@@ -7741,14 +7750,18 @@ describe("titles through the agents owner resolver", () => {
       },
     );
     const requests: string[] = [];
-    const dispose = registerBackgroundBash(extension.events, async (request) => {
-      requests.push(request.params.command);
-      return {
-        content: [{ type: "text", text: "[]" }],
-        details: {},
-        structuredContent: { output: "[]", exit_code: 0, truncated: false },
-      };
-    });
+    const dispose = registerBackgroundBash(
+      extension.context,
+      async (request) => {
+        requests.push(request.params.command);
+        return {
+          content: [{ type: "text", text: "[]" }],
+          details: {},
+          structuredContent: { output: "[]", exit_code: 0, truncated: false },
+        };
+      },
+      () => {},
+    );
     try {
       const resolved = await extension.retitle();
       assert.equal(resolved?.id, "valid");
@@ -7783,11 +7796,15 @@ describe("titles through the agents owner resolver", () => {
       modes: { standard: { ...config.modes.standard!, low: candidates } },
     };
     const extension = captureAgentsExtension({ config: injected });
-    const dispose = registerBackgroundBash(extension.events, async () => ({
-      content: [],
-      details: {},
-      structuredContent: { output: "[]", exit_code: 0, truncated: false },
-    }));
+    const dispose = registerBackgroundBash(
+      extension.context,
+      async () => ({
+        content: [],
+        details: {},
+        structuredContent: { output: "[]", exit_code: 0, truncated: false },
+      }),
+      () => {},
+    );
     try {
       extension.context.model = { provider: "test", id: "parent" };
       const resolved = await extension.retitle();
@@ -7817,15 +7834,19 @@ describe("shared owner candidate selection for titles", () => {
       { executeUsage: runUsage },
     );
     const commands: string[] = [];
-    const dispose = registerBackgroundBash(extension.events, async (request) => {
-      commands.push(request.params.command);
-      if (commands.length === 1) throw new Error("Command requires a reason");
-      return {
-        content: [],
-        details: {},
-        structuredContent: { output: "[]", exit_code: 0, truncated: false },
-      };
-    });
+    const dispose = registerBackgroundBash(
+      extension.context,
+      async (request) => {
+        commands.push(request.params.command);
+        if (commands.length === 1) throw new Error("Command requires a reason");
+        return {
+          content: [],
+          details: {},
+          structuredContent: { output: "[]", exit_code: 0, truncated: false },
+        };
+      },
+      () => {},
+    );
     try {
       await extension.sessionStart();
       assert.equal(extension.context.model?.id, "preferred");

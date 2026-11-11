@@ -28,7 +28,11 @@ read / write / edit / grep / find / ls / bash の実行を Guardrails公開API�
 
 ## 背景Bash入口
 
-lifecycle/background処理は、Tools配下のBash専用helperから `tools:execute-bash` へ要求できる。要求は `id`、`params`、モデル・thinking level・会話IDと会話ファイルの必要情報、任意の `signal` を持つ。`params` は登録Bashのschemaを再利用し、文字列の `command` と任意の数値 `timeout` だけを入口で検証する。
+lifecycle/background処理は、Tools配下のBash専用helperをimportし、型付きの直接APIへ要求できる。要求は `id`、`params`、呼び出し元のruntimeを識別するcontext、モデル・thinking level・会話IDと会話ファイルの必要情報、任意の `signal` を持つ。`params` は登録Bashのschemaを再利用し、文字列の `command` と任意の数値 `timeout` だけを入口で検証する。APIは要求の終端結果をPromiseで返す。
+
+初回要求は、`session_start` の全handlerによる初期化が完了した後の `resources_discover` 以降に開始する。この時点で、そのruntimeの背景APIを利用できる。未登録のAPIへの要求は、初期化を待たずに直ちに `unavailable` で決着する。
+
+同一runtime内では、登録Bashと背景APIが同じ承認状態を共有する。同じ会話ID・会話ファイルを使う場合でも、別runtimeの承認状態は共有しない。再読み込み後は新しいruntimeの背景APIを使い、旧API・失効したcontextによる新規要求は拒否する。
 
 この入口は登録Bashと同じ実行関数・同じGuardrailsの認可状態を使う。要求から実行tool・executor・認可policyを選ばせず、GuardrailsへはBash実行と既存承認限定のpolicyを渡す。新しい認可UIが必要なら実行せず失敗する。通常の登録toolは従来どおり確認UIを使う。既存設定・承認とsandboxの適用は [Guardrails仕様](../guardrails/SPEC.md) に従う。
 
@@ -37,9 +41,10 @@ lifecycle/background処理は、Tools配下のBash専用helperから `tools:exec
 | 要求・状態 | 要求元への結果 |
 | --- | --- |
 | 実行完了 | `completed` と元のtool result。`isError`・details・structuredContentを保持する |
-| 実行がthrow、不正な結果、要求期限の超過 | `failed` と失敗理由 |
+| 引数の検証失敗、実行がthrow、不正な結果、要求期限の超過 | `failed` と失敗理由 |
 | 開始前・実行中のabort | `aborted` と中断理由 |
-| 有効な受信口が同期的にclaimしない | emit直後に `unavailable` と不在理由 |
-| 受信側の停止 | 保留要求を `unavailable` と停止理由で決着する |
+| APIが未登録・停止済み、または要求元のruntimeが失効している | 直ちに `unavailable` と不在・失効理由 |
+| Guardrailsの初期化が失敗したruntimeの有効なAPIへの要求 | `failed` と通常ツールと同じ初期化エラー |
+| `session_shutdown` による背景APIの停止 | 保留要求を `unavailable` と停止理由で決着する |
 
-要求期限は約2秒とし、`params.timeout` が2秒より長ければその秒数を使う。最初のawait前に1つの受信口だけがclaimでき、終端は一度だけ確定する。event busのemitが非同期処理の完了を待つとは扱わない。中断・期限超過・停止では実行信号をabortし、以後の遅延応答を破棄する。停止時は受信口を解除し、再読み込み後は新しい受信口を使う。入口の不在・無効・失敗時に別の実行経路へfallbackしない。
+要求期限は約2秒とし、`params.timeout` が2秒より長ければその秒数を使う。1要求につき実行は最大1回とし、終端は一度だけ確定する。中断・期限超過・停止では実行信号をabortし、以後の遅延応答を破棄する。`session_shutdown` で背景APIを停止し、そのruntimeへの新規要求を拒否する。入口の不在・無効・失敗時に別の実行経路へfallbackしない。
