@@ -60,7 +60,7 @@ describe("webviewHtml", () => {
     );
     expect(html).toContain(".session-button { position: relative; isolation: isolate;");
     expect(html).toContain(
-      'content: ""; position: absolute; inset: -1px -1px -1px calc(24px - 1px);',
+      'content: ""; position: absolute; inset: -1px -1px -1px calc(22px - 1px);',
     );
     expect(html).toContain("pointer-events: none; z-index: -1;");
     expect(html).toContain(".session-button:hover { background: transparent; }");

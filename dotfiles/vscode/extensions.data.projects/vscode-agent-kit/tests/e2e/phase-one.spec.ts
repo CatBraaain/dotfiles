@@ -133,8 +133,9 @@ test(
       for (const [index, row] of layout.rows.entries()) {
         expect(row.row.left).toBe(16);
         expect(row.button).toEqual(row.row);
-        expect(row.paint.left).toBe(40);
-        expect(row.paint.left).toBe(row.workspaceName.left);
+        expect(row.paint.left).toBe(38);
+        expect(row.name.left - row.paint.left).toBe(7);
+        expect(row.workspaceName.left).toBe(28);
         expect(row.paint.right).toBe(row.button.right);
         expect(row.paint.height).toBe(32);
         expect(row.row.right).toBe(layout.viewport.width - 12);
@@ -202,7 +203,7 @@ test(
 
 for (const theme of ["Dark Modern", "Light Modern"]) {
   test(
-    `Keeps session backgrounds aligned with workspace names across selection states in ${theme}`,
+    `Keeps compact workspace headers and balanced session backgrounds across selection states in ${theme}`,
     { annotation: { type: "design", description: "DESIGN.md: session row hierarchy" } },
     async ({ host }, testInfo) => {
       await test.step(`Check session background geometry in ${theme}`, async () => {
@@ -247,6 +248,8 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
                 height: parseFloat(paint.height),
               },
               workspaceName: rect(row.closest(".group")!.querySelector(".group-title")!),
+              chevron: rect(row.closest(".group")!.querySelector(".group-chevron")!),
+              chevronIcon: rect(row.closest(".group")!.querySelector(".group-chevron svg")!),
               name: rect(row.querySelector(".session-name")!),
               status: rect(row.querySelector(".session-status")!),
               timestamp: rect(row.querySelector(".session-timestamp")!),
@@ -274,8 +277,14 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
         expect(idle.button.left).toBe(16);
         expect(idle.name.left).toBe(45);
         expect(idle.status.left).toBe(25);
-        expect(idle.paint.left).toBe(40);
-        expect(idle.paint.left).toBe(idle.workspaceName.left);
+        expect(idle.paint.left).toBe(38);
+        expect(idle.name.left - idle.paint.left).toBe(7);
+        expect(idle.workspaceName.left).toBe(28);
+        expect(idle.chevron.left).toBe(4);
+        expect(idle.chevron.width).toBe(24);
+        expect(idle.chevron.height).toBe(24);
+        expect(idle.chevronIcon.left).toBe(10);
+        expect(idle.workspaceName.left - idle.chevron.right).toBe(0);
         expect(idle.paint.right).toBe(idle.button.right);
         expect(idle.paint.height).toBe(32);
         expect(idle.pointerEvents).toBe("none");
@@ -319,8 +328,10 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
           body: JSON.stringify({ idle, hover, focus, selected, selectedFocus }, null, 2),
           contentType: "application/json",
         });
-        await testInfo.attach(`${theme} selected focus`, {
-          body: await host.page.screenshot({ path: testInfo.outputPath("selected-focus.png") }),
+        await button.blur();
+        await expect.poll(async () => (await appearance()).background).toBe(idle.inactiveColor);
+        await testInfo.attach(`${theme} selected`, {
+          body: await host.page.screenshot({ path: testInfo.outputPath("selected.png") }),
           contentType: "image/png",
         });
         const statePath = join(host.directory, "agent/session-state.json");
@@ -334,7 +345,8 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
           .describe("Approval icon in the unpainted gutter");
         await expect(status).toHaveAttribute("data-state", "waiting-approval");
         await expect(status.locator("svg")).toBeVisible();
-        await button.focus();
+        await button.blur();
+        await expect.poll(async () => (await appearance()).background).toBe(idle.inactiveColor);
         const approval = await appearance();
         expect(approval.status).toEqual(idle.status);
         expect(approval.name).toEqual(idle.name);
@@ -350,9 +362,9 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
             );
           }),
         ).toBe(true);
-        await testInfo.attach(`${theme} approval gutter and selected focus`, {
+        await testInfo.attach(`${theme} approval gutter and selected`, {
           body: await host.page.screenshot({
-            path: testInfo.outputPath("approval-selected-focus.png"),
+            path: testInfo.outputPath("approval-selected.png"),
           }),
           contentType: "image/png",
         });

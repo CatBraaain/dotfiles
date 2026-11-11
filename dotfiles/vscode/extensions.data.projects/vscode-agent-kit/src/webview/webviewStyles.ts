@@ -31,7 +31,7 @@ export const webviewStyles = `
     .group { min-width: 0; }
     .group + .group { margin-top: 12px; }
     .group-header { gap: 4px; min-width: 0; min-height: 24px; }
-    .group-toggle { display: flex; flex: 1; align-items: center; gap: 4px; min-width: 0; border-radius: var(--session-radius); }
+    .group-toggle { display: flex; flex: 1; align-items: center; gap: 0; min-width: 0; margin-left: -8px; border-radius: var(--session-radius); }
     .group-toggle:hover { background: var(--vscode-list-hoverBackground); }
     .group-toggle > button:hover { background: transparent; }
     .group-chevron, .group-new-session, .group-mode-toggle { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-foreground); }
@@ -45,7 +45,7 @@ export const webviewStyles = `
     .session-row { position: relative; min-width: 0; height: 32px; margin-left: 4px; border-radius: var(--session-radius); }
     .group-header + .session-row { margin-top: 4px; }
     .session-button { position: relative; isolation: isolate; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 32px; padding: 0 calc(36px + 5ch + 8px) 0 8px; border-radius: var(--session-radius); color: var(--vscode-foreground); background: transparent; text-align: left; }
-    .session-button::before { content: ""; position: absolute; inset: -1px -1px -1px calc(24px - 1px); border-radius: inherit; pointer-events: none; z-index: -1; }
+    .session-button::before { content: ""; position: absolute; inset: -1px -1px -1px calc(22px - 1px); border-radius: inherit; pointer-events: none; z-index: -1; }
     .session-button:hover { background: transparent; }
     .session-button:hover::before { background: var(--vscode-list-hoverBackground); }
     .session-button:focus-visible { outline: none; }

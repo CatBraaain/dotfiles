@@ -274,10 +274,10 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         };
       });
       expect(contentAndPaint).toEqual({
-        workspaceNameLeft: 40,
+        workspaceNameLeft: 28,
         nameLeft: 45,
         statusLeft: 25,
-        paintLeft: 40,
+        paintLeft: 38,
         paintRight: width - 12,
       });
       const nameWidths = await row.evaluate((element) => {
@@ -1060,6 +1060,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       const idleBounds = await controls.evaluateAll((buttons) =>
         buttons.map((button) => button.getBoundingClientRect().toJSON()),
       );
+      expect(idleBounds[0]).toMatchObject({ x: 4, width: 24, height: 24 });
+      expect(idleBounds[1].x).toBe(28);
+      expect(await surface.evaluate((element) => getComputedStyle(element).gap)).toBe("0px");
       expect(await surface.evaluate((element) => getComputedStyle(element).borderRadius)).toBe(
         "9.6px",
       );
