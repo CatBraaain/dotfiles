@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "bun:test";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   AssistantMessageComponent,
   createCodemodeExtension,
+  CustomMessageComponent,
   initTheme,
   UserMessageComponent,
   ToolExecutionComponent,
@@ -31,6 +33,13 @@ import toolRendererExtension, {
   type ToolRenderers,
 } from "./index.ts";
 import { installToolRowFolding } from "./tool-rows.ts";
+
+const { CustomEntryComponent } = await import(
+  new URL(
+    "./modes/interactive/components/custom-entry.js",
+    import.meta.resolve("@earendil-works/pi-coding-agent"),
+  ).href
+);
 
 const plainTheme = {
   fg: (_color: string, text: string) => text,
@@ -314,6 +323,243 @@ describe("collapsed row left alignment", () => {
           assert.ok(stripTerminalSequences(line).endsWith("21:30:03"));
         }
       }
+    }
+  });
+});
+
+function createAssistant(
+  content: AssistantMessage["content"] = [{ type: "text", text: "Assistant body" }],
+): AssistantMessageComponent {
+  return new AssistantMessageComponent(
+    {
+      role: "assistant",
+      content,
+      api: "openai-responses",
+      provider: "openai",
+      model: "test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 0,
+    },
+    true,
+    undefined,
+    "",
+  );
+}
+
+describe("collapsed tool entry boundaries", () => {
+  it("separates assistant bodies from a contiguous tool run on both sides", () => {
+    const chat = new Container();
+    chat.addChild(createAssistant());
+    chat.addChild(createRow("read"));
+    chat.addChild(createRow("bash"));
+    chat.addChild(createAssistant());
+    for (const width of [80, 24, 120, 80]) {
+      const lines = chat
+        .render(width)
+        .map(stripTerminalSequences)
+        .map((line) => line.trimEnd());
+      assert.equal(lines.length, 7);
+      assert.equal(lines[1], " Assistant body");
+      assert.equal(lines[2], "");
+      assert.ok(lines[3]!.startsWith(" read "));
+      assert.ok(lines[4]!.startsWith(" $ "));
+      assert.equal(lines[5], "");
+      assert.equal(lines[6], " Assistant body");
+    }
+  });
+
+  for (const kind of ["user", "custom", "plain"]) {
+    it(`keeps exactly one boundary row around a ${kind} entry`, () => {
+      const entry =
+        kind === "user"
+          ? new UserMessageComponent("Entry body")
+          : kind === "custom"
+            ? new CustomMessageComponent({
+                role: "custom",
+                customType: "test-entry",
+                content: "Entry body",
+                display: true,
+                timestamp: 0,
+              })
+            : new Text("Entry body", 0, 0);
+      const first = createRow("read");
+      const second = createRow("bash");
+      const chat = new Container();
+      chat.addChild(first);
+      chat.addChild(entry);
+      chat.addChild(second);
+      for (const width of [24, 80, 120]) {
+        const entryLines = entry.render(width);
+        if (kind !== "plain") {
+          assert.equal(stripTerminalSequences(entryLines.at(-1)!).trim(), "");
+          assert.ok(entryLines.at(-1)!.includes("\x1b[48;"));
+        }
+        if (kind === "custom") assert.equal(entryLines[0], "");
+        assert.deepEqual(chat.render(width), [
+          first.render(width)[0]!,
+          ...(kind === "custom" ? [] : [""]),
+          ...entryLines,
+          "",
+          second.render(width).at(-1)!,
+        ]);
+        assert.equal(second.render(width)[0], "");
+      }
+    });
+  }
+
+  it("keeps empty assistants and empty custom entries out of tool runs", () => {
+    const chat = new Container();
+    chat.addChild(createRow("read"));
+    chat.addChild(createAssistant([]));
+    chat.addChild(createAssistant([{ type: "toolCall", id: "call", name: "read", arguments: {} }]));
+    chat.addChild(
+      new CustomMessageComponent(
+        { role: "custom", customType: "empty", content: "", display: true, timestamp: 0 },
+        () => new Container(),
+      ),
+    );
+    chat.addChild(createRow("bash"));
+    for (const width of [80, 24, 120]) {
+      const lines = chat.render(width);
+      assert.equal(lines.length, 2);
+      assert.ok(stripTerminalSequences(lines[0]!).startsWith(" read "));
+      assert.ok(stripTerminalSequences(lines[1]!).startsWith(" $ "));
+    }
+  });
+
+  for (const kind of ["message", "entry"]) {
+    it(`keeps the registered legacy pi-stamp renderer empty inside its real ${kind} wrapper`, () => {
+      let renderer: (() => { render(width: number): string[]; invalidate(): void }) | undefined;
+      toolRendererExtension({
+        registerEntryRenderer(_type: string, render: typeof renderer) {
+          renderer = render;
+        },
+      } as unknown as ExtensionAPI);
+      const empty =
+        kind === "message"
+          ? new CustomMessageComponent(
+              { role: "custom", customType: "pi-stamp", content: "", display: true, timestamp: 0 },
+              () => renderer!(),
+            )
+          : new CustomEntryComponent(
+              {
+                type: "custom",
+                id: "legacy-stamp",
+                parentId: null,
+                timestamp: "2025-01-01T00:00:00.000Z",
+                customType: "pi-stamp",
+                data: {},
+              },
+              () => renderer!(),
+            );
+      const first = createRow("read");
+      const second = createRow("bash");
+      const chat = new Container();
+      chat.addChild(first);
+      chat.addChild(empty);
+      chat.addChild(second);
+      for (const width of [24, 80, 120]) {
+        assert.deepEqual(chat.render(width), [...first.render(width), ...second.render(width)]);
+        assert.deepEqual(empty.render(width), []);
+        chat.invalidate();
+        assert.equal(chat.render(width).length, 2);
+        chat.handleMouse(clickEvent(1, width, 2));
+        assert.equal((second as unknown as { expanded: boolean }).expanded, true);
+        second.setExpanded(false);
+      }
+    });
+  }
+
+  it("keeps hidden thinking out of a contiguous tool run", () => {
+    const first = createRow("read");
+    const second = createRow("bash");
+    const hidden = createAssistant([{ type: "thinking", thinking: "hidden thought" }]);
+    const chat = new Container();
+    chat.addChild(first);
+    chat.addChild(hidden);
+    chat.addChild(second);
+    for (const width of [80, 24, 120]) {
+      assert.deepEqual(chat.render(width), [first.render(width)[0]!, second.render(width).at(-1)!]);
+    }
+  });
+
+  it("reuses explicit spacers and leaves non-tool containers unchanged", () => {
+    const chat = new Container();
+    const first = createRow("read");
+    const second = createRow("bash");
+    chat.addChild(new Text("before", 0, 0));
+    chat.addChild(new Spacer(1));
+    chat.addChild(first);
+    chat.addChild(second);
+    chat.addChild(new Spacer(1));
+    chat.addChild(new Text("after", 0, 0));
+    assert.deepEqual(
+      chat.render(80).map((line) => line.trimEnd()),
+      [
+        "before",
+        "",
+        ...first.render(80).map((line) => line.trimEnd()),
+        ...second.render(80).map((line) => line.trimEnd()),
+        "",
+        "after",
+      ],
+    );
+    const other = new Container();
+    other.addChild(new Text("one", 0, 0));
+    other.addChild(new Text("two", 0, 0));
+    assert.deepEqual(
+      other.render(80).map((line) => line.trimEnd()),
+      ["one", "two"],
+    );
+  });
+
+  it("updates boundary padding when adjacent entries change visibility or the row moves", () => {
+    const entry = createAssistant();
+    const row = createRow("read");
+    const chat = new Container();
+    chat.addChild(entry);
+    chat.addChild(row);
+    assert.equal(chat.render(80).at(-2), "");
+    entry.updateContent({
+      ...(
+        entry as unknown as {
+          lastMessage: AssistantMessage;
+        }
+      ).lastMessage,
+      content: [],
+    });
+    assert.equal(chat.render(80).length, 1);
+    chat.clear();
+    const next = new Container();
+    next.addChild(row);
+    assert.equal(next.render(80).length, 1);
+  });
+
+  it("restores the container hook on dispose and reload without changing child identities", () => {
+    dispose();
+    const original = Container.prototype.render;
+    const chat = new Container();
+    chat.addChild(createAssistant());
+    chat.addChild(createRow("read"));
+    const children = [...chat.children];
+    for (let cycle = 0; cycle < 2; cycle++) {
+      dispose = installToolRowFolding(
+        (row, width) => formatCollapsedToolRow(row, plainTheme, width),
+        plainTheme,
+      );
+      assert.notEqual(Container.prototype.render, original);
+      assert.equal(chat.render(80).at(-2), "");
+      assert.deepEqual(chat.children, children);
+      dispose();
+      assert.equal(Container.prototype.render, original);
     }
   });
 });
@@ -749,7 +995,7 @@ describe("summary failure boundaries", () => {
           .render(80)
           .map(stripTerminalSequences)
           .map((line) => line.trimEnd()),
-        [" mystery_tool — [render error]", "editor remains visible"],
+        [" mystery_tool — [render error]", "", "editor remains visible"],
       );
     });
   }
@@ -847,6 +1093,61 @@ function terminalClick(terminal: MemoryTerminal, row: number): void {
 }
 
 describe("headless fullscreen layout", () => {
+  it("keeps boundary blanks outside clickable headers through expansion and resize", async () => {
+    const terminal = new MemoryTerminal();
+    const tui = new TuiAltScreen(terminal, false, "/tmp/work/dotfiles", { copyOnSelect: false });
+    const first = createRow("read", tui);
+    const second = createRow("bash", tui);
+    const chat = new Container();
+    chat.addChild(createAssistant());
+    chat.addChild(first);
+    chat.addChild(second);
+    chat.addChild(new Text("Entry after tools", 0, 0));
+    const editor = new Input({ prompt: "Approve? " });
+    tui.addChild(chat);
+    tui.addChild(editor);
+    tui.setFocus(editor);
+    tui.start();
+    try {
+      for (const width of [100, 24, 80]) {
+        terminal.columns = width;
+        terminal.resize!();
+        await renderFrame(tui);
+        let lines = tui.getScreenLines().map(stripTerminalSequences);
+        const firstY = lines.findIndex((line) => line.startsWith(" read "));
+        const secondY = lines.findIndex((line) => line.startsWith(" $ "));
+        const afterY = lines.findIndex((line) => line.startsWith("Entry after tools"));
+        assert.ok(firstY > 0);
+        assert.equal(secondY, firstY + 1);
+        assert.equal(afterY, secondY + 2);
+        assert.equal(lines[firstY - 1]!.trim(), "");
+        assert.equal(lines[secondY + 1]!.trim(), "");
+        terminalClick(terminal, firstY - 1);
+        terminalClick(terminal, secondY + 1);
+        await renderFrame(tui);
+        assert.equal((first as unknown as { expanded: boolean }).expanded, false);
+        assert.equal((second as unknown as { expanded: boolean }).expanded, false);
+        terminalClick(terminal, firstY);
+        await renderFrame(tui);
+        assert.equal((first as unknown as { expanded: boolean }).expanded, true);
+        lines = tui.getScreenLines().map(stripTerminalSequences);
+        const expandedSecondY = lines.findIndex((line) => line.startsWith(" $ "));
+        assert.ok(expandedSecondY > secondY);
+        terminalClick(terminal, expandedSecondY);
+        await renderFrame(tui);
+        assert.equal((second as unknown as { expanded: boolean }).expanded, true);
+        first.setExpanded(false);
+        second.setExpanded(false);
+        await renderFrame(tui);
+        assert.equal(editor.focused, true);
+      }
+      terminal.input!("y");
+      assert.equal(editor.getValue(), "y");
+    } finally {
+      tui.stop();
+    }
+  });
+
   it("routes individual clicks after height changes without stealing approval input focus", async () => {
     const terminal = new MemoryTerminal();
     const tui = new TuiAltScreen(terminal, false, "/tmp/work/dotfiles", { copyOnSelect: false });
