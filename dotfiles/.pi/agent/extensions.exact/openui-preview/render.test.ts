@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, it } from "bun:test";
 import { displayLibrary } from "./library.data";
 import { validateOpenuiLang } from "./render";
+import { SUPPORTED_COMPONENTS } from "./supported-components";
+import { openuiLibrary } from "@openuidev/react-ui/genui-lib";
 
 let specDir: string;
 beforeAll(() => {
@@ -17,6 +19,24 @@ afterAll(() => {
 });
 
 describe("validateOpenuiLang", () => {
+  it("uses exactly the configured components in the generated library", () => {
+    const configuredNames = [...SUPPORTED_COMPONENTS].sort();
+    assert.equal(new Set(configuredNames).size, configuredNames.length);
+    assert.deepEqual(Object.keys(displayLibrary.components).sort(), configuredNames);
+  });
+
+  it("rejects every upstream component that is not configured", () => {
+    const supported = new Set<string>(SUPPORTED_COMPONENTS);
+    const excludedNames = Object.keys(openuiLibrary.components).filter(
+      (name) => !supported.has(name),
+    );
+    assert.ok(excludedNames.length > 0);
+    for (const name of excludedNames) {
+      const result = validateOpenuiLang(`root = Stack([${name}()])`, specDir);
+      assert.equal(result.ok, false, name);
+      if (!result.ok) assert.match(result.error, /display-only library/, name);
+    }
+  });
   for (const [name, source] of [
     ["card", 'root = Stack([Card([CardHeader("Report"), TextContent("Revenue **rose**")])])'],
     ["table", 'root = Stack([Table([Col("Name", ["A", "B"]), Col("Value", [10, 20])])])'],

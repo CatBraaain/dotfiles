@@ -303,14 +303,17 @@ describe("extension wiring", () => {
     assert.deepEqual(captured.legacyRenderers, [OPENUI_CUSTOM_TYPE]);
     assert.deepEqual(
       [...captured.handlers.keys()],
-      ["before_agent_start", "session_shutdown", "message_end"],
+      ["resources_discover", "session_shutdown", "message_end"],
     );
   });
-  it("injects the existing prompt section", () => {
+  it("registers the generated skill path without injecting a prompt section", () => {
     const captured = capture();
-    const sections: Record<string, string> = {};
-    captured.handlers.get("before_agent_start")?.({ systemPromptOptions: { sections } });
-    assert.match(sections["openui-lang"]!, /```openui-lang/);
+    assert.equal(captured.handlers.has("before_agent_start"), false);
+    const resources = captured.handlers.get("resources_discover")?.({ reason: "startup" });
+    const skillPath = join(import.meta.dir, "skills", "openui-preview", "SKILL.md");
+    assert.deepEqual(resources, { skillPaths: [skillPath] });
+    const reloaded = captured.handlers.get("resources_discover")?.({ reason: "reload" });
+    assert.deepEqual(reloaded, resources);
   });
   it("removes fences only from the displayed assistant body", () => {
     const captured = capture();

@@ -3,14 +3,14 @@ import { createRoot } from "react-dom/client";
 import { createLibrary, Renderer } from "@openuidev/react-lang";
 import { openuiLibrary } from "@openuidev/react-ui/genui-lib";
 import "@openuidev/react-ui/index.css";
-import { INTERACTIVE_COMPONENTS } from "./display-only.ts";
+import { SUPPORTED_COMPONENTS } from "./supported-components.ts";
 
-const interactive = new Set(INTERACTIVE_COMPONENTS);
+const supported = new Set(SUPPORTED_COMPONENTS);
 const library = createLibrary({
   components: Object.entries(openuiLibrary.components)
-    .filter(([name]) => !interactive.has(name))
+    .filter(([name]) => supported.has(name))
     .map(([, component]) => component),
-  root: openuiLibrary.root,
+  root: openuiLibrary.root && supported.has(openuiLibrary.root) ? openuiLibrary.root : undefined,
 });
 const STABLE_FRAMES = 5;
 const state = { ready: false, error: "" };

@@ -1,12 +1,14 @@
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ThemeBg, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { Box, Image, Text, type Component } from "@earendil-works/pi-tui";
 import { requestBackgroundBash, type BackgroundBashContext } from "../tools/background-bash.ts";
 import { extractOpenuiLangBlocks, stripOpenuiLangBlocks, type OpenuiLangBlock } from "./fence";
-import { PROMPT_SECTION_NAME, openuiInstructions } from "./prompt";
 import { validateOpenuiLang } from "./render";
 import { shotOpenui, type ShotOptions } from "./snapshot";
+
+const SKILL_PATH = fileURLToPath(new URL("./skills/openui-preview/SKILL.md", import.meta.url));
 
 export const OPENUI_CUSTOM_TYPE = "openui-preview";
 export const MAX_HEIGHT_CELLS = 30;
@@ -130,9 +132,7 @@ export default function openuiPreviewExtension(
   pi.registerMarkdownTransformer((markdown, context) =>
     context.messageType === "assistant" ? stripOpenuiLangBlocks(markdown) : markdown,
   );
-  pi.on("before_agent_start", (event) => {
-    event.systemPromptOptions.sections[PROMPT_SECTION_NAME] = openuiInstructions(deps.generatedDir);
-  });
+  pi.on("resources_discover", () => ({ skillPaths: [SKILL_PATH] }));
   pi.on("session_shutdown", async () => {
     controller.abort(new Error("OpenUI preview session stopped"));
     await Promise.allSettled(pending);

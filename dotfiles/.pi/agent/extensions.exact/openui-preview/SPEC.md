@@ -6,40 +6,56 @@ assistant出力中の ` ```openui-lang ` コードフェンスを、確定後に
 
 | イベント | 動作 |
 | --- | --- |
-| `before_agent_start` | system promptに `openui-lang` セクション（openui-langのdisplay-only作成指示）を常時注入する |
+| `resources_discover` | 拡張フォルダ内に生成した `skills/openui-preview/SKILL.md` を `skillPaths` で登録する |
 | `message_end`（assistantメッセージ確定時） | メッセージ本文から ` ```openui-lang ` フェンスを検出し、各ブロックのプレビュー生成をキューへ投入する |
 | markdown描画（assistant本文） | 本文から ` ```openui-lang ` ブロックを除去して表示する（表示のみの除去。LLMコンテキストは変えない） |
 
 `message_start`・`message_update`（ストリーミング中）は対象外。プレビューはメッセージ確定後に生成される。
 
-## system promptへの注入
+## openui-preview skill
 
-`before_agent_start` で `event.systemPromptOptions.sections["openui-lang"]` に、openui-langのdisplay-only指示を設定する。指示は `prompt.ts` が生成する:
+`openui-preview` skillは、markdown応答内にdisplay-onlyのOpenUI Langを作成するための構文・コンポーネント説明・例・ルールを本文として提供する。モデルは生成UIが有用な応答を作るときにskillを選び、本文を読む。system promptへの常時掲載はskillの名前・description・パスだけとする。
 
-- 入力はapplyで生成した `spec.json`（58コンポーネントのLibrarySpec）と `prompt-options.json`（examples・additionalRules）。両方とも `spec.apply.ts` が `library.data.ts` から生成する
-- `library.data.ts` は正本であり、`@openuidev/react-ui` の `genui-lib` から対話コンポーネント（Button・Form等26種）を除外した `createLibrary` 結果と、`genui-lib/prompt-options` から対話系を示す語を含むexamples・rulesを除外したpromptOptionsをexportする。プロジェクト外部のリポジトリには依存しない
-- `prompt.ts` は対話コンポーネント（同26種）をsignatureから `never` 化・unionから除去し（`displayOnlySignature`）、生成promptの `## Action` セクションと `ActionExpression` の説明行を除去する（`stripInteractivePromptParts`）
-- preambleを差し替え、markdown応答内の `openui-lang` fenced blockへの埋め込みを指示する（lang-core既定の「応答全体がコード」前提は使わない）
+frontmatterの `name` は `openui-preview`、`description` は「markdown応答内に表示専用のOpenUI Langを作成する。生成UIを使う応答や、openui-langコードフェンスの作成・修正時に使う。」とする。本文はapplyで生成した `spec.json`（LibrarySpec）と `prompt-options.json`（examples・additionalRules）から作成し、構文・コンポーネント説明・例・ルールが本文だけで読める形とする。両入力の安全な型・説明・例・規則の変更は本文に反映する。対応一覧やプロンプトの手書きによる二重管理は行わない。
+
+| 本文の情報 | 掲載する用法 |
+| --- | --- |
+| 出力形式 | markdown応答内の、完結した `openui-lang` コードフェンス。各プログラムは `root` を定義し、参照先をすべて含む |
+| 値と参照 | 文字列・数値・真偽値・null・配列・オブジェクト・表示部品の呼出しと、静的に定義した通常の名前参照 |
+| signature | 対応部品の引数名・順序・表示用の型を保持する。未選択部品はunionから除き、操作やbinding用の引数位置はnullで表す。末尾の省略可能引数は省略でき、中間位置を飛ばす場合はnullを渡す |
+| 説明・規則・例 | 現行の静的描画能力に合う既存素材。state・binding・Query・Mutation・Action・動的AST式を使う用法、入力フォームの作成、chunkごとの逐次表示を教える案内は含めない |
+| 状態を持つ表示部品 | Tabs・Accordion・Carousel・Steps・Table等の初期状態の静止画。切替・開閉・ページ送りを前提としない |
+| 画像参照 | `data:` に埋め込んだ画像。外部URLやローカルファイルの参照を案内しない |
+| 撮影時点 | assistantメッセージが確定した後。表示領域は幅960 px・高さ1280 px |
+
+上流の構文・部品説明・例を利用し、常時生成される案内も上表へ整合させる。新たな補足説明は日本語とする。SKILL本文は描画方法を案内するものであり、rendererの部品集合・入力検証・通信制限は変更しない。
+
+## 対応部品
+
+対応部品の集合は [対応部品設定](./supported-components.ts) に明示する。生成する部品案内・入力検証・描画で、同じ設定の部品集合を使用する。
+
+| 条件 | 結果 |
+| --- | --- |
+| 設定で選択した部品 | 部品案内に掲載し、入力検証と描画で使用する |
+| 設定で選択していない部品 | 部品案内に掲載せず、入力時は理由をエラーカードで表示する |
+| 上流ライブラリに部品が追加され、設定は変わらない | 対応部品の集合は変わらない |
+| 対応部品設定を変更して生成物を更新する | 部品案内・入力検証・描画が変更後の集合に従う |
 
 ## 生成物とapplyの前提
 
-`spec.json` と `prompt-options.json` は `spec.apply.ts`（applyフック）が `library.data.ts` から生成し、ホームの拡張フォルダに配置する。生成物はgit管理せず、apply時に更新する。spec生成用の依存は後述の依存導入フックが準備する。
+apply時に、対応部品設定と上流の部品定義・プロンプト素材から `spec.json`・`prompt-options.json`・frontmatter付きの `skills/openui-preview/SKILL.md` を生成し、ホームの拡張フォルダへ配置する。これら3つの生成物はgit管理せず、apply時に更新する。
 
-`library.data.ts` は `.data.` 予約名のため差分検知・適用の対象外であり、ホームには展開されない。applyフックはスナップショット実行位置（dist側の拡張フォルダ）から `library.data.ts` と `display-only.ts` を読み、ホーム側の一時ディレクトリ `.spec-gen/` にコピーしてから読み込む。これで親を遡って `~/.pi/agent/node_modules` の依存を解決できる。`.spec-gen/` は使用後に削除する。
-
-依存は `bun_install.apply.ts` が導入した `~/.pi/agent/node_modules` を利用する。applyフックは dist相対パス順で実行され、`bun_install.apply.ts` が拡張フォルダのフックより先に走る（[依存導入仕様](../../bun_install.spec.md)）。
+生成に必要な依存は [依存導入仕様](../../bun_install.spec.md) に従って準備する。
 
 | 状態 | 操作 | 結果 |
 | --- | --- | --- |
-| `library.data.ts`・`display-only.ts`・`bun.lock` の内容ハッシュが記録と一致し、生成物が両方存在する | applyフックを実行 | 生成を省略する |
-| ハッシュが記録と異なる、または記録・生成物のどちらかが欠けている | applyフックを実行 | CLIでspecとprompt optionsを再生成し、成功後に記録（`spec-gen-stamp`）を更新する |
+| 対応部品設定・生成に使う定義・プロンプト素材・依存lockfileが前回成功時から変わらず、3つの生成物がすべて存在する | applyフックを実行 | 生成を省略する |
+| 生成入力が変わった、または前回成功の記録・生成物が欠けている | applyフックを実行 | 3つの生成物を再生成し、成功後に記録を更新する |
 | CLIが見つからない・生成が失敗する | applyフックを実行 | 非0で終了し、記録は更新しない。既存の生成物はそのまま残る |
-
-`library.data.ts`・`display-only.ts`・`bun.lock` は dist側のファイルを読む。生成物と `spec-gen-stamp` はホームの拡張フォルダ配下の管理対象外ファイルである。
 
 ## 実行条件（モード）
 
-プレビュー生成はTUIモード（`ctx.mode` が `"tui"`）だけで行う。rpc・json・printモードでは `message_end` を無視する。カスタムエントリのレンダリングはTUIだけで行われる。system promptへの注入はモードによらず常時ON、markdown transformerもモードによらず登録する。
+プレビュー生成はTUIモード（`ctx.mode` が `"tui"`）だけで行う。rpc・json・printモードでは `message_end` を無視する。カスタムエントリのレンダリングはTUIだけで行われる。skillとmarkdown transformerはモードによらず登録する。
 
 ## フェンスの検出
 
@@ -57,7 +73,7 @@ assistant出力中の ` ```openui-lang ` コードフェンスを、確定後に
 
 ## openui-lang → React描画
 
-入力は `spec.json` のschemaとrootに従って解析する。描画には `@openuidev/react-lang` の `Renderer` と `@openuidev/react-ui/genui-lib` の既存部品を使い、生成用ライブラリと同じdisplay-onlyの部品構成を渡す。React Rendererは汎用のOpenUI Lang描画機能であり、本拡張の専用処理がブラウザへの配置と撮影を担う。
+入力は `spec.json` のschemaとrootに従って解析する。描画には `@openuidev/react-lang` の `Renderer` と `@openuidev/react-ui/genui-lib` の既存部品を使い、「対応部品」で定めた部品構成を渡す。React Rendererは汎用のOpenUI Lang描画機能であり、本拡張の専用処理がブラウザへの配置と撮影を担う。
 
 見た目は `@openuidev/react-ui/index.css` のlight paletteと既存部品のレイアウトに従う。ブラウザ内でReactを実行し、チャートを含む部品のDOM・SVGを描画する。
 
