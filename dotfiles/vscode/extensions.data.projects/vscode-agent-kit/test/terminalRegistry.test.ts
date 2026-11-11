@@ -38,6 +38,11 @@ function setup(restored?: vscode.Terminal) {
       closeAutomatically(terminal);
       return terminal;
     }),
+    createNew: vi.fn((cwd: string) => {
+      const terminal = displayTerminal(cwd);
+      closeAutomatically(terminal);
+      return terminal;
+    }),
     find: vi.fn(() => restored),
   };
   const registry = new TerminalRegistry(runtimes.store, displays, runtimes.mux);
@@ -395,6 +400,24 @@ describe("TerminalRegistry", () => {
     expect(displays.create.mock.results[0].value.dispose).not.toHaveBeenCalled();
     await registry.open(session("A"));
     expect(displays.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases a pending attachment on dispose without closing the display or killing Pi", async () => {
+    const { registry, mocks, displays } = setup();
+    let release!: (clients: never[]) => void;
+    mocks.clients.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    const opening = registry.open(session("A")).catch((error: Error) => error);
+    await vi.waitFor(() => expect(mocks.clients).toHaveBeenCalledOnce());
+    registry.dispose();
+    expect(await opening).toBeInstanceOf(Error);
+    expect(displays.create.mock.results[0].value.dispose).not.toHaveBeenCalled();
+    expect(mocks.stop).not.toHaveBeenCalled();
+    await expect(registry.presentNew("/project")).rejects.toThrow("disposed");
+    release([]);
   });
 
   it("closes an archived conversation display and clears selection", async () => {

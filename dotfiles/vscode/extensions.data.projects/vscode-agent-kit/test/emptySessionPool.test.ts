@@ -1,0 +1,429 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { EmptySessionPool } from "../src/emptySessionPool";
+import * as workDirectory from "../src/workDirectory";
+import { PiMux, type PiMuxSession } from "../src/piMux";
+import { SessionLauncher } from "../src/launcher";
+import { TerminalRegistry } from "../src/terminalRegistry";
+import { editorTerminals } from "../src/terminals";
+import { fakeRuntimes } from "./runtimeFixtures";
+import { cleanup, tempDir } from "./fixtures";
+
+const api = vi.hoisted(() => ({ terminals: [], createTerminal: vi.fn() }));
+vi.mock("vscode", () => ({
+  Uri: { file: (fsPath: string) => ({ fsPath }) },
+  TerminalLocation: { Editor: 1 },
+  window: api,
+}));
+
+let root: string;
+let statePath: string;
+let pool: EmptySessionPool;
+let onError: ReturnType<typeof vi.fn<(message: string) => void>>;
+let execute: ReturnType<
+  typeof vi.fn<(executable: string, args: string[], cwd?: string) => Promise<string>>
+>;
+let live: Map<string, PiMuxSession>;
+let saved: Set<string>;
+let fileExists: ReturnType<typeof vi.fn<(file: string) => Promise<boolean>>>;
+let sequence: number;
+
+beforeEach(async () => {
+  root = await tempDir("pi-empty-pool-");
+  statePath = join(root, "session-state.json");
+  onError = vi.fn();
+  live = new Map();
+  saved = new Set();
+  sequence = 0;
+  fileExists = vi.fn(async (file) => saved.has(file));
+  execute = vi.fn(async (_executable, args, cwd) => {
+    if (args[0] === "list") return JSON.stringify([...live.values()]);
+    const physicalCwd = await realpath(cwd!);
+    const existing = [...live.values()].find(
+      (session) => session.cwd === physicalCwd && !saved.has(session.file!),
+    );
+    if (existing !== undefined) return `Pi session ${existing.id}\n`;
+    const id = `new-${++sequence}`;
+    live.set(id, { id, cwd: physicalCwd, file: join(root, `${id}.jsonl`), state: null });
+    return `Pi session ${id}\n`;
+  });
+  pool = new EmptySessionPool({ statePath, mux: new PiMux(execute), fileExists, onError });
+  api.createTerminal.mockClear();
+});
+
+afterEach(async () => {
+  pool.dispose();
+  vi.restoreAllMocks();
+  await cleanup(root);
+});
+
+async function register(cwds: string[]) {
+  await writeFile(
+    statePath,
+    JSON.stringify({
+      "active-workspaces": Object.fromEntries(cwds.map((cwd) => [cwd, { "active-sessions": {} }])),
+    }),
+  );
+  pool.syncWorkspaces();
+}
+
+function newCalls() {
+  return execute.mock.calls.filter(([, args]) => args[0] === "new");
+}
+
+async function ready(count = 1) {
+  await vi.waitFor(() => expect(fileExists).toHaveBeenCalledTimes(count));
+}
+
+function firstFile() {
+  return live.get("new-1")!.file!;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
+describe("EmptySessionPool", () => {
+  it("prewarms every registered cwd, including empty groups, without a Terminal or active entry", async () => {
+    const other = join(root, "other");
+    await mkdir(other);
+    await register([root, other]);
+    await ready(2);
+    expect(newCalls()).toHaveLength(2);
+    expect(newCalls()).toEqual(
+      expect.arrayContaining([
+        ["pi-mux", ["new", "--detached"], root],
+        ["pi-mux", ["new", "--detached"], other],
+      ]),
+    );
+    const state = JSON.parse(await readFile(statePath, "utf8"));
+    expect(state["active-workspaces"][root]["active-sessions"]).toEqual({});
+    expect(api.createTerminal).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("tracks physical CLI metadata and refills through the unchanged logical symlink registration", async () => {
+    const alias = join(root, "alias");
+    await symlink(root, alias);
+    await register([alias]);
+    await ready();
+    expect(live.get("new-1")?.cwd).toBe(root);
+    const storeBefore = await readFile(statePath, "utf8");
+    saved.add(firstFile());
+    pool.onSessionFileChanged(firstFile());
+    await ready(3);
+    expect(newCalls().map(([, , cwd]) => cwd)).toEqual([alias, alias]);
+    expect(live.size).toBe(2);
+    expect(await readFile(statePath, "utf8")).toBe(storeBefore);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("shares one physical empty Pi across logical registrations and refills only through a remaining alias", async () => {
+    const first = join(root, "first");
+    const second = join(root, "second");
+    await symlink(root, first);
+    await symlink(root, second);
+    await register([first, second]);
+    await vi.waitFor(() => expect(fileExists).toHaveBeenCalled());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(live.size).toBe(1);
+    await register([second]);
+    const newBeforeSave = newCalls().length;
+    const file = firstFile();
+    saved.add(file);
+    pool.onSessionFileChanged(file);
+    pool.onSessionFileChanged(file);
+    await vi.waitFor(() => expect(newCalls()).toHaveLength(newBeforeSave + 1));
+    await vi.waitFor(() => expect(live.size).toBe(2));
+    expect(newCalls().at(-1)?.[2]).toBe(second);
+    const next = live.get("new-2")!.file!;
+    await register([]);
+    saved.add(next);
+    pool.onSessionFileChanged(next);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(newCalls()).toHaveLength(newBeforeSave + 1);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("keeps a shared refill when its original logical registration is removed during save detection", async () => {
+    const first = join(root, "first");
+    const second = join(root, "second");
+    await symlink(root, first);
+    await symlink(root, second);
+    await register([first, second]);
+    await vi.waitFor(() => expect(fileExists).toHaveBeenCalled());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const gate = deferred<boolean>();
+    fileExists.mockReturnValueOnce(gate.promise);
+    const file = firstFile();
+    saved.add(file);
+    pool.onSessionFileChanged(file);
+    await register([second]);
+    const before = newCalls().length;
+    gate.resolve(true);
+    await vi.waitFor(() => expect(newCalls()).toHaveLength(before + 1));
+    await vi.waitFor(() => expect(live.size).toBe(2));
+    expect(newCalls().at(-1)?.[2]).toBe(second);
+  });
+
+  it("moves an already scheduled refill to the remaining logical registration before invoking the CLI", async () => {
+    const first = join(root, "first");
+    const second = join(root, "second");
+    await symlink(root, first);
+    await symlink(root, second);
+    await register([first, second]);
+    await vi.waitFor(() => expect(fileExists).toHaveBeenCalled());
+    pool.observeOpened(second, "new-1");
+    await vi.waitFor(() => expect(fileExists.mock.calls.length).toBeGreaterThanOrEqual(2));
+    const original = workDirectory.requireWorkDirectory;
+    const gate = deferred<void>();
+    const validating = vi
+      .spyOn(workDirectory, "requireWorkDirectory")
+      .mockImplementationOnce(async (cwd) => {
+        await gate.promise;
+        return original(cwd);
+      });
+    const before = newCalls().length;
+    saved.add(firstFile());
+    pool.onSessionFileChanged(firstFile());
+    await vi.waitFor(() => expect(validating).toHaveBeenCalledWith(first));
+    await register([second]);
+    gate.resolve();
+    await vi.waitFor(() => expect(newCalls()).toHaveLength(before + 1));
+    expect(newCalls().at(-1)?.[2]).toBe(second);
+    await vi.waitFor(() => expect(live.size).toBe(2));
+  });
+
+  it("rejects a truly different physical CLI cwd without watching or refilling its file", async () => {
+    const other = join(root, "other");
+    await mkdir(other);
+    const original = execute.getMockImplementation()!;
+    execute.mockImplementation(async (executable, args, cwd) => {
+      const result = await original(executable, args, cwd);
+      if (args[0] === "new") live.get("new-1")!.cwd = other;
+      return result;
+    });
+    await register([root]);
+    await vi.waitFor(() =>
+      expect(onError).toHaveBeenCalledWith(expect.stringContaining("Cannot locate")),
+    );
+    expect(fileExists).not.toHaveBeenCalled();
+    saved.add(firstFile());
+    pool.onSessionFileChanged(firstFile());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(newCalls()).toHaveLength(1);
+  });
+
+  it("warms only newly registered workspaces after changes from another client", async () => {
+    const other = join(root, "other");
+    await mkdir(other);
+    await register([root]);
+    await ready();
+    await register([root, other]);
+    await ready(2);
+    pool.syncWorkspaces();
+    expect(newCalls().map(([, , cwd]) => cwd)).toEqual([root, other]);
+  });
+
+  it("reuses an already running empty Pi on activation and extension restart", async () => {
+    live.set("preexisting", {
+      id: "preexisting",
+      cwd: root,
+      file: join(root, "empty.jsonl"),
+      state: null,
+    });
+    await register([root]);
+    await ready();
+    pool.dispose();
+    pool = new EmptySessionPool({ statePath, mux: new PiMux(execute), fileExists, onError });
+    pool.syncWorkspaces();
+    await ready(2);
+    expect([...live.keys()]).toEqual(["preexisting"]);
+    expect(newCalls()).toHaveLength(2);
+  });
+
+  it("refills exactly once on the first saved message without Refresh or assistant completion", async () => {
+    await register([root]);
+    await ready();
+    const file = firstFile();
+    saved.add(file);
+    pool.onSessionFileChanged(file);
+    pool.onSessionFileChanged(file);
+    pool.onSessionFileChanged(file);
+    await vi.waitFor(() => expect(newCalls()).toHaveLength(2));
+    await vi.waitFor(() => expect([...live.keys()]).toEqual(["new-1", "new-2"]));
+    pool.onSessionFileChanged(file);
+    pool.observeOpened(root, "new-1");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(newCalls()).toHaveLength(2);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("keeps a handled input's unsaved Pi despite change notifications and non-null planned file", async () => {
+    await register([root]);
+    await ready();
+    pool.onSessionFileChanged(firstFile());
+    await ready(2);
+    expect(newCalls()).toHaveLength(1);
+    expect(live.size).toBe(1);
+  });
+
+  it("rechecks a file saved before its path was tracked and refills after the original request finishes", async () => {
+    const list = deferred<string>();
+    const original = execute.getMockImplementation()!;
+    execute.mockImplementation(async (executable, args, cwd) =>
+      args[0] === "list" && live.size === 1 ? list.promise : original(executable, args, cwd),
+    );
+    await register([root]);
+    await vi.waitFor(() => expect(live.size).toBe(1));
+    const file = firstFile();
+    saved.add(file);
+    pool.onSessionFileChanged(file);
+    list.resolve(JSON.stringify([...live.values()]));
+    await vi.waitFor(() => expect(newCalls()).toHaveLength(2));
+    await ready(2);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("refills after a foreground-created empty Pi saves, even after a failed background startup", async () => {
+    execute.mockRejectedValueOnce(new Error("startup failed"));
+    await register([root]);
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+    live.set("foreground", {
+      id: "foreground",
+      cwd: root,
+      file: join(root, "foreground.jsonl"),
+      state: null,
+    });
+    pool.observeOpened(root, "foreground");
+    await ready();
+    saved.add(join(root, "foreground.jsonl"));
+    pool.onSessionFileChanged(join(root, "foreground.jsonl"));
+    await vi.waitFor(() => expect(newCalls()).toHaveLength(2));
+    await ready(3);
+    expect(live.size).toBe(2);
+  });
+
+  it("tracks a replacement explicitly opened after an empty Pi exits without reviving it automatically", async () => {
+    await register([root]);
+    await ready();
+    live.delete("new-1");
+    pool.syncWorkspaces();
+    expect(newCalls()).toHaveLength(1);
+    live.set("replacement", {
+      id: "replacement",
+      cwd: root,
+      file: join(root, "replacement.jsonl"),
+      state: null,
+    });
+    pool.observeOpened(root, "replacement");
+    await ready(2);
+    saved.add(join(root, "replacement.jsonl"));
+    pool.onSessionFileChanged(join(root, "replacement.jsonl"));
+    await vi.waitFor(() => expect(newCalls()).toHaveLength(2));
+    expect(live.has("new-1")).toBe(false);
+  });
+
+  it("stops refilling on unregister and reuses the existing Pi on re-registration", async () => {
+    await register([root]);
+    await ready();
+    const file = firstFile();
+    await register([]);
+    saved.add(file);
+    pool.onSessionFileChanged(file);
+    expect(newCalls()).toHaveLength(1);
+    expect(live.size).toBe(1);
+    await register([root]);
+    await ready(2);
+    expect(newCalls()).toHaveLength(2);
+    expect(live.size).toBe(2);
+  });
+
+  it("ignores late startup completion after unregister without stopping the started Pi", async () => {
+    const gate = deferred<string>();
+    execute.mockReturnValueOnce(gate.promise);
+    await register([root]);
+    await vi.waitFor(() => expect(newCalls()).toHaveLength(1));
+    await register([]);
+    live.set("late", { id: "late", cwd: root, file: join(root, "late.jsonl"), state: null });
+    gate.resolve("Pi session late\n");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(execute.mock.calls).toHaveLength(1);
+    expect(live.has("late")).toBe(true);
+  });
+
+  it("leaves live Pi and files intact on disposal and ignores late notifications", async () => {
+    await register([root]);
+    await ready();
+    const file = firstFile();
+    pool.dispose();
+    saved.add(file);
+    pool.onSessionFileChanged(file);
+    pool.syncWorkspaces();
+    pool.observeOpened(root, "new-1");
+    expect(newCalls()).toHaveLength(1);
+    expect(live.size).toBe(1);
+    expect(saved.has(file)).toBe(true);
+  });
+
+  it("reports a cwd-specific failure once, without retrying on unrelated state updates", async () => {
+    execute.mockRejectedValueOnce(new Error("pi-mux missing"));
+    await register([root]);
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(expect.stringContaining(root)));
+    expect(onError.mock.calls[0][0]).toContain("pi-mux missing");
+    pool.syncWorkspaces();
+    pool.syncWorkspaces();
+    expect(newCalls()).toHaveLength(1);
+    await register([]);
+    await register([root]);
+    await ready();
+    expect(newCalls()).toHaveLength(2);
+  });
+
+  it("reports an invalid registered cwd without starting Pi or modifying the store", async () => {
+    const missing = join(root, "missing");
+    await register([missing]);
+    const original = await readFile(statePath, "utf8");
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(expect.stringContaining(missing)));
+    expect(newCalls()).toHaveLength(0);
+    expect(await readFile(statePath, "utf8")).toBe(original);
+  });
+
+  it("does not block New Session's Terminal behind a pending background startup", async () => {
+    const background = deferred<string>();
+    execute.mockReturnValueOnce(background.promise);
+    await register([root]);
+    await vi.waitFor(() => expect(newCalls()).toHaveLength(1));
+    const runtimes = fakeRuntimes();
+    const registry = new TerminalRegistry(
+      runtimes.store,
+      editorTerminals(runtimes.store),
+      runtimes.mux,
+    );
+    const pid = deferred<number>();
+    const terminal = { processId: pid.promise, show: vi.fn(), dispose: vi.fn() };
+    api.createTerminal.mockReturnValue(terminal);
+    const launcher = new SessionLauncher({
+      statePath,
+      registry,
+      emptySessions: pool,
+      onSessionStarted: vi.fn(),
+    });
+    const launching = launcher.start(root).catch((error: Error) => error);
+    await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledOnce());
+    expect(api.createTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({ shellArgs: ["new"] }),
+    );
+    registry.onTerminalClosed(terminal as never);
+    expect(await launching).toBeInstanceOf(Error);
+    launcher.dispose();
+    pool.dispose();
+    background.resolve("Pi session late\n");
+    pid.resolve(123);
+  });
+});

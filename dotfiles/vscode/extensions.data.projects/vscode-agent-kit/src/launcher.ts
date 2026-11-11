@@ -2,10 +2,12 @@ import type * as vscode from "vscode";
 import { requireWorkDirectory } from "./workDirectory";
 import { addActiveSession } from "./sessionStateStore";
 import type { TerminalRegistry } from "./terminalRegistry";
+import type { EmptySessionPool } from "./emptySessionPool";
 
 export interface SessionLauncherDeps {
   statePath: string;
   registry: TerminalRegistry;
+  emptySessions?: EmptySessionPool;
   onSessionStarted: (sessionId: string) => void | Promise<void>;
 }
 
@@ -15,18 +17,22 @@ export class SessionLauncher implements vscode.Disposable {
   constructor(private readonly deps: SessionLauncherDeps) {}
 
   async start(cwd: string): Promise<void> {
+    const workDir = await requireWorkDirectory(cwd);
+    if (this.disposed) return;
+    const presentation = this.deps.registry.presentNew(workDir).then(
+      (terminal) => ({ ok: true as const, terminal }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
     await this.deps.registry.run(async () => {
-      const workDir = await requireWorkDirectory(cwd);
+      const result = await presentation;
       if (this.disposed) return;
-      const sessionId = await this.deps.registry.mux.newSession(workDir);
-      const result = addActiveSession(this.deps.statePath, workDir, sessionId);
-      if (!result.ok) throw new Error(result.message);
-      try {
-        const { terminal } = await this.deps.registry.open({ sessionId, cwd: workDir });
-        terminal.show();
-      } finally {
-        await this.deps.onSessionStarted(sessionId);
-      }
+      if (!result.ok) throw result.error;
+      const runtime = await this.deps.registry.openNew(workDir, result.terminal);
+      if (this.disposed) return;
+      this.deps.emptySessions?.observeOpened(workDir, runtime.sessionId);
+      const registration = addActiveSession(this.deps.statePath, workDir, runtime.sessionId);
+      if (!registration.ok) throw new Error(registration.message);
+      await this.deps.onSessionStarted(runtime.sessionId);
     });
   }
 

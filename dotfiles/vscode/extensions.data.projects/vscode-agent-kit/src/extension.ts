@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { basename, dirname } from "node:path";
 import { homedir } from "node:os";
 import { SessionLauncher } from "./launcher";
+import { EmptySessionPool } from "./emptySessionPool";
 import { resolveAgentDir, resolveSessionDir, sessionStatePath } from "./paths";
 import { TerminalRegistry } from "./terminalRegistry";
 import { editorTerminals } from "./terminals";
@@ -20,9 +21,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.onDidCloseTerminal((closed) => registry.onTerminalClosed(closed)),
   );
 
+  const emptySessions = new EmptySessionPool({
+    statePath,
+    mux: registry.mux,
+    onError: (message) => {
+      void vscode.window.showErrorMessage(message);
+    },
+  });
   const launcher: SessionLauncher = new SessionLauncher({
     statePath,
     registry,
+    emptySessions,
     onSessionStarted: () => provider.refresh(),
   });
   const provider = new SessionWebviewProvider({
@@ -36,13 +45,29 @@ export function activate(context: vscode.ExtensionContext): void {
   const stateWatcher = vscode.workspace.createFileSystemWatcher(
     new vscode.RelativePattern(vscode.Uri.file(dirname(statePath)), basename(statePath)),
   );
-  stateWatcher.onDidChange(() => void provider.refresh());
-  stateWatcher.onDidCreate(() => void provider.refresh());
+  stateWatcher.onDidChange(onStateChanged);
+  stateWatcher.onDidCreate(onStateChanged);
+  stateWatcher.onDidDelete(onStateChanged);
+
+  const sessionWatcher = vscode.workspace.createFileSystemWatcher(
+    new vscode.RelativePattern(vscode.Uri.file(sessionDir), "**/*.jsonl"),
+  );
+  sessionWatcher.onDidCreate((uri) => emptySessions.onSessionFileChanged(uri.fsPath));
+  sessionWatcher.onDidChange((uri) => emptySessions.onSessionFileChanged(uri.fsPath));
+  emptySessions.syncWorkspaces();
+
+  function onStateChanged(): void {
+    emptySessions.syncWorkspaces();
+    void provider.refresh();
+  }
 
   context.subscriptions.push(
     launcher,
+    registry,
+    emptySessions,
     provider,
     stateWatcher,
+    sessionWatcher,
     vscode.commands.registerCommand("piSessions.refreshSessions", () => provider.refresh()),
     vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
       webviewOptions: { retainContextWhenHidden: true },

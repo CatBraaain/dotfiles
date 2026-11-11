@@ -62,6 +62,27 @@ describe("TmuxRuntimeStore", () => {
     expect(await store.resolveTarget("unknown")).toBeUndefined();
   });
 
+  it("resolves a cold display target back to its exact ID, cwd and planned file", async () => {
+    const { store } = setup();
+    expect(await store.resolveSession("target-B")).toEqual({
+      sessionId: "B",
+      cwd: "/project",
+      file: "/saved.jsonl",
+      target: "target-B",
+    });
+    expect(await store.resolveSession("unknown")).toBeUndefined();
+  });
+
+  it.each([
+    "broken\tnot-base64",
+    "broken\tbnVsbA==",
+    `broken\t${Buffer.from(JSON.stringify({ id: "A", cwd: "relative", file: "/saved.jsonl" })).toString("base64")}`,
+    `broken\t${Buffer.from(JSON.stringify({ id: "A", cwd: "/project", file: "relative" })).toString("base64")}`,
+  ])("ignores invalid cold metadata without guessing its identity: %s", async (metadata) => {
+    const { store } = setup(metadata);
+    expect(await store.resolveSession("broken")).toBeUndefined();
+  });
+
   it("kills only the exact resolved session on the dedicated socket", async () => {
     const { store, execute } = setup();
     expect(await store.stop("A")).toBe("target-A");

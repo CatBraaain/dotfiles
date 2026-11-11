@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { getuid } from "node:process";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import { errorMessage, isRecord } from "./guards";
 import type { PiSession } from "./piMux";
@@ -42,6 +42,35 @@ export class TmuxRuntimeStore {
       try {
         const metadata: unknown = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
         if (isRecord(metadata) && metadata.id === sessionId) return target;
+      } catch {
+        continue;
+      }
+    }
+    return undefined;
+  }
+
+  async resolveSession(target: string): Promise<(PiRuntime & { file: string }) | undefined> {
+    const panes = await this.query([
+      "list-panes",
+      "-a",
+      "-F",
+      "#{session_name}\t#{@pi-tmux-session}",
+    ]);
+    for (const line of panes.split("\n")) {
+      const [name, encoded] = line.split("\t");
+      if (name !== target || !encoded) continue;
+      try {
+        const metadata: unknown = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+        if (
+          isRecord(metadata) &&
+          typeof metadata.id === "string" &&
+          metadata.id.length > 0 &&
+          typeof metadata.cwd === "string" &&
+          isAbsolute(metadata.cwd) &&
+          typeof metadata.file === "string" &&
+          isAbsolute(metadata.file)
+        )
+          return { sessionId: metadata.id, cwd: metadata.cwd, file: metadata.file, target };
       } catch {
         continue;
       }

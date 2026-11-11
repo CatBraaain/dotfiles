@@ -18,7 +18,7 @@ export function fakeRuntimes() {
   const muxMocks = {
     newSession: vi.fn(async (cwd: string) => {
       const sessionId = `new-${muxMocks.newSession.mock.calls.length}`;
-      open({ sessionId, cwd });
+      live.set(sessionId, { sessionId, cwd, target: `pi-${sessionId}` });
       return sessionId;
     }),
     list: vi.fn(async (): Promise<PiMuxSession[]> =>
@@ -37,6 +37,12 @@ export function fakeRuntimes() {
   const tmuxMocks = {
     socketPath: "/run/user/1000/pi-tmux/server.sock",
     resolveTarget: vi.fn(async (sessionId: string) => live.get(sessionId)?.target),
+    resolveSession: vi.fn(async (target: string) => {
+      const runtime = [...live.values()].find((entry) => entry.target === target);
+      return runtime === undefined
+        ? undefined
+        : { ...runtime, file: `/sessions/${runtime.sessionId}.jsonl` };
+    }),
     stop: vi.fn(async (sessionId: string) => {
       const target = live.get(sessionId)?.target;
       live.delete(sessionId);

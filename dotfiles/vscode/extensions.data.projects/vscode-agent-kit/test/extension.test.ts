@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type * as vscode from "vscode";
 import manifest from "../package.json";
 import { activate } from "../src/extension";
+import { EmptySessionPool } from "../src/emptySessionPool";
 import { SessionWebviewProvider } from "../src/webview/sessionWebviewProvider";
 
 const api = vi.hoisted(() => ({
@@ -10,7 +11,7 @@ const api = vi.hoisted(() => ({
   showErrorMessage: vi.fn(),
   onDidCloseTerminal: vi.fn(),
   registerWebviewViewProvider: vi.fn(),
-  watcher: { onDidChange: vi.fn(), onDidCreate: vi.fn(), dispose: vi.fn() },
+  watcher: { onDidChange: vi.fn(), onDidCreate: vi.fn(), onDidDelete: vi.fn(), dispose: vi.fn() },
 }));
 
 vi.mock("vscode", () => ({
@@ -63,6 +64,38 @@ describe("extension commands", () => {
         ({ command }) => command === "piSessions.reapplyTmuxSettings",
       ),
     ).toBe(false);
+  });
+
+  it("starts workspace prewarming independently of the webview and observes external registration changes", async () => {
+    const sync = vi
+      .spyOn(EmptySessionPool.prototype, "syncWorkspaces")
+      .mockImplementation(() => {});
+    const refresh = vi.spyOn(SessionWebviewProvider.prototype, "refresh").mockResolvedValue();
+    register();
+    expect(sync).toHaveBeenCalledOnce();
+    expect(refresh).not.toHaveBeenCalled();
+    for (const method of ["onDidCreate", "onDidChange", "onDidDelete"] as const) {
+      const callback = api.watcher[method].mock.calls[0][0] as () => void;
+      callback();
+    }
+    expect(sync).toHaveBeenCalledTimes(4);
+    expect(refresh).toHaveBeenCalledTimes(3);
+  });
+
+  it("observes session file creation and changes without relying on state or Refresh", () => {
+    vi.spyOn(EmptySessionPool.prototype, "syncWorkspaces").mockImplementation(() => {});
+    const changed = vi
+      .spyOn(EmptySessionPool.prototype, "onSessionFileChanged")
+      .mockImplementation(() => {});
+    register();
+    for (const method of ["onDidCreate", "onDidChange"] as const) {
+      const callback = api.watcher[method].mock.calls[1][0] as (uri: { fsPath: string }) => void;
+      callback({ fsPath: "/fixture/sessions/first.jsonl" });
+    }
+    expect(changed.mock.calls).toEqual([
+      ["/fixture/sessions/first.jsonl"],
+      ["/fixture/sessions/first.jsonl"],
+    ]);
   });
 
   it("contributes a named refresh icon only to the Sessions view title", () => {

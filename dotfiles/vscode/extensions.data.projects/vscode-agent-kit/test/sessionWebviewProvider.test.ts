@@ -2061,7 +2061,7 @@ describe("SessionWebviewProvider", () => {
       const displayedId = fixture.registry.displayedSessionId;
       expect(displayedId).toBeDefined();
       expect(displayedId).not.toBe(activeSessionId);
-      expect(fixture.terminal.show).toHaveBeenCalledTimes(2);
+      expect(fixture.terminal.show).toHaveBeenCalledTimes(3);
       expect(onSessionStarted).toHaveBeenCalledWith(displayedId);
       expect(activeSessionIds(readStore(fixture.statePath)).has(displayedId!)).toBe(true);
       const listedIds = sentState().groups.flatMap((group) =>
@@ -2288,7 +2288,8 @@ describe("SessionWebviewProvider", () => {
     );
     const terminal = { processId: Promise.resolve(123), show: vi.fn(), dispose: vi.fn() };
     vscodeMocks.createTerminal.mockImplementation(() => {
-      expect(activeSessionIds(readStore(statePath))).toEqual(new Set([activeSessionId]));
+      expect(activeSessionIds(readStore(statePath))).toEqual(new Set());
+      mocks.open({ sessionId: activeSessionId, cwd: root });
       return terminal;
     });
     const launcher = new SessionLauncher({
@@ -2329,11 +2330,11 @@ describe("SessionWebviewProvider", () => {
     expect(renderedRows(sentState())).toEqual([]);
     await webview.receive({ type: "newSession", cwd: root });
 
-    expect(fakePiMuxCommand).toHaveBeenCalledWith("pi-mux", ["new", "--detached"], root);
+    expect(fakePiMuxCommand.mock.calls.some(([, args]) => args[0] === "new")).toBe(false);
     expect(vscodeMocks.createTerminal).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ shellPath: "pi-mux", shellArgs: ["open", activeSessionId] }),
+      expect.objectContaining({ shellPath: "pi-mux", shellArgs: ["new"] }),
     );
-    expect(terminal.show).toHaveBeenCalledOnce();
+    expect(terminal.show).toHaveBeenCalledTimes(2);
     expect(registry.displayedSessionId).toBe(activeSessionId);
     expect(sentState().displayedSessionId).toBe(activeSessionId);
     expect(sentState().groups[0].sessions.map((session) => session.sessionId)).toEqual([

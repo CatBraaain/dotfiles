@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { expandWorkDirectoryInput, requireWorkDirectory } from "../src/workDirectory";
+import {
+  expandWorkDirectoryInput,
+  requireWorkDirectory,
+  sameWorkDirectory,
+} from "../src/workDirectory";
 import { cleanup, tempDir } from "./fixtures";
 
 let root: string;
@@ -18,6 +22,24 @@ afterEach(async () => {
 describe("work directories", () => {
   it("normalizes an existing absolute directory", async () => {
     expect(await requireWorkDirectory(`${root}/./`)).toBe(root);
+  });
+
+  it("preserves a valid logical symlink cwd while comparing physical directory identity", async () => {
+    const alias = join(root, "alias");
+    await symlink(root, alias);
+    expect(await requireWorkDirectory(alias)).toBe(alias);
+    expect(await sameWorkDirectory(alias, root)).toBe(true);
+  });
+
+  it("recognizes two symlinks to the same directory without equating different directories", async () => {
+    const first = join(root, "first");
+    const second = join(root, "second");
+    const other = join(root, "other");
+    await symlink(root, first);
+    await symlink(root, second);
+    await mkdir(other);
+    expect(await sameWorkDirectory(first, second)).toBe(true);
+    expect(await sameWorkDirectory(first, other)).toBe(false);
   });
 
   it("rejects a relative cwd", async () => {
