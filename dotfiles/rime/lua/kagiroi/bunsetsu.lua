@@ -12,10 +12,6 @@ local kHistoryMarker = "\tp2"
 local kLearningScale = 10000
 local kMaximumWordDiscount = 0.9
 
-local function cost_is_better(cost, other_cost)
-    return cost < other_cost
-end
-
 local function path_precedes(a, b)
     if a.score ~= b.score then return a.score < b.score end
     if a.node._end ~= b.node._end then return a.node._end > b.node._end end
@@ -402,7 +398,7 @@ local function completion_costs(starting, length, env, context, word_bonuses)
                     local tail = remaining[successor]
                     if conn and tail then
                         local cost = conn + discounted_wcost(successor, word_bonuses) + tail
-                        if not best or cost_is_better(cost, best) then best = cost end
+                        if not best or cost < best then best = cost end
                     end
                 end
                 remaining[node] = best
@@ -462,7 +458,7 @@ local function ranked_path_enum(reading, env, context, stock_texts, starting)
         cheapest_prefix[node] = prefixes
         local key = text .. "|" .. first_left
         local previous = prefixes[key]
-        if previous and not cost_is_better(own, previous.own) then return end
+        if previous and not (own < previous.own) then return end
         local prefix = { own = own }
         prefixes[key] = prefix
         sequence = sequence + 1
@@ -504,10 +500,6 @@ local function ranked_path_enum(reading, env, context, stock_texts, starting)
         end
     end
     return results
-end
-
-local function contextual_path_enum(reading, env, context, stock_texts, starting)
-    return ranked_path_enum(reading, env, context, stock_texts, starting)
 end
 
 local function apply_enumerated_paths(candidates, reading, enumerated)
@@ -647,7 +639,7 @@ local function text_route_pairs(starting, length, text, matrix_cost)
                                 if next_offset == #text then
                                     local key = first_left .. " " .. node.right_id
                                     local current = pairs_by_key[key]
-                                    if not current or cost_is_better(own, current.own) then
+                                    if not current or own < current.own then
                                         pairs_by_key[key] = { left_id = first_left, right_id = node.right_id,
                                             own = own, words = route_words_of(incoming, node) }
                                     end
@@ -659,7 +651,7 @@ local function text_route_pairs(starting, length, text, matrix_cost)
                                 local key = first_left .. " " .. next_offset
                                 local existing = node_states[key]
                                 if existing then
-                                    if cost_is_better(own, existing.own) then
+                                    if own < existing.own then
                                         existing.own, existing.prev = own, incoming
                                     end
                                 else
@@ -822,7 +814,7 @@ local function attach_contextual_costs(candidates, reading, env, context, frame)
         if candidates[index].entry and not candidates[index].route_words then table.remove(candidates, index) end
     end
     context = context or { at_start = true, at_end = true }
-    local enumerated = contextual_path_enum(reading, env, context, stock_texts, starting)
+    local enumerated = ranked_path_enum(reading, env, context, stock_texts, starting)
     if enumerated then
         apply_enumerated_paths(candidates, reading, enumerated)
         attach_pair_routes(candidates, reading, env, starting, route_cache)
@@ -840,7 +832,7 @@ local function reorder_contextual(clause, env, context)
     local key = context_key(context)
     clause.discovered_contexts = clause.discovered_contexts or {}
     if context and not clause.discovered_contexts[key] then
-        local enumerated = contextual_path_enum(clause.reading, env, context, clause.stock_texts, clause.starting)
+        local enumerated = ranked_path_enum(clause.reading, env, context, clause.stock_texts, clause.starting)
         apply_enumerated_paths(clause.unfiltered, clause.reading, enumerated)
         attach_pair_routes(clause.unfiltered, clause.reading, env, clause.starting, clause.route_cache)
     end
