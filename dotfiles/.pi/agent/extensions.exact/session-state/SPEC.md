@@ -1,29 +1,27 @@
-# session-state の所属・実行フェーズ・タイトル仕様
+# session-state の実行フェーズ・タイトル仕様
 
-この文書は、pi拡張 session-state の所属ストア更新と、専用tmux paneへの実行フェーズ・タイトル公開を定める。読者は、この拡張と外部の読み書き手を保守する user と coding agent である。課題・目的・重要な制約の正本は [REQUIREMENTS.md](REQUIREMENTS.md) とする。
+この文書は、pi拡張 session-state の専用tmux paneへの実行フェーズ・タイトル公開を定める。読者は、この拡張と外部の読み書き手を保守する user と coding agent である。課題・目的・重要な制約の正本は [REQUIREMENTS.md](REQUIREMENTS.md) とする。
 
 ## 適用対象
 
-現在の session directory が、そのcwdの subagent用directory と一致する子セッションでは、ストア更新・コマンド登録・pane公開を行わない。この判定は新規・resume・fork・vision委譲に共通し、agent名・役割・親ヘッダーの有無では変わらない。
+実行フェーズの公開はトップレベルセッションに適用する。現在の session directory が、そのcwdの subagent用directory と一致する子セッションでは、pane公開を行わない。この判定は新規・resume・fork・画像入力の自動vision委譲に共通し、agent名・役割・親ヘッダーの有無では変わらない。
 
-| 入力・状態 | 所属ストア | pane公開 |
-| --- | --- | --- |
-| トップレベルの `input` | 自セッションの所属を追加する | 現在値を維持する |
-| トップレベルの `session_start` | 内容と有無を維持する | 公開世代を開始する |
-| トップレベルの `resources_discover` | 内容と有無を維持する | 管理下を照合し、`waiting-user` を公開する |
-| 実行フェーズ・保存名の変化 | 内容と有無を維持する | 下記イベント表に従う |
-| `session_shutdown` | 所属を保持する | 新規公開を止め、optionの除去を試みる |
-| 専用tmux管理外のトップレベル | 所属更新とコマンドを提供する | 公開しない |
+公開はライフサイクルイベントに従い、この拡張が提供するスラッシュコマンドはない。自セッションは、この拡張が動作しているpiの現在のセッションを指す。
 
-## 所属ストア
+| 入力・状態 | pane公開 |
+| --- | --- |
+| トップレベルの `input` | 現在値を維持する |
+| トップレベルの `session_start` | 公開世代を開始する |
+| トップレベルの `resources_discover` | 管理下を照合し、`waiting-user` を公開する |
+| 実行フェーズ・保存名の変化 | 下記イベント表に従う |
+| `session_shutdown` | 新規公開を止め、optionの除去を試みる |
+| 専用tmux管理外のトップレベル | 公開しない |
 
-保存先は pi の agent directory 配下の `session-state.json` とする。所属の意味・形式・保持対象・不正なストアの条件は [メタデータストアの契約](REQUIREMENTS.md#メタデータストアの契約) に従う。
+## 所属・復元との境界
 
-トップレベルのセッション開始時に `/archive`・`/unarchive` を登録する。`input` による自動アーカイブ解除と両コマンドの結果・lock・通知は [機能要件](REQUIREMENTS.md#機能要件) に従う。
+セッション一覧の正本は `pi-mux list` とし、復元用JSONの読込み・更新はpi-muxが担う。session-stateの出力は、後述するpane optionの実行フェーズとタイトルである。
 
-この拡張による所属更新は、入力・コマンドの受付順に反映する。保存は同じdirectoryの一時ファイルへ書き、renameで置換する。保存失敗時は一時ファイルを清掃する。不正なストアは上書きしない。
-
-実行フェーズと保存名のイベントではストアを読み書きしない。既存entryの `state` は所属更新時にも保持し、実行フェーズの表示入力には使わない。
+起動・入力・実行フェーズ遷移・終了の全期間で、pi の agent directory 配下の `session-state.json` を読み書き・再作成しない。ファイルがない場合と旧内容が残る場合のどちらでも、実行フェーズの公開はその内容やI/Oの成否に依存せず動作する。保存済みの所属JSON・会話JSONL・復元用JSONは、この拡張によって変更・削除されない。
 
 ## 管理paneの初期照合
 
@@ -92,7 +90,7 @@ run区間は `agent_start` から `agent_settled` までとし、中断による
 
 開始済みのtmux CLIは世代失効で強制中断せず、通常のtool結果が返るまで待つ。結果が `completed` なら、Bashエラーを含めその実行は終端したものとして、次の公開へ進む。古いsetやunsetの副作用が終わる前に、新世代の照合・公開を開始しない。CLI自身のtimeoutは約1秒、背景Bash要求の期限は約2秒とする。
 
-背景要求が `failed`・`unavailable`・`aborted` で終わった場合、CLI実行の終端を確証できないため、そのpiプロセスからの後続CLIを停止し、短く通知する。停止は新しい会話・reload・factoryの再生成でも解除しない。停止後もinputと所属操作は継続する。
+背景要求が `failed`・`unavailable`・`aborted` で終わった場合、CLI実行の終端を確証できないため、そのpiプロセスからの後続CLIを停止し、短く通知する。停止は新しい会話・reload・factoryの再生成でも解除しない。停止後もinputとpi本体の動作は継続する。
 
 終了時は新規受付を止め、未実行分を失効させ、開始済みCLIの終端を待つ。実行終端が確定していればoptionの除去を待つ。Tools が先に停止した場合や終端が不確実な場合は、追加のcleanupを実行せず、通知とpane終了を公開終了の境界にする。paneが終了すると、pane-local optionも消滅する。
 
@@ -109,4 +107,4 @@ CLI実行は [Toolsの背景Bash入口](../tools/SPEC.md#背景bash入口) に�
 | `aborted` | 実行終端が不確実な中断を通知し、後続CLIを停止する |
 | 出力の欠落・切り詰め・照合不一致 | 管理paneとして採用しない |
 
-所属更新・公開の失敗はTUIの短い警告で通知し、inputとpi本体の動作を継続する。UIがない場合は標準エラーへ通知する。
+公開の失敗はTUIの短い警告で通知し、inputとpi本体の動作を継続する。UIがない場合は標準エラーへ通知する。

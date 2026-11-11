@@ -126,6 +126,9 @@ if (sessionFirst) sessionStateExtension(pi);
 toolsExtension(pi, config);
 if (!sessionFirst) sessionStateExtension(pi);
 assert.deepEqual(commandNames, []);
+const storePath = join(directory, "session-state.json");
+const before = existsSync(storePath) ? statSync(storePath, { bigint: true }) : undefined;
+const bytes = before ? readFileSync(storePath, "utf8") : undefined;
 
 try {
   await dispatch("session_start", { reason: "startup" });
@@ -150,16 +153,10 @@ try {
     assert.equal(sandboxCommands.length, 0);
     assert.equal(readOption(), "");
     await dispatch("input");
-    await waitFor("membership", () => existsSync(join(directory, "session-state.json")));
     await dispatch("session_shutdown", { reason: "quit" });
   } else {
     await waitFor("startup", () => readOption() === stateOptionValue(sessionId, "waiting-user"));
-    assert.equal(existsSync(join(directory, "session-state.json")), false);
     await dispatch("input");
-    await waitFor("membership", () => existsSync(join(directory, "session-state.json")));
-    const storePath = join(directory, "session-state.json");
-    const before = statSync(storePath, { bigint: true });
-    const bytes = readFileSync(storePath, "utf8");
     for (const [type, state] of [
       ["agent_start", "running"],
       ["ui_prompt_start", "waiting-approval"],
@@ -178,9 +175,6 @@ try {
     await delay(20);
     assert.equal(sandboxCommands.length, commandsBefore);
     assert.equal(sandboxCommands.some(command => command.includes("show-options")), false);
-    const after = statSync(storePath, { bigint: true });
-    assert.deepEqual([after.ino, after.mtimeNs], [before.ino, before.mtimeNs]);
-    assert.equal(readFileSync(storePath, "utf8"), bytes);
 
     const live = context();
     const captured = {
@@ -212,7 +206,14 @@ try {
     } else {
       assert.ok(notifications.some((text) => text.includes("publication stopped")));
     }
+  }
+  assert.deepEqual(commandNames, []);
+  if (before) {
+    const after = statSync(storePath, { bigint: true });
+    assert.deepEqual([after.ino, after.mtimeNs], [before.ino, before.mtimeNs]);
     assert.equal(readFileSync(storePath, "utf8"), bytes);
+  } else {
+    assert.equal(existsSync(storePath), false);
   }
   assert.equal(trace.length, 0);
   if (!denied) assert.ok(sandboxCommands.length > 0);
@@ -363,15 +364,17 @@ describe("session-state with a dedicated headless tmux and real registered Bash"
     TEST_TIMEOUT_MS,
   );
   for (const order of ["session-first", "tools-first"] as const) {
-    it(
-      `uses the Bash-only entrance and real sandbox with ${order} shutdown`,
-      async () => {
-        const result = await runScenario(order, false);
-        assert.equal(result.ok, true, result.error ?? "scenario failed");
-        assert.ok(result.sandboxCommands.length >= 8);
-      },
-      TEST_TIMEOUT_MS,
-    );
+    for (const initialStore of ["absent", "legacy", "invalid"] as const) {
+      it(
+        `uses registered Bash with ${order} shutdown and ${initialStore} membership storage`,
+        async () => {
+          const result = await runScenario(order, false, false, SCENARIO, initialStore);
+          assert.equal(result.ok, true, result.error ?? "scenario failed");
+          assert.ok(result.sandboxCommands.length >= 8);
+        },
+        TEST_TIMEOUT_MS,
+      );
+    }
   }
 
   it(
@@ -397,6 +400,7 @@ async function runScenario(
   denied: boolean,
   race = false,
   scenario = SCENARIO,
+  initialStore: "absent" | "legacy" | "invalid" = "absent",
 ): Promise<ScenarioResult> {
   mkdirSync("/tmp/work/dotfiles", { recursive: true });
   const directory = mkdtempSync("/tmp/work/dotfiles/mvp-tmux-");
@@ -406,6 +410,21 @@ async function runScenario(
   const scriptPath = join(directory, "scenario.mjs");
   const reportPath = join(directory, "result.json");
   writeFileSync(scriptPath, scenario);
+  if (initialStore !== "absent") {
+    const bytes =
+      initialStore === "invalid"
+        ? "{broken"
+        : JSON.stringify({
+            "active-workspaces": {
+              [directory]: {
+                "active-sessions": { old: { lock: true, state: "running", custom: "keep" } },
+                pinned: true,
+              },
+            },
+            custom: ["keep"],
+          });
+    writeFileSync(join(directory, "session-state.json"), bytes);
+  }
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     XDG_RUNTIME_DIR: runtimeDir,
