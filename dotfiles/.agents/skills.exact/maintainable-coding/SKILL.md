@@ -129,28 +129,18 @@ function handle(event: Event) {
 
 #### Waiting1 固定 sleep → 条件成立までの動的待機
 
-結果が出る「はず」の時刻まで待つのを、結果を直接観測して待つのに置き換える。
+結果が出る「はず」の時刻まで待つのを、結果を直接観測して待つのに置き換える。以下の `readResultIfReady` は、未完成なら `undefined`、完成後は結果を返す。
 
 ##### before
 
 ```ts
-await page.click("#submit");
-await sleep(5000); // 結果が出るはずの時刻まで待つ
-const result = await page.textContent(".result");
+await sleep(timeoutMs);
+const result = await readResultIfReady();
 ```
 
 ##### after
 
-Playwright のように待機が組み込まれている環境では、それを直接使う:
-
-```ts
-await page.click("#submit");
-const result = await page.textContent(".result"); // 要素を自動で待つ
-// 明示的に待つとき:
-await page.waitForSelector(".result", { state: "visible" });
-```
-
-組み込まれていない環境では、条件成立まで polling する:
+条件が成立したときだけ値を返す `check` を polling する:
 
 ```ts
 async function waitFor<T>(
@@ -167,6 +157,8 @@ async function waitFor<T>(
   }
   throw new Error(`condition not met within ${timeoutMs}ms`);
 }
+
+const result = await waitFor(readResultIfReady, timeoutMs);
 ```
 
 ##### why
@@ -231,7 +223,7 @@ const [, host, owner, repo] = match;
 
 ```ts
 const { host, pathname } = new URL(url);
-const [, owner, repo] = pathname.split("/").filter(Boolean);
+const [owner, repo] = pathname.split("/").filter(Boolean);
 ```
 
 ##### why
@@ -262,7 +254,10 @@ import { z } from "zod";
 const envSchema = z.object({
   DATABASE_URL: z.string().url(),
   PORT: z.coerce.number().int().default(3000),
-  DEBUG: z.boolean().default(false),
+  DEBUG: z
+    .string()
+    .optional()
+    .transform((value) => value === "1"),
 });
 
 const env = envSchema.parse(process.env);
