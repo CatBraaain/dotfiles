@@ -3,11 +3,12 @@ import { spawnSync } from "node:child_process";
 import { afterAll, beforeAll, describe, it } from "bun:test";
 import { parse } from "shell-quote";
 import { getTmuxPaths, PARENT_PI_ENV_KEYS } from "../tmux-handoff/shared.ts";
-import createSessionExtension, {
+import {
+  registerMainagentTool,
   buildTmuxCommand,
   validateInput,
-  type CreateSessionInput,
-} from "./index";
+  type MainagentInput,
+} from "./mainagent.ts";
 
 type ApprovalUI = {
   confirm(title: string, message: string): Promise<boolean>;
@@ -31,7 +32,7 @@ type CapturedHandlers = Map<string, (event: any, context?: any) => unknown>;
 
 function captureTool(handlers?: CapturedHandlers): any {
   const tools: any[] = [];
-  createSessionExtension({
+  registerMainagentTool({
     registerTool: (tool: any) => tools.push(tool),
     on: (event: string, handler: (event: any, context?: any) => unknown) =>
       handlers?.set(event, handler),
@@ -118,7 +119,7 @@ function withAgentName(
   };
 }
 
-const request: CreateSessionInput = { initialRequest: "fix the failing build" };
+const request: MainagentInput = { initialRequest: "fix the failing build" };
 
 const previousAgentName = process.env.PI_AGENT_NAME;
 beforeAll(() => {
@@ -205,9 +206,9 @@ describe("common independent startup command", () => {
 });
 
 describe("ツールの登録", () => {
-  it("create_detached_session として登録し、bash に到達する", () => {
+  it("mainagent として登録し、bash に到達する", () => {
     const tool = captureTool();
-    assert.equal(tool.name, "create_detached_session");
+    assert.equal(tool.name, "mainagent");
     assert.deepEqual(tool.reachesTools(), ["bash"]);
     assert.deepEqual(Object.keys(tool.parameters.properties).sort(), ["cwd", "initialRequest"]);
     assert.deepEqual(Object.keys(tool.outputSchema.properties).sort(), ["error", "status"]);

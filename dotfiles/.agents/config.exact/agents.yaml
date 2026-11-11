@@ -237,7 +237,7 @@ agents:
 
   senior:
     class: high
-    tools: ["*", "!handoff_session", "!recontext", "!create_detached_session"]
+    tools: ["*", "!handoff_session", "!recontext", "!mainagent"]
     subagents: [junior, vision]
     systemPrompt:
       - *agent-overview
@@ -250,7 +250,7 @@ agents:
 
   junior:
     class: low
-    tools: ["*", "!handoff_session", "!recontext", "!create_detached_session"]
+    tools: ["*", "!handoff_session", "!recontext", "!mainagent"]
     subagents: []
     systemPrompt: &junior-prompts
       - *subagent-report
@@ -265,14 +265,14 @@ agents:
 
   vision:
     class: vision
-    tools: ["*", "!handoff_session", "!recontext", "!create_detached_session"]
+    tools: ["*", "!handoff_session", "!recontext", "!mainagent"]
     subagents: []
     # tools・systemPrompt は junior と同じ内容。画像入力対応モデル（vision class）のみが異なる
     systemPrompt: *junior-prompts
 
   chat:
     class: middle
-    tools: [web_search, web_fetch, "!handoff_session", "!recontext", "!create_detached_session"]
+    tools: [web_search, web_fetch, "!handoff_session", "!recontext", "!mainagent"]
     subagents: []
     systemPrompt:
       - *agent-overview

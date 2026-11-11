@@ -70,7 +70,7 @@ const toolNames = [
   "subagent",
   "recontext",
   "session_search",
-  "create_detached_session",
+  "mainagent",
   "powershell",
   "mystery_tool",
   "constructor",
@@ -956,7 +956,7 @@ describe("single tool rows", () => {
 describe("summary failure boundaries", () => {
   for (const phase of ["before validation", "after validation error"]) {
     it(`renders non-string session names ${phase}`, () => {
-      const row = createRow("create_detached_session");
+      const row = createRow("mainagent");
       row.updateArgs({ name: 42, initialRequest: "test" });
       if (phase === "after validation error") {
         row.updateResult({
@@ -965,16 +965,16 @@ describe("summary failure boundaries", () => {
         });
       }
       const status = phase === "before validation" ? "Running..." : "argument validation failed";
-      assert.equal(renderedText(row), ` create_detached_session test — ${status}`);
+      assert.equal(renderedText(row), ` mainagent test — ${status}`);
     });
   }
 
   it("ignores a non-string initial request when formatting the session call", () => {
-    const row = createRow("create_detached_session");
+    const row = createRow("mainagent");
     row.updateArgs({ name: "  session label  ", initialRequest: 42 });
-    assert.equal(renderedText(row), " create_detached_session session label — Running...");
+    assert.equal(renderedText(row), " mainagent session label — Running...");
     row.updateArgs({ name: 42, initialRequest: 42 });
-    assert.ok(renderedText(row).startsWith(" create_detached_session"));
+    assert.ok(renderedText(row).startsWith(" mainagent"));
     assert.equal(renderedText(row).includes("[render error]"), false);
   });
 

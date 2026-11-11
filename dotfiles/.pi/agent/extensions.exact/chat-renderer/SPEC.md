@@ -5,7 +5,7 @@ pi TUI のトランスクリプトを構成する各エントリの表示を担�
 ## 仕組み
 
 - `pi.registerToolRenderer` で resolver を1本登録し、ツール名ごとの `renderCall` / `renderResult` を返す。
-- ツール別の整形は `bash` `read` `write` `edit` `grep` `find` `ls` `ask_permission` `codemode` `web_search` `web_fetch` `subagent` `recontext` `session_search` `create_detached_session` に適用する。
+- ツール別の整形は `bash` `read` `write` `edit` `grep` `find` `ls` `ask_permission` `codemode` `web_search` `web_fetch` `subagent` `recontext` `session_search` `mainagent` に適用する。
 - 登録にないツールの詳細は、残りの resolver → 登録済みツール自身の renderer → pi既定の順で解決する。未知のツールにも共通の1行表示と個別展開を適用する。
 - 描画は結果の `details` と content から行う。スクロール・リサイズ・テーマ変更後も、その時点の展開状態を保って再描画する。
 - 描画実装と resolver API の互換型は `index.ts` に置く。テキスト表示は共通の描画手順を使い、ツールごとの差をコール行・結果行の定義で表す。main agent と subagent の Actions は同じコール行・成功サマリーの整形処理を使う。
@@ -271,14 +271,14 @@ subagent の呼び出しを受け付けた直後から子エージェントの�
 | テキスト色 | セクション区切りと同じグレー系とする |
 | 消去 | 子エージェントの実行が確定した時点で待機行を消す |
 
-## session_search / create_detached_session
+## session_search / mainagent
 
 | ツール | 既定1行（成功時） | 展開時の詳細 |
 | --- | --- | --- |
 | `session_search` | `session_search <action> — session_search: <status>` | 検索・一覧・表示の結果テキスト全体 |
-| `create_detached_session` | `create_detached_session <名前プレビュー> — create_detached_session: <status>` | 作成したセッションの結果テキスト全体 |
+| `mainagent` | `mainagent <名前プレビュー> — mainagent: <status>` | 作成したセッションの結果テキスト全体 |
 
-`<status>` は構造化出力の `status` とし、判定できないときは `session_search` が `complete`、`create_detached_session` が `created` を使う。`<名前プレビュー>` は前後空白を取り除いた `name`、名前がないときは `initialRequest` とし、40文字で切り詰める。
+`<status>` は構造化出力の `status` とし、判定できないときは `session_search` が `complete`、`mainagent` が `created` を使う。`<名前プレビュー>` は前後空白を取り除いた `name`、名前がないときは `initialRequest` とし、40文字で切り詰める。
 
 実行中・エラーは共通の表示規則に従う。展開した結果テキストは、エラーのとき `error` 色、成功のとき `toolOutput` 色で表示する。
 

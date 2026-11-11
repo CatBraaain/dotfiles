@@ -63,7 +63,7 @@ const WEB_DISPLAYS = {
 } as const;
 const SESSION_DISPLAYS = {
   session_search: { successStatus: "complete", text: allTextContent },
-  create_detached_session: { successStatus: "created", text: allTextContent },
+  mainagent: { successStatus: "created", text: allTextContent },
 };
 
 const REGISTRY: Record<string, RendererEntry> = {

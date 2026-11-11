@@ -28,7 +28,7 @@ const parameters = Type.Object({
   ),
 });
 
-export type CreateSessionInput = Static<typeof parameters>;
+export type MainagentInput = Static<typeof parameters>;
 type BashOutcome = Awaited<ReturnType<ExtensionToolContext["executeTool"]>>;
 
 const outputSchema = Type.Object({
@@ -51,13 +51,11 @@ type ApprovalUI = {
   ): Promise<string | undefined>;
 };
 
-export function validateInput(input: CreateSessionInput): string | undefined {
-  if (input.initialRequest.trim() === "")
-    return "create_detached_session initialRequest must not be empty";
-  if (input.initialRequest.includes("\0"))
-    return "create_detached_session initialRequest cannot contain NUL";
+export function validateInput(input: MainagentInput): string | undefined {
+  if (input.initialRequest.trim() === "") return "mainagent initialRequest must not be empty";
+  if (input.initialRequest.includes("\0")) return "mainagent initialRequest cannot contain NUL";
   if (input.cwd !== undefined && input.cwd.includes("\0"))
-    return "create_detached_session cwd cannot contain NUL";
+    return "mainagent cwd cannot contain NUL";
   return undefined;
 }
 
@@ -99,7 +97,7 @@ function sessionResult(outcome: BashOutcome): AgentToolResult<{ bash: BashOutcom
     bash.isError ||
     (envelope?.exit_code !== undefined && envelope.exit_code !== 0)
   ) {
-    const error = `create_detached_session tmux command failed:\n${text}`;
+    const error = `mainagent tmux command failed:\n${text}`;
     return {
       content: [{ type: "text", text: error }],
       details,
@@ -115,7 +113,7 @@ function sessionResult(outcome: BashOutcome): AgentToolResult<{ bash: BashOutcom
   };
 }
 
-export default function createSessionExtension(pi: ExtensionAPI): void {
+export function registerMainagentTool(pi: ExtensionAPI): void {
   let sessionApproved = false;
   let turnApproved = false;
   let turnGeneration = 0;
@@ -137,7 +135,7 @@ export default function createSessionExtension(pi: ExtensionAPI): void {
 
   async function requestApproval(
     context: ExtensionToolContext,
-    input: CreateSessionInput,
+    input: MainagentInput,
     signal: AbortSignal | undefined,
   ): Promise<ApprovalDecision> {
     const ui = context.ui as ApprovalUI;
@@ -176,15 +174,13 @@ export default function createSessionExtension(pi: ExtensionAPI): void {
     )?.trim();
     signal?.throwIfAborted();
     return {
-      denied: reason
-        ? `create_detached_session denied by user: ${reason}`
-        : "create_detached_session denied by user",
+      denied: reason ? `mainagent denied by user: ${reason}` : "mainagent denied by user",
     };
   }
 
   const tool: ToolDefinition<typeof parameters> & { reachesTools(): string[] } = {
-    name: "create_detached_session",
-    label: "Create Detached Session",
+    name: "mainagent",
+    label: "Main Agent",
     description:
       "Create a detached, independent main-agent pi session in a tmux window and start it with an initial request. Returns only the session information; the tool does not wait for, converse with, or collect results. The user takes over the session via tmux attach. Requires interactive approval.",
     parameters,
@@ -197,13 +193,12 @@ export default function createSessionExtension(pi: ExtensionAPI): void {
       if (validationError !== undefined) throw new Error(validationError);
       if (process.env.PI_AGENT_NAME !== MAIN_AGENT_NAME)
         throw new Error(
-          `create_detached_session is restricted to the main agent (current agent: ${process.env.PI_AGENT_NAME ?? "unknown"})`,
+          `mainagent is restricted to the main agent (current agent: ${process.env.PI_AGENT_NAME ?? "unknown"})`,
         );
       signal?.throwIfAborted();
 
       if (!sessionApproved && !turnApproved) {
-        if (!ctx.hasUI || !ctx.ui)
-          throw new Error("create_detached_session requires interactive approval");
+        if (!ctx.hasUI || !ctx.ui) throw new Error("mainagent requires interactive approval");
         const decision = await requestApproval(ctx, input, signal);
         if ("denied" in decision) return deniedResult(decision.denied);
       }

@@ -25,7 +25,7 @@ const KNOWN_TOOLS = [
   "subagent",
   "recontext",
   "session_search",
-  "create_detached_session",
+  "mainagent",
 ];
 
 describe("chat-renderer registry", () => {
@@ -197,7 +197,7 @@ describe("shared text renderers", () => {
     );
   });
 
-  for (const name of ["session_search", "create_detached_session"]) {
+  for (const name of ["session_search", "mainagent"]) {
     it(`shows every text block when ${name} is expanded`, () => {
       const result = {
         content: [

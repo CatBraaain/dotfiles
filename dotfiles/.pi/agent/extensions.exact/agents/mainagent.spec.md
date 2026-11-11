@@ -1,6 +1,6 @@
-# create-session拡張機能Spec
+# mainagentツールSpec
 
-`create_detached_session` ツールで、ユーザーが対話を引き継ぐ独立した標準mainセッションを会話ごとのtmux sessionとして作成し、初期依頼を即実行する。作成先は標準設定・標準権限のmainであり、呼び出し元セッションとの会話継続・結果待ち・成果回収は行わない。対象読者は、この拡張を保守・変更する人である。
+`mainagent` ツールで、ユーザーが対話を引き継ぐ独立した標準mainセッションを会話ごとのtmux sessionとして作成し、初期依頼を即実行する。作成先は標準設定・標準権限のmainであり、呼び出し元セッションとの会話継続・結果待ち・成果回収は行わない。対象読者は、この拡張を保守・変更する人である。
 
 ## ツールの入力
 
@@ -13,18 +13,18 @@
 
 ## 呼び出し元の制限
 
-`create_detached_session` はmain agentだけが呼び出せる。次の2段階で制限する。
+`mainagent` はmain agentだけが呼び出せる。次の2段階で制限する。
 
 | 層 | 動作 |
 | --- | --- |
-| `~/.agents/config/agents.yaml` | main 以外の全agentの `tools` から `!create_detached_session` で除外する |
+| `~/.agents/config/agents.yaml` | main 以外の全agentの `tools` から `!mainagent` で除外する |
 | 拡張の実行時ゲート | 環境変数 `PI_AGENT_NAME` が `main` でない呼び出し（未設定を含む）をツールエラーにする |
 
-実行時ゲートは `PI_AGENT_NAME` を agents拡張が設定することを前提とする。agents拡張の負う名前の正本は `agents` 拡張のspecが定める。
+実行時ゲートは `PI_AGENT_NAME` を agents拡張が設定することを前提とする。agents拡張の負う名前の正本は [agent管理の仕様](agent-management.spec.md#概要)が定める。
 
 ## 承認
 
-`create_detached_session` の実行は、1回のユーザー確認を必要とする。確認は選択ダイアログで、選択肢は次の4つである。
+`mainagent` の実行は、1回のユーザー確認を必要とする。確認は選択ダイアログで、選択肢は次の4つである。
 
 | 選択肢 | 効果 |
 | --- | --- |
@@ -57,7 +57,7 @@ session承認も同じ置換・reloadで失効する。履歴からはどちら�
 
 ## tmuxの構成
 
-`create_detached_session` は、承認後に呼び出し時点で登録されているbashツールを1回だけ呼ぶ。bashツールの権限確認・sandbox・中断・出力上限をそのまま適用する。承認の拒否・キャンセル・中断では、作成コマンドを実行しない。
+`mainagent` は、承認後に呼び出し時点で登録されているbashツールを1回だけ呼ぶ。bashツールの権限確認・sandbox・中断・出力上限をそのまま適用する。承認の拒否・キャンセル・中断では、作成コマンドを実行しない。
 
 通常の対話起動と同じ専用サーバーを利用する。専用管理先・設定の契約は [pi-mux の仕様](../../../../.local/cli.exact/pi-mux/SPEC.md) に従う。サーバーが未起動でも必要時に自動起動し、通常tmux のソケット・設定・稼働状態へ作用しない。`TMUX`・`TMUX_TMPDIR` によって作成先を変更しない。
 
@@ -81,4 +81,4 @@ session承認も同じ置換・reloadで失効する。履歴からはどちら�
 
 ## guardrail との二重確認
 
-`create_detached_session` のbash実行は guardrail のコマンド判定も受ける。標準の `guardrails.yaml` では共通CLIのコマンドはデフォルトルール（`.*` allow）で許可されるため、通常は本拡張の確認だけが表示される。ユーザーが `guardrails.yaml` のコマンドルールを変更し、共通CLIのコマンドが確認対象になった場合は、本拡張の承認に加えてguardrailの確認ダイアログが表示される。この二重確認は緩和・迂回せず、そのまま残す。
+`mainagent` のbash実行は guardrail のコマンド判定も受ける。標準の `guardrails.yaml` では共通CLIのコマンドはデフォルトルール（`.*` allow）で許可されるため、通常は本拡張の確認だけが表示される。ユーザーが `guardrails.yaml` のコマンドルールを変更し、共通CLIのコマンドが確認対象になった場合は、本拡張の承認に加えてguardrailの確認ダイアログが表示される。この二重確認は緩和・迂回せず、そのまま残す。

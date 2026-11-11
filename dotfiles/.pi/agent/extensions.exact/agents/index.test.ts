@@ -126,6 +126,8 @@ const modeConfig: AgentConfig = {
 };
 
 type CapturedTool = {
+  name: string;
+  label: string;
   execute: (...args: any[]) => Promise<any>;
   renderCall?: (...args: any[]) => unknown;
   renderResult?: (...args: any[]) => unknown;
@@ -206,6 +208,7 @@ function captureAgentsExtension(
   let agentWidget: any;
   let requestedRenderCount = 0;
   let registeredTool: CapturedTool | undefined;
+  const registeredTools: CapturedTool[] = [];
   const eventBusHandlers = new Map<string, Array<(data: unknown) => void>>();
   const classChangeRequests: unknown[] = [];
   const titleManager = SessionManager.inMemory("/parent");
@@ -244,7 +247,8 @@ function captureAgentsExtension(
           registeredFlagDefinitions.set(name, definition);
         },
         registerTool(tool: CapturedTool) {
-          registeredTool = tool;
+          registeredTools.push(tool);
+          if (tool.name === "subagent") registeredTool = tool;
         },
         getFlag(name: string) {
           return options.flags?.[name];
@@ -349,6 +353,7 @@ function captureAgentsExtension(
     selectedModels,
     registeredFlags,
     registeredFlagDefinitions,
+    registeredTools,
     sentMessages,
     spawnCalls,
     appendedEntries,
@@ -1143,6 +1148,93 @@ describe("待機スピナー", () => {
 });
 
 describe("拡張の接続", () => {
+  it("registers mainagent and subagent exactly once as separate tools", () => {
+    const extension = captureAgentsExtension();
+    try {
+      assert.deepEqual(extension.registeredTools.map((tool) => tool.name).sort(), [
+        "mainagent",
+        "subagent",
+      ]);
+      assert.equal(
+        extension.registeredTools.find((tool) => tool.name === "mainagent")?.label,
+        "Main Agent",
+      );
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("allows mainagent only for main in the shipped configuration", () => {
+    const shippedConfig = parseAgentConfig(
+      readFileSync(
+        new URL("../../../../.agents/config.exact/agents.yaml", import.meta.url),
+        "utf8",
+      ),
+    );
+    assert.ok(shippedConfig.config);
+    for (const agent of Object.keys(shippedConfig.config.agents)) {
+      assert.equal(
+        shouldBlockToolCall(agent, "mainagent", shippedConfig.config),
+        agent !== "main",
+        agent,
+      );
+    }
+  });
+
+  it("preserves mainagent approval expiry alongside agents lifecycle handlers", async () => {
+    const previousAgentName = process.env.PI_AGENT_NAME;
+    const extension = captureAgentsExtension({ config: modeConfig }, { flags: { agent: "main" } });
+    const mainagent = extension.registeredTools.find((tool) => tool.name === "mainagent")!;
+    let approvalCount = 0;
+    const bashCalls: string[] = [];
+    const context = {
+      ...extension.context,
+      ui: {
+        ...extension.context.ui,
+        async select() {
+          approvalCount++;
+          return "Allow in this turn";
+        },
+      },
+      async executeTool(name: string) {
+        bashCalls.push(name);
+        return {
+          isError: false,
+          result: { content: [{ type: "text", text: "Pi session fixture-id" }], details: {} },
+        };
+      },
+    };
+    async function executeMainagent() {
+      return mainagent.execute(
+        "call",
+        { initialRequest: "fix the build" },
+        undefined,
+        undefined,
+        context,
+      );
+    }
+    try {
+      await extension.sessionStart();
+      assert.deepEqual((await executeMainagent()).structuredContent, { status: "created" });
+      await executeMainagent();
+      assert.equal(approvalCount, 1);
+      await extension.input("next request");
+      await executeMainagent();
+      assert.equal(approvalCount, 2);
+      await extension.messageStart({ role: "user", content: "next request" });
+      await executeMainagent();
+      assert.equal(approvalCount, 3);
+      assert.deepEqual(bashCalls, ["bash", "bash", "bash", "bash"]);
+      await extension.runCommand("worker");
+      await assert.rejects(executeMainagent(), /restricted to the main agent/);
+      assert.equal(bashCalls.length, 4);
+    } finally {
+      if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
+      else process.env.PI_AGENT_NAME = previousAgentName;
+      extension.restore();
+    }
+  });
+
   it("起動時に default agent の class 候補を適用し、agent 表示と allowlist を更新する", async () => {
     const extension = captureAgentsExtension();
     try {
@@ -1326,7 +1418,7 @@ describe("class によるモデルルーティング", () => {
       await extension.sessionStart();
       const modelCountBefore = extension.selectedModels.length;
       const result = await extension.input("hello");
-      assert.equal(result, undefined);
+      assert.deepEqual(result, { action: "continue" });
       assert.equal(extension.selectedModels.length, modelCountBefore);
     } finally {
       extension.restore();
