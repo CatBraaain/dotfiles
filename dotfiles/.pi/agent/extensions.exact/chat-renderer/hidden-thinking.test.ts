@@ -53,8 +53,10 @@ handlers.get("session_start")({}, { mode: "tui", ui });
 try {
   assert.notEqual(host.ToolExecutionComponent.prototype.render, originalRender);
   assert.equal(mode.hiddenThinkingLabel, "");
-  assert.deepEqual(lines(speech), speechBefore);
-  assert.deepEqual(lines(visible), visibleBefore);
+  const speechBox = [...speechBefore, ""];
+  const visibleBox = [...visibleBefore, ""];
+  assert.deepEqual(lines(speech), speechBox);
+  assert.deepEqual(lines(visible), visibleBox);
   const first = new host.ToolExecutionComponent("read", "first", { path: "/project/file" }, {}, extension.renderersOf("read"), mode.ui, "/project");
   const second = new host.ToolExecutionComponent("read", "second", { path: "/project/file" }, {}, extension.renderersOf("read"), mode.ui, "/project");
   first.updateResult({ content: [{ type: "text", text: "details" }], isError: false });
@@ -96,7 +98,7 @@ try {
     assert.deepEqual(row.render(80), raw);
   }
   chat.children = [first, speech, second];
-  assert.deepEqual(lines(chat), [...lines(first), ...speechBefore, ...expanded]);
+  assert.deepEqual(lines(chat), [...lines(first), ...speechBox, ...expanded]);
 } finally {
   handlers.get("session_shutdown")({}, { mode: "tui", ui });
 }
