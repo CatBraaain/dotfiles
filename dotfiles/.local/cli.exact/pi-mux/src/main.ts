@@ -20,6 +20,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 type Operation =
+  | { kind: "help" }
   | { kind: "new"; detached: boolean; request?: string }
   | { kind: "open"; id: string }
   | { kind: "close"; id: string }
@@ -89,6 +90,21 @@ const PANE_FORMAT =
 export async function main(argv = process.argv.slice(2)): Promise<number> {
   try {
     const operation = parseOperation(argv);
+    if (operation.kind === "help") {
+      console.log(`Usage:
+  pi-mux
+  pi-mux -h
+  pi-mux --help
+  pi-mux new [--detached] [initial-request]
+  pi-mux open <session-id>
+  pi-mux close <session-id>
+  pi-mux list
+  pi-mux workspace register <cwd>
+  pi-mux workspace unregister <cwd>
+  pi-mux snapshot [server-generation]
+  pi-mux restore`);
+      return 0;
+    }
     if (operation.kind === "list") {
       console.log(JSON.stringify(await listWorkspaces(tmuxConfiguration())));
       return 0;
@@ -160,6 +176,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 }
 
 export function parseOperation(argv: string[]): Operation {
+  if (argv.length === 1 && (argv[0] === "-h" || argv[0] === "--help")) return { kind: "help" };
   if (argv.length === 0) return { kind: "new", detached: false };
   if (argv[0] === "new") {
     const detached = argv[1] === "--detached";

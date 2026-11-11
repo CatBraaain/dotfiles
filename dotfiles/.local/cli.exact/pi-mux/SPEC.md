@@ -9,6 +9,7 @@
 | 入力 | 結果 |
 | --- | --- |
 | `pi-mux` | `pi-mux new` と同じ |
+| `pi-mux -h`、`pi-mux --help` | ヘルプを表示する |
 | `pi-mux new [--detached] [initial-request]` | 初期依頼の有無で会話を選び、通常はTUIへ接続する。`--detached` では会話IDと接続コマンドを返す |
 | `pi-mux open <session-id>` | 完全一致する会話IDの稼働中pi実体へ再接続する。稼働していなければ、保存会話を元のcwdで再開して接続する |
 | `pi-mux close <session-id>` | 完全一致する会話IDのpiを非対話で終了し、その会話を復元対象から除く。保存会話・workspace登録・session所属を保持する |
@@ -21,6 +22,14 @@
 `open` は対話TUIへ接続する。新しい会話IDは `new` の起動時にCLIが採番する。
 
 シェルの `a` は `pi-mux` を呼ぶ。`pi` コマンド自体と、ほかのaliasは維持する。
+
+### ヘルプ
+
+トップレベルの引数が `-h` または `--help` の1個だけの場合、利用書式と「操作」表の各操作の呼び出し書式をstdoutへ表示し、終了コード0で終了する。出力は `Usage` などのラベルとコマンド構文からなる簡潔な一覧とする。
+
+ヘルプ表示では、設定の読み込み・検証、依存コマンドの確認、tmux操作、状態の作成・変更を行わない。
+
+`new -h`・`new --help`・`new --detached --help` では、help引数を初期依頼として扱う。
 
 ### new
 
