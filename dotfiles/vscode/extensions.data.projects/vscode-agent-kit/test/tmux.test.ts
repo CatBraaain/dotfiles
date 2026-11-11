@@ -83,19 +83,35 @@ describe("TmuxRuntimeStore", () => {
     expect(await store.resolveSession("broken")).toBeUndefined();
   });
 
-  it("kills only the exact resolved session on the dedicated socket", async () => {
+  it("resolves the displayed client pane ID rather than another Pi in the same session", async () => {
     const { store, execute } = setup();
-    expect(await store.stop("A")).toBe("target-A");
-    expect(execute.mock.calls.map(([, args]) => args)).toEqual([
-      ["-S", socket, "list-panes", "-a", "-F", "#{session_name}\t#{@pi-tmux-session}"],
-      ["-S", socket, "kill-session", "-t", "=target-A"],
+    const encoded = Buffer.from(JSON.stringify({ id: "B" })).toString("base64");
+    execute.mockResolvedValueOnce(`${encoded}\n`);
+    const client = { pid: 123, name: "/dev/pts/1", target: "shared" };
+    expect(await store.resolveClientSessionId(client)).toBe("B");
+    expect(execute).toHaveBeenCalledExactlyOnceWith("tmux", [
+      "-S",
+      socket,
+      "display-message",
+      "-p",
+      "-c",
+      client.name,
+      "#{@pi-tmux-session}",
     ]);
   });
 
-  it("does not kill any session when the ID has no published target", async () => {
+  it.each([
+    "",
+    "invalid",
+    ...[null, {}, { id: "" }, { id: 7 }].map((metadata) =>
+      Buffer.from(JSON.stringify(metadata)).toString("base64"),
+    ),
+  ])("does not guess a restored ID from invalid pane metadata: %s", async (encoded) => {
     const { store, execute } = setup();
-    expect(await store.stop("unknown")).toBeUndefined();
-    expect(execute.mock.calls.map(([, args]) => args[2])).toEqual(["list-panes"]);
+    execute.mockResolvedValueOnce(encoded);
+    expect(
+      await store.resolveClientSessionId({ pid: 123, name: "/dev/pts/1", target: "shared" }),
+    ).toBeUndefined();
   });
 
   it.each([
@@ -106,40 +122,21 @@ describe("TmuxRuntimeStore", () => {
   ])("treats an absent server as no target without starting a server: %s", async (message) => {
     const { store, execute } = setup();
     execute.mockRejectedValue(new Error(message));
-    expect(await store.stop("A")).toBeUndefined();
+    expect(await store.resolveTarget("A")).toBeUndefined();
     expect(await store.clients()).toEqual([]);
     expect(execute.mock.calls.every(([, args]) => args[0] === "-S")).toBe(true);
   });
-
-  it.each(["can't find session: target-A", "no server running on socket"])(
-    "accepts a target disappearing between discovery and kill: %s",
-    async (message) => {
-      const { store, execute } = setup();
-      execute
-        .mockResolvedValueOnce(pane("target-A", "A"))
-        .mockRejectedValueOnce(new Error(message));
-      expect(await store.stop("A")).toBe("target-A");
-    },
-  );
 
   it.each(["permission denied", "spawn tmux ENOENT", "query timed out"])(
     "reports discovery failures without treating them as an absent server: %s",
     async (message) => {
       const { store, execute } = setup();
       execute.mockRejectedValue(new Error(message));
-      await expect(store.stop("A")).rejects.toThrow(message);
+      await expect(store.resolveTarget("A")).rejects.toThrow(message);
       await expect(store.clients()).rejects.toThrow(message);
       expect(execute.mock.calls.every(([, args]) => args[2] !== "kill-session")).toBe(true);
     },
   );
-
-  it("reports a kill failure with its command and socket", async () => {
-    const { store, execute } = setup();
-    execute
-      .mockResolvedValueOnce(pane("target-A", "A"))
-      .mockRejectedValueOnce(new Error("kill denied"));
-    await expect(store.stop("A")).rejects.toThrow(`tmux kill-session (${socket}): kill denied`);
-  });
 
   it("lists client PIDs and switches only the selected client", async () => {
     const { store, execute } = setup();

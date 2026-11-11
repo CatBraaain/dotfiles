@@ -112,16 +112,12 @@ export class TerminalRegistry implements vscode.Disposable {
   async stop(sessionId: string): Promise<void> {
     const display = this.currentDisplay();
     const displayedSession = this.displayedSession;
-    const displayPid =
-      display !== undefined && displayedSession === undefined ? await display.processId : undefined;
-    const restoredTarget =
-      displayPid === undefined
-        ? undefined
-        : (await this.runtimes.clients()).find(
-            (client) => client.pid === displayPid || client.parentPid === displayPid,
-          )?.target;
-    const target = await this.runtimes.stop(sessionId);
-    if (displayedSession === sessionId || (target !== undefined && restoredTarget === target)) {
+    const restoredSessionId =
+      display !== undefined && displayedSession === undefined
+        ? await this.resolveRestoredSessionId(display)
+        : undefined;
+    await this.mux.closeSession(sessionId);
+    if (displayedSession === sessionId || restoredSessionId === sessionId) {
       if (display !== undefined) await this.changeDisplay(() => this.closeDisplay(display));
       this.displayedSession = undefined;
     }
@@ -149,6 +145,19 @@ export class TerminalRegistry implements vscode.Disposable {
   private currentDisplay(): vscode.Terminal | undefined {
     const terminal = this.display ?? this.terminals.find();
     return terminal !== undefined && !this.closed.has(terminal) ? terminal : undefined;
+  }
+
+  private async resolveRestoredSessionId(display: vscode.Terminal): Promise<string | undefined> {
+    try {
+      const pid = await display.processId;
+      if (pid === undefined) return undefined;
+      const client = (await this.runtimes.clients()).find(
+        (entry) => entry.pid === pid || entry.parentPid === pid,
+      );
+      return client === undefined ? undefined : await this.runtimes.resolveClientSessionId(client);
+    } catch {
+      return undefined;
+    }
   }
 
   private createNewDisplay(cwd: string): vscode.Terminal {

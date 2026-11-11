@@ -235,7 +235,7 @@ describe("SessionLauncher", () => {
     expect(runtimes.client.target).toBe("pi-old");
     expect(stateIds()).toEqual(new Set());
     expect(terminal.dispose).not.toHaveBeenCalled();
-    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
   });
 
   it("reasserts Terminal focus after cold attachment without delaying its first show", async () => {
@@ -289,7 +289,7 @@ describe("SessionLauncher", () => {
     expect(api.createTerminal.mock.results[0].value.dispose).toHaveBeenCalledOnce();
     expect(stateIds()).toEqual(new Set());
     expect(onSessionStarted).not.toHaveBeenCalled();
-    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
     expect(runtimes.live.size).toBe(1);
   });
 

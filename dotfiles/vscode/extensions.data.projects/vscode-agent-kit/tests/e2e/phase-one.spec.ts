@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
@@ -1156,6 +1157,7 @@ test(
     let unarchivedA!: ReturnType<VSCodeFixture["piProcesses"]>[number];
     let sourceA = "";
     let sourceB = "";
+    const restorePath = join(host.directory, "agent/pi-tmux/pi-mux-restore.json");
     await test.step("Start isolated A and B Pi runtimes and an ordinary fixture tmux session", async () => {
       // B ships archived; make it active so switching away from it keeps
       // its Pi running while this test archives and reopens A.
@@ -1170,6 +1172,11 @@ test(
       sourceA = readFileSync(host.sessions.A.session, "utf8");
       sourceB = readFileSync(host.sessions.B.session, "utf8");
       host.tmux(["new-session", "-d", "-s", "ordinary-fixture", "sleep", "120"]);
+      execFileSync(join(host.directory, "bin/pi-mux"), ["snapshot"], { env: host.env });
+      const snapshot = JSON.parse(readFileSync(restorePath, "utf8"));
+      expect(
+        snapshot.workspaces.flatMap((workspace: { sessions: string[] }) => workspace.sessions),
+      ).toContain(aId);
       const frame = await host.sessionFrame();
       const toggle = frame
         .locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`)
@@ -1185,6 +1192,10 @@ test(
       await expect(frame.getByRole("dialog").describe("No Archive confirmation")).toBeHidden();
       await expect(rowIn(frame, aId)).toHaveCount(0);
       await expect.poll(() => existsSync(`/proc/${initialA.pid}`)).toBe(false);
+      const snapshot = JSON.parse(readFileSync(restorePath, "utf8"));
+      expect(
+        snapshot.workspaces.flatMap((workspace: { sessions: string[] }) => workspace.sessions),
+      ).not.toContain(aId);
       expect(host.piProcesses().some((entry) => entry.target === initialA.target)).toBe(false);
       expect(
         host.tmux(["list-sessions", "-F", "#{session_name}"]).trim().split("\n"),
@@ -1299,9 +1310,35 @@ test(
         contentType: "application/json",
       });
     });
-    await test.step("Archive background A while keeping B displayed with its original PID", async () => {
+    await test.step("Archive background A while keeping B and a shell in the same tmux session", async () => {
       await host.selectSession("B");
       await host.expectNativeDisplay("B");
+      const aPane = host
+        .tmux(["display-message", "-p", "-t", unarchivedA.target, "#{pane_id}"])
+        .trim();
+      const bPane = host
+        .tmux(["display-message", "-p", "-t", initialB.target, "#{pane_id}"])
+        .trim();
+      host.tmux(["join-pane", "-d", "-h", "-s", aPane, "-t", bPane]);
+      const [shellPane, shellPid] = host
+        .tmux([
+          "split-window",
+          "-d",
+          "-h",
+          "-P",
+          "-F",
+          "#{pane_id}\t#{pane_pid}",
+          "-t",
+          bPane,
+          "/bin/bash",
+          "--noprofile",
+          "--norc",
+        ])
+        .trim()
+        .split("\t");
+      expect(host.piProcesses().find((entry) => entry.pid === unarchivedA.pid)?.target).toBe(
+        initialB.target,
+      );
       const frame = await host.sessionFrame();
       const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
       await rowIn(frame, aId)
@@ -1318,10 +1355,13 @@ test(
           .describe("B remains displayed"),
       ).toBeVisible();
       expect(host.snapshot().terminals.find((terminal) => terminal.owned)?.pid).toBe(displayPid);
-      expect(host.piProcesses().find((entry) => entry.target === initialB.target)?.pid).toBe(
-        initialB.pid,
+      expect(host.piProcesses().some((entry) => entry.pid === initialB.pid)).toBe(true);
+      await expect.poll(() => existsSync(`/proc/${unarchivedA.pid}`)).toBe(false);
+      expect(host.piProcesses().some((entry) => entry.pid === unarchivedA.pid)).toBe(false);
+      expect(host.tmux(["list-panes", "-a", "-F", "#{pane_id}"]).trim().split("\n")).toContain(
+        shellPane,
       );
-      expect(host.piProcesses().some((entry) => entry.target === initialA.target)).toBe(false);
+      expect(existsSync(`/proc/${shellPid}`)).toBe(true);
       expect(host.tmux(["list-sessions", "-F", "#{session_name}"])).toContain("ordinary-fixture");
     });
   },

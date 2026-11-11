@@ -44,6 +44,10 @@ export class PiMux {
     return match[1];
   }
 
+  async closeSession(sessionId: string): Promise<void> {
+    await this.command(["close", sessionId]);
+  }
+
   async list(): Promise<PiMuxWorkspace[]> {
     const output = await this.command(["list"]);
     const workspaces: unknown = JSON.parse(output);

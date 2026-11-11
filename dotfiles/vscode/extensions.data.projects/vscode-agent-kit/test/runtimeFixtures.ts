@@ -24,6 +24,9 @@ export function fakeRuntimes() {
       live.set(sessionId, { sessionId, cwd, target: `pi-${sessionId}` });
       return sessionId;
     }),
+    closeSession: vi.fn(async (sessionId: string) => {
+      live.delete(sessionId);
+    }),
     list: vi.fn(async (): Promise<PiMuxWorkspace[]> =>
       [...new Set([...workspaces, ...[...live.values()].map(({ cwd }) => cwd)])].map((cwd) => ({
         cwd,
@@ -51,11 +54,10 @@ export function fakeRuntimes() {
         ? undefined
         : { ...runtime, file: `/sessions/${runtime.sessionId}.jsonl` };
     }),
-    stop: vi.fn(async (sessionId: string) => {
-      const target = live.get(sessionId)?.target;
-      live.delete(sessionId);
-      return target;
-    }),
+    resolveClientSessionId: vi.fn(
+      async (displayClient: TmuxClient) =>
+        [...live.values()].find((entry) => entry.target === displayClient.target)?.sessionId,
+    ),
     clients: vi.fn(async () => [client]),
     switchClient: vi.fn(async (_client: TmuxClient, runtime: PiRuntime) => {
       client.target = runtime.target;

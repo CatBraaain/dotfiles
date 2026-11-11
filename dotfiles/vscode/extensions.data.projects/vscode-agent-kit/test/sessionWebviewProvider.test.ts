@@ -1476,16 +1476,15 @@ describe("SessionWebviewProvider", () => {
 
     // opening the archived session keeps its tmux session alive while displayed
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
-    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
 
     // switching to the unarchived session stops the archived one
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    expect(runtimes.mocks.stop).toHaveBeenCalledWith(inactiveSessionId);
+    expect(runtimes.mocks.closeSession).toHaveBeenCalledWith(inactiveSessionId);
     expect(runtimes.live.has(inactiveSessionId)).toBe(false);
     expect(runtimes.live.has(activeSessionId)).toBe(true);
 
-    // the stop only closes the tmux session: the store keeps the archived membership
     expect(activeSessionIds(readStore(statePath)).has(inactiveSessionId)).toBe(false);
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.displayedSessionId).toBe(
       activeSessionId,
@@ -1505,7 +1504,7 @@ describe("SessionWebviewProvider", () => {
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
 
     await webview.receive({ type: "newSession", cwd: root });
-    expect(runtimes.mocks.stop).toHaveBeenCalledWith(inactiveSessionId);
+    expect(runtimes.mocks.closeSession).toHaveBeenCalledWith(inactiveSessionId);
     expect(runtimes.live.has(inactiveSessionId)).toBe(false);
   });
 
@@ -1523,7 +1522,7 @@ describe("SessionWebviewProvider", () => {
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
       `Failed to start Pi session in ${root}: Work folder missing`,
     );
-    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
   });
 
@@ -1540,7 +1539,7 @@ describe("SessionWebviewProvider", () => {
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
 
     await webview.receive({ type: "newSession", cwd: root });
-    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
   });
 
@@ -1552,7 +1551,7 @@ describe("SessionWebviewProvider", () => {
     expect(activeSessionIds(readStore(statePath)).has(inactiveSessionId)).toBe(true);
 
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
   });
 
@@ -1563,7 +1562,7 @@ describe("SessionWebviewProvider", () => {
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
 
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
-    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
   });
 
@@ -1578,7 +1577,7 @@ describe("SessionWebviewProvider", () => {
     await rm(join(sessionDir, encodeCwdDirName(root), "first.jsonl"));
     runtimes.live.delete(activeSessionId);
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
   });
 
@@ -1590,7 +1589,7 @@ describe("SessionWebviewProvider", () => {
 
     await writeFile(statePath, "not json", "utf8");
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    expect(runtimes.mocks.stop).not.toHaveBeenCalled();
+    expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
   });
 
@@ -1604,18 +1603,18 @@ describe("SessionWebviewProvider", () => {
     // matching the whitelist semantics of the list
     await rm(statePath);
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    expect(runtimes.mocks.stop).toHaveBeenCalledWith(inactiveSessionId);
+    expect(runtimes.mocks.closeSession).toHaveBeenCalledWith(inactiveSessionId);
   });
 
   it("reports the failure but keeps the new display when stopping the archived display fails", async () => {
     const { runtimes, webview } = await archivedDisplayFixture();
 
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
-    runtimes.mocks.stop.mockRejectedValueOnce(new Error("tmux kill failed"));
+    runtimes.mocks.closeSession.mockRejectedValueOnce(new Error("pi-mux close failed"));
 
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
-      `Failed to stop archived Pi session ${inactiveSessionId}: tmux kill failed`,
+      `Failed to stop archived Pi session ${inactiveSessionId}: pi-mux close failed`,
     );
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.displayedSessionId).toBe(
       activeSessionId,
@@ -3036,8 +3035,8 @@ describe("SessionWebviewProvider", () => {
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     mocks.open({ sessionId: inactiveSessionId, cwd: root });
     const otherRuntime = live.get(inactiveSessionId);
-    const stop = mocks.stop.getMockImplementation()!;
-    mocks.stop.mockImplementationOnce(async (sessionId) => {
+    const stop = mocks.closeSession.getMockImplementation()!;
+    mocks.closeSession.mockImplementationOnce(async (sessionId) => {
       expect(activeSessionIds(readStore(statePath)).has(sessionId)).toBe(true);
       return stop(sessionId);
     });
@@ -3049,7 +3048,7 @@ describe("SessionWebviewProvider", () => {
       pid: 1,
     });
 
-    expect(mocks.stop).toHaveBeenCalledWith(activeSessionId);
+    expect(mocks.closeSession).toHaveBeenCalledWith(activeSessionId);
     expect(live.has(activeSessionId)).toBe(false);
     expect(live.get(inactiveSessionId)).toBe(otherRuntime);
     expect(activeSessionIds(readStore(statePath))).toEqual(new Set([inactiveSessionId]));
@@ -3081,11 +3080,42 @@ describe("SessionWebviewProvider", () => {
     );
   });
 
-  it("leaves membership and display unchanged when runtime stop fails", async () => {
+  it("still calls close before archiving a stopped session absent from list", async () => {
+    const { webview, statePath, mocks, live, registry } = await archiveFixture();
+    live.delete(activeSessionId);
+    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith(activeSessionId);
+    expect(activeSessionIds(readStore(statePath)).has(activeSessionId)).toBe(false);
+    expect(registry.displayedSessionId).toBeUndefined();
+  });
+
+  it("does not restart Pi or change membership and selection when close fails after Pi exits", async () => {
+    const { webview, statePath, mocks, live, terminal, registry } = await archiveFixture();
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    const before = await readFile(statePath, "utf8");
+    const starts = mocks.open.mock.calls.length;
+    mocks.closeSession.mockImplementationOnce(async (sessionId) => {
+      live.delete(sessionId);
+      throw new Error("restore candidate removal failed");
+    });
+    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith(activeSessionId);
+    expect(await readFile(statePath, "utf8")).toBe(before);
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(registry.displayedSessionId).toBe(activeSessionId);
+    expect(live.has(activeSessionId)).toBe(false);
+    expect(mocks.open).toHaveBeenCalledTimes(starts);
+    expect(mocks.newSession).not.toHaveBeenCalled();
+    expect(vscodeMocks.showErrorMessage).toHaveBeenLastCalledWith(
+      expect.stringMatching(/Failed to stop Pi session .*restore candidate removal failed/),
+    );
+  });
+
+  it("leaves membership and display unchanged when close fails", async () => {
     const { webview, statePath, mocks, terminal, registry } = await archiveFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     const before = await readFile(statePath, "utf8");
-    mocks.stop.mockRejectedValueOnce(new Error("stop denied"));
+    mocks.closeSession.mockRejectedValueOnce(new Error("stop denied"));
     await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
     expect(await readFile(statePath, "utf8")).toBe(before);
     expect(terminal.dispose).not.toHaveBeenCalled();
@@ -3099,11 +3129,10 @@ describe("SessionWebviewProvider", () => {
     const { webview, statePath, mocks, live, registry } = await archiveFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     const before = await readFile(statePath, "utf8");
-    const stop = mocks.stop.getMockImplementation()!;
-    mocks.stop.mockImplementationOnce(async (sessionId) => {
-      const target = await stop(sessionId);
+    const stop = mocks.closeSession.getMockImplementation()!;
+    mocks.closeSession.mockImplementationOnce(async (sessionId) => {
+      await stop(sessionId);
       await chmod(root, 0o500);
-      return target;
     });
     try {
       await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
@@ -3134,7 +3163,7 @@ describe("SessionWebviewProvider", () => {
     expect(await readFile(statePath, "utf8")).toBe(before);
     await writeFile(statePath, "{ invalid", "utf8");
     await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
-    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(mocks.closeSession).not.toHaveBeenCalled();
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledTimes(2);
   });
 
@@ -3145,14 +3174,14 @@ describe("SessionWebviewProvider", () => {
     const pendingStop = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const stop = mocks.stop.getMockImplementation()!;
-    mocks.stop.mockImplementationOnce(async (sessionId) => {
+    const stop = mocks.closeSession.getMockImplementation()!;
+    mocks.closeSession.mockImplementationOnce(async (sessionId) => {
       await pendingStop;
       return stop(sessionId);
     });
     const archived = webview.receive({ type: "archiveSession", sessionId: activeSessionId });
     const opened = webview.receive({ type: "openSession", sessionId: activeSessionId });
-    await vi.waitFor(() => expect(mocks.stop).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(mocks.closeSession).toHaveBeenCalledTimes(1));
     expect(mocks.open).toHaveBeenCalledTimes(1);
     release();
     await Promise.all([archived, opened]);

@@ -440,13 +440,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     await this.refresh();
   }
 
-  /** Stop the tmux session of the previously displayed session when it is
-   * still archived after the shared display moved to another session.
-   * Opening an archived session may keep its Pi alive while it stays
-   * displayed, but leaving it without unarchiving must not keep that Pi
-   * running. The display must have actually moved: an unchanged or lost
-   * display (failed open or launch) keeps the previous Pi. A store read
-   * error keeps it too because the archived state cannot be confirmed. */
   private async stopArchivedDisplayedSession(previousSessionId: string | undefined): Promise<void> {
     if (
       previousSessionId === undefined ||

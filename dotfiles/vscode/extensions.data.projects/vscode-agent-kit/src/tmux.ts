@@ -78,15 +78,22 @@ export class TmuxRuntimeStore {
     return undefined;
   }
 
-  async stop(sessionId: string): Promise<string | undefined> {
-    const target = await this.resolveTarget(sessionId);
-    if (target === undefined) return undefined;
+  async resolveClientSessionId(client: TmuxClient): Promise<string | undefined> {
+    const encoded = await this.query([
+      "display-message",
+      "-p",
+      "-c",
+      client.name,
+      "#{@pi-tmux-session}",
+    ]);
     try {
-      await this.command(["kill-session", "-t", `=${target}`]);
-    } catch (error) {
-      if (!isMissingServer(error) && !/can't find session:/.test(errorMessage(error))) throw error;
+      const metadata: unknown = JSON.parse(Buffer.from(encoded.trim(), "base64").toString("utf8"));
+      return isRecord(metadata) && typeof metadata.id === "string" && metadata.id.length > 0
+        ? metadata.id
+        : undefined;
+    } catch {
+      return undefined;
     }
-    return target;
   }
 
   async clients(): Promise<TmuxClient[]> {

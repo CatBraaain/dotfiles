@@ -32,6 +32,24 @@ describe("PiMux", () => {
     },
   );
 
+  it("closes the exact complete ID once and accepts empty stdout", async () => {
+    const sessionId = "A0b12345-6789-4000-8000-0123456789ab";
+    const execute = vi.fn().mockResolvedValue("");
+    await expect(new PiMux(execute).closeSession(sessionId)).resolves.toBeUndefined();
+    expect(execute).toHaveBeenCalledExactlyOnceWith("pi-mux", ["close", sessionId], undefined);
+  });
+
+  it.each(["close failed after Pi exited", "spawn pi-mux ENOENT"])(
+    "reports close failures without retrying or falling back: %s",
+    async (message) => {
+      const execute = vi.fn().mockRejectedValue(new Error(message));
+      await expect(new PiMux(execute).closeSession("custom-ID")).rejects.toThrow(
+        `pi-mux close custom-ID: ${message}`,
+      );
+      expect(execute).toHaveBeenCalledExactlyOnceWith("pi-mux", ["close", "custom-ID"], undefined);
+    },
+  );
+
   it("parses the JSON live list, including unsaved sessions", async () => {
     const sessions = [
       { cwd: "/project", sessions: [liveSession] },

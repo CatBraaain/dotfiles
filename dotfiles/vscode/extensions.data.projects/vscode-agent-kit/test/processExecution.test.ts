@@ -104,6 +104,42 @@ describe("external command environment", () => {
     );
   });
 
+  it("executes close with an unchanged ID and accepts an empty successful response", async () => {
+    await withPiMuxProcess(
+      'if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(["close", "custom-ID"])) process.exit(2);',
+      async () => {
+        await expect(new PiMux().closeSession("custom-ID")).resolves.toBeUndefined();
+        expect(processMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["close", "custom-ID"], {
+          cwd: undefined,
+          timeout: 0,
+          env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
+        });
+      },
+    );
+  });
+
+  it("reports a nonzero close exit without retry or fallback", async () => {
+    await withPiMuxProcess(
+      'process.stderr.write("restore candidate removal failed\\n"); process.exit(1);',
+      async () => {
+        await expect(new PiMux().closeSession("custom-ID")).rejects.toThrow(
+          /pi-mux close custom-ID: .*restore candidate removal failed/s,
+        );
+        expect(processMock).toHaveBeenCalledOnce();
+      },
+    );
+  });
+
+  it("reports an unavailable close CLI without invoking tmux", async () => {
+    await withPiMuxProcess("", async (cwd) => {
+      vi.stubEnv("PATH", join(cwd, "missing"));
+      await expect(new PiMux().closeSession("custom-ID")).rejects.toThrow(
+        "pi-mux close custom-ID: spawn pi-mux ENOENT",
+      );
+      expect(processMock).toHaveBeenCalledOnce();
+    });
+  });
+
   it("uses the exact socket without -f and removes tmux context for direct commands", async () => {
     vi.stubEnv("TMUX", "/unrelated/socket,1,0");
     vi.stubEnv("TMUX_PANE", "%9");
