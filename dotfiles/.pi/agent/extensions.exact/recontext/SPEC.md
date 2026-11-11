@@ -28,7 +28,7 @@
 
 ## ツール行の描画
 
-`recontext` のツール行の表示は entry-renderer 拡張が担う。表示仕様の正本は `../entry-renderer/SPEC.md` を参照。
+`recontext` のツール行の表示は chat-renderer 拡張が担う。表示仕様の正本は `../chat-renderer/SPEC.md` を参照。
 
 ## コンテキスト切替
 

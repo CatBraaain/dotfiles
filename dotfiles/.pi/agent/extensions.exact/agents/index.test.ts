@@ -33,7 +33,7 @@ import agentsExtension, {
 } from "./index";
 import { SPINNER_FRAMES, spinnerFrame } from "../titlebar/index.ts";
 import { ERROR_OUTPUT_PREVIEW_LIMIT } from "../shared/tool-text.ts";
-import { renderersOf } from "../entry-renderer/index.ts";
+import { renderersOf } from "../chat-renderer/index.ts";
 import { CLASS_CHANGE_EVENT, requestClassChange } from "./class-change.ts";
 import { parseCronExpression } from "./cron.ts";
 import { runUsage } from "./usage.ts";

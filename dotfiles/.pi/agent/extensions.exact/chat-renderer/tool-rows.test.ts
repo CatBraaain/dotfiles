@@ -10,10 +10,12 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
+  Box,
   Container,
   Input,
   resetCapabilitiesCache,
   setCapabilities,
+  Spacer,
   stripTerminalSequences,
   Text,
   TuiAltScreen,
@@ -316,6 +318,85 @@ describe("collapsed row left alignment", () => {
   });
 });
 
+describe("expanded tool outer spacing", () => {
+  for (const name of ["read", "codemode", "recontext", "self_tool", "self_spaced_tool"]) {
+    it(`keeps one uncolored outer row around ${name} across padding, resize and clicks`, () => {
+      dispose();
+      const originalRender = ToolExecutionComponent.prototype.render;
+      dispose = installToolRowFolding(
+        (row, width) => formatCollapsedToolRow(row, plainTheme, width),
+        plainTheme,
+      );
+      const custom: ToolRenderers | undefined = name.startsWith("self_")
+        ? {
+            renderShell: "self",
+            renderCall(_args, theme, context) {
+              const box = new Box(context.outputPad, 1, (text) => theme.bg("toolSuccessBg", text));
+              box.addChild(new Text("self header", 0, 0));
+              const container = new Container();
+              container.addChild(box);
+              if (name === "self_spaced_tool") container.addChild(new Spacer(1));
+              return container;
+            },
+            renderResult() {
+              return new Container();
+            },
+          }
+        : undefined;
+      const row = createRow(name, fakeTui, custom);
+      row.updateResult({
+        content: [{ type: "text", text: "details" }],
+        details: { reason: "reason", handoff: "handoff" },
+        isError: false,
+      });
+      const next = createRow("bash");
+      const chat = new Container();
+      chat.addChild(row);
+      chat.addChild(next);
+      for (const outputPad of [0, 1, 3]) {
+        row.setOutputPad(outputPad);
+        for (const width of [24, 80, 120, 80]) {
+          row.setExpanded(true);
+          const original = originalRender.call(row, width);
+          const expected = original.at(-1) === "" ? original : [...original, ""];
+          const expanded = row.render(width);
+          assert.deepEqual(expanded, expected);
+          assert.equal(expanded[0], "");
+          assert.equal(expanded.at(-1), "");
+          for (const line of [expanded[1]!, expanded.at(-2)!]) {
+            assert.equal(stripTerminalSequences(line).trim(), "");
+            assert.ok(line.includes("\x1b[48;"));
+          }
+          assert.ok(expanded.every((line) => visibleWidth(line) <= width));
+          assert.deepEqual(row.render(width), expanded);
+          row.invalidate();
+          assert.deepEqual(row.render(width), expanded);
+          const header = expanded.findIndex((line) => stripTerminalSequences(line).trim());
+          const rendered = chat.render(width);
+          if (original.at(-1) !== "") {
+            chat.handleMouse(clickEvent(expanded.length - 1, width, rendered.length));
+            assert.deepEqual(row.render(width), expanded);
+          }
+          chat.handleMouse(clickEvent(expanded.length, width, rendered.length));
+          assert.ok(next.render(width).length > 1);
+          next.setExpanded(false);
+          chat.render(width);
+          chat.handleMouse(clickEvent(header, width, expanded.length + 1));
+          assert.equal(row.render(width).length, 1);
+          assert.equal(chat.render(width).length, 2);
+        }
+      }
+      for (const expanded of [true, false, true, false]) {
+        row.setExpanded(expanded);
+        next.setExpanded(expanded);
+        const lines = chat.render(80);
+        assert.equal(lines.length, row.render(80).length + next.render(80).length);
+        if (!expanded) assert.equal(lines.length, 2);
+      }
+    });
+  }
+});
+
 describe("single tool rows", () => {
   for (const name of toolNames) {
     it(`keeps ${name} to one width-bounded row in every execution state`, () => {
@@ -590,7 +671,16 @@ describe("single tool rows", () => {
         handlers.set(name, handler);
       },
     } as unknown as ExtensionAPI);
-    const context = { mode: "tui", ui: { theme: plainTheme } };
+    const labels: Array<string | undefined> = [];
+    const context = {
+      mode: "tui",
+      ui: {
+        theme: plainTheme,
+        setHiddenThinkingLabel(label?: string) {
+          labels.push(label);
+        },
+      },
+    };
     handlers.get("session_start")!({}, context);
     handlers.get("session_start")!({}, context);
     const restored = createRow();
@@ -599,7 +689,12 @@ describe("single tool rows", () => {
     assert.equal(ToolExecutionComponent.prototype.render, originalRender);
     assert.equal(ToolExecutionComponent.prototype.handleMouse, originalMouse);
     assert.ok(restored.render(80).length > 1);
-    handlers.get("session_start")!({}, { mode: "rpc" });
+    assert.deepEqual(labels, ["", undefined, "", undefined]);
+    for (const mode of ["rpc", "json", "print"]) {
+      handlers.get("session_start")!({}, { mode });
+      handlers.get("session_shutdown")!({}, { mode });
+    }
+    assert.deepEqual(labels, ["", undefined, "", undefined]);
     assert.equal(ToolExecutionComponent.prototype.render, originalRender);
   });
 });

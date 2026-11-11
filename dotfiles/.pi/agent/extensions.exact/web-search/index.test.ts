@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { renderersOf } from "../entry-renderer/index.ts";
+import { renderersOf } from "../chat-renderer/index.ts";
 import webSearchExtension, {
   browseCliDir,
   browseScript,

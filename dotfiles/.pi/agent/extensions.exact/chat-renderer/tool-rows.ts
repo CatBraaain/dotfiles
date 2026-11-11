@@ -43,7 +43,8 @@ export function installToolRowFolding(
     const lines = originalRender.call(this, width);
     const headerRow = lines.findIndex((line) => stripTerminalSequences(line).trim() !== "");
     headerRows.set(this, headerRow < 0 ? 0 : headerRow);
-    return headerRow < 0 ? renderSummary(row, width) : lines;
+    if (headerRow < 0) return renderSummary(row, width);
+    return lines.at(-1) === "" ? lines : [...lines, ""];
   }
 
   function renderSummary(row: ToolRowState, width: number): string[] {

@@ -16,7 +16,7 @@ import {
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { registerCodemode } from "./codemode.ts";
-import { codemodeRenderers } from "../entry-renderer/index.ts";
+import { codemodeRenderers } from "../chat-renderer/index.ts";
 
 type CodemodeDefinition = ToolDefinition<
   Type.TObject<{ code: Type.TString }>,

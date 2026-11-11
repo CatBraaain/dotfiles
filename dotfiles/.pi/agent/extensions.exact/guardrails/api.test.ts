@@ -28,7 +28,7 @@ import {
   formatDuration,
   formatSize,
   renderersOf,
-} from "../entry-renderer/index.ts";
+} from "../chat-renderer/index.ts";
 import {
   compileCommandRuleEntries,
   defaultGuardrailConfigPath,

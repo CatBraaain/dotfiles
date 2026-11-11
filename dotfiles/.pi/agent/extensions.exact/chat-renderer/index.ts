@@ -157,6 +157,7 @@ export default function (pi: ExtensionAPI) {
     dispose = undefined;
     executionEndedAtMsByCallId.clear();
     if (ctx.mode === "tui") {
+      ctx.ui.setHiddenThinkingLabel("");
       const theme = ctx.ui.theme;
       const disposeToolRows = installToolRowFolding(
         (row, width) => formatCollapsedToolRow(row, theme, width),
@@ -166,6 +167,7 @@ export default function (pi: ExtensionAPI) {
       dispose = () => {
         disposeToolRows();
         disposeStamps();
+        ctx.ui.setHiddenThinkingLabel();
       };
     }
   });
