@@ -4,7 +4,7 @@ import { quote } from "shell-quote";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { BackgroundBashOutcome } from "../tools/background-bash.ts";
 
-export type SessionPhase = "running" | "waiting-approval" | "waiting-user";
+export type SessionState = "running" | "waiting-approval" | "waiting-user";
 
 export const PANE_OPTION_NAME = "@pi_session_state";
 export const OPTION_VALUE_VERSION = 1;
@@ -34,8 +34,8 @@ export function dedicatedSocketPath(env: NodeJS.ProcessEnv = process.env): strin
   return join(runtimeDir, "pi-tmux", "server.sock");
 }
 
-export function phaseOptionValue(sessionId: string, phase: SessionPhase): string {
-  return JSON.stringify({ version: OPTION_VALUE_VERSION, sessionId, phase });
+export function stateOptionValue(sessionId: string, state: SessionState): string {
+  return JSON.stringify({ version: OPTION_VALUE_VERSION, sessionId, state });
 }
 
 export function tmuxCommandLine(socketPath: string, args: string[]): string {
@@ -43,11 +43,11 @@ export function tmuxCommandLine(socketPath: string, args: string[]): string {
   return quote(["tmux", "-S", socketPath, ...args]);
 }
 
-export function setPhaseOptionCommand(socketPath: string, paneId: string, value: string): string {
+export function setStateOptionCommand(socketPath: string, paneId: string, value: string): string {
   return tmuxCommandLine(socketPath, ["set-option", "-p", "-t", paneId, PANE_OPTION_NAME, value]);
 }
 
-export function unsetPhaseOptionCommand(socketPath: string, paneId: string): string {
+export function unsetStateOptionCommand(socketPath: string, paneId: string): string {
   return tmuxCommandLine(socketPath, ["set-option", "-p", "-u", "-t", paneId, PANE_OPTION_NAME]);
 }
 
@@ -95,22 +95,22 @@ export async function detectManagedPane(
   }
 }
 
-export async function publishPhase(
+export async function publishState(
   run: BashRunner,
   binding: ManagedPaneBinding,
   sessionId: string,
-  phase: SessionPhase,
+  state: SessionState,
 ): Promise<PublicationOutcome> {
-  const value = phaseOptionValue(sessionId, phase);
-  const set = await run(setPhaseOptionCommand(binding.socketPath, binding.paneId, value));
+  const value = stateOptionValue(sessionId, state);
+  const set = await run(setStateOptionCommand(binding.socketPath, binding.paneId, value));
   return executionFailure(set) ?? { status: "published" };
 }
 
-export async function unsetPhaseOption(
+export async function unsetStateOption(
   run: BashRunner,
   binding: ManagedPaneBinding,
 ): Promise<PublicationOutcome> {
-  const outcome = await run(unsetPhaseOptionCommand(binding.socketPath, binding.paneId));
+  const outcome = await run(unsetStateOptionCommand(binding.socketPath, binding.paneId));
   return executionFailure(outcome) ?? { status: "published" };
 }
 

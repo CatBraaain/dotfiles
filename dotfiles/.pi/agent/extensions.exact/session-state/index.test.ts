@@ -27,7 +27,7 @@ import sessionStateExtension, {
   type SessionStateStore as ActiveSessionsStore,
   type SessionStateStore,
 } from "./index.ts";
-import { phaseOptionValue } from "./tmux.ts";
+import { stateOptionValue } from "./tmux.ts";
 
 type EventHandler = (event: ExtensionEvent, ctx: ExtensionContext) => unknown;
 type KeywordResponse = (command: string) => ToolExecutionOutcome | Promise<ToolExecutionOutcome>;
@@ -386,8 +386,8 @@ describe("sessionStateExtension in top-level sessions", () => {
       h.restoreBashReceiver();
       await h.emit("resources_discover");
       await waitFor(
-        "initial phase after Tools initialization",
-        () => h.server.paneOptionOf("%0") === phaseOptionValue(h.sessionId, "waiting-user"),
+        "initial state after Tools initialization",
+        () => h.server.paneOptionOf("%0") === stateOptionValue(h.sessionId, "waiting-user"),
       );
       assert.equal(h.notifications.length, 0);
     } finally {
@@ -395,10 +395,10 @@ describe("sessionStateExtension in top-level sessions", () => {
     }
   });
   for (const agent of ["main", "senior", "junior", "vision", "chat"]) {
-    it(`publishes the phase sequence for a top-level ${agent} session with a parent header`, async () => {
+    it(`publishes the state sequence for a top-level ${agent} session with a parent header`, async () => {
       const harness = await createExtensionHarness({ agent, customDir: agent === "vision" });
       try {
-        const phases = [
+        const states = [
           ["session_start", "waiting-user"],
           ["agent_start", "running"],
           ["ui_prompt_start", "waiting-approval"],
@@ -407,12 +407,12 @@ describe("sessionStateExtension in top-level sessions", () => {
           ["input", "waiting-user"],
           ["agent_end", "waiting-user"],
         ] as const;
-        for (const [event, expectedPhase] of phases) {
+        for (const [event, expectedState] of states) {
           await harness.emit(event);
-          await waitFor(`phase ${expectedPhase} on ${event}`, () => {
+          await waitFor(`state ${expectedState} on ${event}`, () => {
             const value = harness.server.paneOptionOf("%0");
             return (
-              value !== undefined && value === phaseOptionValue(harness.sessionId, expectedPhase)
+              value !== undefined && value === stateOptionValue(harness.sessionId, expectedState)
             );
           });
         }
@@ -433,7 +433,7 @@ describe("sessionStateExtension in top-level sessions", () => {
       await harness.emit("agent_start");
       await waitFor(
         "running",
-        () => harness.server.paneOptionOf("%0") === phaseOptionValue("s1", "running"),
+        () => harness.server.paneOptionOf("%0") === stateOptionValue("s1", "running"),
       );
       await harness.emit("message_update");
       await finishEventLoopTurn();
@@ -469,7 +469,7 @@ describe("sessionStateExtension in top-level sessions", () => {
     }
   });
 
-  it("notifies a detection failure once and stops publishing phases", async () => {
+  it("notifies a detection failure once and stops publishing states", async () => {
     const harness = await createExtensionHarness();
     try {
       harness.server.responses["display-message"] = () => completedResult("no such server", true);
@@ -487,7 +487,7 @@ describe("sessionStateExtension in top-level sessions", () => {
         0,
       );
       assert.deepEqual(
-        harness.notifications.filter((notification) => /session phase/.test(notification.message)),
+        harness.notifications.filter((notification) => /session state/.test(notification.message)),
         [],
       );
     } finally {
@@ -537,11 +537,11 @@ const unchangedEvents = [
   "input",
 ] as const satisfies readonly ExtensionEvent["type"][];
 
-describe("session-state MVP phase boundaries", () => {
-  it("publishes only phase changes and never reads pane options", async () => {
+describe("session-state MVP state boundaries", () => {
+  it("publishes only state changes and never reads pane options", async () => {
     const h = await createExtensionHarness();
     try {
-      for (const [event, phase] of [
+      for (const [event, state] of [
         ["session_start", "waiting-user"],
         ["agent_start", "running"],
         ["ui_prompt_start", "waiting-approval"],
@@ -549,7 +549,7 @@ describe("session-state MVP phase boundaries", () => {
         ["agent_settled", "waiting-user"],
       ] as const) {
         await h.emit(event);
-        await waitFor(event, () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", phase));
+        await waitFor(event, () => h.server.paneOptionOf("%0") === stateOptionValue("s1", state));
         const count = h.server.commands.length;
         await h.emit(event === "session_start" ? "ui_prompt_end" : event);
         await finishEventLoopTurn();
@@ -573,12 +573,12 @@ describe("session-state MVP phase boundaries", () => {
       await h.emit("ui_prompt_start");
       await waitFor(
         "approval",
-        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-approval"),
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-approval"),
       );
       await h.emit("ui_prompt_end");
       await waitFor(
         "idle",
-        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-user"),
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user"),
       );
     } finally {
       await h.close();
@@ -593,7 +593,7 @@ describe("session-state MVP phase boundaries", () => {
       await h.emit("ui_prompt_start");
       await waitFor(
         "approval",
-        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-approval"),
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-approval"),
       );
       const count = h.server.commands.length;
       for (const event of [...progressEvents, "agent_start", "agent_settled"]) await h.emit(event);
@@ -602,7 +602,7 @@ describe("session-state MVP phase boundaries", () => {
       await h.emit("ui_prompt_end");
       await waitFor(
         "idle",
-        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-user"),
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user"),
       );
     } finally {
       await h.close();
@@ -616,7 +616,7 @@ describe("session-state MVP phase boundaries", () => {
       await h.emit("agent_start");
       await waitFor(
         "running",
-        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "running"),
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "running"),
       );
       h.server.setPaneOption("%0", "external-value");
       const count = h.server.commands.length;
@@ -628,7 +628,7 @@ describe("session-state MVP phase boundaries", () => {
       await h.emit("agent_settled", { aborted: true });
       await waitFor(
         "aborted settled",
-        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-user"),
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user"),
       );
     } finally {
       await h.close();
@@ -636,7 +636,7 @@ describe("session-state MVP phase boundaries", () => {
   });
 
   for (const reason of ["startup", "reload", "new", "resume", "fork"]) {
-    it(`publishes an equal initial phase for a new ${reason} generation`, async () => {
+    it(`publishes an equal initial state for a new ${reason} generation`, async () => {
       const h = await createExtensionHarness();
       try {
         await h.emit("session_start");
@@ -644,21 +644,21 @@ describe("session-state MVP phase boundaries", () => {
         const count = h.server.commands.length;
         await h.emit("session_start", { reason });
         await waitFor("new generation set", () => h.server.commands.length === count + 2);
-        assert.equal(h.server.paneOptionOf("%0"), phaseOptionValue("s1", "waiting-user"));
+        assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("s1", "waiting-user"));
       } finally {
         await h.close();
       }
     });
   }
 
-  it("preserves the latest phase after a delayed set response", async () => {
+  it("preserves the latest state after a delayed set response", async () => {
     const h = await createExtensionHarness();
     const pending = Promise.withResolvers<ToolExecutionOutcome>();
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
       h.server.responses["set-option"] = () => {
-        h.server.setPaneOption("%0", phaseOptionValue("s1", "running"));
+        h.server.setPaneOption("%0", stateOptionValue("s1", "running"));
         return pending.promise;
       };
       await h.emit("agent_start");
@@ -668,10 +668,10 @@ describe("session-state MVP phase boundaries", () => {
       pending.resolve(completedResult(""));
       await waitFor(
         "latest",
-        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-approval"),
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-approval"),
       );
       await finishEventLoopTurn();
-      assert.equal(h.server.paneOptionOf("%0"), phaseOptionValue("s1", "waiting-approval"));
+      assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("s1", "waiting-approval"));
       assert.deepEqual(h.notifications, []);
     } finally {
       pending.resolve(completedResult(""));
@@ -694,12 +694,12 @@ describe("session-state MVP phase boundaries", () => {
       pending.resolve(completedResult(""));
       await waitFor(
         "replacement",
-        () => h.server.paneOptionOf("%0") === phaseOptionValue("replacement", "waiting-user"),
+        () => h.server.paneOptionOf("%0") === stateOptionValue("replacement", "waiting-user"),
       );
       await waitFor("old drained", () => !h.server.hasPending());
       assert.deepEqual(h.notifications, []);
       assert.equal(
-        h.server.commands.some((c) => c.includes(phaseOptionValue("s1", "waiting-user"))),
+        h.server.commands.some((c) => c.includes(stateOptionValue("s1", "waiting-user"))),
         false,
       );
     } finally {
@@ -715,7 +715,7 @@ describe("session-state MVP phase boundaries", () => {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
       h.server.responses["set-option"] = () => {
-        h.server.setPaneOption("%0", phaseOptionValue("s1", "running"));
+        h.server.setPaneOption("%0", stateOptionValue("s1", "running"));
         return pending.promise;
       };
       await h.emit("agent_start");
@@ -724,14 +724,14 @@ describe("session-state MVP phase boundaries", () => {
       h.sessionId = "replacement";
       await h.emit("session_start");
       await finishEventLoopTurn();
-      assert.equal(h.server.paneOptionOf("%0"), phaseOptionValue("s1", "running"));
+      assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("s1", "running"));
       pending.resolve(completedResult(""));
       await waitFor(
         "replacement",
-        () => h.server.paneOptionOf("%0") === phaseOptionValue("replacement", "waiting-user"),
+        () => h.server.paneOptionOf("%0") === stateOptionValue("replacement", "waiting-user"),
       );
       await waitFor("late response", () => !h.server.hasPending());
-      assert.equal(h.server.paneOptionOf("%0"), phaseOptionValue("replacement", "waiting-user"));
+      assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("replacement", "waiting-user"));
       assert.deepEqual(h.notifications, []);
     } finally {
       pending.resolve(completedResult(""));
@@ -803,7 +803,7 @@ describe("session-state MVP phase boundaries", () => {
       await h.emit("ui_prompt_start");
       await waitFor(
         "next transition",
-        () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-approval"),
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-approval"),
       );
     } finally {
       await h.close();
@@ -820,7 +820,7 @@ describe("session-state CLI execution ordering", () => {
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
       h.server.responses["set-option"] = async () => {
         await finish.promise;
-        h.server.setPaneOption("%0", phaseOptionValue("s1", "running"));
+        h.server.setPaneOption("%0", stateOptionValue("s1", "running"));
         return completedResult("");
       };
       await h.emit("agent_start");
@@ -852,7 +852,7 @@ describe("session-state CLI execution ordering", () => {
         "replacement or failure",
         () =>
           h.notifications.length > 0 ||
-          h.server.paneOptionOf("%0") === phaseOptionValue("replacement", "waiting-user"),
+          h.server.paneOptionOf("%0") === stateOptionValue("replacement", "waiting-user"),
       );
       assert.equal(
         h.server.commands
@@ -860,7 +860,7 @@ describe("session-state CLI execution ordering", () => {
           .some((command) => (parse(command) as string[]).includes("%9")),
         false,
       );
-      assert.equal(h.server.paneOptionOf("%0"), phaseOptionValue("replacement", "waiting-user"));
+      assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("replacement", "waiting-user"));
       assert.notEqual(
         Reflect.get(process, Symbol.for("pi.session-state.publication-stopped")),
         true,
@@ -886,7 +886,7 @@ describe("session-state CLI execution ordering", () => {
           await finish.promise;
           h.server.setPaneOption(
             "%0",
-            operation === "unset" ? undefined : phaseOptionValue("s1", "running"),
+            operation === "unset" ? undefined : stateOptionValue("s1", "running"),
           );
           return completedResult("");
         };
@@ -898,16 +898,16 @@ describe("session-state CLI execution ordering", () => {
         await h.emit("session_start");
         await finishEventLoopTurn();
         assert.equal(h.server.commands.length, count, "no new CLI before old execution ends");
-        assert.equal(h.server.paneOptionOf("%0"), phaseOptionValue("s1", "waiting-user"));
+        assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("s1", "waiting-user"));
         delete h.server.responses["set-option"];
         finish.resolve();
         await shutdown;
         await waitFor(
           "replacement",
-          () => h.server.paneOptionOf("%0") === phaseOptionValue("replacement", "waiting-user"),
+          () => h.server.paneOptionOf("%0") === stateOptionValue("replacement", "waiting-user"),
         );
         await finishEventLoopTurn();
-        assert.equal(h.server.paneOptionOf("%0"), phaseOptionValue("replacement", "waiting-user"));
+        assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("replacement", "waiting-user"));
         assert.deepEqual(h.notifications, []);
       } finally {
         finish.resolve();
@@ -925,7 +925,7 @@ describe("session-state CLI execution ordering", () => {
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
       h.server.responses["set-option"] = async () => {
         await finish.promise;
-        h.server.setPaneOption("%0", phaseOptionValue("s1", "running"));
+        h.server.setPaneOption("%0", stateOptionValue("s1", "running"));
         return completedResult("");
       };
       await h.emit("agent_start");
@@ -941,7 +941,7 @@ describe("session-state CLI execution ordering", () => {
         "settled after old CLI",
         () =>
           h.server.commands.length === count + 1 &&
-          h.server.paneOptionOf("%0") === phaseOptionValue("s1", "waiting-user"),
+          h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user"),
       );
       assert.equal(h.server.commands.length, count + 1);
       assert.deepEqual(h.notifications, []);
@@ -961,7 +961,7 @@ describe("session-state CLI execution ordering", () => {
         h.server.responses["set-option"] = async () => {
           if (failure === "throw") throw new Error("transport failed");
           await finish.promise;
-          h.server.setPaneOption("%0", phaseOptionValue("s1", "running"));
+          h.server.setPaneOption("%0", stateOptionValue("s1", "running"));
           return completedResult("");
         };
         await h.emit("agent_start");
@@ -1004,7 +1004,7 @@ describe("session-state CLI execution ordering", () => {
 });
 
 describe("session-state membership compatibility", () => {
-  it("keeps an absent membership store absent through phase events and shutdown", async () => {
+  it("keeps an absent membership store absent through state events and shutdown", async () => {
     const h = await createExtensionHarness();
     try {
       for (const event of lifecycleEvents.filter((event) => event !== "input")) await h.emit(event);
@@ -1013,7 +1013,7 @@ describe("session-state membership compatibility", () => {
       await h.close();
     }
   });
-  it("preserves bytes, inode, old state, and unknown fields for phase-only events", async () => {
+  it("preserves bytes, inode, old state, and unknown fields for state-only events", async () => {
     const h = await createExtensionHarness();
     try {
       const bytes = JSON.stringify({
@@ -1028,7 +1028,7 @@ describe("session-state membership compatibility", () => {
       });
       writeFileSync(h.storePath, bytes);
       const before = statSync(h.storePath, { bigint: true });
-      for (const [event, phase] of [
+      for (const [event, state] of [
         ["session_start", "waiting-user"],
         ["agent_start", "running"],
         ["ui_prompt_start", "waiting-approval"],
@@ -1036,7 +1036,7 @@ describe("session-state membership compatibility", () => {
         ["agent_settled", "waiting-user"],
       ] as const) {
         await h.emit(event);
-        await waitFor(event, () => h.server.paneOptionOf("%0") === phaseOptionValue("s1", phase));
+        await waitFor(event, () => h.server.paneOptionOf("%0") === stateOptionValue("s1", state));
         assert.equal(readFileSync(h.storePath, "utf8"), bytes);
       }
       await h.emit("session_shutdown");

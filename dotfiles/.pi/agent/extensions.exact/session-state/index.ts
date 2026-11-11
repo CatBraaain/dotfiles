@@ -11,12 +11,12 @@ import { subagentSessionDir } from "../agents/index.ts";
 import { requestBackgroundBash, type BackgroundBashContext } from "../tools/background-bash.ts";
 import {
   detectManagedPane,
-  publishPhase,
-  unsetPhaseOption,
+  publishState,
+  unsetStateOption,
   type BashRunner,
   type ManagedPaneBinding,
   type PublicationOutcome,
-  type SessionPhase,
+  type SessionState,
 } from "./tmux.ts";
 
 const TMUX_COMMAND_TIMEOUT_S = 1;
@@ -24,7 +24,7 @@ const MAX_NOTIFICATION_LENGTH = 200;
 const PUBLICATION_STOPPED = Symbol.for("pi.session-state.publication-stopped");
 const publicationProcess = process as NodeJS.Process & { [PUBLICATION_STOPPED]?: boolean };
 
-export type SessionState = "running" | "waiting-approval" | "waiting-user";
+export type { SessionState } from "./tmux.ts";
 
 export interface SessionEntry {
   lock?: boolean;
@@ -61,7 +61,7 @@ interface PublicationGeneration {
   controller: AbortController;
   initializationStarted: boolean;
   binding?: ManagedPaneBinding;
-  phase?: SessionPhase;
+  state?: SessionState;
   sessionId: string;
   run: BashRunner;
   environment: Pick<NodeJS.ProcessEnv, "XDG_RUNTIME_DIR" | "TMUX" | "TMUX_PANE">;
@@ -108,20 +108,20 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
         publicationProcess[PUBLICATION_STOPPED] = true;
         const reason = outcome.status === "aborted" ? outcome.reason : outcome.error;
         (generation?.notify ?? notify)(
-          `session phase publication stopped: Bash completion is unknown (${outcome.status}): ${errorMessage(reason)}`,
+          `session state publication stopped: Bash completion is unknown (${outcome.status}): ${errorMessage(reason)}`,
         );
       }
       return outcome;
     };
   }
 
-  function schedulePhasePublication(phase: SessionPhase): void {
+  function scheduleStatePublication(state: SessionState): void {
     const gen = generation;
-    if (!gen || !gen.initializationStarted || gen.phase === phase) return;
-    gen.phase = phase;
+    if (!gen || !gen.initializationStarted || gen.state === state) return;
+    gen.state = state;
     enqueuePublication(gen, async () => {
       if (gen.controller.signal.aborted || !gen.binding) return;
-      const outcome = await publishPhase(gen.run, gen.binding, gen.sessionId, phase);
+      const outcome = await publishState(gen.run, gen.binding, gen.sessionId, state);
       if (!publicationProcess[PUBLICATION_STOPPED] && !gen.controller.signal.aborted)
         reportPublicationOutcome(gen, outcome);
     });
@@ -180,24 +180,24 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
         gen.notify(`cannot confirm managed tmux pane: ${detection.message}`);
       if (detection.status === "aborted") gen.notify("managed tmux pane check was interrupted");
     });
-    schedulePhasePublication("waiting-user");
+    scheduleStatePublication("waiting-user");
   });
 
   pi.on("agent_start", () => {
     isAgentRunActive = true;
-    if (!isWaitingForApproval) schedulePhasePublication("running");
+    if (!isWaitingForApproval) scheduleStatePublication("running");
   });
   pi.on("ui_prompt_start", () => {
     isWaitingForApproval = true;
-    schedulePhasePublication("waiting-approval");
+    scheduleStatePublication("waiting-approval");
   });
   pi.on("ui_prompt_end", () => {
     isWaitingForApproval = false;
-    schedulePhasePublication(isAgentRunActive ? "running" : "waiting-user");
+    scheduleStatePublication(isAgentRunActive ? "running" : "waiting-user");
   });
   pi.on("agent_settled", () => {
     isAgentRunActive = false;
-    if (!isWaitingForApproval) schedulePhasePublication("waiting-user");
+    if (!isWaitingForApproval) scheduleStatePublication("waiting-user");
   });
   pi.on("session_shutdown", async () => {
     const gen = generation;
@@ -209,13 +209,13 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
       enqueuePublication(gen, async () => {
         if (!gen.binding) return;
         try {
-          const outcome = await unsetPhaseOption(gen.run, gen.binding);
+          const outcome = await unsetStateOption(gen.run, gen.binding);
           if (publicationProcess[PUBLICATION_STOPPED]) return;
           if (outcome.status === "failed")
-            gen.notify(`cannot clear session phase option: ${outcome.message}`);
-          if (outcome.status === "aborted") gen.notify("session phase cleanup was interrupted");
+            gen.notify(`cannot clear session state option: ${outcome.message}`);
+          if (outcome.status === "aborted") gen.notify("session state cleanup was interrupted");
         } catch (error) {
-          gen.notify(`cannot clear session phase option: ${errorMessage(error)}`);
+          gen.notify(`cannot clear session state option: ${errorMessage(error)}`);
         }
       });
     }
@@ -262,8 +262,8 @@ function captureBashContext(ctx: ExtensionContext): BackgroundBashContext {
 }
 
 function reportPublicationOutcome(gen: PublicationGeneration, outcome: PublicationOutcome): void {
-  if (outcome.status === "failed") gen.notify(`cannot publish session phase: ${outcome.message}`);
-  if (outcome.status === "aborted") gen.notify("session phase publication was interrupted");
+  if (outcome.status === "failed") gen.notify(`cannot publish session state: ${outcome.message}`);
+  if (outcome.status === "aborted") gen.notify("session state publication was interrupted");
 }
 
 function makeNotifier(ctx: ExtensionContext): (message: string) => void {

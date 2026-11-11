@@ -8,12 +8,12 @@ import type { BackgroundBashOutcome as ToolExecutionOutcome } from "../tools/bac
 import {
   dedicatedSocketPath,
   detectManagedPane,
-  phaseOptionValue,
+  stateOptionValue,
   PANE_OPTION_NAME,
-  publishPhase,
-  setPhaseOptionCommand,
-  unsetPhaseOption,
-  unsetPhaseOptionCommand,
+  publishState,
+  setStateOptionCommand,
+  unsetStateOption,
+  unsetStateOptionCommand,
   type BashRunner,
   type ManagedPaneBinding,
 } from "./tmux.ts";
@@ -140,21 +140,21 @@ describe("dedicatedSocketPath", () => {
   });
 });
 
-describe("phase option value", () => {
-  it("builds one JSON object from version, sessionId, and phase", () => {
+describe("state option value", () => {
+  it("builds one JSON object from version, sessionId, and state", () => {
     assert.equal(
-      phaseOptionValue("s1", "running"),
-      '{"version":1,"sessionId":"s1","phase":"running"}',
+      stateOptionValue("s1", "running"),
+      '{"version":1,"sessionId":"s1","state":"running"}',
     );
   });
 });
 
 describe("tmux command builders", () => {
   it("starts every command with tmux -S <absolute path>", () => {
-    const value = phaseOptionValue('s\'1 "x"', "running");
+    const value = stateOptionValue('s\'1 "x"', "running");
     for (const command of [
-      setPhaseOptionCommand(DEDICATED_SOCKET, "%0", value),
-      unsetPhaseOptionCommand(DEDICATED_SOCKET, "%0"),
+      setStateOptionCommand(DEDICATED_SOCKET, "%0", value),
+      unsetStateOptionCommand(DEDICATED_SOCKET, "%0"),
     ]) {
       const argv = parse(command) as string[];
       assert.deepEqual(argv.slice(0, 3), ["tmux", "-S", DEDICATED_SOCKET]);
@@ -162,11 +162,11 @@ describe("tmux command builders", () => {
   });
 
   it("passes the value as one argument with set-option -p and survives a quote round trip", () => {
-    const value = phaseOptionValue('s\'id "x"; $(touch /unsafe) #{pane_id}', "waiting-approval");
-    const argv = parse(setPhaseOptionCommand(DEDICATED_SOCKET, "%0", value)) as string[];
+    const value = stateOptionValue('s\'id "x"; $(touch /unsafe) #{pane_id}', "waiting-approval");
+    const argv = parse(setStateOptionCommand(DEDICATED_SOCKET, "%0", value)) as string[];
     assert.deepEqual(argv.slice(3), ["set-option", "-p", "-t", "%0", PANE_OPTION_NAME, value]);
     assert.equal(
-      setPhaseOptionCommand(DEDICATED_SOCKET, "%0", value),
+      setStateOptionCommand(DEDICATED_SOCKET, "%0", value),
       quote([
         "tmux",
         "-S",
@@ -182,7 +182,7 @@ describe("tmux command builders", () => {
   });
 
   it("unset removes the pane-local value with set-option -p -u", () => {
-    const argv = parse(unsetPhaseOptionCommand(DEDICATED_SOCKET, "%0")) as string[];
+    const argv = parse(unsetStateOptionCommand(DEDICATED_SOCKET, "%0")) as string[];
     assert.deepEqual(argv.slice(3), ["set-option", "-p", "-u", "-t", "%0", PANE_OPTION_NAME]);
   });
 });
@@ -343,15 +343,15 @@ describe("detectManagedPane", () => {
   });
 });
 
-describe("publishPhase", () => {
-  for (const phase of ["running", "waiting-approval", "waiting-user"] as const) {
-    it(`publishes ${phase} with one set and no read`, async () => {
+describe("publishState", () => {
+  for (const state of ["running", "waiting-approval", "waiting-user"] as const) {
+    it(`publishes ${state} with one set and no read`, async () => {
       const server = new FakeTmuxServer();
-      assert.deepEqual(await publishPhase(server.run, verifiedBinding, "s1", phase), {
+      assert.deepEqual(await publishState(server.run, verifiedBinding, "s1", state), {
         status: "published",
       });
       assert.equal(server.commands.length, 1);
-      assert.equal(server.paneOptionOf("%0"), phaseOptionValue("s1", phase));
+      assert.equal(server.paneOptionOf("%0"), stateOptionValue("s1", state));
       assert.equal((parse(server.commands[0]!) as string[]).includes("-F"), false);
     });
   }
@@ -366,18 +366,18 @@ describe("publishPhase", () => {
   ] as const) {
     it(`propagates ${outcome.status} without another command`, async () => {
       const server = new FakeTmuxServer({ "set-option": () => outcome });
-      assert.deepEqual(await publishPhase(server.run, verifiedBinding, "s1", "running"), expected);
+      assert.deepEqual(await publishState(server.run, verifiedBinding, "s1", "running"), expected);
       assert.equal(server.commands.length, 1);
     });
   }
 });
 
-describe("unsetPhaseOption", () => {
+describe("unsetStateOption", () => {
   it("removes the pane-local value", async () => {
     const server = new FakeTmuxServer();
-    server.setPaneOption("%0", phaseOptionValue("s1", "running"));
+    server.setPaneOption("%0", stateOptionValue("s1", "running"));
 
-    const outcome = await unsetPhaseOption(server.run, verifiedBinding);
+    const outcome = await unsetStateOption(server.run, verifiedBinding);
 
     assert.deepEqual(outcome, { status: "published" });
     assert.equal(server.paneOptionOf("%0"), undefined);
@@ -387,7 +387,7 @@ describe("unsetPhaseOption", () => {
     const failed = new FakeTmuxServer({
       "set-option": () => completedResult("cannot unset option", true),
     });
-    assert.deepEqual(await unsetPhaseOption(failed.run, verifiedBinding), {
+    assert.deepEqual(await unsetStateOption(failed.run, verifiedBinding), {
       status: "failed",
       message: "cannot unset option",
     });
@@ -395,7 +395,7 @@ describe("unsetPhaseOption", () => {
     const thrown = new FakeTmuxServer({
       "set-option": () => failedOutcome(new Error("no receiver")),
     });
-    assert.deepEqual(await unsetPhaseOption(thrown.run, verifiedBinding), {
+    assert.deepEqual(await unsetStateOption(thrown.run, verifiedBinding), {
       status: "failed",
       message: "no receiver",
     });
@@ -403,14 +403,14 @@ describe("unsetPhaseOption", () => {
     const aborted = new FakeTmuxServer({
       "set-option": () => abortedOutcome(),
     });
-    assert.deepEqual(await unsetPhaseOption(aborted.run, verifiedBinding), { status: "aborted" });
+    assert.deepEqual(await unsetStateOption(aborted.run, verifiedBinding), { status: "aborted" });
   });
 });
 
 describe("pane publication failure boundaries", () => {
   it("rejects a relative runtime or socket path before dispatch", () => {
     assert.throws(() => dedicatedSocketPath({ XDG_RUNTIME_DIR: "relative" }), /must be absolute/);
-    assert.throws(() => setPhaseOptionCommand("relative.sock", "%0", "value"), /must be absolute/);
+    assert.throws(() => setStateOptionCommand("relative.sock", "%0", "value"), /must be absolute/);
   });
 
   it("does not trust a regular file as a managed socket", async () => {
@@ -439,7 +439,7 @@ describe("pane publication failure boundaries", () => {
         },
       }),
     });
-    assert.deepEqual(await publishPhase(server.run, verifiedBinding, "s1", "running"), {
+    assert.deepEqual(await publishState(server.run, verifiedBinding, "s1", "running"), {
       status: "failed",
       message: "nonzero",
     });

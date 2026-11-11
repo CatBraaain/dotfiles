@@ -25,7 +25,7 @@ const { createEventBus } = await import(process.env.PI_TEST_SDK_URL);
 const { default: toolsExtension } = await import(pathToFileURL(join(moduleDir, "../tools/index.ts")));
 const { default: sessionStateExtension } = await import(pathToFileURL(join(moduleDir, "index.ts")));
 const { SandboxRunner } = await import(pathToFileURL(join(moduleDir, "../guardrails/sandbox-runner.ts")));
-const { detectManagedPane, phaseOptionValue, PANE_OPTION_NAME } = await import(pathToFileURL(join(moduleDir, "tmux.ts")));
+const { detectManagedPane, stateOptionValue, PANE_OPTION_NAME } = await import(pathToFileURL(join(moduleDir, "tmux.ts")));
 const { requestBackgroundBash } = await import(pathToFileURL(join(moduleDir, "../tools/background-bash.ts")));
 
 const socket = join(process.env.XDG_RUNTIME_DIR, "pi-tmux", "server.sock");
@@ -129,18 +129,18 @@ assert.deepEqual(commandNames, []);
 try {
   await dispatch("session_start", { reason: "startup" });
   if (race) {
-    await waitFor("startup", () => readOption() === phaseOptionValue(sessionId, "waiting-user"));
+    await waitFor("startup", () => readOption() === stateOptionValue(sessionId, "waiting-user"));
     await dispatch("agent_start");
     await waitFor("old CLI started", () => existsSync(join(directory, "race-started")));
     const count = sandboxCommands.length;
     sessionId = "replacement";
     await dispatch("session_start", { reason: "resume" });
     assert.equal(sandboxCommands.length, count, "new publication waits for the old CLI");
-    assert.equal(readOption(), phaseOptionValue("race-old", "waiting-user"));
+    assert.equal(readOption(), stateOptionValue("race-old", "waiting-user"));
     writeFileSync(join(directory, "race-release"), "release");
-    await waitFor("replacement after delayed set", () => readOption() === phaseOptionValue(sessionId, "waiting-user"));
+    await waitFor("replacement after delayed set", () => readOption() === stateOptionValue(sessionId, "waiting-user"));
     assert.equal(existsSync(join(directory, "race-finished")), true);
-    assert.equal(readOption(), phaseOptionValue(sessionId, "waiting-user"));
+    assert.equal(readOption(), stateOptionValue(sessionId, "waiting-user"));
     assert.equal(notifications.length, 0);
     await dispatch("session_shutdown", { reason: "quit" });
     assert.equal(readOption(), "");
@@ -152,24 +152,24 @@ try {
     await waitFor("membership", () => existsSync(join(directory, "session-state.json")));
     await dispatch("session_shutdown", { reason: "quit" });
   } else {
-    await waitFor("startup", () => readOption() === phaseOptionValue(sessionId, "waiting-user"));
+    await waitFor("startup", () => readOption() === stateOptionValue(sessionId, "waiting-user"));
     assert.equal(existsSync(join(directory, "session-state.json")), false);
     await dispatch("input");
     await waitFor("membership", () => existsSync(join(directory, "session-state.json")));
     const storePath = join(directory, "session-state.json");
     const before = statSync(storePath, { bigint: true });
     const bytes = readFileSync(storePath, "utf8");
-    for (const [type, phase] of [
+    for (const [type, state] of [
       ["agent_start", "running"],
       ["ui_prompt_start", "waiting-approval"],
       ["ui_prompt_end", "running"],
       ["agent_settled", "waiting-user"],
     ]) {
       await dispatch(type);
-      await waitFor(type, () => readOption() === phaseOptionValue(sessionId, phase));
+      await waitFor(type, () => readOption() === stateOptionValue(sessionId, state));
     }
     await dispatch("agent_start");
-    await waitFor("running", () => readOption() === phaseOptionValue(sessionId, "running"));
+    await waitFor("running", () => readOption() === stateOptionValue(sessionId, "running"));
     const commandsBefore = sandboxCommands.length;
     await dispatch("provider_stream_event");
     await dispatch("tool_execution_update");
@@ -295,7 +295,7 @@ async function runScenario(order: string, denied: boolean, race = false): Promis
       [
         "#!/bin/sh",
         `case "$*" in`,
-        `  *'"sessionId":"race-old","phase":"running"'*)`,
+        `  *'"sessionId":"race-old","state":"running"'*)`,
         `    printf started > "$PI_TEST_DIRECTORY/race-started"`,
         `    while [ ! -e "$PI_TEST_DIRECTORY/race-release" ]; do sleep 0.01; done`,
         `    "$PI_TEST_TMUX" "$@"`,

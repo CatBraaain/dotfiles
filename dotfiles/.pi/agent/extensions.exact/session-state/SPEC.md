@@ -46,12 +46,12 @@
 pane-local user option `@pi_session_state` に、次のJSON文字列を1回の `set-option -p` で設定する。
 
 ```json
-{ "version": 1, "sessionId": "<現在の会話ID>", "phase": "running" }
+{ "version": 1, "sessionId": "<現在の会話ID>", "state": "running" }
 ```
 
-`phase` は `running`・`waiting-approval`・`waiting-user` のいずれかである。JSON文字列は `JSON.stringify` で組み立て、shell引数をescapeして渡す。`-F` によるtmux format展開は行わない。
+`state` は `running`・`waiting-approval`・`waiting-user` のいずれかである。JSON文字列は `JSON.stringify` で組み立て、shell引数をescapeして渡す。`-F` によるtmux format展開は行わない。
 
-同じ世代では、前回要求したphaseと同じならCLIを呼ばない。世代開始時は、同じ会話ID・phaseでも初期値を公開する。公開のためにpane optionを読み取らず、外部上書きだけでは再公開しない。
+同じ世代では、前回要求したstateと同じならCLIを呼ばない。世代開始時は、同じ会話ID・stateでも初期値を公開する。公開のためにpane optionを読み取らず、外部上書きだけでは再公開しない。
 
 ### 実行の区間とイベント
 
@@ -69,7 +69,7 @@ run区間は `agent_start` から `agent_settled` までとし、中断による
 | `agent_settled` | run区間を終了し、承認待ちでなければ `waiting-user` を公開する |
 | `session_shutdown` | 新規公開と未実行分を止め、開始済みCLIの通常終端を待ち、可能ならoptionを除去する |
 
-その他の進展イベントでは公開しない。承認待ち中は、進展・繰り返しの `agent_start`・確定停止によって表示を `running` へ戻さない。UI終了後は、その時点のrun区間に対応するphaseへ戻す。
+その他の進展イベントでは公開しない。承認待ち中は、進展・繰り返しの `agent_start`・確定停止によって表示を `running` へ戻さない。UI終了後は、その時点のrun区間に対応するstateへ戻す。
 
 ### 世代と終了
 

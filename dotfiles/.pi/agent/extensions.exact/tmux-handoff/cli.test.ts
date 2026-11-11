@@ -820,16 +820,16 @@ describe("pi-mux read-only list", () => {
     TIMEOUT_MS,
   );
 
-  for (const phase of ["running", "waiting-approval", "waiting-user"] as const) {
+  for (const state of ["running", "waiting-approval", "waiting-user"] as const) {
     it(
-      "returns only the four public fields with phase " + phase,
+      "returns only the four public fields with state " + state,
       async () => {
         await fixture(async (f) => {
           const { pane, metadata } = await publishedIdlePane(f);
           const value = JSON.stringify(
-            { version: 1, sessionId: metadata.id, phase },
+            { version: 1, sessionId: metadata.id, state },
             null,
-            phase === "running" ? 2 : undefined,
+            state === "running" ? 2 : undefined,
           );
           const published = await f.tmux([
             "set-option",
@@ -846,7 +846,7 @@ describe("pi-mux read-only list", () => {
           assert.equal(result.code, 0, result.err);
           assert.equal(result.err, "");
           assert.deepEqual(JSON.parse(result.out), [
-            { id: metadata.id, cwd: metadata.cwd, file: metadata.file, state: phase },
+            { id: metadata.id, cwd: metadata.cwd, file: metadata.file, state },
           ]);
           assert.equal(existsSync(metadata.file), false);
           assert.equal(existsSync(join(f.agent, "pi-tmux")), false);
@@ -858,7 +858,7 @@ describe("pi-mux read-only list", () => {
     );
   }
 
-  const unavailablePhases = [
+  const unavailableStates = [
     { name: "unpublished", value: undefined },
     { name: "invalid JSON", value: "{invalid" },
     { name: "invalid multiline JSON", value: "invalid\n%1\t$1\tbad\t%%%invalid%%%\t1\t0" },
@@ -866,21 +866,25 @@ describe("pi-mux read-only list", () => {
     { name: "an array", value: "[]" },
     {
       name: "another version",
-      value: JSON.stringify({ version: 2, sessionId: "live-id", phase: "running" }),
+      value: JSON.stringify({ version: 2, sessionId: "live-id", state: "running" }),
     },
     {
       name: "another conversation",
-      value: JSON.stringify({ version: 1, sessionId: "other-id", phase: "running" }),
+      value: JSON.stringify({ version: 1, sessionId: "other-id", state: "running" }),
     },
     {
-      name: "an unknown phase",
-      value: JSON.stringify({ version: 1, sessionId: "live-id", phase: "idle" }),
+      name: "an unknown state",
+      value: JSON.stringify({ version: 1, sessionId: "live-id", state: "idle" }),
     },
-    { name: "a missing phase", value: JSON.stringify({ version: 1, sessionId: "live-id" }) },
+    {
+      name: "only the old phase field",
+      value: JSON.stringify({ version: 1, sessionId: "live-id", phase: "running" }),
+    },
+    { name: "a missing state", value: JSON.stringify({ version: 1, sessionId: "live-id" }) },
   ];
-  for (const { name, value } of unavailablePhases) {
+  for (const { name, value } of unavailableStates) {
     it(
-      "keeps the live identity with a null phase for " + name,
+      "keeps the live identity with a null state for " + name,
       async () => {
         await fixture(async (f) => {
           const { pane, metadata } = await publishedIdlePane(f);
@@ -1047,7 +1051,7 @@ describe("pi-mux read-only list", () => {
   );
 
   it(
-    "reports phase inspection failures without returning a partial array",
+    "reports state inspection failures without returning a partial array",
     async () => {
       await fixture(async (f) => {
         await publishedIdlePane(f);
@@ -1057,13 +1061,13 @@ describe("pi-mux read-only list", () => {
           wrapper,
           previous.replace(
             'case "$*" in',
-            'case "$*" in\n  *"show-options -pqv"*) echo "phase access refused" >&2; exit 1 ;;',
+            'case "$*" in\n  *"show-options -pqv"*) echo "state access refused" >&2; exit 1 ;;',
           ),
         );
         const result = await f.run(["list"]);
         assert.equal(result.code, 1);
         assert.equal(result.out, "");
-        assert.match(result.err, /phase access refused/);
+        assert.match(result.err, /state access refused/);
         assert.equal(existsSync(join(f.agent, "pi-tmux")), false);
       });
     },

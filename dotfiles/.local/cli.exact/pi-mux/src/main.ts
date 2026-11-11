@@ -29,7 +29,7 @@ type Candidate = { id: string; cwd: string };
 type ManagedSession = Candidate & { session: string };
 type Snapshot = { version: 1; generation: string; sessions: Candidate[]; pending: Candidate[] };
 type Session = { id: string; cwd: string; file: string };
-type SessionPhase = "running" | "waiting-approval" | "waiting-user";
+type SessionState = "running" | "waiting-approval" | "waiting-user";
 type Pane = Session & {
   pane: string;
   session: string;
@@ -547,7 +547,7 @@ async function listSessions(config: TmuxConfig) {
   return await Promise.all(
     panes.map(async ({ id, cwd, file, pane }) => {
       const state = await tmux(config, ["show-options", "-pqv", "-t", pane, "@pi_session_state"]);
-      return { id, cwd, file, state: parsePhase(state.stdout, id) };
+      return { id, cwd, file, state: parseState(state.stdout, id) };
     }),
   );
 }
@@ -602,18 +602,18 @@ async function livePanes(
     });
 }
 
-function parsePhase(encoded: string | undefined, id: string): SessionPhase | null {
+function parseState(encoded: string | undefined, id: string): SessionState | null {
   if (!encoded) return null;
-  let state: { version?: unknown; sessionId?: unknown; phase?: unknown } | null;
+  let metadata: { version?: unknown; sessionId?: unknown; state?: unknown } | null;
   try {
-    state = JSON.parse(encoded);
+    metadata = JSON.parse(encoded);
   } catch {
     return null;
   }
-  if (state?.version !== 1 || state.sessionId !== id) return null;
-  const phase = state.phase;
-  return phase === "running" || phase === "waiting-approval" || phase === "waiting-user"
-    ? phase
+  if (metadata?.version !== 1 || metadata.sessionId !== id) return null;
+  const state = metadata.state;
+  return state === "running" || state === "waiting-approval" || state === "waiting-user"
+    ? state
     : null;
 }
 
