@@ -26,29 +26,18 @@ modes:
       - model: openai-codex/gpt-<LATEST>-sol
       - model: commandcode/z-ai/glm-<LATEST>-flash
       - model: zai/glm-<LATEST>-flash
-        settings:
-          - multiply: zai.urgency
     middle:
       - model: zai/glm-<LATEST>-flash
       - model: openai-codex/gpt-<LATEST>-sol
       - model: commandcode/z-ai/glm-<LATEST>-flash
-      - model: zai/glm-<LATEST>-flash
-        settings:
-          - multiply: zai.urgency
     low:
       - model: openai-codex/gpt-6-luna
       - model: zai/glm-<LATEST>-flash
       - model: commandcode/z-ai/glm-<LATEST>-flash
-      - model: zai/glm-<LATEST>-flash
-        settings:
-          - multiply: zai.urgency
     vision:
       - model: openai-codex/gpt-<LATEST>-luna
       - model: zai/glm-<LATEST>-flash
       - model: commandcode/z-ai/glm-<LATEST>-flash
-      - model: zai/glm-<LATEST>-flash
-        settings:
-          - multiply: zai.urgency
 
   max:
     high:
