@@ -62,6 +62,12 @@ local function history_bonus(commit_count)
     return math.floor(kLearningScale * math.log(commit_count + 1) / math.log(2))
 end
 
+local function lexical_history_bonus(history, reading_length)
+    local history_length = utf8.len(history.reading)
+    local coverage = history_length * (history_length + 1) / (reading_length * (reading_length + 1))
+    return math.floor(history_bonus(history.commit_count) * coverage)
+end
+
 local function escape_history_field(value)
     return (string.gsub(value, "[%,%;%%%s]", function(character)
         return string.format("%%%02X", string.byte(character))
@@ -367,7 +373,9 @@ local function route_history_discount(state, active, choice)
             if matches_route and table.concat(readings) == history.reading
                 and table.concat(texts) == history.text then
                 matches[last] = matches[last] or {}
-                matches[last][#matches[last] + 1] = { first = first, bonus = history_bonus(history.commit_count) }
+                matches[last][#matches[last] + 1] = {
+                    first = first, bonus = lexical_history_bonus(history, utf8.len(state.reading)),
+                }
             end
         end
     end
@@ -439,7 +447,7 @@ local function dictionary_nodes(env, reading)
     local offsets = {}
     for offset in utf8.codes(reading) do offsets[#offsets + 1] = offset end
     offsets[#offsets + 1] = #reading + 1
-    local starting = { histories = {} }
+    local starting = { histories = {}, reading_length = length }
     for first = 1, length do
         local nodes = {}
         for last = first, length do
@@ -772,11 +780,12 @@ local function attach_histories(starting, env)
                 }
             end
             local nodes = starting[history.first]
+            local bonus = lexical_history_bonus(history, starting.reading_length)
             nodes[#nodes + 1] = {
                 start = history.first, _end = history.last,
                 surface = history.reading, candidate = history.text,
                 left_id = route.left_id, right_id = route.right_id,
-                wcost = route.own - history_bonus(history.commit_count), route_words = words,
+                wcost = route.own - bonus, route_words = words,
             }
         end
     end
@@ -817,12 +826,25 @@ local function add_fallback_nodes(starting, reading, boundaries)
     end
 end
 
-local function ranked_path(reading, env, context, boundaries, fallback)
+local function whole_reading_histories(starting)
+    local whole = {}
+    for _, history in ipairs(starting.histories or {}) do
+        if history.first == 1 and history.last == starting.reading_length then
+            whole[#whole + 1] = history
+        end
+    end
+    return whole
+end
+
+local function ranked_path(reading, env, context, boundaries, fallback, dictionary_only)
     local length = utf8.len(reading)
     local starting = dictionary_nodes(env, reading)
     constrain_boundaries(starting, length, boundaries)
     if fallback then add_fallback_nodes(starting, reading, boundaries) end
-    attach_histories(starting, env)
+    if not dictionary_only then
+        starting.histories = whole_reading_histories(starting)
+        attach_histories(starting, env)
+    end
     local remaining, completions = completion_costs(starting, length, env, context)
     local path, best = nil, math.huge
     for _, node in ipairs(starting[1] or {}) do
@@ -1145,8 +1167,13 @@ local function split_via_path(reading, env, context, all_reading)
         if all_reading and path then
             for _, history in ipairs(boundary_histories(env, reading)) do
                 local alternative, cost = ranked_path(reading, env, context, history.boundaries, true)
-                if alternative and cost - history_bonus(history.commit_count) < score then
-                    path, score, boundaries = alternative, cost - history_bonus(history.commit_count), history.boundaries
+                if alternative and cost <= score then
+                    path, score, boundaries = alternative, cost, history.boundaries
+                end
+                local dictionary_path, dictionary_cost = ranked_path(reading, env, context, history.boundaries, true, true)
+                local boundary_score = dictionary_cost and dictionary_cost - history_bonus(history.commit_count)
+                if dictionary_path and boundary_score <= score then
+                    path, score, boundaries = dictionary_path, boundary_score, history.boundaries
                 end
             end
         end

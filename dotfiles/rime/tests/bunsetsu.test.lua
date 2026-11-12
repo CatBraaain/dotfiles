@@ -244,6 +244,129 @@ do
         "publishing the menu preserves the selected kanji candidate")
 end
 
+print("== 1b. separate short histories share the full reading learning budget")
+do
+    local dictionary = {
+        { surface = "あいうえ", candidate = "正解", left_id = 1, right_id = 1, cost = 100 },
+        { surface = "あ", candidate = "亜", left_id = 2, right_id = 2, cost = 100 },
+        { surface = "い", candidate = "伊", left_id = 3, right_id = 3, cost = 100 },
+        { surface = "う", candidate = "宇", left_id = 4, right_id = 4, cost = 100 },
+        { surface = "え", candidate = "絵", left_id = 5, right_id = 5, cost = 100 },
+    }
+    for _, typed in ipairs({ false, true }) do
+        local histories = { { surface = "あいうえ", text = "正解|1 1", commit_count = 8 } }
+        for index = 2, #dictionary do
+            local word = dictionary[index]
+            local text = word.candidate .. "|" .. word.left_id .. " " .. word.right_id
+            if typed then
+                text = word.candidate .. "|1851 1851\tp2:c " .. word.surface .. "," .. word.candidate
+                    .. "," .. word.left_id .. "," .. word.right_id
+            end
+            histories[#histories + 1] = { surface = word.surface, text = text, commit_count = 8 }
+        end
+        local matrix = pos_matrix({1, 2, 3, 4, 5})
+        local bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
+        bunsetsu.start(context, "あいうえ")
+        check(bunsetsu.display(context) == "正解" and #selected_route(bunsetsu, context) == 1,
+            "equally frequent separate short histories cannot outvote the learned whole word")
+        check(select_clause_text(bunsetsu, context, 1, "亜伊宇絵"),
+            "the alternative multiword route remains selectable")
+        for _ = 1, 16 do
+            bunsetsu.start(context, "あいうえ")
+            check(select_clause_text(bunsetsu, context, 1, "亜伊宇絵"),
+                "the selected whole-reading route can still be confirmed repeatedly")
+            record_learning(bunsetsu, context, histories)
+        end
+        bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
+        bunsetsu.start(context, "あいうえ")
+        check(bunsetsu.display(context) == "亜伊宇絵" and #selected_route(bunsetsu, context) == 4,
+            "repeated whole-reading commits promote the multiword route in a new engine")
+        local retained = #histories >= 5
+        for index = 1, 5 do retained = retained and histories[index].commit_count == 8 end
+        check(retained, "new learning retains every existing short and whole-word history")
+    end
+end
+
+print("== 1c. vocabulary and boundary evidence do not double the same reading budget")
+do
+    local dictionary = {
+        { surface = "あい", candidate = "愛", left_id = 1, right_id = 1, cost = 100 },
+        { surface = "あ", candidate = "亜", left_id = 2, right_id = 2, cost = 200 },
+        { surface = "い", candidate = "伊", left_id = 3, right_id = 3, cost = 200 },
+    }
+    local histories = {
+        { surface = "あい", text = "愛|1 1", commit_count = 8 },
+        { surface = "あい", text = "亜伊|1851 1851\tp2:s あ,亜,2,2;い,伊,3,3", commit_count = 4 },
+        { surface = "あい", text = "あい|1851 1851\tb1 1,1", commit_count = 4 },
+    }
+    local bunsetsu, context = pos_engine(dictionary, pos_matrix({1, 2, 3}), histories,
+        function() return false end)
+    bunsetsu.start(context, "あい")
+    check(bunsetsu.display(context) == "愛" and #bunsetsu.state(context).clauses == 1,
+        "a less frequent phrase and its boundary cannot count the same confirmations twice")
+end
+
+print("== 1d. partial commits overcome connection costs beside a non-dictionary tail")
+do
+    local dictionary = {
+        { surface = "あ", candidate = "亜", left_id = 1, right_id = 1, cost = 100 },
+        { surface = "あ", candidate = "阿", left_id = 2, right_id = 2, cost = 300 },
+        { surface = "い", candidate = "伊", left_id = 3, right_id = 3, cost = 100 },
+    }
+    local matrix = pos_matrix({1, 2, 3}, { ["0 2"] = 1000 })
+    local histories = {}
+    local bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return true end)
+    bunsetsu.start(context, "あいq")
+    check(bunsetsu.display(context) == "亜伊q", "connection costs lead before partial-word training")
+    for round = 1, 64 do
+        bunsetsu.start(context, "あいq")
+        check(select_clause_text(bunsetsu, context, 1, "阿"),
+            "the expensive connected word remains selectable in partial round " .. round)
+        record_learning(bunsetsu, context, histories)
+    end
+    check(#histories == 3 and history_count(histories, "阿|1851 1851\tp2:c あ,阿,2,2") == 64
+        and history_count(histories, "伊|1851 1851\tp2:c い,伊,3,3") == 64
+        and history_count(histories, "あいq|1851 1851\tb1 1,1,1") == 64,
+        "raw-tail commits save partial vocabulary and boundaries without a whole-reading vocabulary record")
+    bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return true end)
+    bunsetsu.start(context, "あいq")
+    check(bunsetsu.display(context) == "阿伊q" and #bunsetsu.state(context).clauses == 3,
+        "partial learning overcomes the connection difference without changing raw-tail boundaries")
+end
+
+print("== 1e. negative internal dictionary costs retain partial learning strength")
+do
+    local dictionary = {
+        { surface = "あい", candidate = "愛", left_id = 1, right_id = 1, cost = 100 },
+        { surface = "あ", candidate = "亜", left_id = 2, right_id = 2, cost = 100 },
+        { surface = "い", candidate = "伊", left_id = 3, right_id = 3, cost = 100 },
+        { surface = "う", candidate = "宇", left_id = 4, right_id = 4, cost = 100 },
+    }
+    local matrix = pos_matrix({1, 2, 3, 4}, { ["0 1"] = -2000, ["2 3"] = -1000 })
+    local histories = {}
+    local bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
+    bunsetsu.start(context, "あいう")
+    check(bunsetsu.display(context) == "愛宇", "the unlearned connected route leads initially")
+    for round = 1, 8 do
+        bunsetsu.start(context, "あい")
+        check(select_clause_text(bunsetsu, context, 1, "亜伊"),
+            "the negative-cost route remains selectable in training round " .. round)
+        record_learning(bunsetsu, context, histories)
+    end
+    local saved = "亜伊|1851 1851\tp2:c あ,亜,2,2;い,伊,3,3"
+    check(history_count(histories, saved) == 8 and #histories == 2,
+        "training records the negative-cost partial route without any longer-reading history")
+    for _, count in ipairs({8, 1000000}) do
+        for _, history in ipairs(histories) do
+            if history.text == saved then history.commit_count = count end
+        end
+        bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
+        bunsetsu.start(context, "あいう")
+        check(bunsetsu.display(context) == "亜伊宇",
+            "a partial route with internal cost minus eight hundred benefits from count " .. count)
+    end
+end
+
 print("== 2. identical text keeps the best full route and learns only its middle ids")
 do
     local dictionary = {
@@ -311,7 +434,7 @@ do
     local bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
     bunsetsu.start(context, "あい")
     check(bunsetsu.display(context) == "愛", "unlearned dictionary costs lead initially")
-    for round = 1, 16 do
+    for round = 1, 64 do
         bunsetsu.start(context, "あい")
         if #bunsetsu.state(context).clauses == 1 then bunsetsu.resize(context, -1) end
         check(select_clause_text(bunsetsu, context, 1, "亜") and select_clause_text(bunsetsu, context, 2, "伊"),
@@ -371,7 +494,7 @@ do
     check(#bunsetsu.state(context).clauses == 1, "boundary history is not generalized to a different full reading")
 end
 
-print("== 7. partial multiword histories affect both analysis and candidate rank")
+print("== 7. partial multiword histories keep working in candidate rank inside a longer reading")
 do
     local dictionary = {
         { surface = "あい", candidate = "愛", left_id = 1, right_id = 1, cost = 100 },
@@ -390,6 +513,25 @@ do
         check(histories[1].commit_count == 8 and histories[1].text == "亜伊" .. suffix,
             "learning a longer reading preserves the old partial record without inferred ids or boundaries")
     end
+end
+
+print("== 7b. partial histories from another reading do not move the automatic segmentation")
+do
+    local dictionary = {
+        { surface = "あいう", candidate = "愛宇", left_id = 1, right_id = 1, cost = 100 },
+        { surface = "あ", candidate = "亜", left_id = 2, right_id = 2, cost = 100 },
+        { surface = "い", candidate = "伊", left_id = 3, right_id = 3, cost = 100 },
+        { surface = "う", candidate = "宇", left_id = 4, right_id = 4, cost = 100 },
+    }
+    local histories = { { surface = "あい", text = "亜伊|1851 1851\tp2:c あ,亜,2,2;い,伊,3,3", commit_count = 64 } }
+    local bunsetsu, context = pos_engine(dictionary, pos_matrix({1, 2, 3, 4}), histories,
+        function(right_id, left_id) return right_id == 3 and left_id == 4 end)
+    bunsetsu.start(context, "あいう")
+    local clauses = bunsetsu.state(context).clauses
+    check(#clauses == 1 and clauses[1].reading == "あいう",
+        "a heavily confirmed shorter-reading vocabulary keeps the dictionary segmentation of the longer reading")
+    check(select_clause_text(bunsetsu, context, 1, "亜伊宇"),
+        "the partial multiword route stays selectable as a candidate of the single clause")
 end
 
 print("== 8. a finite learning score can lose to a different connection context")
@@ -1161,9 +1303,10 @@ do
         if choice.text == "亜伊" and choice.left_id == 1851 then learned_own = choice.own end
         if choice.text == "亜伊" and choice.left_id == 1898 then other_own = choice.own end
     end
-    check(#selected_route(bunsetsu, context) == 2 and bunsetsu.display(context) == "亜伊"
-        and learned_own == 5100 - 10000 and other_own == 5100,
-        "only the trained word identity receives the finite history discount inside the multiword route")
+    local subword_discount = math.floor(10000 * (1 * 2) / (2 * 3))
+    check(#selected_route(bunsetsu, context) == 2 and bunsetsu.display(context) == "阿伊"
+        and learned_own == 5100 - subword_discount and other_own == 5100,
+        "only the trained word identity receives the coverage-scaled discount inside the multiword route")
 end
 
 print("== 32. legacy partial histories retain stored rows and actual words at every interval position")
