@@ -7,6 +7,7 @@ local variants = require("kagiroi/char_variants")
 local segmenter_loaded, segmenter = pcall(require, "kagiroi/segmenter")
 
 local kContextualDiscoveryLimit = 30
+local kKanjiCandidateId = 1920
 local kHistoryIds = "1851 1851"
 local kHistoryMarker = "\tp2"
 local kLearningScale = 10000
@@ -923,7 +924,9 @@ local function attach_contextual_costs(candidates, reading, env, context)
     local route_cache = {}
     attach_pair_routes(candidates, reading, env, starting, route_cache)
     for index = #candidates, 1, -1 do
-        if candidates[index].entry and not candidates[index].route_words then table.remove(candidates, index) end
+        local choice = candidates[index]
+        local kanji = choice.left_id == kKanjiCandidateId and choice.right_id == kKanjiCandidateId
+        if choice.entry and not choice.route_words and not kanji then table.remove(candidates, index) end
     end
     context = context or { at_start = true, at_end = true }
     local enumerated = ranked_path_enum(reading, env, context, stock_texts, starting)

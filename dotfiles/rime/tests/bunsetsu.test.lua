@@ -214,6 +214,36 @@ do
     end
 end
 
+print("== 1a. phrase-backed kanji candidates survive without normal dictionary routes")
+do
+    local dictionary = {
+        { surface = "か", candidate = "化", left_id = 1851, right_id = 1851, cost = 100 },
+    }
+    local readings = {
+        ["か"] = {
+            { text = "果", phrase = { text = "果|1920 1920", custom_code = "か " } },
+            { text = "化", phrase = { text = "化|1851 1851", custom_code = "か " } },
+            { text = "幻", phrase = { text = "幻|1920 999", custom_code = "か " } },
+            { text = "花", phrase = { text = "花|1920 1920", custom_code = "か " } },
+            { text = "カ" },
+        },
+    }
+    local bunsetsu, context = new_engine(dictionary, pos_matrix({ 1851, 1920, 999 }), readings)
+    bunsetsu.start(context, "か")
+    local clause = bunsetsu.state(context).clauses[1]
+    local displayed = {}
+    for _, choice in ipairs(clause.candidates) do displayed[#displayed + 1] = choice.text end
+    check(table.concat(displayed, "|") == "化|果|花|カ",
+        "scored routes lead while phrase-backed kanji retain their order and invalid phrases disappear")
+    check(select_clause_text(bunsetsu, context, 1, "果"),
+        "the kanji translator's whole-reading candidate remains selectable")
+    check(selected_route(bunsetsu, context) == nil,
+        "a kanji candidate without a normal dictionary route remains unscored")
+    bunsetsu.render(context)
+    check(clause.candidates[clause.selected].text == "果",
+        "publishing the menu preserves the selected kanji candidate")
+end
+
 print("== 2. identical text keeps the best full route and learns only its middle ids")
 do
     local dictionary = {
