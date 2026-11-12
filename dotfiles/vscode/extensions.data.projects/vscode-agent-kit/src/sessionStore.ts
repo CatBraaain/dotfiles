@@ -26,19 +26,24 @@ export async function sessionFileExists(filePath: string): Promise<boolean> {
  * saved conversations from `pi-mux history`. Live entries win on conflicts.
  * A session counts as archived when no normal live Pi carries its ID.
  */
-export async function listSessionSnapshot(mux: PiMux, workspaces: readonly PiMuxWorkspace[]) {
+export async function listSessionSnapshot(
+  mux: PiMux,
+  workspaces: readonly PiMuxWorkspace[],
+  fileCreationTimeMs: (filePath: string) => Promise<number | null> = statCreationTimeMs,
+) {
   const registeredCwds = workspaces.map(({ cwd }) => cwd);
   const registered = new Set(registeredCwds);
   const history = registeredCwds.length === 0 ? [] : await mux.history();
+  const savedEntries = history.filter((entry) => registered.has(entry.cwd));
+  const creationTimes = await Promise.all(savedEntries.map(({ file }) => fileCreationTimeMs(file)));
   const summaries = new Map<string, SessionSummary>();
-  for (const entry of history) {
-    if (!registered.has(entry.cwd)) continue;
+  for (const [index, entry] of savedEntries.entries()) {
     summaries.set(entry.id, {
       sessionId: entry.id,
       filePath: entry.file,
       cwd: entry.cwd,
       displayName: entry.title ?? "Untitled",
-      createdAtMs: entry.mtime,
+      createdAtMs: creationTimes[index],
       updatedAtMs: entry.mtime,
     });
   }
@@ -71,4 +76,13 @@ export async function listSessionSnapshot(mux: PiMux, workspaces: readonly PiMux
         .map(({ sessionId }) => sessionId),
     ),
   };
+}
+
+/** Creation time (birth time) of a file in epoch ms; null when unavailable. */
+async function statCreationTimeMs(filePath: string): Promise<number | null> {
+  try {
+    return (await stat(filePath)).birthtimeMs;
+  } catch {
+    return null;
+  }
 }
