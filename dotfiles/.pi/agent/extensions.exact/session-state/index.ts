@@ -91,6 +91,7 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
     enqueuePublication(gen, async () => {
       try {
         while (!gen.controller.signal.aborted && gen.binding) {
+          gen.lastPublished = undefined;
           const outcome = await publishState(gen.run, gen.binding, sessionId, state, title);
           if (publicationProcess[PUBLICATION_STOPPED] || gen.controller.signal.aborted) return;
           if (outcome.status !== "busy") {

@@ -968,6 +968,54 @@ describe("session-state MVP state boundaries", () => {
   });
 });
 
+describe("session-state partial publication recovery", () => {
+  for (const title of [undefined, "Latest title"]) {
+    it(`republishes settled state after a partial running failure with ${title ? "a saved title" : "no title"}`, async () => {
+      const h = await createExtensionHarness();
+      try {
+        h.sessionName = title;
+        const waitingValue = stateOptionValue("s1", "waiting-user", title ?? null);
+        const runningValue = stateOptionValue("s1", "running", title ?? null);
+        await h.emit("session_start");
+        await waitFor("initial publication", () => h.server.paneOptionOf("%0") === waitingValue);
+        await finishEventLoopTurn();
+        h.server.responses.state = () => {
+          h.server.setPaneOption("%0", runningValue);
+          return completedResult("snapshot update failed after publishing running", true);
+        };
+        await h.emit("agent_start");
+        await waitFor("publication failure", () =>
+          h.notifications.some((notice) => notice.message.includes("cannot publish")),
+        );
+        await finishEventLoopTurn();
+        assert.equal(h.server.paneOptionOf("%0"), runningValue);
+        delete h.server.responses.state;
+
+        await h.emit("agent_settled");
+        await waitFor("settled publication", () => h.server.paneOptionOf("%0") === waitingValue);
+        await finishEventLoopTurn();
+        const requests = stateArguments(h.server.commands);
+        assert.deepEqual(
+          requests.map((args) => args[3]),
+          ["waiting-user", "running", "waiting-user"],
+        );
+        assert.deepEqual(
+          requests.map((args) => JSON.parse(args[args.indexOf("--title") + 1]!)),
+          [title ?? null, title ?? null, title ?? null],
+        );
+        const count = h.server.commands.length;
+        await h.emit("agent_settled");
+        await h.emit("session_info_changed", { name: title });
+        await finishEventLoopTurn();
+        assert.equal(h.server.commands.length, count);
+      } finally {
+        delete h.server.responses.state;
+        await h.close();
+      }
+    });
+  }
+});
+
 describe("session-state lock retry", () => {
   it("keeps a contended running notification ahead of later waiting and title notifications", async () => {
     const h = await createExtensionHarness();
