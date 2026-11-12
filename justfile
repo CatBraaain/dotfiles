@@ -45,6 +45,7 @@ test-rime:
     lua5.4 tests/default_config.test.lua default.custom.yaml
     lua5.4 tests/weasel_config.test.lua weasel.custom.yaml
     lua5.4 tests/fcitx5_config.test.lua ../fcitx5/conf/rime.conf ../remap.data.md
+    lua5.4 tests/kagiroi_config.test.lua kagiroi.custom.yaml lua/kagiroi/candidate_gate.lua "$generated/lua/kagiroi/zenkaku_text.lua"
     bash tests/rime/run.sh
 
 diff:
