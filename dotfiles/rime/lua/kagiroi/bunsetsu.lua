@@ -922,6 +922,9 @@ local function attach_contextual_costs(candidates, reading, env, context)
     attach_histories(starting, env)
     local route_cache = {}
     attach_pair_routes(candidates, reading, env, starting, route_cache)
+    for index = #candidates, 1, -1 do
+        if candidates[index].entry and not candidates[index].route_words then table.remove(candidates, index) end
+    end
     context = context or { at_start = true, at_end = true }
     local enumerated = ranked_path_enum(reading, env, context, stock_texts, starting)
     if enumerated then
