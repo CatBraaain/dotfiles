@@ -1,23 +1,23 @@
 import * as vscode from "vscode";
 import { homedir } from "node:os";
 import type { PiSession } from "./piMux";
-import type { TmuxRuntimeStore } from "./tmux";
 
-const OWNER_KEY = "PI_SESSIONS_DISPLAY_SOCKET";
+const OWNER_KEY = "PI_SESSIONS_DISPLAY";
+const OWNER_VALUE = "1";
 
 export interface DisplayTerminals {
   find(): vscode.Terminal | undefined;
   create(session: PiSession): vscode.Terminal;
 }
 
-export function editorTerminals(tmux: TmuxRuntimeStore): DisplayTerminals {
+export function editorTerminals(): DisplayTerminals {
   return {
     find() {
       return vscode.window.terminals.find((terminal) => {
         const options = terminal.creationOptions;
         return (
           "env" in options &&
-          options.env?.[OWNER_KEY] === tmux.socketPath &&
+          options.env?.[OWNER_KEY] === OWNER_VALUE &&
           terminal.exitStatus === undefined
         );
       });
@@ -30,7 +30,7 @@ export function editorTerminals(tmux: TmuxRuntimeStore): DisplayTerminals {
         shellArgs: session.temporary
           ? ["open", "--temporary", session.sessionId]
           : ["open", session.sessionId],
-        env: { [OWNER_KEY]: tmux.socketPath, TMUX: null, TMUX_PANE: null },
+        env: { [OWNER_KEY]: OWNER_VALUE, TMUX: null, TMUX_PANE: null },
         isTransient: false,
       });
     },

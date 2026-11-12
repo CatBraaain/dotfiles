@@ -1,7 +1,6 @@
 import type * as vscode from "vscode";
-import { flattenPiMuxSessions, type PiMux } from "./piMux";
+import type { PiMux, PiMuxWorkspace } from "./piMux";
 import { realpath } from "node:fs/promises";
-import { isAbsolute } from "node:path";
 import { errorMessage } from "./guards";
 import { sessionFileExists } from "./sessionStore";
 import { requireWorkDirectory, sameWorkDirectory } from "./workDirectory";
@@ -110,20 +109,9 @@ export class EmptySessionPool implements vscode.Disposable {
   private async track(slot: WorkspaceSlot, sessionId: string): Promise<void> {
     const cwd = this.registeredCwd(slot);
     if (this.consumed.has(sessionId) || cwd === undefined) return;
-    const session = flattenPiMuxSessions(await this.deps.mux.list()).find(
-      (entry) => entry.id === sessionId,
-    );
+    const file = await findPlannedSessionFile(await this.deps.mux.list(), sessionId, cwd);
     if (this.registeredCwd(slot) === undefined || this.consumed.has(sessionId)) return;
-    if (
-      session?.file === null ||
-      session === undefined ||
-      !isAbsolute(session.file) ||
-      !(await sameWorkDirectory(session.cwd, cwd))
-    ) {
-      throw new Error(`Cannot locate the session file for Pi ${sessionId} in ${cwd}`);
-    }
-    if (this.registeredCwd(slot) === undefined || this.consumed.has(sessionId)) return;
-    const empty = { id: sessionId, file: session.file };
+    const empty = { id: sessionId, file };
     slot.sessions.set(sessionId, empty);
     await this.consumeSaved(slot, empty);
   }
@@ -148,4 +136,21 @@ export class EmptySessionPool implements vscode.Disposable {
   private report(cwd: string, error: unknown): void {
     if (!this.disposed) this.deps.onError(`Empty Pi session in ${cwd}: ${errorMessage(error)}`);
   }
+}
+
+/** Resolve the planned file path of a prewarmed session: the `empty` entry,
+ * or the saved `sessions` entry when the conversation file appeared before tracking. */
+async function findPlannedSessionFile(
+  workspaces: readonly PiMuxWorkspace[],
+  sessionId: string,
+  cwd: string,
+): Promise<string> {
+  for (const workspace of workspaces) {
+    if (!(await sameWorkDirectory(workspace.cwd, cwd))) continue;
+    const empty = workspace.empty.find(({ id }) => id === sessionId);
+    if (empty !== undefined) return empty.file;
+    const saved = workspace.sessions.find(({ id }) => id === sessionId);
+    if (saved !== undefined) return saved.file;
+  }
+  throw new Error(`Cannot locate the session file for Pi ${sessionId} in ${cwd}`);
 }

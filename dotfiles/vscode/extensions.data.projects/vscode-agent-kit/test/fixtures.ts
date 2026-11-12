@@ -50,18 +50,3 @@ export function messageEntry(
     ...overrides,
   };
 }
-
-/** A session_info entry line with overrides. */
-export function sessionInfoEntry(
-  name: unknown,
-  overrides: Record<string, unknown> = {},
-): Record<string, unknown> {
-  return {
-    type: "session_info",
-    id: "e2",
-    parentId: "e1",
-    timestamp: "2024-12-03T14:00:02.000Z",
-    name,
-    ...overrides,
-  };
-}

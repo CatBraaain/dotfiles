@@ -16,7 +16,6 @@ const LIST_REFRESH_INTERVAL_MS = 1_000;
 
 export interface SessionWebviewDeps {
   extensionUri: string;
-  sessionDir: string;
   /** Session state store, shared with the pi extension `session-state`. */
   statePath: string;
   registry: TerminalRegistry;
@@ -158,7 +157,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         return;
       }
       const { sessions, registeredCwds, archivedIds } = await listSessionSnapshot(
-        this.deps.sessionDir,
+        this.deps.registry.mux,
         workspaces,
       );
       if (this.disposed || !this.view?.visible || version !== this.refreshVersion) return;
@@ -292,7 +291,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       confirmedDisplay = await this.deps.registry.displayForSession(sessionId);
       if (confirmedDisplay !== undefined) {
         const snapshot = await listSessionSnapshot(
-          this.deps.sessionDir,
+          this.deps.registry.mux,
           await this.deps.registry.mux.list(),
         );
         replacement = archiveReplacement(snapshot.sessions, snapshot.archivedIds, session);

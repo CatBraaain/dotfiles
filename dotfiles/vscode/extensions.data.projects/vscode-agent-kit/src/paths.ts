@@ -1,5 +1,4 @@
-import { join, resolve } from "node:path";
-
+import { join } from "node:path";
 /** Environment variables used to locate Pi's agent and session directories. */
 export interface PiPathEnv {
   PI_CODING_AGENT_DIR?: string | undefined;
@@ -25,15 +24,4 @@ export function resolveSessionDir(env: PiPathEnv, homeDir: string): string {
  * sent message and phase change. */
 export function sessionStatePath(agentDir: string): string {
   return join(agentDir, "session-state.json");
-}
-
-/**
- * Encode a cwd into Pi's session group directory name:
- * leading separator stripped, then every `/`, `\`, and `:` replaced with `-`,
- * wrapped in `--`/`--`. Mirrors pi's getDefaultSessionDirPath.
- * e.g. "/home/username" -> "--home-username--".
- */
-export function encodeCwdDirName(cwd: string): string {
-  const resolved = resolve(cwd);
-  return `--${resolved.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 }

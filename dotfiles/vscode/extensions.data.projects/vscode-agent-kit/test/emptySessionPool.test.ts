@@ -3,7 +3,7 @@ import { mkdir, readFile, realpath, symlink, writeFile } from "node:fs/promises"
 import { join } from "node:path";
 import { EmptySessionPool } from "../src/emptySessionPool";
 import * as workDirectory from "../src/workDirectory";
-import { PiMux, type PiMuxSession } from "../src/piMux";
+import { PiMux, type PiMuxEmptySession, type PiMuxSession } from "../src/piMux";
 import { SessionLauncher } from "../src/launcher";
 import { TerminalRegistry } from "../src/terminalRegistry";
 import { editorTerminals } from "../src/terminals";
@@ -78,13 +78,14 @@ async function register(cwds: string[]) {
 }
 
 function listWorkspaces() {
-  const sessionsByCwd = new Map<string, PiMuxSession[]>();
+  const sessionsByCwd = new Map<string, { saved: PiMuxSession[]; empty: PiMuxEmptySession[] }>();
   for (const { cwd, ...session } of live.values()) {
-    const sessions = sessionsByCwd.get(cwd) ?? [];
-    sessions.push(session);
-    sessionsByCwd.set(cwd, sessions);
+    const entry = sessionsByCwd.get(cwd) ?? { saved: [], empty: [] };
+    if (saved.has(session.file)) entry.saved.push(session);
+    else entry.empty.push({ id: session.id, file: session.file });
+    sessionsByCwd.set(cwd, entry);
   }
-  return [...sessionsByCwd].map(([cwd, sessions]) => ({ cwd, sessions }));
+  return [...sessionsByCwd].map(([cwd, { saved: sessions, empty }]) => ({ cwd, sessions, empty }));
 }
 
 function newCalls() {
@@ -428,11 +429,7 @@ describe("EmptySessionPool", () => {
     await register([root]);
     await vi.waitFor(() => expect(newCalls()).toHaveLength(1));
     const runtimes = fakeRuntimes();
-    const registry = new TerminalRegistry(
-      runtimes.store,
-      editorTerminals(runtimes.store),
-      runtimes.mux,
-    );
+    const registry = new TerminalRegistry(editorTerminals(), runtimes.mux);
     const pid = deferred<number>();
     const terminal = { processId: pid.promise, show: vi.fn(), dispose: vi.fn() };
     api.createTerminal.mockReturnValue(terminal);

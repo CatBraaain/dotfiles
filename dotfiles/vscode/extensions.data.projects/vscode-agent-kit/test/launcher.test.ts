@@ -29,7 +29,7 @@ beforeEach(async () => {
   root = await tempDir("pi-launcher-test-");
   processId = Promise.resolve(123);
   runtimes = fakeRuntimes();
-  registry = new TerminalRegistry(runtimes.store, editorTerminals(runtimes.store), runtimes.mux);
+  registry = new TerminalRegistry(editorTerminals(), runtimes.mux);
   api.createTerminal.mockImplementation((creationOptions: vscode.TerminalOptions) => {
     const terminal = {
       creationOptions,
@@ -38,7 +38,10 @@ beforeEach(async () => {
       dispose: vi.fn(() => registry.onTerminalClosed(terminal as unknown as vscode.Terminal)),
     };
     const args = creationOptions.shellArgs as string[];
-    runtimes.mocks.open({ sessionId: args[1], cwd: root });
+    runtimes.mocks.open({
+      sessionId: args[1],
+      cwd: runtimes.live.get(args[1])?.cwd ?? root,
+    });
     return terminal;
   });
   onSessionStarted = vi.fn();
@@ -122,7 +125,7 @@ describe("SessionLauncher", () => {
     expect(stateIds()).toEqual(new Set(["new-1"]));
   });
 
-  it.each(["newSession", "list", "clients"] as const)(
+  it.each(["newSession", "list", "current"] as const)(
     "shows an existing Terminal before unresolved %s and registers only after attachment",
     async (method) => {
       const terminal = await existingDisplay();
@@ -146,17 +149,17 @@ describe("SessionLauncher", () => {
     async (otherCwd) => {
       const nextCwd = otherCwd ? join(root, "other") : root;
       if (otherCwd) await mkdir(nextCwd);
-      const gate = deferred<Awaited<ReturnType<typeof runtimes.store.clients>>>();
-      runtimes.mocks.clients.mockReturnValueOnce(gate.promise);
+      const gate = deferred<Awaited<ReturnType<typeof runtimes.mux.current>>>();
+      runtimes.mocks.current.mockReturnValueOnce(gate.promise);
       const first = launcher.start(root);
-      await vi.waitFor(() => expect(runtimes.mocks.clients).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(runtimes.mocks.current).toHaveBeenCalledOnce());
       const terminal = api.createTerminal.mock.results[0].value;
       const second = launcher.start(nextCwd);
       await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledOnce());
       expect(api.createTerminal).toHaveBeenCalledOnce();
       expect(stateIds()).toEqual(new Set());
       expect(registry.displayedSessionId).toBeUndefined();
-      gate.resolve([runtimes.client]);
+      gate.resolve(undefined);
       await Promise.all([first, second]);
       expect(onSessionStarted.mock.calls.map(([id]) => id)).toEqual(["new-1", "new-2"]);
       expect(registry.displayedSessionId).toBe("new-2");
@@ -191,7 +194,7 @@ describe("SessionLauncher", () => {
     await launcher.start(other);
     await launcher.start(root);
     expect(api.createTerminal).toHaveBeenCalledOnce();
-    expect(runtimes.mocks.switchClient.mock.calls.map(([, runtime]) => runtime.sessionId)).toEqual([
+    expect(runtimes.mocks.switch.mock.calls.map(([sessionId]) => sessionId)).toEqual([
       "new-1",
       "new-2",
     ]);
@@ -199,27 +202,27 @@ describe("SessionLauncher", () => {
     expect(onSessionStarted.mock.calls.map(([id]) => id)).toEqual(["new-1", "new-2"]);
   });
 
-  it("shows another click immediately while an earlier switch-client is unresolved", async () => {
+  it("shows another click immediately while an earlier switch is unresolved", async () => {
     const terminal = await existingDisplay();
-    const switching = deferred<void>();
-    runtimes.mocks.switchClient.mockReturnValueOnce(switching.promise);
+    const switching = deferred<boolean>();
+    runtimes.mocks.switch.mockReturnValueOnce(switching.promise);
     const first = launcher.start(root);
-    await vi.waitFor(() => expect(runtimes.mocks.switchClient).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(runtimes.mocks.switch).toHaveBeenCalledOnce());
     const second = launcher.start(root);
     await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledTimes(2));
     expect(registry.displayedSessionId).toBe("old");
     expect(stateIds()).toEqual(new Set());
-    switching.resolve();
+    switching.resolve(true);
     await Promise.all([first, second]);
     expect(onSessionStarted.mock.calls.map(([id]) => id)).toEqual(["new-1", "new-2"]);
   });
 
-  it("preserves the old display and membership when switch-client fails", async () => {
+  it("preserves the old display and membership when switch fails", async () => {
     const terminal = await existingDisplay();
-    runtimes.mocks.switchClient.mockRejectedValueOnce(new Error("switch failed"));
+    runtimes.mocks.switch.mockRejectedValueOnce(new Error("switch failed"));
     await expect(launcher.start(root)).rejects.toThrow("switch failed");
     expect(registry.displayedSessionId).toBe("old");
-    expect(runtimes.client.target).toBe("pi-old");
+    expect(runtimes.client.attachedId).toBe("old");
     expect(stateIds()).toEqual(new Set());
     expect(terminal.dispose).not.toHaveBeenCalled();
     expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
@@ -256,11 +259,11 @@ describe("SessionLauncher", () => {
     expect(api.createTerminal).toHaveBeenCalledOnce();
     expect(runtimes.live.size).toBe(1);
     expect(stateIds()).toEqual(new Set(["new-1"]));
-    expect(runtimes.mocks.switchClient).not.toHaveBeenCalled();
+    expect(runtimes.mocks.switch).not.toHaveBeenCalled();
   });
 
   it("closes a failed cold Terminal without registering, refreshing, or killing Pi", async () => {
-    runtimes.mocks.clients.mockRejectedValueOnce(new Error("attachment failed"));
+    runtimes.mocks.current.mockRejectedValueOnce(new Error("attachment failed"));
     await expect(launcher.start(root)).rejects.toThrow("attachment failed");
     expect(api.createTerminal.mock.results[0].value.dispose).toHaveBeenCalledOnce();
     expect(stateIds()).toEqual(new Set());

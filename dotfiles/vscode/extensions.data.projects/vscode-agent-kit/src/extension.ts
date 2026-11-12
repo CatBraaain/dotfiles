@@ -6,7 +6,6 @@ import { EmptySessionPool } from "./emptySessionPool";
 import { resolveAgentDir, resolveSessionDir, sessionStatePath } from "./paths";
 import { TerminalRegistry } from "./terminalRegistry";
 import { editorTerminals } from "./terminals";
-import { TmuxRuntimeStore, piMuxSocketPath } from "./tmux";
 import { SessionWebviewProvider, VIEW_ID } from "./webview/sessionWebviewProvider";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -14,8 +13,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const agentDir = resolveAgentDir(process.env, homeDir);
   const sessionDir = resolveSessionDir(process.env, homeDir);
   const statePath = sessionStatePath(agentDir);
-  const tmux = new TmuxRuntimeStore(piMuxSocketPath());
-  const registry = new TerminalRegistry(tmux, editorTerminals(tmux));
+  const registry = new TerminalRegistry(editorTerminals());
 
   context.subscriptions.push(
     vscode.window.onDidCloseTerminal((closed) => registry.onTerminalClosed(closed)),
@@ -35,7 +33,6 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   const provider = new SessionWebviewProvider({
     extensionUri: context.extensionUri.fsPath,
-    sessionDir,
     statePath,
     registry,
     startNewSession: (cwd) => launcher.start(cwd),

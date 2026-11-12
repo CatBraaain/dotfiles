@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolve } from "node:path";
-import {
-  encodeCwdDirName,
-  sessionStatePath,
-  resolveAgentDir,
-  resolveSessionDir,
-} from "../src/paths";
+import { sessionStatePath, resolveAgentDir, resolveSessionDir } from "../src/paths";
 
 describe("directory resolution", () => {
   it("defaults to ~/.pi/agent and <agentDir>/sessions", () => {
@@ -33,27 +27,5 @@ describe("directory resolution", () => {
 
   it("places the session state store at <agentDir>/session-state.json", () => {
     expect(sessionStatePath("/custom/agent")).toBe("/custom/agent/session-state.json");
-  });
-});
-
-describe("encodeCwdDirName (pi-compatible group directory names)", () => {
-  it("matches pi's encoding for ordinary paths", () => {
-    expect(encodeCwdDirName("/home/username")).toBe("--home-username--");
-    expect(encodeCwdDirName("/home/username/projects/vscode-pi-sessions")).toBe(
-      "--home-username-projects-vscode-pi-sessions--",
-    );
-  });
-
-  it("replaces colons and backslashes", () => {
-    expect(encodeCwdDirName("/a/b:c")).toBe("--a-b-c--");
-    expect(encodeCwdDirName("/a\\b")).toBe("--a-b--");
-  });
-
-  it("encodes the root path as ----", () => {
-    expect(encodeCwdDirName("/")).toBe("----");
-  });
-
-  it("resolves relative paths before encoding", () => {
-    expect(encodeCwdDirName("foo")).toBe(encodeCwdDirName(resolve("foo")));
   });
 });

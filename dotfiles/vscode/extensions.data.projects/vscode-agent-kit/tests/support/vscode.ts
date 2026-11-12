@@ -15,11 +15,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { encodeCwdDirName } from "../../src/paths";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
 const root = resolve(__dirname, "../..");
+
+/** Encode a cwd into pi's session group directory name (e.g. "/a/b" -> "--a-b--"). */
+function encodeCwdDirName(cwd: string): string {
+  const stripped = resolve(cwd)
+    .replace(/^[/\\]/, "")
+    .replace(/[/\\:]/g, "-");
+  return `--${stripped}--`;
+}
 const dotfiles = process.env.PI_REVIEW_DOTFILES ?? join(homedir(), "projects/dotfiles/dotfiles");
 const realPi = execFileSync("which", ["pi"], { encoding: "utf8" }).trim();
 const realTmux = execFileSync("which", ["tmux"], { encoding: "utf8" }).trim();

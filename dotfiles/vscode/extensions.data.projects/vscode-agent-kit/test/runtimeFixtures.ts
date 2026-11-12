@@ -1,7 +1,15 @@
 import { vi } from "vitest";
-import type { PiRuntime, TmuxClient, TmuxRuntimeStore } from "../src/tmux";
-import type { PiMux, PiMuxWorkspace, PiSession } from "../src/piMux";
+import type {
+  PiMux,
+  PiMuxCurrentSession,
+  PiMuxHistoryEntry,
+  PiMuxWorkspace,
+  PiRuntime,
+  PiSession,
+} from "../src/piMux";
 
+/** CLI-shaped runtime fixture: one tmux client whose attachment the mocks move
+ * between sessions through `current` and `switch`, mirroring pi-mux behavior. */
 export function fakeRuntimes() {
   const live = new Map<string, PiRuntime>();
   const phases = new Map<string, string | null>();
@@ -9,7 +17,13 @@ export function fakeRuntimes() {
   const files = new Map<string, string>();
   const titles = new Map<string, string | null>();
   const temporary = new Set<string>();
-  const client = { pid: 123, name: "/dev/fixture", target: "" };
+  const emptyIds = new Set<string>();
+  const history = new Map<string, PiMuxHistoryEntry>();
+  const client = {
+    pid: 123,
+    parentPid: undefined as number | undefined,
+    attachedId: undefined as string | undefined,
+  };
   const open = vi.fn((session: PiSession) => {
     if (session.temporary) {
       if (!live.has(session.sessionId)) temporary.add(session.sessionId);
@@ -19,7 +33,7 @@ export function fakeRuntimes() {
       target: `pi-${session.sessionId}`,
     };
     live.set(session.sessionId, runtime);
-    client.target = runtime.target;
+    client.attachedId = runtime.sessionId;
     return runtime;
   });
   const muxMocks = {
@@ -41,12 +55,19 @@ export function fakeRuntimes() {
       [...new Set([...workspaces, ...[...live.values()].map(({ cwd }) => cwd)])].map((cwd) => ({
         cwd,
         sessions: [...live.values()]
-          .filter((runtime) => runtime.cwd === cwd)
+          .filter((runtime) => runtime.cwd === cwd && !emptyIds.has(runtime.sessionId))
           .map((runtime) => ({
             id: runtime.sessionId,
             file: files.get(runtime.sessionId) ?? `/sessions/${runtime.sessionId}.jsonl`,
             state: phases.get(runtime.sessionId) ?? null,
             title: titles.get(runtime.sessionId) ?? null,
+            ...(temporary.has(runtime.sessionId) ? { temporary: true as const } : {}),
+          })),
+        empty: [...live.values()]
+          .filter((runtime) => runtime.cwd === cwd && emptyIds.has(runtime.sessionId))
+          .map((runtime) => ({
+            id: runtime.sessionId,
+            file: files.get(runtime.sessionId) ?? `/sessions/${runtime.sessionId}.jsonl`,
             ...(temporary.has(runtime.sessionId) ? { temporary: true as const } : {}),
           })),
       })),
@@ -55,35 +76,40 @@ export function fakeRuntimes() {
       async (ids: readonly string[]): Promise<Set<string> | null> =>
         new Set(ids.filter((id) => live.has(id))),
     ),
-  };
-  const tmuxMocks = {
-    socketPath: "/run/user/1000/pi-tmux/server.sock",
-    resolveTarget: vi.fn(async (sessionId: string) => live.get(sessionId)?.target),
-    resolveSession: vi.fn(async (target: string) => {
-      const runtime = [...live.values()].find((entry) => entry.target === target);
-      return runtime === undefined
-        ? undefined
-        : { ...runtime, file: `/sessions/${runtime.sessionId}.jsonl` };
+    switch: vi.fn(async (sessionId: string, clientPid?: number): Promise<boolean> => {
+      if (!clientMatches(clientPid) || !live.has(sessionId)) return false;
+      client.attachedId = sessionId;
+      return true;
     }),
-    resolveClientSessionId: vi.fn(
-      async (displayClient: TmuxClient) =>
-        [...live.values()].find((entry) => entry.target === displayClient.target)?.sessionId,
+    current: vi.fn(async (clientPid?: number): Promise<PiMuxCurrentSession | undefined> => {
+      if (!clientMatches(clientPid) || client.attachedId === undefined) return undefined;
+      const runtime = live.get(client.attachedId);
+      if (runtime === undefined) return undefined;
+      return {
+        id: runtime.sessionId,
+        cwd: runtime.cwd,
+        file: files.get(runtime.sessionId) ?? `/sessions/${runtime.sessionId}.jsonl`,
+        target: runtime.target,
+      };
+    }),
+    history: vi.fn(async (): Promise<PiMuxHistoryEntry[]> =>
+      [...history.values()].sort((a, b) => b.mtime - a.mtime || a.file.localeCompare(b.file)),
     ),
-    clients: vi.fn(async () => [client]),
-    switchClient: vi.fn(async (_client: TmuxClient, runtime: PiRuntime) => {
-      client.target = runtime.target;
-    }),
   };
+  function clientMatches(clientPid: number | undefined): boolean {
+    return client.pid === clientPid || client.parentPid === clientPid;
+  }
   return {
-    store: tmuxMocks as unknown as TmuxRuntimeStore,
     mux: muxMocks as unknown as PiMux,
-    mocks: { ...tmuxMocks, ...muxMocks, open },
+    mocks: { ...muxMocks, open },
     live,
     workspaces,
     files,
     titles,
     phases,
     temporary,
+    emptyIds,
+    history,
     client,
   };
 }

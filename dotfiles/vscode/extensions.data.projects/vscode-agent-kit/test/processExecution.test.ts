@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PiMux } from "../src/piMux";
-import { TmuxRuntimeStore } from "../src/tmux";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -75,10 +74,34 @@ describe("external command environment", () => {
     },
   );
 
-  it("keeps list queries bounded without applying their timeout to lifecycle operations", async () => {
+  it("keeps query commands bounded without applying their timeout to lifecycle operations", async () => {
     processMock.mockResolvedValue({ stdout: "[]\n" });
     expect(await new PiMux().list()).toEqual([]);
     expect(processMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["list"], {
+      cwd: undefined,
+      timeout: 10_000,
+      env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
+    });
+    processMock.mockResolvedValue({
+      stdout: JSON.stringify({ id: "A", cwd: "/p", file: "/f", target: "t" }) + "\n",
+    });
+    await new PiMux().current();
+    expect(processMock).toHaveBeenLastCalledWith("pi-mux", ["current"], {
+      cwd: undefined,
+      timeout: 10_000,
+      env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
+    });
+    processMock.mockResolvedValue({ stdout: "" });
+    await new PiMux().switch("A");
+    expect(processMock).toHaveBeenLastCalledWith("pi-mux", ["switch", "A"], {
+      cwd: undefined,
+      timeout: 10_000,
+      env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
+    });
+    processMock.mockClear();
+    processMock.mockResolvedValue({ stdout: "[]\n" });
+    await new PiMux().history();
+    expect(processMock).toHaveBeenLastCalledWith("pi-mux", ["history"], {
       cwd: undefined,
       timeout: 10_000,
       env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
@@ -156,26 +179,5 @@ describe("external command environment", () => {
       );
       expect(processMock).toHaveBeenCalledOnce();
     });
-  });
-
-  it("uses the exact socket without -f and removes tmux context for direct commands", async () => {
-    vi.stubEnv("TMUX", "/unrelated/socket,1,0");
-    vi.stubEnv("TMUX_PANE", "%9");
-    processMock.mockResolvedValue({ stdout: "" });
-    expect(await new TmuxRuntimeStore("/dedicated/server.sock").clients()).toEqual([]);
-    expect(processMock).toHaveBeenCalledExactlyOnceWith(
-      "tmux",
-      [
-        "-S",
-        "/dedicated/server.sock",
-        "list-clients",
-        "-F",
-        "#{client_pid}\t#{client_name}\t#{session_name}",
-      ],
-      {
-        timeout: 10_000,
-        env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
-      },
-    );
   });
 });

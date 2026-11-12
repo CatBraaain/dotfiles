@@ -1,11 +1,17 @@
 import type * as vscode from "vscode";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { DisplayTerminals } from "./terminals";
-import type { PiRuntime, TmuxClient, TmuxRuntimeStore } from "./tmux";
-import { PiMux, flattenPiMuxSessions, type PiSession } from "./piMux";
+import type { PiMuxCurrentSession, PiRuntime } from "./piMux";
+import { PiMux, hasLiveSession, type PiSession } from "./piMux";
 import { errorMessage } from "./guards";
-import { requireWorkDirectory, sameWorkDirectory } from "./workDirectory";
+import { requireWorkDirectory } from "./workDirectory";
 import { cwdGroupKey } from "./grouping";
+
+/** A display switched to a replacement session; used to roll back on close failure. */
+interface SwitchedDisplay {
+  clientPid: number;
+  previousId: string;
+}
 
 export class TerminalRegistry implements vscode.Disposable {
   private disposed = false;
@@ -22,7 +28,6 @@ export class TerminalRegistry implements vscode.Disposable {
   private readonly closed = new WeakSet<vscode.Terminal>();
 
   constructor(
-    readonly runtimes: TmuxRuntimeStore,
     private readonly terminals: DisplayTerminals,
     readonly mux: PiMux = new PiMux(),
   ) {}
@@ -50,14 +55,9 @@ export class TerminalRegistry implements vscode.Disposable {
     intent: "select" | "unarchive" = "select",
   ): Promise<{ runtime: PiRuntime; terminal: vscode.Terminal }> {
     try {
-      const isAlive = flattenPiMuxSessions(await this.mux.list()).some(
-        (session) => session.id === launch.sessionId,
-      );
-      const target = isAlive ? await this.runtimes.resolveTarget(launch.sessionId) : undefined;
-      if (isAlive && target === undefined) {
-        throw new Error(`Cannot resolve tmux target for session ${launch.sessionId}`);
-      }
-      return await this.connect(launch, intent === "unarchive" ? undefined : target);
+      const workspaces = await this.mux.list();
+      const isAlive = hasLiveSession(workspaces, launch.sessionId);
+      return await this.connect(launch, isAlive && intent === "select");
     } catch (error) {
       throw new Error(`Pi session ${launch.sessionId} in ${launch.cwd}: ${errorMessage(error)}`);
     }
@@ -69,9 +69,7 @@ export class TerminalRegistry implements vscode.Disposable {
     if (this.displayedSession !== undefined) {
       return this.displayedSession === sessionId ? display : undefined;
     }
-    return (await this.resolveRestoredSession(display))?.sessionId === sessionId
-      ? display
-      : undefined;
+    return (await this.resolveRestoredSession(display))?.id === sessionId ? display : undefined;
   }
 
   async stop(
@@ -87,13 +85,13 @@ export class TerminalRegistry implements vscode.Disposable {
     let switchError: string | undefined;
     if (isDisplayed && displayedCwd === undefined && display !== undefined) {
       const restored = await this.resolveRestoredSession(display);
-      displayedCwd = restored?.sessionId === sessionId ? restored?.cwd : undefined;
+      displayedCwd = restored?.id === sessionId ? restored?.cwd : undefined;
     } else if (!isDisplayed && this.displayedSession === undefined && display !== undefined) {
       const restored = await this.resolveRestoredSession(display);
-      isDisplayed = restored?.sessionId === sessionId;
+      isDisplayed = restored?.id === sessionId;
       displayedCwd = isDisplayed ? restored?.cwd : undefined;
     }
-    let switched: { client: TmuxClient; previous: PiRuntime } | undefined;
+    let switched: SwitchedDisplay | undefined;
     if (isDisplayed && display !== undefined && replacement !== undefined) {
       try {
         switched = await this.switchBeforeStop(display, sessionId, replacement, displayedCwd);
@@ -106,7 +104,7 @@ export class TerminalRegistry implements vscode.Disposable {
     } catch (error) {
       if (switched !== undefined) {
         try {
-          await this.runtimes.switchClient(switched.client, switched.previous);
+          await this.mux.switch(switched.previousId, switched.clientPid);
         } catch (rollbackError) {
           throw new Error(
             `${errorMessage(error)}; failed to restore display: ${errorMessage(rollbackError)}`,
@@ -140,7 +138,7 @@ export class TerminalRegistry implements vscode.Disposable {
     sessionId: string,
     replacement: PiSession,
     displayedCwd: string | undefined,
-  ): Promise<{ client: TmuxClient; previous: PiRuntime }> {
+  ): Promise<SwitchedDisplay> {
     if (
       display.exitStatus !== undefined ||
       displayedCwd === undefined ||
@@ -149,19 +147,15 @@ export class TerminalRegistry implements vscode.Disposable {
       throw new Error(`Pi display cwd mismatch for ${replacement.sessionId}`);
     }
     await requireWorkDirectory(replacement.cwd);
-    const target = await this.runtimes.resolveTarget(replacement.sessionId);
-    if (target === undefined)
-      throw new Error(`Pi session is no longer running: ${replacement.sessionId}`);
     const pid = await display.processId;
-    const client = (await this.runtimes.clients()).find(
-      (entry) => entry.pid === pid || entry.parentPid === pid,
-    );
-    if (pid === undefined || client === undefined || this.closed.has(display)) {
+    if (pid === undefined || this.closed.has(display)) {
       throw new Error(`Pi display is no longer attached: ${sessionId}`);
     }
-    const previous = { sessionId, cwd: displayedCwd, target: client.target };
-    await this.runtimes.switchClient(client, { ...replacement, target });
-    return { client, previous };
+    const previous = await this.mux.current(pid);
+    if (previous === undefined) throw new Error(`Pi display is no longer attached: ${sessionId}`);
+    if (!(await this.mux.switch(replacement.sessionId, pid)))
+      throw new Error(`Pi session is no longer running: ${replacement.sessionId}`);
+    return { clientPid: pid, previousId: previous.id };
   }
 
   onTerminalClosed(terminal: vscode.Terminal): void {
@@ -190,14 +184,11 @@ export class TerminalRegistry implements vscode.Disposable {
 
   private async resolveRestoredSession(
     display: vscode.Terminal,
-  ): Promise<(PiRuntime & { file: string }) | undefined> {
+  ): Promise<PiMuxCurrentSession | undefined> {
     try {
       const pid = await display.processId;
       if (pid === undefined) return undefined;
-      const client = (await this.runtimes.clients()).find(
-        (entry) => entry.pid === pid || entry.parentPid === pid,
-      );
-      return client === undefined ? undefined : await this.runtimes.resolveSession(client.target);
+      return await this.mux.current(pid);
     } catch {
       return undefined;
     }
@@ -215,13 +206,13 @@ export class TerminalRegistry implements vscode.Disposable {
     return next;
   }
 
-  private async connect(session: PiSession, target: string | undefined) {
+  private async connect(session: PiSession, reuseDisplay: boolean) {
     const { terminal, created } = await this.changeDisplay(async () => {
       let restored = this.currentDisplay();
       if (restored !== undefined) {
         const options = restored.creationOptions;
         const hasLegacyTitle = options.name === "Pi" && restored.name === "Pi";
-        if (restored.exitStatus !== undefined || hasLegacyTitle || target === undefined) {
+        if (restored.exitStatus !== undefined || hasLegacyTitle || !reuseDisplay) {
           await this.closeDisplay(restored);
           restored = undefined;
         }
@@ -229,12 +220,10 @@ export class TerminalRegistry implements vscode.Disposable {
       this.requireActive();
       const terminal = restored ?? this.terminals.create(session);
       this.display = terminal;
-
       return { terminal, created: restored === undefined };
     });
     try {
-      const { client, runtime } = await this.waitForClient(terminal, session, target);
-      if (client.target !== runtime.target) await this.runtimes.switchClient(client, runtime);
+      const runtime = await this.waitForClient(terminal, session);
       this.requireActive();
       if (this.closed.has(terminal)) throw new Error("Pi display closed during attachment");
       this.displayedSession = runtime.sessionId;
@@ -263,7 +252,7 @@ export class TerminalRegistry implements vscode.Disposable {
     }
   }
 
-  private async waitForClient(terminal: vscode.Terminal, session: PiSession, target?: string) {
+  private async waitForClient(terminal: vscode.Terminal, session: PiSession): Promise<PiRuntime> {
     this.requireActive();
     const controller = new AbortController();
     const closed = new Promise<never>((_resolve, reject) => {
@@ -275,10 +264,7 @@ export class TerminalRegistry implements vscode.Disposable {
     try {
       if (this.closed.has(terminal))
         controller.abort(new Error("Pi display closed during attachment"));
-      return await Promise.race([
-        this.pollClient(terminal, session, target, controller.signal),
-        closed,
-      ]);
+      return await Promise.race([this.pollClient(terminal, session, controller.signal), closed]);
     } finally {
       controller.abort();
       this.attachments.delete(terminal);
@@ -288,38 +274,33 @@ export class TerminalRegistry implements vscode.Disposable {
   private async pollClient(
     terminal: vscode.Terminal,
     session: PiSession,
-    target: string | undefined,
     signal: AbortSignal,
-  ) {
+  ): Promise<PiRuntime> {
     const pid = await terminal.processId;
     signal.throwIfAborted();
     if (pid === undefined) throw new Error(`Pi display process did not start in ${session.cwd}`);
     while (terminal.exitStatus === undefined) {
       signal.throwIfAborted();
-      const [clients, resolvedTarget] = await Promise.all([
-        this.runtimes.clients(),
-        target ?? this.runtimes.resolveTarget(session.sessionId),
-      ]);
+      const current = await this.mux.current(pid);
       signal.throwIfAborted();
       if (terminal.exitStatus !== undefined) break;
-      const client = clients.find((entry) => entry.pid === pid || entry.parentPid === pid);
-      if (client !== undefined) {
-        const runtime =
-          resolvedTarget === undefined
-            ? undefined
-            : { cwd: session.cwd, sessionId: session.sessionId, target: resolvedTarget };
-        signal.throwIfAborted();
-        if (runtime !== undefined && runtime.target !== undefined) {
-          if (!(await sameWorkDirectory(runtime.cwd, session.cwd)))
-            throw new Error(`Pi display cwd mismatch: ${runtime.cwd} (expected ${session.cwd})`);
-          signal.throwIfAborted();
-          return { client, runtime: { ...runtime, cwd: session.cwd } };
-        }
-      }
+      const runtime = await this.runtimeFor(current, session, pid);
+      if (runtime !== undefined) return runtime;
       await sleep(50, undefined, { signal });
     }
-    throw new Error(
-      `Pi display exited before attaching pid=${pid} in ${session.cwd} (${this.runtimes.socketPath})`,
-    );
+    throw new Error(`Pi display exited before attaching pid=${pid} in ${session.cwd}`);
+  }
+
+  /** Interpret `pi-mux current`: a matching session attaches; anything else switches first. */
+  private async runtimeFor(
+    current: PiMuxCurrentSession | undefined,
+    session: PiSession,
+    clientPid: number,
+  ): Promise<PiRuntime | undefined> {
+    if (current?.id !== session.sessionId) {
+      await this.mux.switch(session.sessionId, clientPid);
+      return undefined;
+    }
+    return { sessionId: session.sessionId, cwd: session.cwd, target: current.target };
   }
 }
