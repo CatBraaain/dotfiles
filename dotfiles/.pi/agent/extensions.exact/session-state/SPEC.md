@@ -19,9 +19,9 @@
 
 ## 所属・復元との境界
 
-セッション一覧の正本は `pi-mux list` とし、復元用JSONの読込み・更新はpi-muxが担う。session-stateの出力は、後述するpane optionの実行フェーズとタイトルである。
+セッション一覧の正本は `pi-mux list` とし、復元用JSONの読込み・更新はpi-muxが担う。session-stateは、自セッションの実行フェーズと保存済みタイトルを [pi-muxのstate操作](../../../../.local/cli.exact/pi-mux/SPEC.md#state) へ通知し、pane optionに公開する。状態metadataを直接書き換えず、終了時の除去も同じ公開CLIへ依頼する。
 
-起動・入力・実行フェーズ遷移・終了の全期間で、pi の agent directory 配下の `session-state.json` を読み書き・再作成しない。ファイルがない場合と旧内容が残る場合のどちらでも、実行フェーズの公開はその内容やI/Oの成否に依存せず動作する。保存済みの所属JSON・会話JSONL・復元用JSONは、この拡張によって変更・削除されない。
+起動・入力・実行フェーズ遷移・終了の全期間で、pi の agent directory 配下の `session-state.json` を読み書き・再作成しない。ファイルがない場合と旧内容が残る場合のどちらでも、実行フェーズの公開はその内容やI/Oの成否に依存せず動作する。保存済みの所属JSON・復元用JSONを拡張自身は直接読み書きせず、会話JSONLも変更・削除しない。`running` 通知に伴う一時再開からの昇格と復元記録更新はpi-muxが行う。
 
 ## 管理paneの初期照合
 
@@ -39,29 +39,15 @@
 
 全項目が一致したpaneだけを公開先にする。専用paneの子プロセスや偽マーカーを持つプロセスは、照合不一致により公開対象外になる。照合は各世代の `resources_discover` で、全拡張の `session_start` 初期化が完了した後に行う。その世代では捕捉済みの接続先を使う。
 
-## pane optionの公開契約
+専用serverプロセスの開始時刻とpi自身のprocess start timeも捕捉し、socket・server PID・pane ID・pi PIDとともに、state操作の `--source` の各項目へ渡す。serverの開始時刻は `serverStartTime`、piの開始時刻は `started` とする。CLI初期化の有無によらず、専用serverのPIDと開始時刻で生存期間を識別する。再送時にも捕捉済みsourceを維持し、古い通知を新server・新pane・新piへ付け替えない。pi-muxは変更の直前に通知元を再照合する。
 
-pane-local user option `@pi_session_state` に、次のJSON文字列を1回の `set-option -p` で設定する。
+## 状態通知の公開契約
 
-```json
-{
-  "version": 1,
-  "sessionId": "<現在の会話ID>",
-  "state": "running",
-  "title": "Fix the build"
-}
-```
+公開先の形式は [pi-muxのpane option公開契約](../../../../.local/cli.exact/pi-mux/SPEC.md#pane-optionの公開契約) に従う。通常の通知には `state <会話ID> <state> --source <JSON> --title <JSON>`、終了時には `state <会話ID> --clear --source <JSON>` を使う。
 
-| 項目 | 値 |
-| --- | --- |
-| `version` | `1` |
-| `sessionId` | 現在の会話ID |
-| `state` | `running`・`waiting-approval`・`waiting-user` のいずれか |
-| `title` | pi が保存した現在のセッション名。名前がない場合は `null` |
+タイトルの正本はpiの保存済みセッション名とし、名前がない場合は `null` を通知する。sourceとtitleはそれぞれJSON化し、shell引数としてescapeして渡す。
 
-タイトルの正本は pi の保存済みセッション名とし、pane option は共有用の値とする。JSON文字列は `JSON.stringify` で組み立て、shell引数をescapeして渡す。`-F` によるtmux format展開は行わない。
-
-同じ世代では、前回要求したstateとtitleの両方が同じならCLIを呼ばない。titleだけが変わった場合は、現在のstateと会話IDを維持して公開する。その後のstate変更でも現在のtitleを保持する。世代開始時は、同じ会話ID・state・titleでも初期値を公開する。公開のためにpane optionを読み取らず、外部上書きだけでは再公開しない。
+同じ世代では、直前に成功した通知とstate・titleの両方が同じで、未完了の通知がなければCLIを呼ばない。失敗した通知は成功済みと見なさず、同値の次の要求でも再送できる。titleだけが変わった場合は、現在のstateと会話IDを維持して通知する。その後のstate変更でも現在のtitleを保持する。世代開始時は、同じ会話ID・state・titleでも初期値を通知する。公開のためにpane optionを読み取らず、外部上書きだけでは再通知しない。
 
 ### 実行の区間とイベント
 
@@ -80,7 +66,7 @@ run区間は `agent_start` から `agent_settled` までとし、中断による
 | `agent_settled` | run区間を終了し、承認待ちでなければ `waiting-user` を公開する |
 | `session_shutdown` | 新規公開と未実行分を止め、開始済みCLIの通常終端を待ち、可能ならoptionを除去する |
 
-保存名の変更は標準の `session_info_changed` で受け取る。初回リクエストのagentループ終了より遅れて保存された場合も、セッションのアクティブ化や次のstate変更を待たずに公開する。初期照合前の保存名変更はtitleの現在値に反映し、tmux CLIは `resources_discover` 以降に実行する。
+保存名の変更は標準の `session_info_changed` で受け取る。初回リクエストのagentループ終了より遅れて保存された場合も、セッションのアクティブ化や次のstate変更を待たずに公開する。初期照合前の保存名変更はtitleの現在値に反映し、公開CLIは `resources_discover` 以降に実行する。
 
 その他の進展イベントでは公開しない。承認待ち中は、進展・繰り返しの `agent_start`・確定停止によって表示を `running` へ戻さない。UI終了後は、その時点のrun区間に対応するstateへ戻す。
 
@@ -88,7 +74,9 @@ run区間は `agent_start` から `agent_settled` までとし、中断による
 
 公開処理はrunの `ctx.signal` と独立する。会話ID・state・title・必要context・接続候補を受付時に捕捉し、実行フェーズとタイトルの公開は同じ受付順で反映する。世代失効では、未実行の旧公開・古い結果・古い操作の失敗通知を破棄する。
 
-開始済みのtmux CLIは世代失効で強制中断せず、通常のtool結果が返るまで待つ。結果が `completed` なら、Bashエラーを含めその実行は終端したものとして、次の公開へ進む。古いsetやunsetの副作用が終わる前に、新世代の照合・公開を開始しない。CLI自身のtimeoutは約1秒、背景Bash要求の期限は約2秒とする。
+開始済みのCLIは世代失効で強制中断せず、通常のtool結果が返るまで待つ。結果が `completed` なら、Bashエラーを含めその実行は終端したものとする。古い通知や除去の副作用が終わる前に、新世代の照合・公開を開始しない。CLIのtimeoutは1秒とし、背景Bash要求全体の期限はToolsの指定秒数+2秒、すなわち3秒とする。
+
+通常公開のstate操作が終了コード75で通常終端した場合は、有効な世代の未反映の同じ通知を受付順のまま背景で再送する。ロック競合だけを理由に `running` を後続の待機通知で置き換えない。起動・復元のロックを持つ呼出元が通知の成功を待つ循環を作らず、resources_discoverとpiの初期化・入力を継続する。世代失効とshutdownは、未実行の再送を止める。shutdownの除去が競合した場合は再送せず通知し、終了を継続する。競合以外の通常終端した失敗は通知し、後続要求を受け付ける。
 
 背景要求が `failed`・`unavailable`・`aborted` で終わった場合、CLI実行の終端を確証できないため、そのpiプロセスからの後続CLIを停止し、短く通知する。停止は新しい会話・reload・factoryの再生成でも解除しない。停止後もinputとpi本体の動作は継続する。
 
@@ -96,12 +84,14 @@ run区間は `agent_start` から `agent_settled` までとし、中断による
 
 ## 実行経路と失敗
 
-CLI実行は [Toolsの背景Bash入口](../tools/SPEC.md#背景bash入口) に依頼し、[Guardrailsの認可・sandbox契約](../guardrails/SPEC.md) に従う。
+初期照合のtmux CLIと通知のpi-mux CLIは、どちらも [Toolsの背景Bash入口](../tools/SPEC.md#背景bash入口) に依頼し、[Guardrailsの認可・sandbox契約](../guardrails/SPEC.md) に従う。受信口が不在・無効の場合も、直接のプロセス起動や別のBash生成へ切り替えない。
 
 | 結果 | 扱い |
 | --- | --- |
 | `completed`、Bash成功 | 結果を用いて照合・公開を進める |
-| `completed`、`isError` または非0終了 | 操作失敗として通知する |
+| `completed`、通常公開のstate操作が終了コード75 | 有効な世代の同じ通知を再送する |
+| `completed`、shutdownの除去が終了コード75 | 競合を通知し、終了を継続する |
+| `completed`、上記以外の `isError` または非0終了 | 操作失敗として通知する。同値の次の要求も受け付ける |
 | `failed` | 実行終端が不確実として通知し、後続CLIを停止する |
 | `unavailable` | 入口の不在・停止を通知し、後続CLIを停止する |
 | `aborted` | 実行終端が不確実な中断を通知し、後続CLIを停止する |

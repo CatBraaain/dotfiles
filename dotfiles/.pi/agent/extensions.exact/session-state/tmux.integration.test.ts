@@ -31,7 +31,7 @@ const { requestBackgroundBash } = await import(pathToFileURL(join(moduleDir, "..
 const socket = join(process.env.XDG_RUNTIME_DIR, "pi-tmux", "server.sock");
 const pane = process.env.TMUX_PANE;
 const race = process.env.PI_TEST_RACE === "1";
-let sessionId = race ? "race-old" : "session-'quoted-#{pane_id}";
+let sessionId = race ? "race-old" : "session-external";
 const notifications = [];
 const trace = [];
 const sandboxCommands = [];
@@ -95,6 +95,10 @@ function context() {
   return { ctx, state };
 }
 async function dispatch(type, fields = {}) {
+  if (type === "session_start") {
+    const metadata = { id: sessionId, cwd: directory, file: join(directory, "external.jsonl"), pid: process.pid };
+    cli("set-option", "-p", "-t", pane, "@pi-tmux-session", Buffer.from(JSON.stringify(metadata)).toString("base64"));
+  }
   currentContext = context();
   try {
     for (const handler of handlers.get(type) ?? []) {
@@ -186,13 +190,13 @@ try {
       sessionManager: { getSessionId: () => sessionId, getSessionFile: () => undefined },
     };
     async function run(command) {
-      return requestBackgroundBash({ id: "test-detect", params: { command }, context: captured });
+      return requestBackgroundBash({ id: "test-detect", params: { command, timeout: 1 }, context: captured });
     }
     const [actualSocket, actualServer] = process.env.TMUX.split(",");
     const forged = await detectManagedPane(run, { ...process.env, TMUX: actualSocket + ",99999999" });
-    assert.equal(forged.status, "unmanaged");
+    assert.equal(forged.status, "unmanaged", JSON.stringify(forged));
     const child = await detectManagedPane(run, process.env, process.pid + 1);
-    assert.equal(child.status, "unmanaged");
+    assert.equal(child.status, "unmanaged", JSON.stringify(child));
     const callsBefore = sandboxCommands.length;
     const ordinary = await detectManagedPane(run, { ...process.env, TMUX: "/tmp/unrelated.sock,1" });
     assert.equal(ordinary.status, "unmanaged");
@@ -307,9 +311,9 @@ const { session } = await createAgentSession({
   settingsManager: settings, sessionManager: manager, resourceLoader: loader, tools: [],
 });
 try {
-  await session.bindExtensions({ mode: "rpc", onError: error => errors.push(error) });
   const identity = { id: manager.getSessionId(), cwd: directory, file: manager.getSessionFile(), pid: process.pid };
   cli("set-option", "-p", "-t", pane, "@pi-tmux-session", Buffer.from(JSON.stringify(identity)).toString("base64"));
+  await session.bindExtensions({ mode: "rpc", onError: error => errors.push(error) });
   await waitFor("initial state", () => readOption()?.state === "waiting-user");
   assert.equal(readOption().title, null);
   const request = session.prompt("Discuss delayed session titles");
@@ -329,7 +333,7 @@ try {
   assert.match(readFileSync(identity.file, "utf8"), /"type":"session_info".*"name":"Delayed SDK title"/);
   const cliPath = resolve(moduleDir, "../../../../.local/cli.exact/pi-mux/src/main.ts");
   const listed = JSON.parse(execFileSync(process.execPath, [cliPath, "list"], { encoding: "utf8" }));
-  assert.deepEqual(listed, [{ id: identity.id, cwd: identity.cwd, file: identity.file, state: "waiting-user", title }]);
+  assert.deepEqual(listed, [{ cwd: identity.cwd, sessions: [{ id: identity.id, file: identity.file, state: "waiting-user", title }] }]);
   assert.equal(cli("show-options", "-pqv", "-t", pane, "@pi-tmux-session"), beforeIdentity);
   await session.prompt("Continue the same conversation");
   await waitFor("later state retains title", () => readOption()?.state === "waiting-user" && readOption()?.title === title);
@@ -436,25 +440,38 @@ async function runScenario(
     PI_TEST_DENIED: denied ? "1" : "0",
     PI_TEST_RACE: race ? "1" : "0",
   };
+  const bin = join(directory, "bin");
+  mkdirSync(bin);
+  env.PATH = `${bin}:${env.PATH}`;
+  const cliSource = fileURLToPath(
+    new URL("../../../../.local/cli.exact/pi-mux/src/main.ts", import.meta.url),
+  );
+  writeFileSync(
+    join(bin, "pi-mux"),
+    "#!/bin/sh\nexec " + quote([process.execPath, cliSource]) + ' "$@"\n',
+    { mode: 0o755 },
+  );
   if (race) {
     const actualTmux = execFileSync("which", ["tmux"], { encoding: "utf8" }).trim();
-    const bin = join(directory, "bin");
-    mkdirSync(bin);
     env.PI_TEST_TMUX = actualTmux;
-    env.PATH = `${bin}:${env.PATH}`;
     writeFileSync(
       join(bin, "tmux"),
       [
         "#!/bin/sh",
-        `case "$*" in`,
-        `  *'"sessionId":"race-old","state":"running"'*)`,
-        `    printf started > "$PI_TEST_DIRECTORY/race-started"`,
-        `    while [ ! -e "$PI_TEST_DIRECTORY/race-release" ]; do sleep 0.01; done`,
-        `    "$PI_TEST_TMUX" "$@"`,
-        `    status=$?`,
-        `    printf finished > "$PI_TEST_DIRECTORY/race-finished"`,
-        `    exit "$status";;`,
-        "esac",
+        `if [ "$5" = source-file ] && [ "$6" = - ]; then`,
+        `  input=$(cat)`,
+        `  case "$input" in`,
+        `    *race-old*running*)`,
+        `      printf started > "$PI_TEST_DIRECTORY/race-started"`,
+        `      while [ ! -e "$PI_TEST_DIRECTORY/race-release" ]; do sleep 0.01; done`,
+        `      printf '%s' "$input" | "$PI_TEST_TMUX" "$@"`,
+        `      status=$?`,
+        `      printf finished > "$PI_TEST_DIRECTORY/race-finished"`,
+        `      exit "$status";;`,
+        `  esac`,
+        `  printf '%s' "$input" | "$PI_TEST_TMUX" "$@"`,
+        `  exit $?`,
+        "fi",
         `exec "$PI_TEST_TMUX" "$@"`,
         "",
       ].join("\n"),

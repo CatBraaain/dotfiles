@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { subagentSessionDir } from "../agents/index.ts";
 import { requestBackgroundBash, type BackgroundBashContext } from "../tools/background-bash.ts";
@@ -13,6 +14,7 @@ import {
 } from "./tmux.ts";
 
 const TMUX_COMMAND_TIMEOUT_S = 1;
+const LOCK_RETRY_INTERVAL_MS = 50;
 const MAX_NOTIFICATION_LENGTH = 200;
 const PUBLICATION_STOPPED = Symbol.for("pi.session-state.publication-stopped");
 const publicationProcess = process as NodeJS.Process & { [PUBLICATION_STOPPED]?: boolean };
@@ -24,6 +26,8 @@ interface PublicationGeneration {
   initializationStarted: boolean;
   binding?: ManagedPaneBinding;
   state?: SessionState;
+  lastPublished?: { state: SessionState; title: string | null };
+  pending: number;
   title: string | null;
   sessionId: string;
   run: BashRunner;
@@ -73,15 +77,36 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
     title: string | null = generation?.title ?? null,
   ): void {
     const gen = generation;
-    if (!gen || !gen.initializationStarted || (gen.state === state && gen.title === title)) return;
+    if (!gen || !gen.initializationStarted) return;
     gen.state = state;
     gen.title = title;
+    if (
+      gen.pending === 0 &&
+      gen.lastPublished?.state === state &&
+      gen.lastPublished.title === title
+    )
+      return;
     const sessionId = gen.sessionId;
+    gen.pending++;
     enqueuePublication(gen, async () => {
-      if (gen.controller.signal.aborted || !gen.binding) return;
-      const outcome = await publishState(gen.run, gen.binding, sessionId, state, title);
-      if (!publicationProcess[PUBLICATION_STOPPED] && !gen.controller.signal.aborted)
-        reportPublicationOutcome(gen, outcome);
+      try {
+        while (!gen.controller.signal.aborted && gen.binding) {
+          const outcome = await publishState(gen.run, gen.binding, sessionId, state, title);
+          if (publicationProcess[PUBLICATION_STOPPED] || gen.controller.signal.aborted) return;
+          if (outcome.status !== "busy") {
+            if (outcome.status === "published") gen.lastPublished = { state, title };
+            reportPublicationOutcome(gen, outcome);
+            return;
+          }
+          try {
+            await delay(LOCK_RETRY_INTERVAL_MS, undefined, { signal: gen.controller.signal });
+          } catch (error) {
+            if (!gen.controller.signal.aborted) throw error;
+          }
+        }
+      } finally {
+        gen.pending--;
+      }
     });
   }
 
@@ -102,6 +127,7 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
     const gen: PublicationGeneration = {
       controller,
       initializationStarted: false,
+      pending: 0,
       sessionId: ctx.sessionManager.getSessionId(),
       title: ctx.sessionManager.getSessionName() ?? null,
       run: makeBashRunner(context, notify),
@@ -164,11 +190,13 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
       enqueuePublication(gen, async () => {
         if (!gen.binding) return;
         try {
-          const outcome = await unsetStateOption(gen.run, gen.binding);
+          const outcome = await unsetStateOption(gen.run, gen.binding, gen.sessionId);
           if (publicationProcess[PUBLICATION_STOPPED]) return;
           if (outcome.status === "failed")
             gen.notify(`cannot clear session state option: ${outcome.message}`);
           if (outcome.status === "aborted") gen.notify("session state cleanup was interrupted");
+          if (outcome.status === "busy")
+            gen.notify("cannot clear session state option: pi-mux lock is busy");
         } catch (error) {
           gen.notify(`cannot clear session state option: ${errorMessage(error)}`);
         }

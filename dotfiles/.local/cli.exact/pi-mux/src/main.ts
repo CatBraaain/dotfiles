@@ -22,14 +22,26 @@ import { fileURLToPath } from "node:url";
 type Operation =
   | { kind: "help" }
   | { kind: "new"; detached: boolean; request?: string }
-  | { kind: "open"; id: string }
-  | { kind: "close"; id: string }
+  | { kind: "open"; id: string; temporary: boolean }
+  | { kind: "state"; id: string; source: StateSource; notification: StateNotification }
+  | { kind: "close"; id: string; ifTemporary: boolean }
   | { kind: "list" }
   | { kind: "workspace"; action: "register" | "unregister"; cwd: string }
   | { kind: "snapshot"; generation?: string }
   | { kind: "restore" };
 type Candidate = { id: string; cwd: string };
-type ManagedSession = Candidate & { session: string };
+type ManagedSession = Candidate & { session: string; temporary: boolean };
+type StateSource = {
+  socket: string;
+  serverPid: number;
+  serverStartTime: string;
+  pane: string;
+  pid: number;
+  started: string;
+};
+type StateNotification =
+  | { clear: true }
+  | { clear: false; state: SessionState; title: string | null };
 type RestoreState = { version: 1; generation: string; sessions: Candidate[] };
 type Workspace = { cwd: string; sessions: string[] };
 type Snapshot = { version: 1; generation: string; workspaces: Workspace[] };
@@ -52,6 +64,7 @@ type ListedSession = {
   file: string;
   state: SessionState | null;
   title: string | null;
+  temporary?: true;
 };
 type ListedWorkspace = { cwd: string; sessions: ListedSession[] };
 type Config = ReturnType<typeof configuration>;
@@ -81,6 +94,7 @@ const PARENT_ENV_KEYS = new Set([
   "PI_AGENT_NAME",
   "PI_AGENT_CONFIG",
   "PI_TMUX_SESSION_ID",
+  "PI_TMUX_TEMPORARY",
   "PI_TMUX_STARTUP_COMMAND",
   "PI_TMUX_STARTUP_MODE",
 ]);
@@ -96,7 +110,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux -h
   pi-mux --help
   pi-mux new [--detached] [initial-request]
-  pi-mux open <session-id>
+  pi-mux open [--temporary] <session-id>
+  pi-mux state <session-id> <state> --source <JSON> --title <JSON>
+  pi-mux state <session-id> --clear --source <JSON>
   pi-mux close <session-id>
   pi-mux list
   pi-mux workspace register <cwd>
@@ -104,6 +120,23 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux snapshot [server-generation]
   pi-mux restore`);
       return 0;
+    }
+    if (operation.kind === "state") {
+      try {
+        const config = tmuxConfiguration();
+        prepareDirectory(config.stateDirectory);
+        return await withLock(
+          config,
+          async () => {
+            await notifyState(config, operation.id, operation.source, operation.notification);
+            return 0;
+          },
+          "try",
+        );
+      } catch (error) {
+        console.error(`pi-mux: state ${operation.id}: ${errorMessage(error)}`);
+        return error instanceof LockBusyError ? 75 : 1;
+      }
     }
     if (operation.kind === "list") {
       console.log(JSON.stringify(await listWorkspaces(tmuxConfiguration())));
@@ -113,7 +146,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       const config = tmuxConfiguration();
       prepareDirectory(config.stateDirectory);
       return await withLock(config, async () => {
-        await closeSession(config, operation.id);
+        await closeSession(config, operation.id, operation.ifTemporary);
         return 0;
       });
     }
@@ -139,14 +172,27 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       prepareDirectory(config.directory);
       const configured = await configuredSessionRoots(config);
       if (configured.preferred) rememberSessionRoot(config, configured.preferred);
-      const failures = await startAndRestore(config, operation.kind === "restore");
+      let temporaryTarget: string | undefined;
+      if (operation.kind === "open" && operation.temporary) {
+        const selected = await resolveSaved(config, operation.id);
+        if (!selected.running && !selected.managed) temporaryTarget = operation.id;
+      }
+      const failures = await startAndRestore(config, operation.kind === "restore", temporaryTarget);
       if (operation.kind === "restore") return failures > 0 ? 2 : 0;
       const target =
         operation.kind === "open"
-          ? await openSaved(config, operation.id)
+          ? await openSaved(config, operation.id, operation.temporary ? "temporary" : "normal")
           : operation.request === undefined
             ? await openNew(config)
             : await createIndependent(config, operation.request);
+      if (operation.kind === "open") {
+        try {
+          if (!operation.temporary) await promoteSession(config, target.session, target.id);
+          await snapshotSessions(config, undefined, "repair");
+        } catch (error) {
+          throw new Error(`Cannot update open session ${operation.id}: ${errorMessage(error)}`);
+        }
+      }
       registerWorkspaces(config, [target.cwd]);
       rememberSessionRoot(config, dirname(target.file));
       if (operation.kind === "new" && operation.detached) {
@@ -186,12 +232,19 @@ export function parseOperation(argv: string[]): Operation {
     if (requests.length === 1 && request?.trim() && !request.includes("\0"))
       return { kind: "new", detached, request };
   }
-  if (
-    argv.length === 2 &&
-    (argv[0] === "open" || argv[0] === "close") &&
-    SESSION_ID_PATTERN.test(argv[1]!)
-  )
-    return { kind: argv[0], id: argv[1]! };
+  if (argv[0] === "state") return parseStateOperation(argv);
+  if (argv[0] === "open") {
+    const temporary = argv[1] === "--temporary";
+    const id = argv[temporary ? 2 : 1];
+    if (argv.length === (temporary ? 3 : 2) && id && SESSION_ID_PATTERN.test(id))
+      return { kind: "open", id, temporary };
+  }
+  if (argv[0] === "close") {
+    const conditional = argv[1] === "--if-temporary";
+    const id = argv[conditional ? 2 : 1];
+    if (argv.length === (conditional ? 3 : 2) && id && SESSION_ID_PATTERN.test(id))
+      return { kind: "close", id, ifTemporary: conditional };
+  }
   if (
     argv.length === 3 &&
     argv[0] === "workspace" &&
@@ -205,8 +258,282 @@ export function parseOperation(argv: string[]): Operation {
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [initial-request] | open <session-id> | close <session-id> | list | workspace register|unregister <cwd> | snapshot [server-generation] | restore]",
+    "usage: pi-mux [new [--detached] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | close <session-id> | list | workspace register|unregister <cwd> | snapshot [server-generation] | restore]",
   );
+}
+
+function parseStateOperation(argv: string[]): Operation {
+  const id = argv[1];
+  try {
+    if (!id || !SESSION_ID_PATTERN.test(id)) throw new Error("Invalid complete conversation ID");
+    const clear = argv[2] === "--clear";
+    const state = argv[2];
+    if (!clear && state !== "running" && state !== "waiting-approval" && state !== "waiting-user")
+      throw new Error("Invalid state");
+    const options = new Map<string, unknown>();
+    for (let index = 3; index < argv.length; index += 2) {
+      const key = argv[index]!;
+      const value = argv[index + 1];
+      if ((key !== "--source" && key !== "--title") || options.has(key) || value === undefined)
+        throw new Error("Missing, duplicate, or unexpected state argument");
+      options.set(key, JSON.parse(value));
+    }
+    if (!options.has("--source") || (clear ? options.has("--title") : !options.has("--title")))
+      throw new Error("State requires source and title; clear requires only source");
+    const source = options.get("--source");
+    if (
+      !isRecord(source) ||
+      typeof source.socket !== "string" ||
+      !isAbsolute(source.socket) ||
+      !Number.isSafeInteger(source.serverPid) ||
+      Number(source.serverPid) <= 0 ||
+      typeof source.serverStartTime !== "string" ||
+      !/^\d+$/.test(source.serverStartTime) ||
+      typeof source.pane !== "string" ||
+      !/^%\d+$/.test(source.pane) ||
+      !Number.isSafeInteger(source.pid) ||
+      Number(source.pid) <= 0 ||
+      typeof source.started !== "string" ||
+      !/^\d+$/.test(source.started)
+    )
+      throw new Error("Invalid source");
+    const title = options.get("--title");
+    if (!clear && title !== null && typeof title !== "string") throw new Error("Invalid title");
+    return {
+      kind: "state",
+      id,
+      source: {
+        socket: source.socket,
+        serverPid: Number(source.serverPid),
+        serverStartTime: source.serverStartTime,
+        pane: source.pane,
+        pid: Number(source.pid),
+        started: source.started,
+      },
+      notification: clear
+        ? { clear: true }
+        : { clear: false, state: state as SessionState, title: title as string | null },
+    };
+  } catch (error) {
+    throw new Error(`state ${id ?? "<missing>"}: ${errorMessage(error)}`);
+  }
+}
+
+async function isTemporarySession(
+  config: TmuxConfig,
+  session: string,
+  id: string,
+  allowMissing = false,
+): Promise<boolean> {
+  const result = await tmux(config, ["show-environment", "-t", session, "PI_TMUX_TEMPORARY"], true);
+  if (result.exitCode !== 0) {
+    if (result.stderr.includes("unknown variable: PI_TMUX_TEMPORARY")) return false;
+    if (
+      allowMissing &&
+      (serverIsAbsent(config, result.stderr) ||
+        result.stderr.includes("no such session:") ||
+        result.stderr.includes("can't find session:"))
+    )
+      return false;
+    throw new Error(`Cannot inspect temporary session ${session}: ${result.stderr.trim()}`);
+  }
+  return result.stdout.trim() === `PI_TMUX_TEMPORARY=${id}`;
+}
+
+async function promoteSession(config: TmuxConfig, session: string, id: string): Promise<void> {
+  if (await isTemporarySession(config, session, id))
+    await tmux(config, ["set-environment", "-u", "-t", session, "PI_TMUX_TEMPORARY"]);
+}
+
+async function notifyState(
+  config: TmuxConfig,
+  id: string,
+  source: StateSource,
+  notification: StateNotification,
+): Promise<void> {
+  if (source.socket !== config.socket)
+    throw new Error("Source socket does not match the dedicated socket");
+  const server = await tmux(config, [
+    "display-message",
+    "-p",
+    "-t",
+    source.pane,
+    "#{pid}:#{pane_id}",
+  ]);
+  const [serverPid, paneId] = server.stdout.trimEnd().split(":");
+  if (
+    Number(serverPid) !== source.serverPid ||
+    paneId !== source.pane ||
+    processStartTime(source.serverPid) !== source.serverStartTime
+  )
+    throw new Error("Source server or pane lifetime no longer matches");
+  const session = (
+    await tmux(config, ["display-message", "-p", "-t", source.pane, "#{session_id}"])
+  ).stdout.trimEnd();
+  if (!/^\$\d+$/.test(session)) throw new Error("Source server or pane lifetime no longer matches");
+  await verifyStateTarget(config, id, source);
+  const owner = JSON.stringify({ id, ...source });
+  const outcome = await runGuardedStateCommands(config, source, {
+    id,
+    owner,
+    notification,
+    session,
+  });
+  if (outcome === "rejected") throw new Error("Source server or pane lifetime no longer matches");
+  if (notification.clear || notification.state !== "running") return;
+  if (await serverOption(config, "@pi-mux-generation"))
+    await snapshotSessions(config, undefined, "repair");
+}
+
+function shLiteral(value: string): string {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
+async function verifyStateTarget(
+  config: TmuxConfig,
+  id: string,
+  source: StateSource,
+): Promise<void> {
+  const result = await tmux(config, [
+    "list-panes",
+    "-a",
+    "-F",
+    "#{pane_id}|#{@pi-tmux-session}|#{pane_pid}|#{pane_dead}",
+  ]);
+  const matching = result.stdout
+    .trimEnd()
+    .split("\n")
+    .filter(Boolean)
+    .flatMap((line) => {
+      const [pane, encoded, panePid, dead] = line.split("|");
+      if (dead !== "0" || !pane || !encoded) return [];
+      let metadata: { id?: unknown; pid?: unknown; processPid?: unknown; startup?: unknown };
+      try {
+        metadata = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+      } catch {
+        throw new Error(`Invalid pi session metadata in pane ${pane}`);
+      }
+      if (
+        metadata.id !== id ||
+        (metadata.startup !== "accepted" &&
+          metadata.startup !== "ready" &&
+          metadata.startup !== undefined) ||
+        !panePid ||
+        !/^[1-9]\d*$/.test(panePid)
+      )
+        return [];
+      const pid = typeof metadata.processPid === "number" ? metadata.processPid : Number(panePid);
+      if (!Number.isSafeInteger(pid) || pid <= 0) return [];
+      return [{ pane, pid }];
+    });
+  if (matching.length !== 1 || matching[0]!.pane !== source.pane || matching[0]!.pid !== source.pid)
+    throw new Error("Source Pi process does not match the conversation and pane");
+  if (processStartTime(source.pid) !== source.started)
+    throw new Error("Source Pi process does not match the conversation and pane");
+}
+
+function sourceEntityGuard(config: TmuxConfig, source: StateSource): string {
+  const processStartOf = (pid: string) =>
+    `"$(sed 's/.*) //' /proc/${pid}/stat | awk '{print $20}')"`;
+  const sessionProcess = `p=$(tmux -S ${shLiteral(config.socket)} show-options -pqv -t ${shLiteral(source.pane)} '@pi-tmux-session' 2>/dev/null | base64 -d 2>/dev/null | sed -n 's/.*"processPid":\\([0-9][0-9]*\\).*/\\1/p')`;
+  return [
+    `[ "#{socket_path}" = ${shLiteral(config.socket)} ]`,
+    `[ "#{pid}" = ${String(source.serverPid)} ]`,
+    `[ ${processStartOf("#{pid}")} = ${shLiteral(source.serverStartTime)} ]`,
+    `[ "#{pane_id}" = ${shLiteral(source.pane)} ]`,
+    sessionProcess,
+    "case $p in ''|*[!0-9]*) p=#{pane_pid};; esac",
+    `[ "$p" = ${String(source.pid)} ]`,
+    `[ ${processStartOf("$p")} = ${shLiteral(source.started)} ]`,
+  ].join(" && ");
+}
+
+function guardedTmuxLine(
+  pane: string,
+  guard: string,
+  whenTrue: string[][],
+  elseMarker?: string,
+): string {
+  const quoted = [
+    "if-shell",
+    "-t",
+    pane,
+    guard,
+    whenTrue.map((args) => tmuxArguments(args)).join(" ; "),
+  ];
+  if (elseMarker !== undefined) quoted.push(tmuxArguments(["display-message", "-p", elseMarker]));
+  return tmuxArguments(quoted);
+}
+
+async function runGuardedStateCommands(
+  config: TmuxConfig,
+  source: StateSource,
+  plan: {
+    id: string;
+    owner: string;
+    notification: StateNotification;
+    session: string;
+  },
+): Promise<"written" | "skipped" | "rejected"> {
+  const entity = sourceEntityGuard(config, source);
+  const pane = source.pane;
+  const lines: string[] = [];
+  if (plan.notification.clear) {
+    lines.push(
+      guardedTmuxLine(
+        pane,
+        entity,
+        [["display-message", "-p", "PI_MUX_ENTITY_OK"]],
+        "PI_MUX_STATE_REJECTED",
+      ),
+    );
+    const ownerGuard = `[ "$(tmux -S ${shLiteral(config.socket)} show-options -pqv -t ${shLiteral(pane)} '@pi-mux-state-source' 2>/dev/null)" = ${shLiteral(plan.owner)} ]`;
+    lines.push(
+      guardedTmuxLine(
+        pane,
+        `${entity} && ${ownerGuard}`,
+        [
+          ["set-option", "-pu", "-t", pane, "@pi_session_state"],
+          ["set-option", "-pu", "-t", pane, "@pi-mux-state-source"],
+          ["display-message", "-p", "PI_MUX_STATE_WRITTEN"],
+        ],
+        "PI_MUX_SKIPPED",
+      ),
+    );
+  } else {
+    const stateValue = JSON.stringify({
+      version: 1,
+      sessionId: plan.id,
+      state: plan.notification.state,
+      title: plan.notification.title,
+    });
+    lines.push(
+      guardedTmuxLine(
+        pane,
+        entity,
+        [
+          ["set-option", "-p", "-t", pane, "@pi-mux-state-source", plan.owner],
+          ["set-option", "-p", "-t", pane, "@pi_session_state", stateValue],
+          ["display-message", "-p", "PI_MUX_STATE_WRITTEN"],
+        ],
+        "PI_MUX_STATE_REJECTED",
+      ),
+    );
+    if (plan.notification.state === "running") {
+      const temporaryGuard = `[ "$(tmux -S ${shLiteral(config.socket)} show-environment -t ${shLiteral(plan.session)} PI_TMUX_TEMPORARY 2>/dev/null)" = ${shLiteral(`PI_TMUX_TEMPORARY=${plan.id}`)} ]`;
+      lines.push(
+        guardedTmuxLine(pane, `${entity} && ${temporaryGuard}`, [
+          ["set-environment", "-u", "-t", plan.session, "PI_TMUX_TEMPORARY"],
+          ["display-message", "-p", "PI_MUX_PROMOTED"],
+        ]),
+      );
+    }
+  }
+  const result = await tmux(config, ["source-file", "-"], false, `${lines.join("\n")}\n`);
+  const markers = result.stdout.trim().split("\n").filter(Boolean);
+  if (markers.includes("PI_MUX_STATE_REJECTED")) return "rejected";
+  if (markers.includes("PI_MUX_STATE_WRITTEN")) return "written";
+  return plan.notification.clear ? "skipped" : "rejected";
 }
 
 function configuration() {
@@ -243,7 +570,13 @@ function tmuxConfiguration() {
   };
 }
 
-async function withLock<T>(config: TmuxConfig, action: () => Promise<T>): Promise<T> {
+class LockBusyError extends Error {}
+
+async function withLock<T>(
+  config: TmuxConfig,
+  action: () => Promise<T>,
+  mode: "wait" | "try" = "wait",
+): Promise<T> {
   const key = createHash("sha256").update(realpathSync(config.stateDirectory)).digest("hex");
   const address = `\0pi-mux-${process.getuid!()}-${key}`;
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
@@ -256,6 +589,7 @@ async function withLock<T>(config: TmuxConfig, action: () => Promise<T>): Promis
       });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
+      if (mode === "try") throw new LockBusyError("Another pi-mux operation holds the lock");
       await Bun.sleep(POLL_INTERVAL_MS);
       continue;
     }
@@ -270,7 +604,11 @@ async function withLock<T>(config: TmuxConfig, action: () => Promise<T>): Promis
   throw new Error("Timed out waiting for another pi-mux operation");
 }
 
-async function startAndRestore(config: Config, restoreRequested: boolean): Promise<number> {
+async function startAndRestore(
+  config: Config,
+  restoreRequested: boolean,
+  temporaryTarget?: string,
+): Promise<number> {
   await tmux(config, ["start-server"]);
   await tmux(config, ["source-file", config.tmuxConfig]);
   const existing = await serverOption(config, "@pi-mux-generation");
@@ -293,7 +631,7 @@ async function startAndRestore(config: Config, restoreRequested: boolean): Promi
   if (!restoreRequested && restored === generation) return 0;
   let failures = 0;
   try {
-    failures = await restoreSessions(config, generation);
+    failures = await restoreSessions(config, generation, temporaryTarget);
   } catch (error) {
     console.error(`pi-mux: restore failed: ${errorMessage(error)}`);
     failures++;
@@ -302,9 +640,19 @@ async function startAndRestore(config: Config, restoreRequested: boolean): Promi
   return failures;
 }
 
-async function restoreSessions(config: Config, generation: string): Promise<number> {
+async function restoreSessions(
+  config: Config,
+  generation: string,
+  temporaryTarget?: string,
+): Promise<number> {
   const previous = readSnapshot(config);
-  const candidates = uniqueCandidates(previous?.sessions ?? []);
+  const temporaryIds = new Set(
+    (await managedSessions(config)).filter((entry) => entry.temporary).map((entry) => entry.id),
+  );
+  if (temporaryTarget) temporaryIds.add(temporaryTarget);
+  const candidates = uniqueCandidates(previous?.sessions ?? []).filter(
+    (entry) => !temporaryIds.has(entry.id),
+  );
   let state: RestoreState = { version: 1, generation, sessions: candidates };
   await setRestoringSessions(config, candidates);
   writeSnapshot(config, state);
@@ -334,23 +682,34 @@ async function restoreSessions(config: Config, generation: string): Promise<numb
   return failures;
 }
 
-async function snapshotSessions(config: Config, expectedGeneration?: string): Promise<void> {
+async function snapshotSessions(
+  config: TmuxConfig,
+  expectedGeneration?: string,
+  mode: "existing" | "repair" = "existing",
+): Promise<void> {
   const generation = await serverOption(config, "@pi-mux-generation");
   if (!generation) throw new Error("Dedicated server has not been initialized by pi-mux");
   if (expectedGeneration !== undefined && generation !== expectedGeneration) return;
   const previous = readSnapshot(config);
-  if (!previous || previous.generation !== generation) return;
+  if (previous && previous.generation !== generation) {
+    if (mode === "repair") throw new Error("Snapshot belongs to another server generation");
+    return;
+  }
+  if (!previous && mode === "existing") return;
   const managed = await managedSessions(config);
+  const temporaryIds = new Set(managed.filter((entry) => entry.temporary).map((entry) => entry.id));
   const restoring = await Promise.all(
-    previous.sessions.map(async (candidate) => {
-      const marker = await serverOption(config, `@pi-mux-restoring-${candidate.id}`);
-      if (marker && marker !== "1") throw new Error("Invalid in-memory restore state");
-      return marker ? [candidate] : [];
-    }),
+    (previous?.sessions ?? [])
+      .filter((candidate) => !temporaryIds.has(candidate.id))
+      .map(async (candidate) => {
+        const marker = await serverOption(config, `@pi-mux-restoring-${candidate.id}`);
+        if (marker && marker !== "1") throw new Error("Invalid in-memory restore state");
+        return marker ? [candidate] : [];
+      }),
   );
   const sessions = uniqueCandidates([
     ...restoring.flat(),
-    ...managed.map(({ id, cwd }) => ({ id, cwd })),
+    ...managed.filter((entry) => !entry.temporary).map(({ id, cwd }) => ({ id, cwd })),
   ]);
   if ((await serverOption(config, "@pi-mux-generation")) !== generation)
     throw new Error("Dedicated server changed during snapshot");
@@ -385,7 +744,7 @@ async function managedSessions(config: TmuxConfig): Promise<ManagedSession[]> {
     const path = await tmux(config, ["display-message", "-p", "-t", session, "#{session_path}"]);
     const cwd = path.stdout.replace(/\n$/, "");
     if (!isAbsolute(cwd)) throw new Error(`Invalid working directory in tmux session ${session}`);
-    sessions.push({ id, cwd, session });
+    sessions.push({ id, cwd, session, temporary: await isTemporarySession(config, session, id) });
   }
   return sessions;
 }
@@ -538,29 +897,41 @@ async function openNew(config: Config): Promise<Pane> {
   throw new Error("Timed out reserving an unsaved new session");
 }
 
-async function openSaved(config: Config, id: string): Promise<Pane> {
+async function resolveSaved(config: Config, id: string) {
   const managed = (await managedSessions(config)).filter((session) => session.id === id);
   if (managed.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
-  const running = (await livePanes(config)).filter((pane) => pane.id === id);
+  const running = (await livePanes(config, "list")).filter((pane) => pane.id === id);
   if (running.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
   const saved = await findSaved(
     config,
     id,
     running.map((pane) => dirname(pane.file)),
   );
-  if (running[0]) return running[0];
-  if (managed[0]) return await waitForSession(config, managed[0].session, id);
+  if (!running[0] && !managed[0]) {
+    if (!saved) throw new Error(`Session not found (use the complete ID): ${id}`);
+    if (!existsSync(saved.cwd) || !statSync(saved.cwd).isDirectory())
+      throw new Error(`Session working directory does not exist: ${saved.cwd}`);
+  }
+  return { running: running[0], managed: managed[0], saved };
+}
+
+async function openSaved(
+  config: Config,
+  id: string,
+  mode: "normal" | "temporary" = "normal",
+): Promise<Pane> {
+  const { running, managed, saved } = await resolveSaved(config, id);
+  if (running) return running;
+  if (managed) return await waitForSession(config, managed.session, id);
   if (!saved) throw new Error(`Session not found (use the complete ID): ${id}`);
-  if (!existsSync(saved.cwd) || !statSync(saved.cwd).isDirectory())
-    throw new Error(`Session working directory does not exist: ${saved.cwd}`);
   const name = sessionName(id);
-  const created = await createSession(config, saved, name);
+  const created = await createSession(config, { ...saved, temporary: mode === "temporary" }, name);
   return await waitForSession(config, created ?? name, id);
 }
 
 async function createSession(
   config: Config,
-  session: { id: string; cwd: string; file?: string; request?: string },
+  session: { id: string; cwd: string; file?: string; request?: string; temporary?: boolean },
   name: string,
 ): Promise<string | undefined> {
   const startupCommand =
@@ -568,6 +939,7 @@ async function createSession(
   const desired = {
     ...config.env,
     PI_TMUX_SESSION_ID: session.id,
+    ...(session.temporary ? { PI_TMUX_TEMPORARY: session.id } : {}),
     ...(startupCommand === undefined
       ? { PI_TMUX_STARTUP_MODE: "create" }
       : { PI_TMUX_STARTUP_COMMAND: startupCommand }),
@@ -679,7 +1051,7 @@ async function collectWorkspaceList(
   membership: "read" | "import" = "read",
 ): Promise<ListedWorkspace[]> {
   const sessions = await Promise.all(
-    panes.map(async ({ id, cwd, file, pane }) => {
+    panes.map(async ({ id, cwd, file, pane, session }) => {
       const metadata = await tmux(config, [
         "show-options",
         "-pqv",
@@ -687,7 +1059,16 @@ async function collectWorkspaceList(
         pane,
         "@pi_session_state",
       ]);
-      return { cwd, session: { id, file, ...parseSessionMetadata(metadata.stdout, id) } };
+      const temporary = await isTemporarySession(config, session, id, true);
+      return {
+        cwd,
+        session: {
+          id,
+          file,
+          ...parseSessionMetadata(metadata.stdout, id, file),
+          ...(temporary ? { temporary: true as const } : {}),
+        },
+      };
     }),
   );
   if (membership === "import")
@@ -749,16 +1130,19 @@ function registerWorkspaces(config: TmuxConfig, cwds: string[]): void {
   if (changed) writeMembershipStore(config, store);
 }
 
-async function closeSession(config: TmuxConfig, id: string): Promise<void> {
+async function closeSession(config: TmuxConfig, id: string, ifTemporary = false): Promise<void> {
   try {
-    readSnapshot(config);
     const panes = await livePanes(config, "list");
     const running = panes.filter((pane) => pane.id === id);
     const managed = (await managedSessions(config)).filter((session) => session.id === id);
     if (running.length > 1 || managed.length > 1)
       throw new Error("Multiple pi processes match the conversation ID");
-    const targets = [...running, ...(await initializingPanes(config, managed, panes))];
+    const initializing = await initializingPanes(config, managed, panes);
+    const targets = [...running, ...initializing];
     if (targets.length > 1) throw new Error("Multiple pi processes match the conversation ID");
+    if (ifTemporary && !(await isCloseTargetTemporary(config, running[0]?.session, managed, id)))
+      return;
+    readSnapshot(config);
     await terminatePanes(config, targets);
     const deadline = Date.now() + STARTUP_TIMEOUT_MS;
     while (true) {
@@ -797,6 +1181,17 @@ async function closeSession(config: TmuxConfig, id: string): Promise<void> {
   } catch (error) {
     throw new Error(`Cannot close session ${id}: ${errorMessage(error)}`);
   }
+}
+
+async function isCloseTargetTemporary(
+  config: TmuxConfig,
+  runningSession: string | undefined,
+  managed: ManagedSession[],
+  id: string,
+): Promise<boolean> {
+  if (runningSession && (await isTemporarySession(config, runningSession, id))) return true;
+  for (const { session } of managed) if (await isTemporarySession(config, session, id)) return true;
+  return false;
 }
 
 async function terminatePanes(config: TmuxConfig, targets: StopTarget[]): Promise<void> {
@@ -1051,24 +1446,65 @@ async function livePanes(
 function parseSessionMetadata(
   encoded: string | undefined,
   id: string,
+  file: string,
 ): { state: SessionState | null; title: string | null } {
-  const unavailable = { state: null, title: null };
-  if (!encoded) return unavailable;
+  const state = parseSessionState(encoded, id);
+  const published = parsePublishedTitle(encoded, id);
+  const title = published !== null ? published : savedSessionName(file);
+  return { state, title };
+}
+
+function parseSessionState(encoded: string | undefined, id: string): SessionState | null {
+  const metadata = parseSessionOption(encoded, id);
+  if (!metadata) return null;
+  const state = metadata.state;
+  return state === "running" || state === "waiting-approval" || state === "waiting-user"
+    ? state
+    : null;
+}
+
+function parsePublishedTitle(encoded: string | undefined, id: string): string | null {
+  const metadata = parseSessionOption(encoded, id);
+  return metadata && typeof metadata.title === "string" ? metadata.title : null;
+}
+
+function parseSessionOption(
+  encoded: string | undefined,
+  id: string,
+): { state?: unknown; title?: unknown } | undefined {
+  if (!encoded) return undefined;
   let metadata: { version?: unknown; sessionId?: unknown; state?: unknown; title?: unknown } | null;
   try {
     metadata = JSON.parse(encoded);
   } catch {
-    return unavailable;
+    return undefined;
   }
-  if (metadata?.version !== 1 || metadata.sessionId !== id) return unavailable;
-  const state = metadata.state;
-  return {
-    state:
-      state === "running" || state === "waiting-approval" || state === "waiting-user"
-        ? state
-        : null,
-    title: typeof metadata.title === "string" ? metadata.title : null,
-  };
+  if (metadata?.version !== 1 || metadata.sessionId !== id) return undefined;
+  return metadata;
+}
+
+function savedSessionName(file: string): string | null {
+  let lines: string[];
+  try {
+    lines = readFileSync(file, "utf8").split("\n");
+  } catch {
+    return null;
+  }
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const line = lines[index];
+    if (!line) continue;
+    let entry: { type?: unknown; name?: unknown };
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (entry.type !== "session_info") continue;
+    if (typeof entry.name !== "string") return null;
+    const name = entry.name.trim();
+    return name || null;
+  }
+  return null;
 }
 
 async function hasSession(config: Config, name: string): Promise<boolean> {
@@ -1228,6 +1664,10 @@ function executable(name: string): string {
   const path = Bun.which(name);
   if (!path) throw new Error(`Executable not found on PATH: ${name}`);
   return path;
+}
+
+function tmuxArguments(args: string[]): string {
+  return args.map(quoteTmuxArgument).join(" ");
 }
 
 function quoteTmuxArgument(argument: string): string {

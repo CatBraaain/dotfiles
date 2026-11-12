@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { createServer } from "node:net";
 import {
   chmodSync,
   copyFileSync,
@@ -499,6 +500,45 @@ async function waitFor<T>(check: () => T | undefined | Promise<T | undefined>): 
   throw new Error("Timed out waiting for the isolated pi fixture");
 }
 
+type MuxFixture = Awaited<ReturnType<typeof createFixture>>;
+
+function enableStatePublisher(f: MuxFixture): void {
+  symlinkSync(
+    resolve(EXTENSION_DIR, "../session-state"),
+    join(f.agent, "extensions/session-state"),
+  );
+  writeFileSync(join(f.bin, "pi-mux"), "#!/bin/sh\nexec " + quote(CLI_COMMAND) + ' "$@"\n', {
+    mode: 0o700,
+  });
+}
+
+async function notificationSource(f: MuxFixture, pane: Pick<Pane, "pane" | "pid">) {
+  const server = await f.tmux(["display-message", "-p", "-t", pane.pane, "#{pid}"]);
+  const serverPid = Number(server.out.trim());
+  function started(pid: number): string {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]!;
+  }
+  return {
+    socket: f.socket,
+    serverPid,
+    serverStartTime: started(serverPid),
+    pane: pane.pane,
+    pid: pane.pid,
+    started: started(pane.pid),
+  };
+}
+
+async function listedSession(f: MuxFixture, id: string) {
+  const result = await f.run(["list"]);
+  assert.equal(result.code, 0, result.err);
+  const workspaces = JSON.parse(result.out) as {
+    cwd: string;
+    sessions: { id: string; state: string | null; title: string | null; temporary?: true }[];
+  }[];
+  return workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === id);
+}
+
 async function firstPane(f: Awaited<ReturnType<typeof createFixture>>): Promise<Pane> {
   return await waitFor(async () => (await f.panes())[0]);
 }
@@ -930,7 +970,12 @@ describe("pi-mux workspace list", () => {
           assert.equal(result.code, 0, result.err);
           assert.deepEqual(
             JSON.parse(result.out),
-            [{ cwd: metadata.cwd, sessions: [{ id: metadata.id, file: metadata.file, state, title }] }],
+            [
+              {
+                cwd: metadata.cwd,
+                sessions: [{ id: metadata.id, file: metadata.file, state, title }],
+              },
+            ],
             value,
           );
         }
@@ -1475,7 +1520,9 @@ export default function (pi) {
         assert.deepEqual(JSON.parse(listed.out), [
           {
             cwd: f.cwdB,
-            sessions: [{ id: otherMetadata.id, file: otherMetadata.file, state: null, title: null }],
+            sessions: [
+              { id: otherMetadata.id, file: otherMetadata.file, state: null, title: null },
+            ],
           },
         ]);
       });
@@ -3618,6 +3665,1087 @@ describe("pi-mux conservative failure handling", () => {
         assert.match(rejected.err, /access refused/);
         assert.deepEqual(f.snapshot(), before);
         assert.equal((await f.panes()).length, 1);
+      });
+    },
+    TIMEOUT_MS,
+  );
+});
+
+async function stateFor(
+  f: MuxFixture,
+  id: string,
+  source: Awaited<ReturnType<typeof notificationSource>>,
+  state: string,
+  title: string | null = null,
+) {
+  return await waitFor(async () => {
+    const result = await f.run([
+      "state",
+      id,
+      state,
+      "--source",
+      JSON.stringify(source),
+      "--title",
+      JSON.stringify(title),
+    ]);
+    return result.code === 75 ? undefined : result;
+  });
+}
+
+async function paneState(f: MuxFixture, pane: string): Promise<unknown> {
+  const result = await f.tmux(["show-options", "-pqv", "-t", pane, "@pi_session_state"]);
+  assert.equal(result.code, 0, result.err);
+  return result.out.trim() ? JSON.parse(result.out) : undefined;
+}
+
+async function openClient(
+  f: MuxFixture,
+  name: string,
+  id: string,
+  temporary = false,
+): Promise<Pane> {
+  await f.client(name, ["open", ...(temporary ? ["--temporary"] : []), id]);
+  return await waitFor(async () =>
+    (await f.panes()).find((pane) => pane.id === id && pane.startup === "ready"),
+  );
+}
+
+describe("pi-mux temporary lifecycle", () => {
+  it(
+    "excludes temporary open before startup restoration and all later snapshots, then promotes on running",
+    async () => {
+      await fixture(async (f) => {
+        enableStatePublisher(f);
+        f.saved("temporary-id");
+        f.saved("other-id", f.cwdB);
+        f.seed([
+          { id: "temporary-id", cwd: f.cwdA },
+          { id: "other-id", cwd: f.cwdB },
+        ]);
+        const opened = await openClient(f, "temporary-view", "temporary-id", true);
+        await waitFor(async () =>
+          ((await paneState(f, opened.pane)) as { state?: string })?.state === "waiting-user"
+            ? true
+            : undefined,
+        );
+        const before = await f.panes();
+        assert.equal(before.length, 2);
+        const initialCandidates = f.snapshotCandidates();
+        assert.deepEqual(initialCandidates, [{ id: "other-id", cwd: f.cwdB }]);
+        const listed = await f.run(["list"]);
+        assert.equal(listed.code, 0, listed.err);
+        const workspaces = JSON.parse(listed.out) as {
+          sessions: { id: string; temporary?: true }[];
+        }[];
+        const sessions = workspaces.flatMap((workspace) => workspace.sessions);
+        assert.equal(sessions.find((entry) => entry.id === opened.id)?.temporary, true);
+        assert.equal(
+          Object.hasOwn(
+            sessions.find((entry) => entry.id === "other-id")!,
+            "temporary",
+          ),
+          false,
+        );
+        const source = await notificationSource(f, opened);
+        for (const state of ["waiting-user", "waiting-approval"]) {
+          const published = await stateFor(f, opened.id, source, state, "Viewing only");
+          assert.deepEqual(published, { code: 0, out: "", err: "" });
+          assert.equal((await f.run(["snapshot"])).code, 0);
+          assert.deepEqual(f.snapshotCandidates(), initialCandidates);
+        }
+        const title = "Quoted 'title' \"\n#{pane_id} $(touch /unsafe)";
+        const running = await stateFor(f, opened.id, source, "running", title);
+        assert.deepEqual(running, { code: 0, out: "", err: "" });
+        assert.deepEqual(await paneState(f, opened.pane), {
+          version: 1,
+          sessionId: opened.id,
+          state: "running",
+          title,
+        });
+        assert.deepEqual(
+          new Set(f.snapshotCandidates().map((entry) => entry.id)),
+          new Set(["temporary-id", "other-id"]),
+        );
+        assert.equal((await stateFor(f, opened.id, source, "running", title)).code, 0);
+        assert.equal((await stateFor(f, opened.id, source, "waiting-user", title)).code, 0);
+        await f.detachAll();
+        await openClient(f, "reconnect-temporary", opened.id, true);
+        await f.detachAll();
+        const after = await f.panes();
+        assert.deepEqual(
+          after.map(({ id, pid, pane }) => ({ id, pid, pane })),
+          before.map(({ id, pid, pane }) => ({ id, pid, pane })),
+        );
+        const normalList = JSON.parse((await f.run(["list"])).out) as { sessions: object[] }[];
+        assert.equal(
+          normalList
+            .flatMap((workspace) => workspace.sessions)
+            .some((session) => Object.hasOwn(session, "temporary")),
+          false,
+        );
+        const clear = await f.run([
+          "state",
+          opened.id,
+          "--clear",
+          "--source",
+          JSON.stringify(source),
+        ]);
+        assert.deepEqual(clear, { code: 0, out: "", err: "" });
+        assert.equal(await paneState(f, opened.pane), undefined);
+        assert.equal(f.snapshotCandidates().length, 2);
+        const closed = await f.run(["close", opened.id]);
+        assert.deepEqual(closed, { code: 0, out: "", err: "" });
+        assert.deepEqual(f.snapshotCandidates(), initialCandidates);
+        assert.equal(existsSync(opened.file), true);
+        assert.equal(
+          (await f.panes()).find((pane) => pane.id === "other-id")?.pid,
+          before.find((pane) => pane.id === "other-id")?.pid,
+        );
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "normal open promotes the same Pi immediately while temporary reconnection does not",
+    async () => {
+      await fixture(async (f) => {
+        f.saved("view-id");
+        const opened = await openClient(f, "first-view", "view-id", true);
+        await f.detachAll();
+        const reconnected = await openClient(f, "second-view", "view-id", true);
+        await f.detachAll();
+        assert.equal(reconnected.pid, opened.pid);
+        assert.deepEqual(f.snapshotCandidates(), []);
+        const promoted = await openClient(f, "normal-view", "view-id");
+        await f.detachAll();
+        assert.equal(promoted.pid, opened.pid);
+        assert.equal(promoted.pane, opened.pane);
+        assert.deepEqual(f.snapshotCandidates(), [{ id: "view-id", cwd: f.cwdA }]);
+        assert.equal((await f.run(["restore"])).code, 0);
+        assert.equal((await f.panes()).length, 1);
+        assert.equal((await f.panes())[0]?.pid, opened.pid);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "never restores a viewing-only Pi after server restart",
+    async () => {
+      await fixture(async (f) => {
+        f.saved("view-id");
+        f.saved("keep-id", f.cwdB);
+        f.seed([{ id: "keep-id", cwd: f.cwdB }]);
+        await openClient(f, "view-only", "view-id", true);
+        await f.detachAll();
+        assert.equal((await f.run(["snapshot"])).code, 0);
+        assert.deepEqual(f.snapshotCandidates(), [{ id: "keep-id", cwd: f.cwdB }]);
+        await f.tmux(["kill-server"]);
+        assert.equal((await f.run(["restore"])).code, 0);
+        assert.deepEqual(
+          (await f.panes()).map((pane) => pane.id),
+          ["keep-id"],
+        );
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "keeps restore candidates untouched when temporary conversation resolution fails",
+    async () => {
+      await fixture(async (f) => {
+        f.saved("duplicate-id");
+        f.seed([{ id: "duplicate-id", cwd: f.cwdA }]);
+        const file = join(f.agent, "sessions/fixture_duplicate-id.jsonl");
+        copyFileSync(file, join(f.agent, "sessions/duplicate.jsonl"));
+        const before = readFileSync(join(f.agent, "pi-tmux/pi-mux-restore.json"), "utf8");
+        const rejected = await f.run(["open", "--temporary", "duplicate-id"]);
+        assert.equal(rejected.code, 1);
+        assert.match(rejected.err, /Ambiguous session ID/);
+        assert.equal(readFileSync(join(f.agent, "pi-tmux/pi-mux-restore.json"), "utf8"), before);
+        assert.deepEqual(await f.panes(), []);
+      });
+    },
+    TIMEOUT_MS,
+  );
+});
+
+describe("pi-mux state identity and persistence boundaries", () => {
+  it(
+    "does not mark or promote a different conversation in another pane of the temporary session",
+    async () => {
+      await fixture(async (f) => {
+        f.saved("temporary-parent");
+        const target = await openClient(f, "same-session-view", "temporary-parent", true);
+        await f.detachAll();
+        const created = await f.tmux([
+          "new-window",
+          "-d",
+          "-P",
+          "-F",
+          "#{pane_id}\t#{pane_pid}",
+          "-t",
+          target.session,
+          "sleep",
+          "120",
+        ]);
+        assert.equal(created.code, 0, created.err);
+        const [pane, pid] = created.out.trim().split("\t");
+        assert.ok(pane && pid);
+        const sibling = {
+          id: "sibling-id",
+          cwd: target.cwd,
+          file: join(f.agent, "sibling.jsonl"),
+          pid: Number(pid),
+        };
+        assert.equal(
+          (
+            await f.tmux([
+              "set-option",
+              "-p",
+              "-t",
+              pane,
+              "@pi-tmux-session",
+              Buffer.from(JSON.stringify(sibling)).toString("base64"),
+            ])
+          ).code,
+          0,
+        );
+        const source = await notificationSource(f, { pane, pid: sibling.pid });
+        assert.equal((await stateFor(f, sibling.id, source, "running")).code, 0);
+        assert.equal((await listedSession(f, target.id))?.temporary, true);
+        assert.equal((await listedSession(f, sibling.id))?.temporary, undefined);
+        assert.deepEqual(f.snapshotCandidates(), []);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "rejects an old server's state and clear after socket and pane identifiers are reused",
+    async () => {
+      await fixture(async (f) => {
+        const first = await publishedIdlePane(f);
+        const old = await notificationSource(f, { pane: first.pane, pid: first.metadata.pid });
+        assert.equal((await stateFor(f, first.metadata.id, old, "running")).code, 0);
+        await f.tmux(["kill-server"]);
+        const replacement = await publishedIdlePane(f);
+        const source = await notificationSource(f, {
+          pane: replacement.pane,
+          pid: replacement.metadata.pid,
+        });
+        assert.equal(
+          (await stateFor(f, replacement.metadata.id, source, "waiting-user", "New lifetime")).code,
+          0,
+        );
+        const before = await paneState(f, replacement.pane);
+        assert.equal((await stateFor(f, first.metadata.id, old, "running")).code, 1);
+        assert.equal(
+          (await f.run(["state", first.metadata.id, "--clear", "--source", JSON.stringify(old)]))
+            .code,
+          1,
+        );
+        assert.deepEqual(await paneState(f, replacement.pane), before);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  for (const failure of ["write-denied", "invalid-record"] as const) {
+    it(
+      `repairs an already published running promotion after ${failure} without stopping Pi`,
+      async () => {
+        await fixture(async (f) => {
+          const configuration = join(f.env.HOME, ".config/tmux/pi.conf");
+          writeFileSync(
+            configuration,
+            readFileSync(configuration, "utf8").replace(/^set-hook.*$/gm, ""),
+          );
+          f.saved("repair-id");
+          const target = await openClient(f, "repair-view", "repair-id", true);
+          await f.detachAll();
+          const source = await notificationSource(f, target);
+          const stateDirectory = join(f.agent, "pi-tmux");
+          const path = join(stateDirectory, "pi-mux-restore.json");
+          const original = readFileSync(path, "utf8");
+          try {
+            if (failure === "write-denied") chmodSync(stateDirectory, 0o500);
+            else writeFileSync(path, "{broken");
+            const failed = await stateFor(
+              f,
+              target.id,
+              source,
+              "running",
+              "Published before persistence",
+            );
+            assert.equal(failed.code, 1);
+            assert.match(failed.err, /repair-id/);
+            assert.deepEqual(await paneState(f, target.pane), {
+              version: 1,
+              sessionId: target.id,
+              state: "running",
+              title: "Published before persistence",
+            });
+            assert.equal(
+              readFileSync(path, "utf8"),
+              failure === "write-denied" ? original : "{broken",
+            );
+            assert.equal((await f.panes())[0]?.pid, target.pid);
+          } finally {
+            chmodSync(stateDirectory, 0o700);
+            if (failure === "invalid-record") writeFileSync(path, original);
+          }
+          assert.deepEqual(
+            await stateFor(f, target.id, source, "running", "Published before persistence"),
+            { code: 0, out: "", err: "" },
+          );
+          assert.deepEqual(f.snapshotCandidates(), [{ id: target.id, cwd: target.cwd }]);
+          assert.equal((await f.panes())[0]?.pid, target.pid);
+        });
+      },
+      TIMEOUT_MS,
+    );
+  }
+
+  it(
+    "repairs a failed normal-open promotion on the same running Pi",
+    async () => {
+      await fixture(async (f) => {
+        const configuration = join(f.env.HOME, ".config/tmux/pi.conf");
+        writeFileSync(
+          configuration,
+          readFileSync(configuration, "utf8").replace(/^set-hook.*$/gm, ""),
+        );
+        f.saved("open-repair-id");
+        const target = await openClient(f, "open-repair-view", "open-repair-id", true);
+        await f.detachAll();
+        const directory = join(f.agent, "pi-tmux");
+        const original = f.snapshot();
+        try {
+          chmodSync(directory, 0o500);
+          const failed = await f.run(["open", target.id]);
+          assert.equal(failed.code, 1);
+          assert.match(failed.err, /Cannot update open session open-repair-id/);
+          assert.deepEqual(f.snapshot(), original);
+        } finally {
+          chmodSync(directory, 0o700);
+        }
+        const repaired = await openClient(f, "open-repair-normal", target.id);
+        await f.detachAll();
+        assert.equal(repaired.pid, target.pid);
+        assert.deepEqual(f.snapshotCandidates(), [{ id: target.id, cwd: target.cwd }]);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  for (const store of ["absent", "invalid", "unreadable"] as const) {
+    it(
+      `publishes and clears on an external uninitialized server with ${store} membership storage`,
+      async () => {
+        await fixture(async (f) => {
+          const { pane, metadata } = await publishedIdlePane(f, "legacy", "external-id");
+          const source = await notificationSource(f, { pane, pid: metadata.pid });
+          const storePath = join(f.agent, "session-state.json");
+          if (store === "invalid") writeFileSync(storePath, "{broken");
+          if (store === "unreadable") mkdirSync(storePath);
+          for (const state of ["waiting-user", "running", "waiting-approval"]) {
+            const result = await stateFor(f, metadata.id, source, state);
+            assert.deepEqual(result, { code: 0, out: "", err: "" });
+          }
+          assert.equal((await f.tmux(["show-options", "-gqv", "@pi-mux-generation"])).out, "");
+          assert.equal(existsSync(join(f.agent, "pi-tmux/pi-mux-restore.json")), false);
+          const cleaned = await f.run([
+            "state",
+            metadata.id,
+            "--clear",
+            "--source",
+            JSON.stringify(source),
+          ]);
+          assert.deepEqual(cleaned, { code: 0, out: "", err: "" });
+          assert.equal(await paneState(f, pane), undefined);
+          if (store === "absent") assert.equal(existsSync(storePath), false);
+          if (store === "invalid") assert.equal(readFileSync(storePath, "utf8"), "{broken");
+          if (store === "unreadable") assert.equal(existsSync(storePath), true);
+        });
+      },
+      TIMEOUT_MS,
+    );
+  }
+
+  it(
+    "rejects duplicate live identities before publishing or clearing",
+    async () => {
+      await fixture(async (f) => {
+        const first = await publishedIdlePane(f, "ready", "duplicate-first");
+        const source = await notificationSource(f, { pane: first.pane, pid: first.metadata.pid });
+        assert.equal((await stateFor(f, first.metadata.id, source, "waiting-user")).code, 0);
+        const before = await paneState(f, first.pane);
+        const other = await publishedIdlePane(f, "ready", "duplicate-second");
+        const metadata = { ...other.metadata, id: first.metadata.id };
+        assert.equal(
+          (
+            await f.tmux([
+              "set-option",
+              "-p",
+              "-t",
+              other.pane,
+              "@pi-tmux-session",
+              Buffer.from(JSON.stringify(metadata)).toString("base64"),
+            ])
+          ).code,
+          0,
+        );
+        assert.equal((await stateFor(f, first.metadata.id, source, "running")).code, 1);
+        assert.equal(
+          (await f.run(["state", first.metadata.id, "--clear", "--source", JSON.stringify(source)]))
+            .code,
+          1,
+        );
+        assert.deepEqual(await paneState(f, first.pane), before);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "rejects each stale source component and a mismatched conversation without changing publication",
+    async () => {
+      await fixture(async (f) => {
+        const { pane, metadata } = await publishedIdlePane(f);
+        const source = await notificationSource(f, { pane, pid: metadata.pid });
+        assert.equal((await stateFor(f, metadata.id, source, "waiting-user", "Original")).code, 0);
+        const original = await paneState(f, pane);
+        const badSources = [
+          { ...source, socket: f.outer },
+          { ...source, serverPid: source.serverPid + 1 },
+          { ...source, serverStartTime: "0" },
+          { ...source, pane: "%99999" },
+          { ...source, pid: source.pid + 1 },
+          { ...source, started: "0" },
+        ];
+        for (const invalid of badSources) {
+          const failed = await stateFor(f, metadata.id, invalid, "running");
+          assert.equal(failed.code, 1, JSON.stringify(invalid));
+          assert.match(failed.err, new RegExp(metadata.id));
+          assert.deepEqual(await paneState(f, pane), original);
+          assert.equal(
+            (await f.run(["state", metadata.id, "--clear", "--source", JSON.stringify(invalid)]))
+              .code,
+            1,
+          );
+        }
+        assert.equal((await stateFor(f, "other-id", source, "running")).code, 1);
+        assert.deepEqual(await paneState(f, pane), original);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "returns 75 without modification when another operation holds the shared lock",
+    async () => {
+      await fixture(async (f) => {
+        const { pane, metadata } = await publishedIdlePane(f);
+        const source = await notificationSource(f, { pane, pid: metadata.pid });
+        const stateDirectory = join(f.agent, "pi-tmux");
+        mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+        const key = createHash("sha256").update(realpathSync(stateDirectory)).digest("hex");
+        const lock = createServer();
+        await new Promise<void>((resolve, reject) => {
+          lock.once("error", reject);
+          lock.listen(`\0pi-mux-${process.getuid!()}-${key}`, resolve);
+        });
+        try {
+          const result = await f.run([
+            "state",
+            metadata.id,
+            "running",
+            "--source",
+            JSON.stringify(source),
+            "--title",
+            "null",
+          ]);
+          assert.equal(result.code, 75);
+          assert.equal(result.out, "");
+          assert.match(result.err, /live-id.*lock/);
+          assert.equal(await paneState(f, pane), undefined);
+          assert.equal(existsSync(join(stateDirectory, "pi-mux-restore.json")), false);
+        } finally {
+          await new Promise<void>((resolve) => lock.close(() => resolve()));
+        }
+      });
+    },
+    TIMEOUT_MS,
+  );
+});
+
+describe("pi-mux temporary conversations", () => {
+  it("parses only the leading temporary flag and validates state payloads before side effects", () => {
+    assert.deepEqual(parseOperation(["open", "--temporary", "complete-id"]), {
+      kind: "open",
+      temporary: true,
+      id: "complete-id",
+    });
+    assert.deepEqual(parseOperation(["open", "complete-id"]), {
+      kind: "open",
+      temporary: false,
+      id: "complete-id",
+    });
+    for (const argv of [
+      ["open", "--temporary"],
+      ["open", "complete-id", "--temporary"],
+      ["open", "--temporary", "--temporary", "complete-id"],
+    ])
+      assert.throws(() => parseOperation(argv), /usage:/);
+    const source = {
+      socket: "/tmp/server.sock",
+      serverPid: 1,
+      serverStartTime: "1",
+      pane: "%0",
+      pid: 2,
+      started: "2",
+    };
+    const json = JSON.stringify(source);
+    assert.deepEqual(
+      parseOperation(["state", "complete-id", "running", "--title", '"title"', "--source", json]),
+      {
+        kind: "state",
+        id: "complete-id",
+        source,
+        notification: { clear: false, state: "running", title: "title" },
+      },
+    );
+    for (const args of [
+      ["running", "--source", json],
+      ["running", "--title", "1", "--source", json],
+      ["running", "--title", "null", "--source", "{}"],
+      ["running", "--title", "null", "--source", "{broken"],
+      ["running", "--title", "null", "--source", json, "--source", json],
+      ["--clear", "--source", json, "--title", "null"],
+      ["idle", "--source", json, "--title", "null"],
+    ])
+      assert.throws(() => parseOperation(["state", "complete-id", ...args]), /state complete-id:/);
+  });
+
+  it(
+    "excludes a temporary target before restoring other candidates and normally opens the same Pi without downgrade",
+    async () => {
+      await fixture(async (f) => {
+        enableStatePublisher(f);
+        f.saved("temporary-target");
+        f.saved("other-retained", f.cwdB);
+        f.seed([
+          { id: "temporary-target", cwd: f.cwdA },
+          { id: "other-retained", cwd: f.cwdB },
+        ]);
+        await f.client("browse", ["open", "--temporary", "temporary-target"]);
+        const target = await waitFor(async () =>
+          (await f.panes()).find((pane) => pane.id === "temporary-target"),
+        );
+        await waitFor(async () =>
+          (await listedSession(f, target.id))?.state === "waiting-user" ? true : undefined,
+        );
+        const other = (await f.panes()).find((pane) => pane.id === "other-retained");
+        assert.ok(other);
+        assert.equal((await f.panes()).length, 2);
+        assert.equal((await listedSession(f, target.id))?.temporary, true);
+        for (let i = 0; i < 2; i++) {
+          const snapshot = await f.run(["snapshot"]);
+          assert.equal(snapshot.code, 0, snapshot.err);
+          assert.deepEqual(f.snapshotCandidates(), [{ id: other.id, cwd: other.cwd }]);
+        }
+        const origin = JSON.stringify(await notificationSource(f, target));
+        const title = await f.run([
+          "state",
+          target.id,
+          "waiting-approval",
+          "--source",
+          origin,
+          "--title",
+          '"Browsing title"',
+        ]);
+        assert.equal(title.code, 0, title.err);
+        assert.equal((await listedSession(f, target.id))?.temporary, true);
+        assert.equal((await listedSession(f, target.id))?.title, "Browsing title");
+        const clear = await f.run(["state", target.id, "--clear", "--source", origin]);
+        assert.equal(clear.code, 0, clear.err);
+        assert.equal((await listedSession(f, target.id))?.temporary, true);
+        await f.detachAll();
+        assert.equal(await f.exitCode("browse"), 0);
+        await f.client("normal", ["open", target.id]);
+        await waitFor(() =>
+          f.snapshotCandidates().some((entry) => entry.id === target.id) ? true : undefined,
+        );
+        await f.detachAll();
+        assert.equal(await f.exitCode("normal"), 0);
+        assert.equal((await listedSession(f, target.id))?.temporary, undefined);
+        await f.client("no-downgrade", ["open", "--temporary", target.id]);
+        await f.detachAll();
+        assert.equal(await f.exitCode("no-downgrade"), 0);
+        const current = (await f.panes()).find((pane) => pane.id === target.id)!;
+        assert.deepEqual(
+          { pid: current.pid, pane: current.pane },
+          { pid: target.pid, pane: target.pane },
+        );
+        assert.equal((await f.panes()).length, 2);
+        assert.equal((await listedSession(f, target.id))?.temporary, undefined);
+        assert.equal(readdirSync(f.root).filter((entry) => entry.startsWith("argv-")).length, 2);
+        const closed = await f.run(["close", target.id]);
+        assert.equal(closed.code, 0, closed.err);
+        assert.deepEqual(
+          (await f.panes()).map((pane) => pane.id),
+          [other.id],
+        );
+        assert.ok(existsSync(target.file));
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "promotes the existing Pi from the real publisher's running event and retains it after settling",
+    async () => {
+      await fixture(async (f) => {
+        enableStatePublisher(f);
+        f.saved("execute-temporary");
+        await f.client("execute", ["open", "--temporary", "execute-temporary"]);
+        const target = await firstPane(f);
+        await waitFor(async () =>
+          (await listedSession(f, target.id))?.state === "waiting-user" ? true : undefined,
+        );
+        assert.equal((await listedSession(f, target.id))?.temporary, true);
+        assert.deepEqual(f.snapshotCandidates(), []);
+        await f.persist(target);
+        await waitFor(() =>
+          f.snapshotCandidates().some((entry) => entry.id === target.id) ? true : undefined,
+        );
+        await waitFor(async () =>
+          (await listedSession(f, target.id))?.state === "waiting-user" ? true : undefined,
+        );
+        const origin = JSON.stringify(await notificationSource(f, target));
+        const repeated = await f.run([
+          "state",
+          target.id,
+          "running",
+          "--title",
+          "null",
+          "--source",
+          origin,
+        ]);
+        assert.equal(repeated.code, 0, repeated.err);
+        const waited = await f.run([
+          "state",
+          target.id,
+          "waiting-user",
+          "--title",
+          "null",
+          "--source",
+          origin,
+        ]);
+        assert.equal(waited.code, 0, waited.err);
+        assert.equal((await listedSession(f, target.id))?.temporary, undefined);
+        assert.equal((await f.panes())[0]!.pid, target.pid);
+        assert.equal((await f.panes()).length, 1);
+        assert.equal((await f.run(["snapshot"])).code, 0);
+        assert.deepEqual(f.snapshotCandidates(), [{ id: target.id, cwd: target.cwd }]);
+        await f.detachAll();
+        assert.equal(await f.exitCode("execute"), 0);
+        const closed = await f.run(["close", target.id]);
+        assert.equal(closed.code, 0, closed.err);
+        assert.ok(existsSync(target.file));
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "keeps a temporary-only conversation out of restore after closing and validates missing targets without removing candidates",
+    async () => {
+      await fixture(async (f) => {
+        f.saved("browse-close");
+        f.seed([{ id: "browse-close", cwd: f.cwdA }]);
+        const before = f.snapshot();
+        const missing = await f.run(["open", "--temporary", "missing-id"]);
+        assert.equal(missing.code, 1);
+        assert.deepEqual(f.snapshot(), before);
+        await f.client("browse-close", ["open", "--temporary", "browse-close"]);
+        const target = await firstPane(f);
+        await f.detachAll();
+        assert.equal(await f.exitCode("browse-close"), 0);
+        const closed = await f.run(["close", target.id]);
+        assert.equal(closed.code, 0, closed.err);
+        assert.deepEqual(f.snapshotCandidates(), []);
+        assert.equal((await f.run(["restore"])).code, 0);
+        assert.deepEqual(await f.panes(), []);
+        assert.ok(existsSync(target.file));
+      });
+    },
+    TIMEOUT_MS,
+  );
+});
+
+describe("pi-mux conditional close", () => {
+  it("parses only the leading --if-temporary flag", () => {
+    assert.deepEqual(parseOperation(["close", "--if-temporary", "complete-id"]), {
+      kind: "close",
+      id: "complete-id",
+      ifTemporary: true,
+    });
+    assert.deepEqual(parseOperation(["close", "complete-id"]), {
+      kind: "close",
+      id: "complete-id",
+      ifTemporary: false,
+    });
+    for (const argv of [
+      ["close", "complete-id", "--if-temporary"],
+      ["close", "--if-temporary", "--if-temporary", "complete-id"],
+      ["close", "--if-temporary"],
+    ])
+      assert.throws(() => parseOperation(argv), /usage:/);
+  });
+
+  it(
+    "stops a temporary Pi with candidate removal and keeps the saved file",
+    async () => {
+      await fixture(async (f) => {
+        const file = f.saved("conditional-id");
+        f.seed([{ id: "other-kept", cwd: f.cwdB }]);
+        const opened = await openClient(f, "conditional-view", "conditional-id", true);
+        await f.detachAll();
+        const result = await f.run(["close", "--if-temporary", opened.id]);
+        assert.deepEqual(result, { code: 0, out: "", err: "" });
+        assert.deepEqual(await f.panes(), []);
+        await waitFor(() =>
+          f.snapshotCandidates().some((entry) => entry.id === opened.id) ? undefined : true,
+        );
+        assert.equal(existsSync(file), true);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "keeps a promoted Pi, its pane, and restore candidates unchanged",
+    async () => {
+      await fixture(async (f) => {
+        f.saved("promoted-id");
+        const opened = await openClient(f, "promoted-view", "promoted-id", true);
+        const source = await notificationSource(f, opened);
+        assert.equal((await stateFor(f, opened.id, source, "running")).code, 0);
+        await f.detachAll();
+        assert.deepEqual(f.snapshotCandidates(), [{ id: opened.id, cwd: f.cwdA }]);
+        const result = await f.run(["close", "--if-temporary", opened.id]);
+        assert.deepEqual(result, { code: 0, out: "", err: "" });
+        assert.equal((await f.panes())[0]?.pid, opened.pid);
+        assert.deepEqual(f.snapshotCandidates(), [{ id: opened.id, cwd: f.cwdA }]);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "succeeds without any change when no running target exists",
+    async () => {
+      await fixture(async (f) => {
+        f.saved("absent-id");
+        f.seed([{ id: "absent-id", cwd: f.cwdA }]);
+        const before = f.snapshot();
+        const result = await f.run(["close", "--if-temporary", "absent-id"]);
+        assert.deepEqual(result, { code: 0, out: "", err: "" });
+        assert.deepEqual(f.snapshot(), before);
+        assert.deepEqual(await f.panes(), []);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "rejects duplicate live identities without stopping either",
+    async () => {
+      await fixture(async (f) => {
+        const first = await publishedIdlePane(f, "ready", "duplicate-close-first");
+        const second = await publishedIdlePane(f, "ready", "duplicate-close-second");
+        const duplicated = { ...second.metadata, id: first.metadata.id };
+        assert.equal(
+          (
+            await f.tmux([
+              "set-option",
+              "-p",
+              "-t",
+              second.pane,
+              "@pi-tmux-session",
+              Buffer.from(JSON.stringify(duplicated)).toString("base64"),
+            ])
+          ).code,
+          0,
+        );
+        const result = await f.run(["close", "--if-temporary", first.metadata.id]);
+        assert.equal(result.code, 1);
+        assert.match(result.err, /Multiple pi processes/);
+        assert.equal((await f.panes()).length, 2);
+        assert.equal(existsSync(`/proc/${first.metadata.pid}`), true);
+        assert.equal(existsSync(`/proc/${second.metadata.pid}`), true);
+      });
+    },
+    TIMEOUT_MS,
+  );
+});
+
+describe("pi-mux list title fallback", () => {
+  it(
+    "resolves the latest session_info name when no published title exists",
+    async () => {
+      await fixture(async (f) => {
+        const { metadata } = await publishedIdlePane(f, "ready", "fallback-id");
+        const file = join(f.agent, "sessions", "fallback-id.jsonl");
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(
+          file,
+          [
+            JSON.stringify({ type: "session", version: 3, id: metadata.id, cwd: f.cwdA }),
+            JSON.stringify({ type: "session_info", name: "Older name" }),
+            JSON.stringify({ type: "message", role: "user", content: "fixture" }),
+            JSON.stringify({ type: "session_info", name: "Latest name" }),
+          ].join("\n") + "\n",
+        );
+        const listed = JSON.parse((await f.run(["list"])).out) as {
+          sessions: { id: string; state: string | null; title: string | null }[];
+        }[];
+        const session = listed
+          .flatMap((workspace) => workspace.sessions)
+          .find((entry) => entry.id === metadata.id);
+        assert.ok(session);
+        assert.equal(session.title, "Latest name");
+        assert.equal(session.state, null);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "prefers the published title over the saved session name",
+    async () => {
+      await fixture(async (f) => {
+        const { pane, metadata } = await publishedIdlePane(f, "ready", "published-id");
+        const file = join(f.agent, "sessions", "published-id.jsonl");
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(
+          file,
+          [JSON.stringify({ type: "session_info", name: "Saved name" })].join("\n") + "\n",
+        );
+        await f.tmux([
+          "set-option",
+          "-p",
+          "-t",
+          pane,
+          "@pi_session_state",
+          JSON.stringify({
+            version: 1,
+            sessionId: metadata.id,
+            state: "running",
+            title: "Published name",
+          }),
+        ]);
+        const listed = JSON.parse((await f.run(["list"])).out) as {
+          sessions: { id: string; state: string | null; title: string | null }[];
+        }[];
+        const session = listed
+          .flatMap((workspace) => workspace.sessions)
+          .find((entry) => entry.id === metadata.id);
+        assert.deepEqual(session, {
+          id: metadata.id,
+          file: metadata.file,
+          state: "running",
+          title: "Published name",
+        });
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "treats an empty latest name as an explicit clear and reports null",
+    async () => {
+      await fixture(async (f) => {
+        const { metadata } = await publishedIdlePane(f, "ready", "cleared-id");
+        const file = join(f.agent, "sessions", "cleared-id.jsonl");
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(
+          file,
+          [
+            JSON.stringify({ type: "session_info", name: "Previous name" }),
+            JSON.stringify({ type: "session_info", name: "" }),
+          ].join("\n") + "\n",
+        );
+        const listed = JSON.parse((await f.run(["list"])).out) as {
+          sessions: { id: string; title: string | null }[];
+        }[];
+        const session = listed
+          .flatMap((workspace) => workspace.sessions)
+          .find((entry) => entry.id === metadata.id);
+        assert.equal(session?.title, null);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "falls back to null for missing, unreadable, or entry-less session files",
+    async () => {
+      await fixture(async (f) => {
+        const created = await publishedIdlePane(f, "ready", "created-id");
+        const missing = await publishedIdlePane(f, "ready", "missing-id");
+        const plain = await publishedIdlePane(f, "ready", "plain-id");
+        const createdFile = join(f.agent, "sessions", "created-id.jsonl");
+        mkdirSync(createdFile, { recursive: true });
+        const plainFile = join(f.agent, "sessions", "plain-id.jsonl");
+        mkdirSync(dirname(plainFile), { recursive: true });
+        writeFileSync(
+          plainFile,
+          JSON.stringify({ type: "session", version: 3, id: "plain-id" }) + "\n",
+        );
+        const listed = JSON.parse((await f.run(["list"])).out) as {
+          sessions: { id: string; title: string | null }[];
+        }[];
+        const titles = new Map(
+          listed.flatMap((workspace) => workspace.sessions).map((entry) => [entry.id, entry.title]),
+        );
+        assert.equal(titles.get(created.metadata.id), null);
+        assert.equal(titles.get(missing.metadata.id), null);
+        assert.equal(titles.get(plain.metadata.id), null);
+      });
+    },
+    TIMEOUT_MS,
+  );
+});
+
+describe("pi-mux conditional close edge paths", () => {
+  it(
+    "stops an initializing temporary managed pi before its metadata is published",
+    async () => {
+      await fixture(async (f) => {
+        const id = "initializing-temporary";
+        mkdirSync(dirname(f.socket), { recursive: true, mode: 0o700 });
+        const created = await f.tmux([
+          "new-session",
+          "-d",
+          "-P",
+          "-F",
+          "#{session_id}\t#{pane_id}\t#{pane_pid}",
+          "-s",
+          "initializing-" + id,
+          "-c",
+          f.cwdA,
+          "--",
+          "/usr/bin/env",
+          `PI_TMUX_SESSION_ID=${id}`,
+          `PI_TMUX_TEMPORARY=${id}`,
+          "sleep",
+          "120",
+        ]);
+        assert.equal(created.code, 0, created.err);
+        const [session, pane, pidText] = created.out.trim().split("\t");
+        const pid = Number(pidText);
+        assert.ok(session && pane && pid);
+        assert.equal(
+          (await f.tmux(["set-environment", "-t", session, "PI_TMUX_SESSION_ID", id])).code,
+          0,
+        );
+        assert.equal(
+          (await f.tmux(["set-environment", "-t", session, "PI_TMUX_TEMPORARY", id])).code,
+          0,
+        );
+        const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+        const started = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]!;
+        assert.equal(
+          (
+            await f.tmux([
+              "set-option",
+              "-p",
+              "-t",
+              pane,
+              "@pi-mux-launch",
+              JSON.stringify({ id, pid, started }),
+            ])
+          ).code,
+          0,
+        );
+        const result = await f.run(["close", "--if-temporary", id]);
+        assert.deepEqual(result, { code: 0, out: "", err: "" });
+        assert.deepEqual(await f.panes(), []);
+        assert.equal(existsSync(`/proc/${pid}`), false);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "returns 0 for a non-temporary target even when the restore record is invalid",
+    async () => {
+      await fixture(async (f) => {
+        f.saved("normal-open-id");
+        const opened = await openClient(f, "normal-open-view", "normal-open-id");
+        await f.detachAll();
+        await f.exitCode("normal-open-view");
+        const record = join(f.agent, "pi-tmux/pi-mux-restore.json");
+        await waitFor(async () => {
+          const observed = readFileSync(record, "utf8");
+          await Bun.sleep(200);
+          return readFileSync(record, "utf8") === observed ? true : undefined;
+        });
+        writeFileSync(record, "{broken");
+        const promoted = await f.run(["close", "--if-temporary", opened.id]);
+        assert.deepEqual(promoted, { code: 0, out: "", err: "" });
+        assert.equal((await f.panes())[0]?.pid, opened.pid);
+        assert.equal(readFileSync(record, "utf8"), "{broken");
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "returns 0 for an absent target without touching an invalid restore record",
+    async () => {
+      await fixture(async (f) => {
+        f.saved("absent-invalid-id");
+        f.seed([{ id: "absent-invalid-id", cwd: f.cwdA }]);
+        const record = join(f.agent, "pi-tmux/pi-mux-restore.json");
+        writeFileSync(record, "{broken");
+        const result = await f.run(["close", "--if-temporary", "absent-invalid-id"]);
+        assert.deepEqual(result, { code: 0, out: "", err: "" });
+        assert.equal(readFileSync(record, "utf8"), "{broken");
+        assert.deepEqual(await f.panes(), []);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "keeps a temporary pi running and reports an invalid restore record without stopping",
+    async () => {
+      await fixture(async (f) => {
+        f.saved("broken-record-id");
+        const opened = await openClient(f, "broken-record-view", "broken-record-id", true);
+        await f.detachAll();
+        await f.exitCode("broken-record-view");
+        const record = join(f.agent, "pi-tmux/pi-mux-restore.json");
+        await waitFor(async () => {
+          const observed = readFileSync(record, "utf8");
+          await Bun.sleep(200);
+          return readFileSync(record, "utf8") === observed ? true : undefined;
+        });
+        writeFileSync(record, "{broken");
+        const result = await f.run(["close", "--if-temporary", opened.id]);
+        assert.equal(result.code, 1, JSON.stringify(result));
+        assert.match(result.err, /Cannot close session broken-record-id/);
+        assert.match(result.err, /Cannot read snapshot|Invalid snapshot/);
+        assert.equal((await f.panes())[0]?.pid, opened.pid);
+        assert.equal(existsSync(`/proc/${opened.pid}`), true);
+        assert.equal(readFileSync(record, "utf8"), "{broken");
+        assert.equal(existsSync(opened.file), true);
       });
     },
     TIMEOUT_MS,

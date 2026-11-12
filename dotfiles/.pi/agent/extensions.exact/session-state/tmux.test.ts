@@ -2,18 +2,17 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createServer } from "node:net";
-import { parse, quote } from "shell-quote";
+import { parse } from "shell-quote";
 import { describe, it } from "bun:test";
 import type { BackgroundBashOutcome as ToolExecutionOutcome } from "../tools/background-bash.ts";
 import {
   dedicatedSocketPath,
   detectManagedPane,
   stateOptionValue,
-  PANE_OPTION_NAME,
   publishState,
-  setStateOptionCommand,
   unsetStateOption,
-  unsetStateOptionCommand,
+  stateCommand,
+  processStartTime,
   type BashRunner,
   type ManagedPaneBinding,
 } from "./tmux.ts";
@@ -22,8 +21,11 @@ const DEDICATED_SOCKET = "/run/user/dedicated/pi-tmux/server.sock";
 
 const verifiedBinding: ManagedPaneBinding = {
   socketPath: DEDICATED_SOCKET,
-  serverPid: 4242,
+  serverPid: process.pid,
   paneId: "%0",
+  serverStartTime: processStartTime(process.pid),
+  pid: process.pid,
+  started: processStartTime(process.pid),
 };
 function completedResult(text: string, isError = false): ToolExecutionOutcome {
   return {
@@ -67,19 +69,22 @@ class FakeTmuxServer {
   readonly run: BashRunner = async (command) => {
     this.commands.push(command);
     const argv = parse(command) as string[];
-    const keyword = argv[3]!;
+    const keyword = argv[0] === "pi-mux" ? "state" : argv[3]!;
     const custom = this.responses[keyword]?.();
     if (custom) return custom;
     if (keyword === "display-message") return completedResult(this.verifiedFieldsLine());
-    if (keyword === "show-options") {
-      const paneId = argv[argv.indexOf("-t") + 1]!;
-      const value = this.paneOptions.get(paneId);
-      return completedResult(value ?? "");
-    }
-    if (keyword === "set-option") {
-      const paneId = argv[argv.indexOf("-t") + 1]!;
-      if (argv.includes("-u")) this.paneOptions.delete(paneId);
-      else this.paneOptions.set(paneId, argv.at(-1)!);
+    if (keyword === "state") {
+      const source = JSON.parse(argv[argv.indexOf("--source") + 1]!);
+      if (argv.includes("--clear")) this.paneOptions.delete(source.pane);
+      else
+        this.paneOptions.set(
+          source.pane,
+          stateOptionValue(
+            argv[2]!,
+            argv[3] as "running",
+            JSON.parse(argv[argv.indexOf("--title") + 1]!),
+          ),
+        );
       return completedResult("");
     }
     return completedResult(`unexpected tmux keyword: ${keyword}`, true);
@@ -88,7 +93,7 @@ class FakeTmuxServer {
   private verifiedFieldsLine(): string {
     const fields = [
       this.socketPath,
-      "4242",
+      String(process.pid),
       "%0",
       readlinkSync("/proc/self/fd/0"),
       String(process.pid),
@@ -100,7 +105,7 @@ class FakeTmuxServer {
 function dedicatedEnv(overrides: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
   return {
     XDG_RUNTIME_DIR: "/run/user/dedicated",
-    TMUX: `${DEDICATED_SOCKET},4242`,
+    TMUX: `${DEDICATED_SOCKET},${process.pid}`,
     TMUX_PANE: "%0",
     ...overrides,
   };
@@ -116,7 +121,11 @@ async function createDedicatedCandidate() {
     socket.once("error", reject);
     socket.listen(socketPath, resolve);
   });
-  const env = { XDG_RUNTIME_DIR: runtimeDir, TMUX: `${socketPath},4242`, TMUX_PANE: "%0" };
+  const env = {
+    XDG_RUNTIME_DIR: runtimeDir,
+    TMUX: `${socketPath},${process.pid}`,
+    TMUX_PANE: "%0",
+  };
   return {
     env,
     socketPath,
@@ -164,41 +173,23 @@ describe("state option value", () => {
   });
 });
 
-describe("tmux command builders", () => {
-  it("starts every command with tmux -S <absolute path>", () => {
-    const value = stateOptionValue('s\'1 "x"', "running");
-    for (const command of [
-      setStateOptionCommand(DEDICATED_SOCKET, "%0", value),
-      unsetStateOptionCommand(DEDICATED_SOCKET, "%0"),
-    ]) {
-      const argv = parse(command) as string[];
-      assert.deepEqual(argv.slice(0, 3), ["tmux", "-S", DEDICATED_SOCKET]);
-    }
-  });
-
-  it("passes the value as one argument with set-option -p and survives a quote round trip", () => {
-    const value = stateOptionValue('s\'id "x"; $(touch /unsafe) #{pane_id}', "waiting-approval");
-    const argv = parse(setStateOptionCommand(DEDICATED_SOCKET, "%0", value)) as string[];
-    assert.deepEqual(argv.slice(3), ["set-option", "-p", "-t", "%0", PANE_OPTION_NAME, value]);
-    assert.equal(
-      setStateOptionCommand(DEDICATED_SOCKET, "%0", value),
-      quote([
-        "tmux",
-        "-S",
-        DEDICATED_SOCKET,
-        "set-option",
-        "-p",
-        "-t",
-        "%0",
-        PANE_OPTION_NAME,
-        value,
-      ]),
-    );
-  });
-
-  it("unset removes the pane-local value with set-option -p -u", () => {
-    const argv = parse(unsetStateOptionCommand(DEDICATED_SOCKET, "%0")) as string[];
-    assert.deepEqual(argv.slice(3), ["set-option", "-p", "-u", "-t", "%0", PANE_OPTION_NAME]);
+describe("state command builder", () => {
+  it("passes source and title as single JSON arguments without tmux expansion", () => {
+    const title = "Quoted 'title' \"\n; $(touch /unsafe) #{pane_id}";
+    const argv = parse(
+      stateCommand(verifiedBinding, "s1", ["running", "--title", JSON.stringify(title)]),
+    ) as string[];
+    assert.deepEqual(argv.slice(0, 4), ["pi-mux", "state", "s1", "running"]);
+    assert.equal(JSON.parse(argv[argv.indexOf("--title") + 1]!), title);
+    assert.deepEqual(JSON.parse(argv[argv.indexOf("--source") + 1]!), {
+      socket: DEDICATED_SOCKET,
+      serverPid: process.pid,
+      serverStartTime: verifiedBinding.serverStartTime,
+      pane: "%0",
+      pid: process.pid,
+      started: verifiedBinding.started,
+    });
+    assert.equal(argv.includes("-F"), false);
   });
 });
 
@@ -233,7 +224,11 @@ describe("detectManagedPane", () => {
     const runtimeDir = mkdtempSync("/tmp/work/dotfiles/session-state-tmux-unit-");
     try {
       const socketPath = join(runtimeDir, "pi-tmux/server.sock");
-      const env = { XDG_RUNTIME_DIR: runtimeDir, TMUX: `${socketPath},4242`, TMUX_PANE: "%0" };
+      const env = {
+        XDG_RUNTIME_DIR: runtimeDir,
+        TMUX: `${socketPath},${process.pid}`,
+        TMUX_PANE: "%0",
+      };
       const server = new FakeTmuxServer();
       const detection = await detectManagedPane(server.run, env);
       assert.deepEqual(detection, { status: "unmanaged" });
@@ -250,7 +245,7 @@ describe("detectManagedPane", () => {
       const detection = await detectManagedPane(server.run, candidate.env);
       assert.deepEqual(detection, {
         status: "managed",
-        binding: { socketPath: candidate.socketPath, serverPid: 4242, paneId: "%0" },
+        binding: { ...verifiedBinding, socketPath: candidate.socketPath },
       });
       assert.equal(server.commands.length, 1);
       const argv = parse(server.commands[0]!) as string[];
@@ -268,14 +263,17 @@ describe("detectManagedPane", () => {
       const selfPid = process.pid;
       const tty = readlinkSync("/proc/self/fd/0");
       const socketPath = candidate.socketPath;
-      const matching = [socketPath, "4242", "%0", tty, String(selfPid)].join("\t");
+      const matching = [socketPath, String(process.pid), "%0", tty, String(selfPid)].join("\t");
       const mismatchedReplies = [
         ["serverPid", [socketPath, "9999", "%0", tty, String(selfPid)].join("\t")],
-        ["paneId", [socketPath, "4242", "%9", tty, String(selfPid)].join("\t")],
-        ["paneTty", [socketPath, "4242", "%0", "/dev/other/pty", String(selfPid)].join("\t")],
-        ["panePid", [socketPath, "4242", "%0", tty, String(selfPid + 1)].join("\t")],
-        ["socket", ["/other/socket", "4242", "%0", tty, String(selfPid)].join("\t")],
-        ["shortLine", [socketPath, "4242"].join("\t")],
+        ["paneId", [socketPath, String(process.pid), "%9", tty, String(selfPid)].join("\t")],
+        [
+          "paneTty",
+          [socketPath, String(process.pid), "%0", "/dev/other/pty", String(selfPid)].join("\t"),
+        ],
+        ["panePid", [socketPath, String(process.pid), "%0", tty, String(selfPid + 1)].join("\t")],
+        ["socket", ["/other/socket", String(process.pid), "%0", tty, String(selfPid)].join("\t")],
+        ["shortLine", [socketPath, String(process.pid)].join("\t")],
       ] as const;
       for (const [field, reply] of mismatchedReplies) {
         const server = new FakeTmuxServer(
@@ -292,7 +290,7 @@ describe("detectManagedPane", () => {
       );
       assert.deepEqual(await detectManagedPane(verified.run, candidate.env, selfPid), {
         status: "managed",
-        binding: { socketPath, serverPid: 4242, paneId: "%0" },
+        binding: { ...verifiedBinding, socketPath },
       });
     } finally {
       await candidate.cleanup();
@@ -380,7 +378,7 @@ describe("publishState", () => {
     [abortedOutcome(), { status: "aborted" }],
   ] as const) {
     it(`propagates ${outcome.status} without another command`, async () => {
-      const server = new FakeTmuxServer({ "set-option": () => outcome });
+      const server = new FakeTmuxServer({ state: () => outcome });
       assert.deepEqual(await publishState(server.run, verifiedBinding, "s1", "running"), expected);
       assert.equal(server.commands.length, 1);
     });
@@ -392,7 +390,7 @@ describe("unsetStateOption", () => {
     const server = new FakeTmuxServer();
     server.setPaneOption("%0", stateOptionValue("s1", "running"));
 
-    const outcome = await unsetStateOption(server.run, verifiedBinding);
+    const outcome = await unsetStateOption(server.run, verifiedBinding, "s1");
 
     assert.deepEqual(outcome, { status: "published" });
     assert.equal(server.paneOptionOf("%0"), undefined);
@@ -400,32 +398,33 @@ describe("unsetStateOption", () => {
 
   it("returns distinct results for non-zero exits, execution failures, and aborts", async () => {
     const failed = new FakeTmuxServer({
-      "set-option": () => completedResult("cannot unset option", true),
+      state: () => completedResult("cannot unset option", true),
     });
-    assert.deepEqual(await unsetStateOption(failed.run, verifiedBinding), {
+    assert.deepEqual(await unsetStateOption(failed.run, verifiedBinding, "s1"), {
       status: "failed",
       message: "cannot unset option",
     });
 
     const thrown = new FakeTmuxServer({
-      "set-option": () => failedOutcome(new Error("no receiver")),
+      state: () => failedOutcome(new Error("no receiver")),
     });
-    assert.deepEqual(await unsetStateOption(thrown.run, verifiedBinding), {
+    assert.deepEqual(await unsetStateOption(thrown.run, verifiedBinding, "s1"), {
       status: "failed",
       message: "no receiver",
     });
 
     const aborted = new FakeTmuxServer({
-      "set-option": () => abortedOutcome(),
+      state: () => abortedOutcome(),
     });
-    assert.deepEqual(await unsetStateOption(aborted.run, verifiedBinding), { status: "aborted" });
+    assert.deepEqual(await unsetStateOption(aborted.run, verifiedBinding, "s1"), {
+      status: "aborted",
+    });
   });
 });
 
 describe("pane publication failure boundaries", () => {
   it("rejects a relative runtime or socket path before dispatch", () => {
     assert.throws(() => dedicatedSocketPath({ XDG_RUNTIME_DIR: "relative" }), /must be absolute/);
-    assert.throws(() => setStateOptionCommand("relative.sock", "%0", "value"), /must be absolute/);
   });
 
   it("does not trust a regular file as a managed socket", async () => {
@@ -435,7 +434,11 @@ describe("pane publication failure boundaries", () => {
     writeFileSync(socketPath, "not a socket");
     const server = new FakeTmuxServer({}, socketPath);
     try {
-      const env = { XDG_RUNTIME_DIR: runtimeDir, TMUX: `${socketPath},4242`, TMUX_PANE: "%0" };
+      const env = {
+        XDG_RUNTIME_DIR: runtimeDir,
+        TMUX: `${socketPath},${process.pid}`,
+        TMUX_PANE: "%0",
+      };
       assert.deepEqual(await detectManagedPane(server.run, env), { status: "unmanaged" });
       assert.deepEqual(server.commands, []);
     } finally {
@@ -445,7 +448,7 @@ describe("pane publication failure boundaries", () => {
 
   it("treats a nonzero structured exit code as failure even without isError", async () => {
     const server = new FakeTmuxServer({
-      "set-option": () => ({
+      state: () => ({
         status: "completed",
         result: {
           content: [{ type: "text", text: "nonzero" }],

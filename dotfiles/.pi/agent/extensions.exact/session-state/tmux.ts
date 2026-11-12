@@ -1,4 +1,4 @@
-import { readlinkSync, statSync } from "node:fs";
+import { readFileSync, readlinkSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { quote } from "shell-quote";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
@@ -13,6 +13,9 @@ export interface ManagedPaneBinding {
   socketPath: string;
   serverPid: number;
   paneId: string;
+  serverStartTime: string;
+  pid: number;
+  started: string;
 }
 
 export type BashRunner = (command: string) => Promise<BackgroundBashOutcome>;
@@ -25,6 +28,7 @@ export type ManagedPaneDetection =
 
 export type PublicationOutcome =
   | { status: "published" }
+  | { status: "busy" }
   | { status: "aborted" }
   | { status: "failed"; message: string };
 
@@ -47,12 +51,28 @@ export function tmuxCommandLine(socketPath: string, args: string[]): string {
   return quote(["tmux", "-S", socketPath, ...args]);
 }
 
-export function setStateOptionCommand(socketPath: string, paneId: string, value: string): string {
-  return tmuxCommandLine(socketPath, ["set-option", "-p", "-t", paneId, PANE_OPTION_NAME, value]);
+export function stateCommand(
+  binding: ManagedPaneBinding,
+  sessionId: string,
+  args: string[],
+): string {
+  const source = {
+    socket: binding.socketPath,
+    serverPid: binding.serverPid,
+    serverStartTime: binding.serverStartTime,
+    pane: binding.paneId,
+    pid: binding.pid,
+    started: binding.started,
+  };
+  return quote(["pi-mux", "state", sessionId, ...args, "--source", JSON.stringify(source)]);
 }
 
-export function unsetStateOptionCommand(socketPath: string, paneId: string): string {
-  return tmuxCommandLine(socketPath, ["set-option", "-p", "-u", "-t", paneId, PANE_OPTION_NAME]);
+export function processStartTime(pid: number): string {
+  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+  const started = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+  if (!started || !/^\d+$/.test(started))
+    throw new Error(`Cannot identify process start time: ${pid}`);
+  return started;
 }
 
 export async function detectManagedPane(
@@ -92,7 +112,14 @@ export async function detectManagedPane(
     if (!isVerified) return { status: "unmanaged" };
     return {
       status: "managed",
-      binding: { socketPath, serverPid: Number(actualServerPid), paneId },
+      binding: {
+        socketPath,
+        serverPid: Number(actualServerPid),
+        paneId,
+        serverStartTime: processStartTime(Number(actualServerPid)),
+        pid: selfPid,
+        started: processStartTime(selfPid),
+      },
     };
   } catch (error) {
     return { status: "failed", message: errorMessage(error) };
@@ -106,16 +133,18 @@ export async function publishState(
   state: SessionState,
   title: string | null = null,
 ): Promise<PublicationOutcome> {
-  const value = stateOptionValue(sessionId, state, title);
-  const set = await run(setStateOptionCommand(binding.socketPath, binding.paneId, value));
+  const set = await run(
+    stateCommand(binding, sessionId, [state, "--title", JSON.stringify(title)]),
+  );
   return executionFailure(set) ?? { status: "published" };
 }
 
 export async function unsetStateOption(
   run: BashRunner,
   binding: ManagedPaneBinding,
+  sessionId: string,
 ): Promise<PublicationOutcome> {
-  const outcome = await run(unsetStateOptionCommand(binding.socketPath, binding.paneId));
+  const outcome = await run(stateCommand(binding, sessionId, ["--clear"]));
   return executionFailure(outcome) ?? { status: "published" };
 }
 
@@ -123,6 +152,8 @@ function executionFailure(outcome: BackgroundBashOutcome): PublicationOutcome | 
   if (outcome.status === "aborted") return { status: "aborted" };
   if (outcome.status === "failed" || outcome.status === "unavailable")
     return { status: "failed", message: errorMessage(outcome.error) };
+  if ((outcome.result.structuredContent as { exit_code?: unknown } | undefined)?.exit_code === 75)
+    return { status: "busy" };
   const failure = bashResultFailure(outcome.result);
   return failure === undefined ? undefined : { status: "failed", message: failure };
 }

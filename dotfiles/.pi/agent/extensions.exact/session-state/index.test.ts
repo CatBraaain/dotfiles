@@ -25,7 +25,7 @@ import { stateOptionValue } from "./tmux.ts";
 type EventHandler = (event: ExtensionEvent, ctx: ExtensionContext) => unknown;
 type KeywordResponse = (command: string) => ToolExecutionOutcome | Promise<ToolExecutionOutcome>;
 
-const WAIT_TIMEOUT_MS = 3_000;
+const WAIT_TIMEOUT_MS = 5_000;
 
 class FakeTmuxServer {
   readonly commands: string[] = [];
@@ -53,19 +53,22 @@ class FakeTmuxServer {
     try {
       this.commands.push(command);
       const argv = parse(command) as string[];
-      const keyword = argv[3]!;
+      const keyword = argv[0] === "pi-mux" ? "state" : argv[3]!;
       const custom = this.responses[keyword]?.(command);
       if (custom) return await custom;
       if (keyword === "display-message") return completedResult(this.verifiedFieldsLine());
-      if (keyword === "show-options") {
-        const paneId = argv[argv.indexOf("-t") + 1]!;
-        const value = this.paneOptions.get(paneId);
-        return completedResult(value ?? "");
-      }
-      if (keyword === "set-option") {
-        const paneId = argv[argv.indexOf("-t") + 1]!;
-        if (argv.includes("-u")) this.paneOptions.delete(paneId);
-        else this.paneOptions.set(paneId, argv.at(-1)!);
+      if (keyword === "state") {
+        const source = JSON.parse(argv[argv.indexOf("--source") + 1]!);
+        if (argv.includes("--clear")) this.paneOptions.delete(source.pane);
+        else
+          this.paneOptions.set(
+            source.pane,
+            stateOptionValue(
+              argv[2]!,
+              argv[3] as "running",
+              JSON.parse(argv[argv.indexOf("--title") + 1]!),
+            ),
+          );
         return completedResult("");
       }
       return completedResult(`unexpected tmux keyword: ${keyword}`, true);
@@ -77,7 +80,7 @@ class FakeTmuxServer {
   private verifiedFieldsLine(): string {
     const fields = [
       this.socketPath,
-      "4242",
+      String(process.pid),
       "%0",
       readlinkSync("/proc/self/fd/0"),
       String(process.pid),
@@ -158,10 +161,10 @@ async function createExtensionHarness(
   const agent = options.agent ?? "main";
   process.env.XDG_RUNTIME_DIR = runtimeDir;
   if (options.dedicated === false) {
-    process.env.TMUX = `/other/socket,4242`;
+    process.env.TMUX = `/other/socket,${process.pid}`;
     process.env.TMUX_PANE = "%0";
   } else {
-    process.env.TMUX = `${socketPath},4242`;
+    process.env.TMUX = `${socketPath},${process.pid}`;
     process.env.TMUX_PANE = "%0";
   }
   const previousAgentName = process.env.PI_AGENT_NAME;
@@ -478,7 +481,7 @@ describe("sessionStateExtension in top-level sessions", () => {
       await harness.emit("agent_start");
       await finishEventLoopTurn();
       assert.equal(
-        harness.server.commands.filter((command) => command.includes("set-option")).length,
+        harness.server.commands.filter((command) => command.startsWith("pi-mux state ")).length,
         0,
       );
       assert.deepEqual(
@@ -635,34 +638,41 @@ describe("session-state title publication", () => {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
       const count = h.server.commands.length;
-      h.server.responses["set-option"] = () => pending.promise;
+      h.server.responses["state"] = () => pending.promise;
       await h.emit("session_info_changed", { name: "First title" });
       await waitFor("pending title", () => h.server.hasPending());
       await h.emit("agent_start");
       await h.emit("session_info_changed", { name: "Second title" });
-      delete h.server.responses["set-option"];
+      delete h.server.responses["state"];
       pending.resolve(completedResult(""));
       await waitFor(
         "queued snapshots",
         () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "running", "Second title"),
       );
-      const values = h.server.commands
-        .slice(count)
-        .map((command) => JSON.parse((parse(command) as string[]).at(-1)!));
+      const values = h.server.commands.slice(count).map((command) => {
+        const argv = parse(command) as string[];
+        return JSON.parse(
+          stateOptionValue(
+            argv[2]!,
+            argv[3] as "running",
+            JSON.parse(argv[argv.indexOf("--title") + 1]!),
+          ),
+        );
+      });
       assert.deepEqual(values, [
         { version: 1, sessionId: "s1", state: "waiting-user", title: "First title" },
         { version: 1, sessionId: "s1", state: "running", title: "First title" },
         { version: 1, sessionId: "s1", state: "running", title: "Second title" },
       ]);
 
-      h.server.responses["set-option"] = () => oldSet.promise;
+      h.server.responses["state"] = () => oldSet.promise;
       await h.emit("session_info_changed", { name: "Old title" });
       await waitFor("old title in flight", () => h.server.hasPending());
       await h.emit("session_info_changed", { name: "Discarded title" });
       h.sessionId = "replacement";
       h.sessionName = "Replacement title";
       await h.emit("session_start", { reason: "resume" });
-      delete h.server.responses["set-option"];
+      delete h.server.responses["state"];
       oldSet.resolve(completedResult(""));
       await waitFor(
         "replacement title",
@@ -695,13 +705,15 @@ describe("session-state MVP state boundaries", () => {
       ] as const) {
         await h.emit(event);
         await waitFor(event, () => h.server.paneOptionOf("%0") === stateOptionValue("s1", state));
+        await finishEventLoopTurn();
+        await finishEventLoopTurn();
         const count = h.server.commands.length;
         await h.emit(event === "session_start" ? "ui_prompt_end" : event);
         await finishEventLoopTurn();
         assert.equal(h.server.commands.length, count, event);
       }
       assert.equal(h.server.commands.filter((c) => c.includes("display-message")).length, 1);
-      assert.equal(h.server.commands.filter((c) => c.includes("set-option")).length, 5);
+      assert.equal(h.server.commands.filter((c) => c.startsWith("pi-mux state ")).length, 5);
       assert.equal(
         h.server.commands.some((c) => c.includes("show-options")),
         false,
@@ -802,14 +814,14 @@ describe("session-state MVP state boundaries", () => {
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-      h.server.responses["set-option"] = () => {
+      h.server.responses["state"] = () => {
         h.server.setPaneOption("%0", stateOptionValue("s1", "running"));
         return pending.promise;
       };
       await h.emit("agent_start");
       await waitFor("set started", () => h.server.hasPending());
       await h.emit("ui_prompt_start");
-      delete h.server.responses["set-option"];
+      delete h.server.responses["state"];
       pending.resolve(completedResult(""));
       await waitFor(
         "latest",
@@ -859,13 +871,13 @@ describe("session-state MVP state boundaries", () => {
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-      h.server.responses["set-option"] = () => {
+      h.server.responses["state"] = () => {
         h.server.setPaneOption("%0", stateOptionValue("s1", "running"));
         return pending.promise;
       };
       await h.emit("agent_start");
       await waitFor("old set", () => h.server.hasPending());
-      delete h.server.responses["set-option"];
+      delete h.server.responses["state"];
       h.sessionId = "replacement";
       await h.emit("session_start");
       await finishEventLoopTurn();
@@ -890,10 +902,10 @@ describe("session-state MVP state boundaries", () => {
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-      h.server.responses["set-option"] = () => pending.promise;
+      h.server.responses["state"] = () => pending.promise;
       await h.emit("agent_start");
       await waitFor("pending", () => h.server.hasPending());
-      delete h.server.responses["set-option"];
+      delete h.server.responses["state"];
       let ended = false;
       const shutdown = h.emit("session_shutdown").then(() => {
         ended = true;
@@ -930,28 +942,208 @@ describe("session-state MVP state boundaries", () => {
     }
   });
 
-  it("reports a failed publication without retrying on progress", async () => {
+  it("retries an equal failed state on the next state request, but not on progress", async () => {
     const h = await createExtensionHarness();
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-      h.server.responses["set-option"] = () => completedResult("failure", true);
+      h.server.responses["state"] = () => completedResult("failure", true);
       await h.emit("agent_start");
       await waitFor("warning", () =>
         h.notifications.some((n) => n.message.includes("cannot publish")),
       );
       const count = h.server.commands.length;
       await h.emit("message_update");
-      await h.emit("agent_start");
       await finishEventLoopTurn();
       assert.equal(h.server.commands.length, count);
-      delete h.server.responses["set-option"];
-      await h.emit("ui_prompt_start");
+      delete h.server.responses["state"];
+      await h.emit("agent_start");
       await waitFor(
-        "next transition",
-        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-approval"),
+        "equal state retry",
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "running"),
       );
     } finally {
+      await h.close();
+    }
+  });
+});
+
+describe("session-state lock retry", () => {
+  it("keeps a contended running notification ahead of later waiting and title notifications", async () => {
+    const h = await createExtensionHarness();
+    let busy = true;
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      h.server.responses.state = () =>
+        busy
+          ? {
+              status: "completed",
+              result: {
+                content: [{ type: "text", text: "lock busy" }],
+                details: {},
+                isError: true,
+                structuredContent: { exit_code: 75 },
+              },
+            }
+          : completedResult("");
+      await h.emit("agent_start");
+      await waitFor(
+        "first attempt",
+        () => h.server.commands.filter((command) => command.startsWith("pi-mux state")).length >= 2,
+      );
+      await h.emit("agent_settled");
+      await h.emit("session_info_changed", { name: "Later title" });
+      await waitFor(
+        "background retry",
+        () => h.server.commands.filter((command) => command.startsWith("pi-mux state")).length >= 3,
+      );
+      const pending = h.server.commands.slice(2).map((command) => parse(command) as string[]);
+      assert.ok(pending.every((argv) => argv[3] === "running"));
+      assert.ok(
+        pending.every(
+          (argv) =>
+            argv[argv.indexOf("--source") + 1] === pending[0]![pending[0]!.indexOf("--source") + 1],
+        ),
+      );
+      busy = false;
+      delete h.server.responses.state;
+      await waitFor(
+        "ordered retry and later states",
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user", "Later title"),
+      );
+      const states = h.server.commands
+        .filter((command) => command.startsWith("pi-mux state"))
+        .map((command) => (parse(command) as string[])[3]);
+      assert.deepEqual(states.slice(-3), ["running", "waiting-user", "waiting-user"]);
+      assert.deepEqual(h.notifications, []);
+    } finally {
+      delete h.server.responses.state;
+      await h.close();
+    }
+  });
+
+  it("stops retries at shutdown and does not retry a contended clear", async () => {
+    const h = await createExtensionHarness();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      h.server.responses.state = () => ({
+        status: "completed",
+        result: {
+          content: [{ type: "text", text: "busy" }],
+          details: {},
+          structuredContent: { exit_code: 75 },
+        },
+      });
+      await h.emit("agent_start");
+      await waitFor("contended running", () => h.server.commands.length >= 3);
+      await h.emit("session_shutdown");
+      const count = h.server.commands.length;
+      assert.equal(h.server.commands.filter((command) => command.includes("--clear")).length, 1);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.equal(h.server.commands.length, count);
+      assert.ok(h.notifications.some((notice) => notice.message.includes("lock is busy")));
+    } finally {
+      delete h.server.responses.state;
+      await h.close();
+    }
+  });
+});
+
+function busyResult(): ToolExecutionOutcome {
+  return {
+    status: "completed",
+    result: {
+      content: [{ type: "text", text: "pi-mux lock is busy" }],
+      details: {},
+      isError: true,
+      structuredContent: { exit_code: 75 },
+    },
+  };
+}
+
+function stateArguments(commands: string[]): string[][] {
+  return commands
+    .filter((command) => command.startsWith("pi-mux state "))
+    .map((command) => parse(command) as string[]);
+}
+
+describe("session-state lock retries", () => {
+  it("returns from discovery while busy and preserves running before later idle notifications", async () => {
+    const h = await createExtensionHarness();
+    try {
+      h.server.responses.state = () => busyResult();
+      await h.emit("session_start");
+      await waitFor("initial busy request", () => stateArguments(h.server.commands).length > 0);
+      await h.emit("agent_start");
+      await h.emit("session_info_changed", { name: "Queued title" });
+      await h.emit("agent_settled");
+      await waitFor("background retry", () => stateArguments(h.server.commands).length >= 2);
+      assert.equal(h.server.paneOptionOf("%0"), undefined);
+      delete h.server.responses.state;
+      await waitFor(
+        "final idle",
+        () =>
+          h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user", "Queued title"),
+      );
+      const requests = stateArguments(h.server.commands);
+      assert.deepEqual(
+        requests.slice(-3).map((args) => [args[3], JSON.parse(args[args.indexOf("--title") + 1]!)]),
+        [
+          ["running", null],
+          ["running", "Queued title"],
+          ["waiting-user", "Queued title"],
+        ],
+      );
+      const sources = requests.map((args) => args[args.indexOf("--source") + 1]);
+      assert.equal(new Set(sources).size, 1);
+      assert.deepEqual(h.notifications, []);
+    } finally {
+      delete h.server.responses.state;
+      await h.close();
+    }
+  });
+
+  it("does not retry a busy shutdown clear", async () => {
+    const h = await createExtensionHarness();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      h.server.responses.state = () => busyResult();
+      await h.emit("session_shutdown");
+      assert.equal(
+        stateArguments(h.server.commands).filter((args) => args.includes("--clear")).length,
+        1,
+      );
+      assert.match(h.notifications.at(-1)!.message, /lock is busy/);
+    } finally {
+      delete h.server.responses.state;
+      await h.close();
+    }
+  });
+
+  it("cancels an old retry without publishing queued running after replacement", async () => {
+    const h = await createExtensionHarness();
+    try {
+      h.server.responses.state = () => busyResult();
+      await h.emit("session_start");
+      await waitFor("busy", () => stateArguments(h.server.commands).length > 0);
+      await h.emit("agent_start");
+      h.sessionId = "replacement";
+      delete h.server.responses.state;
+      await h.emit("session_start");
+      await waitFor(
+        "replacement",
+        () => h.server.paneOptionOf("%0") === stateOptionValue("replacement", "waiting-user"),
+      );
+      assert.equal(
+        stateArguments(h.server.commands).some((args) => args[2] === "s1" && args[3] === "running"),
+        false,
+      );
+      assert.deepEqual(h.notifications, []);
+    } finally {
+      delete h.server.responses.state;
       await h.close();
     }
   });
@@ -964,7 +1156,7 @@ describe("session-state CLI execution ordering", () => {
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-      h.server.responses["set-option"] = async () => {
+      h.server.responses["state"] = async () => {
         await finish.promise;
         h.server.setPaneOption("%0", stateOptionValue("s1", "running"));
         return completedResult("");
@@ -978,7 +1170,7 @@ describe("session-state CLI execution ordering", () => {
         return completedResult(
           [
             h.server.socketPath,
-            "4242",
+            String(process.pid),
             "%0",
             readlinkSync("/proc/self/fd/0"),
             String(process.pid),
@@ -992,7 +1184,7 @@ describe("session-state CLI execution ordering", () => {
       h.sessionId = "replacement";
       await h.emit("session_start");
       const count = h.server.commands.length;
-      delete h.server.responses["set-option"];
+      delete h.server.responses["state"];
       finish.resolve();
       await waitFor(
         "replacement or failure",
@@ -1016,7 +1208,7 @@ describe("session-state CLI execution ordering", () => {
       process.env.TMUX_PANE = "%0";
       finish.resolve();
       delete h.server.responses["display-message"];
-      delete h.server.responses["set-option"];
+      delete h.server.responses["state"];
       await h.close();
     }
   });
@@ -1028,7 +1220,7 @@ describe("session-state CLI execution ordering", () => {
       try {
         await h.emit("session_start");
         await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-        h.server.responses["set-option"] = async () => {
+        h.server.responses["state"] = async () => {
           await finish.promise;
           h.server.setPaneOption(
             "%0",
@@ -1045,7 +1237,7 @@ describe("session-state CLI execution ordering", () => {
         await finishEventLoopTurn();
         assert.equal(h.server.commands.length, count, "no new CLI before old execution ends");
         assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("s1", "waiting-user"));
-        delete h.server.responses["set-option"];
+        delete h.server.responses["state"];
         finish.resolve();
         await shutdown;
         await waitFor(
@@ -1069,7 +1261,7 @@ describe("session-state CLI execution ordering", () => {
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-      h.server.responses["set-option"] = async () => {
+      h.server.responses["state"] = async () => {
         await finish.promise;
         h.server.setPaneOption("%0", stateOptionValue("s1", "running"));
         return completedResult("");
@@ -1081,7 +1273,7 @@ describe("session-state CLI execution ordering", () => {
       await h.emit("agent_settled", { aborted: true });
       await finishEventLoopTurn();
       assert.equal(h.server.commands.length, count);
-      delete h.server.responses["set-option"];
+      delete h.server.responses["state"];
       finish.resolve();
       await waitFor(
         "settled after old CLI",
@@ -1104,7 +1296,7 @@ describe("session-state CLI execution ordering", () => {
       try {
         await h.emit("session_start");
         await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-        h.server.responses["set-option"] = async () => {
+        h.server.responses["state"] = async () => {
           if (failure === "throw") throw new Error("transport failed");
           await finish.promise;
           h.server.setPaneOption("%0", stateOptionValue("s1", "running"));
@@ -1119,7 +1311,7 @@ describe("session-state CLI execution ordering", () => {
           h.notifications.some((n) => /publication stopped/.test(n.message)),
         );
         const count = h.server.commands.length;
-        delete h.server.responses["set-option"];
+        delete h.server.responses["state"];
         h.restoreBashReceiver();
         h.sessionId = "replacement";
         await h.emit("session_start");
@@ -1215,7 +1407,7 @@ describe("session-state without membership storage", () => {
               1,
             );
             assert.equal(
-              h.server.commands.filter((command) => command.includes("set-option")).length,
+              h.server.commands.filter((command) => command.startsWith("pi-mux state ")).length,
               6,
             );
             if (initialStore === "absent") {
