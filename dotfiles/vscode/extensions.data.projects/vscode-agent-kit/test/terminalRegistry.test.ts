@@ -81,6 +81,42 @@ describe("TerminalRegistry", () => {
     expect(registry.displayedSessionId).toBe("B");
   });
 
+  it("runs explicit normal open even with the same temporary Pi and existing Terminal", async () => {
+    const { registry, displays, mocks, temporary, live } = setup();
+    temporary.add("A");
+    const original = live.get("A");
+    const first = await registry.open({ ...session("A"), temporary: true });
+    expect(temporary.has("A")).toBe(true);
+    const next = await registry.open(session("A"), "unarchive");
+    expect(next.terminal).not.toBe(first.terminal);
+    expect(first.terminal.dispose).toHaveBeenCalledOnce();
+    expect(displays.create).toHaveBeenLastCalledWith(session("A"));
+    expect(temporary.has("A")).toBe(false);
+    expect(live.get("A")).toBe(original);
+    expect(mocks.closeSession).not.toHaveBeenCalled();
+    expect(mocks.closeTemporarySession).not.toHaveBeenCalled();
+  });
+
+  it("reselects a temporary Pi without promoting or restarting it", async () => {
+    const { registry, displays, temporary, live } = setup();
+    temporary.add("A");
+    const original = live.get("A");
+    const request = { ...session("A"), temporary: true as const };
+    const first = await registry.open(request);
+    expect((await registry.open(request)).terminal).toBe(first.terminal);
+    expect(displays.create).toHaveBeenCalledExactlyOnceWith(request);
+    expect(temporary.has("A")).toBe(true);
+    expect(live.get("A")).toBe(original);
+  });
+
+  it("keeps a normal Pi normal when opened temporarily from a stale archived row", async () => {
+    const { registry, temporary, live } = setup();
+    const original = live.get("A");
+    await registry.open({ ...session("A"), temporary: true });
+    expect(temporary.has("A")).toBe(false);
+    expect(live.get("A")).toBe(original);
+  });
+
   it("recreates the display for different cwd without restarting live Pi", async () => {
     const { registry, displays, live } = setup();
     const original = [...live.values()];
@@ -573,6 +609,18 @@ describe("editorTerminals", () => {
     expect(editorTerminals(store).find()).toBe(owned);
     windowMock.terminals = [unrelated];
     expect(editorTerminals(store).find()).toBeUndefined();
+  });
+
+  it("passes temporary open as argv to the native Terminal", () => {
+    const { store } = fakeRuntimes();
+    windowMock.createTerminal.mockClear();
+    editorTerminals(store).create({ ...session("custom-ID"), temporary: true });
+    expect(windowMock.createTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        shellPath: "pi-mux",
+        shellArgs: ["open", "--temporary", "custom-ID"],
+      }),
+    );
   });
 
   it("creates a native-title editor Terminal using pi-mux open", () => {

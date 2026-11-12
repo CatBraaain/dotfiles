@@ -8,6 +8,7 @@ const executeFile = promisify(execFile);
 export interface PiSession {
   sessionId: string;
   cwd: string;
+  temporary?: true;
 }
 
 export interface PiMuxSession {
@@ -15,6 +16,7 @@ export interface PiMuxSession {
   file: string;
   state: string | null;
   title: string | null;
+  temporary?: true;
 }
 
 export interface PiMuxWorkspace {
@@ -46,6 +48,10 @@ export class PiMux {
 
   async closeSession(sessionId: string): Promise<void> {
     await this.command(["close", sessionId]);
+  }
+
+  async closeTemporarySession(sessionId: string): Promise<void> {
+    await this.command(["close", "--if-temporary", sessionId]);
   }
 
   async list(): Promise<PiMuxWorkspace[]> {
@@ -93,7 +99,8 @@ function isPiMuxSession(session: unknown): session is PiMuxSession {
     typeof session.file === "string" &&
     isAbsolute(session.file) &&
     (session.state === null || typeof session.state === "string") &&
-    (session.title === null || typeof session.title === "string")
+    (session.title === null || typeof session.title === "string") &&
+    (!Object.hasOwn(session, "temporary") || session.temporary === true)
   );
 }
 

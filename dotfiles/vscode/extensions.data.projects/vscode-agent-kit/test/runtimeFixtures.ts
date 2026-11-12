@@ -8,8 +8,12 @@ export function fakeRuntimes() {
   const workspaces = new Set<string>();
   const files = new Map<string, string>();
   const titles = new Map<string, string | null>();
+  const temporary = new Set<string>();
   const client = { pid: 123, name: "/dev/fixture", target: "" };
   const open = vi.fn((session: PiSession) => {
+    if (session.temporary) {
+      if (!live.has(session.sessionId)) temporary.add(session.sessionId);
+    } else temporary.delete(session.sessionId);
     const runtime = live.get(session.sessionId) ?? {
       ...session,
       target: `pi-${session.sessionId}`,
@@ -26,6 +30,12 @@ export function fakeRuntimes() {
     }),
     closeSession: vi.fn(async (sessionId: string) => {
       live.delete(sessionId);
+      temporary.delete(sessionId);
+    }),
+    closeTemporarySession: vi.fn(async (sessionId: string) => {
+      if (!temporary.has(sessionId)) return;
+      live.delete(sessionId);
+      temporary.delete(sessionId);
     }),
     list: vi.fn(async (): Promise<PiMuxWorkspace[]> =>
       [...new Set([...workspaces, ...[...live.values()].map(({ cwd }) => cwd)])].map((cwd) => ({
@@ -37,6 +47,7 @@ export function fakeRuntimes() {
             file: files.get(runtime.sessionId) ?? `/sessions/${runtime.sessionId}.jsonl`,
             state: phases.get(runtime.sessionId) ?? null,
             title: titles.get(runtime.sessionId) ?? null,
+            ...(temporary.has(runtime.sessionId) ? { temporary: true as const } : {}),
           })),
       })),
     ),
@@ -72,6 +83,7 @@ export function fakeRuntimes() {
     files,
     titles,
     phases,
+    temporary,
     client,
   };
 }

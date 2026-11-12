@@ -151,13 +151,15 @@ export async function listSessionSnapshot(
     };
   });
   for (const session of liveSummaries) sessionsById.set(session.sessionId, session);
-  const liveIds = new Set(live.map(({ id }) => id));
+  const normalIds = new Set(live.filter((session) => !session.temporary).map(({ id }) => id));
   const sessions = [...sessionsById.values()];
   return {
     sessions,
     registeredCwds,
     archivedIds: new Set(
-      sessions.filter(({ sessionId }) => !liveIds.has(sessionId)).map(({ sessionId }) => sessionId),
+      sessions
+        .filter(({ sessionId }) => !normalIds.has(sessionId))
+        .map(({ sessionId }) => sessionId),
     ),
   };
 }

@@ -200,22 +200,23 @@ export class VSCodeFixture {
     this.tmux([...args, "@pi_session_state", option]);
   }
 
-  /** Add a fixture session to its workspace's active-sessions map and reload
-   * the list. The shared display stops a still-archived previous display
-   * when it moves away, so tests that keep a fixture Pi alive across a
-   * switch must make that fixture active first. */
   async activateSession(key: string): Promise<void> {
-    const statePath = join(this.directory, "agent/session-state.json");
-    const store = JSON.parse(readFileSync(statePath, "utf8")) as {
-      "active-workspaces": Record<string, { "active-sessions"?: Record<string, unknown> }>;
-    };
+    const frame = await this.sessionFrame();
     const session = this.sessions[key];
-    const workspace = store["active-workspaces"][session.cwd];
-    if (workspace === undefined) throw new Error(`workspace is not registered: ${session.cwd}`);
-    workspace["active-sessions"] ??= {};
-    workspace["active-sessions"][session.id] = {};
-    writeFileSync(statePath, JSON.stringify(store));
-    await this.refreshSessions();
+    const mode = frame
+      .locator(`[data-mode-toggle="${session.cwd}"]`)
+      .describe(`${key} workspace All toggle`);
+    if ((await mode.getAttribute("data-mode")) === "unarchived") await mode.click();
+    const row = frame
+      .locator(".session-row")
+      .filter({ has: frame.locator(`[data-session="${session.id}"]`) })
+      .describe(`${key} conversation`);
+    await expect(row).toBeVisible();
+    const unarchive = row
+      .locator(`[data-unarchive="${session.id}"]`)
+      .describe(`${key} explicit normal open`);
+    if (await unarchive.count()) await unarchive.click({ steps: 15 });
+    await expect(row).not.toHaveClass(/archived/);
   }
 
   async expectPiVisible(cwd?: string): Promise<void> {

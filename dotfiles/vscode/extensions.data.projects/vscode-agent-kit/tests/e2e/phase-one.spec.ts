@@ -218,6 +218,7 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
         await host.page.getByRole("option", { name: /Preferences: Color Theme/ }).click();
         await picker.fill(theme);
         await host.page.getByRole("option", { name: theme, exact: true }).click();
+        await host.activateSession("A");
         const frame = await host.sessionFrame();
         await expect(frame.locator("body")).toHaveClass(
           theme.includes("Light") ? /vscode-light/ : /vscode-dark/,
@@ -230,6 +231,15 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
         const button = frame
           .locator(`[data-session="${host.sessions.A.id}"]`)
           .describe("Session background and focus target");
+        await frame
+          .locator("section.group")
+          .filter({ has: frame.getByTitle(host.sessions.A.cwd, { exact: true }) })
+          .locator(
+            `.session-row:not(.archived) .session-button:not([data-session="${host.sessions.A.id}"])`,
+          )
+          .describe("Other normal Pi to leave A unselected")
+          .click({ steps: 15 });
+        await host.expectPiVisible(host.sessions.A.cwd);
 
         async function appearance() {
           return button.evaluate((element) => {
@@ -385,10 +395,10 @@ test(
   "Switches between A/B conversations with Pi-notified titles",
   { annotation: { type: "spec", description: "E2E-2" } },
   async ({ host }, testInfo) => {
+    testInfo.setTimeout(150_000);
     const firstPids = new Map<string, number>();
     const selections = ["A", "B", "A", "B"];
-    // B ships archived; make it active so switching away from it does not
-    // stop its Pi and the switch keeps reusing the same process.
+    await host.activateSession("A");
     await host.activateSession("B");
     for (const [index, key] of selections.entries()) {
       const isLastSelection = index === selections.length - 1;
@@ -556,7 +566,7 @@ test(
     await test.step("Switch same-cwd conversations without replacing the display or their Pi processes", async () => {
       await host.selectSession("A");
       await host.expectNativeDisplay("A");
-      await host.selectSession("Deleted");
+      await host.activateSession("Deleted");
       await host.expectNativeDisplay("Deleted");
       const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
       const pids = host
@@ -1139,12 +1149,15 @@ test(
   async ({ host }, testInfo) => {
     const statePath = join(host.directory, "agent/session-state.json");
     const aIsListed = (): boolean => {
-      const store = JSON.parse(readFileSync(statePath, "utf8")) as {
-        sentinel?: string;
-        "active-workspaces": Record<string, { "active-sessions"?: Record<string, unknown> }>;
-      };
-      const entry = store["active-workspaces"][host.sessions.A.cwd] ?? {};
-      return Object.hasOwn(entry["active-sessions"] ?? {}, aId);
+      const workspaces = JSON.parse(
+        execFileSync(join(host.directory, "bin/pi-mux"), ["list"], {
+          env: host.env,
+          encoding: "utf8",
+        }),
+      ) as { sessions: { id: string; temporary?: true }[] }[];
+      return workspaces.some(({ sessions }) =>
+        sessions.some(({ id, temporary }) => id === aId && temporary !== true),
+      );
     };
     const aId = host.sessions.A.id;
     const rowIn = (frame: Frame, id: string) =>
@@ -1155,12 +1168,12 @@ test(
     let initialA!: ReturnType<VSCodeFixture["piProcesses"]>[number];
     let initialB!: ReturnType<VSCodeFixture["piProcesses"]>[number];
     let unarchivedA!: ReturnType<VSCodeFixture["piProcesses"]>[number];
+    let temporaryA!: ReturnType<VSCodeFixture["piProcesses"]>[number];
     let sourceA = "";
     let sourceB = "";
     const restorePath = join(host.directory, "agent/pi-tmux/pi-mux-restore.json");
     await test.step("Start isolated A and B Pi runtimes and an ordinary fixture tmux session", async () => {
-      // B ships archived; make it active so switching away from it keeps
-      // its Pi running while this test archives and reopens A.
+      await host.activateSession("A");
       await host.activateSession("B");
       await host.selectSession("B");
       await host.selectSession("A");
@@ -1192,10 +1205,14 @@ test(
       await expect(frame.getByRole("dialog").describe("No Archive confirmation")).toBeHidden();
       await expect(rowIn(frame, aId)).toHaveCount(0);
       await expect.poll(() => existsSync(`/proc/${initialA.pid}`)).toBe(false);
-      const snapshot = JSON.parse(readFileSync(restorePath, "utf8"));
-      expect(
-        snapshot.workspaces.flatMap((workspace: { sessions: string[] }) => workspace.sessions),
-      ).not.toContain(aId);
+      await expect
+        .poll(() => {
+          const snapshot = JSON.parse(readFileSync(restorePath, "utf8"));
+          return snapshot.workspaces.flatMap(
+            (workspace: { sessions: string[] }) => workspace.sessions,
+          );
+        })
+        .not.toContain(aId);
       expect(host.piProcesses().some((entry) => entry.target === initialA.target)).toBe(false);
       expect(
         host.tmux(["list-sessions", "-F", "#{session_name}"]).trim().split("\n"),
@@ -1241,7 +1258,32 @@ test(
         contentType: "image/png",
       });
     });
-    await test.step("Unarchive the row and see it reopen in the shared terminal", async () => {
+    await test.step("Browse archived A temporarily without adding it to the restore snapshot", async () => {
+      await host.selectSession("A");
+      await host.expectNativeDisplay("A");
+      temporaryA = host.sessionRuntime("A")!;
+      const frame = await host.sessionFrame();
+      await expect(rowIn(frame, aId)).toHaveClass(/archived/);
+      const workspaces = JSON.parse(
+        execFileSync(join(host.directory, "bin/pi-mux"), ["list"], {
+          env: host.env,
+          encoding: "utf8",
+        }),
+      ) as { sessions: { id: string; temporary?: true }[] }[];
+      expect(
+        workspaces.flatMap(({ sessions }) => sessions).find(({ id }) => id === aId)?.temporary,
+      ).toBe(true);
+      execFileSync(join(host.directory, "bin/pi-mux"), ["snapshot"], { env: host.env });
+      const snapshot = JSON.parse(readFileSync(restorePath, "utf8"));
+      expect(
+        snapshot.workspaces.flatMap((workspace: { sessions: string[] }) => workspace.sessions),
+      ).not.toContain(aId);
+      await host.selectSession("A");
+      await host.expectNativeDisplay("A");
+      expect(host.sessionRuntime("A")?.pid).toBe(temporaryA.pid);
+      expect(aIsListed()).toBe(false);
+    });
+    await test.step("Unarchive the existing temporary Pi through normal open", async () => {
       const frame = await host.sessionFrame();
       await rowIn(frame, aId)
         .locator(`[data-unarchive="${aId}"]`)
@@ -1256,10 +1298,9 @@ test(
       await expect(status).toHaveCSS("width", "12px");
       await expect(status).toHaveCSS("height", "12px");
       expect(aIsListed()).toBe(true);
-      // Unarchive opens the stored conversation: Pi starts from the saved
-      // source and the shared terminal shows it.
       await host.expectNativeDisplay("A");
       unarchivedA = host.piProcesses().find((entry) => entry.target === initialA.target)!;
+      expect(unarchivedA.pid).toBe(temporaryA.pid);
       expect(unarchivedA.pid).not.toBe(initialA.pid);
       expect(existsSync(`/proc/${initialA.pid}`)).toBe(false);
       expect(
@@ -1364,6 +1405,16 @@ test(
       expect(existsSync(`/proc/${shellPid}`)).toBe(true);
       expect(host.tmux(["list-sessions", "-F", "#{session_name}"])).toContain("ordinary-fixture");
     });
+    await test.step("Close only the previous temporary A after a successful switch to normal B", async () => {
+      await host.selectSession("A");
+      await host.expectNativeDisplay("A");
+      const temporary = host.sessionRuntime("A")!;
+      await host.selectSession("B");
+      await host.expectNativeDisplay("B");
+      await expect.poll(() => existsSync(`/proc/${temporary.pid}`)).toBe(false);
+      expect(host.sessionRuntime("B")?.pid).toBe(initialB.pid);
+      expect(readFileSync(host.sessions.A.session, "utf8").startsWith(sourceA)).toBe(true);
+    });
   },
 );
 
@@ -1376,6 +1427,7 @@ test(
     ],
   },
   async ({ host }, testInfo) => {
+    testInfo.setTimeout(150_000);
     const statePath = join(host.directory, "agent/session-state.json");
     const workspaceCwd = host.sessions.A.cwd;
     const phases = [
@@ -1427,7 +1479,7 @@ test(
     });
     await test.step("Open four existing conversations in live panes", async () => {
       for (const { key } of phases) {
-        await host.selectSession(key);
+        await host.activateSession(key);
         await host.expectNativeDisplay(key);
       }
       const frame = await host.sessionFrame();

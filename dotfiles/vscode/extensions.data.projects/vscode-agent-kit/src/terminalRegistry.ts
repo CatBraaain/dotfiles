@@ -94,7 +94,10 @@ export class TerminalRegistry implements vscode.Disposable {
     }
   }
 
-  async open(launch: PiSession): Promise<{ runtime: PiRuntime; terminal: vscode.Terminal }> {
+  async open(
+    launch: PiSession,
+    intent: "select" | "unarchive" = "select",
+  ): Promise<{ runtime: PiRuntime; terminal: vscode.Terminal }> {
     try {
       const isAlive = flattenPiMuxSessions(await this.mux.list()).some(
         (session) => session.id === launch.sessionId,
@@ -103,7 +106,7 @@ export class TerminalRegistry implements vscode.Disposable {
       if (isAlive && target === undefined) {
         throw new Error(`Cannot resolve tmux target for session ${launch.sessionId}`);
       }
-      return await this.connect(launch, target);
+      return await this.connect(launch, intent === "unarchive" ? undefined : target);
     } catch (error) {
       throw new Error(`Pi session ${launch.sessionId} in ${launch.cwd}: ${errorMessage(error)}`);
     }

@@ -85,6 +85,16 @@ async function existingDisplay(): Promise<MockDisplay> {
 }
 
 describe("SessionLauncher", () => {
+  it("returns the actual previous display after earlier queued selections finish", async () => {
+    await existingDisplay();
+    runtimes.mocks.open({ sessionId: "queued", cwd: root });
+    const selected = registry.run(() => registry.open({ sessionId: "queued", cwd: root }));
+    const launched = launcher.start(root);
+    await selected;
+    expect(await launched).toBe("queued");
+    expect(registry.displayedSessionId).not.toBe("queued");
+  });
+
   it("creates and shows a cold native Terminal before its process ID or attachment resolves", async () => {
     const pid = deferred<number>();
     processId = pid.promise;

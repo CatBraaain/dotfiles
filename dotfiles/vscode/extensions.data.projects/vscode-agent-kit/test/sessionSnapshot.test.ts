@@ -110,6 +110,51 @@ describe("listSessionSnapshot", () => {
     expect(snapshot.archivedIds).toEqual(new Set(["archived"]));
   });
 
+  it("merges temporary Pi with history without hiding unsaved rows or duplicating IDs", async () => {
+    await saved("history");
+    await saved("temporary");
+    const snapshot = await listSessionSnapshot(join(root, "sessions"), [
+      {
+        cwd: root,
+        sessions: [
+          live("normal", join(root, "normal.jsonl")),
+          {
+            ...live("temporary", join(root, "missing.jsonl"), "Live temporary title"),
+            temporary: true,
+          },
+          { ...live("unsaved", join(root, "unsaved.jsonl")), temporary: true },
+        ],
+      },
+      { cwd: "/empty", sessions: [] },
+    ]);
+    expect(snapshot.sessions.map(({ sessionId }) => sessionId).sort()).toEqual([
+      "history",
+      "normal",
+      "temporary",
+      "unsaved",
+    ]);
+    expect(snapshot.archivedIds).toEqual(new Set(["history", "temporary", "unsaved"]));
+    expect(snapshot.sessions.find(({ sessionId }) => sessionId === "temporary")?.displayName).toBe(
+      "Live temporary title",
+    );
+    expect(snapshot.sessions.find(({ sessionId }) => sessionId === "unsaved")).toMatchObject({
+      createdAtMs: null,
+      updatedAtMs: null,
+    });
+    expect(snapshot.registeredCwds).toEqual([root, "/empty"]);
+  });
+
+  it("moves a temporary Pi to the normal collection when the list attribute disappears", async () => {
+    const session = live("A", join(root, "A.jsonl"));
+    const temporary = await listSessionSnapshot(root, [
+      { cwd: root, sessions: [{ ...session, temporary: true }] },
+    ]);
+    const normal = await listSessionSnapshot(root, [{ cwd: root, sessions: [session] }]);
+    expect(temporary.archivedIds).toEqual(new Set(["A"]));
+    expect(normal.archivedIds).toEqual(new Set());
+    expect(normal.sessions).toEqual(temporary.sessions);
+  });
+
   it("keeps existing date sorting with unknown dates last", async () => {
     const known = await saved("known");
     const { sessions } = await listSessionSnapshot(join(root, "sessions"), [

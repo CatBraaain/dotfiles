@@ -23,7 +23,12 @@ export function editorTerminals(tmux: TmuxRuntimeStore): DisplayTerminals {
       });
     },
     create(session) {
-      return create(session.cwd, ["open", session.sessionId]);
+      return create(
+        session.cwd,
+        session.temporary
+          ? ["open", "--temporary", session.sessionId]
+          : ["open", session.sessionId],
+      );
     },
     createNew(cwd) {
       return create(cwd, ["new"]);

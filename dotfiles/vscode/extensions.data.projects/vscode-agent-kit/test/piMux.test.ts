@@ -50,6 +50,43 @@ describe("PiMux", () => {
     },
   );
 
+  it("closes a temporary candidate conditionally through the public CLI", async () => {
+    const execute = vi.fn().mockResolvedValue("");
+    await new PiMux(execute).closeTemporarySession("custom-ID");
+    expect(execute).toHaveBeenCalledExactlyOnceWith(
+      "pi-mux",
+      ["close", "--if-temporary", "custom-ID"],
+      undefined,
+    );
+  });
+
+  it("reports conditional close failure without retry or fallback", async () => {
+    const execute = vi.fn().mockRejectedValue(new Error("close denied"));
+    await expect(new PiMux(execute).closeTemporarySession("A")).rejects.toThrow(
+      "pi-mux close --if-temporary A: close denied",
+    );
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it.each([{}, { temporary: true }])(
+    "accepts normal or temporary sessions: %j",
+    async (attributes) => {
+      const workspaces = [{ cwd: "/project", sessions: [{ ...liveSession, ...attributes }] }];
+      const mux = new PiMux(vi.fn().mockResolvedValue(JSON.stringify(workspaces)));
+      expect(await mux.list()).toEqual(workspaces);
+      expect(await mux.aliveSessionIds(["A"])).toEqual(new Set(["A"]));
+    },
+  );
+
+  it.each([false, null, "true", 1, {}, []])(
+    "rejects an invalid temporary attribute: %j",
+    async (temporary) => {
+      const workspaces = [{ cwd: "/project", sessions: [{ ...liveSession, temporary }] }];
+      const mux = new PiMux(vi.fn().mockResolvedValue(JSON.stringify(workspaces)));
+      await expect(mux.list()).rejects.toThrow("Invalid pi-mux list response");
+    },
+  );
+
   it("parses the JSON live list, including unsaved sessions", async () => {
     const sessions = [
       { cwd: "/project", sessions: [liveSession] },

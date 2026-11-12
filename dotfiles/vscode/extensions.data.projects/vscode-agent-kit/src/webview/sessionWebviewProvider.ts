@@ -1,16 +1,6 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import {
-  activeSessionIds,
-  archiveSessions,
-  readSessionStateStore,
-  registerWorkspace,
-  unarchiveSessions,
-  unregisterWorkspace,
-  type SessionPhase,
-  type SessionRef,
-  type SessionStateUpdateResult,
-} from "../sessionStateStore";
+import { registerWorkspace, unregisterWorkspace, type SessionPhase } from "../sessionStateStore";
 import { listSessionSnapshot, sessionFileExists, type SessionSummary } from "../sessionStore";
 import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
 import type { TerminalRegistry } from "../terminalRegistry";
@@ -29,7 +19,7 @@ export interface SessionWebviewDeps {
   /** Session state store, shared with the pi extension `session-state`. */
   statePath: string;
   registry: TerminalRegistry;
-  startNewSession: (cwd: string) => Promise<void>;
+  startNewSession: (cwd: string) => Promise<string | undefined>;
   onWorkspaces?: (cwds: readonly string[]) => void;
 }
 
@@ -37,6 +27,8 @@ export interface SessionWebviewDeps {
 export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
   private sessionsById = new Map<string, SessionSummary>();
+  private archivedSessionIds = new Set<string>();
+  private temporarySessionIds = new Set<string>();
   private state: WebviewState | undefined;
   private runningSessionIds = new Set<string>();
   private runningObservations = new Map<string, symbol>();
@@ -149,12 +141,16 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       const workspaces = await this.deps.registry.mux.list();
       if (this.disposed || version !== this.refreshVersion) return;
       this.deps.onWorkspaces?.(workspaces.map(({ cwd }) => cwd));
+      const live = flattenPiMuxSessions(workspaces);
+      this.temporarySessionIds = new Set(
+        live.filter((session) => session.temporary).map(({ id }) => id),
+      );
       const phases = phasesFromWorkspaces(workspaces);
       if (!this.view?.visible) {
         this.updateUnread(
           flattenPiMuxSessions(workspaces).map(({ id }) => ({ sessionId: id })),
           {
-            archivedIds: new Set(),
+            archivedIds: this.temporarySessionIds,
             livePhases: phases,
           },
         );
@@ -167,6 +163,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       if (this.disposed || !this.view?.visible || version !== this.refreshVersion) return;
       this.updateUnread(sessions, { archivedIds, livePhases: phases });
       this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
+      this.archivedSessionIds = archivedIds;
       this.postState({
         groups: sessionViewGroups(sessions, {
           registeredCwds,
@@ -241,19 +238,15 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "newSession") {
-      const previousSessionId = this.deps.registry.displayedSessionId;
+      let previousSessionId: string | undefined;
       try {
         await requireWorkDirectory(request.cwd);
-        await this.deps.startNewSession(request.cwd);
+        previousSessionId = await this.deps.startNewSession(request.cwd);
       } catch (error) {
         this.postError(`Failed to start Pi session in ${request.cwd}: ${errorMessage(error)}`);
         return;
       }
-      // The launch replaced the shared display; stop an archived previous
-      // display the same way a switch away from it does. A separate
-      // registry.run is required because nesting it inside startNewSession's
-      // own run would wait on that run forever.
-      await this.deps.registry.run(() => this.stopArchivedDisplayedSession(previousSessionId));
+      await this.deps.registry.run(() => this.stopTemporaryDisplayedSession(previousSessionId));
       await this.refresh();
       return;
     }
@@ -280,13 +273,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "unarchiveSession") {
-      await this.deps.registry.run(async () => {
-        const session = await this.updateKnownSession(request.sessionId, (ref) =>
-          unarchiveSessions(this.deps.statePath, [ref]),
-        );
-        if (session === undefined) return;
-        await this.openKnownSession(session);
-      });
+      await this.deps.registry.run(() => this.openSession(request.sessionId, "unarchive"));
       return;
     }
   }
@@ -295,11 +282,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     const session = this.sessionsById.get(sessionId);
     if (session === undefined) {
       this.postError(`Session not found: ${sessionId}`);
-      return;
-    }
-    const store = readSessionStateStore(this.deps.statePath);
-    if (store.status === "error") {
-      this.postError(store.message);
       return;
     }
     try {
@@ -327,37 +309,12 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         displayedSessionId: this.deps.registry.displayedSessionId,
       });
     }
-    const result = archiveSessions(this.deps.statePath, [{ sessionId, cwd: session.cwd }]);
-    if (!result.ok) {
-      this.postError(
-        `Pi session ${sessionId} stopped, but failed to save archive: ${result.message}`,
-      );
-      return;
-    }
     await this.refresh();
   }
 
   private postState(state: WebviewState): void {
     this.state = state;
     this.post({ type: "sessions", state });
-  }
-
-  private async updateKnownSession(
-    sessionId: string,
-    update: (ref: SessionRef) => SessionStateUpdateResult,
-  ): Promise<SessionSummary | undefined> {
-    const session = this.sessionsById.get(sessionId);
-    if (session === undefined) {
-      this.postError(`Session not found: ${sessionId}`);
-      return undefined;
-    }
-    const result = update({ sessionId, cwd: session.cwd });
-    if (!result.ok) {
-      this.postError(result.message);
-      return undefined;
-    }
-    await this.refresh();
-    return session;
   }
 
   private async addWorkspace(path: string): Promise<void> {
@@ -384,18 +341,25 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
   }
 
-  private async openSession(sessionId: string): Promise<void> {
+  private async openSession(
+    sessionId: string,
+    intent: "select" | "unarchive" = "select",
+  ): Promise<void> {
     const session = this.sessionsById.get(sessionId);
     if (session === undefined) {
       this.postError(`Session not found: ${sessionId}`);
       return;
     }
-    await this.openKnownSession(session);
+    await this.openKnownSession(session, intent);
   }
 
-  private async openKnownSession(session: SessionSummary): Promise<void> {
+  private async openKnownSession(
+    session: SessionSummary,
+    intent: "select" | "unarchive",
+  ): Promise<void> {
     const previousSessionId = this.deps.registry.displayedSessionId;
     const { sessionId } = session;
+    const temporary = intent === "select" && this.archivedSessionIds.has(sessionId);
     try {
       if (
         !(await sessionFileExists(session.filePath)) &&
@@ -412,10 +376,14 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     let terminal: vscode.Terminal;
     try {
       await requireWorkDirectory(session.cwd);
-      ({ terminal } = await this.deps.registry.open({
-        sessionId,
-        cwd: session.cwd,
-      }));
+      ({ terminal } = await this.deps.registry.open(
+        {
+          sessionId,
+          cwd: session.cwd,
+          ...(temporary ? { temporary: true as const } : {}),
+        },
+        intent,
+      ));
     } catch (error) {
       this.postError(
         `Failed to open session ${sessionId} in ${session.cwd}: ${errorMessage(error)}`,
@@ -424,7 +392,9 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
 
     terminal.show();
-    await this.stopArchivedDisplayedSession(previousSessionId);
+    if (temporary) this.temporarySessionIds.add(sessionId);
+    else this.temporarySessionIds.delete(sessionId);
+    await this.stopTemporaryDisplayedSession(previousSessionId);
     this.refreshVersion += 1;
     this.stopListPolling();
     const runningObservation = this.runningObservations.get(sessionId);
@@ -435,28 +405,24 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       }
       this.unreadSessionIds.delete(sessionId);
     }
-    // Re-send the list so the webview's selection display follows the
-    // session the shared terminal now shows.
     await this.refresh();
   }
 
-  private async stopArchivedDisplayedSession(previousSessionId: string | undefined): Promise<void> {
+  private async stopTemporaryDisplayedSession(
+    previousSessionId: string | undefined,
+  ): Promise<void> {
     if (
       previousSessionId === undefined ||
-      previousSessionId === this.deps.registry.displayedSessionId
+      previousSessionId === this.deps.registry.displayedSessionId ||
+      !this.temporarySessionIds.has(previousSessionId)
     ) {
       return;
     }
-    const store = readSessionStateStore(this.deps.statePath);
-    if (store.status === "error") return;
-    if (activeSessionIds(store.status === "ok" ? store.data : undefined).has(previousSessionId)) {
-      return;
-    }
     try {
-      await this.deps.registry.stop(previousSessionId);
+      await this.deps.registry.mux.closeTemporarySession(previousSessionId);
     } catch (error) {
       this.postError(
-        `Failed to stop archived Pi session ${previousSessionId}: ${errorMessage(error)}`,
+        `Failed to close temporary Pi session ${previousSessionId}: ${errorMessage(error)}`,
       );
     }
   }
@@ -487,8 +453,11 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
 
 function phasesFromWorkspaces(workspaces: readonly PiMuxWorkspace[]): Map<string, SessionPhase> {
   const phases = new Map<string, SessionPhase>();
-  for (const { id, state } of flattenPiMuxSessions(workspaces)) {
-    if (state === "running" || state === "waiting-approval" || state === "waiting-user")
+  for (const { id, state, temporary } of flattenPiMuxSessions(workspaces)) {
+    if (
+      !temporary &&
+      (state === "running" || state === "waiting-approval" || state === "waiting-user")
+    )
       phases.set(id, state);
   }
   return phases;

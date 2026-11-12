@@ -118,6 +118,24 @@ describe("external command environment", () => {
     );
   });
 
+  it("passes the conditional close flag and complete ID to an isolated contract fixture", async () => {
+    await withPiMuxProcess(
+      'if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(["close", "--if-temporary", "custom-ID"])) process.exit(2);',
+      async () => {
+        await expect(new PiMux().closeTemporarySession("custom-ID")).resolves.toBeUndefined();
+        expect(processMock).toHaveBeenCalledExactlyOnceWith(
+          "pi-mux",
+          ["close", "--if-temporary", "custom-ID"],
+          {
+            cwd: undefined,
+            timeout: 0,
+            env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
+          },
+        );
+      },
+    );
+  });
+
   it("reports a nonzero close exit without retry or fallback", async () => {
     await withPiMuxProcess(
       'process.stderr.write("restore candidate removal failed\\n"); process.exit(1);',
