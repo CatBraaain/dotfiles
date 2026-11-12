@@ -11,9 +11,9 @@ export class TerminalRegistry implements vscode.Disposable {
   private disposed = false;
   private display: vscode.Terminal | undefined;
   private displayedSession: string | undefined;
+  private displayedSessionCwd: string | undefined;
   private pending = Promise.resolve();
   private displayChanges = Promise.resolve();
-  private readonly newDisplays = new WeakMap<vscode.Terminal, string>();
   private readonly closeWaiters = new Map<
     vscode.Terminal,
     { promise: Promise<void>; resolve: () => void }
@@ -40,59 +40,9 @@ export class TerminalRegistry implements vscode.Disposable {
     return next;
   }
 
-  async presentNew(cwd: string): Promise<vscode.Terminal> {
-    this.requireActive();
+  presentExisting(): void {
     const display = this.currentDisplay();
-    if (
-      display !== undefined &&
-      display.exitStatus === undefined &&
-      !this.closeWaiters.has(display)
-    ) {
-      display.show();
-      return display;
-    }
-    return this.changeDisplay(async () => {
-      const current = this.currentDisplay();
-      if (
-        current !== undefined &&
-        (current.exitStatus !== undefined || this.closeWaiters.has(current))
-      ) {
-        await this.closeDisplay(current);
-      }
-      this.requireActive();
-      const terminal = this.currentDisplay() ?? this.createNewDisplay(cwd);
-      terminal.show();
-      return terminal;
-    });
-  }
-
-  async openNew(cwd: string, presented: vscode.Terminal): Promise<PiRuntime> {
-    try {
-      if (this.closed.has(presented) && this.currentDisplay() === undefined) {
-        throw new Error("Pi display closed before attachment");
-      }
-      const cold = this.currentDisplay();
-      if (cold !== undefined && this.newDisplays.get(cold) === cwd) {
-        try {
-          const { runtime } = await this.waitForClient(cold, { cwd });
-          this.newDisplays.delete(cold);
-          this.displayedSession = runtime.sessionId;
-          cold.show();
-          return runtime;
-        } catch (error) {
-          if (!this.disposed) await this.closeDisplay(cold);
-          throw error;
-        }
-      }
-      this.requireActive();
-      const sessionId = await this.mux.newSession(cwd);
-      this.requireActive();
-      const { runtime, terminal } = await this.open({ sessionId, cwd });
-      terminal.show();
-      return runtime;
-    } catch (error) {
-      throw new Error(`New Pi session in ${cwd}: ${errorMessage(error)}`);
-    }
+    if (display !== undefined && !this.closeWaiters.has(display)) display.show();
   }
 
   async open(
@@ -119,7 +69,9 @@ export class TerminalRegistry implements vscode.Disposable {
     if (this.displayedSession !== undefined) {
       return this.displayedSession === sessionId ? display : undefined;
     }
-    return (await this.resolveRestoredSessionId(display)) === sessionId ? display : undefined;
+    return (await this.resolveRestoredSession(display))?.sessionId === sessionId
+      ? display
+      : undefined;
   }
 
   async stop(
@@ -131,14 +83,20 @@ export class TerminalRegistry implements vscode.Disposable {
     let isDisplayed =
       this.displayedSession === sessionId ||
       (display !== undefined && display === confirmedDisplay);
+    let displayedCwd = this.displayedSession === sessionId ? this.displayedSessionCwd : undefined;
     let switchError: string | undefined;
-    if (!isDisplayed && this.displayedSession === undefined && display !== undefined) {
-      isDisplayed = (await this.resolveRestoredSessionId(display)) === sessionId;
+    if (isDisplayed && displayedCwd === undefined && display !== undefined) {
+      const restored = await this.resolveRestoredSession(display);
+      displayedCwd = restored?.sessionId === sessionId ? restored?.cwd : undefined;
+    } else if (!isDisplayed && this.displayedSession === undefined && display !== undefined) {
+      const restored = await this.resolveRestoredSession(display);
+      isDisplayed = restored?.sessionId === sessionId;
+      displayedCwd = isDisplayed ? restored?.cwd : undefined;
     }
     let switched: { client: TmuxClient; previous: PiRuntime } | undefined;
     if (isDisplayed && display !== undefined && replacement !== undefined) {
       try {
-        switched = await this.switchBeforeStop(display, sessionId, replacement);
+        switched = await this.switchBeforeStop(display, sessionId, replacement, displayedCwd);
       } catch (error) {
         switchError = errorMessage(error);
       }
@@ -165,11 +123,13 @@ export class TerminalRegistry implements vscode.Disposable {
         !this.closed.has(display)
       ) {
         this.displayedSession = replacement.sessionId;
+        this.displayedSessionCwd = replacement.cwd;
       } else {
         if (display !== undefined) {
           await this.changeDisplay(() => this.closeDisplay(display));
         }
         this.displayedSession = undefined;
+        this.displayedSessionCwd = undefined;
       }
     }
     return { switched: switched !== undefined, switchError };
@@ -179,14 +139,12 @@ export class TerminalRegistry implements vscode.Disposable {
     display: vscode.Terminal,
     sessionId: string,
     replacement: PiSession,
+    displayedCwd: string | undefined,
   ): Promise<{ client: TmuxClient; previous: PiRuntime }> {
-    const options = display.creationOptions;
-    const cwd = "cwd" in options ? options.cwd : undefined;
-    const displayCwd = typeof cwd === "string" ? cwd : cwd?.fsPath;
     if (
       display.exitStatus !== undefined ||
-      displayCwd === undefined ||
-      cwdGroupKey(displayCwd) !== cwdGroupKey(replacement.cwd)
+      displayedCwd === undefined ||
+      cwdGroupKey(displayedCwd) !== cwdGroupKey(replacement.cwd)
     ) {
       throw new Error(`Pi display cwd mismatch for ${replacement.sessionId}`);
     }
@@ -201,7 +159,7 @@ export class TerminalRegistry implements vscode.Disposable {
     if (pid === undefined || client === undefined || this.closed.has(display)) {
       throw new Error(`Pi display is no longer attached: ${sessionId}`);
     }
-    const previous = { sessionId, cwd: displayCwd, target: client.target };
+    const previous = { sessionId, cwd: displayedCwd, target: client.target };
     await this.runtimes.switchClient(client, { ...replacement, target });
     return { client, previous };
   }
@@ -230,24 +188,19 @@ export class TerminalRegistry implements vscode.Disposable {
     return terminal !== undefined && !this.closed.has(terminal) ? terminal : undefined;
   }
 
-  private async resolveRestoredSessionId(display: vscode.Terminal): Promise<string | undefined> {
+  private async resolveRestoredSession(
+    display: vscode.Terminal,
+  ): Promise<(PiRuntime & { file: string }) | undefined> {
     try {
       const pid = await display.processId;
       if (pid === undefined) return undefined;
       const client = (await this.runtimes.clients()).find(
         (entry) => entry.pid === pid || entry.parentPid === pid,
       );
-      return client === undefined ? undefined : await this.runtimes.resolveClientSessionId(client);
+      return client === undefined ? undefined : await this.runtimes.resolveSession(client.target);
     } catch {
       return undefined;
     }
-  }
-
-  private createNewDisplay(cwd: string): vscode.Terminal {
-    const terminal = this.terminals.createNew(cwd);
-    this.newDisplays.set(terminal, cwd);
-    this.display = terminal;
-    return terminal;
   }
 
   private changeDisplay<T>(operation: () => Promise<T>): Promise<T> {
@@ -267,15 +220,8 @@ export class TerminalRegistry implements vscode.Disposable {
       let restored = this.currentDisplay();
       if (restored !== undefined) {
         const options = restored.creationOptions;
-        const cwd = "cwd" in options ? options.cwd : undefined;
-        const displayCwd = typeof cwd === "string" ? cwd : cwd?.fsPath;
         const hasLegacyTitle = options.name === "Pi" && restored.name === "Pi";
-        if (
-          restored.exitStatus !== undefined ||
-          displayCwd !== session.cwd ||
-          hasLegacyTitle ||
-          target === undefined
-        ) {
+        if (restored.exitStatus !== undefined || hasLegacyTitle || target === undefined) {
           await this.closeDisplay(restored);
           restored = undefined;
         }
@@ -283,6 +229,7 @@ export class TerminalRegistry implements vscode.Disposable {
       this.requireActive();
       const terminal = restored ?? this.terminals.create(session);
       this.display = terminal;
+
       return { terminal, created: restored === undefined };
     });
     try {
@@ -290,8 +237,8 @@ export class TerminalRegistry implements vscode.Disposable {
       if (client.target !== runtime.target) await this.runtimes.switchClient(client, runtime);
       this.requireActive();
       if (this.closed.has(terminal)) throw new Error("Pi display closed during attachment");
-      this.newDisplays.delete(terminal);
       this.displayedSession = runtime.sessionId;
+      this.displayedSessionCwd = runtime.cwd;
       return { runtime, terminal };
     } catch (error) {
       if (created && !this.disposed) await this.changeDisplay(() => this.closeDisplay(terminal));
@@ -316,11 +263,7 @@ export class TerminalRegistry implements vscode.Disposable {
     }
   }
 
-  private async waitForClient(
-    terminal: vscode.Terminal,
-    session: { cwd: string; sessionId?: string },
-    target?: string,
-  ) {
+  private async waitForClient(terminal: vscode.Terminal, session: PiSession, target?: string) {
     this.requireActive();
     const controller = new AbortController();
     const closed = new Promise<never>((_resolve, reject) => {
@@ -344,7 +287,7 @@ export class TerminalRegistry implements vscode.Disposable {
 
   private async pollClient(
     terminal: vscode.Terminal,
-    session: { cwd: string; sessionId?: string },
+    session: PiSession,
     target: string | undefined,
     signal: AbortSignal,
   ) {
@@ -355,20 +298,16 @@ export class TerminalRegistry implements vscode.Disposable {
       signal.throwIfAborted();
       const [clients, resolvedTarget] = await Promise.all([
         this.runtimes.clients(),
-        session.sessionId === undefined
-          ? undefined
-          : (target ?? this.runtimes.resolveTarget(session.sessionId)),
+        target ?? this.runtimes.resolveTarget(session.sessionId),
       ]);
       signal.throwIfAborted();
       if (terminal.exitStatus !== undefined) break;
       const client = clients.find((entry) => entry.pid === pid || entry.parentPid === pid);
       if (client !== undefined) {
         const runtime =
-          session.sessionId === undefined
-            ? await this.runtimes.resolveSession(client.target)
-            : resolvedTarget === undefined
-              ? undefined
-              : { cwd: session.cwd, sessionId: session.sessionId, target: resolvedTarget };
+          resolvedTarget === undefined
+            ? undefined
+            : { cwd: session.cwd, sessionId: session.sessionId, target: resolvedTarget };
         signal.throwIfAborted();
         if (runtime !== undefined && runtime.target !== undefined) {
           if (!(await sameWorkDirectory(runtime.cwd, session.cwd)))

@@ -78,24 +78,6 @@ export class TmuxRuntimeStore {
     return undefined;
   }
 
-  async resolveClientSessionId(client: TmuxClient): Promise<string | undefined> {
-    const encoded = await this.query([
-      "display-message",
-      "-p",
-      "-c",
-      client.name,
-      "#{@pi-tmux-session}",
-    ]);
-    try {
-      const metadata: unknown = JSON.parse(Buffer.from(encoded.trim(), "base64").toString("utf8"));
-      return isRecord(metadata) && typeof metadata.id === "string" && metadata.id.length > 0
-        ? metadata.id
-        : undefined;
-    } catch {
-      return undefined;
-    }
-  }
-
   async clients(): Promise<TmuxClient[]> {
     const clients = await this.query([
       "list-clients",

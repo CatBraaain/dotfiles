@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -156,6 +157,7 @@ function mockTerminal(
   mocks: ReturnType<typeof fakeRuntimes>["mocks"],
   terminal: object,
   registry: TerminalRegistry,
+  openCwd: string,
 ): void {
   let created = false;
   vscodeMocks.createTerminal.mockImplementation((options) => {
@@ -163,7 +165,7 @@ function mockTerminal(
     if (typeof sessionId === "string") {
       mocks.open({
         sessionId,
-        cwd: options.cwd.fsPath,
+        cwd: openCwd,
         ...(options.shellArgs.includes("--temporary") ? { temporary: true as const } : {}),
       });
     }
@@ -238,7 +240,7 @@ async function archiveFixture() {
     show: vi.fn(),
     dispose: vi.fn(() => registry.onTerminalClosed(terminal as never)),
   };
-  mockTerminal(runtimes.mocks, terminal, registry);
+  mockTerminal(runtimes.mocks, terminal, registry, root);
   const { provider, statePath } = createProvider({ sessionDir, registry });
   setUpStore(statePath, root, [activeSessionId, inactiveSessionId]);
   const webview = createView();
@@ -1405,7 +1407,7 @@ describe("SessionWebviewProvider", () => {
       sendText: vi.fn(),
       show: vi.fn(),
     };
-    mockTerminal(mocks, terminal, registry);
+    mockTerminal(mocks, terminal, registry, root);
 
     await webview.receive({ type: "ready" });
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
@@ -1429,7 +1431,7 @@ describe("SessionWebviewProvider", () => {
     };
     const { store: runtimeStore, mux, mocks } = providerRuntimes();
     const registry = new TerminalRegistry(runtimeStore, editorTerminals(runtimeStore), mux);
-    mockTerminal(mocks, terminal, registry);
+    mockTerminal(mocks, terminal, registry, root);
     const { provider, statePath } = createProvider({ sessionDir, registry });
     setUpStore(statePath, root, [activeSessionId]);
     expect(archiveSessions(statePath, [{ sessionId: activeSessionId, cwd: root }]).ok).toBe(true);
@@ -1478,7 +1480,7 @@ describe("SessionWebviewProvider", () => {
       show: vi.fn(),
       dispose: vi.fn(() => registry.onTerminalClosed(terminal as never)),
     };
-    mockTerminal(runtimes.mocks, terminal, registry);
+    mockTerminal(runtimes.mocks, terminal, registry, root);
     const { provider, statePath } = createProvider({ sessionDir, registry, ...deps });
     runtimes.temporary.add(inactiveSessionId);
     setUpStore(statePath, root, [activeSessionId]);
@@ -1781,7 +1783,7 @@ describe("SessionWebviewProvider", () => {
     };
     const { store: runtimeStore, mux, mocks } = providerRuntimes();
     const registry = new TerminalRegistry(runtimeStore, editorTerminals(runtimeStore), mux);
-    mockTerminal(mocks, terminal, registry);
+    mockTerminal(mocks, terminal, registry, root);
     const { provider, statePath } = createProvider({ sessionDir, registry });
     setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
@@ -1808,7 +1810,7 @@ describe("SessionWebviewProvider", () => {
     const terminal = { processId: Promise.resolve(123), show: vi.fn() };
     const { store: runtimeStore, mux, mocks } = providerRuntimes();
     const registry = new TerminalRegistry(runtimeStore, editorTerminals(runtimeStore), mux);
-    mockTerminal(mocks, terminal, registry);
+    mockTerminal(mocks, terminal, registry, root);
     const { provider, statePath } = createProvider({ sessionDir, registry });
     setUpStore(statePath, root, [activeSessionId]);
     expect(archiveSessions(statePath, [{ sessionId: activeSessionId, cwd: root }]).ok).toBe(true);
@@ -1832,7 +1834,7 @@ describe("SessionWebviewProvider", () => {
     });
     // the session that just came back from the archive opens in the shared terminal
     expect(vscodeMocks.createTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: { fsPath: root } }),
+      expect.objectContaining({ cwd: { fsPath: homedir() } }),
     );
     expect(terminal.show).toHaveBeenCalledTimes(1);
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.displayedSessionId).toBe(
@@ -1969,7 +1971,7 @@ describe("SessionWebviewProvider", () => {
     const terminal = { processId: Promise.resolve(123), show: vi.fn() };
     const { store, mux, mocks } = providerRuntimes();
     const registry = new TerminalRegistry(store, editorTerminals(store), mux);
-    mockTerminal(mocks, terminal, registry);
+    mockTerminal(mocks, terminal, registry, root);
     const { provider, statePath } = createProvider({ sessionDir, registry });
     setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
@@ -1979,7 +1981,7 @@ describe("SessionWebviewProvider", () => {
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
 
     expect(vscodeMocks.createTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: { fsPath: root } }),
+      expect.objectContaining({ cwd: { fsPath: homedir() } }),
     );
     expect(terminal.show).toHaveBeenCalledTimes(1);
     expect(vscodeMocks.getWorkspaceFolder).not.toHaveBeenCalled();
@@ -2003,7 +2005,7 @@ describe("SessionWebviewProvider", () => {
       show: vi.fn(),
     };
     const { registry, mocks } = createRuntimeRegistry();
-    mockTerminal(mocks, terminal, registry);
+    mockTerminal(mocks, terminal, registry, root);
     const { provider, statePath } = createProvider({ sessionDir, registry });
     setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
@@ -2016,7 +2018,7 @@ describe("SessionWebviewProvider", () => {
     expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(1);
     expect(vscodeMocks.createTerminal).toHaveBeenCalledWith(
       expect.objectContaining({
-        cwd: { fsPath: root },
+        cwd: { fsPath: homedir() },
         location: 1,
         shellPath: "pi-mux",
         shellArgs: ["open", "--temporary", activeSessionId],
@@ -2259,7 +2261,7 @@ describe("SessionWebviewProvider", () => {
     const terminal = { processId: Promise.resolve(123), show: vi.fn() };
     const { store, mux, mocks, live } = providerRuntimes();
     const registry = new TerminalRegistry(store, editorTerminals(store), mux);
-    mockTerminal(mocks, terminal, registry);
+    mockTerminal(mocks, terminal, registry, root);
     const { provider, statePath } = createProvider({ sessionDir, registry });
     setUpStore(statePath, root, [activeSessionId]);
     const webview = createView();
@@ -2395,11 +2397,13 @@ describe("SessionWebviewProvider", () => {
     expect(renderedRows(sentState())).toEqual([]);
     await webview.receive({ type: "newSession", cwd: root });
 
-    expect(fakePiMuxCommand.mock.calls.some(([, args]) => args[0] === "new")).toBe(false);
+    expect(
+      fakePiMuxCommand.mock.calls.some(([, args]) => args.join(" ") === "new --detached"),
+    ).toBe(true);
     expect(vscodeMocks.createTerminal).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ shellPath: "pi-mux", shellArgs: ["new"] }),
+      expect.objectContaining({ shellPath: "pi-mux", shellArgs: ["open", activeSessionId] }),
     );
-    expect(terminal.show).toHaveBeenCalledTimes(2);
+    expect(terminal.show).toHaveBeenCalledTimes(1);
     expect(registry.displayedSessionId).toBe(activeSessionId);
     expect(sentState().displayedSessionId).toBe(activeSessionId);
     expect(sentState().groups[0].sessions.map((session) => session.sessionId)).toEqual([
@@ -2749,7 +2753,7 @@ describe("SessionWebviewProvider", () => {
     vscodeMocks.createTerminal.mockImplementation((options) => {
       fixture.mocks.open({
         sessionId: options.shellArgs.at(-1),
-        cwd: options.cwd.fsPath,
+        cwd: root,
         ...(options.shellArgs.includes("--temporary") ? { temporary: true as const } : {}),
       });
       const terminal = {
@@ -2959,7 +2963,7 @@ describe("SessionWebviewProvider", () => {
       cwd: root,
       target: `pi-${inactiveSessionId}`,
     });
-    mockTerminal(mocks, terminal, registry);
+    mockTerminal(mocks, terminal, registry, root);
     let finishOpening: () => void = () => {};
     const opening = new Promise<void>((resolve) => {
       finishOpening = resolve;
@@ -3030,7 +3034,7 @@ describe("SessionWebviewProvider", () => {
           target: `pi-${inactiveSessionId}`,
         });
         mocks.switchClient.mockRejectedValueOnce(new Error("tmux permission denied"));
-        mockTerminal(mocks, terminal, registry);
+        mockTerminal(mocks, terminal, registry, root);
         mocks.clients.mockImplementationOnce(async () => {
           client.target = "different-target";
           return [client];
@@ -3248,6 +3252,7 @@ describe("SessionWebviewProvider", () => {
     Object.assign(vscodeMocks.terminals, [restored]);
     client.target = `pi-${activeSessionId}`;
     mocks.clients
+      .mockResolvedValueOnce([client])
       .mockResolvedValueOnce([client])
       .mockRejectedValue(new Error("client lookup denied"));
     await webview.receive({ type: "archiveSession", sessionId: activeSessionId });

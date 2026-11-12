@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { homedir } from "node:os";
 import type * as vscode from "vscode";
 import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -22,13 +23,11 @@ let registry: TerminalRegistry;
 let runtimes: ReturnType<typeof fakeRuntimes>;
 let onSessionStarted: ReturnType<typeof vi.fn<(sessionId: string) => void>>;
 let processId: Promise<number | undefined>;
-let coldCount: number;
 
 beforeEach(async () => {
   vi.clearAllMocks();
   root = await tempDir("pi-launcher-test-");
   processId = Promise.resolve(123);
-  coldCount = 0;
   runtimes = fakeRuntimes();
   registry = new TerminalRegistry(runtimes.store, editorTerminals(runtimes.store), runtimes.mux);
   api.createTerminal.mockImplementation((creationOptions: vscode.TerminalOptions) => {
@@ -39,11 +38,7 @@ beforeEach(async () => {
       dispose: vi.fn(() => registry.onTerminalClosed(terminal as unknown as vscode.Terminal)),
     };
     const args = creationOptions.shellArgs as string[];
-    const cwd = (creationOptions.cwd as vscode.Uri).fsPath;
-    if (args[0] === "new") {
-      const existing = [...runtimes.live.values()].find((runtime) => runtime.cwd === cwd);
-      runtimes.mocks.open({ sessionId: existing?.sessionId ?? `cold-${++coldCount}`, cwd });
-    } else runtimes.mocks.open({ sessionId: args[1], cwd });
+    runtimes.mocks.open({ sessionId: args[1], cwd: root });
     return terminal;
   });
   onSessionStarted = vi.fn();
@@ -95,40 +90,36 @@ describe("SessionLauncher", () => {
     expect(registry.displayedSessionId).not.toBe("queued");
   });
 
-  it("creates and shows a cold native Terminal before its process ID or attachment resolves", async () => {
+  it("creates the display Terminal before attachment resolves and shows it after attaching", async () => {
     const pid = deferred<number>();
     processId = pid.promise;
     const launching = launcher.start(root);
     await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
     const terminal = api.createTerminal.mock.results[0].value;
-    expect(terminal.show).toHaveBeenCalledOnce();
+    expect(terminal.show).not.toHaveBeenCalled();
     expect(api.createTerminal).toHaveBeenCalledWith(
       expect.objectContaining({
-        cwd: { fsPath: root },
+        cwd: { fsPath: homedir() },
         location: 1,
         shellPath: "pi-mux",
-        shellArgs: ["new"],
+        shellArgs: ["open", "new-1"],
       }),
     );
-    expect(runtimes.mocks.newSession).not.toHaveBeenCalled();
-    expect(runtimes.mocks.list).not.toHaveBeenCalled();
     expect(stateIds()).toEqual(new Set());
     expect(registry.displayedSessionId).toBeUndefined();
     pid.resolve(123);
     await launching;
-    expect(stateIds()).toEqual(new Set(["cold-1"]));
-    expect(onSessionStarted).toHaveBeenCalledExactlyOnceWith("cold-1");
-    expect(registry.displayedSessionId).toBe("cold-1");
+    expect(terminal.show).toHaveBeenCalledOnce();
+    expect(stateIds()).toEqual(new Set(["new-1"]));
+    expect(onSessionStarted).toHaveBeenCalledExactlyOnceWith("new-1");
+    expect(registry.displayedSessionId).toBe("new-1");
   });
 
-  it("resolves a cold session from the attached client's target without a detached new or list", async () => {
-    runtimes.mocks.list.mockImplementation(() => {
-      throw new Error("must not wait for list");
-    });
+  it("reserves the empty Pi through a detached new without opening it twice", async () => {
     await launcher.start(root);
-    expect(runtimes.mocks.resolveSession).toHaveBeenCalledWith("pi-cold-1");
-    expect(runtimes.mocks.newSession).not.toHaveBeenCalled();
-    expect(stateIds()).toEqual(new Set(["cold-1"]));
+    expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(root);
+    expect(api.createTerminal.mock.calls[0][0].shellArgs).toEqual(["open", "new-1"]);
+    expect(stateIds()).toEqual(new Set(["new-1"]));
   });
 
   it.each(["newSession", "list", "clients"] as const)(
@@ -136,6 +127,7 @@ describe("SessionLauncher", () => {
     async (method) => {
       const terminal = await existingDisplay();
       const gate = deferred<never>();
+      void gate.promise.catch(() => {});
       runtimes.mocks[method].mockReturnValueOnce(gate.promise);
       const launching = launcher.start(root).catch((error: Error) => error);
       await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledOnce());
@@ -160,19 +152,20 @@ describe("SessionLauncher", () => {
       await vi.waitFor(() => expect(runtimes.mocks.clients).toHaveBeenCalledOnce());
       const terminal = api.createTerminal.mock.results[0].value;
       const second = launcher.start(nextCwd);
-      await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledOnce());
       expect(api.createTerminal).toHaveBeenCalledOnce();
       expect(stateIds()).toEqual(new Set());
       expect(registry.displayedSessionId).toBeUndefined();
       gate.resolve([runtimes.client]);
       await Promise.all([first, second]);
-      expect(onSessionStarted.mock.calls.map(([id]) => id)).toEqual(["cold-1", "new-1"]);
-      expect(registry.displayedSessionId).toBe("new-1");
-      expect(api.createTerminal).toHaveBeenCalledTimes(otherCwd ? 2 : 1);
+      expect(onSessionStarted.mock.calls.map(([id]) => id)).toEqual(["new-1", "new-2"]);
+      expect(registry.displayedSessionId).toBe("new-2");
+      expect(api.createTerminal).toHaveBeenCalledOnce();
+      expect(terminal.show).toHaveBeenCalledTimes(3);
     },
   );
 
-  it("creates a second click's Terminal while a closed first display still has an unresolved process ID", async () => {
+  it("creates a second click's Terminal without waiting for a closed display's process ID", async () => {
     const pid = deferred<number>();
     processId = pid.promise;
     const first = launcher.start(root).catch((error: Error) => error);
@@ -183,42 +176,26 @@ describe("SessionLauncher", () => {
     processId = secondPid.promise;
     const second = launcher.start(root);
     await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledTimes(2));
-    expect(api.createTerminal.mock.results[1].value.show).toHaveBeenCalledOnce();
     secondPid.resolve(123);
     await second;
+    expect(api.createTerminal.mock.results[1].value.show).toHaveBeenCalledOnce();
     expect(await first).toBeInstanceOf(Error);
-    expect(registry.displayedSessionId).toBe("cold-1");
+    expect(registry.displayedSessionId).toBe("new-2");
     pid.resolve(123);
   });
 
-  it("creates a second click's Terminal before a queued predecessor's new call resolves", async () => {
+  it("reuses the shared display across cwds without creating extra display tabs", async () => {
     const terminal = await existingDisplay();
-    const pending = deferred<string>();
-    runtimes.mocks.newSession.mockReturnValueOnce(pending.promise);
-    const first = launcher.start(root);
-    await vi.waitFor(() => expect(runtimes.mocks.newSession).toHaveBeenCalledOnce());
-    registry.onTerminalClosed(terminal);
-    const second = launcher.start(root);
-    await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledTimes(2));
-    expect(api.createTerminal.mock.results[1].value.show).toHaveBeenCalledOnce();
-    expect(registry.displayedSessionId).toBe("old");
-    pending.resolve("old");
-    await Promise.all([first, second]);
-  });
-
-  it("waits only for shared close completion and never creates two live display tabs", async () => {
-    const terminal = await existingDisplay();
-    vi.mocked(terminal.dispose).mockImplementation(() => {});
     const other = join(root, "other");
     await mkdir(other);
-    const first = launcher.start(other);
-    await vi.waitFor(() => expect(terminal.dispose).toHaveBeenCalledOnce());
-    const second = launcher.start(root);
-    await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledOnce());
+    await launcher.start(other);
+    await launcher.start(root);
     expect(api.createTerminal).toHaveBeenCalledOnce();
-    registry.onTerminalClosed(terminal);
-    await Promise.all([first, second]);
-    expect(api.createTerminal).toHaveBeenCalledTimes(3);
+    expect(runtimes.mocks.switchClient.mock.calls.map(([, runtime]) => runtime.sessionId)).toEqual([
+      "new-1",
+      "new-2",
+    ]);
+    expect(terminal.dispose).not.toHaveBeenCalled();
     expect(onSessionStarted.mock.calls.map(([id]) => id)).toEqual(["new-1", "new-2"]);
   });
 
@@ -248,21 +225,10 @@ describe("SessionLauncher", () => {
     expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
   });
 
-  it("reasserts Terminal focus after cold attachment without delaying its first show", async () => {
-    const pid = deferred<number>();
-    processId = pid.promise;
-    const launching = launcher.start(root);
-    await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
-    const terminal = api.createTerminal.mock.results[0].value;
-    expect(terminal.show).toHaveBeenCalledOnce();
-    pid.resolve(123);
-    await launching;
-    expect(terminal.show).toHaveBeenCalledTimes(2);
-  });
-
-  it("normalizes cwd before creating the cold Terminal", async () => {
+  it("normalizes cwd before reserving the empty session", async () => {
     await launcher.start(`${root}/.`);
-    expect(api.createTerminal.mock.calls[0][0].cwd.fsPath).toBe(root);
+    expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(root);
+    expect(stateIds()).toEqual(new Set(["new-1"]));
   });
 
   it.each(["relative/path", "/definitely-missing-pi-launcher-directory"])(
@@ -284,12 +250,12 @@ describe("SessionLauncher", () => {
 
   it("uses the CLI's same-cwd empty session on repeated clicks", async () => {
     await launcher.start(root);
-    runtimes.mocks.newSession.mockResolvedValue("cold-1");
+    runtimes.mocks.newSession.mockResolvedValue("new-1");
     await launcher.start(root);
     await launcher.start(root);
     expect(api.createTerminal).toHaveBeenCalledOnce();
     expect(runtimes.live.size).toBe(1);
-    expect(stateIds()).toEqual(new Set(["cold-1"]));
+    expect(stateIds()).toEqual(new Set(["new-1"]));
     expect(runtimes.mocks.switchClient).not.toHaveBeenCalled();
   });
 
@@ -303,36 +269,15 @@ describe("SessionLauncher", () => {
     expect(runtimes.live.size).toBe(1);
   });
 
-  it("connects a logical symlink cwd to its physical metadata without changing registration keys", async () => {
+  it("connects a logical symlink cwd without changing registration keys", async () => {
     const alias = join(root, "alias");
     await symlink(root, alias);
-    runtimes.mocks.resolveSession.mockResolvedValueOnce({
-      sessionId: "cold-1",
-      cwd: root,
-      file: join(root, "cold-1.jsonl"),
-      target: "pi-cold-1",
-    });
     await launcher.start(alias);
-    expect(api.createTerminal.mock.calls[0][0].cwd.fsPath).toBe(alias);
     expect(api.createTerminal.mock.results[0].value.dispose).not.toHaveBeenCalled();
-    expect(registry.displayedSessionId).toBe("cold-1");
-    expect(stateIds()).toEqual(new Set(["cold-1"]));
+    expect(registry.displayedSessionId).toBe("new-1");
+    expect(stateIds()).toEqual(new Set(["new-1"]));
     const store = readSessionStateStore(join(root, "session-state.json"));
     expect(store.status === "ok" && Object.keys(store.data["active-workspaces"])).toEqual([alias]);
-  });
-
-  it("rejects a cold metadata cwd mismatch without publishing selection", async () => {
-    const other = join(root, "other");
-    await mkdir(other);
-    runtimes.mocks.resolveSession.mockResolvedValueOnce({
-      sessionId: "wrong",
-      cwd: other,
-      file: "/wrong.jsonl",
-      target: "pi-wrong",
-    });
-    await expect(launcher.start(root)).rejects.toThrow("cwd mismatch");
-    expect(stateIds()).toEqual(new Set());
-    expect(registry.displayedSessionId).toBeUndefined();
   });
 
   it("preserves invalid state data when registration fails after connection", async () => {

@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { homedir } from "node:os";
 import type { PiSession } from "./piMux";
 import type { TmuxRuntimeStore } from "./tmux";
 
@@ -7,7 +8,6 @@ const OWNER_KEY = "PI_SESSIONS_DISPLAY_SOCKET";
 export interface DisplayTerminals {
   find(): vscode.Terminal | undefined;
   create(session: PiSession): vscode.Terminal;
-  createNew(cwd: string): vscode.Terminal;
 }
 
 export function editorTerminals(tmux: TmuxRuntimeStore): DisplayTerminals {
@@ -23,26 +23,16 @@ export function editorTerminals(tmux: TmuxRuntimeStore): DisplayTerminals {
       });
     },
     create(session) {
-      return create(
-        session.cwd,
-        session.temporary
+      return vscode.window.createTerminal({
+        cwd: vscode.Uri.file(homedir()),
+        location: vscode.TerminalLocation.Editor,
+        shellPath: "pi-mux",
+        shellArgs: session.temporary
           ? ["open", "--temporary", session.sessionId]
           : ["open", session.sessionId],
-      );
-    },
-    createNew(cwd) {
-      return create(cwd, ["new"]);
+        env: { [OWNER_KEY]: tmux.socketPath, TMUX: null, TMUX_PANE: null },
+        isTransient: false,
+      });
     },
   };
-
-  function create(cwd: string, shellArgs: string[]): vscode.Terminal {
-    return vscode.window.createTerminal({
-      cwd: vscode.Uri.file(cwd),
-      location: vscode.TerminalLocation.Editor,
-      shellPath: "pi-mux",
-      shellArgs,
-      env: { [OWNER_KEY]: tmux.socketPath, TMUX: null, TMUX_PANE: null },
-      isTransient: false,
-    });
-  }
 }

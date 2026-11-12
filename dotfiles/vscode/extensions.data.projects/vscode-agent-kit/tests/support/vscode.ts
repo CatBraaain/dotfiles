@@ -287,9 +287,9 @@ export class VSCodeFixture {
       .toEqual([{ label: paneTitle, active: true }]);
     const tab = this.page.locator(".tabs-container [role=tab]").describe("Native Pi display tab");
     await expect(tab.locator(".label-name")).toHaveText(paneTitle);
-    await expect(tab.locator(".label-description")).toHaveText(basename(cwd));
+    await expect(tab.locator(".label-description")).toHaveText("~");
     const display = this.snapshot().terminals.find((terminal) => terminal.owned)!;
-    expect(readlinkSync(`/proc/${display.pid}/cwd`)).toBe(cwd);
+    expect(readlinkSync(`/proc/${display.pid}/cwd`)).toBe(join(this.directory, "home"));
     if (existsSync(this.sessions[key].session)) {
       const frame = await this.sessionFrame();
       await expect(

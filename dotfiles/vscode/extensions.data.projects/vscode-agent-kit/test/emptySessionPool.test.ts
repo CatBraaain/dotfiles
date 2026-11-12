@@ -422,7 +422,7 @@ describe("EmptySessionPool", () => {
     expect(await readFile(statePath, "utf8")).toBe(original);
   });
 
-  it("does not block New Session's Terminal behind a pending background startup", async () => {
+  it("starts a New Session independently while a background startup is pending", async () => {
     const background = deferred<string>();
     execute.mockReturnValueOnce(background.promise);
     await register([root]);
@@ -443,10 +443,11 @@ describe("EmptySessionPool", () => {
       onSessionStarted: vi.fn(),
     });
     const launching = launcher.start(root).catch((error: Error) => error);
-    await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
     expect(api.createTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({ shellArgs: ["new"] }),
+      expect.objectContaining({ shellArgs: ["open", "new-1"] }),
     );
+    expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(root);
     registry.onTerminalClosed(terminal as never);
     expect(await launching).toBeInstanceOf(Error);
     launcher.dispose();

@@ -1,8 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getuid } from "node:process";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { TmuxRuntimeStore, piMuxSocketPath } from "../src/tmux";
+
+const procReadFile = vi.hoisted(() => vi.fn());
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  procReadFile.mockImplementation(actual.readFile);
+  return { ...actual, readFile: procReadFile };
+});
 
 const socket = "/runtime with spaces/pi-tmux/server.sock";
 
@@ -20,7 +27,15 @@ function setup(panes = [pane("target-A", "A"), pane("target-B", "B")].join("\n")
   return { store: new TmuxRuntimeStore(socket, execute), execute };
 }
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  procReadFile.mockClear();
+  vi.unstubAllEnvs();
+});
+
+beforeEach(async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  procReadFile.mockImplementation(actual.readFile);
+});
 
 describe("piMuxSocketPath", () => {
   it("uses the pi-mux socket in XDG_RUNTIME_DIR", () => {
@@ -83,37 +98,6 @@ describe("TmuxRuntimeStore", () => {
     expect(await store.resolveSession("broken")).toBeUndefined();
   });
 
-  it("resolves the displayed client pane ID rather than another Pi in the same session", async () => {
-    const { store, execute } = setup();
-    const encoded = Buffer.from(JSON.stringify({ id: "B" })).toString("base64");
-    execute.mockResolvedValueOnce(`${encoded}\n`);
-    const client = { pid: 123, name: "/dev/pts/1", target: "shared" };
-    expect(await store.resolveClientSessionId(client)).toBe("B");
-    expect(execute).toHaveBeenCalledExactlyOnceWith("tmux", [
-      "-S",
-      socket,
-      "display-message",
-      "-p",
-      "-c",
-      client.name,
-      "#{@pi-tmux-session}",
-    ]);
-  });
-
-  it.each([
-    "",
-    "invalid",
-    ...[null, {}, { id: "" }, { id: 7 }].map((metadata) =>
-      Buffer.from(JSON.stringify(metadata)).toString("base64"),
-    ),
-  ])("does not guess a restored ID from invalid pane metadata: %s", async (encoded) => {
-    const { store, execute } = setup();
-    execute.mockResolvedValueOnce(encoded);
-    expect(
-      await store.resolveClientSessionId({ pid: 123, name: "/dev/pts/1", target: "shared" }),
-    ).toBeUndefined();
-  });
-
   it.each([
     "no server running on socket",
     "error connecting to /runtime/pi-tmux/server.sock (No such file or directory)",
@@ -140,6 +124,9 @@ describe("TmuxRuntimeStore", () => {
 
   it("lists client PIDs and switches only the selected client", async () => {
     const { store, execute } = setup();
+    procReadFile.mockImplementation(async () => {
+      throw Object.assign(new Error("not available"), { code: "ENOENT" });
+    });
     const clients = await store.clients();
     expect(clients).toEqual([
       { pid: 123, name: "/dev/pts/1", target: "target-A" },
