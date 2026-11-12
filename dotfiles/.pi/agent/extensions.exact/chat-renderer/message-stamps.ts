@@ -3,14 +3,8 @@ import {
   UserMessageComponent,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
-import {
-  Container,
-  Markdown,
-  Spacer,
-  stripTerminalSequences,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
-import { stampTime } from "./stamp-time.ts";
+import { Markdown, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { stampSuffix, stampTime } from "./stamp-time.ts";
 
 type AssistantPart = {
   timestamp?: string;
@@ -35,18 +29,8 @@ export function installMessageStamps(theme: Theme): () => void {
     if (!active || lines.length === 0) return lines;
     const part = this as unknown as AssistantPart;
     if (part.hasToolCalls) return lines;
-    const content = this.children[0];
-    const leading = content instanceof Container ? content.children[0] : undefined;
-    const top = leading instanceof Spacer ? leading.render(width).length : 0;
-    return renderMessageBox(
-      lines,
-      width,
-      stampTime(part.timestamp ?? part.lastMessage?.timestamp),
-      {
-        top,
-        bottom: 0,
-      },
-    );
+    appendStamp(lines, width, stampTime(part.timestamp ?? part.lastMessage?.timestamp));
+    return lines;
   }
 
   function renderUser(this: UserMessageComponent, width: number): string[] {
@@ -84,6 +68,11 @@ export function recordMessageStart(message: { role: string; timestamp?: number }
   if (message.role === "user" && typeof message.timestamp === "number") {
     pendingUserStampsMs.push(message.timestamp);
   }
+}
+
+function appendStamp(lines: string[], width: number, stamp: string): void {
+  if (!displayTheme || stamp === "") return;
+  lines.push(displayTheme.fg("dim", stampSuffix("", stamp, width)));
 }
 
 function renderMessageBox(

@@ -130,100 +130,134 @@ function imageComponent(): Image {
   );
 }
 
-for (const { role, create, bottomPadding } of [
-  { role: "user", create: userMessage, bottomPadding: 1 },
-  { role: "assistant", create: textResponse, bottomPadding: 0 },
-]) {
-  describe(`${role} message boxes`, () => {
-    it("uses one top row and one timestamp footer without duplicating native padding", () => {
-      const component = create("hello");
-      const baseline = renderWithoutBox(component, 80);
-      const lines = component.render(80);
-      assert.deepEqual(lines.map(stripTerminalSequences), [
-        " ".repeat(80),
-        " hello" + " ".repeat(74),
-        " ".repeat(72) + stamp,
-      ]);
-      assert.equal(lines.length, baseline.length + 1 - bottomPadding);
-      assert.ok(lines.at(-1)!.includes(currentTheme.fg("dim", stamp)));
-      for (const line of lines) {
-        assert.equal(visibleWidth(line), 80);
-        for (const column of [0, 6, 79]) {
-          assert.equal(
-            getActiveBackgroundAnsi(sliceByColumn(line, 0, column + 1)),
-            currentTheme.getBgAnsi("userMessageBg"),
-          );
-        }
-      }
-    });
-
-    for (const text of [
-      "first line\n\nlast line",
-      "This paragraph wraps across several display lines and ends here.",
-      "```ts\nconst answer = 42;\n```",
-      "\x1b[31m\u6f22\u5b57\u{1f642}e\u0301\x1b[39m",
-      "hello\x1b[31m" + "\u3000".repeat(5) + "\x1b[39m",
-    ]) {
-      it(`keeps rendered body content, styles and wrapping: ${JSON.stringify(text)}`, () => {
-        const component = create(text);
-        const width = 21;
-        const baseline = renderWithoutBox(component, width);
-        const body = baseline.slice(1, baseline.length - bottomPadding);
-        const lines = component.render(width);
-        assert.deepEqual(lines.slice(1, -1).map(withoutBackground), body.map(withoutBackground));
-        assert.equal(stripTerminalSequences(lines.at(-1)!), " ".repeat(13) + stamp);
-        assert.ok(lines.every((line) => visibleWidth(line) <= width));
-      });
-    }
-
-    it("retains body trailing blank rows separately from the footer", () => {
-      const component = create("body");
-      component.addChild(new Text("tail\n\n", 1, 0));
-      const baseline = renderWithoutBox(component, 80);
-      const lines = component.render(80);
-      assert.equal(lines.length, baseline.length + 1);
-      assert.deepEqual(
-        lines.slice(1, -1).map(withoutBackground),
-        baseline.slice(1).map(withoutBackground),
-      );
-      assert.equal(stripTerminalSequences(lines.at(-2)!).trim(), "");
-      assert.equal(visibleWidth(lines.at(-2)!), 80);
-      assert.equal(stripTerminalSequences(lines.at(-1)!), " ".repeat(72) + stamp);
-    });
-
-    for (const outputPad of [0, 2]) {
-      it(`keeps horizontal outputPad=${outputPad}`, () => {
-        const component = create("hello", outputPad);
-        const baseline = renderWithoutBox(component, 80);
-        assert.deepEqual(
-          component.render(80).slice(1, -1).map(withoutBackground),
-          baseline.slice(1, baseline.length - bottomPadding).map(withoutBackground),
+describe("user message boxes", () => {
+  const bottomPadding = 1;
+  it("uses one top row and one timestamp footer without duplicating native padding", () => {
+    const component = userMessage("hello");
+    const baseline = renderWithoutBox(component, 80);
+    const lines = component.render(80);
+    assert.deepEqual(lines.map(stripTerminalSequences), [
+      " ".repeat(80),
+      " hello" + " ".repeat(74),
+      " ".repeat(72) + stamp,
+    ]);
+    assert.equal(lines.length, baseline.length + 1 - bottomPadding);
+    assert.ok(lines.at(-1)!.includes(currentTheme.fg("dim", stamp)));
+    for (const line of lines) {
+      assert.equal(visibleWidth(line), 80);
+      for (const column of [0, 6, 79]) {
+        assert.equal(
+          getActiveBackgroundAnsi(sliceByColumn(line, 0, column + 1)),
+          currentTheme.getBgAnsi("userMessageBg"),
         );
-      });
+      }
     }
+  });
 
-    it("preserves hyperlinks in the body but does not link the footer", () => {
-      setCapabilities({ ...originalCapabilities, hyperlinks: true });
-      const lines = create("[docs](https://example.com)").render(80);
-      assert.equal(getOsc8LinkAtColumn(lines[1]!, 1), "https://example.com");
-      assert.equal(getOsc8LinkAtColumn(lines.at(-1)!, 72), undefined);
+  for (const text of [
+    "first line\n\nlast line",
+    "This paragraph wraps across several display lines and ends here.",
+    "```ts\nconst answer = 42;\n```",
+    "\x1b[31m\u6f22\u5b57\u{1f642}e\u0301\x1b[39m",
+    "hello\x1b[31m" + "\u3000".repeat(5) + "\x1b[39m",
+  ]) {
+    it(`keeps rendered body content, styles and wrapping: ${JSON.stringify(text)}`, () => {
+      const component = userMessage(text);
+      const width = 21;
+      const baseline = renderWithoutBox(component, width);
+      const body = baseline.slice(1, baseline.length - bottomPadding);
+      const lines = component.render(width);
+      assert.deepEqual(lines.slice(1, -1).map(withoutBackground), body.map(withoutBackground));
+      assert.equal(stripTerminalSequences(lines.at(-1)!), " ".repeat(13) + stamp);
+      assert.ok(lines.every((line) => visibleWidth(line) <= width));
     });
+  }
 
-    it("restores the outer background after a child code background closes", () => {
-      const markdownTheme: MarkdownTheme = {
-        ...getMarkdownTheme(),
-        highlightCode: (code) => ["\x1b[44m" + code + "\x1b[49m plain"],
-      };
-      const component = create("```ts\nconst answer = 42;\n```", 1, markdownTheme);
+  it("retains body trailing blank rows separately from the footer", () => {
+    const component = userMessage("body");
+    component.addChild(new Text("tail\n\n", 1, 0));
+    const baseline = renderWithoutBox(component, 80);
+    const lines = component.render(80);
+    assert.equal(lines.length, baseline.length + 1);
+    assert.deepEqual(
+      lines.slice(1, -1).map(withoutBackground),
+      baseline.slice(1).map(withoutBackground),
+    );
+    assert.equal(stripTerminalSequences(lines.at(-2)!).trim(), "");
+    assert.equal(visibleWidth(lines.at(-2)!), 80);
+    assert.equal(stripTerminalSequences(lines.at(-1)!), " ".repeat(72) + stamp);
+  });
+
+  for (const outputPad of [0, 2]) {
+    it(`keeps horizontal outputPad=${outputPad}`, () => {
+      const component = userMessage("hello", outputPad);
+      const baseline = renderWithoutBox(component, 80);
+      assert.deepEqual(
+        component.render(80).slice(1, -1).map(withoutBackground),
+        baseline.slice(1, baseline.length - bottomPadding).map(withoutBackground),
+      );
+    });
+  }
+
+  it("preserves hyperlinks in the body but does not link the footer", () => {
+    setCapabilities({ ...originalCapabilities, hyperlinks: true });
+    const lines = userMessage("[docs](https://example.com)").render(80);
+    assert.equal(getOsc8LinkAtColumn(lines[1]!, 1), "https://example.com");
+    assert.equal(getOsc8LinkAtColumn(lines.at(-1)!, 72), undefined);
+  });
+
+  it("restores the outer background after a child code background closes", () => {
+    const markdownTheme: MarkdownTheme = {
+      ...getMarkdownTheme(),
+      highlightCode: (code) => ["\x1b[44m" + code + "\x1b[49m plain"],
+    };
+    const component = userMessage("```ts\nconst answer = 42;\n```", 1, markdownTheme);
+    const baseline = renderWithoutBox(component, 80);
+    const lines = component.render(80);
+    const codeLine = lines.find((line) => stripTerminalSequences(line).includes("const answer"))!;
+    const plainCode = stripTerminalSequences(codeLine);
+    const codeColumn = visibleWidth(plainCode.slice(0, plainCode.indexOf("const")));
+    const plainColumn = visibleWidth(plainCode.slice(0, plainCode.indexOf("plain")));
+    assert.equal(getActiveBackgroundAnsi(sliceByColumn(codeLine, 0, codeColumn + 1)), "\x1b[44m");
+    assert.equal(
+      getActiveBackgroundAnsi(sliceByColumn(codeLine, 0, plainColumn + 1)),
+      currentTheme.getBgAnsi("userMessageBg"),
+    );
+    assert.deepEqual(
+      lines.slice(1, -1).map(withoutBackground),
+      baseline.slice(1, baseline.length - bottomPadding).map(withoutBackground),
+    );
+  });
+
+  for (const { name, text, childBackground } of [
+    { name: "combined full reset", text: "before\x1b[0;31mafter" },
+    { name: "combined child background close", text: "before\x1b[44mchild\x1b[49;39mafter" },
+    {
+      name: "truecolor background with reset-valued channels",
+      text: "before\x1b[0;48;2;0;49;0mafter\x1b[49;39m tail",
+      childBackground: "\x1b[48;2;0;49;0m",
+    },
+    {
+      name: "indexed background with a reset-valued index",
+      text: "before\x1b[0;48;5;49mafter\x1b[49;39m tail",
+      childBackground: "\x1b[48;5;49m",
+    },
+  ]) {
+    it(`keeps effective backgrounds across ${name}`, () => {
+      const component = userMessage(text);
       const baseline = renderWithoutBox(component, 80);
       const lines = component.render(80);
-      const codeLine = lines.find((line) => stripTerminalSequences(line).includes("const answer"))!;
-      const plainCode = stripTerminalSequences(codeLine);
-      const codeColumn = visibleWidth(plainCode.slice(0, plainCode.indexOf("const")));
-      const plainColumn = visibleWidth(plainCode.slice(0, plainCode.indexOf("plain")));
-      assert.equal(getActiveBackgroundAnsi(sliceByColumn(codeLine, 0, codeColumn + 1)), "\x1b[44m");
+      const body = lines[1]!;
+      const plainBody = stripTerminalSequences(body);
+      const afterColumn = visibleWidth(plainBody.slice(0, plainBody.indexOf("after")));
+      assert.equal(lines.length, 3);
+      assert.equal(visibleWidth(body), 80);
       assert.equal(
-        getActiveBackgroundAnsi(sliceByColumn(codeLine, 0, plainColumn + 1)),
+        getActiveBackgroundAnsi(sliceByColumn(body, 0, afterColumn + 1)),
+        childBackground ?? currentTheme.getBgAnsi("userMessageBg"),
+      );
+      assert.equal(
+        getActiveBackgroundAnsi(sliceByColumn(body, 0, 80)),
         currentTheme.getBgAnsi("userMessageBg"),
       );
       assert.deepEqual(
@@ -231,170 +265,175 @@ for (const { role, create, bottomPadding } of [
         baseline.slice(1, baseline.length - bottomPadding).map(withoutBackground),
       );
     });
+  }
 
-    for (const { name, text, childBackground } of [
-      { name: "combined full reset", text: "before\x1b[0;31mafter" },
-      { name: "combined child background close", text: "before\x1b[44mchild\x1b[49;39mafter" },
-      {
-        name: "truecolor background with reset-valued channels",
-        text: "before\x1b[0;48;2;0;49;0mafter\x1b[49;39m tail",
-        childBackground: "\x1b[48;2;0;49;0m",
-      },
-      {
-        name: "indexed background with a reset-valued index",
-        text: "before\x1b[0;48;5;49mafter\x1b[49;39m tail",
-        childBackground: "\x1b[48;5;49m",
-      },
-    ]) {
-      it(`keeps effective backgrounds across ${name}`, () => {
-        const component = create(text);
-        const baseline = renderWithoutBox(component, 80);
-        const lines = component.render(80);
-        const body = lines[1]!;
-        const plainBody = stripTerminalSequences(body);
-        const afterColumn = visibleWidth(plainBody.slice(0, plainBody.indexOf("after")));
-        assert.equal(lines.length, 3);
-        assert.equal(visibleWidth(body), 80);
-        assert.equal(
-          getActiveBackgroundAnsi(sliceByColumn(body, 0, afterColumn + 1)),
-          childBackground ?? currentTheme.getBgAnsi("userMessageBg"),
-        );
-        assert.equal(
-          getActiveBackgroundAnsi(sliceByColumn(body, 0, 80)),
-          currentTheme.getBgAnsi("userMessageBg"),
-        );
-        assert.deepEqual(
-          lines.slice(1, -1).map(withoutBackground),
-          baseline.slice(1, baseline.length - bottomPadding).map(withoutBackground),
-        );
-      });
-    }
-
-    for (const width of [8, 7, 2]) {
-      it(`keeps the box at width ${width} and shows only a fitting timestamp`, () => {
-        const component = create("hi", 0);
-        const lines = component.render(width);
-        assert.equal(lines.length, 3);
-        assert.equal(stripTerminalSequences(lines[0]!), " ".repeat(width));
-        assert.equal(stripTerminalSequences(lines.at(-1)!), width >= 8 ? stamp : " ".repeat(width));
-        assert.ok(lines.every((line) => visibleWidth(line) === width));
-      });
-    }
-
-    it("keeps a colored empty footer when the timestamp is unavailable", () => {
-      const component = create("hello");
-      if (component instanceof UserMessageComponent) {
-        delete (component as unknown as { timestamp?: string }).timestamp;
-      } else {
-        delete (component as unknown as { lastMessage: { timestamp?: number } }).lastMessage
-          .timestamp;
-      }
-      const lines = component.render(80);
+  for (const width of [8, 7, 2]) {
+    it(`keeps the box at width ${width} and shows only a fitting timestamp`, () => {
+      const component = userMessage("hi", 0);
+      const lines = component.render(width);
       assert.equal(lines.length, 3);
-      assert.equal(stripTerminalSequences(lines.at(-1)!), " ".repeat(80));
+      assert.equal(stripTerminalSequences(lines[0]!), " ".repeat(width));
+      assert.equal(stripTerminalSequences(lines.at(-1)!), width >= 8 ? stamp : " ".repeat(width));
+      assert.ok(lines.every((line) => visibleWidth(line) === width));
+    });
+  }
+
+  it("keeps a colored empty footer when the timestamp is unavailable", () => {
+    const component = userMessage("hello");
+    delete (component as unknown as { timestamp?: string }).timestamp;
+    const lines = component.render(80);
+    assert.equal(lines.length, 3);
+    assert.equal(stripTerminalSequences(lines.at(-1)!), " ".repeat(80));
+    assert.equal(
+      getActiveBackgroundAnsi(sliceByColumn(lines.at(-1)!, 0, 80)),
+      currentTheme.getBgAnsi("userMessageBg"),
+    );
+  });
+
+  for (const text of ["", " \n \n"]) {
+    it(`does not add a box around an empty body: ${JSON.stringify(text)}`, () => {
+      const component = userMessage(text);
+      assert.deepEqual(component.render(80), renderWithoutBox(component, 80));
+    });
+  }
+
+  it("does not duplicate padding or mutate cached body lines after resize", () => {
+    const component = userMessage("hello");
+    const baseline = renderWithoutBox(component, 80);
+    for (const width of [80, 21, 7, 8, 80, 80]) {
+      const lines = component.render(width);
+      assert.equal(lines.length, 3, `width=${width}`);
       assert.equal(
-        getActiveBackgroundAnsi(sliceByColumn(lines.at(-1)!, 0, 80)),
+        stripTerminalSequences(lines.join("\n")).split(stamp).length - 1,
+        width >= 8 ? 1 : 0,
+        `width=${width}`,
+      );
+    }
+    assert.deepEqual(renderWithoutBox(component, 80), baseline);
+  });
+
+  it("restores existing components and both original renderers on dispose", () => {
+    const component = userMessage("hello");
+    const baseline = renderWithoutBox(component, 80);
+    component.render(80);
+    dispose();
+    assert.equal(UserMessageComponent.prototype.render, originalUserRender);
+    assert.equal(AssistantMessageComponent.prototype.render, originalAssistantRender);
+    assert.deepEqual(component.render(80), baseline);
+  });
+
+  for (const protocol of ["kitty", "iterm2"] as const) {
+    for (const text of ["", "before image"]) {
+      it(`preserves ${protocol} controls and height reservations: ${JSON.stringify(text)}`, () => {
+        setCapabilities({ ...originalCapabilities, images: protocol });
+        setCellDimensions({ widthPx: 8, heightPx: 16 });
+        const component = userMessage(text);
+        const image = imageComponent();
+        component.addChild(image);
+        const imageLines = image.render(80).slice();
+        const baseline = renderWithoutBox(component, 80);
+        const originalImageStart = baseline.length - imageLines.length;
+        const offset = text === "" ? 1 : 0;
+        const lines = component.render(80);
+        assert.ok(imageLines.some(isImageLine));
+        assert.ok(imageLines.length > 1);
+        assert.deepEqual(
+          lines.slice(originalImageStart + offset, originalImageStart + offset + imageLines.length),
+          baseline.slice(originalImageStart),
+        );
+        assert.equal(stripTerminalSequences(lines[0]!), " ".repeat(80));
+        assert.equal(stripTerminalSequences(lines.at(-1)!), " ".repeat(72) + stamp);
+        assert.deepEqual(image.render(80), imageLines);
+      });
+    }
+  }
+
+  it("colors body blank rows after an image without consuming its reserved rows", () => {
+    setCapabilities({ ...originalCapabilities, images: "kitty" });
+    const component = userMessage("");
+    const image = imageComponent();
+    component.addChild(image);
+    component.addChild(new Spacer(2));
+    const imageHeight = image.render(80).length;
+    const baseline = renderWithoutBox(component, 80);
+    const lines = component.render(80);
+    assert.deepEqual(lines.slice(1, 1 + imageHeight), baseline.slice(0, imageHeight));
+    for (const line of lines.slice(1 + imageHeight, -1)) {
+      assert.equal(stripTerminalSequences(line), " ".repeat(80));
+      assert.equal(
+        getActiveBackgroundAnsi(sliceByColumn(line, 0, 80)),
         currentTheme.getBgAnsi("userMessageBg"),
       );
-    });
-
-    for (const text of ["", " \n \n"]) {
-      it(`does not add a box around an empty body: ${JSON.stringify(text)}`, () => {
-        const component = create(text);
-        assert.deepEqual(component.render(80), renderWithoutBox(component, 80));
-      });
     }
+    assert.equal(lines.length, baseline.length + 2);
+  });
+});
 
-    it("does not duplicate padding or mutate cached body lines after resize", () => {
-      const component = create("hello");
-      const baseline = renderWithoutBox(component, 80);
-      for (const width of [80, 21, 7, 8, 80, 80]) {
-        const lines = component.render(width);
-        assert.equal(lines.length, 3, `width=${width}`);
-        assert.equal(
-          stripTerminalSequences(lines.join("\n")).split(stamp).length - 1,
-          width >= 8 ? 1 : 0,
-          `width=${width}`,
-        );
-      }
-      assert.deepEqual(renderWithoutBox(component, 80), baseline);
-    });
-
-    it("restores existing components and both original renderers on dispose", () => {
-      const component = create("hello");
-      const baseline = renderWithoutBox(component, 80);
-      component.render(80);
-      dispose();
-      assert.equal(UserMessageComponent.prototype.render, originalUserRender);
-      assert.equal(AssistantMessageComponent.prototype.render, originalAssistantRender);
-      assert.deepEqual(component.render(80), baseline);
-    });
-
-    for (const protocol of ["kitty", "iterm2"] as const) {
-      for (const text of ["", "before image"]) {
-        it(`preserves ${protocol} controls and height reservations: ${JSON.stringify(text)}`, () => {
-          setCapabilities({ ...originalCapabilities, images: protocol });
-          setCellDimensions({ widthPx: 8, heightPx: 16 });
-          const component = create(text);
-          const image = imageComponent();
-          component.addChild(image);
-          const imageLines = image.render(80).slice();
-          const baseline = renderWithoutBox(component, 80);
-          const originalImageStart = baseline.length - imageLines.length;
-          const offset = text === "" ? 1 : 0;
-          const lines = component.render(80);
-          assert.ok(imageLines.some(isImageLine));
-          assert.ok(imageLines.length > 1);
-          assert.deepEqual(
-            lines.slice(
-              originalImageStart + offset,
-              originalImageStart + offset + imageLines.length,
-            ),
-            baseline.slice(originalImageStart),
-          );
-          assert.equal(stripTerminalSequences(lines[0]!), " ".repeat(80));
-          assert.equal(stripTerminalSequences(lines.at(-1)!), " ".repeat(72) + stamp);
-          assert.deepEqual(image.render(80), imageLines);
-        });
-      }
+describe("assistant message stamps", () => {
+  it("appends a right-aligned timestamp row without a background", () => {
+    const component = textResponse("hello");
+    const baseline = renderWithoutBox(component, 80);
+    const lines = component.render(80);
+    assert.deepEqual(lines.slice(0, -1).map(withoutBackground), baseline.map(withoutBackground));
+    assert.equal(stripTerminalSequences(lines.at(-1)!), " ".repeat(72) + stamp);
+    assert.equal(lines.at(-1)!, currentTheme.fg("dim", " ".repeat(72) + stamp));
+    assert.equal(visibleWidth(lines.at(-1)!), 80);
+    for (const line of lines) {
+      assert.equal(getActiveBackgroundAnsi(sliceByColumn(line, 0, 80)), "");
     }
+  });
 
-    it("colors body blank rows after an image without consuming its reserved rows", () => {
-      setCapabilities({ ...originalCapabilities, images: "kitty" });
-      const component = create("");
-      const image = imageComponent();
-      component.addChild(image);
-      component.addChild(new Spacer(2));
-      const imageHeight = image.render(80).length;
+  it("keeps empty renders empty", () => {
+    const component = textResponse("");
+    assert.deepEqual(component.render(80), []);
+  });
+
+  it("does not append a timestamp row when the time is unknown", () => {
+    const component = textResponse("hello");
+    delete (component as unknown as { timestamp?: string }).timestamp;
+    delete (component as unknown as { lastMessage?: { timestamp?: number } }).lastMessage;
+    assert.deepEqual(
+      component.render(80).map(withoutBackground),
+      renderWithoutBox(component, 80).map(withoutBackground),
+    );
+  });
+
+  it("keeps the timestamp row within narrow widths", () => {
+    const component = textResponse("hi", 0);
+    const lines = component.render(21);
+    assert.equal(stripTerminalSequences(lines.at(-1)!), " ".repeat(13) + stamp);
+    assert.ok(lines.every((line) => visibleWidth(line) <= 21));
+    const narrow = component.render(8);
+    assert.equal(stripTerminalSequences(narrow.at(-1)!), "");
+  });
+
+  for (const protocol of ["kitty", "iterm2"] as const) {
+    it(`preserves ${protocol} image controls and appends the timestamp`, () => {
+      setCapabilities({ ...originalCapabilities, images: protocol });
+      setCellDimensions({ widthPx: 8, heightPx: 16 });
+      const component = textResponse("before image");
+      component.addChild(imageComponent());
       const baseline = renderWithoutBox(component, 80);
       const lines = component.render(80);
-      assert.deepEqual(lines.slice(1, 1 + imageHeight), baseline.slice(0, imageHeight));
-      for (const line of lines.slice(1 + imageHeight, -1)) {
-        assert.equal(stripTerminalSequences(line), " ".repeat(80));
-        assert.equal(
-          getActiveBackgroundAnsi(sliceByColumn(line, 0, 80)),
-          currentTheme.getBgAnsi("userMessageBg"),
-        );
-      }
-      assert.equal(lines.length, baseline.length + 2);
+      assert.ok(baseline.some(isImageLine));
+      assert.deepEqual(lines.slice(0, -1).map(withoutBackground), baseline.map(withoutBackground));
+      assert.equal(stripTerminalSequences(lines.at(-1)!), " ".repeat(72) + stamp);
     });
-  });
-}
+  }
+});
 
 for (const themeName of ["dark", "light"]) {
-  it(`uses the existing user background for both roles in the ${themeName} theme`, () => {
+  it(`uses the existing user background in the ${themeName} theme`, () => {
     initTheme(themeName, false);
     dispose();
     currentTheme = themes.getThemeByName(themeName)!;
     themes.setThemeInstance(currentTheme);
     dispose = installMessageStamps(currentTheme);
-    for (const component of [userMessage("hello"), textResponse("hello")]) {
-      for (const line of component.render(80)) {
-        assert.equal(
-          getActiveBackgroundAnsi(sliceByColumn(line, 0, 80)),
-          currentTheme.getBgAnsi("userMessageBg"),
-        );
-      }
+    for (const line of userMessage("hello").render(80)) {
+      assert.equal(
+        getActiveBackgroundAnsi(sliceByColumn(line, 0, 80)),
+        currentTheme.getBgAnsi("userMessageBg"),
+      );
     }
   });
 }
@@ -409,12 +448,15 @@ it("keeps terminal-default backgrounds without inventing a fallback color", () =
   dispose();
   themes.setThemeInstance(colorless);
   dispose = installMessageStamps(colorless);
-  for (const component of [userMessage("hello"), textResponse("hello")]) {
-    const lines = component.render(80);
-    assert.equal(lines.length, 3);
-    assert.equal(stripTerminalSequences(lines.at(-1)!), " ".repeat(72) + stamp);
-    assert.ok(lines.every((line) => getActiveBackgroundAnsi(sliceByColumn(line, 0, 80)) === ""));
-  }
+  const userLines = userMessage("hello").render(80);
+  assert.equal(userLines.length, 3);
+  assert.equal(stripTerminalSequences(userLines.at(-1)!), " ".repeat(72) + stamp);
+  assert.ok(userLines.every((line) => getActiveBackgroundAnsi(sliceByColumn(line, 0, 80)) === ""));
+  const assistantLines = textResponse("hello").render(80);
+  assert.equal(stripTerminalSequences(assistantLines.at(-1)!), " ".repeat(72) + stamp);
+  assert.ok(
+    assistantLines.every((line) => getActiveBackgroundAnsi(sliceByColumn(line, 0, 80)) === ""),
+  );
 });
 
 describe("message timestamp sources", () => {
@@ -509,19 +551,29 @@ const baselines = components.map(component => component.render(80));
 const originalRenders = [host.UserMessageComponent.prototype.render, host.AssistantMessageComponent.prototype.render];
 const dispose = stamps.installMessageStamps(theme);
 try {
-  for (const component of components) {
-    const lines = component.render(80);
-    assert.deepEqual(lines.map(tui.stripTerminalSequences), [
-      " ".repeat(80), " hello" + " ".repeat(74), " ".repeat(72) + "21:30:03",
-    ]);
-    for (const line of lines) {
-      assert.equal(utils.getActiveBackgroundAnsi(tui.sliceByColumn(line, 0, 80)), theme.getBgAnsi("userMessageBg"));
-    }
-    for (const width of [14, 7, 80, 80]) {
-      const resized = component.render(width).map(tui.stripTerminalSequences);
-      assert.equal(resized.length, 3);
-      assert.equal(resized.at(-1), width >= 8 ? " ".repeat(width - 8) + "21:30:03" : " ".repeat(width));
-    }
+  const userLines = user.render(80);
+  assert.deepEqual(userLines.map(tui.stripTerminalSequences), [
+    " ".repeat(80), " hello" + " ".repeat(74), " ".repeat(72) + "21:30:03",
+  ]);
+  for (const line of userLines) {
+    assert.equal(utils.getActiveBackgroundAnsi(tui.sliceByColumn(line, 0, 80)), theme.getBgAnsi("userMessageBg"));
+  }
+  for (const width of [14, 7, 80, 80]) {
+    const resized = user.render(width).map(tui.stripTerminalSequences);
+    assert.equal(resized.length, 3);
+    assert.equal(resized.at(-1), width >= 8 ? " ".repeat(width - 8) + "21:30:03" : " ".repeat(width));
+  }
+  const assistantLines = assistant.render(80);
+  assert.deepEqual(
+    assistantLines.map(tui.stripTerminalSequences),
+    [...baselines[1].map(tui.stripTerminalSequences), " ".repeat(72) + "21:30:03"],
+  );
+  for (const line of assistantLines) {
+    assert.equal(utils.getActiveBackgroundAnsi(tui.sliceByColumn(line, 0, 80)), "");
+  }
+  for (const width of [14, 7, 80, 80]) {
+    const resized = assistant.render(width).map(tui.stripTerminalSequences);
+    assert.equal(resized.at(-1), width >= 10 ? " ".repeat(width - 8) + "21:30:03" : "");
   }
   for (const protocol of ["kitty", "iterm2"]) {
     tui.setCapabilities({ ...tui.getCapabilities(), images: protocol });
@@ -541,7 +593,7 @@ try {
       const original = originalRenders[index].call(component, 80);
       assert.ok(original.length > 1);
       const boxed = component.render(80);
-      assert.deepEqual(boxed.slice(1, -1), original);
+      assert.deepEqual(index === 0 ? boxed.slice(1, -1) : boxed.slice(0, -1), original);
       assert.equal(tui.stripTerminalSequences(boxed.at(-1)), " ".repeat(72) + "21:30:03");
     });
   }
