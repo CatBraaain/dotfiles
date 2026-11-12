@@ -13,9 +13,31 @@ local kLearningScale = 10000
 local kUnknownWordCost = 10000
 local kBoundaryMarker = "\tb1 "
 
+local function route_precedes(a, b)
+    for index = 1, math.min(#a, #b) do
+        if a[index]._end ~= b[index]._end then return a[index]._end < b[index]._end end
+    end
+    if #a ~= #b then return #a < #b end
+    for index = 1, #a do
+        local left, right = a[index].dictionary_order or 0, b[index].dictionary_order or 0
+        if left ~= right then return left < right end
+    end
+    return false
+end
+
+local function extend_route(prefix, node, suffix)
+    local words = {}
+    for _, word in ipairs(prefix) do words[#words + 1] = word end
+    for _, word in ipairs(node.route_words or { node }) do words[#words + 1] = word end
+    for _, word in ipairs(suffix or {}) do words[#words + 1] = word end
+    return words
+end
+
 local function path_precedes(a, b)
     if a.score ~= b.score then return a.score < b.score end
-    if a.node._end ~= b.node._end then return a.node._end < b.node._end end
+    if route_precedes(a.completion, b.completion) then return true end
+    if route_precedes(b.completion, a.completion) then return false end
+    if a.node._end ~= b.node._end then return a.node._end > b.node._end end
     return a.sequence < b.sequence
 end
 
@@ -386,6 +408,7 @@ local function starting_nodes(viterbi, length)
         for _, node in ipairs(viterbi.lattice[position] or {}) do
             local key = node.start
             starting[key] = starting[key] or {}
+            node.dictionary_order = #starting[key] + 1
             starting[key][#starting[key] + 1] = node
         end
     end
@@ -421,8 +444,9 @@ local function dictionary_nodes(env, reading)
         for last = first, length do
             local surface = reading:sub(offsets[first], offsets[last + 1] - 1)
             local entries, histories = lexicon_entries(env, surface)
-            for _, lex in ipairs(entries) do
+            for order, lex in ipairs(entries) do
                 nodes[#nodes + 1] = {
+                    dictionary_order = order,
                     start = first, _end = last, surface = surface,
                     candidate = lex.candidate, left_id = lex.left_id, right_id = lex.right_id,
                     wcost = lex.cost,
@@ -439,34 +463,40 @@ local function dictionary_nodes(env, reading)
 end
 
 local function completion_costs(starting, length, env, context)
-    local remaining = {}
+    local remaining, completions = {}, {}
     for position = length, 1, -1 do
         for _, node in ipairs(starting[position] or {}) do
             if node._end == length then
                 remaining[node] = right_boundary_term(env, context, node.right_id)
+                completions[node] = {}
             else
-                local best
+                local best, best_route
                 for _, successor in ipairs(starting[node._end + 1] or {}) do
                     local conn = matrix_cost(env, node.right_id, successor.left_id)
                     local tail = remaining[successor]
                     if conn and tail then
                         local cost = conn + successor.wcost + tail
-                        if not best or cost < best then best = cost end
+                        if not best or cost <= best then
+                            local route = extend_route({}, successor, completions[successor])
+                            if not best or cost < best or route_precedes(route, best_route) then
+                                best, best_route = cost, route
+                            end
+                        end
                     end
                 end
-                remaining[node] = best
+                remaining[node], completions[node] = best, best_route
             end
         end
     end
-    return remaining
+    return remaining, completions
 end
 
 local function ranked_path_enum(reading, env, context, stock_texts, starting)
     local length = utf8.len(reading)
-    local remaining = completion_costs(starting, length, env, context)
+    local remaining, completions = completion_costs(starting, length, env, context)
     local heap, cheapest_prefix = {}, {}
     local sequence = 0
-    local function offer(node, text, first_left, own, left_term)
+    local function offer(node, text, first_left, own, left_term, incoming)
         local tail = remaining[node]
         if not tail then return end
         local prefixes = cheapest_prefix[node] or {}
@@ -474,12 +504,15 @@ local function ranked_path_enum(reading, env, context, stock_texts, starting)
         local key = text
         local score = left_term + own
         local previous = prefixes[key]
-        if previous and not (score < previous.score) then return end
-        local prefix = { score = score }
+        local words = extend_route(incoming or {}, node)
+        if previous and (score > previous.score
+            or score == previous.score and not route_precedes(words, previous.words)) then return end
+        local prefix = { score = score, words = words }
         prefixes[key] = prefix
         sequence = sequence + 1
         heap_push(heap, {
             sequence = sequence,
+            completion = extend_route(incoming or {}, node, completions[node]),
             node = node, text = text, first_left_id = first_left,
             own = own, left_term = left_term, key = key, prefix = prefix,
             score = left_term + own + tail,
@@ -509,7 +542,7 @@ local function ranked_path_enum(reading, env, context, stock_texts, starting)
                     local conn = matrix_cost(env, node.right_id, successor.left_id)
                     if conn then
                         offer(successor, path.text .. successor.candidate, path.first_left_id,
-                            path.own + conn + successor.wcost, path.left_term)
+                            path.own + conn + successor.wcost, path.left_term, path.prefix.words)
                     end
                 end
             end
@@ -712,6 +745,7 @@ local function attach_histories(starting, env)
                         start = position - history.first + 1, _end = node._end - history.first + 1,
                         surface = node.surface, candidate = node.candidate,
                         left_id = node.left_id, right_id = node.right_id, wcost = node.wcost,
+                        dictionary_order = node.dictionary_order,
                     }
                 end
             end
@@ -733,6 +767,7 @@ local function attach_histories(starting, env)
                     start = word.start + history.first - 1, _end = word._end + history.first - 1,
                     surface = word.surface, candidate = word.candidate,
                     left_id = word.left_id, right_id = word.right_id, wcost = word.wcost,
+                    dictionary_order = word.dictionary_order,
                 }
             end
             local nodes = starting[history.first]
@@ -787,29 +822,22 @@ local function ranked_path(reading, env, context, boundaries, fallback)
     constrain_boundaries(starting, length, boundaries)
     if fallback then add_fallback_nodes(starting, reading, boundaries) end
     attach_histories(starting, env)
-    local remaining = completion_costs(starting, length, env, context)
-    local path, current, best = {}, nil, math.huge
+    local remaining, completions = completion_costs(starting, length, env, context)
+    local path, best = nil, math.huge
     for _, node in ipairs(starting[1] or {}) do
         local left = left_boundary_term(env, context, node.left_id)
         local tail = remaining[node]
-        if left and tail and left + node.wcost + tail < best then
-            current, best = node, left + node.wcost + tail
-        end
-    end
-    while current do
-        for _, word in ipairs(current.route_words or { current }) do path[#path + 1] = word end
-        if current._end == length then return path, best end
-        local successor, cheapest = nil, math.huge
-        for _, node in ipairs(starting[current._end + 1] or {}) do
-            local conn = matrix_cost(env, current.right_id, node.left_id)
-            local tail = remaining[node]
-            if conn and tail and conn + node.wcost + tail < cheapest then
-                successor, cheapest = node, conn + node.wcost + tail
+        if left and tail then
+            local score = left + node.wcost + tail
+            if score <= best then
+                local route = extend_route({}, node, completions[node])
+                if not path or score < best or route_precedes(route, path) then
+                    path, best = route, score
+                end
             end
         end
-        current = successor
     end
-    return nil
+    return path, best
 end
 
 local function attach_pair_routes(candidates, reading, env, starting, route_cache)

@@ -437,6 +437,27 @@ do
         "equal automatic paths choose shorter words first, then dictionary order")
 end
 
+print("== 12a. initial analysis compares suffix boundaries before the first dictionary choice")
+do
+    local dictionary = {
+        { surface = "あ", candidate = "亜", left_id = 1, right_id = 1, cost = 0 },
+        { surface = "あ", candidate = "阿", left_id = 2, right_id = 2, cost = 0 },
+        { surface = "あ", candidate = "唖", left_id = 2, right_id = 2, cost = 0 },
+        { surface = "いう", candidate = "言う", left_id = 3, right_id = 3, cost = 0 },
+        { surface = "い", candidate = "伊", left_id = 4, right_id = 4, cost = 0 },
+        { surface = "う", candidate = "宇", left_id = 5, right_id = 5, cost = 0 },
+    }
+    local matrix = pos_matrix({1, 2, 3, 4, 5}, { ["1 4"] = 100, ["2 3"] = 100 })
+    local histories = {}
+    local bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return true end)
+    bunsetsu.start(context, "あいう")
+    check(#bunsetsu.state(context).clauses == 3 and bunsetsu.display(context) == "阿伊宇",
+        "initial segmentation prefers all shorter boundaries, then dictionary order among tied readings")
+    record_learning(bunsetsu, context, histories)
+    check(history_count(histories, "阿伊宇|1851 1851\tp2:s あ,阿,2,2;い,伊,4,4;う,宇,5,5") == 1,
+        "confirmation learns the initially selected shorter route and its actual POS ids")
+end
+
 print("== 13. lattice-backed engines still analyze the reading before splitting")
 do
     local dictionary = {
@@ -682,7 +703,7 @@ do
     end
 end
 
-print("== 21. tied fixed-frame paths retain the selected text and distinct alternatives")
+print("== 21. tied paths retain the selected text and ranked alternatives within bounded work")
 do
     local dictionary = {}
     for index = 1, 48 do
@@ -693,16 +714,48 @@ do
     local bunsetsu, context, viterbi = new_engine(dictionary, pos_matrix({ 368 }), {})
     viterbi:analyze(reading)
     local initial_text = viterbi:best_n()().candidate
-    bunsetsu.start(context, reading)
+    local instruction_budget, hook_interval = 20000000, 10000
+    local instructions = 0
+    debug.sethook(function()
+        instructions = instructions + hook_interval
+        if instructions > instruction_budget then error("equal-cost search exceeded 20 million instructions") end
+    end, "", hook_interval)
+    local completed, problem = pcall(bunsetsu.start, context, reading)
+    debug.sethook()
+    assert(completed, problem)
     local clause = bunsetsu.state(context).clauses[1]
     local seen, initial_scored = {}, false
     for _, choice in ipairs(clause.unfiltered) do
         if choice.text == initial_text and choice.own == 0 then initial_scored = true end
     end
-    check(initial_scored and #clause.candidates > 1, "the selected tied route and distinct alternatives remain available")
+    check(initial_scored and #clause.candidates == 31, "the selected tied route and thirty discovered texts remain available")
+    check(clause.candidates[clause.selected].text == initial_text, "discovery preserves the initially selected text")
+    for index = 1, 31 do
+        local expected = string.rep(utf8.char(0x4e01), 11) .. utf8.char(0x4e00 + index)
+        check(clause.candidates[index].text == expected, "equal-cost dictionary order is stable at rank " .. index)
+    end
     for _, choice in ipairs(clause.candidates) do
         check(not seen[choice.text], "tied paths display each text only once")
         seen[choice.text] = true
+    end
+end
+
+print("== 21a. equal-cost discovery compares all word boundaries before dictionary choices")
+do
+    local dictionary = {
+        { surface = "あ", candidate = "亜", left_id = 1, right_id = 1, cost = 0 },
+        { surface = "あ", candidate = "阿", left_id = 1, right_id = 1, cost = 0 },
+        { surface = "いう", candidate = "言う", left_id = 1, right_id = 1, cost = 0 },
+        { surface = "い", candidate = "伊", left_id = 1, right_id = 1, cost = 0 },
+        { surface = "う", candidate = "宇", left_id = 1, right_id = 1, cost = 0 },
+    }
+    local bunsetsu, context = new_engine(dictionary, pos_matrix({1}), {}, false,
+        function() return false end)
+    bunsetsu.start(context, "あいう")
+    local candidates = bunsetsu.state(context).clauses[1].candidates
+    for index, expected in ipairs({ "亜伊宇", "阿伊宇", "亜言う", "阿言う" }) do
+        check(candidates[index] and candidates[index].text == expected,
+            "shorter suffix boundaries precede dictionary choice at rank " .. index)
     end
 end
 
@@ -897,8 +950,9 @@ do
         context:set_option("_kagiroi_hide_candidates", true)
         bunsetsu.resize(context, -1)
         local outer, left, right = state.clauses[1], state.clauses[2], state.clauses[3]
-        check(left.reading == "い" and right.reading == "さかな" and left.frame[1].left_id == 694,
-            "resize reparses both readings and fixes the unlearned verb form")
+        check(left.reading == "い" and right.reading == "さかな"
+            and selected_route(bunsetsu, context, 2)[1].left_id == 695,
+            "resize reparses both readings and selects the best compatible lexical route")
         check(outer.candidates[outer.selected].text == outer_text
             and outer.candidates[outer.selected].left_id == 1898,
             "the outer display is retained while its best compatible source route changes")
@@ -935,7 +989,7 @@ do
         "the clause after the removed boundary keeps its selected display")
 end
 
-print("== 27. relearning a deduped winner refreshes the same engine without changing the fixed frame")
+print("== 27. relearning a deduped winner refreshes the same engine and retains its lexical identity")
 do
     local dictionary = {
         { surface = "あ", candidate = "赤", left_id = 1851, right_id = 1851, cost = 100 },
@@ -950,11 +1004,11 @@ do
         check(select_clause_text(bunsetsu, context, 1, "朱"), "the deduped target remains selectable in learning round " .. round)
         record_learning(bunsetsu, context, histories)
         bunsetsu.start(context, "あ")
-        local clause = bunsetsu.state(context).clauses[1]
-        check(bunsetsu.display(context) == "朱" and clause.frame[1].left_id == 1851,
-            "the same engine sees new learning while keeping its ordinary frame in round " .. round)
-        check(#histories == 1 and histories[1].commit_count == round
-            and histories[1].text == "朱|1851 1851\tp2:c あ,朱,1851,1851",
+        check(bunsetsu.display(context) == "朱" and selected_route(bunsetsu, context)[1].left_id == 1851,
+            "the same engine sees new learning and retains the selected POS in round " .. round)
+        check(#histories == 2 and histories[1].commit_count == round
+            and histories[1].text == "朱|1851 1851\tp2:c あ,朱,1851,1851"
+            and history_count(histories, "あ|1851 1851\tb1 1") == round,
             "relearning increases only the actual selected route's counter in round " .. round)
     end
 end
@@ -975,29 +1029,29 @@ do
     local first_history = "亜伊宇|1851 1851\tp2:c あ,亜,1851,1851;い,伊,1841,1841;う,宇,1909,1909"
     local second_history = "亜伊宇|1851 1851\tp2:c あ,亜,1851,1851;い,伊,1920,1920;う,宇,1909,1909"
     check(histories[1].text == first_history, "learning records the complete route including its middle word")
-    dictionary[2].cost, dictionary[3].cost = 2000, 100
+    dictionary[2].cost, dictionary[3].cost = 20000, 100
     bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
     bunsetsu.start(context, "あいう")
     local clause = bunsetsu.state(context).clauses[1]
     check(clause.candidates[clause.selected].route_words[2].left_id == 1920,
-        "a different ordinary middle-word frame cannot be replaced by the previous learned frame")
-    check(clause.unfiltered[1].history_discount == nil, "shared endpoints do not transfer the previous middle-word discount")
+        "a sufficiently cheaper middle-word route defeats the finite discount on the previous route")
+    check(clause.unfiltered[1].own == 300, "shared endpoints do not transfer the previous middle-word discount")
     for _ = 1, 2 do
         record_learning(bunsetsu, context, histories)
         bunsetsu.start(context, "あいう")
     end
-    check(#histories == 2 and histories[1].commit_count == 1
-        and histories[2].text == second_history and histories[2].commit_count == 2,
+    check(#histories == 3 and history_count(histories, first_history) == 1
+        and history_count(histories, second_history) == 2,
         "the two identical displays maintain independent middle-word counters")
-    dictionary[2].cost, dictionary[3].cost = 100, 1000
+    dictionary[2].cost, dictionary[3].cost = 100, 30000
     bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
     bunsetsu.start(context, "あいう")
     record_learning(bunsetsu, context, histories)
-    check(histories[1].commit_count == 2 and histories[2].commit_count == 2,
-        "returning to the original frame relearns only its own complete route")
+    check(history_count(histories, first_history) == 2 and history_count(histories, second_history) == 2,
+        "returning to the original route relearns only its own complete route")
 end
 
-print("== 29. context-specific single-word and multiword histories cannot replace each other's frames")
+print("== 29. single-word and multiword histories compete while retaining independent counters")
 do
     local dictionary = {
         { surface = "ないで", candidate = "内で", left_id = 1851, right_id = 1851, cost = 50 },
@@ -1015,21 +1069,22 @@ do
     for _ = 1, 3 do
         bunsetsu.start(context, "たべないで")
         local clauses = bunsetsu.state(context).clauses
-        check(#clauses == 2 and #clauses[2].frame == 2 and bunsetsu.display(context) == "食べ内で",
-            "verb context independently fixes the multiword frame")
+        check(#clauses == 2 and #selected_route(bunsetsu, context, 2) == 2
+            and bunsetsu.display(context) == "食べ内で",
+            "verb context selects the multiword route")
         record_learning(bunsetsu, context, histories)
     end
-    check(#histories == 4 and histories[1].commit_count == 1
-        and histories[3].text == "内で|1851 1851\tp2:c ない,内,1841,1841;で,で,1909,1909"
-        and histories[3].commit_count == 3,
+    local single_history = "内で|1851 1851\tp2:c ないで,内で,1851,1851"
+    local multi_history = "内で|1851 1851\tp2:c ない,内,1841,1841;で,で,1909,1909"
+    check(history_count(histories, single_history) == 1 and history_count(histories, multi_history) == 3,
         "single-word and multiword histories over the same reading and display have separate counters")
     bunsetsu.start(context, "ないで")
     local clause = bunsetsu.state(context).clauses[1]
-    check(#clause.frame == 1 and #clause.candidates[clause.selected].route_words == 1,
-        "more commits to the multiword route cannot change the standalone one-word frame")
+    check(#clause.candidates[clause.selected].route_words == 2,
+        "more commits can promote the multiword route even without the verb context")
     record_learning(bunsetsu, context, histories)
-    check(histories[1].commit_count == 2 and histories[3].commit_count == 3,
-        "relearning the standalone route leaves the contextual multiword counter unchanged")
+    check(history_count(histories, single_history) == 1 and history_count(histories, multi_history) == 4,
+        "standalone confirmation increments the selected multiword route, not the old single-word route")
 end
 
 print("== 30. clause and whole-sentence histories have independent counters for the same word route")
@@ -1042,15 +1097,17 @@ do
     local bunsetsu, context = pos_engine(dictionary, pos_matrix({ 1851, 1841 }), histories, function() return true end)
     bunsetsu.start(context, "あい")
     record_learning(bunsetsu, context, histories)
-    check(#histories == 3 and histories[3].text == "亜伊|1851 1851\tp2:s あ,亜,1851,1851;い,伊,1841,1841",
+    check(#histories == 4 and histories[3].text == "亜伊|1851 1851\tp2:s あ,亜,1851,1851;い,伊,1841,1841"
+        and history_count(histories, "あい|1851 1851\tb1 1,1") == 1,
         "the listed two-clause selection stores both clauses and its complete sentence route")
     bunsetsu.start(context, "あい")
     context:set_option("_kagiroi_hide_candidates", true)
     bunsetsu.resize(context, 1)
     record_learning(bunsetsu, context, histories)
     record_learning(bunsetsu, context, histories)
-    check(#histories == 4 and histories[3].commit_count == 1 and histories[4].commit_count == 2
-        and histories[4].text == "亜伊|1851 1851\tp2:c あ,亜,1851,1851;い,伊,1841,1841",
+    check(#histories == 6 and histories[3].commit_count == 1
+        and history_count(histories, "亜伊|1851 1851\tp2:c あ,亜,1851,1851;い,伊,1841,1841") == 2
+        and history_count(histories, "あい|1851 1851\tb1 2") == 2,
         "merging and relearning the same words grows only the clause-scoped counter")
 end
 
@@ -1074,8 +1131,9 @@ do
         if choice.text == "亜伊" and choice.left_id == 1851 then learned_own = choice.own end
         if choice.text == "亜伊" and choice.left_id == 1898 then other_own = choice.own end
     end
-    check(#clause.frame == 2 and bunsetsu.display(context) == "亜伊" and learned_own == 600 and other_own == 5100,
-        "only the trained word identity improves the enclosing fixed-frame candidate")
+    check(#selected_route(bunsetsu, context) == 2 and bunsetsu.display(context) == "亜伊"
+        and learned_own == 5100 - 10000 and other_own == 5100,
+        "only the trained word identity receives the finite history discount inside the multiword route")
 end
 
 print("== 32. legacy partial histories retain stored rows and actual words at every interval position")
@@ -1105,12 +1163,12 @@ do
                 function() return false end)
             for _, reading in ipairs(case.readings) do
                 bunsetsu.start(context, reading[1])
-                local clause = bunsetsu.state(context).clauses[1]
-                check(bunsetsu.display(context) == reading[2] and #clause.frame == utf8.len(reading[1]),
+                check(bunsetsu.display(context) == reading[2]
+                    and #selected_route(bunsetsu, context) == utf8.len(reading[1]),
                     "legacy learning ranks only the original word slots in " .. reading[1])
             end
             record_learning(bunsetsu, context, histories)
-            check(#histories == 2 and legacy.text == stored_text and legacy.candidate == case.candidate
+            check(#histories == 3 and legacy.text == stored_text and legacy.candidate == case.candidate
                 and legacy.commit_count == 1000000 and legacy.left_id == 1851 and legacy.right_id == 1851,
                 "adding route-aware learning does not rewrite or merge the existing legacy record")
             check(histories[2].text == case.saved and histories[2].commit_count == 1,
@@ -1153,12 +1211,11 @@ do
     bunsetsu, context = pos_engine(dictionary, matrix, histories)
     bunsetsu.start(context, "ない")
     local clause = bunsetsu.state(context).clauses[1]
-    check(clause.candidates[clause.selected].left_id == 1954 and clause.unfiltered[1].own == 5000
-        and clause.unfiltered[1].history_discount == nil,
+    check(clause.candidates[clause.selected].left_id == 1954 and clause.unfiltered[1].own == 5000,
         "a noun-only frame keeps its original identity and cost despite the auxiliary history")
     record_learning(bunsetsu, context, histories)
-    check(#histories == 2 and histories[1].commit_count == 1
-        and histories[2].text == "ない|1851 1851\tp2:c ない,ない,1954,1954",
+    check(#histories == 3 and histories[1].commit_count == 1
+        and history_count(histories, "ない|1851 1851\tp2:c ない,ない,1954,1954") == 1,
         "noun learning creates a separate route history instead of growing the auxiliary counter")
 end
 
@@ -1190,7 +1247,7 @@ do
             if choice.text == "亜" then rejected = choice end
             if choice.text == "阿" then accepted = choice end
         end
-        check(rejected and rejected.history_discount == nil and accepted and accepted.history_discount == 10000
+        check(rejected and rejected.own == 5000 and accepted and accepted.own == 1000 - 10000
             and bunsetsu.display(context) == "阿", "invalid suffix is not a legacy discount and the following valid row remains readable: " .. suffix)
         check(#histories == 2 and malformed.text == "亜|1851 1851" .. suffix and malformed.commit_count == 1000000,
             "rejecting a malformed suffix does not rewrite its stored row")
@@ -1248,17 +1305,17 @@ do
     bunsetsu.start(context, "あいう")
     record_learning(bunsetsu, context, histories)
     local saved = "亜伊宇|1851 1851\tp2:c あ,亜,1841,1841;い,伊,1898,1898;う,宇,1909,1909"
-    check(#histories == 1 and histories[1].text == saved, "training stores the original middle word with shared endpoints")
+    check(#histories == 2 and histories[1].text == saved, "training stores the original middle word with shared endpoints")
     dictionary[2].cost = 10
     bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
     bunsetsu.start(context, "あいう")
     local clause = bunsetsu.state(context).clauses[1]
     local selected = clause.candidates[clause.selected]
-    check(clause.frame[2].left_id == 1851 and selected.route_words[2].left_id == 1898
+    check(dictionary[2].cost < dictionary[3].cost and selected.route_words[2].left_id == 1898
         and selected.left_id == 1841 and selected.right_id == 1909 and bunsetsu.display(context) == "亜伊宇",
         "learning preserves the middle lexical identity even when a same-POS competitor becomes cheaper")
     record_learning(bunsetsu, context, histories)
-    check(#histories == 1 and histories[1].text == saved and histories[1].commit_count == 2,
+    check(#histories == 2 and histories[1].text == saved and histories[1].commit_count == 2,
         "deduplication and relearning grow only the selected middle-word history")
     table.remove(dictionary, 3)
     bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
@@ -1267,7 +1324,7 @@ do
     check(clause.candidates[clause.selected].route_words[2].left_id == 1851,
         "removing the trained middle word leaves the competing same-POS route selectable")
     for _, choice in ipairs(clause.unfiltered) do
-        check(choice.route_words[2].left_id == 1851 and choice.own == 210 and choice.history_discount == nil,
+        check(choice.route_words[2].left_id == 1851 and choice.own == 210,
             "the remaining route keeps its independent word cost and receives no removed-word discount")
     end
     check(histories[1].text == saved and histories[1].commit_count == 2,
@@ -1297,8 +1354,10 @@ do
     bunsetsu.start(context, "あい")
     local state = bunsetsu.state(context)
     local left, right = state.clauses[1], state.clauses[2]
-    check(left.frame[1].left_id == 1851 and right.frame[1].left_id == 694,
-        "the ordinary fixed frame retains the original full-path lexical ids")
+    check(left.reading == "あ" and right.reading == "い"
+        and selected_route(bunsetsu, context, 1)[1].left_id == 1898
+        and selected_route(bunsetsu, context, 2)[1].left_id == 695,
+        "initial clauses retain their reading boundaries and use the best learned and connected lexical ids")
     check(#left.candidates == 1 and left.candidates[left.selected].left_id == 1898,
         "the first conversion must switch the deduped representative to the learned same-POS route")
     local bird_cost = 100 + matrix["1898 694"]
@@ -1368,7 +1427,8 @@ do
         local state = bunsetsu.state(context)
         for index = 1, #prefix_readings do
             local clause = state.clauses[index]
-            check(clause.frame[1].left_id == 1851 and clause.candidates[clause.selected].left_id == 1851,
+            check(selected_route(bunsetsu, context, index)[1].left_id == 1851
+                and clause.candidates[clause.selected].left_id == 1851,
                 "the initial ordinary path starts every prefix representative on its original id")
         end
         state.active = #state.clauses
