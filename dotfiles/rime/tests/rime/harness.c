@@ -4568,7 +4568,10 @@ int main(int argc, char* argv[]) {
     g_user_data_dir = user_data_dir;
 
     RIME_STRUCT(RimeTraits, traits);
-    traits.shared_data_dir = "/usr/share/rime-data";
+    const char* shared_data_dir = getenv("RIME_SHARED_DATA");
+    traits.shared_data_dir = shared_data_dir && *shared_data_dir
+                                ? shared_data_dir
+                                : "/usr/share/rime-data";
     traits.user_data_dir = user_data_dir;
     traits.distribution_name = "dotfiles-rime-test";
     traits.distribution_code_name = "just test-rime";

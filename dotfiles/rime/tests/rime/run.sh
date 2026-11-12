@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Build and run the headless librime behavior harness for the managed Kagiroi
-# config. The workspace under /tmp mirrors the deployed layout: managed files
-# from dotfiles/rime and stock Kagiroi files from the local mirror. The
-# deploy cache is reused across runs; pass --clean to rebuild it.
-# Options: --clean  rebuild the workspace from scratch
+# config. The workspace under TMPDIR mirrors the deployed layout: managed
+# files from dotfiles/rime and stock Kagiroi files from the local mirror.
+# Every invocation deploys into its own private workspace and removes it when
+# the run exits.
+# Options: --clean  accepted for compatibility; every run deploys from scratch
 #          --verbose print compositions and candidate menus
 set -euo pipefail
 
@@ -11,11 +12,10 @@ mirror="${KAGIROI_MIRROR:-$HOME/mirrors/github.com/rimeinn/rime-kagiroi}"
 shared="${RIME_SHARED_DATA:-/usr/share/rime-data}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 
-clean=0
 harness_args=()
 for argument in "$@"; do
     case "$argument" in
-        --clean) clean=1 ;;
+        --clean) ;;
         --verbose) harness_args+=(-v) ;;
         *) echo "unknown option: $argument" >&2; exit 2 ;;
     esac
@@ -23,15 +23,15 @@ done
 
 command -v cc >/dev/null || { echo "cc is required" >&2; exit 1; }
 if pkg-config --exists rime; then
-    rime_cflags="$(pkg-config --cflags rime)"
-    rime_libs="$(pkg-config --libs rime)"
+    read -r -a rime_cflags <<<"$(pkg-config --cflags rime)"
+    read -r -a rime_libs <<<"$(pkg-config --libs rime)"
 else
     # librime-dev is missing; the stock headers from the librime mirror are
     # ABI-compatible with the installed runtime.
     mirror_headers="$HOME/mirrors/github.com/rime/librime/src"
     if [ -f "$mirror_headers/rime_api.h" ] && [ -f /usr/lib/x86_64-linux-gnu/librime.so.1 ]; then
-        rime_cflags="-I$mirror_headers"
-        rime_libs="-l:librime.so.1"
+        rime_cflags=(-I"$mirror_headers")
+        rime_libs=(-l:librime.so.1)
     else
         echo "librime-dev is required (pkg-config 'rime' not found); run: just install" >&2
         exit 1
@@ -39,11 +39,17 @@ else
 fi
 [ -d "$mirror" ] || { echo "Kagiroi mirror not found: $mirror" >&2; exit 1; }
 [ -d "$shared" ] || { echo "Rime shared data not found: $shared" >&2; exit 1; }
+export RIME_SHARED_DATA="$shared"
 
-cache="${TMPDIR:-/tmp}/dotfiles-rime-test"
-if [ "$clean" = 1 ]; then rm -rf "$cache"; fi
-workspace="$cache/user"
-mkdir -p "$cache/harness" "$workspace/lua/kagiroi"
+run="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-rime-test.XXXXXXXX")"
+cleanup() { rm -rf "$run"; }
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+workspace="$run/user"
+mkdir -p "$workspace/lua/kagiroi"
 
 # Stock Kagiroi files first, so the managed files always win.
 # kagiroi.yaml carries the alphabet/key_bindings/punct nodes the schema includes.
@@ -70,8 +76,11 @@ install -m 644 "$root"/default.custom.yaml "$root"/kagiroi.custom.yaml \
 bun "$root/zenkaku.build.ts" --output "$workspace/kagiroi_dotfiles_zenkaku.dict.yaml"
 install -m 644 "$root"/lua/kagiroi/*.lua "$workspace/lua/kagiroi/"
 
-cc -std=c11 -O2 -o "$cache/harness/harness" "$root/tests/rime/harness.c" $rime_cflags $rime_libs
+cc -std=c11 -O2 -o "$run/harness" "$root/tests/rime/harness.c" \
+    "${rime_cflags[@]}" "${rime_libs[@]}"
 # Learning tests write userdb entries that shift candidate order; start every
 # run from a clean slate so the baseline menu is stable.
 rm -rf "$workspace"/*.userdb
-exec "$cache/harness/harness" "$workspace" "${harness_args[@]}"
+status=0
+"$run/harness" "$workspace" "${harness_args[@]}" || status=$?
+exit "$status"
