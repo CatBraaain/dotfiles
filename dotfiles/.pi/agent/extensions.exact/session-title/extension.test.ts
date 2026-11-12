@@ -551,7 +551,7 @@ describe("title length validation", () => {
     assert.equal(h.notifications.length, 0);
     const correction = JSON.stringify(h.calls[1]!.context.messages);
     assert.match(correction, /64/);
-    assert.match(correction, /25/);
+    assert.match(correction, /at most 20/);
     assert.match(correction, /only the title/i);
     const messagesAfter = h.manager.getEntries().filter((entry) => entry.type === "message");
     assert.deepEqual(messagesAfter, messagesBefore);
@@ -564,8 +564,8 @@ describe("title length boundaries and retry failures", () => {
     { language: "Japanese", character: "あ" },
     { language: "supplementary Unicode", character: "😀" },
   ]) {
-    it(`accepts 25 ${language} code points without retrying`, async () => {
-      const title = character.repeat(25);
+    it(`accepts 30 ${language} code points without retrying`, async () => {
+      const title = character.repeat(30);
       const h = harness({ complete: async () => assistant("stop", title) });
       h.user();
       await h.retitle();
@@ -574,19 +574,19 @@ describe("title length boundaries and retry failures", () => {
       assert.equal(h.notifications.length, 0);
     });
 
-    it(`retries 26 ${language} code points with the measured length`, async () => {
+    it(`retries 31 ${language} code points with the measured length`, async () => {
       let attempts = 0;
       const h = harness({
         complete: async () => {
           attempts++;
-          return assistant("stop", character.repeat(attempts === 1 ? 26 : 25));
+          return assistant("stop", character.repeat(attempts === 1 ? 31 : 30));
         },
       });
       h.user();
       await h.retitle();
-      assert.deepEqual(h.names, [character.repeat(25)]);
+      assert.deepEqual(h.names, [character.repeat(30)]);
       assert.equal(h.calls.length, 2);
-      assert.match(JSON.stringify(h.calls[1]!.context.messages), /26 characters/);
+      assert.match(JSON.stringify(h.calls[1]!.context.messages), /31 characters/);
       assert.equal(h.notifications.length, 0);
     });
   }
@@ -616,7 +616,7 @@ describe("title length boundaries and retry failures", () => {
       const h = harness({
         complete: async () => {
           attempts++;
-          if (attempts === 1 || failure === "overlong") return assistant("stop", "a".repeat(26));
+          if (attempts === 1 || failure === "overlong") return assistant("stop", "a".repeat(31));
           if (failure === "empty") return assistant("stop", " \n\t ");
           if (failure === "throw") throw new Error("Network unavailable");
           return assistant(failure, "Do not save");
@@ -631,7 +631,11 @@ describe("title length boundaries and retry failures", () => {
       assert.equal(h.notifications.length, 1);
       assert.deepEqual(h.notificationLevels, ["warning"]);
       assert.match(h.notifications[0]!, /Session title was not changed/);
-      if (failure === "overlong") assert.match(h.notifications[0]!, /26.*25/);
+      if (failure === "overlong") {
+        const warning = h.notifications[0]!;
+        assert.match(warning, /31 characters; the limit is 30/);
+        assert.ok(warning.includes(`"${"a".repeat(31)}"`));
+      }
     });
   }
 
@@ -643,7 +647,7 @@ describe("title length boundaries and retry failures", () => {
       const h = harness({
         complete: async () => {
           attempts++;
-          if (attempts === 1) return assistant("stop", "a".repeat(26));
+          if (attempts === 1) return assistant("stop", "a".repeat(31));
           retryStarted.resolve();
           return result.promise;
         },
