@@ -687,7 +687,7 @@ function conversationFile(
   agentDir: string,
   cwd: string,
   id: string,
-  options: { title?: string; mtime?: Date; activity?: string } = {},
+  options: { title?: string; message?: string; mtime?: Date; activity?: string } = {},
 ): string {
   const file = join(sessionGroupDirectory(agentDir, cwd), `2026-01-01T00-00-00-000Z_${id}.jsonl`);
   mkdirSync(dirname(file), { recursive: true });
@@ -702,6 +702,17 @@ function conversationFile(
             parentId: null,
             timestamp: "2026-01-01T00:00:01.000Z",
             name: options.title,
+          },
+        ]),
+    ...(options.message === undefined
+      ? []
+      : [
+          {
+            type: "message",
+            id: "e2",
+            parentId: null,
+            timestamp: "2026-01-01T00:00:02.000Z",
+            message: { role: "user", content: options.message },
           },
         ]),
     ...(options.activity === undefined ? [] : [{ type: "message", timestamp: options.activity }]),
@@ -992,11 +1003,13 @@ describe("history", () => {
       });
       const untitledId = randomUUID();
       const untitledFile = conversationFile(fixture.agentDir, fixture.cwd, untitledId, {
+        message: "fix the\n\n   build now",
         mtime: new Date("2026-01-01T00:00:00.000Z"),
       });
       fixture.subagentFile(fixture.cwd, randomUUID());
       const otherId = randomUUID();
       const otherFile = conversationFile(fixture.agentDir, fixture.otherCwd, otherId, {
+        message: "review the diff",
         mtime: new Date("2026-01-03T00:00:00.000Z"),
         activity: "2026-01-03T00:00:01.000Z",
       });
@@ -1004,13 +1017,15 @@ describe("history", () => {
       assert.equal(result.error, undefined);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), [
-        historyEntry(otherFile, otherId, fixture.otherCwd, null, {
+        historyEntry(otherFile, otherId, fixture.otherCwd, "review the diff", {
           mtime: Date.parse("2026-01-03T00:00:01.000Z"),
         }),
         historyEntry(titledFile, titledId, fixture.cwd, "Named session", {
           mtime: Date.parse("2026-01-02T00:00:01.000Z"),
         }),
-        historyEntry(untitledFile, untitledId, fixture.cwd, null),
+        historyEntry(untitledFile, untitledId, fixture.cwd, "fix the build now", {
+          mtime: Date.parse("2026-01-01T00:00:02.000Z"),
+        }),
       ]);
     } finally {
       fixture.cleanup();

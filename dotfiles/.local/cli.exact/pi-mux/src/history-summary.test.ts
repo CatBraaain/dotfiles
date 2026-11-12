@@ -7,6 +7,55 @@ import { HistorySummaryCache } from "./history-summary";
 
 const temporaryRoot = "/tmp/work/dotfiles/pi-mux-summary-race-tests";
 
+function writeSummaryFixture(entries: unknown[]): { file: string; cacheHome: string } {
+  const directory = join(temporaryRoot, randomUUID());
+  const file = join(directory, "session.jsonl");
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(file, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  return { file, cacheHome: join(directory, "cache") };
+}
+
+function resolveTitleIsolated(cacheHome: string, file: string): string | null {
+  const previous = process.env.XDG_CACHE_HOME;
+  process.env.XDG_CACHE_HOME = cacheHome;
+  try {
+    return new HistorySummaryCache().resolve(file).title;
+  } finally {
+    if (previous === undefined) delete process.env.XDG_CACHE_HOME;
+    else process.env.XDG_CACHE_HOME = previous;
+  }
+}
+
+function userMessage(content: unknown, id = "m1"): unknown {
+  return {
+    type: "message",
+    id,
+    parentId: null,
+    timestamp: "2026-01-01T00:00:00.000Z",
+    message: { role: "user", content },
+  };
+}
+
+function assistantMessage(content: unknown): unknown {
+  return {
+    type: "message",
+    id: "a1",
+    parentId: "m1",
+    timestamp: "2026-01-01T00:00:01.000Z",
+    message: { role: "assistant", content },
+  };
+}
+
+function sessionInfo(name: unknown): unknown {
+  return {
+    type: "session_info",
+    id: "s1",
+    parentId: null,
+    timestamp: "2026-01-01T00:00:02.000Z",
+    name,
+  };
+}
+
 describe("history summary read consistency", () => {
   it("does not save a summary when the original file changes during the read", () => {
     const directory = join(temporaryRoot, randomUUID());
@@ -81,5 +130,87 @@ describe("history summary read consistency", () => {
       else process.env.XDG_CACHE_HOME = previousCacheHome;
       fs.rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("history first user message fallback", () => {
+  it("extracts a string user message as the title", () => {
+    const { file, cacheHome } = writeSummaryFixture([userMessage("fix the build")]);
+    assert.equal(resolveTitleIsolated(cacheHome, file), "fix the build");
+  });
+
+  it("joins array text blocks with a single space and skips non-text blocks", () => {
+    const { file, cacheHome } = writeSummaryFixture([
+      userMessage([
+        { type: "toolCall", name: "bash", arguments: {} },
+        { type: "text", text: "hello" },
+        { type: "text", text: "world" },
+      ]),
+    ]);
+    assert.equal(resolveTitleIsolated(cacheHome, file), "hello world");
+  });
+
+  it("skips empty text entries and non-user messages until a usable user message", () => {
+    const { file, cacheHome } = writeSummaryFixture([
+      userMessage(""),
+      userMessage([{ type: "text", text: "   " }], "m2"),
+      userMessage(42, "m3"),
+      assistantMessage("assistant reply"),
+      { type: "message", id: "m5", parentId: null, message: { role: "user" } },
+      { type: "message", id: "m6", parentId: null, text: "flat message" },
+      userMessage("actual first message", "m7"),
+    ]);
+    assert.equal(resolveTitleIsolated(cacheHome, file), "actual first message");
+  });
+
+  it("collapses consecutive whitespace including newlines into single spaces", () => {
+    const { file, cacheHome } = writeSummaryFixture([
+      userMessage([{ type: "text", text: "  fix\n\n   the\t" }, { type: "text", text: "\nbuild  " }]),
+    ]);
+    assert.equal(resolveTitleIsolated(cacheHome, file), "fix the build");
+  });
+
+  it("truncates to 80 code points counting surrogate pairs as one", () => {
+    const { file, cacheHome } = writeSummaryFixture([userMessage("🙂".repeat(81) + "x")]);
+    assert.equal(resolveTitleIsolated(cacheHome, file), "🙂".repeat(80));
+  });
+
+  it("keeps a title at or below 80 code points unchanged", () => {
+    const exactlyEighty = "a".repeat(79) + "🙂";
+    const { file, cacheHome } = writeSummaryFixture([userMessage(exactlyEighty)]);
+    assert.equal(resolveTitleIsolated(cacheHome, file), exactlyEighty);
+  });
+
+  it("prefers the last session_info name over the first user message", () => {
+    const { file, cacheHome } = writeSummaryFixture([
+      sessionInfo("older name"),
+      userMessage("first message"),
+      sessionInfo("final name"),
+    ]);
+    assert.equal(resolveTitleIsolated(cacheHome, file), "final name");
+  });
+
+  it("falls back to the first user message after an explicit name clear", () => {
+    const { file, cacheHome } = writeSummaryFixture([
+      sessionInfo("cleared name"),
+      userMessage("fallback after clear"),
+      sessionInfo("  "),
+    ]);
+    assert.equal(resolveTitleIsolated(cacheHome, file), "fallback after clear");
+  });
+
+  it("lets a later session_info name replace a cached first-message title", () => {
+    const { file, cacheHome } = writeSummaryFixture([userMessage("first message title")]);
+    assert.equal(resolveTitleIsolated(cacheHome, file), "first message title");
+    const cacheDirectory = join(cacheHome, "pi-mux", "history-titles");
+    const [cached] = fs.readdirSync(cacheDirectory);
+    assert.ok(cached);
+    assert.equal(
+      JSON.parse(fs.readFileSync(join(cacheDirectory, cached), "utf8")).title,
+      "first message title",
+    );
+    fs.appendFileSync(file, JSON.stringify(sessionInfo("Named later")) + "\n");
+    assert.equal(resolveTitleIsolated(cacheHome, file), "Named later");
+    assert.equal(resolveTitleIsolated(cacheHome, file), "Named later");
   });
 });

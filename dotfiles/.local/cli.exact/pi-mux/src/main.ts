@@ -1663,7 +1663,7 @@ function parseSessionMetadata(
 ): { state: SessionState | null; title: string | null } {
   const state = parseSessionState(encoded, id);
   const published = parsePublishedTitle(encoded, id);
-  const title = published !== null ? published : savedSessionName(file);
+  const title = published !== null ? published : resolveSessionTitle(file);
   return { state, title };
 }
 
@@ -1696,7 +1696,7 @@ function parseSessionOption(
   return metadata;
 }
 
-function savedSessionName(file: string): string | null {
+function resolveSessionTitle(file: string): string | null {
   return new HistorySummaryCache().resolve(file).title;
 }
 

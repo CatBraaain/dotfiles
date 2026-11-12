@@ -307,7 +307,7 @@ describe("history cache", () => {
       assert.equal(cacheFiles.length, 1);
       const cacheFile = cacheFiles[0]!;
       const cache = JSON.parse(readFileSync(cacheFile, "utf8"));
-      assert.equal(cache.version, 2);
+      assert.equal(cache.version, 3);
       assert.equal(cache.title, "Cached title");
       assert.equal(cache.mtime, null);
       assert.equal(cache.file, file);
@@ -772,7 +772,7 @@ describe("history cache", () => {
         .cacheFiles()
         .map((cacheFile) => JSON.parse(readFileSync(cacheFile, "utf8")));
       assert.ok(
-        cache.every((record) => record.version === 2 && typeof record.fingerprint === "string"),
+        cache.every((record) => record.version === 3 && typeof record.fingerprint === "string"),
       );
       assert.equal(readFileSync(movedFile, "utf8"), movedContents);
     } finally {

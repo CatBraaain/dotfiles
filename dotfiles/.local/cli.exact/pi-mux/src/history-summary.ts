@@ -18,7 +18,8 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
 const SUMMARY_READ_CHUNK_BYTES = 256 * 1024;
-const SUMMARY_CACHE_VERSION = 2;
+const SUMMARY_CACHE_VERSION = 3;
+const FIRST_MESSAGE_MAX_CODE_POINTS = 80;
 
 export type SavedSessionSummary = { title: string | null; mtime: number | null };
 
@@ -160,6 +161,7 @@ export function readSavedSessionSummary(file: string): StoredSummary {
       }
       if (titleFound && mtimeFound) break;
     }
+    if (title === null) title = firstUserMessageTitle(fd, Number(before.size));
     const fingerprint = fileFingerprint(before);
     const stable =
       fingerprint === fileFingerprint(fstatSync(fd, { bigint: true })) &&
@@ -170,6 +172,88 @@ export function readSavedSessionSummary(file: string): StoredSummary {
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
+}
+
+function* forwardLines(fd: number, size: number): Generator<string> {
+  let position = 0;
+  let parts: Buffer[] = [];
+  while (position < size) {
+    const length = Math.min(SUMMARY_READ_CHUNK_BYTES, size - position);
+    position += length;
+    const buffer = Buffer.allocUnsafe(length);
+    let filled = 0;
+    while (filled < length) {
+      const count = readSync(fd, buffer, filled, length - filled, position - length + filled);
+      if (count === 0) throw new Error("Session changed during title lookup");
+      filled += count;
+    }
+    let start = 0;
+    let newline = buffer.indexOf(10, start);
+    while (newline >= 0) {
+      const prefix = buffer.subarray(start, newline);
+      const line = parts.length > 0 ? Buffer.concat([...parts, prefix]) : prefix;
+      yield line.toString("utf8");
+      parts = [];
+      start = newline + 1;
+      newline = start < length ? buffer.indexOf(10, start) : -1;
+    }
+    if (start < length) parts.push(buffer.subarray(start, length));
+  }
+  if (parts.length > 0) yield Buffer.concat(parts).toString("utf8");
+}
+
+function firstUserMessageTitle(fd: number, size: number): string | null {
+  for (const line of forwardLines(fd, size)) {
+    if (!line) continue;
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    if (record.type !== "message") continue;
+    const message = record.message;
+    if (!message || typeof message !== "object" || Array.isArray(message)) continue;
+    const { role, content } = message as Record<string, unknown>;
+    if (role !== "user") continue;
+    const text = messageText(content);
+    if (!text) continue;
+    const shaped = shapeFirstMessageTitle(text);
+    if (!shaped) continue;
+    return shaped;
+  }
+  return null;
+}
+
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object" || Array.isArray(block)) continue;
+    const record = block as Record<string, unknown>;
+    if (record.type !== "text" || typeof record.text !== "string") continue;
+    parts.push(record.text);
+  }
+  return parts.join(" ");
+}
+
+function shapeFirstMessageTitle(text: string): string {
+  const collapsed = text.replace(/\s+/gu, " ").trim();
+  return truncateCodePoints(collapsed, FIRST_MESSAGE_MAX_CODE_POINTS).trimEnd();
+}
+
+function truncateCodePoints(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  let end = 0;
+  let count = 0;
+  while (end < text.length && count < limit) {
+    end += text.codePointAt(end)! > 0xffff ? 2 : 1;
+    count++;
+  }
+  return text.slice(0, end);
 }
 
 function* reverseLines(fd: number, size: number): Generator<string> {

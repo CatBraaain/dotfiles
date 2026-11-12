@@ -4507,7 +4507,10 @@ describe("pi-mux list title fallback", () => {
           [
             JSON.stringify({ type: "session", version: 3, id: metadata.id, cwd: f.cwdA }),
             JSON.stringify({ type: "session_info", name: "Older name" }),
-            JSON.stringify({ type: "message", role: "user", content: "fixture" }),
+            JSON.stringify({
+              type: "message",
+              message: { role: "user", content: "first user message" },
+            }),
             JSON.stringify({ type: "session_info", name: "Latest name" }),
           ].join("\n") + "\n",
         );
@@ -4519,6 +4522,48 @@ describe("pi-mux list title fallback", () => {
           .find((entry) => entry.id === metadata.id);
         assert.ok(session);
         assert.equal(session.title, "Latest name");
+        assert.equal(session.state, null);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "falls back to the shaped first user message when no session_info name exists",
+    async () => {
+      await fixture(async (f) => {
+        const { metadata } = await publishedIdlePane(f, "ready", "first-message-id");
+        const file = join(f.agent, "sessions", "first-message-id.jsonl");
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(
+          file,
+          [
+            JSON.stringify({ type: "session", version: 3, id: metadata.id, cwd: f.cwdA }),
+            JSON.stringify({
+              type: "message",
+              message: { role: "system", content: "preamble" },
+            }),
+            JSON.stringify({
+              type: "message",
+              message: {
+                role: "user",
+                content: [
+                  { type: "toolCall", name: "bash", arguments: {} },
+                  { type: "text", text: "fix\n\n  the\tbuild" },
+                  { type: "text", text: " now" },
+                ],
+              },
+            }),
+          ].join("\n") + "\n",
+        );
+        const listed = JSON.parse((await f.run(["list"])).out) as {
+          sessions: { id: string; state: string | null; title: string | null }[];
+        }[];
+        const session = listed
+          .flatMap((workspace) => workspace.sessions)
+          .find((entry) => entry.id === metadata.id);
+        assert.ok(session);
+        assert.equal(session.title, "fix the build now");
         assert.equal(session.state, null);
       });
     },
@@ -4567,7 +4612,7 @@ describe("pi-mux list title fallback", () => {
   );
 
   it(
-    "treats an empty latest name as an explicit clear and reports null",
+    "treats an empty latest name as an explicit clear and falls back to the first user message",
     async () => {
       await fixture(async (f) => {
         const { metadata } = await publishedIdlePane(f, "ready", "cleared-id");
@@ -4577,6 +4622,10 @@ describe("pi-mux list title fallback", () => {
           file,
           [
             JSON.stringify({ type: "session_info", name: "Previous name" }),
+            JSON.stringify({
+              type: "message",
+              message: { role: "user", content: "cleared falls back to me" },
+            }),
             JSON.stringify({ type: "session_info", name: "" }),
           ].join("\n") + "\n",
         );
@@ -4586,7 +4635,7 @@ describe("pi-mux list title fallback", () => {
         const session = listed
           .flatMap((workspace) => workspace.sessions)
           .find((entry) => entry.id === metadata.id);
-        assert.equal(session?.title, null);
+        assert.equal(session?.title, "cleared falls back to me");
       });
     },
     TIMEOUT_MS,
