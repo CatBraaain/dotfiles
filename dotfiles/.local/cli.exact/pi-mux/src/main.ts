@@ -18,7 +18,7 @@ import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HistoryTitleCache } from "./history-titles";
+import { HistorySummaryCache, parseEpochMs } from "./history-summary";
 
 type Operation =
   | { kind: "help" }
@@ -79,7 +79,8 @@ type HistoryEntry = {
   cwd: string;
   file: string;
   title: string | null;
-  mtime: number;
+  btime: number;
+  mtime: number | null;
   size: number;
 };
 type Config = ReturnType<typeof configuration>;
@@ -1258,7 +1259,7 @@ async function historySessions(
   );
   const history: HistoryEntry[] = [];
   const normalIds = new Set<string>();
-  const titles = new HistoryTitleCache();
+  const summaries = new HistorySummaryCache();
   for (const { file, archived } of listed.flat()) {
     let header: ReturnType<typeof readHeader>;
     try {
@@ -1266,27 +1267,35 @@ async function historySessions(
     } catch {
       continue;
     }
+    const btime = parseEpochMs(header?.timestamp);
     if (
       header?.type !== "session" ||
       typeof header.id !== "string" ||
       !SESSION_ID_PATTERN.test(header.id) ||
       typeof header.cwd !== "string" ||
-      !isAbsolute(header.cwd)
+      !isAbsolute(header.cwd) ||
+      btime === undefined
     )
       continue;
     if (archived && normalIds.has(header.id)) continue;
     if (!archived) normalIds.add(header.id);
     const stat = statSync(file);
+    const summary = summaries.resolve(file);
     history.push({
       id: header.id,
       cwd: header.cwd,
       file,
-      title: titles.resolveTitle(file),
-      mtime: Math.round(stat.mtimeMs),
+      title: summary.title,
+      btime,
+      mtime: summary.mtime,
       size: stat.size,
     });
   }
-  return history.sort((a, b) => b.mtime - a.mtime || a.file.localeCompare(b.file));
+  return history.sort(
+    (a, b) =>
+      (b.mtime ?? Number.NEGATIVE_INFINITY) - (a.mtime ?? Number.NEGATIVE_INFINITY) ||
+      a.file.localeCompare(b.file),
+  );
 }
 
 function readMembershipStore(config: TmuxConfig): MembershipStore {
@@ -1687,7 +1696,7 @@ function parseSessionOption(
 }
 
 function savedSessionName(file: string): string | null {
-  return new HistoryTitleCache().resolveTitle(file);
+  return new HistorySummaryCache().resolve(file).title;
 }
 
 async function hasSession(config: Config, name: string): Promise<boolean> {
@@ -1789,7 +1798,9 @@ async function sessionDirectoryEntries(directory: string) {
   });
 }
 
-function readHeader(path: string): { type?: unknown; id?: unknown; cwd?: unknown } | undefined {
+function readHeader(
+  path: string,
+): { type?: unknown; id?: unknown; cwd?: unknown; timestamp?: unknown } | undefined {
   const fd = openSync(path, "r");
   try {
     const buffer = Buffer.alloc(SESSION_HEADER_MAX_BYTES);

@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -686,7 +687,7 @@ function conversationFile(
   agentDir: string,
   cwd: string,
   id: string,
-  options: { title?: string; mtime?: Date },
+  options: { title?: string; mtime?: Date; activity?: string } = {},
 ): string {
   const file = join(sessionGroupDirectory(agentDir, cwd), `2026-01-01T00-00-00-000Z_${id}.jsonl`);
   mkdirSync(dirname(file), { recursive: true });
@@ -703,20 +704,30 @@ function conversationFile(
             name: options.title,
           },
         ]),
+    ...(options.activity === undefined ? [] : [{ type: "message", timestamp: options.activity }]),
   ];
   writeFileSync(file, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
   if (options.mtime) utimesSync(file, options.mtime, options.mtime);
   return file;
 }
 
-function historyEntry(file: string, id: string, cwd: string, title: string | null) {
+const fixtureBtimeMs = Date.parse("2026-01-01T00:00:00.000Z");
+
+function historyEntry(
+  file: string,
+  id: string,
+  cwd: string,
+  title: string | null,
+  times: { btime?: number; mtime?: number | null } = {},
+) {
   const stat = statSync(file);
   return {
     id,
     cwd,
     file,
     title,
-    mtime: Math.round(stat.mtimeMs),
+    btime: times.btime ?? fixtureBtimeMs,
+    mtime: times.mtime ?? null,
     size: stat.size,
   };
 }
@@ -977,6 +988,7 @@ describe("history", () => {
       const titledFile = conversationFile(fixture.agentDir, fixture.cwd, titledId, {
         title: "Named session",
         mtime: new Date("2026-01-02T00:00:00.000Z"),
+        activity: "2026-01-02T00:00:01.000Z",
       });
       const untitledId = randomUUID();
       const untitledFile = conversationFile(fixture.agentDir, fixture.cwd, untitledId, {
@@ -986,13 +998,18 @@ describe("history", () => {
       const otherId = randomUUID();
       const otherFile = conversationFile(fixture.agentDir, fixture.otherCwd, otherId, {
         mtime: new Date("2026-01-03T00:00:00.000Z"),
+        activity: "2026-01-03T00:00:01.000Z",
       });
       const result = fixture.run(["history"]);
       assert.equal(result.error, undefined);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), [
-        historyEntry(otherFile, otherId, fixture.otherCwd, null),
-        historyEntry(titledFile, titledId, fixture.cwd, "Named session"),
+        historyEntry(otherFile, otherId, fixture.otherCwd, null, {
+          mtime: Date.parse("2026-01-03T00:00:01.000Z"),
+        }),
+        historyEntry(titledFile, titledId, fixture.cwd, "Named session", {
+          mtime: Date.parse("2026-01-02T00:00:01.000Z"),
+        }),
         historyEntry(untitledFile, untitledId, fixture.cwd, null),
       ]);
     } finally {
@@ -1012,6 +1029,52 @@ describe("history", () => {
       const unregistered = fixture.run(["history", "--cwd", join(fixture.directory, "away")]);
       assert.equal(unregistered.status, 0, unregistered.stderr);
       assert.deepEqual(JSON.parse(unregistered.stdout), []);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("reports the session start time and the latest activity time", async () => {
+    const fixture = new HistoryFixture();
+    try {
+      const activeId = randomUUID();
+      const activeFile = conversationFile(fixture.agentDir, fixture.cwd, activeId, {
+        mtime: new Date("2026-01-04T00:00:00.000Z"),
+      });
+      appendFileSync(
+        activeFile,
+        [
+          { type: "custom", timestamp: "2026-01-02T11:00:00.000Z" },
+          { type: "message", timestamp: "2026-01-02T12:00:00.000Z" },
+          { type: "session_info", timestamp: "2026-01-02T13:00:00.000Z", name: "Late name" },
+          { type: "compaction", timestamp: "2026-01-02T09:00:00.000Z" },
+          { type: "message", text: "no timestamp" },
+        ]
+          .map((entry) => JSON.stringify(entry))
+          .join("\n") + "\n",
+      );
+      const startedId = randomUUID();
+      const startedFile = conversationFile(fixture.agentDir, fixture.cwd, startedId, {
+        mtime: new Date("2026-01-03T00:00:00.000Z"),
+      });
+      const invalidId = randomUUID();
+      const invalidFile = join(
+        sessionGroupDirectory(fixture.agentDir, fixture.cwd),
+        `2026-01-05T00-00-00-000Z_${invalidId}.jsonl`,
+      );
+      mkdirSync(dirname(invalidFile), { recursive: true });
+      writeFileSync(
+        invalidFile,
+        JSON.stringify({ type: "session", version: 1, id: invalidId, cwd: fixture.cwd }) + "\n",
+      );
+      const result = fixture.run(["history"]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [
+        historyEntry(activeFile, activeId, fixture.cwd, "Late name", {
+          mtime: Date.parse("2026-01-02T09:00:00.000Z"),
+        }),
+        historyEntry(startedFile, startedId, fixture.cwd, null),
+      ]);
     } finally {
       fixture.cleanup();
     }

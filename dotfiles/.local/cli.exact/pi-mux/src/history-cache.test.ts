@@ -250,9 +250,23 @@ spyOn(promises, "readdir").mockImplementation((...args) => {
     return { error: undefined, status, stdout, stderr };
   }
 
-  expected(file: string, id: string, cwd: string, title: string | null) {
+  expected(
+    file: string,
+    id: string,
+    cwd: string,
+    title: string | null,
+    times: { btime?: number; mtime?: number | null } = {},
+  ) {
     const stat = statSync(file);
-    return { id, cwd, file, title, mtime: Math.round(stat.mtimeMs), size: stat.size };
+    return {
+      id,
+      cwd,
+      file,
+      title,
+      btime: times.btime ?? Date.parse("2026-01-01T00:00:00.000Z"),
+      mtime: times.mtime ?? null,
+      size: stat.size,
+    };
   }
 
   cacheFiles(): string[] {
@@ -275,7 +289,7 @@ spyOn(promises, "readdir").mockImplementation((...args) => {
   }
 }
 
-describe("history title cache", () => {
+describe("history cache", () => {
   it("creates a private per-file cache and preserves identical warm output without rewriting it", () => {
     const fixture = new HistoryCacheFixture();
     try {
@@ -293,8 +307,9 @@ describe("history title cache", () => {
       assert.equal(cacheFiles.length, 1);
       const cacheFile = cacheFiles[0]!;
       const cache = JSON.parse(readFileSync(cacheFile, "utf8"));
-      assert.equal(cache.version, 1);
+      assert.equal(cache.version, 2);
       assert.equal(cache.title, "Cached title");
+      assert.equal(cache.mtime, null);
       assert.equal(cache.file, file);
       assert.equal(typeof cache.fingerprint, "string");
       assert.equal(statSync(fixture.cacheDirectory).mode & 0o777, cacheDirectoryMode);
@@ -348,7 +363,11 @@ describe("history title cache", () => {
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(
         JSON.parse(result.stdout),
-        expected.sort((a, b) => b.mtime - a.mtime || a.file.localeCompare(b.file)),
+        expected.sort(
+          (a, b) =>
+            (b.mtime ?? Number.NEGATIVE_INFINITY) - (a.mtime ?? Number.NEGATIVE_INFINITY) ||
+            a.file.localeCompare(b.file),
+        ),
       );
     } finally {
       fixture.cleanup();
@@ -451,6 +470,41 @@ describe("history title cache", () => {
       assert.equal(updated.status, 0, updated.stderr);
       assert.deepEqual(JSON.parse(updated.stdout), [
         fixture.expected(file, id, fixture.cwd, "appended title"),
+      ]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("refreshes the latest activity time from appended entries and reuses it warm", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        { type: "message", timestamp: "2026-01-02T00:00:00.000Z" },
+      ]);
+      const first = fixture.history();
+      assert.equal(first.status, 0, first.stderr);
+      const cacheFile = fixture.cacheFileFor(file);
+      assert.ok(cacheFile);
+      const cache = JSON.parse(readFileSync(cacheFile, "utf8"));
+      assert.equal(cache.mtime, Date.parse("2026-01-02T00:00:00.000Z"));
+      const cacheMtime = statSync(cacheFile).mtimeMs;
+      const warm = fixture.history();
+      assert.equal(warm.status, 0, warm.stderr);
+      assert.equal(warm.stdout, first.stdout);
+      assert.equal(statSync(cacheFile).mtimeMs, cacheMtime);
+      writeFileSync(
+        file,
+        `${readFileSync(file, "utf8")}${JSON.stringify({ type: "compaction", timestamp: "2026-01-03T00:00:00.000Z" })}\n`,
+      );
+      const refreshed = fixture.history();
+      assert.equal(refreshed.status, 0, refreshed.stderr);
+      assert.deepEqual(JSON.parse(refreshed.stdout), [
+        fixture.expected(file, id, fixture.cwd, null, {
+          mtime: Date.parse("2026-01-03T00:00:00.000Z"),
+        }),
       ]);
     } finally {
       fixture.cleanup();
@@ -605,6 +659,7 @@ describe("history title cache", () => {
         { corrupt: "{broken", field: undefined },
         { corrupt: undefined, field: "version", invalid: 999 },
         { corrupt: undefined, field: "title", invalid: 42 },
+        { corrupt: undefined, field: "mtime", invalid: "yesterday" },
         { corrupt: undefined, field: "fingerprint", invalid: "incorrect-fingerprint" },
       ];
       for (const [index, testCase] of cases.entries()) {
@@ -717,7 +772,7 @@ describe("history title cache", () => {
         .cacheFiles()
         .map((cacheFile) => JSON.parse(readFileSync(cacheFile, "utf8")));
       assert.ok(
-        cache.every((record) => record.version === 1 && typeof record.fingerprint === "string"),
+        cache.every((record) => record.version === 2 && typeof record.fingerprint === "string"),
       );
       assert.equal(readFileSync(movedFile, "utf8"), movedContents);
     } finally {
@@ -846,7 +901,7 @@ describe("standard session lookup", () => {
     }
   });
 
-  it("includes archive-only history and prefers a normal duplicate despite a newer archive mtime", () => {
+  it("includes archive-only history and prefers a normal duplicate", () => {
     const fixture = new HistoryCacheFixture();
     try {
       const id = randomUUID();
@@ -854,7 +909,7 @@ describe("standard session lookup", () => {
         fixture.header(id),
         fixture.sessionInfo("Normal"),
       ]);
-      const duplicate = fixture.writeSession(
+      fixture.writeSession(
         fixture.cwd,
         id,
         [fixture.header(id), fixture.sessionInfo("Archived duplicate")],
@@ -862,8 +917,6 @@ describe("standard session lookup", () => {
           file: join(dirname(file), "archive", `${id}.jsonl`),
         },
       );
-      utimesSync(file, new Date("2026-01-01"), new Date("2026-01-01"));
-      utimesSync(duplicate, new Date("2026-01-03"), new Date("2026-01-03"));
       const archivedId = randomUUID();
       const archived = fixture.writeSession(
         fixture.cwd,
@@ -873,12 +926,11 @@ describe("standard session lookup", () => {
           file: join(dirname(file), "archive", `${archivedId}.jsonl`),
         },
       );
-      utimesSync(archived, new Date("2026-01-02"), new Date("2026-01-02"));
       const result = fixture.history();
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), [
-        fixture.expected(archived, archivedId, fixture.cwd, "Archive only"),
         fixture.expected(file, id, fixture.cwd, "Normal"),
+        fixture.expected(archived, archivedId, fixture.cwd, "Archive only"),
       ]);
     } finally {
       fixture.cleanup();
@@ -1002,7 +1054,7 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
   });
 });
 
-describe("shared list and history title cache", () => {
+describe("shared list and history cache", () => {
   for (const initial of ["history", "list"] as const) {
     it(`reuses a title cached by ${initial} in the other command without reading the title again`, () => {
       const fixture = new HistoryCacheFixture();
