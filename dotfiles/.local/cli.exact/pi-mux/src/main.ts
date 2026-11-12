@@ -16,9 +16,9 @@ import {
 import { readdir, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HistoryTitleCache, readSavedSessionTitle } from "./history-titles";
+import { HistoryTitleCache } from "./history-titles";
 
 type Operation =
   | { kind: "help" }
@@ -200,8 +200,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         return 0;
       }
       prepareDirectory(config.directory);
-      const configured = await configuredSessionRoots(config);
-      if (configured.preferred) rememberSessionRoot(config, configured.preferred);
+      if (operation.kind === "new") {
+        const configured = await configuredSessionRoots(config);
+        if (configured.preferred) rememberSessionRoot(config, configured.preferred);
+      }
       let temporaryTarget: string | undefined;
       if (operation.kind === "open" && operation.temporary) {
         const selected = await resolveSaved(config, operation.id);
@@ -710,7 +712,7 @@ async function restoreSessions(
   let failures = 0;
   for (const candidate of candidates) {
     try {
-      const saved = await findSaved(config, candidate.id, [], "restore");
+      const saved = await findSaved(config, candidate.id, "restore");
       if (!saved) {
         console.error(`pi-mux: restore ${candidate.id}: saved conversation not found; removed`);
       } else {
@@ -953,11 +955,7 @@ async function resolveSaved(config: Config, id: string) {
   if (managed.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
   const running = (await livePanes(config, "list")).filter((pane) => pane.id === id);
   if (running.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
-  const saved = await findSaved(
-    config,
-    id,
-    running.map((pane) => dirname(pane.file)),
-  );
+  const saved = await findSaved(config, id);
   if (!running[0] && !managed[0]) {
     if (!saved) throw new Error(`Session not found (use the complete ID): ${id}`);
     if (!existsSync(saved.cwd) || !statSync(saved.cwd).isDirectory())
@@ -1246,30 +1244,22 @@ async function historySessions(
   const registered = Object.keys(readMembershipStore(config)["active-workspaces"]);
   const cwds = cwdFilter === undefined ? registered : registered.filter((cwd) => cwd === cwdFilter);
   if (cwds.length === 0) return [];
-  const configured = await configuredSessionRoots(config);
-  const remembered = await rememberedSessionRoots(config);
-  const directories = new Set<string>();
-  for (const cwd of cwds) {
-    const group = sessionGroupName(cwd);
-    for (const root of configured.roots) directories.add(join(root, group));
-    for (const root of remembered) if (basename(root) === group) directories.add(root);
-  }
+  const groups = [
+    ...new Set(cwds.map((cwd) => join(config.agentDir, "sessions", sessionGroupName(cwd)))),
+  ];
+  const directories = [
+    ...groups.map((directory) => ({ directory, archived: false })),
+    ...groups.map((group) => ({ directory: join(group, "archive"), archived: true })),
+  ];
   const listed = await Promise.all(
-    [...directories].map(async (directory) => {
-      const entries = await readdir(directory, { withFileTypes: true }).catch(
-        (error: NodeJS.ErrnoException) => {
-          if (error.code === "ENOENT") return [];
-          throw error;
-        },
-      );
-      return entries.flatMap((entry) =>
-        entry.isFile() && entry.name.endsWith(".jsonl") ? [join(directory, entry.name)] : [],
-      );
-    }),
+    directories.map(async ({ directory, archived }) =>
+      (await sessionFiles(directory)).map((file) => ({ file, archived })),
+    ),
   );
   const history: HistoryEntry[] = [];
+  const normalIds = new Set<string>();
   const titles = new HistoryTitleCache();
-  for (const file of new Set(listed.flat())) {
+  for (const { file, archived } of listed.flat()) {
     const header = readHeader(file);
     if (
       header?.type !== "session" ||
@@ -1279,6 +1269,8 @@ async function historySessions(
       !isAbsolute(header.cwd)
     )
       continue;
+    if (archived && normalIds.has(header.id)) continue;
+    if (!archived) normalIds.add(header.id);
     const stat = statSync(file);
     history.push({
       id: header.id,
@@ -1690,7 +1682,7 @@ function parseSessionOption(
 }
 
 function savedSessionName(file: string): string | null {
-  return readSavedSessionTitle(file).title;
+  return new HistoryTitleCache().resolveTitle(file);
 }
 
 async function hasSession(config: Config, name: string): Promise<boolean> {
@@ -1721,14 +1713,7 @@ async function configuredSessionRoots(config: TmuxConfig) {
   );
   const override = config.env.PI_CODING_AGENT_SESSION_DIR;
   const preferred = override ? expandPath(override) : settings[1] || settings[0];
-  return {
-    preferred,
-    roots: [
-      join(config.agentDir, "sessions"),
-      ...settings.filter((path): path is string => Boolean(path)),
-      ...(override ? [expandPath(override)] : []),
-    ],
-  };
+  return { preferred };
 }
 
 function registryDirectory(config: TmuxConfig): string {
@@ -1745,74 +1730,58 @@ function rememberSessionRoot(config: Config, root: string): void {
   renameSync(temporary, join(directory, `${key}.json`));
 }
 
-async function rememberedSessionRoots(config: TmuxConfig): Promise<string[]> {
-  const directory = registryDirectory(config);
-  if (!existsSync(directory)) return [];
-  prepareDirectory(directory);
-  const entries = await readdir(directory);
-  return await Promise.all(
-    entries
-      .filter((name) => name.endsWith(".json"))
-      .map(async (name) => {
-        const path = join(directory, name);
-        const root = JSON.parse(await readFile(path, "utf8"));
-        if (typeof root !== "string" || !isAbsolute(root))
-          throw new Error(`Invalid recorded session directory: ${path}`);
-        return root;
-      }),
-  );
-}
-
 async function findSaved(
   config: Config,
   id: string,
-  liveRoots: string[],
   purpose: "open" | "restore" = "open",
 ): Promise<Session | undefined> {
-  const configured = await configuredSessionRoots(config);
-  const roots = [
-    ...new Set([...configured.roots, ...(await rememberedSessionRoots(config)), ...liveRoots]),
-  ];
-  const files = [
-    ...new Set(
-      (await Promise.all(roots.map(sessionFiles))).flat().map((file) => realpathSync(file)),
-    ),
-  ];
-  const matches = files.flatMap((file) => {
-    const header = readHeader(file);
-    if (
-      header?.type !== "session" ||
-      typeof header.id !== "string" ||
-      !SESSION_ID_PATTERN.test(header.id) ||
-      typeof header.cwd !== "string" ||
-      !isAbsolute(header.cwd)
-    ) {
-      if (purpose === "restore" || header?.id === id)
-        throw new Error(`Invalid session header: ${file}`);
-      return [];
-    }
-    if (header.id !== id) return [];
-    return [{ id, file, cwd: header.cwd }];
-  });
-  if (matches.length > 1) throw new Error(`Ambiguous session ID: ${id} (${matches.length} files)`);
-  return matches[0];
+  const root = join(config.agentDir, "sessions");
+  const groups = (await sessionDirectoryEntries(root))
+    .filter(
+      (entry) => entry.isDirectory() && entry.name.startsWith("--") && entry.name.endsWith("--"),
+    )
+    .map((entry) => join(root, entry.name));
+  for (const directories of [groups, groups.map((group) => join(group, "archive"))]) {
+    const files = [
+      ...new Set(
+        (await Promise.all(directories.map(sessionFiles))).flat().map((file) => realpathSync(file)),
+      ),
+    ];
+    const matches = files.flatMap((file) => {
+      const header = readHeader(file);
+      if (
+        header?.type !== "session" ||
+        typeof header.id !== "string" ||
+        !SESSION_ID_PATTERN.test(header.id) ||
+        typeof header.cwd !== "string" ||
+        !isAbsolute(header.cwd)
+      ) {
+        if (purpose === "restore" || header?.id === id)
+          throw new Error(`Invalid session header: ${file}`);
+        return [];
+      }
+      if (header.id !== id) return [];
+      return [{ id, file, cwd: header.cwd }];
+    });
+    if (matches.length > 1)
+      throw new Error(`Ambiguous session ID: ${id} (${matches.length} files)`);
+    if (matches[0]) return matches[0];
+  }
+  return undefined;
 }
 
 async function sessionFiles(directory: string): Promise<string[]> {
-  const entries = await readdir(directory, { withFileTypes: true }).catch(
-    (error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return [];
-      throw error;
-    },
-  );
-  const files = await Promise.all(
-    entries.map(async (entry) => {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) return await sessionFiles(path);
-      return entry.isFile() && entry.name.endsWith(".jsonl") ? [path] : [];
-    }),
-  );
-  return files.flat();
+  const entries = await sessionDirectoryEntries(directory);
+  return entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+    .map((entry) => join(directory, entry.name));
+}
+
+async function sessionDirectoryEntries(directory: string) {
+  return await readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  });
 }
 
 function readHeader(path: string): { type?: unknown; id?: unknown; cwd?: unknown } | undefined {

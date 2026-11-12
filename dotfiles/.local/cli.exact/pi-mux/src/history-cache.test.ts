@@ -42,6 +42,7 @@ class HistoryCacheFixture {
   readonly cacheDirectory: string;
   readonly membership: string;
   readonly env: Record<string, string>;
+  readonly preloads: string[] = [];
 
   constructor() {
     mkdirSync(temporaryRoot, { recursive: true });
@@ -116,14 +117,122 @@ class HistoryCacheFixture {
     };
   }
 
-  history(cwd = this.cwd) {
-    return spawnSync(bunExecutable, ["run", source, "history", "--cwd", cwd], {
+  run(args: string[]) {
+    return spawnSync(bunExecutable, ["run", ...this.preloads, source, ...args], {
       cwd: this.cwd,
       env: this.env,
       encoding: "utf8",
       timeout: 20_000,
       maxBuffer: 10 * 1024 * 1024,
     });
+  }
+
+  history(cwd = this.cwd) {
+    return this.run(["history", "--cwd", cwd]);
+  }
+
+  mockTmux(id: string, file: string, running = false): void {
+    const bin = join(this.directory, "bin");
+    mkdirSync(bin);
+    this.env.PATH = `${bin}:${this.env.PATH}`;
+    mkdirSync(join(this.agentDir, "extensions", "pi-mux-bridge"), { recursive: true });
+    writeFileSync(join(this.agentDir, "extensions", "pi-mux-bridge", "index.ts"), "");
+    mkdirSync(join(this.env.HOME!, ".config", "tmux"), { recursive: true });
+    writeFileSync(join(this.env.HOME!, ".config", "tmux", "pi.conf"), "");
+    writeFileSync(join(bin, "pi"), "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+    const pane = { id, cwd: this.cwd, file, pid: process.pid, startup: "ready" };
+    const runningFile = join(this.directory, "mock-running.json");
+    if (running) writeFileSync(runningFile, JSON.stringify(pane));
+    writeFileSync(
+      join(bin, "tmux"),
+      `#!${bunExecutable}
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+const args = process.argv.slice(process.argv[4] === "-f" ? 6 : 4);
+const directory = ${JSON.stringify(this.directory)};
+const runningFile = ${JSON.stringify(runningFile)};
+let pane = ${JSON.stringify(pane)};
+if (existsSync(runningFile)) pane = JSON.parse(readFileSync(runningFile, "utf8"));
+switch (args[0]) {
+  case "list-panes":
+    if (existsSync(runningFile)) console.log(["%1", "$1", "pi-test", Buffer.from(JSON.stringify(pane)).toString("base64"), pane.pid, "0"].join("\\t"));
+    break;
+  case "list-sessions":
+    if (existsSync(runningFile)) console.log("$1");
+    break;
+  case "show-environment":
+    if (args.at(-1) === "PI_TMUX_TEMPORARY") {
+      console.error("unknown variable: PI_TMUX_TEMPORARY");
+      process.exitCode = 1;
+    } else if (args.at(-1) === "PI_TMUX_SESSION_ID") console.log("PI_TMUX_SESSION_ID=" + pane.id);
+    break;
+  case "display-message":
+    console.log(pane.cwd);
+    break;
+  case "show-options":
+    if (args.at(-1) === "@pi-mux-generation" || args.at(-1) === "@pi-mux-restored") console.log("test-generation");
+    if (args.at(-1) === "@pi_session_state" && existsSync(directory + "/published.json")) console.log(readFileSync(directory + "/published.json", "utf8"));
+    break;
+  case "source-file":
+    if (args[1] === "-") {
+      const command = await Bun.stdin.text();
+      appendFileSync(directory + "/launch.log", command);
+      const tokens = (command.match(/"(?:\\\\.|[^"\\\\])*"/g) ?? []).map((token) => JSON.parse(token.replaceAll("\\\\$", "$")));
+      pane.id = tokens.find((token) => token.startsWith("PI_TMUX_SESSION_ID=")).slice("PI_TMUX_SESSION_ID=".length);
+      pane.cwd = tokens[tokens.indexOf("-c") + 1];
+      const selected = tokens.indexOf("--session");
+      if (selected >= 0) pane.file = tokens[selected + 1];
+      writeFileSync(runningFile, JSON.stringify(pane));
+      console.log(["$1", "%1", pane.pid].join("\\t"));
+    }
+    break;
+  case "has-session":
+    process.exitCode = existsSync(runningFile) ? 0 : 1;
+    break;
+  case "start-server":
+  case "set-option":
+  case "set-environment":
+  case "attach-session":
+    break;
+  default:
+    console.error("Unexpected mock tmux command: " + args.join(" "));
+    process.exitCode = 99;
+}
+`,
+      { mode: 0o700 },
+    );
+  }
+
+  traceReads(forbidArchive = false): void {
+    const preload = join(this.directory, "trace-reads.ts");
+    const trace = join(this.directory, "reads.jsonl");
+    writeFileSync(trace, "");
+    writeFileSync(
+      preload,
+      `import { spyOn } from "bun:test";
+import * as fs from "node:fs";
+import * as promises from "node:fs/promises";
+const trace = ${JSON.stringify(trace)};
+const originalRead = fs.readSync;
+spyOn(fs, "readSync").mockImplementation((...args) => {
+  const file = fs.readlinkSync("/proc/self/fd/" + args[0]);
+  if (file.endsWith(".jsonl")) fs.appendFileSync(trace, JSON.stringify({ file, length: args[3] }) + "\\n");
+  return Reflect.apply(originalRead, fs, args);
+});
+const originalReaddir = promises.readdir;
+spyOn(promises, "readdir").mockImplementation((...args) => {
+  if (${forbidArchive} && String(args[0]).endsWith("/archive")) throw new Error("Archive inspection forbidden");
+  return Reflect.apply(originalReaddir, promises, args);
+});
+`,
+    );
+    this.preloads.push("--preload", preload);
+  }
+
+  reads(): { file: string; length: number }[] {
+    const trace = join(this.directory, "reads.jsonl");
+    const lines = readFileSync(trace, "utf8").trim();
+    writeFileSync(trace, "");
+    return lines ? lines.split("\n").map((line) => JSON.parse(line)) : [];
   }
 
   async historyAsync(cwd = this.cwd) {
@@ -611,6 +720,400 @@ describe("history title cache", () => {
         cache.every((record) => record.version === 1 && typeof record.fingerprint === "string"),
       );
       assert.equal(readFileSync(movedFile, "utf8"), movedContents);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
+describe("standard session lookup", () => {
+  for (const operation of ["open", "restore"] as const) {
+    it(`${operation} resolves the normal header ID without inspecting archive`, () => {
+      const fixture = new HistoryCacheFixture();
+      try {
+        const id = randomUUID();
+        const original = fixture.writeSession(fixture.cwd, id, [fixture.header(id)]);
+        const file = join(dirname(original), "unrelated-filename.jsonl");
+        renameSync(original, file);
+        fixture.writeSession(fixture.cwd, id, [fixture.header(id)], {
+          file: join(dirname(file), "archive", `${id}.jsonl`),
+        });
+        fixture.mockTmux(id, file);
+        fixture.traceReads(true);
+        if (operation === "restore")
+          writeFileSync(
+            join(fixture.agentDir, "pi-tmux", "pi-mux-restore.json"),
+            JSON.stringify({
+              version: 1,
+              generation: "test-generation",
+              workspaces: [{ cwd: fixture.cwd, sessions: [id] }],
+            }),
+          );
+        const result = fixture.run(operation === "open" ? ["open", id] : ["restore"]);
+        assert.equal(result.error, undefined);
+        assert.equal(result.status, 0, result.stderr);
+        const launch = readFileSync(join(fixture.directory, "launch.log"), "utf8");
+        assert.ok(launch.includes(`"--session" ${JSON.stringify(file)}`));
+        assert.ok(fixture.reads().every((read) => !read.file.includes("/archive/")));
+      } finally {
+        fixture.cleanup();
+      }
+    });
+
+    it(`${operation} resolves an archive-only header ID across cwd groups`, () => {
+      const fixture = new HistoryCacheFixture();
+      try {
+        const id = randomUUID();
+        fixture.writeSession(fixture.cwd, randomUUID(), [fixture.header(randomUUID())]);
+        const file = join(
+          dirname(fixture.sessionFile(fixture.otherCwd, id)),
+          "archive",
+          "saved.jsonl",
+        );
+        fixture.writeSession(fixture.otherCwd, id, [fixture.header(id, fixture.otherCwd)], {
+          file,
+        });
+        fixture.mockTmux(id, file);
+        if (operation === "restore")
+          writeFileSync(
+            join(fixture.agentDir, "pi-tmux", "pi-mux-restore.json"),
+            JSON.stringify({
+              version: 1,
+              generation: "test-generation",
+              workspaces: [{ cwd: fixture.otherCwd, sessions: [id] }],
+            }),
+          );
+        const result = fixture.run(operation === "open" ? ["open", id] : ["restore"]);
+        assert.equal(result.error, undefined);
+        assert.equal(result.status, 0, result.stderr);
+        const launch = readFileSync(join(fixture.directory, "launch.log"), "utf8");
+        assert.ok(launch.includes(`"--session" ${JSON.stringify(file)}`));
+        assert.ok(launch.includes(`"-c" ${JSON.stringify(fixture.otherCwd)}`));
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
+
+  it("inspects archive after normal storage has no header ID match", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const file = fixture.writeSession(fixture.cwd, id, [fixture.header("different-id")]);
+      fixture.mockTmux(id, file);
+      fixture.traceReads(true);
+      const result = fixture.run(["open", "--temporary", id]);
+      assert.equal(result.status, 1);
+      assert.ok(result.stderr.includes("Archive inspection forbidden"));
+      assert.equal(existsSync(join(fixture.directory, "launch.log")), false);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("reports normal ambiguity without inspecting archive or launching pi", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const file = fixture.writeSession(fixture.cwd, id, [fixture.header(id)]);
+      fixture.writeSession(fixture.otherCwd, id, [fixture.header(id, fixture.otherCwd)]);
+      fixture.mockTmux(id, file);
+      fixture.traceReads(true);
+      const result = fixture.run(["open", "--temporary", id]);
+      assert.equal(result.status, 1);
+      assert.ok(result.stderr.includes(`Ambiguous session ID: ${id} (2 files)`));
+      assert.equal(existsSync(join(fixture.directory, "launch.log")), false);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("reports archive ambiguity when normal storage has no matching ID", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      for (const cwd of [fixture.cwd, fixture.otherCwd])
+        fixture.writeSession(cwd, id, [fixture.header(id, cwd)], {
+          file: join(dirname(fixture.sessionFile(cwd, id)), "archive", `${id}.jsonl`),
+        });
+      fixture.mockTmux(id, fixture.sessionFile(fixture.cwd, id));
+      const result = fixture.run(["open", "--temporary", id]);
+      assert.equal(result.status, 1);
+      assert.ok(result.stderr.includes(`Ambiguous session ID: ${id} (2 files)`));
+      assert.equal(existsSync(join(fixture.directory, "launch.log")), false);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("includes archive-only history and prefers a normal duplicate despite a newer archive mtime", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.sessionInfo("Normal"),
+      ]);
+      const duplicate = fixture.writeSession(
+        fixture.cwd,
+        id,
+        [fixture.header(id), fixture.sessionInfo("Archived duplicate")],
+        {
+          file: join(dirname(file), "archive", `${id}.jsonl`),
+        },
+      );
+      utimesSync(file, new Date("2026-01-01"), new Date("2026-01-01"));
+      utimesSync(duplicate, new Date("2026-01-03"), new Date("2026-01-03"));
+      const archivedId = randomUUID();
+      const archived = fixture.writeSession(
+        fixture.cwd,
+        archivedId,
+        [fixture.header(archivedId), fixture.sessionInfo("Archive only")],
+        {
+          file: join(dirname(file), "archive", `${archivedId}.jsonl`),
+        },
+      );
+      utimesSync(archived, new Date("2026-01-02"), new Date("2026-01-02"));
+      const result = fixture.history();
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [
+        fixture.expected(archived, archivedId, fixture.cwd, "Archive only"),
+        fixture.expected(file, id, fixture.cwd, "Normal"),
+      ]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("excludes configured, recorded, loose, and nested files from saved lookup", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const group = dirname(fixture.sessionFile(fixture.cwd, "unused"));
+      const configured = join(fixture.directory, "configured");
+      const recorded = join(fixture.directory, "recorded");
+      const globalConfigured = join(fixture.directory, "global-configured");
+      const projectConfigured = join(fixture.directory, "project-configured");
+      fixture.env.PI_CODING_AGENT_SESSION_DIR = configured;
+      writeFileSync(
+        join(fixture.agentDir, "settings.json"),
+        JSON.stringify({ sessionDir: globalConfigured }),
+      );
+      mkdirSync(join(fixture.cwd, ".pi"));
+      writeFileSync(
+        join(fixture.cwd, ".pi", "settings.json"),
+        JSON.stringify({ sessionDir: projectConfigured }),
+      );
+      writeFileSync(
+        join(fixture.agentDir, "pi-tmux", "session-dirs", "recorded.json"),
+        JSON.stringify(recorded),
+      );
+      const excludedDirectories = [
+        configured,
+        globalConfigured,
+        projectConfigured,
+        recorded,
+        fixture.sessionsDirectory,
+        join(fixture.sessionsDirectory, "not-a-cwd-group"),
+        join(group, "subagents"),
+        join(group, "nested"),
+        join(group, "archive", "subagents"),
+      ];
+      const excludedIds = excludedDirectories.map((directory) => {
+        const id = randomUUID();
+        fixture.writeSession(fixture.cwd, id, [fixture.header(id)], {
+          file: join(directory, `${id}.jsonl`),
+        });
+        return id;
+      });
+      fixture.mockTmux(excludedIds[0]!, join(configured, `${excludedIds[0]}.jsonl`));
+      const history = fixture.history();
+      assert.equal(history.status, 0, history.stderr);
+      assert.deepEqual(JSON.parse(history.stdout), []);
+      for (const id of excludedIds) {
+        const result = fixture.run(["open", "--temporary", id]);
+        assert.equal(result.status, 1, id);
+        assert.ok(result.stderr.includes(`Session not found (use the complete ID): ${id}`));
+      }
+      assert.equal(existsSync(join(fixture.directory, "launch.log")), false);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps custom new-session environment and directory recording", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const custom = join(fixture.directory, "custom-new-sessions");
+      fixture.env.PI_CODING_AGENT_SESSION_DIR = custom;
+      fixture.mockTmux(randomUUID(), join(custom, "new.jsonl"));
+      const result = fixture.run(["new", "--detached", "Start a new task"]);
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 0, result.stderr);
+      const launch = readFileSync(join(fixture.directory, "launch.log"), "utf8");
+      assert.ok(launch.includes(JSON.stringify(`PI_CODING_AGENT_SESSION_DIR=${custom}`)));
+      assert.ok(launch.includes('"--session-id"'));
+      const recorded = readdirSync(join(fixture.agentDir, "pi-tmux", "session-dirs")).map((name) =>
+        JSON.parse(readFileSync(join(fixture.agentDir, "pi-tmux", "session-dirs", name), "utf8")),
+      );
+      assert.ok(recorded.includes(custom));
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
+describe("shared list and history title cache", () => {
+  for (const initial of ["history", "list"] as const) {
+    it(`reuses a title cached by ${initial} in the other command without reading the title again`, () => {
+      const fixture = new HistoryCacheFixture();
+      try {
+        const id = randomUUID();
+        const file = fixture.writeSession(fixture.cwd, id, [
+          fixture.header(id),
+          fixture.sessionInfo("Shared title"),
+        ]);
+        fixture.mockTmux(id, file, true);
+        fixture.traceReads();
+        const first = fixture.run([initial]);
+        assert.equal(first.status, 0, first.stderr);
+        const cacheFile = fixture.cacheFileFor(file);
+        assert.ok(cacheFile);
+        const cacheBefore = statSync(cacheFile, { bigint: true });
+        assert.ok(fixture.reads().length > 0);
+        const second = initial === "history" ? "list" : "history";
+        const result = fixture.run([second]);
+        assert.equal(result.status, 0, result.stderr);
+        const output = JSON.parse(result.stdout);
+        const title = second === "list" ? output[0].sessions[0].title : output[0].title;
+        assert.equal(title, "Shared title");
+        assert.deepEqual(fixture.reads(), second === "list" ? [] : [{ file, length: 64 * 1024 }]);
+        assert.equal(statSync(cacheFile, { bigint: true }).mtimeNs, cacheBefore.mtimeNs);
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
+
+  it("keeps published titles ahead of the saved title without creating a cache", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.sessionInfo("Saved title"),
+      ]);
+      fixture.mockTmux(id, file, true);
+      fixture.traceReads();
+      writeFileSync(
+        join(fixture.directory, "published.json"),
+        JSON.stringify({
+          version: 1,
+          sessionId: id,
+          state: "waiting-user",
+          title: "Published title",
+        }),
+      );
+      const result = fixture.run(["list"]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout)[0].sessions, [
+        { id, file, state: "waiting-user", title: "Published title" },
+      ]);
+      assert.deepEqual(fixture.reads(), []);
+      assert.deepEqual(fixture.cacheFiles(), []);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("refreshes appended, cleared, and truncated titles for list fallback and history", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.sessionInfo("Initial"),
+      ]);
+      fixture.mockTmux(id, file, true);
+      assert.equal(fixture.history().status, 0);
+      for (const title of ["Updated", "  ", "After clear", null]) {
+        if (title === null) writeFileSync(file, JSON.stringify(fixture.header(id)) + "\n");
+        else
+          writeFileSync(
+            file,
+            readFileSync(file, "utf8") + JSON.stringify(fixture.sessionInfo(title)) + "\n",
+          );
+        const expected = title?.trim() || null;
+        const listed = fixture.run(["list"]);
+        assert.equal(listed.status, 0, listed.stderr);
+        assert.equal(JSON.parse(listed.stdout)[0].sessions[0].title, expected);
+        const history = fixture.history();
+        assert.equal(history.status, 0, history.stderr);
+        assert.deepEqual(JSON.parse(history.stdout), [
+          fixture.expected(file, id, fixture.cwd, expected),
+        ]);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("invalidates list fallback after a same-size overwrite with restored mtime", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.sessionInfo("First title"),
+      ]);
+      const fixedTime = new Date("2026-01-01T00:00:00.000Z");
+      utimesSync(file, fixedTime, fixedTime);
+      fixture.mockTmux(id, file, true);
+      assert.equal(fixture.history().status, 0);
+      const before = statSync(file, { bigint: true });
+      fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.sessionInfo("Other title"),
+      ]);
+      utimesSync(file, fixedTime, fixedTime);
+      const after = statSync(file, { bigint: true });
+      assert.equal(after.size, before.size);
+      assert.equal(after.mtimeNs, before.mtimeNs);
+      assert.notEqual(after.ctimeNs, before.ctimeNs);
+      const listed = fixture.run(["list"]);
+      assert.equal(listed.status, 0, listed.stderr);
+      assert.equal(JSON.parse(listed.stdout)[0].sessions[0].title, "Other title");
+      const history = fixture.history();
+      assert.equal(history.status, 0, history.stderr);
+      assert.deepEqual(JSON.parse(history.stdout), [
+        fixture.expected(file, id, fixture.cwd, "Other title"),
+      ]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps list fallback available with corrupt or unwritable title caches", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.sessionInfo("Available title"),
+      ]);
+      fixture.mockTmux(id, file, true);
+      assert.equal(fixture.history().status, 0);
+      const cacheFile = fixture.cacheFileFor(file);
+      assert.ok(cacheFile);
+      for (const corrupted of [true, false]) {
+        if (corrupted) writeFileSync(cacheFile, "{broken");
+        else {
+          rmSync(cacheFile);
+          mkdirSync(cacheFile);
+        }
+        const listed = fixture.run(["list"]);
+        assert.equal(listed.status, 0, listed.stderr);
+        assert.equal(JSON.parse(listed.stdout)[0].sessions[0].title, "Available title");
+      }
     } finally {
       fixture.cleanup();
     }

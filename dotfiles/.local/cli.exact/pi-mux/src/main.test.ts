@@ -3,7 +3,16 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:net";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 const source = join(import.meta.dir, "main.ts");
@@ -603,13 +612,7 @@ exec ${JSON.stringify(realTmux)} "$@"
   clients(): ClientSummary[] {
     const result = spawnSync(
       realTmux!,
-      [
-        "-S",
-        this.socket,
-        "list-clients",
-        "-F",
-        "#{client_name}\t#{client_pid}\t#{client_session}",
-      ],
+      ["-S", this.socket, "list-clients", "-F", "#{client_name}\t#{client_pid}\t#{client_session}"],
       { env: this.env, encoding: "utf8", timeout: 10_000 },
     );
     return result.stdout
@@ -667,7 +670,10 @@ exec ${JSON.stringify(realTmux)} "$@"
     const deadline = Date.now() + 2_000;
     while (this.panePids.some((pid) => existsSync(`/proc/${pid}`)) && Date.now() < deadline)
       await Bun.sleep(10);
-    assert.equal(this.panePids.some((pid) => existsSync(`/proc/${pid}`)), false);
+    assert.equal(
+      this.panePids.some((pid) => existsSync(`/proc/${pid}`)),
+      false,
+    );
     rmSync(this.directory, { recursive: true, force: true });
   }
 }
@@ -746,11 +752,7 @@ describe("list workspace panes", () => {
         ].join("\n") + "\n",
       );
       const emptyId = randomUUID();
-      const emptyFile = join(
-        fixture.directory,
-        "conversations",
-        `later_${emptyId}.jsonl`,
-      );
+      const emptyFile = join(fixture.directory, "conversations", `later_${emptyId}.jsonl`);
       fixture.piSession("saved", { id: savedId, file: savedFile });
       fixture.piSession("fresh", { id: emptyId, file: emptyFile, temporary: true });
       const result = fixture.run(["list"]);
@@ -774,7 +776,10 @@ describe("switch", () => {
     const fixture = new SessionFixture();
     try {
       const id = randomUUID();
-      fixture.piSession("pi", { id, file: join(fixture.directory, "conversations", `${id}.jsonl`) });
+      fixture.piSession("pi", {
+        id,
+        file: join(fixture.directory, "conversations", `${id}.jsonl`),
+      });
       fixture.plainSession("plain");
       await fixture.attach("plain");
       const result = fixture.run(["switch", id]);
@@ -794,7 +799,10 @@ describe("switch", () => {
     const fixture = new SessionFixture();
     try {
       const id = randomUUID();
-      fixture.piSession("pi", { id, file: join(fixture.directory, "conversations", `${id}.jsonl`) });
+      fixture.piSession("pi", {
+        id,
+        file: join(fixture.directory, "conversations", `${id}.jsonl`),
+      });
       await fixture.attach("pi");
       const client = fixture.clients()[0]!;
       const ppid = Number(
@@ -815,7 +823,10 @@ describe("switch", () => {
     const fixture = new SessionFixture();
     try {
       const id = randomUUID();
-      fixture.piSession("pi", { id, file: join(fixture.directory, "conversations", `${id}.jsonl`) });
+      fixture.piSession("pi", {
+        id,
+        file: join(fixture.directory, "conversations", `${id}.jsonl`),
+      });
       await fixture.attach("pi");
       const unknownPid = fixture.run(["switch", id, "--client-pid", "999999999"]);
       assert.equal(unknownPid.status, 1);
@@ -833,7 +844,10 @@ describe("switch", () => {
     const fixture = new SessionFixture();
     try {
       const id = randomUUID();
-      fixture.piSession("pi", { id, file: join(fixture.directory, "conversations", `${id}.jsonl`) });
+      fixture.piSession("pi", {
+        id,
+        file: join(fixture.directory, "conversations", `${id}.jsonl`),
+      });
       const noClient = fixture.run(["switch", id]);
       assert.equal(noClient.status, 1);
       assert.ok(noClient.stderr.includes("Expected one attached tmux client, found 0"));
@@ -1003,7 +1017,7 @@ describe("history", () => {
     }
   });
 
-  it("also scans session directories recorded in session-dirs", async () => {
+  it("ignores custom session directories recorded in session-dirs", async () => {
     const fixture = new HistoryFixture();
     try {
       const id = randomUUID();
@@ -1027,7 +1041,8 @@ describe("history", () => {
       fixture.recordSessionRoot(root);
       const result = fixture.run(["history", "--cwd", fixture.cwd]);
       assert.equal(result.status, 0, result.stderr);
-      assert.deepEqual(JSON.parse(result.stdout), [historyEntry(file, id, fixture.cwd, null)]);
+      assert.deepEqual(JSON.parse(result.stdout), []);
+      assert.ok(existsSync(file));
     } finally {
       fixture.cleanup();
     }
