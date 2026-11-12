@@ -1,10 +1,11 @@
 import type * as vscode from "vscode";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { DisplayTerminals } from "./terminals";
-import type { PiRuntime, TmuxRuntimeStore } from "./tmux";
+import type { PiRuntime, TmuxClient, TmuxRuntimeStore } from "./tmux";
 import { PiMux, flattenPiMuxSessions, type PiSession } from "./piMux";
 import { errorMessage } from "./guards";
-import { sameWorkDirectory } from "./workDirectory";
+import { requireWorkDirectory, sameWorkDirectory } from "./workDirectory";
+import { cwdGroupKey } from "./grouping";
 
 export class TerminalRegistry implements vscode.Disposable {
   private disposed = false;
@@ -112,18 +113,97 @@ export class TerminalRegistry implements vscode.Disposable {
     }
   }
 
-  async stop(sessionId: string): Promise<void> {
+  async displayForSession(sessionId: string): Promise<vscode.Terminal | undefined> {
     const display = this.currentDisplay();
-    const displayedSession = this.displayedSession;
-    const restoredSessionId =
-      display !== undefined && displayedSession === undefined
-        ? await this.resolveRestoredSessionId(display)
-        : undefined;
-    await this.mux.closeSession(sessionId);
-    if (displayedSession === sessionId || restoredSessionId === sessionId) {
-      if (display !== undefined) await this.changeDisplay(() => this.closeDisplay(display));
-      this.displayedSession = undefined;
+    if (display === undefined || display.exitStatus !== undefined) return undefined;
+    if (this.displayedSession !== undefined) {
+      return this.displayedSession === sessionId ? display : undefined;
     }
+    return (await this.resolveRestoredSessionId(display)) === sessionId ? display : undefined;
+  }
+
+  async stop(
+    sessionId: string,
+    options: { replacement?: PiSession; confirmedDisplay?: vscode.Terminal } = {},
+  ): Promise<{ switched: boolean; switchError?: string }> {
+    const { replacement, confirmedDisplay } = options;
+    const display = this.currentDisplay();
+    let isDisplayed =
+      this.displayedSession === sessionId ||
+      (display !== undefined && display === confirmedDisplay);
+    let switchError: string | undefined;
+    if (!isDisplayed && this.displayedSession === undefined && display !== undefined) {
+      isDisplayed = (await this.resolveRestoredSessionId(display)) === sessionId;
+    }
+    let switched: { client: TmuxClient; previous: PiRuntime } | undefined;
+    if (isDisplayed && display !== undefined && replacement !== undefined) {
+      try {
+        switched = await this.switchBeforeStop(display, sessionId, replacement);
+      } catch (error) {
+        switchError = errorMessage(error);
+      }
+    }
+    try {
+      await this.mux.closeSession(sessionId);
+    } catch (error) {
+      if (switched !== undefined) {
+        try {
+          await this.runtimes.switchClient(switched.client, switched.previous);
+        } catch (rollbackError) {
+          throw new Error(
+            `${errorMessage(error)}; failed to restore display: ${errorMessage(rollbackError)}`,
+          );
+        }
+      }
+      throw error;
+    }
+    if (isDisplayed) {
+      if (
+        switched !== undefined &&
+        replacement !== undefined &&
+        display !== undefined &&
+        !this.closed.has(display)
+      ) {
+        this.displayedSession = replacement.sessionId;
+      } else {
+        if (display !== undefined) {
+          await this.changeDisplay(() => this.closeDisplay(display));
+        }
+        this.displayedSession = undefined;
+      }
+    }
+    return { switched: switched !== undefined, switchError };
+  }
+
+  private async switchBeforeStop(
+    display: vscode.Terminal,
+    sessionId: string,
+    replacement: PiSession,
+  ): Promise<{ client: TmuxClient; previous: PiRuntime }> {
+    const options = display.creationOptions;
+    const cwd = "cwd" in options ? options.cwd : undefined;
+    const displayCwd = typeof cwd === "string" ? cwd : cwd?.fsPath;
+    if (
+      display.exitStatus !== undefined ||
+      displayCwd === undefined ||
+      cwdGroupKey(displayCwd) !== cwdGroupKey(replacement.cwd)
+    ) {
+      throw new Error(`Pi display cwd mismatch for ${replacement.sessionId}`);
+    }
+    await requireWorkDirectory(replacement.cwd);
+    const target = await this.runtimes.resolveTarget(replacement.sessionId);
+    if (target === undefined)
+      throw new Error(`Pi session is no longer running: ${replacement.sessionId}`);
+    const pid = await display.processId;
+    const client = (await this.runtimes.clients()).find(
+      (entry) => entry.pid === pid || entry.parentPid === pid,
+    );
+    if (pid === undefined || client === undefined || this.closed.has(display)) {
+      throw new Error(`Pi display is no longer attached: ${sessionId}`);
+    }
+    const previous = { sessionId, cwd: displayCwd, target: client.target };
+    await this.runtimes.switchClient(client, { ...replacement, target });
+    return { client, previous };
   }
 
   onTerminalClosed(terminal: vscode.Terminal): void {

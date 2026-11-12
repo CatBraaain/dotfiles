@@ -5,6 +5,7 @@ import { listSessionSnapshot, sessionFileExists, type SessionSummary } from "../
 import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
 import type { TerminalRegistry } from "../terminalRegistry";
 import { errorMessage } from "../guards";
+import { archiveReplacement } from "../grouping";
 import { flattenPiMuxSessions, type PiMuxWorkspace } from "../piMux";
 import { parseWebviewRequest, type ExtensionMessage, type WebviewState } from "./protocol";
 import { sessionViewGroups } from "./sessionViewData";
@@ -284,8 +285,28 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       this.postError(`Session not found: ${sessionId}`);
       return;
     }
+    let replacement: SessionSummary | undefined;
+    let confirmedDisplay: vscode.Terminal | undefined;
+    let switchError: string | undefined;
     try {
-      await this.deps.registry.stop(sessionId);
+      confirmedDisplay = await this.deps.registry.displayForSession(sessionId);
+      if (confirmedDisplay !== undefined) {
+        const snapshot = await listSessionSnapshot(
+          this.deps.sessionDir,
+          await this.deps.registry.mux.list(),
+        );
+        replacement = archiveReplacement(snapshot.sessions, snapshot.archivedIds, session);
+      }
+    } catch (error) {
+      switchError = `Failed to find another Pi session in ${session.cwd}: ${errorMessage(error)}`;
+    }
+    let switched = false;
+    try {
+      const stopped = await this.deps.registry.stop(sessionId, { replacement, confirmedDisplay });
+      switched = stopped.switched;
+      if (stopped.switchError !== undefined) {
+        switchError = `Failed to switch Pi session after archiving ${sessionId}: ${stopped.switchError}`;
+      }
     } catch (error) {
       this.postError(
         `Failed to stop Pi session ${sessionId} in ${session.cwd}: ${errorMessage(error)}`,
@@ -309,6 +330,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         displayedSessionId: this.deps.registry.displayedSessionId,
       });
     }
+    if (switched && replacement !== undefined) this.unreadSessionIds.delete(replacement.sessionId);
+    if (switchError !== undefined) this.postError(switchError);
     await this.refresh();
   }
 

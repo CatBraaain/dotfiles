@@ -3,6 +3,7 @@
 // store; openSession is ignored (terminals do not exist in the catalog).
 
 import type { SessionSummary } from "../src/sessionStore";
+import { archiveReplacement } from "../src/grouping";
 import type { SessionPhase } from "../src/webview/protocol";
 import { sessionViewGroups } from "../src/webview/sessionViewData";
 
@@ -147,7 +148,18 @@ export function createDemoBridge(): {
     }
     if (request.type === "archiveSession" && typeof request.sessionId === "string") {
       metadata.set(request.sessionId, { archived: true });
-      if (displayedSessionId === request.sessionId) displayedSessionId = undefined;
+      if (displayedSessionId === request.sessionId) {
+        const archivedSession = store.find((session) => session.sessionId === request.sessionId);
+        const archivedIds = new Set(
+          store
+            .filter((session) => entryOf(session.sessionId).archived)
+            .map((session) => session.sessionId),
+        );
+        displayedSessionId =
+          archivedSession === undefined
+            ? undefined
+            : archiveReplacement(store, archivedIds, archivedSession)?.sessionId;
+      }
       postSessions();
       return;
     }

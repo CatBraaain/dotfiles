@@ -1172,14 +1172,17 @@ test(
     let sourceA = "";
     let sourceB = "";
     const restorePath = join(host.directory, "agent/pi-tmux/pi-mux-restore.json");
+    let replacementId = "";
+    let displayPid = 0;
     await test.step("Start isolated A and B Pi runtimes and an ordinary fixture tmux session", async () => {
       await host.activateSession("A");
       await host.activateSession("B");
       await host.selectSession("B");
       await host.selectSession("A");
       await host.expectNativeDisplay("A");
-      initialA = host.piProcesses().find((entry) => entry.cwd === host.sessions.A.cwd)!;
-      initialB = host.piProcesses().find((entry) => entry.cwd === host.sessions.B.cwd)!;
+      initialA = host.sessionRuntime("A")!;
+      initialB = host.sessionRuntime("B")!;
+      displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
       expect(initialA).toBeDefined();
       expect(initialB).toBeDefined();
       sourceA = readFileSync(host.sessions.A.session, "utf8");
@@ -1195,8 +1198,18 @@ test(
         .locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`)
         .describe("A workspace display mode");
       if ((await toggle.getAttribute("data-mode")) === "all") await toggle.click();
+      const candidates = frame
+        .locator("section.group")
+        .filter({ has: frame.getByTitle(host.sessions.A.cwd, { exact: true }) })
+        .locator(".session-row [data-session]")
+        .describe("Same-cwd replacement rows");
+      const ids = await candidates.evaluateAll((buttons) =>
+        buttons.map((button) => button.getAttribute("data-session")),
+      );
+      replacementId = ids.find((id) => id !== aId) ?? "";
+      expect(replacementId).not.toBe("");
     });
-    await test.step("Archive directly, stop only A and view its saved row in All", async () => {
+    await test.step("Archive directly, switch the existing tab and view the saved row in All", async () => {
       const frame = await host.sessionFrame();
       await rowIn(frame, aId)
         .locator(`[data-archive="${aId}"]`)
@@ -1222,11 +1235,29 @@ test(
         initialB.pid,
       );
       await expect
-        .poll(() => host.snapshot().terminals.filter((terminal) => terminal.owned))
-        .toHaveLength(0);
+        .poll(() =>
+          host
+            .snapshot()
+            .terminals.filter((terminal) => terminal.owned)
+            .map((terminal) => terminal.pid),
+        )
+        .toEqual([displayPid]);
       await expect(
-        frame.locator(".session-row.selected").describe("Cleared archive selection"),
-      ).toHaveCount(0);
+        frame
+          .locator(`.session-row.selected [data-session="${replacementId}"]`)
+          .describe("Selected same-cwd replacement"),
+      ).toBeVisible();
+      await expect
+        .poll(() => {
+          const target = host.tmux(["list-clients", "-F", "#{session_name}"]).trim();
+          const encoded = host
+            .tmux(["display-message", "-p", "-t", target, "#{@pi-tmux-session}"])
+            .trim();
+          return encoded === ""
+            ? undefined
+            : (JSON.parse(Buffer.from(encoded, "base64").toString("utf8")) as { id: string }).id;
+        })
+        .toBe(replacementId);
       expect(readFileSync(host.sessions.A.session, "utf8")).toBe(sourceA);
       expect(readFileSync(host.sessions.B.session, "utf8")).toBe(sourceB);
       expect(aIsListed()).toBe(false);

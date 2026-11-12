@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cwdLabel, groupSessions } from "../src/grouping";
+import { archiveReplacement, cwdLabel, groupSessions } from "../src/grouping";
 import type { SessionSummary } from "../src/sessionStore";
 
 function session(
@@ -12,6 +12,42 @@ function session(
     ...overrides,
   };
 }
+
+describe("archiveReplacement", () => {
+  it("uses the list order after excluding the target, archives, and other workspaces", () => {
+    const target = session({ sessionId: "target", cwd: "/a/", createdAtMs: 900 });
+    const newestArchive = session({ sessionId: "archived", cwd: "/a", createdAtMs: 800 });
+    const otherWorkspace = session({
+      sessionId: "elsewhere",
+      cwd: "/a/worktree",
+      createdAtMs: 700,
+    });
+    const older = session({ sessionId: "older", cwd: "/a", createdAtMs: 100, updatedAtMs: 900 });
+    const tieB = session({ sessionId: "b", cwd: "/a", createdAtMs: 300, updatedAtMs: 900 });
+    const tieA = session({ sessionId: "a", cwd: "/a", createdAtMs: 300, updatedAtMs: 100 });
+    const unknown = session({ sessionId: "unknown", cwd: "/a", createdAtMs: null });
+    expect(
+      archiveReplacement(
+        [older, tieB, unknown, otherWorkspace, newestArchive, target, tieA],
+        new Set(["archived"]),
+        target,
+      ),
+    ).toBe(tieA);
+  });
+
+  it("returns no replacement when no unarchived same-cwd session remains", () => {
+    const target = session({ sessionId: "target", cwd: "/a", createdAtMs: 1 });
+    const archived = session({ sessionId: "archived", cwd: "/a", createdAtMs: 2 });
+    expect(archiveReplacement([target, archived], new Set(["archived"]), target)).toBeUndefined();
+  });
+
+  it("selects sessions with unknown start times by id when no dated session remains", () => {
+    const target = session({ sessionId: "target", cwd: "/a", createdAtMs: 1 });
+    const a = session({ sessionId: "a", cwd: "/a", createdAtMs: null });
+    const b = session({ sessionId: "b", cwd: "/a", createdAtMs: null });
+    expect(archiveReplacement([b, target, a], new Set(), target)).toBe(a);
+  });
+});
 
 describe("cwdLabel", () => {
   it("uses the basename of the cwd", () => {

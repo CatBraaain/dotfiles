@@ -76,6 +76,20 @@ export function groupSessions(
   return groups;
 }
 
+export function archiveReplacement(
+  sessions: SessionSummary[],
+  archivedIds: ReadonlySet<string>,
+  archivedSession: Pick<SessionSummary, "sessionId" | "cwd">,
+): SessionSummary | undefined {
+  const candidates = sessions.filter(
+    (session) =>
+      session.sessionId !== archivedSession.sessionId &&
+      cwdGroupKey(session.cwd) === cwdGroupKey(archivedSession.cwd) &&
+      !archivedIds.has(session.sessionId),
+  );
+  return groupSessions(candidates)[0]?.sessions[0];
+}
+
 function compareCreatedAt(a: number | null, b: number | null): number {
   if (a === b) return 0;
   if (a === null) return 1;

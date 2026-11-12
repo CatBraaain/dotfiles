@@ -497,6 +497,95 @@ describe("TerminalRegistry", () => {
     expect(registry.displayedSessionId).toBeUndefined();
   });
 
+  it("switches the attached client before stopping the displayed Pi without closing its tab", async () => {
+    const { registry, live, mocks, displays, client } = setup();
+    const cwd = process.cwd();
+    const { terminal } = await registry.open(session("A", cwd));
+    const close = mocks.closeSession.getMockImplementation()!;
+    mocks.closeSession.mockImplementationOnce(async (id) => {
+      expect(client.target).toBe("pi-B");
+      return close(id);
+    });
+    expect(await registry.stop("A", { replacement: session("B", cwd) })).toEqual({
+      switched: true,
+      switchError: undefined,
+    });
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(displays.create).toHaveBeenCalledOnce();
+    expect(registry.displayedSessionId).toBe("B");
+    expect(live.has("A")).toBe(false);
+    expect(live.has("B")).toBe(true);
+  });
+
+  it("restores the original client when stopping after a switch fails", async () => {
+    const { registry, live, mocks, client } = setup();
+    const cwd = process.cwd();
+    const { terminal } = await registry.open(session("A", cwd));
+    mocks.closeSession.mockRejectedValueOnce(new Error("close denied"));
+    await expect(registry.stop("A", { replacement: session("B", cwd) })).rejects.toThrow(
+      "close denied",
+    );
+    expect(client.target).toBe("pi-A");
+    expect(registry.displayedSessionId).toBe("A");
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(live.has("A")).toBe(true);
+  });
+
+  it("closes the display and stops Pi if its replacement disappeared", async () => {
+    const { registry, live } = setup();
+    const cwd = process.cwd();
+    const { terminal } = await registry.open(session("A", cwd));
+    live.delete("B");
+    const result = await registry.stop("A", { replacement: session("B", cwd) });
+    expect(result.switchError).toContain("no longer running");
+    expect(terminal.dispose).toHaveBeenCalledOnce();
+    expect(registry.displayedSessionId).toBeUndefined();
+    expect(live.has("A")).toBe(false);
+    expect(live.has("B")).toBe(false);
+  });
+
+  it("switches a restored display when its attached target is archived", async () => {
+    const cwd = process.cwd();
+    const existing = displayTerminal(cwd);
+    const { registry, client, displays } = setup(existing);
+    client.target = "pi-A";
+    await registry.stop("A", { replacement: session("B", cwd) });
+    expect(existing.dispose).not.toHaveBeenCalled();
+    expect(displays.create).not.toHaveBeenCalled();
+    expect(registry.displayedSessionId).toBe("B");
+    expect(client.target).toBe("pi-B");
+  });
+
+  it("uses a confirmed restored display when later client lookup fails", async () => {
+    const cwd = process.cwd();
+    const existing = displayTerminal(cwd);
+    const { registry, client, mocks, live } = setup(existing);
+    client.target = "pi-A";
+    const confirmedDisplay = await registry.displayForSession("A");
+    expect(confirmedDisplay).toBe(existing);
+    mocks.clients.mockRejectedValue(new Error("client lookup denied"));
+    const stopped = await registry.stop("A", {
+      replacement: session("B", cwd),
+      confirmedDisplay,
+    });
+    expect(stopped.switchError).toContain("client lookup denied");
+    expect(mocks.closeSession).toHaveBeenCalledWith("A");
+    expect(live.has("A")).toBe(false);
+    expect(existing.dispose).toHaveBeenCalledOnce();
+    expect(registry.displayedSessionId).toBeUndefined();
+  });
+
+  it("stops Pi without closing an unconfirmed restored display when client lookup fails", async () => {
+    const existing = displayTerminal();
+    const { registry, mocks, live } = setup(existing);
+    mocks.clients.mockRejectedValue(new Error("client lookup denied"));
+    const stopped = await registry.stop("A");
+    expect(stopped).toEqual({ switched: false, switchError: undefined });
+    expect(mocks.closeSession).toHaveBeenCalledWith("A");
+    expect(live.has("A")).toBe(false);
+    expect(existing.dispose).not.toHaveBeenCalled();
+  });
+
   it("clears the archived selection even if the user already closed its tab", async () => {
     const { registry } = setup();
     const { terminal } = await registry.open(session("A"));

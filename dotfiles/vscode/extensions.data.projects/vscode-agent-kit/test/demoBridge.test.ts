@@ -85,6 +85,19 @@ describe("createDemoBridge", () => {
     expect(untouched?.isArchived).toBe(false);
   });
 
+  it("selects the first unarchived same-cwd row when archiving the displayed session", () => {
+    const { bridge, last } = setup();
+    bridge.postMessage({ type: "unarchiveSession", sessionId: projectArchivedId });
+    bridge.postMessage({ type: "archiveSession", sessionId: projectCurrentId });
+    expect(last().displayedSessionId).toBe(projectArchivedId);
+    expect(
+      sessions(last()).find((session) => session.sessionId === projectCurrentId)?.isArchived,
+    ).toBe(true);
+    expect(
+      sessions(last()).find((session) => session.sessionId === projectArchivedId)?.isArchived,
+    ).toBe(false);
+  });
+
   it("keeps another displayed session when archiving and never restores a stopped phase", () => {
     const { bridge, last } = setup();
     bridge.postMessage({ type: "archiveSession", sessionId: piToolsCurrentId });
