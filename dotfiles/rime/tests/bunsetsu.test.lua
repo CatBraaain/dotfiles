@@ -1,45 +1,14 @@
 local test_dir = arg[0]:match("^(.*)/")
 local bunsetsu_path = arg[1]
-package.path = test_dir .. "/probe/fixed/?.lua;" .. test_dir .. "/probe/?.lua;"
+package.path = test_dir .. "/?.lua;" .. test_dir .. "/probe/fixed/?.lua;" .. test_dir .. "/probe/?.lua;"
     .. bunsetsu_path:match("^(.*)/kagiroi/") .. "/?.lua;" .. package.path
 
 local synth = require("viterbi_synth_env")
 synth.install_globals()
 local viterbi_module = require("kagiroi/kagiroi_viterbi")
 
-_G.yield = coroutine.yield
-_G.Translation = function(func)
-    return { iter = function() return coroutine.wrap(func) end }
-end
-_G.Set = function(tags) return tags end
-_G.Segment = function(start, finish)
-    return { start = start, _end = finish, has_tag = function() return true end }
-end
-_G.Candidate = function(kind, start, finish, text, comment)
-    local candidate = { type = kind, start = start, _end = finish, text = text, comment = comment }
-    function candidate:get_genuine() return self end
-    function candidate:to_phrase() return self.phrase and { entry = self.phrase } or nil end
-    return candidate
-end
-_G.ShadowCandidate = function(candidate, kind, text, comment)
-    local shadow = { type = kind, text = text, comment = comment, start = candidate.start, _end = candidate._end }
-    function shadow:get_genuine() return candidate end
-    function shadow:to_phrase() return candidate:to_phrase() end
-    return shadow
-end
-_G.DictEntry = function(copy)
-    return copy and { text = copy.text, custom_code = copy.custom_code }
-        or { text = "", custom_code = "" }
-end
-_G.Phrase = function(mem, tag, start, finish, entry)
-    return {
-        toCandidate = function()
-            local candidate = Candidate("kagiroi", start, finish, entry.text, "")
-            candidate.phrase = entry
-            return candidate
-        end,
-    }
-end
+local rime_mocks = require("rime_mocks")
+rime_mocks.install_globals()
 
 local function new_engine(dictionary, matrix, readings, expand_emoji, boundary, userdict)
     local synth_env = synth.new_env(dictionary, userdict, matrix)
@@ -625,7 +594,7 @@ do
         "confirmation increments the original sentence history without replacing either internal POS")
 end
 
-print("== 9. deep same-frame stock candidates follow the complete contextual order")
+print("== 19. deep same-frame stock candidates follow the complete contextual order")
 do
     local dictionary, readings = {}, { ["あ"] = {}, ["う"] = {} }
     local matrix = pos_matrix({ 1851, 1898, 694, 695 }, {
@@ -674,7 +643,7 @@ do
         "initial selection and preview use the discovered contextual head rather than the beam seed")
 end
 
-print("== 10. full-cover stock texts survive a prefix stream longer than five hundred twelve rows")
+print("== 20. full-cover stock texts survive a prefix stream longer than five hundred twelve rows")
 do
     local dictionary = {}
     local matrix = pos_matrix({ 368 })
@@ -713,7 +682,7 @@ do
     end
 end
 
-print("== 11. tied fixed-frame paths retain the selected text and distinct alternatives")
+print("== 21. tied fixed-frame paths retain the selected text and distinct alternatives")
 do
     local dictionary = {}
     for index = 1, 48 do
@@ -737,7 +706,7 @@ do
     end
 end
 
-print("== 12. contextual discovery includes an expensive prefix followed by a negative connection")
+print("== 22. contextual discovery includes an expensive prefix followed by a negative connection")
 do
     local dictionary = {
         { surface = "あ", candidate = "遅", left_id = 1898, right_id = 1898, cost = 10000 },
@@ -776,7 +745,7 @@ do
     check(scored, "discovery retains the complete negative-tail route rather than pruning its expensive prefix")
 end
 
-print("== 13. selection paging and menu sync propagate same-text route identities without changing other displays")
+print("== 23. selection paging and menu sync propagate same-text route identities without changing other displays")
 do
     local dictionary = {
         { surface = "あ", candidate = "赤", left_id = 1851, right_id = 1851, cost = 1 },
@@ -842,7 +811,7 @@ do
     end
 end
 
-print("== 14. reranking preserves filtered choices unscored order and the target reading")
+print("== 24. reranking preserves filtered choices unscored order and the target reading")
 do
     local dictionary = {
         { surface = "あか", candidate = "赤", left_id = 1851, right_id = 1851, cost = 10 },
@@ -889,7 +858,7 @@ do
     end
 end
 
-print("== 15. resizing settles compatible routes while retaining an outer filtered selection")
+print("== 25. resizing settles compatible routes while retaining an outer filtered selection")
 do
     local dictionary = {
         { surface = "あ", candidate = "赤", left_id = 1851, right_id = 1851, cost = 1 },
@@ -944,7 +913,7 @@ do
     end
 end
 
-print("== 16. absorbing a clause retains the selected display of its successor")
+print("== 26. absorbing a clause retains the selected display of its successor")
 do
     local dictionary = {
         { surface = "あ", candidate = "亜", left_id = 1851, right_id = 1851, cost = 100 },
@@ -966,7 +935,7 @@ do
         "the clause after the removed boundary keeps its selected display")
 end
 
-print("== 17. relearning a deduped winner refreshes the same engine without changing the fixed frame")
+print("== 27. relearning a deduped winner refreshes the same engine without changing the fixed frame")
 do
     local dictionary = {
         { surface = "あ", candidate = "赤", left_id = 1851, right_id = 1851, cost = 100 },
@@ -990,7 +959,7 @@ do
     end
 end
 
-print("== 18. same-text histories with shared endpoints keep different middle-word frames separate")
+print("== 28. same-text histories with shared endpoints keep different middle-word frames separate")
 do
     local dictionary = {
         { surface = "あ", candidate = "亜", left_id = 1851, right_id = 1851, cost = 100 },
@@ -1028,7 +997,7 @@ do
         "returning to the original frame relearns only its own complete route")
 end
 
-print("== 19. context-specific single-word and multiword histories cannot replace each other's frames")
+print("== 29. context-specific single-word and multiword histories cannot replace each other's frames")
 do
     local dictionary = {
         { surface = "ないで", candidate = "内で", left_id = 1851, right_id = 1851, cost = 50 },
@@ -1063,7 +1032,7 @@ do
         "relearning the standalone route leaves the contextual multiword counter unchanged")
 end
 
-print("== 20. clause and whole-sentence histories have independent counters for the same word route")
+print("== 30. clause and whole-sentence histories have independent counters for the same word route")
 do
     local dictionary = {
         { surface = "あ", candidate = "亜", left_id = 1851, right_id = 1851, cost = 100 },
@@ -1085,7 +1054,7 @@ do
         "merging and relearning the same words grows only the clause-scoped counter")
 end
 
-print("== 21. a learned subword discounts only its original ids inside a fixed multiword frame")
+print("== 31. a learned subword discounts only its original ids inside a fixed multiword frame")
 do
     local dictionary = {
         { surface = "あ", candidate = "亜", left_id = 1851, right_id = 1851, cost = 5000 },
@@ -1109,7 +1078,7 @@ do
         "only the trained word identity improves the enclosing fixed-frame candidate")
 end
 
-print("== 22. legacy partial histories retain stored rows and actual words at every interval position")
+print("== 32. legacy partial histories retain stored rows and actual words at every interval position")
 do
     local dictionary = {
         { surface = "あ", candidate = "亜", left_id = 1851, right_id = 1851, cost = 5000 },
@@ -1150,7 +1119,7 @@ do
     end
 end
 
-print("== 23. long-vowel kana learning is visible after reconversion and a new engine")
+print("== 33. long-vowel kana learning is visible after reconversion and a new engine")
 do
     local dictionary = {
         { surface = "かれー", candidate = "カレー", left_id = 1898, right_id = 1898, cost = 100 },
@@ -1170,7 +1139,7 @@ do
     check(bunsetsu.display(context) == "かれー", "a new engine restores the saved long-vowel kana history")
 end
 
-print("== 24. auxiliary learning cannot be reused by a noun-only frame with the same display")
+print("== 34. auxiliary learning cannot be reused by a noun-only frame with the same display")
 do
     local dictionary = {
         { surface = "ない", candidate = "ない", left_id = 213, right_id = 213, cost = 100 },
@@ -1193,7 +1162,7 @@ do
         "noun learning creates a separate route history instead of growing the auxiliary counter")
 end
 
-print("== 25. malformed route suffixes are skipped without hiding the following valid history")
+print("== 35. malformed route suffixes are skipped without hiding the following valid history")
 do
     local dictionary = {
         { surface = "あ", candidate = "亜", left_id = 1851, right_id = 1851, cost = 5000 },
@@ -1228,7 +1197,7 @@ do
     end
 end
 
-print("== 26. both reshaped clauses select their first candidate under each other's final compatible route")
+print("== 36. both reshaped clauses select their first candidate under each other's final compatible route")
 do
     local dictionary = {
         { surface = "あ", candidate = "赤", left_id = 1909, right_id = 1909, cost = 1 },
@@ -1266,7 +1235,7 @@ do
         "settling both reshaped sides preserves the unreshaped outer display")
 end
 
-print("== 27. a same-POS middle-word history beats a cheaper competing route without leaking after removal")
+print("== 37. a same-POS middle-word history beats a cheaper competing route without leaking after removal")
 do
     local dictionary = {
         { surface = "あ", candidate = "亜", left_id = 1841, right_id = 1841, cost = 100 },
@@ -1305,7 +1274,7 @@ do
         "ignoring an unavailable middle-word history does not rewrite its stored row")
 end
 
-print("== 28. initial conversion settles a changed same-text representative before selecting its neighbor")
+print("== 38. initial conversion settles a changed same-text representative before selecting its neighbor")
 do
     local dictionary = {
         { surface = "あ", candidate = "赤", left_id = 1851, right_id = 1851, cost = 100 },
@@ -1341,7 +1310,7 @@ do
         "initial neighbor order selection and preview all use the final representative rather than its beam seed")
 end
 
-print("== 29. choosing the left clause reverses the right ranking while retaining its selected display")
+print("== 39. choosing the left clause reverses the right ranking while retaining its selected display")
 do
     local dictionary = {
         { surface = "あ", candidate = "赤", left_id = 1851, right_id = 1851, cost = 100 },
@@ -1369,7 +1338,7 @@ do
         "returning to the original left candidate restores the right order without changing its display")
 end
 
-print("== 30. a resized pair settles a long chain of same-text representatives to independent final-context minima")
+print("== 40. a resized pair settles a long chain of same-text representatives to independent final-context minima")
 do
     local prefix_readings = { "あ", "い", "う", "え", "お", "か", "き", "く" }
     local dictionary, word_costs = {}, {}
@@ -1442,7 +1411,7 @@ do
     end
 end
 
-print("== 31. resized same-text routes switch identities and retain a stable equal-cost representative")
+print("== 41. resized same-text routes switch identities and retain a stable equal-cost representative")
 do
     local dictionary = {
         { surface = "とりさ", candidate = "元", left_id = 1841, right_id = 1841, cost = 1 },

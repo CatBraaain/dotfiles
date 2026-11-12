@@ -1,44 +1,10 @@
-package.path = arg[1]:match("^(.*)/kagiroi/") .. "/?.lua;" .. package.path
+local test_dir = arg[0]:match("^(.*)/")
+package.path = test_dir .. "/?.lua;" .. arg[1]:match("^(.*)/kagiroi/") .. "/?.lua;" .. package.path
 -- The generated key → text mappings are a build artifact (arg[2],
 -- lua/kagiroi/zenkaku_text.lua), not a repository file.
 package.preload["kagiroi/zenkaku_text"] = function() return dofile(arg[2]) end
-_G.yield = coroutine.yield
-_G.Translation = function(func)
-    return { iter = function() return coroutine.wrap(func) end }
-end
-_G.Set = function(tags) return tags end
-_G.Segment = function(start, finish)
-    return { start = start, _end = finish, has_tag = function() return true end }
-end
-_G.Candidate = function(kind, start, finish, text, comment)
-    local candidate = { type = kind, start = start, _end = finish, text = text, comment = comment }
-    function candidate:get_genuine() return self end
-    -- A candidate carrying an entry (set by the stock mock or Phrase below)
-    -- stands for a genuine dictionary phrase, the learning input.
-    function candidate:to_phrase()
-        return self.phrase and { entry = self.phrase } or nil
-    end
-    return candidate
-end
-_G.ShadowCandidate = function(candidate, kind, text, comment)
-    local shadow = { type = kind, text = text, comment = comment, start = candidate.start, _end = candidate._end }
-    function shadow:get_genuine() return candidate end
-    function shadow:to_phrase() return candidate:to_phrase() end
-    return shadow
-end
-_G.DictEntry = function(copy)
-    return copy and { text = copy.text, custom_code = copy.custom_code }
-        or { text = "", custom_code = "" }
-end
-_G.Phrase = function(mem, tag, start, finish, entry)
-    return {
-        toCandidate = function()
-            local candidate = Candidate("kagiroi", start, finish, entry.text, "")
-            candidate.phrase = entry
-            return candidate
-        end,
-    }
-end
+local rime_mocks = require("rime_mocks")
+rime_mocks.install_globals()
 package.preload["kagiroi/kagiroi_translator"] = function()
     return {
         init = function(env)
