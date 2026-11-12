@@ -885,6 +885,46 @@ describe("standard session lookup", () => {
     }
   });
 
+  it("excludes unreadable, deleted, and malformed headers while listing remaining history", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const healthyId = randomUUID();
+      const healthy = fixture.writeSession(fixture.cwd, healthyId, [fixture.header(healthyId)]);
+      const unreadableId = randomUUID();
+      const unreadable = fixture.writeSession(fixture.cwd, unreadableId, [
+        fixture.header(unreadableId),
+      ]);
+      chmodSync(unreadable, 0o000);
+      const deletedId = randomUUID();
+      const deleted = fixture.writeSession(fixture.cwd, deletedId, [fixture.header(deletedId)]);
+      const failOpen = join(fixture.directory, "fail-open.ts");
+      writeFileSync(
+        failOpen,
+        `import { spyOn } from "bun:test";
+import * as fs from "node:fs";
+const deleted = ${JSON.stringify(deleted)};
+const original = fs.openSync;
+spyOn(fs, "openSync").mockImplementation((...args) => {
+  if (args[0] === deleted) throw Object.assign(new Error("deleted after listing"), { code: "ENOENT" });
+  return Reflect.apply(original, fs, args);
+});
+`,
+      );
+      fixture.preloads.push("--preload", failOpen);
+      const malformedId = randomUUID();
+      const malformed = fixture.sessionFile(fixture.cwd, malformedId);
+      mkdirSync(dirname(malformed), { recursive: true });
+      writeFileSync(malformed, "{broken\n");
+      const result = fixture.history();
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [
+        fixture.expected(healthy, healthyId, fixture.cwd, null),
+      ]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("excludes configured, recorded, loose, and nested files from saved lookup", () => {
     const fixture = new HistoryCacheFixture();
     try {

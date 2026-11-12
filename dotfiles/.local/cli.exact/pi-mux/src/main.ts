@@ -1260,7 +1260,12 @@ async function historySessions(
   const normalIds = new Set<string>();
   const titles = new HistoryTitleCache();
   for (const { file, archived } of listed.flat()) {
-    const header = readHeader(file);
+    let header: ReturnType<typeof readHeader>;
+    try {
+      header = readHeader(file);
+    } catch {
+      continue;
+    }
     if (
       header?.type !== "session" ||
       typeof header.id !== "string" ||
