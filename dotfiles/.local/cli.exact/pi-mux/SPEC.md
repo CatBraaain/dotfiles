@@ -6,14 +6,24 @@
 
 ## 保存会話の探索範囲
 
-`open`・`restore` の保存会話解決と `history` の列挙は、`${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions` を標準保存先とする。標準保存先直下のcwdグループは、絶対cwdから先頭のセパレータを除き、`/`・`\`・`:` を `-` へ置き換え、前後を `--` で挟んだ名前とする。
+`open`・`restore` の保存会話解決と `history` の列挙が対象にする保存先は、次の順で最初に得られたパスとする。空文字列の環境変数は未指定として次へ進む。パスの先頭の `~` はホームディレクトリへ展開し、相対パスは呼び出し時のcwdを基準に絶対パスへ解決する。
 
-| 保存区分 | 対象ファイル |
+1. 環境変数 `PI_CODING_AGENT_SESSION_DIR` の値
+2. settings の `sessionDir`。呼び出し時のcwdの `.pi/settings.json` に `sessionDir` がなければ `${PI_CODING_AGENT_DIR:-~/.pi/agent}/settings.json` の値を使う
+3. 既定の `${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions`
+
+settings の読み込みに失敗した、または `sessionDir` が文字列でない場合も、コマンドは失敗する。
+
+pi本体は、環境変数・settings の保存先へcwdグループを作らずに会話ファイルを直接保存し、既定の保存先へのみcwdグループを作る。探索対象の `*.jsonl` は、解決元ごとに次のとおりとする。
+
+| 解決元 | 探索対象の `*.jsonl` |
 | --- | --- |
-| 通常側 | 標準保存先の各cwdグループ直下の `*.jsonl` |
-| archive側 | 各cwdグループの `archive/` 直下の `*.jsonl` |
+| 環境変数・settings | 保存先直下 |
+| 既定 | 各cwdグループ直下（通常側）と、その `archive/` 直下（archive側） |
 
-カスタム保存先と、`subagents/` など上記以外のサブディレクトリにある会話は探索対象にしない。保存先の環境変数・設定、CLIのsession-dirs記録、稼働piの保存先を使って探索範囲を広げない。
+既定の保存先直下のcwdグループは、絶対cwdから先頭のセパレータを除き、`/`・`\`・`:` を `-` へ置き換え、前後を `--` で挟んだ名前とする。
+
+CLIのsession-dirs記録と、稼働piの保存先を探索に使わない。
 
 ## 操作
 
@@ -282,7 +292,7 @@ serverの起動・復元、piの起動・接続、workspace登録は行わない
 
 `history [--cwd <absolute-cwd>]` は、共有store `active-workspaces` に登録されたcwdごとの保存会話を列挙し、stdoutへ `[{"id":"session-id","cwd":"/path/to/workspace","file":"/path/to/session.jsonl","title":"name","btime":1735689600000,"mtime":1735693200000,"size":1024}]` 形式のJSON配列と末尾改行を返す。`--cwd` に絶対パスを指定したときはそのcwdのみを対象にし、登録されていないcwdなら `[]` を返す。
 
-「保存会話の探索範囲」のうち、対象cwdに対応するグループの通常側とarchive側を列挙する。同じ会話IDが通常側とarchive側にある場合は通常側を返し、そのIDのarchive側を結果から除く。
+「保存会話の探索範囲」のうち、対象cwdに対応するグループの通常側とarchive側を列挙する。保存先が環境変数・settings のときは、保存先直下の `*.jsonl` のうちヘッダーのcwdが対象cwdに一致する会話を列挙する。同じ会話IDが通常側とarchive側にある場合は通常側を返し、そのIDのarchive側を結果から除く。
 
 各要素は次の7項目を持つ。
 

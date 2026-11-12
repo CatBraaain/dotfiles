@@ -977,32 +977,16 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
     }
   });
 
-  it("excludes configured, recorded, loose, and nested files from saved lookup", () => {
+  it("excludes recorded, loose, and nested files from saved lookup", () => {
     const fixture = new HistoryCacheFixture();
     try {
       const group = dirname(fixture.sessionFile(fixture.cwd, "unused"));
-      const configured = join(fixture.directory, "configured");
       const recorded = join(fixture.directory, "recorded");
-      const globalConfigured = join(fixture.directory, "global-configured");
-      const projectConfigured = join(fixture.directory, "project-configured");
-      fixture.env.PI_CODING_AGENT_SESSION_DIR = configured;
-      writeFileSync(
-        join(fixture.agentDir, "settings.json"),
-        JSON.stringify({ sessionDir: globalConfigured }),
-      );
-      mkdirSync(join(fixture.cwd, ".pi"));
-      writeFileSync(
-        join(fixture.cwd, ".pi", "settings.json"),
-        JSON.stringify({ sessionDir: projectConfigured }),
-      );
       writeFileSync(
         join(fixture.agentDir, "pi-tmux", "session-dirs", "recorded.json"),
         JSON.stringify(recorded),
       );
       const excludedDirectories = [
-        configured,
-        globalConfigured,
-        projectConfigured,
         recorded,
         fixture.sessionsDirectory,
         join(fixture.sessionsDirectory, "not-a-cwd-group"),
@@ -1017,7 +1001,7 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
         });
         return id;
       });
-      fixture.mockTmux(excludedIds[0]!, join(configured, `${excludedIds[0]}.jsonl`));
+      fixture.mockTmux(excludedIds[0]!, join(recorded, `${excludedIds[0]}.jsonl`));
       const history = fixture.history();
       assert.equal(history.status, 0, history.stderr);
       assert.deepEqual(JSON.parse(history.stdout), []);
@@ -1031,6 +1015,140 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
       fixture.cleanup();
     }
   });
+
+  it("lists flat custom-root sessions filtered by header cwd", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const custom = join(fixture.directory, "custom-sessions");
+      fixture.env.PI_CODING_AGENT_SESSION_DIR = custom;
+      const mineId = randomUUID();
+      const mine = fixture.writeSession(fixture.cwd, mineId, [fixture.header(mineId)], {
+        file: join(custom, `${mineId}.jsonl`),
+      });
+      const otherId = randomUUID();
+      const other = fixture.writeSession(fixture.otherCwd, otherId, [fixture.header(otherId, fixture.otherCwd)], {
+        file: join(custom, `${otherId}.jsonl`),
+      });
+      const defaultId = randomUUID();
+      fixture.writeSession(fixture.cwd, defaultId, [fixture.header(defaultId)]);
+      const mineListed = fixture.history(fixture.cwd);
+      assert.equal(mineListed.status, 0, mineListed.stderr);
+      assert.deepEqual(JSON.parse(mineListed.stdout), [
+        fixture.expected(mine, mineId, fixture.cwd, null),
+      ]);
+      const otherListed = fixture.history(fixture.otherCwd);
+      assert.equal(otherListed.status, 0, otherListed.stderr);
+      assert.deepEqual(JSON.parse(otherListed.stdout), [
+        fixture.expected(other, otherId, fixture.otherCwd, null),
+      ]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("opens a flat custom-root session file", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const custom = join(fixture.directory, "custom-sessions");
+      fixture.env.PI_CODING_AGENT_SESSION_DIR = custom;
+      const id = randomUUID();
+      const file = fixture.writeSession(fixture.cwd, id, [fixture.header(id)], {
+        file: join(custom, `${id}.jsonl`),
+      });
+      const defaultId = randomUUID();
+      fixture.writeSession(fixture.cwd, defaultId, [fixture.header(defaultId)]);
+      fixture.mockTmux(id, file);
+      const result = fixture.run(["open", "--temporary", id]);
+      assert.equal(result.status, 0, result.stderr);
+      const launch = readFileSync(join(fixture.directory, "launch.log"), "utf8");
+      assert.ok(launch.includes(`"--session" ${JSON.stringify(file)}`));
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("searches the project settings sessionDir over the global settings", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const projectRoot = join(fixture.directory, "project-sessions");
+      const globalRoot = join(fixture.directory, "global-sessions");
+      mkdirSync(join(fixture.cwd, ".pi"));
+      writeFileSync(
+        join(fixture.cwd, ".pi", "settings.json"),
+        JSON.stringify({ sessionDir: projectRoot }),
+      );
+      writeFileSync(
+        join(fixture.agentDir, "settings.json"),
+        JSON.stringify({ sessionDir: globalRoot }),
+      );
+      const projectId = randomUUID();
+      const projectFile = fixture.writeSession(fixture.cwd, projectId, [fixture.header(projectId)], {
+        file: join(projectRoot, `${projectId}.jsonl`),
+      });
+      const globalId = randomUUID();
+      fixture.writeSession(fixture.cwd, globalId, [fixture.header(globalId)], {
+        file: join(globalRoot, `${globalId}.jsonl`),
+      });
+      const result = fixture.history(fixture.cwd);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [
+        fixture.expected(projectFile, projectId, fixture.cwd, null),
+      ]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("searches the global settings sessionDir when the project has none", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const globalRoot = join(fixture.directory, "global-sessions");
+      writeFileSync(
+        join(fixture.agentDir, "settings.json"),
+        JSON.stringify({ sessionDir: globalRoot }),
+      );
+      const id = randomUUID();
+      const file = fixture.writeSession(fixture.cwd, id, [fixture.header(id)], {
+        file: join(globalRoot, `${id}.jsonl`),
+      });
+      const result = fixture.history(fixture.cwd);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [fixture.expected(file, id, fixture.cwd, null)]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("treats an empty session-dir environment variable as unset", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      fixture.env.PI_CODING_AGENT_SESSION_DIR = "";
+      const id = randomUUID();
+      const file = fixture.writeSession(fixture.cwd, id, [fixture.header(id)]);
+      const result = fixture.history(fixture.cwd);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [fixture.expected(file, id, fixture.cwd, null)]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  for (const [label, settings] of [
+    ["broken JSON", "{broken"],
+    ["a non-string sessionDir", JSON.stringify({ sessionDir: 42 })],
+  ] as const) {
+    it(`fails the command when settings contain ${label}`, () => {
+      const fixture = new HistoryCacheFixture();
+      try {
+        writeFileSync(join(fixture.agentDir, "settings.json"), settings);
+        const result = fixture.history(fixture.cwd);
+        assert.equal(result.status, 1);
+        assert.ok(result.stderr.length > 0);
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
 
   it("keeps custom new-session environment and directory recording", () => {
     const fixture = new HistoryCacheFixture();

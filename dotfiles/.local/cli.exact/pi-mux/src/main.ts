@@ -202,8 +202,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       }
       prepareDirectory(config.directory);
       if (operation.kind === "new") {
-        const configured = await configuredSessionRoots(config);
-        if (configured.preferred) rememberSessionRoot(config, configured.preferred);
+        const preferred = await configuredSessionRoot(config);
+        if (preferred) rememberSessionRoot(config, preferred);
       }
       let temporaryTarget: string | undefined;
       if (operation.kind === "open" && operation.temporary) {
@@ -1245,16 +1245,16 @@ async function historySessions(
   const registered = Object.keys(readMembershipStore(config)["active-workspaces"]);
   const cwds = cwdFilter === undefined ? registered : registered.filter((cwd) => cwd === cwdFilter);
   if (cwds.length === 0) return [];
+  const targetCwds = new Set(cwds);
   const groups = [
     ...new Set(cwds.map((cwd) => join(config.agentDir, "sessions", sessionGroupName(cwd)))),
   ];
-  const directories = [
-    ...groups.map((directory) => ({ directory, archived: false })),
-    ...groups.map((group) => ({ directory: join(group, "archive"), archived: true })),
-  ];
+  const { customRoot, layers } = await savedSessionLayers(config, groups);
   const listed = await Promise.all(
-    directories.map(async ({ directory, archived }) =>
-      (await sessionFiles(directory)).map((file) => ({ file, archived })),
+    layers.flatMap(({ directories, archived }) =>
+      directories.map(async (directory) =>
+        (await sessionFiles(directory)).map((file) => ({ file, archived })),
+      ),
     ),
   );
   const history: HistoryEntry[] = [];
@@ -1277,6 +1277,7 @@ async function historySessions(
       btime === undefined
     )
       continue;
+    if (customRoot && !targetCwds.has(header.cwd)) continue;
     if (archived && normalIds.has(header.id)) continue;
     if (!archived) normalIds.add(header.id);
     const stat = statSync(file);
@@ -1708,7 +1709,7 @@ function sessionName(id: string): string {
   return `pi-${createHash("sha256").update(id).digest("hex")}`;
 }
 
-async function configuredSessionRoots(config: TmuxConfig) {
+async function configuredSessionRoot(config: TmuxConfig): Promise<string | undefined> {
   const settingPaths = [
     join(config.agentDir, "settings.json"),
     join(process.cwd(), ".pi", "settings.json"),
@@ -1726,8 +1727,7 @@ async function configuredSessionRoots(config: TmuxConfig) {
     }),
   );
   const override = config.env.PI_CODING_AGENT_SESSION_DIR;
-  const preferred = override ? expandPath(override) : settings[1] || settings[0];
-  return { preferred };
+  return override ? expandPath(override) : settings[1] || settings[0];
 }
 
 function registryDirectory(config: TmuxConfig): string {
@@ -1744,18 +1744,40 @@ function rememberSessionRoot(config: Config, root: string): void {
   renameSync(temporary, join(directory, `${key}.json`));
 }
 
+type SessionDirectoryLayer = { directories: string[]; archived: boolean };
+type SavedSessionLayers = { customRoot: string | undefined; layers: SessionDirectoryLayer[] };
+
+async function savedSessionLayers(
+  config: TmuxConfig,
+  groups: string[],
+): Promise<SavedSessionLayers> {
+  const customRoot = await configuredSessionRoot(config);
+  if (customRoot) return { customRoot, layers: [{ directories: [customRoot], archived: false }] };
+  return {
+    customRoot: undefined,
+    layers: [
+      { directories: groups, archived: false },
+      { directories: groups.map((group) => join(group, "archive")), archived: true },
+    ],
+  };
+}
+
+async function cwdGroupDirectories(config: TmuxConfig): Promise<string[]> {
+  const root = join(config.agentDir, "sessions");
+  return (await sessionDirectoryEntries(root))
+    .filter(
+      (entry) => entry.isDirectory() && entry.name.startsWith("--") && entry.name.endsWith("--"),
+    )
+    .map((entry) => join(root, entry.name));
+}
+
 async function findSaved(
   config: Config,
   id: string,
   purpose: "open" | "restore" = "open",
 ): Promise<Session | undefined> {
-  const root = join(config.agentDir, "sessions");
-  const groups = (await sessionDirectoryEntries(root))
-    .filter(
-      (entry) => entry.isDirectory() && entry.name.startsWith("--") && entry.name.endsWith("--"),
-    )
-    .map((entry) => join(root, entry.name));
-  for (const directories of [groups, groups.map((group) => join(group, "archive"))]) {
+  const { layers } = await savedSessionLayers(config, await cwdGroupDirectories(config));
+  for (const { directories } of layers) {
     const files = [
       ...new Set(
         (await Promise.all(directories.map(sessionFiles))).flat().map((file) => realpathSync(file)),
