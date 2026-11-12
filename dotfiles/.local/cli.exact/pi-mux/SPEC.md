@@ -17,6 +17,9 @@
 | `pi-mux close <session-id>` | 完全一致する会話IDのpiを非対話で終了し、その会話を復元対象から除く。保存会話・workspace登録・session所属を保持する |
 | `pi-mux close --if-temporary <session-id>` | 一時再開中のpiだけを `close` と同じ手順で終了し、復元対象から除く。通常状態のpiと稼働対象がないIDは、変更せず成功する |
 | `pi-mux list` | 登録済みworkspaceを、空workspaceも含めたJSON配列で返す。専用tmuxの稼働piがあるworkspaceを自動登録する |
+| `pi-mux switch <session-id> [--client-pid <pid>]` | 接続クライアントが表示するtmuxセッションを、会話IDのpi実体のtmuxセッションへ切り替える |
+| `pi-mux current [--client-pid <pid>]` | 接続クライアントが表示中のpi実体のmetadataをJSONで返す |
+| `pi-mux history [--cwd <absolute-cwd>]` | 登録済みworkspaceの保存会話をJSON配列で列挙する |
 | `pi-mux workspace register <cwd>` | piを起動せずworkspaceを登録する |
 | `pi-mux workspace unregister <cwd>` | 対象workspaceの稼働piを終了し、登録と復元対象を除く。保存会話ファイルは保持する |
 | `pi-mux snapshot [server-generation]` | 稼働中の専用serverから通常の管理会話を採取して保存する。serverを起動せず、指定世代と異なるserverの記録は変更しない |
@@ -198,9 +201,11 @@ pane-local user option `@pi_session_state` に、次のJSON文字列を公開す
 
 ### list
 
-`list` は共有storeの登録済みcwdと専用tmuxの稼働piを統合し、stdoutへ `[{"cwd":"/path/to/workspace","sessions":[{"id":"session-id","file":"/path/to/session.jsonl","state":null,"title":null}]}]` 形式のJSON配列と末尾改行を返す。workspaceの `cwd` は絶対パス、`sessions` は現在の稼働piだけの配列であり、稼働piがなければ空配列になる。共有storeの保存所属や復元候補を稼働piとして代用しない。空新規は会話ファイルが未作成でも含める。PID・tmux targetは内部検証に使う。
+`list` は共有storeの登録済みcwdと専用tmuxの稼働piを統合し、stdoutへ `[{"cwd":"/path/to/workspace","sessions":[{"id":"session-id","file":"/path/to/session.jsonl","state":null,"title":null}],"empty":[{"id":"empty-session-id","file":"/path/to/session.jsonl"}]}]` 形式のJSON配列と末尾改行を返す。workspaceの `cwd` は絶対パス、`sessions` は会話ファイルが存在する稼働piだけの配列であり、該当がなければ空配列になる。共有storeの保存所属や復元候補を稼働piとして代用しない。PID・tmux targetは内部検証に使う。
 
 各sessionは次の4項目を持ち、一時再開中だけ `temporary: true` を追加する。通常状態では `temporary` 属性を省略する。一時再開中も `sessions` に掲載し、`id`・`file`・`state`・`title` の意味は維持する。
+
+空新規（会話ファイルが未作成の稼働pi）は `sessions` に入れず、workspaceオブジェクトの `empty` 配列に置く。存在判定はmetadataの `file` パスに対する存在チェックによる。`empty` の各要素は `id` と `file` の2項目を持ち、`state`・`title` は持たない。`temporary` の付与は `sessions` と同じで、一時再開中だけ `temporary: true` を追加する。`empty` も該当がなければ空配列になる。
 
 | 項目 | 型 | 値 |
 | --- | --- | --- |
@@ -224,10 +229,55 @@ metadataは会話ID・絶対パスのcwdとfileを検証する。paneを直接�
 
 | 状態 | 結果 |
 | --- | --- |
-| 専用serverが未起動、または稼働piがない | 登録済みworkspaceを空の `sessions` とともに返す。登録もなければ終了コード0で `[]` を返す |
+| 専用serverが未起動、または稼働piがない | 登録済みworkspaceを空の `sessions`・`empty` とともに返す。登録もなければ終了コード0で `[]` を返す |
 | tmuxからの取得に失敗 | 理由をstderrへ表示し、非0で終了する |
 
 `list` は未登録の稼働cwdがある場合だけworkspace登録を書き込む。それ以外はディレクトリ作成・JSON書込みを行わない。server起動・復元は行わず、復元記録は参照しない。
+
+### switch
+
+`switch <session-id> [--client-pid <pid>]` は、専用tmuxに接続中のクライアントが表示するtmuxセッションを、その会話IDのpi実体が属するtmuxセッションへ切り替える。会話IDは `open` と同じ形式の完全一致で指定する。serverの起動・復元、piの起動、workspace登録は行わない。
+
+切替先は、全生存paneのmetadataから会話IDと一致するpi実体を探し、そのtmuxセッション名で解決する。同じ会話IDの実体が複数ある、または未知のIDのときは切替せずエラーにする。
+
+クライアントの特定は次のとおり行う。
+
+| 条件 | 結果 |
+| --- | --- |
+| `--client-pid <pid>` 指定時 | 接続中クライアントのうち、クライアントプロセスのPIDが `pid` と一致するか、`/proc/<クライアントPID>/status` のPPidが `pid` と一致するものを1つ使う。該当がない・複数あるときは切替せずエラーにする |
+| `--client-pid` 省略時 | 接続中クライアントがちょうど1つのときそれを使う。0個または2個以上のときは切替せずエラーにする |
+
+切替は `switch-client -c <クライアント> -t =<tmuxセッション名>` としてセッション名の厳密一致で行う。成功時はstdout・stderrへ出力せず終了コード0で終了する。失敗時は理由をstderrへ表示して非0で終了する。クライアントがattachし切っていない場合のリトライは呼び出し側の責務である。
+
+### current
+
+`current [--client-pid <pid>]` は、クライアントが表示中のtmuxセッションに属するpi実体のmetadataを読み、stdoutへ `{"id":"session-id","cwd":"/path/to/workspace","file":"/path/to/session.jsonl","target":"tmux-session-name"}` 形式のJSONオブジェクト1件と末尾改行を返す。`target` はtmuxセッション名、`id`・`cwd`・`file` はmetadataの値とする。クライアントの特定は `switch` と同じ `--client-pid` の照合と省略時の唯一クライアント判定を使う。
+
+| 状態 | 結果 |
+| --- | --- |
+| 表示中のtmuxセッションにmetadataを持つpaneが1つある | metadataの `id`・`cwd`・`file` とセッション名をJSONで返し、終了コード0で終了する |
+| クライアントがpi以外のpaneを表示している、または該当するpaneが特定できない | 何も出力せず理由をstderrへ表示し、非0で終了する |
+
+serverの起動・復元、piの起動・接続、workspace登録は行わない。
+
+### history
+
+`history [--cwd <absolute-cwd>]` は、共有store `active-workspaces` に登録されたcwdごとの保存会話を列挙し、stdoutへ `[{"id":"session-id","cwd":"/path/to/workspace","file":"/path/to/session.jsonl","title":"name","mtime":1735689600000,"size":1024}]` 形式のJSON配列と末尾改行を返す。`--cwd` に絶対パスを指定したときはそのcwdのみを対象にし、登録されていないcwdなら `[]` を返す。
+
+保存会話のディレクトリは、pi本体が保存先グループ名に使うcwdの変換（絶対パスから先頭のセパレータを除き、`/`・`\`・`:` を `-` へ置き換え、前後を `--` で挟む）と、CLIのsession-dirs記録から解決する。対象は設定済み保存先の各ルート直下のグループディレクトリと、session-dirs記録のうちグループ名が一致するディレクトリである。列挙は各グループディレクトリ直下の `*.jsonl` のみとし、`subagents/` などサブディレクトリは対象外にする。
+
+各要素は次の6項目を持つ。
+
+| 項目 | 型 | 値 |
+| --- | --- | --- |
+| `id` | `string` | 会話ファイル先頭行（ヘッダー）の会話ID |
+| `cwd` | `string` | ヘッダーのcwd。グループディレクトリ名より優先する |
+| `file` | `string` | 会話ファイルの絶対パス |
+| `title` | `string \| null` | `list` と同じ規約で解決した保存済みセッション名。`session_info` エントリがなければ `null` |
+| `mtime` | `number` | 会話ファイルの更新時刻（エポックms） |
+| `size` | `number` | 会話ファイルのサイズ（バイト） |
+
+並びは更新時刻の降順とする。ヘッダーが読めない・不正なファイルは結果から除く。archived（負論理）の判定は行わず、対象cwdの保存会話全件を返す。共有storeと会話ファイルへの書込み、serverの起動、piの起動は行わない。
 
 ### snapshotと復元
 

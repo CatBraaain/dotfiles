@@ -16,7 +16,7 @@ import {
 import { readdir, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 type Operation =
@@ -26,6 +26,9 @@ type Operation =
   | { kind: "state"; id: string; source: StateSource; notification: StateNotification }
   | { kind: "close"; id: string; ifTemporary: boolean }
   | { kind: "list" }
+  | { kind: "switch"; id: string; clientPid: number | undefined }
+  | { kind: "current"; clientPid: number | undefined }
+  | { kind: "history"; cwd: string | undefined }
   | { kind: "workspace"; action: "register" | "unregister"; cwd: string }
   | { kind: "snapshot"; generation?: string }
   | { kind: "restore" };
@@ -66,7 +69,18 @@ type ListedSession = {
   title: string | null;
   temporary?: true;
 };
-type ListedWorkspace = { cwd: string; sessions: ListedSession[] };
+type EmptySession = { id: string; file: string; temporary?: true };
+type ListedWorkspace = { cwd: string; sessions: ListedSession[]; empty: EmptySession[] };
+type TmuxClient = { name: string; pid: number; session: string };
+type CurrentSession = { id: string; cwd: string; file: string; target: string };
+type HistoryEntry = {
+  id: string;
+  cwd: string;
+  file: string;
+  title: string | null;
+  mtime: number;
+  size: number;
+};
 type Config = ReturnType<typeof configuration>;
 type TmuxConfig = ReturnType<typeof tmuxConfiguration>;
 
@@ -115,6 +129,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux state <session-id> --clear --source <JSON>
   pi-mux close <session-id>
   pi-mux list
+  pi-mux switch <session-id> [--client-pid <pid>]
+  pi-mux current [--client-pid <pid>]
+  pi-mux history [--cwd <absolute-cwd>]
   pi-mux workspace register <cwd>
   pi-mux workspace unregister <cwd>
   pi-mux snapshot [server-generation]
@@ -140,6 +157,18 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     if (operation.kind === "list") {
       console.log(JSON.stringify(await listWorkspaces(tmuxConfiguration())));
+      return 0;
+    }
+    if (operation.kind === "switch") {
+      await switchSession(tmuxConfiguration(), operation.id, operation.clientPid);
+      return 0;
+    }
+    if (operation.kind === "current") {
+      console.log(JSON.stringify(await currentSession(tmuxConfiguration(), operation.clientPid)));
+      return 0;
+    }
+    if (operation.kind === "history") {
+      console.log(JSON.stringify(await historySessions(tmuxConfiguration(), operation.cwd)));
       return 0;
     }
     if (operation.kind === "close") {
@@ -254,11 +283,35 @@ export function parseOperation(argv: string[]): Operation {
   )
     return { kind: "workspace", action: argv[1], cwd: resolve(argv[2]) };
   if (argv.length === 1 && argv[0] === "list") return { kind: "list" };
+  if (argv[0] === "switch") {
+    const id = argv[1];
+    const pid = argv[2] === "--client-pid" ? argv[3] : undefined;
+    if (
+      id &&
+      SESSION_ID_PATTERN.test(id) &&
+      ((argv.length === 2 && pid === undefined) ||
+        (argv.length === 4 && pid !== undefined && /^[1-9]\d*$/.test(pid)))
+    )
+      return { kind: "switch", id, clientPid: pid === undefined ? undefined : Number(pid) };
+  }
+  if (argv[0] === "current") {
+    const pid = argv[1] === "--client-pid" ? argv[2] : undefined;
+    if (
+      argv.length === 1 ||
+      (argv.length === 3 && pid !== undefined && /^[1-9]\d*$/.test(pid))
+    )
+      return { kind: "current", clientPid: pid === undefined ? undefined : Number(pid) };
+  }
+  if (argv[0] === "history") {
+    const cwd = argv[1] === "--cwd" ? argv[2] : undefined;
+    if (argv.length === 1 || (argv.length === 3 && cwd !== undefined && isAbsolute(cwd)))
+      return { kind: "history", cwd };
+  }
   if (argv.length === 1 && argv[0] === "restore") return { kind: "restore" };
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | close <session-id> | list | workspace register|unregister <cwd> | snapshot [server-generation] | restore]",
+    "usage: pi-mux [new [--detached] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | close <session-id> | list | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] | history [--cwd <absolute-cwd>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore]",
   );
 }
 
@@ -1050,8 +1103,10 @@ async function collectWorkspaceList(
   panes: Pane[],
   membership: "read" | "import" = "read",
 ): Promise<ListedWorkspace[]> {
+  const saved = panes.filter((pane) => existsSync(pane.file));
+  const unsaved = panes.filter((pane) => !existsSync(pane.file));
   const sessions = await Promise.all(
-    panes.map(async ({ id, cwd, file, pane, session }) => {
+    saved.map(async ({ id, cwd, file, pane, session }) => {
       const metadata = await tmux(config, [
         "show-options",
         "-pqv",
@@ -1067,7 +1122,20 @@ async function collectWorkspaceList(
           file,
           ...parseSessionMetadata(metadata.stdout, id, file),
           ...(temporary ? { temporary: true as const } : {}),
-        },
+        } satisfies ListedSession,
+      };
+    }),
+  );
+  const empty = await Promise.all(
+    unsaved.map(async ({ id, cwd, file, session }) => {
+      const temporary = await isTemporarySession(config, session, id, true);
+      return {
+        cwd,
+        session: {
+          id,
+          file,
+          ...(temporary ? { temporary: true as const } : {}),
+        } satisfies EmptySession,
       };
     }),
   );
@@ -1079,11 +1147,150 @@ async function collectWorkspaceList(
   const workspaces = new Map<string, ListedWorkspace>(
     Object.keys(readMembershipStore(config)["active-workspaces"]).map((cwd) => [
       cwd,
-      { cwd, sessions: [] },
+      { cwd, sessions: [], empty: [] },
     ]),
   );
   for (const { cwd, session } of sessions) workspaces.get(cwd)?.sessions.push(session);
+  for (const { cwd, session } of empty) workspaces.get(cwd)?.empty.push(session);
   return [...workspaces.values()];
+}
+
+async function tmuxClients(config: TmuxConfig): Promise<TmuxClient[]> {
+  const result = await tmux(
+    config,
+    ["list-clients", "-F", "#{client_name}\t#{client_pid}\t#{client_session}"],
+    true,
+  );
+  if (result.exitCode !== 0) {
+    if (serverIsAbsent(config, result.stderr) || result.stderr.includes("no clients")) return [];
+    throw new Error(`Cannot list tmux clients: ${result.stderr.trim()}`);
+  }
+  return result.stdout
+    .trimEnd()
+    .split("\n")
+    .filter(Boolean)
+    .flatMap((line) => {
+      const [name, pid, session] = line.split("\t");
+      if (!name || !pid || !/^[1-9]\d*$/.test(pid) || !session)
+        throw new Error(`Invalid tmux client output: ${line}`);
+      return [{ name, pid: Number(pid), session }];
+    });
+}
+
+function processParentPid(pid: number): number | undefined {
+  try {
+    const status = readFileSync(`/proc/${pid}/status`, "utf8");
+    const ppid = /^PPid:\s+(\d+)$/m.exec(status);
+    return ppid ? Number(ppid[1]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveClient(
+  config: TmuxConfig,
+  clientPid: number | undefined,
+): Promise<TmuxClient> {
+  const clients = await tmuxClients(config);
+  const matching =
+    clientPid === undefined
+      ? clients
+      : clients.filter(
+          (client) => client.pid === clientPid || processParentPid(client.pid) === clientPid,
+        );
+  if (matching.length !== 1)
+    throw new Error(
+      clientPid === undefined
+        ? `Expected one attached tmux client, found ${matching.length}`
+        : `Cannot identify the tmux client for process ${clientPid}`,
+    );
+  return matching[0]!;
+}
+
+async function switchSession(
+  config: TmuxConfig,
+  id: string,
+  clientPid: number | undefined,
+): Promise<void> {
+  const targets = (await livePanes(config, "list")).filter((pane) => pane.id === id);
+  if (targets.length === 0) throw new Error(`Session not found (use the complete ID): ${id}`);
+  if (targets.length > 1)
+    throw new Error(`Multiple pi processes are running for session ${id}`);
+  const client = await resolveClient(config, clientPid);
+  await tmux(config, ["switch-client", "-c", client.name, "-t", `=${targets[0]!.name}`]);
+}
+
+async function currentSession(
+  config: TmuxConfig,
+  clientPid: number | undefined,
+): Promise<CurrentSession> {
+  const client = await resolveClient(config, clientPid);
+  const panes = (await livePanes(config, "list")).filter((pane) => pane.name === client.session);
+  if (panes.length !== 1)
+    throw new Error(
+      panes.length === 0
+        ? `The tmux client ${client.name} does not show a pi session: ${client.session}`
+        : `Multiple pi panes are open in tmux session ${client.session}`,
+    );
+  const pane = panes[0]!;
+  return { id: pane.id, cwd: pane.cwd, file: pane.file, target: pane.name };
+}
+
+function sessionGroupName(cwd: string): string {
+  return `--${resolve(cwd).replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+
+async function historySessions(
+  config: TmuxConfig,
+  cwdFilter: string | undefined,
+): Promise<HistoryEntry[]> {
+  const registered = Object.keys(readMembershipStore(config)["active-workspaces"]);
+  const cwds =
+    cwdFilter === undefined ? registered : registered.filter((cwd) => cwd === cwdFilter);
+  if (cwds.length === 0) return [];
+  const configured = await configuredSessionRoots(config);
+  const remembered = await rememberedSessionRoots(config);
+  const directories = new Set<string>();
+  for (const cwd of cwds) {
+    const group = sessionGroupName(cwd);
+    for (const root of configured.roots) directories.add(join(root, group));
+    for (const root of remembered) if (basename(root) === group) directories.add(root);
+  }
+  const listed = await Promise.all(
+    [...directories].map(async (directory) => {
+      const entries = await readdir(directory, { withFileTypes: true }).catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return [];
+          throw error;
+        },
+      );
+      return entries.flatMap((entry) =>
+        entry.isFile() && entry.name.endsWith(".jsonl") ? [join(directory, entry.name)] : [],
+      );
+    }),
+  );
+  const history: HistoryEntry[] = [];
+  for (const file of new Set(listed.flat())) {
+    const header = readHeader(file);
+    if (
+      header?.type !== "session" ||
+      typeof header.id !== "string" ||
+      !SESSION_ID_PATTERN.test(header.id) ||
+      typeof header.cwd !== "string" ||
+      !isAbsolute(header.cwd)
+    )
+      continue;
+    const stat = statSync(file);
+    history.push({
+      id: header.id,
+      cwd: header.cwd,
+      file,
+      title: savedSessionName(file),
+      mtime: Math.round(stat.mtimeMs),
+      size: stat.size,
+    });
+  }
+  return history.sort((a, b) => b.mtime - a.mtime || a.file.localeCompare(b.file));
 }
 
 function readMembershipStore(config: TmuxConfig): MembershipStore {
@@ -1516,7 +1723,7 @@ function sessionName(id: string): string {
   return `pi-${createHash("sha256").update(id).digest("hex")}`;
 }
 
-async function configuredSessionRoots(config: Config) {
+async function configuredSessionRoots(config: TmuxConfig) {
   const settingPaths = [
     join(config.agentDir, "settings.json"),
     join(process.cwd(), ".pi", "settings.json"),
@@ -1545,7 +1752,7 @@ async function configuredSessionRoots(config: Config) {
   };
 }
 
-function registryDirectory(config: Config): string {
+function registryDirectory(config: TmuxConfig): string {
   return join(config.agentDir, "pi-tmux", "session-dirs");
 }
 
@@ -1559,7 +1766,7 @@ function rememberSessionRoot(config: Config, root: string): void {
   renameSync(temporary, join(directory, `${key}.json`));
 }
 
-async function rememberedSessionRoots(config: Config): Promise<string[]> {
+async function rememberedSessionRoots(config: TmuxConfig): Promise<string[]> {
   const directory = registryDirectory(config);
   if (!existsSync(directory)) return [];
   prepareDirectory(directory);

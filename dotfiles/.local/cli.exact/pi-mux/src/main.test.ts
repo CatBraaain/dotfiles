@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:net";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 const source = join(import.meta.dir, "main.ts");
 const realTmux = Bun.which("tmux");
@@ -482,6 +482,554 @@ exec ${JSON.stringify(realTmux)} "$@"
       assert.equal(publicState(fixture), before);
     } finally {
       await fixture.cleanup();
+    }
+  });
+});
+
+const switchTestRoot = "/tmp/work/dotfiles/pi-mux-switch-current";
+const historyTestRoot = "/tmp/work/dotfiles/pi-mux-history";
+
+type ClientSummary = { name: string; pid: number; session: string };
+
+async function waitUntil(condition: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for the fixture condition");
+    await Bun.sleep(10);
+  }
+}
+
+class SessionFixture {
+  readonly directory: string;
+  readonly socket: string;
+  readonly cwd: string;
+  readonly agentDir: string;
+  readonly membership: string;
+  readonly env: Record<string, string>;
+  private readonly attached: Bun.Subprocess[] = [];
+  private readonly panePids: number[] = [];
+
+  constructor() {
+    assert.ok(realTmux && Bun.which("script"), "tmux and script must be installed");
+    mkdirSync(switchTestRoot, { recursive: true });
+    this.directory = mkdtempSync(join(switchTestRoot, "test-"));
+    this.socket = join(this.directory, "runtime/pi-tmux/server.sock");
+    this.cwd = join(this.directory, "workspace");
+    this.agentDir = join(this.directory, "agent");
+    this.membership = join(this.agentDir, "session-state.json");
+    this.env = {
+      PATH: `${join(this.directory, "bin")}:${process.env.PATH ?? ""}`,
+      HOME: join(this.directory, "home"),
+      XDG_RUNTIME_DIR: join(this.directory, "runtime"),
+      PI_CODING_AGENT_DIR: this.agentDir,
+      TERM: "xterm-256color",
+      LANG: "C.UTF-8",
+    };
+    for (const directory of [
+      "bin",
+      "home/.config/tmux",
+      "runtime/pi-tmux",
+      "agent/sessions",
+      "agent/pi-tmux/session-dirs",
+      "agent/extensions/pi-mux-bridge",
+      "workspace",
+    ])
+      mkdirSync(join(this.directory, directory), { recursive: true, mode: 0o700 });
+    writeFileSync(join(this.directory, "agent/extensions/pi-mux-bridge/index.ts"), "");
+    writeFileSync(
+      join(this.directory, "bin/tmux"),
+      `#!/bin/sh
+if [ "$1" != -S ] || [ "$2" != ${JSON.stringify(this.socket)} ]; then exit 64; fi
+exec ${JSON.stringify(realTmux)} "$@"
+`,
+      { mode: 0o700 },
+    );
+    writeFileSync(
+      join(this.directory, "home/.config/tmux/pi.conf"),
+      "set -g exit-empty off\nset -g remain-on-exit off\n",
+    );
+    writeFileSync(
+      this.membership,
+      JSON.stringify({ "active-workspaces": { [this.cwd]: { "active-sessions": {} } } }),
+    );
+  }
+
+  piSession(name: string, entry: { id: string; file: string; temporary?: boolean }): void {
+    const [session, pane, pid] = this.startPane(name);
+    this.tmux(["set-environment", "-t", session, "PI_TMUX_SESSION_ID", entry.id]);
+    if (entry.temporary)
+      this.tmux(["set-environment", "-t", session, "PI_TMUX_TEMPORARY", entry.id]);
+    this.tmux([
+      "set-option",
+      "-p",
+      "-t",
+      pane,
+      "@pi-tmux-session",
+      Buffer.from(
+        JSON.stringify({
+          id: entry.id,
+          cwd: this.cwd,
+          file: entry.file,
+          pid: Number(pid),
+          startup: "ready",
+        }),
+      ).toString("base64"),
+    ]);
+  }
+
+  plainSession(name: string): void {
+    this.startPane(name);
+  }
+
+  private startPane(name: string): [string, string, string] {
+    const [session, pane, pid] = this.tmux([
+      "new-session",
+      "-d",
+      "-s",
+      name,
+      "-c",
+      this.cwd,
+      "-P",
+      "-F",
+      "#{session_id}\t#{pane_id}\t#{pane_pid}",
+      "/bin/sleep",
+      "300",
+    ]).split("\t");
+    assert.ok(session && pane && pid, `cannot start pane for ${name}`);
+    this.panePids.push(Number(pid));
+    return [session, pane, pid];
+  }
+
+  clients(): ClientSummary[] {
+    const result = spawnSync(
+      realTmux!,
+      [
+        "-S",
+        this.socket,
+        "list-clients",
+        "-F",
+        "#{client_name}\t#{client_pid}\t#{client_session}",
+      ],
+      { env: this.env, encoding: "utf8", timeout: 10_000 },
+    );
+    return result.stdout
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [name, pid, session] = line.split("\t");
+        return { name: name!, pid: Number(pid), session: session! };
+      });
+  }
+
+  async attach(session: string): Promise<void> {
+    const command = `tmux -S ${JSON.stringify(this.socket)} attach-session -t ${JSON.stringify(session)}`;
+    const child = Bun.spawn(["script", "-qfc", command, "/dev/null"], {
+      env: this.env,
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    this.attached.push(child);
+    await waitUntil(() => this.clients().some((client) => client.session === session));
+  }
+
+  run(args: string[]) {
+    return spawnSync(process.execPath, ["run", source, ...args], {
+      cwd: this.cwd,
+      env: this.env,
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+  }
+
+  tmux(args: string[]): string {
+    const result = spawnSync(
+      realTmux!,
+      ["-S", this.socket, "-f", join(this.directory, "home/.config/tmux/pi.conf"), ...args],
+      { env: this.env, encoding: "utf8", timeout: 10_000 },
+    );
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  }
+
+  async cleanup(): Promise<void> {
+    spawnSync(realTmux!, ["-S", this.socket, "kill-server"], {
+      env: this.env,
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    for (const child of this.attached) {
+      child.kill();
+      await Promise.race([child.exited, Bun.sleep(2_000)]);
+    }
+    const deadline = Date.now() + 2_000;
+    while (this.panePids.some((pid) => existsSync(`/proc/${pid}`)) && Date.now() < deadline)
+      await Bun.sleep(10);
+    assert.equal(this.panePids.some((pid) => existsSync(`/proc/${pid}`)), false);
+    rmSync(this.directory, { recursive: true, force: true });
+  }
+}
+
+function sessionGroupDirectory(agentDir: string, cwd: string): string {
+  return join(agentDir, "sessions", `--${cwd.replace(/^\//, "").replace(/[/\\:]/g, "-")}--`);
+}
+
+function conversationFile(
+  agentDir: string,
+  cwd: string,
+  id: string,
+  options: { title?: string; mtime?: Date },
+): string {
+  const file = join(sessionGroupDirectory(agentDir, cwd), `2026-01-01T00-00-00-000Z_${id}.jsonl`);
+  mkdirSync(dirname(file), { recursive: true });
+  const entries = [
+    { type: "session", version: 1, id, cwd, timestamp: "2026-01-01T00:00:00.000Z" },
+    ...(options.title === undefined
+      ? []
+      : [
+          {
+            type: "session_info",
+            id: "e1",
+            parentId: null,
+            timestamp: "2026-01-01T00:00:01.000Z",
+            name: options.title,
+          },
+        ]),
+  ];
+  writeFileSync(file, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+  if (options.mtime) utimesSync(file, options.mtime, options.mtime);
+  return file;
+}
+
+function historyEntry(file: string, id: string, cwd: string, title: string | null) {
+  const stat = statSync(file);
+  return {
+    id,
+    cwd,
+    file,
+    title,
+    mtime: Math.round(stat.mtimeMs),
+    size: stat.size,
+  };
+}
+
+describe("list workspace panes", () => {
+  it("separates panes with a saved conversation file from unsaved empty panes", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const savedId = randomUUID();
+      const savedFile = join(
+        fixture.directory,
+        "conversations",
+        `2026-01-01T00-00-00-000Z_${savedId}.jsonl`,
+      );
+      mkdirSync(dirname(savedFile), { recursive: true });
+      writeFileSync(
+        savedFile,
+        [
+          JSON.stringify({
+            type: "session",
+            version: 1,
+            id: savedId,
+            cwd: fixture.cwd,
+            timestamp: "2026-01-01T00:00:00.000Z",
+          }),
+          JSON.stringify({
+            type: "session_info",
+            id: "e1",
+            parentId: null,
+            timestamp: "2026-01-01T00:00:01.000Z",
+            name: "Saved title",
+          }),
+        ].join("\n") + "\n",
+      );
+      const emptyId = randomUUID();
+      const emptyFile = join(
+        fixture.directory,
+        "conversations",
+        `later_${emptyId}.jsonl`,
+      );
+      fixture.piSession("saved", { id: savedId, file: savedFile });
+      fixture.piSession("fresh", { id: emptyId, file: emptyFile, temporary: true });
+      const result = fixture.run(["list"]);
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [
+        {
+          cwd: fixture.cwd,
+          sessions: [{ id: savedId, file: savedFile, state: null, title: "Saved title" }],
+          empty: [{ id: emptyId, file: emptyFile, temporary: true }],
+        },
+      ]);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+});
+
+describe("switch", () => {
+  it("switches the only attached client to the session that owns the conversation", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      fixture.piSession("pi", { id, file: join(fixture.directory, "conversations", `${id}.jsonl`) });
+      fixture.plainSession("plain");
+      await fixture.attach("plain");
+      const result = fixture.run(["switch", id]);
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, "");
+      assert.deepEqual(
+        fixture.clients().map((client) => client.session),
+        ["pi"],
+      );
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("accepts the client pid and the parent pid of the client process", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      fixture.piSession("pi", { id, file: join(fixture.directory, "conversations", `${id}.jsonl`) });
+      await fixture.attach("pi");
+      const client = fixture.clients()[0]!;
+      const ppid = Number(
+        /^PPid:\s+(\d+)$/m.exec(readFileSync(`/proc/${client.pid}/status`, "utf8"))![1]!,
+      );
+      for (const pid of [client.pid, ppid]) {
+        const result = fixture.run(["switch", id, "--client-pid", String(pid)]);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout, "");
+      }
+      assert.equal(fixture.clients()[0]!.session, "pi");
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("fails when no client matches the pid or the conversation id is unknown", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      fixture.piSession("pi", { id, file: join(fixture.directory, "conversations", `${id}.jsonl`) });
+      await fixture.attach("pi");
+      const unknownPid = fixture.run(["switch", id, "--client-pid", "999999999"]);
+      assert.equal(unknownPid.status, 1);
+      assert.ok(unknownPid.stderr.includes("Cannot identify the tmux client"));
+      const unknownId = fixture.run(["switch", randomUUID()]);
+      assert.equal(unknownId.status, 1);
+      assert.ok(unknownId.stderr.includes("Session not found"));
+      assert.equal(fixture.clients()[0]!.session, "pi");
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("fails without --client-pid when zero or multiple clients are attached", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      fixture.piSession("pi", { id, file: join(fixture.directory, "conversations", `${id}.jsonl`) });
+      const noClient = fixture.run(["switch", id]);
+      assert.equal(noClient.status, 1);
+      assert.ok(noClient.stderr.includes("Expected one attached tmux client, found 0"));
+      await fixture.attach("pi");
+      await fixture.attach("pi");
+      const twoClients = fixture.run(["switch", id]);
+      assert.equal(twoClients.status, 1);
+      assert.ok(twoClients.stderr.includes("Expected one attached tmux client, found 2"));
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+});
+
+describe("current", () => {
+  it("prints the metadata of the session the client displays", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      const file = join(fixture.directory, "conversations", `${id}.jsonl`);
+      fixture.piSession("pi", { id, file });
+      await fixture.attach("pi");
+      const expected = { id, cwd: fixture.cwd, file, target: "pi" };
+      assert.deepEqual(JSON.parse(fixture.run(["current"]).stdout), expected);
+      const clientPid = fixture.clients()[0]!.pid;
+      assert.deepEqual(
+        JSON.parse(fixture.run(["current", "--client-pid", String(clientPid)]).stdout),
+        expected,
+      );
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("fails when the client shows a pane without pi metadata", async () => {
+    const fixture = new SessionFixture();
+    try {
+      fixture.plainSession("plain");
+      await fixture.attach("plain");
+      const result = fixture.run(["current"]);
+      assert.equal(result.status, 1);
+      assert.ok(result.stderr.includes("does not show a pi session"));
+      assert.equal(result.stdout, "");
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+});
+
+class HistoryFixture {
+  readonly directory: string;
+  readonly agentDir: string;
+  readonly cwd: string;
+  readonly otherCwd: string;
+  readonly env: Record<string, string>;
+  readonly membership: string;
+
+  constructor() {
+    mkdirSync(historyTestRoot, { recursive: true });
+    this.directory = mkdtempSync(join(historyTestRoot, "test-"));
+    this.agentDir = join(this.directory, "agent");
+    this.cwd = join(this.directory, "workspace");
+    this.otherCwd = join(this.directory, "other");
+    this.membership = join(this.agentDir, "session-state.json");
+    this.env = {
+      PATH: process.env.PATH ?? "",
+      HOME: join(this.directory, "home"),
+      XDG_RUNTIME_DIR: join(this.directory, "runtime"),
+      PI_CODING_AGENT_DIR: this.agentDir,
+      TERM: "xterm-256color",
+      LANG: "C.UTF-8",
+    };
+    mkdirSync(join(this.agentDir, "pi-tmux", "session-dirs"), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      this.membership,
+      JSON.stringify({
+        "active-workspaces": {
+          [this.cwd]: { "active-sessions": {} },
+          [this.otherCwd]: { "active-sessions": {} },
+        },
+      }),
+    );
+  }
+
+  subagentFile(cwd: string, id: string): string {
+    const file = join(sessionGroupDirectory(this.agentDir, cwd), "subagents", `${id}.jsonl`);
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(
+      file,
+      JSON.stringify({
+        type: "session",
+        version: 1,
+        id,
+        cwd,
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }) + "\n",
+    );
+    return file;
+  }
+
+  recordSessionRoot(root: string): void {
+    const key = createHash("sha256").update(root).digest("hex");
+    writeFileSync(
+      join(this.agentDir, "pi-tmux", "session-dirs", `${key}.json`),
+      JSON.stringify(root) + "\n",
+    );
+  }
+
+  run(args: string[]) {
+    return spawnSync(process.execPath, ["run", source, ...args], {
+      env: this.env,
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+  }
+
+  cleanup(): void {
+    rmSync(this.directory, { recursive: true, force: true });
+  }
+}
+
+describe("history", () => {
+  it("lists saved conversations of every registered workspace with titles", async () => {
+    const fixture = new HistoryFixture();
+    try {
+      const titledId = randomUUID();
+      const titledFile = conversationFile(fixture.agentDir, fixture.cwd, titledId, {
+        title: "Named session",
+        mtime: new Date("2026-01-02T00:00:00.000Z"),
+      });
+      const untitledId = randomUUID();
+      const untitledFile = conversationFile(fixture.agentDir, fixture.cwd, untitledId, {
+        mtime: new Date("2026-01-01T00:00:00.000Z"),
+      });
+      fixture.subagentFile(fixture.cwd, randomUUID());
+      const otherId = randomUUID();
+      const otherFile = conversationFile(fixture.agentDir, fixture.otherCwd, otherId, {
+        mtime: new Date("2026-01-03T00:00:00.000Z"),
+      });
+      const result = fixture.run(["history"]);
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [
+        historyEntry(otherFile, otherId, fixture.otherCwd, null),
+        historyEntry(titledFile, titledId, fixture.cwd, "Named session"),
+        historyEntry(untitledFile, untitledId, fixture.cwd, null),
+      ]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("restricts to the requested cwd and returns an empty array for unregistered cwds", async () => {
+    const fixture = new HistoryFixture();
+    try {
+      const id = randomUUID();
+      const file = conversationFile(fixture.agentDir, fixture.cwd, id, {});
+      conversationFile(fixture.agentDir, fixture.otherCwd, randomUUID(), {});
+      const restricted = fixture.run(["history", "--cwd", fixture.cwd]);
+      assert.equal(restricted.status, 0, restricted.stderr);
+      assert.deepEqual(JSON.parse(restricted.stdout), [historyEntry(file, id, fixture.cwd, null)]);
+      const unregistered = fixture.run(["history", "--cwd", join(fixture.directory, "away")]);
+      assert.equal(unregistered.status, 0, unregistered.stderr);
+      assert.deepEqual(JSON.parse(unregistered.stdout), []);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("also scans session directories recorded in session-dirs", async () => {
+    const fixture = new HistoryFixture();
+    try {
+      const id = randomUUID();
+      const root = join(
+        fixture.directory,
+        "alt-sessions",
+        basename(sessionGroupDirectory(fixture.agentDir, fixture.cwd)),
+      );
+      const file = join(root, `2026-01-01T00-00-00-000Z_${id}.jsonl`);
+      mkdirSync(root, { recursive: true });
+      writeFileSync(
+        file,
+        JSON.stringify({
+          type: "session",
+          version: 1,
+          id,
+          cwd: fixture.cwd,
+          timestamp: "2026-01-01T00:00:00.000Z",
+        }) + "\n",
+      );
+      fixture.recordSessionRoot(root);
+      const result = fixture.run(["history", "--cwd", fixture.cwd]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [historyEntry(file, id, fixture.cwd, null)]);
+    } finally {
+      fixture.cleanup();
     }
   });
 });
