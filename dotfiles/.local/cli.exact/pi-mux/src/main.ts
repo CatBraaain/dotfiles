@@ -55,6 +55,7 @@ type Pane = Session & {
   pane: string;
   session: string;
   name: string;
+  active: boolean;
   pid: number;
   panePid: number;
   startup?: "accepted" | "ready";
@@ -115,7 +116,7 @@ const PARENT_ENV_KEYS = new Set([
   "PI_TMUX_STARTUP_MODE",
 ]);
 const PANE_FORMAT =
-  "#{pane_id}\t#{session_id}\t#{session_name}\t#{@pi-tmux-session}\t#{pane_pid}\t#{pane_dead}";
+  "#{pane_id}\t#{session_id}\t#{session_name}\t#{@pi-tmux-session}\t#{pane_pid}\t#{pane_dead}\t#{window_active}\t#{pane_active}";
 
 export async function main(argv = process.argv.slice(2)): Promise<number> {
   try {
@@ -1221,14 +1222,11 @@ async function currentSession(
   clientPid: number | undefined,
 ): Promise<CurrentSession> {
   const client = await resolveClient(config, clientPid);
-  const panes = (await livePanes(config, "list")).filter((pane) => pane.name === client.session);
-  if (panes.length !== 1)
-    throw new Error(
-      panes.length === 0
-        ? `The tmux client ${client.name} does not show a pi session: ${client.session}`
-        : `Multiple pi panes are open in tmux session ${client.session}`,
-    );
-  const pane = panes[0]!;
+  const pane = (await livePanes(config, "list")).find(
+    (pane) => pane.active && pane.name === client.session,
+  );
+  if (!pane)
+    throw new Error(`The tmux client ${client.name} does not show a pi pane: ${client.session}`);
   return { id: pane.id, cwd: pane.cwd, file: pane.file, target: pane.name };
 }
 
@@ -1617,7 +1615,8 @@ async function livePanes(
     .trimEnd()
     .split("\n")
     .flatMap((line) => {
-      const [pane, session, name, encoded, pid, dead] = line.split("\t");
+      const [pane, session, name, encoded, pid, dead, windowActive, paneActive] =
+        line.split("\t");
       if (!pane || !session || !name || !encoded || dead !== "0") return [];
       const metadata = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
       if (
@@ -1645,6 +1644,7 @@ async function livePanes(
           pane,
           session,
           name,
+          active: windowActive === "1" && paneActive === "1",
           pid: metadata.processPid ?? Number(pid),
           panePid: Number(pid),
           id: metadata.id,

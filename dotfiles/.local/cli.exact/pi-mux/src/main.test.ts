@@ -569,6 +569,54 @@ exec ${JSON.stringify(realTmux)} "$@"
     this.tmux(["set-environment", "-t", session, "PI_TMUX_SESSION_ID", entry.id]);
     if (entry.temporary)
       this.tmux(["set-environment", "-t", session, "PI_TMUX_TEMPORARY", entry.id]);
+    this.publishPiMetadata(pane, pid, entry);
+  }
+
+  plainSession(name: string): void {
+    this.startPane(name);
+  }
+
+  piWindow(session: string, entry: { id: string; file: string }): void {
+    const [pane, pid] = this.tmux([
+      "new-window",
+      "-d",
+      "-t",
+      session,
+      "-c",
+      this.cwd,
+      "-P",
+      "-F",
+      "#{pane_id}\t#{pane_pid}",
+      "/bin/sleep",
+      "300",
+    ]).split("\t");
+    assert.ok(pane && pid, `cannot start a pi window in ${session}`);
+    this.panePids.push(Number(pid));
+    this.publishPiMetadata(pane, pid, entry);
+  }
+
+  plainWindow(session: string): void {
+    const [pane, pid] = this.tmux([
+      "new-window",
+      "-t",
+      session,
+      "-c",
+      this.cwd,
+      "-P",
+      "-F",
+      "#{pane_id}\t#{pane_pid}",
+      "/bin/sleep",
+      "300",
+    ]).split("\t");
+    assert.ok(pane && pid, `cannot start a plain window in ${session}`);
+    this.panePids.push(Number(pid));
+  }
+
+  private publishPiMetadata(
+    pane: string,
+    pid: string,
+    entry: { id: string; file: string },
+  ): void {
     this.tmux([
       "set-option",
       "-p",
@@ -585,10 +633,6 @@ exec ${JSON.stringify(realTmux)} "$@"
         }),
       ).toString("base64"),
     ]);
-  }
-
-  plainSession(name: string): void {
-    this.startPane(name);
   }
 
   private startPane(name: string): [string, string, string] {
@@ -885,7 +929,7 @@ describe("switch", () => {
 });
 
 describe("current", () => {
-  it("prints the metadata of the session the client displays", async () => {
+  it("prints the metadata of the pi pane the client displays", async () => {
     const fixture = new SessionFixture();
     try {
       const id = randomUUID();
@@ -911,8 +955,46 @@ describe("current", () => {
       await fixture.attach("plain");
       const result = fixture.run(["current"]);
       assert.equal(result.status, 1);
-      assert.ok(result.stderr.includes("does not show a pi session"));
+      assert.ok(result.stderr.includes("does not show a pi pane"));
       assert.equal(result.stdout, "");
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("fails when the displayed pane is not pi, even though the session has a pi pane", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      fixture.piSession("mixed", {
+        id,
+        file: join(fixture.directory, "conversations", `${id}.jsonl`),
+      });
+      fixture.plainWindow("mixed");
+      await fixture.attach("mixed");
+      const result = fixture.run(["current"]);
+      assert.equal(result.status, 1);
+      assert.ok(result.stderr.includes("does not show a pi pane"));
+      assert.equal(result.stdout, "");
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("returns the displayed pi pane when the session has another pi pane", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const displayedId = randomUUID();
+      const otherId = randomUUID();
+      const displayedFile = join(fixture.directory, "conversations", `${displayedId}.jsonl`);
+      fixture.piSession("dual", { id: displayedId, file: displayedFile });
+      fixture.piWindow("dual", {
+        id: otherId,
+        file: join(fixture.directory, "conversations", `${otherId}.jsonl`),
+      });
+      await fixture.attach("dual");
+      const expected = { id: displayedId, cwd: fixture.cwd, file: displayedFile, target: "dual" };
+      assert.deepEqual(JSON.parse(fixture.run(["current"]).stdout), expected);
     } finally {
       await fixture.cleanup();
     }

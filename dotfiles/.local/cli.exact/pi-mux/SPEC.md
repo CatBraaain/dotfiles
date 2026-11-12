@@ -279,12 +279,14 @@ metadataは会話ID・絶対パスのcwdとfileを検証する。paneを直接�
 
 ### current
 
-`current [--client-pid <pid>]` は、クライアントが表示中のtmuxセッションに属するpi実体のmetadataを読み、stdoutへ `{"id":"session-id","cwd":"/path/to/workspace","file":"/path/to/session.jsonl","target":"tmux-session-name"}` 形式のJSONオブジェクト1件と末尾改行を返す。`target` はtmuxセッション名、`id`・`cwd`・`file` はmetadataの値とする。クライアントの特定は `switch` と同じ `--client-pid` の照合と省略時の唯一クライアント判定を使う。
+`current [--client-pid <pid>]` は、クライアントが表示中のpaneのpi実体のmetadataを読み、stdoutへ `{"id":"session-id","cwd":"/path/to/workspace","file":"/path/to/session.jsonl","target":"tmux-session-name"}` 形式のJSONオブジェクト1件と末尾改行を返す。表示中のpaneは、クライアントが表示するwindowのactive paneとする。`target` は表示中のpaneが属するtmuxセッション名、`id`・`cwd`・`file` はmetadataの値とする。クライアントの特定は `switch` と同じ `--client-pid` の照合と省略時の唯一クライアント判定を使う。
 
 | 状態 | 結果 |
 | --- | --- |
-| 表示中のtmuxセッションにmetadataを持つpaneが1つある | metadataの `id`・`cwd`・`file` とセッション名をJSONで返し、終了コード0で終了する |
-| クライアントがpi以外のpaneを表示している、または該当するpaneが特定できない | 何も出力せず理由をstderrへ表示し、非0で終了する |
+| 表示中のpaneがpi実体のmetadataを持つ | metadataの `id`・`cwd`・`file` と表示中のpaneが属するtmuxセッション名をJSONで返し、終了コード0で終了する |
+| 表示中のpaneがpi実体のmetadataを持たない、または表示中のpaneを特定できない | 何も出力せず理由をstderrへ表示し、非0で終了する |
+
+同一tmuxセッション内の複数のpaneでpi実体が稼働していても、表示中のpaneのpi実体を返す。
 
 serverの起動・復元、piの起動・接続、workspace登録は行わない。
 
