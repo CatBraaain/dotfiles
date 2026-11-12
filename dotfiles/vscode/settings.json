@@ -212,8 +212,16 @@
       "languages": ["markdown"]
     },
     {
-      "command": "oxfmt --stdin-filepath \"${file}\"",
-      "languages": ["yaml", "json", "jsonc"]
+      "command": "oxfmt --stdin-filepath \"${file}.yaml\"",
+      "languages": ["yaml"]
+    },
+    {
+      "command": "oxfmt --stdin-filepath \"${file}.json\"",
+      "languages": ["json"]
+    },
+    {
+      "command": "oxfmt --stdin-filepath \"${file}.jsonc\"",
+      "languages": ["jsonc"]
     },
     {
       "command": "just --fmt --indentation \"  \" --justfile -",
