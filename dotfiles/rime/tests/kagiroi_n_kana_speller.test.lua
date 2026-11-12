@@ -49,7 +49,11 @@ local processor = dofile(arg[1])
 local function new_environment()
     local context = { input = "", caret_pos = 0 }
     context.options = {}
+    context.properties = {}
+    function context:get_property(name) return self.properties[name] or "" end
+    function context:set_property(name, value) self.properties[name] = value end
     function context:get_option(name) return self.options[name] or false end
+    function context:set_option(name, value) self.options[name] = value end
     local composition = {}
     function composition:back()
         if context.input == "" then
@@ -113,7 +117,6 @@ end
 
 local function type_text(text)
     local env = new_environment()
-    processor.ascii_tail = nil
     processor.init(env)
     for character in text:gmatch(".") do
         press(env, character)
@@ -314,11 +317,11 @@ assert(env.context.input == "んあ", "a vowel after a foreign ん must not rebi
 env = new_environment()
 processor.init(env)
 env.context:push_input("こんにちは")
-processor.ascii_tail = #env.context.input
+processor.set_ascii_tail(env.context, #env.context.input)
 press(env, "k")
 assert(env.context.input == "こんにちはk", "a letter after the tail must be appended unconverted")
 -- The tail follows the appended half-width text, as rime_controls does.
-processor.ascii_tail = #env.context.input
+processor.set_ascii_tail(env.context, #env.context.input)
 press(env, "a")
 assert(env.context.input == "こんにちはkあ", "typing after the tail must convert behind it")
 press(env, "n")
@@ -330,7 +333,7 @@ assert(env.context.input == "こんにちはkあな", "the n correction must wor
 env = new_environment()
 processor.init(env)
 env.context:push_input("こんにちはn")
-processor.ascii_tail = #env.context.input
+processor.set_ascii_tail(env.context, #env.context.input)
 press(env, "a")
 assert(env.context.input == "こんにちはnあ", "the tail n must stay fixed while the vowel converts")
 press(env, "k")
@@ -339,7 +342,6 @@ assert(env.context.input == "こんにちはnあか", "typing must keep converti
 
 -- Bare んん survives until the declared full literal is completed.
 env = new_environment()
-processor.ascii_tail = nil
 processor.init(env)
 for character in ("nnnn"):gmatch(".") do press(env, character) end
 assert(env.context.input == "んん", "bare んん must not collapse")
@@ -348,7 +350,6 @@ assert(env.context.input == "んな", "the following vowel completes the literal
 
 for _, option in ipairs({ "ascii_mode", "_kagiroi_ascii_input" }) do
     env = new_environment()
-    processor.ascii_tail = nil
     processor.init(env)
     env.context:push_input("んん")
     env.context.options[option] = true
@@ -362,14 +363,13 @@ end
 env = new_environment()
 processor.init(env)
 env.context:push_input("んん")
-processor.ascii_tail = #env.context.input
+processor.set_ascii_tail(env.context, #env.context.input)
 press(env, "a")
 assert(env.context.input == "んんあ", "postroma must not cross the frozen boundary")
 for character in ("nnnna"):gmatch(".") do press(env, character) end
 assert(env.context.input == "んんあんな", "postroma must still process resumed reading")
 
 -- Seed unmatched history directly: conversion/Enter must not run postroma.
-processor.ascii_tail = nil
 for _, keycode in ipairs({ 0x20, 0xff23, 0xff0d }) do
     env = new_environment()
     processor.init(env)
@@ -397,11 +397,40 @@ assert(env.context.input == "ああ", "replacement output must not feed a fixed-
 -- A raw pending key after the frozen boundary is handled, but not converted.
 env = new_environment()
 processor.init(env)
-processor.ascii_tail = 0
+processor.set_ascii_tail(env.context, 0)
 press(env, "a")
 press(env, "k")
 assert(env.context.input == "ああk", "pending romaji must not reprocess prior kana")
-processor.ascii_tail = nil
 rules.postroma = declared
+
+package.preload["kagiroi/kagiroi_n_kana_speller"] = function() return processor end
+package.preload["kagiroi/bunsetsu"] = function()
+    return { state = function() return nil end }
+end
+package.preload["kagiroi/zenkaku_text"] = function()
+    return { keys = {}, keypad_keys = {} }
+end
+local controls = dofile(arg[1]:gsub("kagiroi_n_kana_speller%.lua$", "rime_controls.lua"))
+local preserved = new_environment()
+controls.init(preserved)
+press(preserved, "k")
+controls.start_ascii_input(preserved.context, true)
+controls.stop_ascii_input(preserved.context)
+local other = new_environment()
+controls.init(other)
+local other_key = {
+    keycode = string.byte("k"),
+    release = function() return false end,
+    shift = function() return false end,
+    ctrl = function() return false end,
+    alt = function() return false end,
+    super = function() return false end,
+}
+assert(controls.func(other_key, other) == kNoop, "a fresh context must accept pending romaji")
+other.context:push_input("k")
+press(preserved, "a")
+assert(preserved.context.input == "kあ", "another context's first key must not thaw preserved romaji")
+press(other, "a")
+assert(other.context.input == "か", "the fresh context must still convert its own pending romaji")
 
 print("Kagiroi declaration-driven kana-speller transition tests passed")

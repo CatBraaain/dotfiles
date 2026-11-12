@@ -5,7 +5,15 @@ local kNoop = 2
 -- lua/kagiroi/zenkaku_text.lua), not a repository file.
 package.preload["kagiroi/zenkaku_text"] = function() return dofile(arg[3]) end
 package.preload["kagiroi/kagiroi_n_kana_speller"] = function()
-    return { init = function() end, fini = function() end, func = function() return kNoop end, ascii_tail = nil }
+    return {
+        init = function() end, fini = function() end, func = function() return kNoop end,
+        get_ascii_tail = function(context)
+            return tonumber(context:get_property("_kagiroi_ascii_tail"))
+        end,
+        set_ascii_tail = function(context, boundary)
+            context:set_property("_kagiroi_ascii_tail", boundary and tostring(boundary) or "")
+        end,
+    }
 end
 package.preload["kagiroi/rime_controls"] = function()
     return dofile(arg[2])
@@ -13,8 +21,9 @@ end
 local controls = require("kagiroi/rime_controls")
 local kana_speller = require("kagiroi/kagiroi_n_kana_speller")
 local processor = dofile(arg[1])
-local context = { options = {}, input = "", commits = {} }
-function context:get_property() return "" end
+local context = { options = {}, input = "", commits = {}, properties = {} }
+function context:get_property(name) return self.properties[name] or "" end
+function context:set_property(name, value) self.properties[name] = value end
 function context:get_option(name)
     return self.options[name] or false
 end
@@ -90,7 +99,7 @@ assert(not context:get_option("_kagiroi_hide_candidates"),
     "entering the ascii input mode must preserve candidate visibility")
 assert(context:get_option("_kagiroi_ascii_input"),
     "Zenkaku_Hankaku must enter the ascii input mode")
-assert(kana_speller.ascii_tail == #context.input,
+assert(kana_speller.get_ascii_tail(context) == #context.input,
     "entering the ascii input mode must record the tail position")
 assert(context:get_option("_kagiroi_off_pending"),
     "entering by Zenkaku_Hankaku must reserve IME OFF")
@@ -100,7 +109,7 @@ assert(context:get_option("_kagiroi_off_pending"),
 assert(press() == kAccepted and not context:get_option("_kagiroi_ascii_input"),
     "Zenkaku_Hankaku must restore the Japanese mode")
 assert(context.input == "かんじ", "the return must keep the composition")
-assert(kana_speller.ascii_tail == #context.input, "the return must keep the tail position")
+assert(kana_speller.get_ascii_tail(context) == #context.input, "the return must keep the tail position")
 assert(#context.commits == 0, "the round trip must not commit")
 assert(context:get_option("_kagiroi_off_pending"),
     "returning to Japanese input must preserve the OFF reservation")
@@ -117,7 +126,7 @@ assert(context:get_option("_kagiroi_ascii_input"),
     "Muhenkan must enter the ascii input mode from a composition")
 assert(context.input == "にほんご" and #context.commits == 0,
     "Muhenkan must keep the composition unconfirmed")
-assert(kana_speller.ascii_tail == #context.input, "Muhenkan must record the tail position")
+assert(kana_speller.get_ascii_tail(context) == #context.input, "Muhenkan must record the tail position")
 assert(context:get_option("_kagiroi_off_pending"), "Muhenkan must reserve IME OFF")
 assert(press({ keycode = kMuhenkan }) == kAccepted,
     "Muhenkan inside the mode must reserve IME OFF")

@@ -88,7 +88,7 @@ local function commit_unconfirmed(context, env)
     end
     reset_expansion(context)
     context:set_option("_kagiroi_hide_candidates", true)
-    kana_speller.ascii_tail = nil
+    kana_speller.set_ascii_tail(context, nil)
     context:set_option("_kagiroi_off_pending", false)
 end
 
@@ -150,7 +150,7 @@ function Top.init(env)
         env.commit_connection = context.commit_notifier:connect(function()
             end_conversion(context, env, false)
             reset_expansion(context)
-            kana_speller.ascii_tail = nil
+            kana_speller.set_ascii_tail(context, nil)
             context:set_option("_kagiroi_off_pending", false)
         end)
     end
@@ -231,7 +231,7 @@ function Top.start_ascii_input(context, reserve_off)
     -- The recorded tail survives only inside the same composition: entering
     -- the mode from one composition to another starts a fresh tail.
     local current_tail = context:get_option("_kagiroi_ascii_input")
-        and kana_speller.ascii_tail or nil
+        and kana_speller.get_ascii_tail(context) or nil
     if current_tail == nil or current_tail > #context_input then
         current_tail = #context_input
     end
@@ -241,14 +241,14 @@ function Top.start_ascii_input(context, reserve_off)
         -- overwrite half of it, and lose the tail instead.
         current_tail = 0
     end
-    kana_speller.ascii_tail = current_tail
+    kana_speller.set_ascii_tail(context, current_tail)
     context:set_option("_kagiroi_ascii_input", true)
     if bunsetsu.state(context) then bunsetsu.render(context) end
 end
 
 function Top.stop_ascii_input(context)
     keep_display_for_editing(context)
-    kana_speller.ascii_tail = #context.input
+    kana_speller.set_ascii_tail(context, #context.input)
     context:set_option("_kagiroi_ascii_input", false)
 end
 
@@ -273,11 +273,12 @@ local function ascii_appended_text(keycode, key_event)
 end
 
 local function finish_deletion(context)
-    if kana_speller.ascii_tail then
-        kana_speller.ascii_tail = math.min(kana_speller.ascii_tail, #context.input)
+    local tail = kana_speller.get_ascii_tail(context)
+    if tail then
+        kana_speller.set_ascii_tail(context, math.min(tail, #context.input))
     end
     if context.input ~= "" then return end
-    kana_speller.ascii_tail = nil
+    kana_speller.set_ascii_tail(context, nil)
     local pending = context:get_option("_kagiroi_off_pending")
     context:set_option("_kagiroi_ascii_input", false)
     context:set_option("_kagiroi_off_pending", false)
@@ -324,7 +325,7 @@ function Top.ascii_func(key_event, env)
         and context.input:find("[A-Z][A-Z]+$") then
         keep_display_for_editing(context, env)
         prepare_append(context)
-        kana_speller.ascii_tail = #context.input
+        kana_speller.set_ascii_tail(context, #context.input)
         context:set_option("_kagiroi_ascii_input", false)
         return kana_speller.func(key_event, env)
     end
@@ -335,7 +336,7 @@ function Top.ascii_func(key_event, env)
         prepare_append(context)
         context:push_input(text)
         -- Every appended character belongs to the fixed tail.
-        kana_speller.ascii_tail = #context.input
+        kana_speller.set_ascii_tail(context, #context.input)
         return kAccepted
     end
 
@@ -362,7 +363,7 @@ function Top.ascii_func(key_event, env)
         bunsetsu.select(context, keycode == kUp and -1 or 1, true)
         context:set_option("_kagiroi_ascii_input", false)
         context:set_option("_kagiroi_off_pending", false)
-        kana_speller.ascii_tail = nil
+        kana_speller.set_ascii_tail(context, nil)
         bunsetsu.render(context)
         return kAccepted
     end
@@ -396,8 +397,8 @@ function Top.func(key_event, env)
     -- The tail of the ascii input mode belongs to the current composition;
     -- an empty input (a fresh session included) invalidates it
     -- (dotfiles/rime/SPEC.md).
-    if not composing and kana_speller.ascii_tail then
-        kana_speller.ascii_tail = nil
+    if not composing and kana_speller.get_ascii_tail(context) then
+        kana_speller.set_ascii_tail(context, nil)
     end
     local menu_visible = composing and env.conversion ~= nil
         and not context:get_option("_kagiroi_hide_candidates")

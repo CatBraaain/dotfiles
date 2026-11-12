@@ -4,8 +4,18 @@ local kNoop = 2
 local base = require("kagiroi/kagiroi_kana_speller")
 local rules = require("kagiroi/zenkaku_rules")
 local Top = { init = base.init, fini = base.fini }
--- Byte boundary of the frozen display; only resumed input after it is read.
-Top.ascii_tail = nil
+local kAsciiTailProperty = "_kagiroi_ascii_tail"
+
+function Top.get_ascii_tail(context)
+    return tonumber(context:get_property(kAsciiTailProperty))
+end
+
+function Top.set_ascii_tail(context, boundary)
+    local value = boundary and tostring(boundary) or ""
+    if context:get_property(kAsciiTailProperty) ~= value then
+        context:set_property(kAsciiTailProperty, value)
+    end
+end
 
 local function is_ascii(context)
     return context:get_option("ascii_mode") or context:get_option("_kagiroi_ascii_input")
@@ -34,10 +44,10 @@ local function trailing_alphabet(env)
     -- The fixed half-width tail spans segment boundaries (uppercase letters
     -- and digits are not reading alphabet), so the resumed run is taken from
     -- the whole input instead of the last segment.
-    local tail = Top.ascii_tail
+    local tail = Top.get_ascii_tail(context)
     if tail then
         if tail > #context.input then
-            Top.ascii_tail = nil
+            Top.set_ascii_tail(context, nil)
             return context, ""
         end
         local suffix = get_alphabet_suffix(context.input, env.alphabet)
@@ -106,7 +116,7 @@ local function replace_literal(text, from, to)
 end
 
 local function postroma(context)
-    local boundary = Top.ascii_tail or 0
+    local boundary = Top.get_ascii_tail(context) or 0
     local reading = context.input:sub(boundary + 1)
     local replaced = reading
     for _, processor in ipairs(rules.postroma) do
@@ -148,7 +158,7 @@ local function spell_after_tail(key_event, env)
 end
 
 local function spell_with_suffix(key_event, env)
-    if Top.ascii_tail then
+    if Top.get_ascii_tail(env.engine.context) then
         return spell_after_tail(key_event, env)
     end
     local result = base.func(key_event, env)

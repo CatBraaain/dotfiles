@@ -56,7 +56,12 @@ package.preload["kagiroi/kagiroi_n_kana_speller"] = function()
         resolve_conversion = function()
             conversions_resolved = conversions_resolved + 1
         end,
-        ascii_tail = nil,
+        get_ascii_tail = function(context)
+            return tonumber(context:get_property("_kagiroi_ascii_tail"))
+        end,
+        set_ascii_tail = function(context, boundary)
+            context:set_property("_kagiroi_ascii_tail", boundary and tostring(boundary) or "")
+        end,
     }
 end
 
@@ -1120,9 +1125,18 @@ assert(env.conversion == nil, "an external commit must end the conversion state"
 -- A commit also drops the ascii tail recorded for the ascii input mode.
 env, context, segment = new_environment()
 local kana_speller = require("kagiroi/kagiroi_n_kana_speller")
-kana_speller.ascii_tail = 6
+kana_speller.set_ascii_tail(context, 6)
+local preserved_env, preserved_context = new_environment()
+preserved_context.input = "k"
+processor.start_ascii_input(preserved_context, true)
+processor.stop_ascii_input(preserved_context)
 context:commit()
-assert(kana_speller.ascii_tail == nil, "a commit must drop the ascii tail")
+assert(kana_speller.get_ascii_tail(context) == nil, "a commit must drop its context's ascii tail")
+assert(kana_speller.get_ascii_tail(preserved_context) == 1,
+    "another context's commit must not drop the preserved ascii tail")
+assert(preserved_context:get_option("_kagiroi_off_pending"),
+    "another context's commit must not cancel the OFF reservation")
+processor.fini(preserved_env)
 
 -- Ascii mode and modifier combinations pass through.
 env, context, segment = new_environment()
@@ -1323,7 +1337,7 @@ assert(press(env, 0xff0d) == kAccepted, "Enter must be consumed")
 assert(context.commits[1] == "かんじabc", "Enter must commit the mixed composition")
 assert(context.input == "" and not context:get_option("_kagiroi_ascii_input"),
     "Enter must end the mode")
-assert(kana_speller.ascii_tail == nil, "the commit must drop the ascii tail")
+assert(kana_speller.get_ascii_tail(context) == nil, "the commit must drop the ascii tail")
 
 -- Editing and conversion keys pass through while the mode is on.
 env, context, segment = new_environment()
