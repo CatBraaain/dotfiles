@@ -414,13 +414,93 @@ describe("EmptySessionPool", () => {
     expect(newCalls()).toHaveLength(2);
   });
 
-  it("reports an invalid registered cwd without starting Pi or modifying the store", async () => {
+  it("silently skips a missing cwd while prewarming valid workspaces and keeping existing data", async () => {
     const missing = join(root, "missing");
-    await register([missing]);
+    const history = join(root, "history.jsonl");
+    await writeFile(history, "saved conversation\n");
+    saved.add(history);
+    live.set("preexisting", {
+      id: "preexisting",
+      cwd: missing,
+      file: join(root, "empty.jsonl"),
+      state: null,
+      title: null,
+    });
+    const existing = { ...live.get("preexisting")! };
+    const validating = vi.spyOn(workDirectory, "requireWorkDirectory");
+    await register([missing, root]);
     const original = await readFile(statePath, "utf8");
-    await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(expect.stringContaining(missing)));
+    await expect(validating.mock.results[0]!.value).rejects.toMatchObject({ code: "ENOENT" });
+    await ready();
+    expect(newCalls().map(([, , cwd]) => cwd)).toEqual([root]);
+    expect(onError).not.toHaveBeenCalled();
+    expect(registeredCwds).toEqual([missing, root]);
+    expect(await readFile(statePath, "utf8")).toBe(original);
+    expect(await readFile(history, "utf8")).toBe("saved conversation\n");
+    expect(live.get("preexisting")).toEqual(existing);
+    expect(execute.mock.calls.every(([, args]) => ["new", "list"].includes(args[0]!))).toBe(true);
+  });
+
+  it("retries a restored cwd only after re-registration rather than ordinary sync updates", async () => {
+    const missing = join(root, "missing");
+    const validating = vi.spyOn(workDirectory, "requireWorkDirectory");
+    await register([missing]);
+    await expect(validating.mock.results[0]!.value).rejects.toMatchObject({ code: "ENOENT" });
+    await mkdir(missing);
+    pool.syncWorkspaces(registeredCwds);
+    pool.syncWorkspaces(registeredCwds);
+    expect(validating).toHaveBeenCalledTimes(1);
+    expect(newCalls()).toHaveLength(0);
+    expect(onError).not.toHaveBeenCalled();
+    await register([]);
+    await register([missing]);
+    await ready();
+    expect(newCalls().map(([, , cwd]) => cwd)).toEqual([missing]);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("reports a non-directory cwd without starting Pi or modifying the store", async () => {
+    const file = join(root, "not-a-directory");
+    await writeFile(file, "content");
+    await register([file]);
+    const original = await readFile(statePath, "utf8");
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledWith(expect.stringContaining(file)));
+    expect(onError.mock.calls[0]![0]).toContain("Work folder is not a directory");
     expect(newCalls()).toHaveLength(0);
     expect(await readFile(statePath, "utf8")).toBe(original);
+  });
+
+  it("reports non-ENOENT directory validation errors", async () => {
+    vi.spyOn(workDirectory, "requireWorkDirectory").mockRejectedValueOnce(
+      Object.assign(new Error("permission denied"), { code: "EACCES" }),
+    );
+    await register([root]);
+    await vi.waitFor(() =>
+      expect(onError).toHaveBeenCalledWith(expect.stringContaining("permission denied")),
+    );
+    expect(newCalls()).toHaveLength(0);
+  });
+
+  it("reports CLI ENOENT failures after directory validation", async () => {
+    execute.mockRejectedValueOnce(
+      Object.assign(new Error("spawn pi-mux ENOENT"), { code: "ENOENT" }),
+    );
+    await register([root]);
+    await vi.waitFor(() =>
+      expect(onError).toHaveBeenCalledWith(expect.stringContaining("spawn pi-mux ENOENT")),
+    );
+    expect(newCalls()).toHaveLength(1);
+  });
+
+  it("reports session file ENOENT failures after startup", async () => {
+    fileExists.mockRejectedValueOnce(
+      Object.assign(new Error("session file ENOENT"), { code: "ENOENT" }),
+    );
+    await register([root]);
+    await vi.waitFor(() =>
+      expect(onError).toHaveBeenCalledWith(expect.stringContaining("session file ENOENT")),
+    );
+    expect(newCalls()).toHaveLength(1);
   });
 
   it("starts a New Session independently while a background startup is pending", async () => {

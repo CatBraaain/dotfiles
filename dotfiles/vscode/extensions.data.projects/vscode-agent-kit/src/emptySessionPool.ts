@@ -1,7 +1,7 @@
 import type * as vscode from "vscode";
 import type { PiMux, PiMuxWorkspace } from "./piMux";
 import { realpath } from "node:fs/promises";
-import { errorMessage } from "./guards";
+import { errorMessage, isRecord } from "./guards";
 import { sessionFileExists } from "./sessionStore";
 import { requireWorkDirectory, sameWorkDirectory } from "./workDirectory";
 
@@ -87,9 +87,8 @@ export class EmptySessionPool implements vscode.Disposable {
   }
 
   private async prepare(cwd: string, slot: WorkspaceSlot): Promise<void> {
-    const directory = await requireWorkDirectory(cwd);
-    const physicalDirectory = await realpath(directory);
-    if (this.registeredCwd(slot) === undefined) return;
+    const physicalDirectory = await findPrewarmDirectory(cwd);
+    if (physicalDirectory === undefined || this.registeredCwd(slot) === undefined) return;
     const shared = this.physicalWorkspaces.get(physicalDirectory);
     if (shared !== undefined && shared !== slot) {
       this.workspaces.set(cwd, shared);
@@ -138,6 +137,15 @@ export class EmptySessionPool implements vscode.Disposable {
   }
 }
 
+async function findPrewarmDirectory(cwd: string): Promise<string | undefined> {
+  try {
+    return await realpath(await requireWorkDirectory(cwd));
+  } catch (error: unknown) {
+    if (isRecord(error) && error.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
 /** Resolve the planned file path of a prewarmed session: the `empty` entry,
  * or the saved `sessions` entry when the conversation file appeared before tracking. */
 async function findPlannedSessionFile(
@@ -146,11 +154,11 @@ async function findPlannedSessionFile(
   cwd: string,
 ): Promise<string> {
   for (const workspace of workspaces) {
-    if (!(await sameWorkDirectory(workspace.cwd, cwd))) continue;
-    const empty = workspace.empty.find(({ id }) => id === sessionId);
-    if (empty !== undefined) return empty.file;
-    const saved = workspace.sessions.find(({ id }) => id === sessionId);
-    if (saved !== undefined) return saved.file;
+    const session =
+      workspace.empty.find(({ id }) => id === sessionId) ??
+      workspace.sessions.find(({ id }) => id === sessionId);
+    if (session === undefined || !(await sameWorkDirectory(workspace.cwd, cwd))) continue;
+    return session.file;
   }
   throw new Error(`Cannot locate the session file for Pi ${sessionId} in ${cwd}`);
 }
