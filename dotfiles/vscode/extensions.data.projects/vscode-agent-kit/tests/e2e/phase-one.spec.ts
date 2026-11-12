@@ -9,9 +9,19 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { Frame } from "playwright/test";
 import type { SessionStateStoreData } from "../../src/sessionStateStore";
 import { expect, test, type VSCodeFixture } from "../support/vscode";
+
+/** One recorded #status mutation while a workspace registration error arrives. */
+interface RegistrationStatusObservation {
+  className: string;
+  text: string;
+  status?: { top: number; bottom: number };
+  input?: { top: number; bottom: number };
+  viewportHeight?: number;
+}
 
 test.use({ trace: "on" });
 
@@ -19,11 +29,11 @@ test(
   "Shows saved history with workspace All alongside a prewarmed unsaved Pi",
   { annotation: { type: "spec", description: "E2E-1" } },
   async ({ host }, testInfo) => {
-    await test.step("Inspect work folder groups and prewarmed Unarchived rows", async () => {
+    await test.step("Inspect work folder groups and hidden prewarmed Unarchived rows", async () => {
       const frame = await host.sessionFrame();
-      await expect(frame.locator(".session-row").describe("Prewarmed unsaved Pi rows")).toHaveCount(
-        3,
-      );
+      await expect(
+        frame.locator(".session-row").describe("Unsaved prewarmed Pi rows stay hidden"),
+      ).toHaveCount(0);
       for (const key of ["A", "B"]) {
         const group = frame
           .locator("section.group")
@@ -45,27 +55,15 @@ test(
         .locator("section.group")
         .filter({ has: frame.getByTitle(host.sessions.B.cwd, { exact: true }) })
         .describe("Empty B Unarchived group");
-      await expect(emptyGroup.locator(".session-row")).toHaveCount(1);
+      await expect(emptyGroup.locator(".session-row")).toHaveCount(0);
       await expect(emptyGroup.locator(`[data-session="${host.sessions.B.id}"]`)).toHaveCount(0);
       await expect(emptyGroup.locator(".empty")).toHaveCount(0);
       await expect(frame.locator(".group-path")).toHaveCount(0);
       await expect(frame.locator("#app header [data-mode-toggle]")).toHaveCount(0);
-      await expect(
-        frame.getByText("No unarchived sessions. Select All to browse saved sessions.", {
-          exact: true,
-        }),
-      ).toHaveCount(0);
       const layout = await frame.evaluate(() => {
         function rect(element: Element) {
           const { left, right, top, bottom, width, height } = element.getBoundingClientRect();
           return { left, right, top, bottom, width, height };
-        }
-        function paintRect(button: Element) {
-          const box = button.getBoundingClientRect();
-          const border = parseFloat(getComputedStyle(button).borderLeftWidth);
-          const paint = getComputedStyle(button, "::before");
-          const left = box.left + border + parseFloat(paint.left);
-          return { left, right: left + parseFloat(paint.width), height: parseFloat(paint.height) };
         }
         const app = document.querySelector("#app")!;
         const footer = document.querySelector(".footer")!;
@@ -88,36 +86,10 @@ test(
           ],
           app: rect(app),
           footer: { ...rect(footer), padding: getComputedStyle(footer).padding },
-          rows: Array.from(document.querySelectorAll(".session-row")).map((row) => ({
-            row: rect(row),
-            button: rect(row.querySelector(".session-button")!),
-            paint: paintRect(row.querySelector(".session-button")!),
-            workspaceName: rect(row.closest(".group")!.querySelector(".group-title")!),
-            name: rect(row.querySelector(".session-name")!),
-            status: rect(row.querySelector(".session-status")!),
-            timestamp: rect(row.querySelector(".session-timestamp")!),
-            action: rect(row.querySelector(".archive, .unarchive")!),
-            nameFont: getComputedStyle(row.querySelector(".session-name")!).fontSize,
-            timestampFont: getComputedStyle(row.querySelector(".session-timestamp")!).fontSize,
-            indent: getComputedStyle(row).marginLeft,
-            gap: getComputedStyle(row.querySelector(".session-button")!).gap,
-          })),
         };
       });
-      const withHostPadding = await frame.evaluate(() => {
-        const initialPadding = document.body.style.padding;
-        try {
-          document.body.style.padding = "0 20px";
-          return Array.from(document.querySelectorAll(".session-row")).map((row) => ({
-            rowWidth: row.getBoundingClientRect().width,
-            nameWidth: row.querySelector(".session-name")!.getBoundingClientRect().width,
-          }));
-        } finally {
-          document.body.style.padding = initialPadding;
-        }
-      });
       const geometryPath = testInfo.outputPath("sidebar-geometry.json");
-      writeFileSync(geometryPath, JSON.stringify({ layout, withHostPadding }, null, 2));
+      writeFileSync(geometryPath, JSON.stringify({ layout }, null, 2));
       await testInfo.attach("Real host sidebar geometry", {
         path: geometryPath,
         contentType: "application/json",
@@ -135,44 +107,6 @@ test(
         host.page.getByRole("button", { name: "Refresh Sessions", exact: true }),
       ).toHaveCount(1);
       await expect(frame.locator(".session-scrollbar")).toHaveCSS("width", "12px");
-      for (const [index, row] of layout.rows.entries()) {
-        expect(row.row.left).toBe(4);
-        expect(row.button).toEqual(row.row);
-        expect(row.paint.left).toBe(row.button.left);
-        expect(row.name.left).toBe(row.workspaceName.left + 1);
-        expect(row.workspaceName.left).toBe(28);
-        expect(row.paint.right).toBe(row.button.right);
-        expect(row.paint.height).toBe(32);
-        expect(row.row.right).toBe(layout.viewport.width - 12);
-        expect(row.row.height).toBe(32);
-        expect(row.row.width).toBe(withHostPadding[index].rowWidth + 40);
-        expect(row.name.width).toBe(withHostPadding[index].nameWidth + 40);
-        expect(row.indent).toBe("-8px");
-        expect(row.status.left).toBe(9);
-        expect(row.name.left).toBe(29);
-        expect(row.status.left).toBeGreaterThan(row.paint.left);
-        if (layout.viewport.width === 299) {
-          expect(row.name.right).toBe(200.65625);
-          expect(row.timestamp.left).toBe(220.90625);
-          expect(row.timestamp.right).toBe(251);
-          expect(row.action.left).toBe(259);
-          expect(row.action.right).toBe(283);
-        }
-        expect(row.name.left).toBe(row.status.right + 8);
-        expect(row.gap).toBe("8px");
-        expect(row.nameFont).toBe("13px");
-        expect(row.timestampFont).toBe("10px");
-        expect(row.status.width).toBe(12);
-        expect(row.status.height).toBe(12);
-        expect(row.action.width).toBe(24);
-        expect(row.action.height).toBe(24);
-        expect(row.timestamp.right).toBe(row.row.right - 36);
-        expect(row.action.right).toBe(row.row.right - 4);
-        expect(row.status.right).toBeLessThanOrEqual(row.name.left);
-        expect(row.name.right).toBeLessThanOrEqual(row.timestamp.left);
-        expect(row.timestamp.right).toBeLessThanOrEqual(row.action.left);
-        expect(row.action.right).toBeLessThanOrEqual(layout.viewport.width - 12);
-      }
       await testInfo.attach("Unarchived（切替前）", {
         body: await host.page.screenshot({ path: testInfo.outputPath("unarchived.png") }),
         contentType: "image/png",
@@ -219,6 +153,7 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
         await picker.fill(theme);
         await host.page.getByRole("option", { name: theme, exact: true }).click();
         await host.activateSession("A");
+        await host.activateSession("Deleted");
         const frame = await host.sessionFrame();
         await expect(frame.locator("body")).toHaveClass(
           theme.includes("Light") ? /vscode-light/ : /vscode-dark/,
@@ -226,19 +161,11 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
         const mode = frame.locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`);
         if ((await mode.getAttribute("data-mode")) === "unarchived") await mode.click();
         await expect(
-          frame.locator(".session-row").describe("Saved A history and prewarmed workspace rows"),
-        ).toHaveCount(5);
+          frame.locator(".session-row").describe("Saved A and Deleted conversation rows"),
+        ).toHaveCount(2);
         const button = frame
           .locator(`[data-session="${host.sessions.A.id}"]`)
           .describe("Session background and focus target");
-        await frame
-          .locator("section.group")
-          .filter({ has: frame.getByTitle(host.sessions.A.cwd, { exact: true }) })
-          .locator(
-            `.session-row:not(.archived) .session-button:not([data-session="${host.sessions.A.id}"])`,
-          )
-          .describe("Other normal Pi to leave A unselected")
-          .click({ steps: 15 });
         await host.expectPiVisible(host.sessions.A.cwd);
 
         async function appearance() {
@@ -850,6 +777,37 @@ test(
         .click({ steps: 15 });
       const pathInput = frame.locator("#workspace-path").describe("Workspace path input");
       await pathInput.fill(host.sessions.Missing.cwd);
+      // The registration error in #status is transient: the periodic list
+      // refresh delivers a new list and clears it within about a second.
+      // Record the status element before submitting so the assertions do
+      // not race the next refresh.
+      await frame.evaluate(() => {
+        const status = document.querySelector("#status")!;
+        const observed: RegistrationStatusObservation[] = [];
+        Object.defineProperty(window, "__registrationStatus", {
+          value: observed,
+          configurable: true,
+        });
+        new MutationObserver(() => {
+          const entry: RegistrationStatusObservation = {
+            className: status.className,
+            text: status.textContent ?? "",
+          };
+          if (status.className === "error") {
+            const box = status.getBoundingClientRect();
+            const input = document.querySelector("#workspace-path")!.getBoundingClientRect();
+            entry.status = { top: box.top, bottom: box.bottom };
+            entry.input = { top: input.top, bottom: input.bottom };
+            entry.viewportHeight = innerHeight;
+          }
+          observed.push(entry);
+        }).observe(status, {
+          attributes: true,
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+      });
       await pathInput.press("Enter");
       await expect(
         host.page
@@ -861,20 +819,36 @@ test(
       await expect(frame.locator("#workspace-path")).toHaveValue(host.sessions.Missing.cwd);
       await expect(frame.locator(".new-workspace")).toBeHidden();
       await expect(frame.locator(".workspace-folder-icon")).toBeVisible();
-      const status = frame.locator("#status").describe("Workspace registration error");
-      await expect(status).toHaveClass("error");
-      await expect(status).toContainText(host.sessions.Missing.cwd);
-      expect(
-        await status.evaluate((element) => {
-          const status = element.getBoundingClientRect();
-          const input = document.querySelector("#workspace-path")!.getBoundingClientRect();
-          return {
-            visible: status.top >= 0,
-            aboveInput: status.bottom <= input.top,
-            gap: innerHeight - input.bottom,
-          };
-        }),
-      ).toEqual({ visible: true, aboveInput: true, gap: 12 });
+      await expect
+        .poll(() =>
+          frame.evaluate((path) => {
+            const observed =
+              (
+                window as unknown as {
+                  __registrationStatus?: { className: string; text: string }[];
+                }
+              ).__registrationStatus ?? [];
+            return observed.some(
+              ({ className, text }) => className === "error" && text.includes(path!),
+            );
+          }, host.sessions.Missing.cwd),
+        )
+        .toBe(true);
+      const errored = await frame.evaluate((path) => {
+        const observed =
+          (
+            window as unknown as {
+              __registrationStatus?: RegistrationStatusObservation[];
+            }
+          ).__registrationStatus ?? [];
+        return observed.find(
+          ({ className, text }) => className === "error" && text.includes(path!),
+        );
+      }, host.sessions.Missing.cwd);
+      expect(errored).toBeDefined();
+      expect(errored!.status!.top).toBeGreaterThanOrEqual(0);
+      expect(errored!.status!.bottom).toBeLessThanOrEqual(errored!.input!.top);
+      expect(errored!.viewportHeight! - errored!.input!.bottom).toBe(12);
       await testInfo.attach("無効なパスと入力保持", {
         body: await host.page.screenshot(),
         contentType: "image/png",
@@ -948,8 +922,8 @@ test(
       await expect(
         frame
           .locator(".session-row.selected")
-          .describe("Unsaved session selection after new launch"),
-      ).toHaveCount(1);
+          .describe("No selected rows while the new session is unsaved"),
+      ).toHaveCount(0);
       const runtime = host.piProcesses().find((entry) => entry.cwd === folder)!;
       const encoded = host
         .tmux(["display-message", "-p", "-t", runtime.target, "#{@pi-tmux-session}"])
@@ -966,7 +940,9 @@ test(
         )
         .toEqual([metadata.id]);
       expect(existsSync(metadata.file)).toBe(false);
-      await expect(group.locator(".session-row")).toHaveCount(1);
+      await expect(
+        group.locator(".session-row").describe("Unsaved new session rows stay hidden"),
+      ).toHaveCount(0);
       const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
       await group.locator(".group-new-session").click();
       await host.expectPiVisible(folder);
@@ -1178,6 +1154,8 @@ test(
       await host.activateSession("A");
       await host.activateSession("B");
       await host.selectSession("B");
+      await host.selectSession("A");
+      await host.activateSession("Deleted");
       await host.selectSession("A");
       await host.expectNativeDisplay("A");
       initialA = host.sessionRuntime("A")!;
@@ -1479,7 +1457,11 @@ test(
       const store = JSON.parse(readFileSync(statePath, "utf8")) as SessionStateStoreData;
       const activeSessions = store["active-workspaces"][workspaceCwd]["active-sessions"]!;
       const sessionDirectory = dirname(host.sessions.A.session);
-      for (const [index, { key }] of phases.entries()) {
+      // The list sorts rows by file creation time (birth time), so create the
+      // four files in reverse display order with small delays between them:
+      // B first and A last keeps the rows in phases order.
+      for (const [reverseIndex, { key }] of [...phases].reverse().entries()) {
+        const index = phases.length - 1 - reverseIndex;
         const fixture = host.sessions[key];
         const entries = fixture.original
           .trimEnd()
@@ -1489,10 +1471,12 @@ test(
         entries[0].timestamp = new Date(Date.UTC(2026, 9, 22, 4 - index)).toISOString();
         const original = entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n";
         const session = join(sessionDirectory, basename(fixture.session));
+        if (existsSync(session)) unlinkSync(session);
         writeFileSync(session, original);
         if (session !== fixture.session) unlinkSync(fixture.session);
         host.sessions[key] = { ...fixture, cwd: workspaceCwd, session, original };
         activeSessions[fixture.id] = {};
+        if (reverseIndex < phases.length - 1) await sleep(50);
       }
       store["active-workspaces"] = { [workspaceCwd]: { "active-sessions": activeSessions } };
       writeFileSync(statePath, JSON.stringify(store));

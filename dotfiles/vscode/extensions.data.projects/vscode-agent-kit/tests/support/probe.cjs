@@ -10,7 +10,7 @@ exports.activate = function activate(context) {
     maxOwnedDisplays = Math.max(
       maxOwnedDisplays,
       vscode.window.terminals.filter(
-        (terminal) => terminal.creationOptions.env?.PI_SESSIONS_DISPLAY_SOCKET !== undefined,
+        (terminal) => terminal.creationOptions.env?.PI_SESSIONS_DISPLAY === "1",
       ).length,
     );
     maxTerminalTabs = Math.max(
@@ -33,7 +33,7 @@ exports.activate = function activate(context) {
           location: vscode.TerminalLocation.Editor,
           shellPath: "tmux",
           shellArgs: ["-S", socketName, "-f", "/dev/null", "attach-session", "-t", target],
-          env: { PI_SESSIONS_DISPLAY_SOCKET: socketName, TMUX: null, TMUX_PANE: null },
+          env: { PI_SESSIONS_DISPLAY: "1", TMUX: null, TMUX_PANE: null },
           isTransient: false,
         })
         .show();
@@ -56,7 +56,7 @@ exports.activate = function activate(context) {
             name: terminal.name,
             pid: await terminal.processId,
             exit: terminal.exitStatus,
-            owned: terminal.creationOptions.env?.PI_SESSIONS_DISPLAY_SOCKET !== undefined,
+            owned: terminal.creationOptions.env?.PI_SESSIONS_DISPLAY === "1",
             options: terminal.creationOptions,
           })),
         ),

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { expect, test } from "../support/vscode";
 
 test(
-  "Tracks public list membership and title for unsaved Pi while prewarming hidden workspaces",
+  "Tracks public list membership and title for running Pi while prewarming hidden workspaces",
   { annotation: { type: "spec", description: "E2E-16" } },
   async ({ host }) => {
     let id = "";
@@ -12,7 +12,7 @@ test(
     let file = "";
     let original = "";
     const statePath = join(host.directory, "agent/session-state.json");
-    await test.step("Find the prewarmed unsaved Pi in the public workspace list", async () => {
+    await test.step("Keep the prewarmed unsaved Pi out of the public list rows", async () => {
       await expect.poll(() => host.piProcesses().length).toBe(3);
       const runtime = host.piProcesses().find(({ cwd }) => cwd === host.sessions.A.cwd)!;
       target = runtime.target;
@@ -39,30 +39,36 @@ test(
       const workspace = workspaces.find(
         (workspace: { cwd: string }) => workspace.cwd === host.sessions.A.cwd,
       );
-      expect(workspace.sessions).toContainEqual({ id, file, state: null, title: null });
+      expect(workspace.sessions).toEqual([]);
+      expect(workspace.empty).toContainEqual({ id, file });
       const frame = await host.sessionFrame();
       await expect(
-        frame.locator(`[data-session="${id}"]`).describe("Unsaved list session"),
-      ).toBeVisible();
+        frame.locator(`[data-session="${id}"]`).describe("Unsaved prewarmed Pi"),
+      ).toHaveCount(0);
       original = readFileSync(statePath, "utf8");
     });
     await test.step("Apply a public title independently of null state and observe automatic list updates", async () => {
+      await host.activateSession("A");
+      const saved = host.sessionRuntime("A")!;
+      expect(saved.target).not.toBe(target);
       host.tmux([
         "set-option",
         "-p",
         "-t",
-        target,
+        saved.target,
         "@pi_session_state",
         JSON.stringify({
           version: 1,
-          sessionId: id,
+          sessionId: host.sessions.A.id,
           state: null,
-          title: "Published unsaved title",
+          title: "Published running title",
         }),
       ]);
       const frame = await host.sessionFrame();
-      const row = frame.locator(`[data-session="${id}"]`).describe("Published unsaved title row");
-      await expect(row.locator(".session-name")).toHaveText("Published unsaved title");
+      const row = frame
+        .locator(`[data-session="${host.sessions.A.id}"]`)
+        .describe("Published running title row");
+      await expect(row.locator(".session-name")).toHaveText("Published running title");
       expect(existsSync(file)).toBe(false);
       expect(readFileSync(statePath, "utf8")).toBe(original);
     });
@@ -86,9 +92,9 @@ test(
       const group = frame
         .locator("section.group")
         .filter({ has: frame.locator(`.group-header[title="${cwd}"]`) });
-      await expect(group.locator(".session-row").describe("Background prewarmed row")).toHaveCount(
-        1,
-      );
+      await expect(
+        group.locator(".session-row").describe("Hidden empty prewarmed Pi rows"),
+      ).toHaveCount(0);
     });
   },
 );
