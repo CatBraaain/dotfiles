@@ -18,6 +18,7 @@ import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { HistoryTitleCache, readSavedSessionTitle } from "./history-titles";
 
 type Operation =
   | { kind: "help" }
@@ -296,10 +297,7 @@ export function parseOperation(argv: string[]): Operation {
   }
   if (argv[0] === "current") {
     const pid = argv[1] === "--client-pid" ? argv[2] : undefined;
-    if (
-      argv.length === 1 ||
-      (argv.length === 3 && pid !== undefined && /^[1-9]\d*$/.test(pid))
-    )
+    if (argv.length === 1 || (argv.length === 3 && pid !== undefined && /^[1-9]\d*$/.test(pid)))
       return { kind: "current", clientPid: pid === undefined ? undefined : Number(pid) };
   }
   if (argv[0] === "history") {
@@ -1214,8 +1212,7 @@ async function switchSession(
 ): Promise<void> {
   const targets = (await livePanes(config, "list")).filter((pane) => pane.id === id);
   if (targets.length === 0) throw new Error(`Session not found (use the complete ID): ${id}`);
-  if (targets.length > 1)
-    throw new Error(`Multiple pi processes are running for session ${id}`);
+  if (targets.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
   const client = await resolveClient(config, clientPid);
   await tmux(config, ["switch-client", "-c", client.name, "-t", `=${targets[0]!.name}`]);
 }
@@ -1237,7 +1234,9 @@ async function currentSession(
 }
 
 function sessionGroupName(cwd: string): string {
-  return `--${resolve(cwd).replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+  return `--${resolve(cwd)
+    .replace(/^[/\\]/, "")
+    .replace(/[/\\:]/g, "-")}--`;
 }
 
 async function historySessions(
@@ -1245,8 +1244,7 @@ async function historySessions(
   cwdFilter: string | undefined,
 ): Promise<HistoryEntry[]> {
   const registered = Object.keys(readMembershipStore(config)["active-workspaces"]);
-  const cwds =
-    cwdFilter === undefined ? registered : registered.filter((cwd) => cwd === cwdFilter);
+  const cwds = cwdFilter === undefined ? registered : registered.filter((cwd) => cwd === cwdFilter);
   if (cwds.length === 0) return [];
   const configured = await configuredSessionRoots(config);
   const remembered = await rememberedSessionRoots(config);
@@ -1270,6 +1268,7 @@ async function historySessions(
     }),
   );
   const history: HistoryEntry[] = [];
+  const titles = new HistoryTitleCache();
   for (const file of new Set(listed.flat())) {
     const header = readHeader(file);
     if (
@@ -1285,7 +1284,7 @@ async function historySessions(
       id: header.id,
       cwd: header.cwd,
       file,
-      title: savedSessionName(file),
+      title: titles.resolveTitle(file),
       mtime: Math.round(stat.mtimeMs),
       size: stat.size,
     });
@@ -1691,27 +1690,7 @@ function parseSessionOption(
 }
 
 function savedSessionName(file: string): string | null {
-  let lines: string[];
-  try {
-    lines = readFileSync(file, "utf8").split("\n");
-  } catch {
-    return null;
-  }
-  for (let index = lines.length - 1; index >= 0; index--) {
-    const line = lines[index];
-    if (!line) continue;
-    let entry: { type?: unknown; name?: unknown };
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    if (entry.type !== "session_info") continue;
-    if (typeof entry.name !== "string") return null;
-    const name = entry.name.trim();
-    return name || null;
-  }
-  return null;
+  return readSavedSessionTitle(file).title;
 }
 
 async function hasSession(config: Config, name: string): Promise<boolean> {
