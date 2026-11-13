@@ -19,14 +19,6 @@ import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
 const root = resolve(__dirname, "../..");
-
-/** Encode a cwd into pi's session group directory name (e.g. "/a/b" -> "--a-b--"). */
-function encodeCwdDirName(cwd: string): string {
-  const stripped = resolve(cwd)
-    .replace(/^[/\\]/, "")
-    .replace(/[/\\:]/g, "-");
-  return `--${stripped}--`;
-}
 const dotfiles = process.env.PI_REVIEW_DOTFILES ?? join(homedir(), "projects/dotfiles/dotfiles");
 const realPi = execFileSync("which", ["pi"], { encoding: "utf8" }).trim();
 const realTmux = execFileSync("which", ["tmux"], { encoding: "utf8" }).trim();
@@ -570,8 +562,9 @@ export class VSCodeFixture {
       const session = join(
         this.directory,
         "agent/sessions",
-        // pi stores each session inside the cwd group directory its header cwd maps to
-        encodeCwdDirName(cwd),
+        // With PI_CODING_AGENT_SESSION_DIR set, pi-mux history lists only the
+        // *.jsonl files directly inside the session directory. Fixture files
+        // must therefore sit directly in it, not in group subdirectories.
         `${timestamp.replace(/[:.]/g, "-")}_${id}.jsonl`,
       );
       write(session, original);

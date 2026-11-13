@@ -61,7 +61,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 
 拡張機能は `pi-mux list` を workspace と稼働 Pi の正本とする。応答は `[{cwd,sessions:[{id,file,state,title,temporary?:true}],empty:[{id,file,temporary?:true}]}]` の JSON 配列であり、cwd と file は絶対パス、state と title は文字列または null である。`temporary` は一時 Pi にだけ `true` で存在し、省略は通常 Pi を表す。`false` やその他の値は不正応答として扱う。`sessions` には会話ファイルが存在する pane だけが載り、未作成分は `empty` に載る。空 workspace は `sessions: []`・`empty: []` として含まれる。独自の所属集合や復元集合を保存しない。
 
-保存済み会話は `pi-mux history` から得る。応答は `[{id,cwd,file,title,mtime,size}]` の JSON 配列（mtime 降順）であり、pi-mux が登録済み workspace の group ディレクトリ直下の `*.jsonl` を列挙し、各ファイルのヘッダー id・cwd を正とし、`session_info` の `name` を title として解決したものになる。
+保存済み会話は `pi-mux history` から得る。応答は `[{id,cwd,file,title,btime,mtime,size}]` の JSON 配列（`mtime` 降順、`mtime` が `null` の要素は後方、同値は `file` 昇順）であり、pi-mux が登録済み workspace の保存会話の `*.jsonl` を列挙し（既定の保存先では group ディレクトリ直下、`PI_CODING_AGENT_SESSION_DIR` 指定時はその直下）、各ファイルのヘッダー id・cwd を正とする。`btime` は会話ファイル先頭行（ヘッダー）の `timestamp` をミリ秒へ解釈した値（セッション開始日時）、`mtime` はファイル内で物理的に最後の `message`/`compaction` エントリの `timestamp`（ミリ秒、該当エントリが無いとき `null`）である。title はセッション名（最後の `session_info` の `name`）で解決し、解決できないとき最初の user メッセージ（80 code points で丸め）を使い、いずれも無いとき `null` になる。
 
 | 項目 | 値 |
 | --- | --- |
@@ -79,14 +79,14 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 
 ### 開始日時・更新日時
 
-開始日時は、history エントリの `file` が示す会話ファイルの作成時刻（birth time、ミリ秒）を使い、取得できないときは開始日時不明とする。更新日時は、history エントリの `mtime`（会話ファイルの更新時刻、ミリ秒）を使う。稼働 Pi が history に無いときは日時不明として一覧に残し、日時欄は空欄とする。
+開始日時は、history エントリの `btime`（会話ファイル先頭行（ヘッダー）の `timestamp` をミリ秒へ解釈した値）を使う。更新日時は、history エントリの `mtime`（ファイル内で物理的に最後の `message`/`compaction` エントリの `timestamp`、ミリ秒）を使い、`mtime` が `null` のときは更新日時が無いものとして日時欄は空欄とする。稼働 Pi が history に無いときは日時不明として一覧に残し、日時欄は空欄とする。
 
 ### 表示名
 
 セッション項目の表示名は次の順で決める。
 
 1. 稼働 Pi は list.title が非空文字列ならその値
-2. history.title（pi-mux が解決した最新の `session_info` の `name`。`/name` や `pi --name` で設定される値）
+2. history.title（pi-mux が解決したタイトル。セッション名（`/name` や `pi --name` で設定される値）、解決できないとき最初の user メッセージ）
 3. いずれも無い場合 `Untitled`
 
 一時 Pi も稼働 Pi として上記の規則に従う。history に無い稼働 Pi は `Untitled` とする。

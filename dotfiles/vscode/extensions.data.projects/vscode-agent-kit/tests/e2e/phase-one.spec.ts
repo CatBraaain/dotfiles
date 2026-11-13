@@ -1457,9 +1457,9 @@ test(
       const store = JSON.parse(readFileSync(statePath, "utf8")) as SessionStateStoreData;
       const activeSessions = store["active-workspaces"][workspaceCwd]["active-sessions"]!;
       const sessionDirectory = dirname(host.sessions.A.session);
-      // The list sorts rows by file creation time (birth time), so create the
-      // four files in reverse display order with small delays between them:
-      // B first and A last keeps the rows in phases order.
+      // The list sorts saved rows by history btime (the header timestamp), so
+      // the four headers carry distinct timestamps that match the phases
+      // order.
       for (const [reverseIndex, { key }] of [...phases].reverse().entries()) {
         const index = phases.length - 1 - reverseIndex;
         const fixture = host.sessions[key];
