@@ -12,5 +12,5 @@
     "types": ["bun", "node"]
   },
   "include": ["dotfiles-manager/**/*.ts", "dotfiles/**/*.build.ts", "dotfiles/**/*.edit.ts"],
-  "exclude": ["dotfiles-manager/**/*.test.ts"]
+  "exclude": ["dotfiles-manager/**/*.test.ts", "dotfiles/windows-menu/create.build.ts"]
 }
