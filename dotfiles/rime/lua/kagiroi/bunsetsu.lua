@@ -14,7 +14,16 @@ local kLearningScale = 10000
 local kUnknownWordCost = 10000
 local kBoundaryMarker = "\tb1 "
 
-local function route_precedes(a, b)
+local function node_words(node)
+    local words = node.expanded_words
+    if not words then
+        words = node.route_words or { node }
+        node.expanded_words = words
+    end
+    return words
+end
+
+local function word_route_precedes(a, b)
     for index = 1, math.min(#a, #b) do
         if a[index]._end ~= b[index]._end then return a[index]._end < b[index]._end end
     end
@@ -26,18 +35,64 @@ local function route_precedes(a, b)
     return false
 end
 
-local function extend_route(prefix, node, suffix)
-    local words = {}
-    for _, word in ipairs(prefix) do words[#words + 1] = word end
-    for _, word in ipairs(node.route_words or { node }) do words[#words + 1] = word end
-    for _, word in ipairs(suffix or {}) do words[#words + 1] = word end
+local function chain_words(node, completions)
+    local cache = completions.chain_words_cache
+    if not cache then
+        cache = {}
+        completions.chain_words_cache = cache
+    end
+    local words = cache[node]
+    if not words then
+        words = {}
+        local current = node
+        while current do
+            local expanded = node_words(current)
+            for _, word in ipairs(expanded) do words[#words + 1] = word end
+            current = completions[current]
+        end
+        cache[node] = words
+    end
     return words
 end
 
-local function path_precedes(a, b)
+local function prefix_words(state)
+    local words = state.words
+    if not words then
+        local nodes, head = {}, state
+        while state do
+            nodes[#nodes + 1] = state.node
+            state = state.prev
+        end
+        words = {}
+        for index = #nodes, 1, -1 do
+            local expanded = node_words(nodes[index])
+            for _, word in ipairs(expanded) do words[#words + 1] = word end
+        end
+        head.words = words
+    end
+    return words
+end
+
+local function path_completion_words(item, completions)
+    local words = item.completion_words
+    if not words then
+        words = {}
+        for _, word in ipairs(prefix_words(item.prefix)) do words[#words + 1] = word end
+        local node = completions[item.node]
+        while node do
+            local expanded = node_words(node)
+            for _, word in ipairs(expanded) do words[#words + 1] = word end
+            node = completions[node]
+        end
+        item.completion_words = words
+    end
+    return words
+end
+
+local function path_precedes(a, b, completions)
     if a.score ~= b.score then return a.score < b.score end
-    if route_precedes(a.completion, b.completion) then return true end
-    if route_precedes(b.completion, a.completion) then return false end
+    if word_route_precedes(path_completion_words(a, completions), path_completion_words(b, completions)) then return true end
+    if word_route_precedes(path_completion_words(b, completions), path_completion_words(a, completions)) then return false end
     if a.node._end ~= b.node._end then return a.node._end > b.node._end end
     return a.sequence < b.sequence
 end
@@ -174,18 +229,18 @@ local function install_userdict_reader(env)
     end
 end
 
-local function heap_push(heap, item)
+local function heap_push(heap, item, completions)
     heap[#heap + 1] = item
     local index = #heap
     while index > 1 do
         local parent = math.floor(index / 2)
-        if not path_precedes(heap[index], heap[parent]) then break end
+        if not path_precedes(heap[index], heap[parent], completions) then break end
         heap[parent], heap[index] = heap[index], heap[parent]
         index = parent
     end
 end
 
-local function heap_pop(heap)
+local function heap_pop(heap, completions)
     local top = heap[1]
     local last = table.remove(heap)
     if #heap > 0 then
@@ -193,8 +248,8 @@ local function heap_pop(heap)
         local index = 1
         while true do
             local left, right, smallest = index * 2, index * 2 + 1, index
-            if left <= #heap and path_precedes(heap[left], heap[smallest]) then smallest = left end
-            if right <= #heap and path_precedes(heap[right], heap[smallest]) then smallest = right end
+            if left <= #heap and path_precedes(heap[left], heap[smallest], completions) then smallest = left end
+            if right <= #heap and path_precedes(heap[right], heap[smallest], completions) then smallest = right end
             if smallest == index then break end
             heap[index], heap[smallest] = heap[smallest], heap[index]
             index = smallest
@@ -477,23 +532,23 @@ local function completion_costs(starting, length, env, context)
         for _, node in ipairs(starting[position] or {}) do
             if node._end == length then
                 remaining[node] = right_boundary_term(env, context, node.right_id)
-                completions[node] = {}
             else
-                local best, best_route
+                local best, best_successor
                 for _, successor in ipairs(starting[node._end + 1] or {}) do
                     local conn = matrix_cost(env, node.right_id, successor.left_id)
                     local tail = remaining[successor]
                     if conn and tail then
                         local cost = conn + successor.wcost + tail
                         if not best or cost <= best then
-                            local route = extend_route({}, successor, completions[successor])
-                            if not best or cost < best or route_precedes(route, best_route) then
-                                best, best_route = cost, route
+                            if not best or cost < best
+                                or word_route_precedes(chain_words(successor, completions),
+                                    chain_words(best_successor, completions)) then
+                                best, best_successor = cost, successor
                             end
                         end
                     end
                 end
-                remaining[node], completions[node] = best, best_route
+                remaining[node], completions[node] = best, best_successor
             end
         end
     end
@@ -513,19 +568,23 @@ local function ranked_path_enum(reading, env, context, stock_texts, starting)
         local key = text
         local score = left_term + own
         local previous = prefixes[key]
-        local words = extend_route(incoming or {}, node)
-        if previous and (score > previous.score
-            or score == previous.score and not route_precedes(words, previous.words)) then return end
-        local prefix = { score = score, words = words }
-        prefixes[key] = prefix
+        local state = { node = node, prev = incoming }
+        if previous then
+            if score > previous.score then return end
+            if score == previous.score
+                and not word_route_precedes(prefix_words(state), prefix_words(previous)) then
+                return
+            end
+        end
+        state.score = score
+        prefixes[key] = state
         sequence = sequence + 1
         heap_push(heap, {
             sequence = sequence,
-            completion = extend_route(incoming or {}, node, completions[node]),
             node = node, text = text, first_left_id = first_left,
-            own = own, left_term = left_term, key = key, prefix = prefix,
+            own = own, left_term = left_term, key = key, prefix = state,
             score = left_term + own + tail,
-        })
+        }, completions)
     end
     for _, node in ipairs(starting[1] or {}) do
         local term = left_boundary_term(env, context, node.left_id)
@@ -535,7 +594,7 @@ local function ranked_path_enum(reading, env, context, stock_texts, starting)
     end
     local results, seen = {}, {}
     while heap[1] and #results < kContextualDiscoveryLimit do
-        local path = heap_pop(heap)
+        local path = heap_pop(heap, completions)
         local node = path.node
         if cheapest_prefix[node][path.key] == path.prefix then
             if node._end == length then
@@ -551,7 +610,7 @@ local function ranked_path_enum(reading, env, context, stock_texts, starting)
                     local conn = matrix_cost(env, node.right_id, successor.left_id)
                     if conn then
                         offer(successor, path.text .. successor.candidate, path.first_left_id,
-                            path.own + conn + successor.wcost, path.left_term, path.prefix.words)
+                            path.own + conn + successor.wcost, path.left_term, path.prefix)
                     end
                 end
             end
@@ -846,21 +905,23 @@ local function ranked_path(reading, env, context, boundaries, fallback, dictiona
         attach_histories(starting, env)
     end
     local remaining, completions = completion_costs(starting, length, env, context)
-    local path, best = nil, math.huge
+    local best_node, best = nil, math.huge
     for _, node in ipairs(starting[1] or {}) do
         local left = left_boundary_term(env, context, node.left_id)
         local tail = remaining[node]
         if left and tail then
             local score = left + node.wcost + tail
             if score <= best then
-                local route = extend_route({}, node, completions[node])
-                if not path or score < best or route_precedes(route, path) then
-                    path, best = route, score
+                if not best_node or score < best
+                    or word_route_precedes(chain_words(node, completions),
+                        chain_words(best_node, completions)) then
+                    best_node, best = node, score
                 end
             end
         end
     end
-    return path, best
+    if not best_node then return nil, best end
+    return chain_words(best_node, completions), best
 end
 
 local function attach_pair_routes(candidates, reading, env, starting, route_cache)
@@ -1605,10 +1666,23 @@ local function history_entry(scope, reading, text, route)
     return entry
 end
 
+local function invalidate_userdict_caches(viterbi)
+    viterbi.lattice = {}
+    viterbi.surface = ""
+    viterbi.bos = nil
+    local cache = viterbi.lookup_cache
+    if cache then
+        local keys = {}
+        for key in cache:pairs() do keys[#keys + 1] = key end
+        for _, key in ipairs(keys) do cache:delete(key) end
+    end
+end
+
 function Top.learn(context)
     Top.sync(context)
     local env = session(context)
     local clauses = env.conversion.clauses
+    env.mem:start_session()
     local join_text, join_reading, join_words = {}, {}, {}
     local joinable = #clauses >= 2
     for index, clause in ipairs(clauses) do
@@ -1641,7 +1715,8 @@ function Top.learn(context)
     entry.custom_code = reading .. " "
     entry.text = reading .. "|" .. kHistoryIds .. kBoundaryMarker .. table.concat(boundaries, ",")
     env.mem:update_userdict(entry, 1, "")
-    env.viterbi:clear()
+    env.mem:finish_session()
+    invalidate_userdict_caches(env.viterbi)
 end
 
 function Top.segment(segmentation, env)

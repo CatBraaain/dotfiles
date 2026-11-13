@@ -59,6 +59,17 @@ function M.new_env(dictionary, userdict, matrix)
         end, self
     end
 
+    function mem:start_session()
+        self.session_open = true
+        return true
+    end
+
+    function mem:finish_session()
+        local was_open = self.session_open
+        self.session_open = false
+        return was_open or false
+    end
+
     local reverse_lookup = {}
     function reverse_lookup:lookup(key)
         local cost = matrix[key]

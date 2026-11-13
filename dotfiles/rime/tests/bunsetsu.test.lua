@@ -1687,5 +1687,24 @@ do
     end
 end
 
+print("== 42. learn batches every userdict write into one storage session")
+do
+    local dictionary = {
+        { surface = "かな", candidate = "仮名", left_id = 1, right_id = 1, cost = 100 },
+    }
+    local bunsetsu, context = pos_engine(dictionary, pos_matrix({ 1 }), {})
+    bunsetsu.start(context, "かな")
+    local mem = context.translator_env.mem
+    local writes, open_writes = 0, 0
+    mem.update_userdict = function(_)
+        writes = writes + 1
+        if mem.session_open then open_writes = open_writes + 1 end
+    end
+    bunsetsu.learn(context)
+    check(writes == 2, "the single clause learns its word and boundary entries")
+    check(open_writes == writes, "every userdict write happens inside the opened session")
+    check(not mem.session_open, "learn closes the storage session before returning")
+end
+
 print(string.format("bunsetsu: %d checks, %d failures", checks, failures))
 os.exit(failures == 0 and 0 or 1)

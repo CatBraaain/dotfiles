@@ -18,7 +18,8 @@ package.preload["kagiroi/kagiroi_translator"] = function()
                 best_n = function() return function() return {} end end,
                 clear = function() end,
             }
-            env.mem = { update_userdict = function() end }
+            env.mem = { start_session = function() end, finish_session = function() end,
+                update_userdict = function() end }
         end,
         fini = function() end,
         func = function(input, seg, env)
@@ -226,6 +227,14 @@ local function press(env, keycode, modifiers)
     }, env)
 end
 
+local function recording_mem(learned)
+    return {
+        start_session = function() end,
+        finish_session = function() end,
+        update_userdict = function(_, entry) learned[#learned + 1] = entry end,
+    }
+end
+
 do
     local append_cases = {
         { key = string.byte("k"), expected = "かな", result = kNoop },
@@ -331,7 +340,7 @@ env, context = new_environment({
     { text = "ネ", readings = { ["1"] = true }, phrase = { text = "ネ|2830 2830", custom_code = "1 " } },
 })
 local learned = {}
-env.mem = { update_userdict = function(self, entry) table.insert(learned, entry) end }
+env.mem = recording_mem(learned)
 context.input = "か1"
 context:set_option("_kagiroi_hide_candidates", true)
 assert(press(env, 0x20) == kAccepted, "the learning test must start with a hidden conversion")
@@ -351,7 +360,7 @@ env, context = new_environment({
     { text = "ネ", readings = { ["1"] = true }, phrase = { text = "ネ|2830 2830", custom_code = "1 " } },
 })
 learned = {}
-env.mem = { update_userdict = function(self, entry) table.insert(learned, entry) end }
+env.mem = recording_mem(learned)
 context.input = "か1"
 context:set_option("_kagiroi_hide_candidates", true)
 assert(press(env, 0x20) == kAccepted, "the hidden-commit test must start with a hidden conversion")
@@ -364,7 +373,7 @@ env, context = new_environment({
     { text = "下", phrase = { text = "下|2820 2820", custom_code = "かな " } },
 })
 learned = {}
-env.mem = { update_userdict = function(self, entry) table.insert(learned, entry) end }
+env.mem = recording_mem(learned)
 context.input = "かな"
 context:set_option("_kagiroi_hide_candidates", true)
 assert(press(env, 0x20) == kAccepted and press(env, 0x20) == kAccepted,
@@ -380,7 +389,7 @@ env, context = new_environment({
     { text = "ネ", readings = { ["1"] = true }, phrase = { text = "ネ|2830 2830", custom_code = "1 " } },
 })
 learned = {}
-env.mem = { update_userdict = function(self, entry) table.insert(learned, entry) end }
+env.mem = recording_mem(learned)
 context.input = "か1"
 context:set_option("_kagiroi_hide_candidates", true)
 assert(press(env, 0x20) == kAccepted and press(env, 0x20) == kAccepted,
@@ -397,7 +406,7 @@ for _, visible in ipairs({ false, true }) do
             { text = "仮名", phrase = { text = "仮名|1851 1851", custom_code = "かな " } },
         })
         learned = {}
-        env.mem = { update_userdict = function(_, entry) table.insert(learned, entry) end }
+        env.mem = recording_mem(learned)
         context.input = "かな"
         press(env, 0x20)
         if visible then press(env, 0x20) end
@@ -412,7 +421,7 @@ end
 for _, key in ipairs({ 0xff0d, 0xff8b, 0xff1b }) do
     env, context = new_environment()
     learned = {}
-    env.mem = { update_userdict = function(_, entry) table.insert(learned, entry) end }
+    env.mem = recording_mem(learned)
     context.input = "かな"
     press(env, key)
     assert(#learned == 0, "direct reading commit or cancellation must not learn")
@@ -420,7 +429,7 @@ end
 
 env, context = new_environment()
 learned = {}
-env.mem = { update_userdict = function(_, entry) table.insert(learned, entry) end }
+env.mem = recording_mem(learned)
 context.input = "かな"
 press(env, 0x20)
 press(env, 0xff51, { shift = true })
@@ -431,7 +440,7 @@ assert(#learned == 0, "cancelling conversion then directly committing the readin
 
 env, context = new_environment()
 learned = {}
-env.mem = { update_userdict = function(_, entry) table.insert(learned, entry) end }
+env.mem = recording_mem(learned)
 context.input = "かな"
 press(env, 0x20)
 press(env, 0xff51, { shift = true })
