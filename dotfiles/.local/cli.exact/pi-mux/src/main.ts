@@ -12,13 +12,18 @@ import {
   renameSync,
   statSync,
   writeFileSync,
+  type Stats,
 } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HistorySummaryCache, parseEpochMs } from "./history-summary";
+import {
+  HistorySummaryCache,
+  parseEpochMs,
+  type SavedSessionSummary,
+} from "./history-summary";
 
 type Operation =
   | { kind: "help" }
@@ -1278,8 +1283,14 @@ async function historySessions(
     if (customRoot && !targetCwds.has(header.cwd)) continue;
     if (archived && normalIds.has(header.id)) continue;
     if (!archived) normalIds.add(header.id);
-    const stat = statSync(file);
-    const summary = summaries.resolve(file);
+    let stat: Stats;
+    let summary: SavedSessionSummary;
+    try {
+      stat = statSync(file);
+      summary = summaries.resolve(file);
+    } catch {
+      continue;
+    }
     history.push({
       id: header.id,
       cwd: header.cwd,

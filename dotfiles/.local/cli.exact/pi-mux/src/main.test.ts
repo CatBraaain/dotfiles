@@ -1008,6 +1008,7 @@ class HistoryFixture {
   readonly otherCwd: string;
   readonly env: Record<string, string>;
   readonly membership: string;
+  readonly preloads: string[] = [];
 
   constructor() {
     mkdirSync(historyTestRoot, { recursive: true });
@@ -1061,7 +1062,7 @@ class HistoryFixture {
   }
 
   run(args: string[]) {
-    return spawnSync(process.execPath, ["run", source, ...args], {
+    return spawnSync(process.execPath, ["run", ...this.preloads, source, ...args], {
       env: this.env,
       encoding: "utf8",
       timeout: 10_000,
@@ -1203,6 +1204,37 @@ describe("history", () => {
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), []);
       assert.ok(existsSync(file));
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("skips conversations that disappear after listing", () => {
+    const fixture = new HistoryFixture();
+    try {
+      const healthyId = randomUUID();
+      const healthyFile = conversationFile(fixture.agentDir, fixture.cwd, healthyId, {});
+      const deletedId = randomUUID();
+      const deletedFile = conversationFile(fixture.agentDir, fixture.cwd, deletedId, {});
+      const failStat = join(fixture.directory, "fail-stat.ts");
+      writeFileSync(
+        failStat,
+        `import { spyOn } from "bun:test";
+import * as fs from "node:fs";
+const deleted = ${JSON.stringify(deletedFile)};
+const original = fs.statSync;
+spyOn(fs, "statSync").mockImplementation((...args) => {
+  if (args[0] === deleted) throw Object.assign(new Error("deleted after listing"), { code: "ENOENT" });
+  return Reflect.apply(original, fs, args);
+});
+`,
+      );
+      fixture.preloads.push("--preload", failStat);
+      const result = fixture.run(["history"]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [
+        historyEntry(healthyFile, healthyId, fixture.cwd, null),
+      ]);
     } finally {
       fixture.cleanup();
     }
