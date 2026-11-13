@@ -151,6 +151,10 @@ export default function (pi: ExtensionAPI) {
   };
   registerable.registerToolRenderer?.((toolName, next) => renderersOf(toolName, next));
   pi.registerEntryRenderer?.(LEGACY_STAMP_ENTRY_TYPE, () => EMPTY_ROW);
+  pi.registerMarkdownTransformer?.((markdown, context) => {
+    if (context.messageType !== "assistant") return markdown;
+    return convertAnsiEscapeLiterals(markdown);
+  });
   let dispose: (() => void) | undefined;
   pi.on?.("session_start", (_event, ctx) => {
     dispose?.();
@@ -838,4 +842,29 @@ function expandKeyText(): string {
 
 function firstTextContent(content: Array<{ type: string; text?: string }>): string {
   return content.find((block) => block.type === "text")?.text ?? "";
+}
+
+const ANSI_FENCE_OPEN_PATTERN = /^\s{0,3}```\s*ansi\s*$/;
+const FENCE_CLOSE_PATTERN = /^\s{0,3}```\s*$/;
+
+export function convertAnsiEscapeLiterals(markdown: string): string {
+  const lines = markdown.split("\n");
+  const converted: string[] = [];
+  let insideAnsiFence = false;
+  for (const line of lines) {
+    if (!insideAnsiFence) {
+      insideAnsiFence = ANSI_FENCE_OPEN_PATTERN.test(line);
+      converted.push(line);
+      continue;
+    }
+    const isFenceEnd = FENCE_CLOSE_PATTERN.test(line);
+    insideAnsiFence = !isFenceEnd;
+    converted.push(isFenceEnd ? line : convertEscapeLiterals(line));
+  }
+  return converted.join("\n");
+}
+
+function convertEscapeLiterals(line: string): string {
+  const escape = "\x1b";
+  return line.replace(/\\x1b/gi, escape).replace(/\\u001b/gi, escape);
 }
