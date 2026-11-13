@@ -1189,11 +1189,27 @@ describe("拡張の接続", () => {
     const bashCalls: string[] = [];
     const context = {
       ...extension.context,
+      mode: "tui",
       ui: {
         ...extension.context.ui,
-        async select() {
+        async custom<T>(
+          factory: (
+            _tui: unknown,
+            _theme: unknown,
+            _keybindings: unknown,
+            done: (choice: T) => void,
+          ) => { handleInput(data: string): void },
+        ): Promise<T> {
           approvalCount++;
-          return "Allow in this turn";
+          return new Promise<T>((resolve) => {
+            const component = factory(
+              { terminal: { rows: 40, columns: 120 }, requestRender() {} },
+              { fg: (_token: string, text: string) => text, bold: (text: string) => text },
+              {},
+              resolve,
+            );
+            component.handleInput("2");
+          });
         },
       },
       async executeTool(name: string) {
@@ -1205,13 +1221,7 @@ describe("拡張の接続", () => {
       },
     };
     async function executeMainagent() {
-      return mainagent.execute(
-        "call",
-        { initialRequest: "fix the build" },
-        undefined,
-        undefined,
-        context,
-      );
+      return mainagent.execute("call", { prompt: "fix the build" }, undefined, undefined, context);
     }
     try {
       await extension.sessionStart();
