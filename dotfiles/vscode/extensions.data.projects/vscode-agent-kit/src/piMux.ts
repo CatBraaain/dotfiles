@@ -53,7 +53,10 @@ export interface PiMuxHistoryEntry {
   cwd: string;
   file: string;
   title: string | null;
-  mtime: number;
+  /** Header timestamp in ms: when the session started. */
+  btime: number;
+  /** Latest message/compaction entry timestamp; null when the file has none. */
+  mtime: number | null;
   size: number;
 }
 
@@ -239,8 +242,9 @@ function isPiMuxHistoryEntry(entry: unknown): entry is PiMuxHistoryEntry {
     typeof entry.file === "string" &&
     isAbsolute(entry.file) &&
     (entry.title === null || typeof entry.title === "string") &&
-    typeof entry.mtime === "number" &&
-    Number.isFinite(entry.mtime) &&
+    typeof entry.btime === "number" &&
+    Number.isFinite(entry.btime) &&
+    (entry.mtime === null || (typeof entry.mtime === "number" && Number.isFinite(entry.mtime))) &&
     typeof entry.size === "number" &&
     Number.isFinite(entry.size)
   );

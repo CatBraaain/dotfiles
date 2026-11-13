@@ -173,6 +173,7 @@ async function seedSavedSession(
     cwd,
     file: filePath,
     title: options.title ?? null,
+    btime: 900_000,
     mtime: 1_000_000 - historySeedCount++,
     size: contents.length,
   });
@@ -2276,6 +2277,7 @@ describe("SessionWebviewProvider", () => {
         cwd: root,
         file: join(cwdDir, "old.jsonl"),
         title: null,
+        btime: 1,
         mtime: 1,
         size: 1,
       },
@@ -2385,6 +2387,7 @@ describe("SessionWebviewProvider", () => {
       cwd: root,
       file: savedFixture,
       title: "Saved fixture conversation",
+      btime: 1,
       mtime: 2,
       size: savedContents.length,
     });

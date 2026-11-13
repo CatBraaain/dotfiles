@@ -13,13 +13,14 @@ const ROOT = "/project";
 function historyEntry(
   id: string,
   cwd: string,
-  options: { title?: string | null; mtime?: number } = {},
+  options: { title?: string | null; btime?: number; mtime?: number } = {},
 ): PiMuxHistoryEntry {
   return {
     id,
     cwd,
     file: `/saved/${id}.jsonl`,
     title: options.title ?? null,
+    btime: options.btime ?? 500,
     mtime: options.mtime ?? 1_000,
     size: 10,
   };
@@ -42,10 +43,6 @@ function live(id: string, file: string, title: string | null = null): PiMuxSessi
 
 function workspace(cwd: string, sessions: PiMuxSession[]): PiMuxWorkspace {
   return { cwd, sessions, empty: [] };
-}
-
-function creationTimesByFile(times: Record<string, number>) {
-  return async (filePath: string): Promise<number | null> => times[filePath] ?? null;
 }
 
 describe("listSessionSnapshot", () => {
@@ -97,13 +94,9 @@ describe("listSessionSnapshot", () => {
     }
   });
 
-  it("uses the file creation time for start and the history mtime for updates", async () => {
-    const { mux } = muxWithHistory([historyEntry("A", ROOT, { mtime: 1_234 })]);
-    const snapshot = await listSessionSnapshot(
-      mux,
-      [workspace(ROOT, [])],
-      creationTimesByFile({ "/saved/A.jsonl": 1_000 }),
-    );
+  it("uses the history btime for start and the mtime for updates", async () => {
+    const { mux } = muxWithHistory([historyEntry("A", ROOT, { btime: 1_000, mtime: 1_234 })]);
+    const snapshot = await listSessionSnapshot(mux, [workspace(ROOT, [])]);
     expect(snapshot.sessions).toEqual([
       {
         sessionId: "A",
@@ -111,21 +104,6 @@ describe("listSessionSnapshot", () => {
         filePath: "/saved/A.jsonl",
         displayName: "Untitled",
         createdAtMs: 1_000,
-        updatedAtMs: 1_234,
-      },
-    ]);
-  });
-
-  it("keeps the history mtime when the file creation time cannot be read", async () => {
-    const { mux } = muxWithHistory([historyEntry("A", ROOT, { mtime: 1_234 })]);
-    const snapshot = await listSessionSnapshot(mux, [workspace(ROOT, [])], async () => null);
-    expect(snapshot.sessions).toEqual([
-      {
-        sessionId: "A",
-        cwd: ROOT,
-        filePath: "/saved/A.jsonl",
-        displayName: "Untitled",
-        createdAtMs: null,
         updatedAtMs: 1_234,
       },
     ]);
@@ -189,18 +167,14 @@ describe("listSessionSnapshot", () => {
   });
 
   it("keeps start-time sorting with unknown start times last", async () => {
-    const { mux } = muxWithHistory([historyEntry("known", ROOT, { mtime: 5_000 })]);
-    const { sessions } = await listSessionSnapshot(
-      mux,
-      [
-        workspace(ROOT, [
-          live("z", "/saved/z.jsonl"),
-          live("a", "/saved/a.jsonl"),
-          live("known", "/saved/known.jsonl"),
-        ]),
-      ],
-      creationTimesByFile({ "/saved/known.jsonl": 5_000 }),
-    );
+    const { mux } = muxWithHistory([historyEntry("known", ROOT, { btime: 5_000 })]);
+    const { sessions } = await listSessionSnapshot(mux, [
+      workspace(ROOT, [
+        live("z", "/saved/z.jsonl"),
+        live("a", "/saved/a.jsonl"),
+        live("known", "/saved/known.jsonl"),
+      ]),
+    ]);
     expect(groupSessions(sessions, [ROOT])[0].sessions.map(({ sessionId }) => sessionId)).toEqual([
       "known",
       "a",

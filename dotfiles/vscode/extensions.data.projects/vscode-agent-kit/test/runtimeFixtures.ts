@@ -93,7 +93,11 @@ export function fakeRuntimes() {
       };
     }),
     history: vi.fn(async (): Promise<PiMuxHistoryEntry[]> =>
-      [...history.values()].sort((a, b) => b.mtime - a.mtime || a.file.localeCompare(b.file)),
+      [...history.values()].sort(
+        (a, b) =>
+          (b.mtime ?? Number.NEGATIVE_INFINITY) - (a.mtime ?? Number.NEGATIVE_INFINITY) ||
+          a.file.localeCompare(b.file),
+      ),
     ),
   };
   function clientMatches(clientPid: number | undefined): boolean {

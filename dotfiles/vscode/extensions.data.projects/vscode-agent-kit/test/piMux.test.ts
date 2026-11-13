@@ -237,17 +237,26 @@ describe("PiMux", () => {
     await expect(mux.current()).rejects.toThrow("Invalid pi-mux current response");
   });
 
-  it("parses the history list with numeric mtime and size", async () => {
+  it("parses the history list with numeric btime, mtime and size", async () => {
     const entries = [
       {
         id: "newer",
         cwd: "/project",
         file: "/saved/newer.jsonl",
         title: "Newer",
+        btime: 100,
         mtime: 2,
         size: 20,
       },
-      { id: "older", cwd: "/project", file: "/saved/older.jsonl", title: null, mtime: 1, size: 10 },
+      {
+        id: "older",
+        cwd: "/project",
+        file: "/saved/older.jsonl",
+        title: null,
+        btime: 50,
+        mtime: 1,
+        size: 10,
+      },
     ];
     const execute = vi.fn().mockResolvedValue(JSON.stringify(entries));
     const mux = new PiMux(execute);
@@ -262,14 +271,42 @@ describe("PiMux", () => {
     );
   });
 
+  it("parses the history list with null mtime for conversations without message entries", async () => {
+    const entries = [
+      {
+        id: "newer",
+        cwd: "/project",
+        file: "/saved/newer.jsonl",
+        title: "Newer",
+        btime: 100,
+        mtime: 2,
+        size: 20,
+      },
+      {
+        id: "empty",
+        cwd: "/project",
+        file: "/saved/empty.jsonl",
+        title: null,
+        btime: 60,
+        mtime: null,
+        size: 0,
+      },
+    ];
+    const execute = vi.fn().mockResolvedValue(JSON.stringify(entries));
+    expect(await new PiMux(execute).history()).toEqual(entries);
+  });
+
   it.each([
     "not json",
     "null",
     "{}",
     '[{"id":"A"}]',
-    '[{"id":"A","cwd":"/c","file":"/f","title":null,"mtime":"1","size":1}]',
-    '[{"id":"A","cwd":"/c","file":"/f","title":null,"mtime":1,"size":"1"}]',
-    '[{"id":"A","cwd":"/c","file":"relative","title":null,"mtime":1,"size":1}]',
+    '[{"id":"A","cwd":"/c","file":"/f","title":null,"mtime":1,"size":1}]',
+    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":null,"mtime":1,"size":1}]',
+    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":"1","mtime":1,"size":1}]',
+    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":1,"mtime":"1","size":1}]',
+    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":1,"mtime":1,"size":"1"}]',
+    '[{"id":"A","cwd":"/c","file":"relative","title":null,"btime":1,"mtime":1,"size":1}]',
   ])("rejects an invalid history response: %s", async (output) => {
     const mux = new PiMux(vi.fn().mockResolvedValue(output));
     await expect(mux.history()).rejects.toThrow("Invalid pi-mux history response");
