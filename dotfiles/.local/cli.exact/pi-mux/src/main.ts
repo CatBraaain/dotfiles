@@ -135,7 +135,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux open [--temporary] <session-id>
   pi-mux state <session-id> <state> --source <JSON> --title <JSON>
   pi-mux state <session-id> --clear --source <JSON>
-  pi-mux close <session-id>
+  pi-mux close [--if-temporary] <session-id>
   pi-mux list
   pi-mux switch <session-id> [--client-pid <pid>]
   pi-mux current [--client-pid <pid>]
@@ -318,7 +318,7 @@ export function parseOperation(argv: string[]): Operation {
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | close <session-id> | list | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] | history [--cwd <absolute-cwd>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore]",
+    "usage: pi-mux [new [--detached] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | close [--if-temporary] <session-id> | list | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] | history [--cwd <absolute-cwd>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore]",
   );
 }
 
