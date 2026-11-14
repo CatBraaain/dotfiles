@@ -2,14 +2,29 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PiMux } from "../src/piMux";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { promisify } from "node:util";
+import { EventEmitter } from "node:events";
 
-const processMock = vi.hoisted(() => vi.fn());
+const spawnMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", async () => {
-  const { promisify } = await import("node:util");
-  const execFile = Object.assign(vi.fn(), { [promisify.custom]: processMock });
-  return { execFile };
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return { ...actual, spawn: spawnMock };
 });
+
+function fakeChildWith(stdout: string) {
+  const child = Object.assign(new EventEmitter(), {
+    stdout: new EventEmitter(),
+    stderr: new EventEmitter(),
+  });
+  queueMicrotask(() => {
+    child.stdout.emit("data", Buffer.from(stdout));
+    child.emit("close", 0, null);
+  });
+  return child;
+}
+
+function succeedWithStdout(stdout: string): void {
+  spawnMock.mockImplementation(() => fakeChildWith(stdout));
+}
 
 async function withPiMuxProcess(
   program: string,
@@ -20,7 +35,7 @@ async function withPiMuxProcess(
   const directory = mkdtempSync(join(parent, "pi-mux-process-"));
   writeFileSync(join(directory, "pi-mux"), `#!/usr/bin/env node\n${program}\n`, { mode: 0o700 });
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  processMock.mockImplementation(promisify(actual.execFile));
+  spawnMock.mockImplementation(actual.spawn);
   vi.stubEnv("PATH", `${directory}:${process.env.PATH}`);
   vi.stubEnv("HOME", directory);
   try {
@@ -32,16 +47,16 @@ async function withPiMuxProcess(
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  processMock.mockReset();
+  spawnMock.mockReset();
 });
 
 describe("external command environment", () => {
   it("calls pi-mux with argv, cwd, and no inherited tmux context", async () => {
     vi.stubEnv("TMUX", "/unrelated/socket,1,0");
     vi.stubEnv("TMUX_PANE", "%9");
-    processMock.mockResolvedValue({ stdout: "Pi session A\nAttach with: pi-mux open A\n" });
+    succeedWithStdout("Pi session A\nAttach with: pi-mux open A\n");
     expect(await new PiMux().newSession("/project with spaces")).toBe("A");
-    expect(processMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["new", "--detached"], {
+    expect(spawnMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["new", "--detached"], {
       cwd: "/project with spaces",
       timeout: 0,
       env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
@@ -61,11 +76,11 @@ describe("external command environment", () => {
       vi.stubEnv("COLORTERM", inherited);
       vi.stubEnv("PI_TRUE_COLOR", "0");
       const parentEnv = { ...process.env };
-      processMock.mockResolvedValue({ stdout: "Pi session A\n" });
+      succeedWithStdout("Pi session A\n");
 
       await new PiMux().newSession("/project");
 
-      expect(processMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["new", "--detached"], {
+      expect(spawnMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["new", "--detached"], {
         cwd: "/project",
         timeout: 0,
         env: expect.objectContaining({ COLORTERM: expected, PI_TRUE_COLOR: "0" }),
@@ -75,37 +90,46 @@ describe("external command environment", () => {
   );
 
   it("keeps query commands bounded without applying their timeout to lifecycle operations", async () => {
-    processMock.mockResolvedValue({ stdout: "[]\n" });
+    succeedWithStdout("[]\n");
     expect(await new PiMux().list()).toEqual([]);
-    expect(processMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["list"], {
+    expect(spawnMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["list"], {
       cwd: undefined,
       timeout: 10_000,
       env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
     });
-    processMock.mockResolvedValue({
-      stdout: JSON.stringify({ id: "A", cwd: "/p", file: "/f", target: "t" }) + "\n",
-    });
+    succeedWithStdout(JSON.stringify({ id: "A", cwd: "/p", file: "/f", target: "t" }) + "\n");
     await new PiMux().current();
-    expect(processMock).toHaveBeenLastCalledWith("pi-mux", ["current"], {
+    expect(spawnMock).toHaveBeenLastCalledWith("pi-mux", ["current"], {
       cwd: undefined,
       timeout: 10_000,
       env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
     });
-    processMock.mockResolvedValue({ stdout: "" });
+    succeedWithStdout("");
     await new PiMux().switch("A");
-    expect(processMock).toHaveBeenLastCalledWith("pi-mux", ["switch", "A"], {
+    expect(spawnMock).toHaveBeenLastCalledWith("pi-mux", ["switch", "A"], {
       cwd: undefined,
       timeout: 10_000,
       env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
     });
-    processMock.mockClear();
-    processMock.mockResolvedValue({ stdout: "[]\n" });
+    spawnMock.mockClear();
+    succeedWithStdout("[]\n");
     await new PiMux().history();
-    expect(processMock).toHaveBeenLastCalledWith("pi-mux", ["history"], {
+    expect(spawnMock).toHaveBeenLastCalledWith("pi-mux", ["history"], {
       cwd: undefined,
       timeout: 10_000,
       env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
     });
+  });
+
+  it("collects a history response larger than the old one-MiB execFile stdout cap", async () => {
+    await withPiMuxProcess(
+      "const entry = { id: '', cwd: '/p', file: '/p/x.jsonl', title: 'x'.repeat(200), btime: 1, mtime: null, size: 1 };" +
+        " const entries = Array.from({ length: 5000 }, (_, i) => Object.assign({}, entry, { id: 'x' + i }));" +
+        " process.stdout.write(JSON.stringify(entries));",
+      async () => {
+        expect(await new PiMux().history()).toHaveLength(5000);
+      },
+    );
   });
 
   it("lets a real detached startup finish beyond the old ten-second limit", async () => {
@@ -122,7 +146,7 @@ describe("external command environment", () => {
       'process.stderr.write("startup failed\\n"); process.exit(7);',
       async (cwd) => {
         await expect(new PiMux().newSession(cwd)).rejects.toThrow("startup failed");
-        expect(processMock).toHaveBeenCalledOnce();
+        expect(spawnMock).toHaveBeenCalledOnce();
       },
     );
   });
@@ -132,7 +156,7 @@ describe("external command environment", () => {
       'if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(["close", "custom-ID"])) process.exit(2);',
       async () => {
         await expect(new PiMux().closeSession("custom-ID")).resolves.toBeUndefined();
-        expect(processMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["close", "custom-ID"], {
+        expect(spawnMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["close", "custom-ID"], {
           cwd: undefined,
           timeout: 0,
           env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
@@ -146,7 +170,7 @@ describe("external command environment", () => {
       'if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(["close", "--if-temporary", "custom-ID"])) process.exit(2);',
       async () => {
         await expect(new PiMux().closeTemporarySession("custom-ID")).resolves.toBeUndefined();
-        expect(processMock).toHaveBeenCalledExactlyOnceWith(
+        expect(spawnMock).toHaveBeenCalledExactlyOnceWith(
           "pi-mux",
           ["close", "--if-temporary", "custom-ID"],
           {
@@ -166,7 +190,7 @@ describe("external command environment", () => {
         await expect(new PiMux().closeSession("custom-ID")).rejects.toThrow(
           /pi-mux close custom-ID: .*restore candidate removal failed/s,
         );
-        expect(processMock).toHaveBeenCalledOnce();
+        expect(spawnMock).toHaveBeenCalledOnce();
       },
     );
   });
@@ -177,7 +201,7 @@ describe("external command environment", () => {
       await expect(new PiMux().closeSession("custom-ID")).rejects.toThrow(
         "pi-mux close custom-ID: spawn pi-mux ENOENT",
       );
-      expect(processMock).toHaveBeenCalledOnce();
+      expect(spawnMock).toHaveBeenCalledOnce();
     });
   });
 });

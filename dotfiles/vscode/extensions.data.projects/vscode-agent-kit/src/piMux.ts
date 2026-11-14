@@ -1,9 +1,6 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { type ChildProcess, spawn } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { errorMessage, isRecord } from "./guards";
-
-const executeFile = promisify(execFile);
 
 const QUERY_TIMEOUT_MS = 10_000;
 const QUERY_COMMANDS = new Set(["list", "history", "current", "switch"]);
@@ -251,15 +248,42 @@ function isPiMuxHistoryEntry(entry: unknown): entry is PiMuxHistoryEntry {
 }
 
 async function executePiMux(executable: string, args: string[], cwd?: string): Promise<string> {
-  const { stdout } = await executeFile(executable, args, {
-    cwd,
-    timeout: QUERY_COMMANDS.has(args[0]) ? QUERY_TIMEOUT_MS : 0,
-    env: {
-      ...process.env,
-      COLORTERM: process.env.COLORTERM ?? "truecolor",
-      TMUX: undefined,
-      TMUX_PANE: undefined,
-    },
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, args, {
+      cwd,
+      timeout: QUERY_COMMANDS.has(args[0]) ? QUERY_TIMEOUT_MS : 0,
+      env: {
+        ...process.env,
+        COLORTERM: process.env.COLORTERM ?? "truecolor",
+        TMUX: undefined,
+        TMUX_PANE: undefined,
+      },
+    });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+    child.on("error", reject);
+    child.on("close", (exitCode, signal) => {
+      if (exitCode === 0 && signal === null) {
+        resolve(Buffer.concat(stdoutChunks).toString("utf8"));
+        return;
+      }
+      reject(
+        new Error(describeFailure(executable, child, Buffer.concat(stderrChunks).toString("utf8"))),
+      );
+    });
   });
-  return stdout;
+}
+
+function describeFailure(executable: string, child: ChildProcess, stderr: string): string {
+  const outcome =
+    child.killed && child.signalCode === "SIGTERM"
+      ? `timed out after ${QUERY_TIMEOUT_MS} ms`
+      : child.signalCode !== null
+        ? `terminated by ${child.signalCode}`
+        : `exited with ${child.exitCode}`;
+  const reason = stderr.trim();
+  const summary = `${executable} ${outcome}`;
+  return reason === "" ? summary : `${reason} (${summary})`;
 }
