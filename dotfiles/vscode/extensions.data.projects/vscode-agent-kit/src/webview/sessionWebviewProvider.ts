@@ -16,7 +16,6 @@ const LIST_REFRESH_INTERVAL_MS = 1_000;
 
 export interface SessionWebviewDeps {
   extensionUri: string;
-  /** Session state store, shared with the pi extension `session-state`. */
   statePath: string;
   registry: TerminalRegistry;
   startNewSession: (cwd: string) => Promise<string | undefined>;
