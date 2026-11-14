@@ -19,11 +19,7 @@ import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  HistorySummaryCache,
-  parseEpochMs,
-  type SavedSessionSummary,
-} from "./history-summary";
+import { HistorySummaryCache, parseEpochMs, type SavedSessionSummary } from "./history-summary";
 
 type Operation =
   | { kind: "help" }
@@ -51,9 +47,18 @@ type StateSource = {
 type StateNotification =
   | { clear: true }
   | { clear: false; state: SessionState; title: string | null };
-type RestoreState = { version: 1; generation: string; sessions: Candidate[] };
+type RestoreState = {
+  version: 1;
+  generation: string;
+  cwds: string[];
+  sessions: Candidate[];
+};
 type Workspace = { cwd: string; sessions: string[] };
-type Snapshot = { version: 1; generation: string; workspaces: Workspace[] };
+type Snapshot = {
+  version: 1;
+  generation: string;
+  workspaces: Workspace[];
+};
 type Session = { id: string; cwd: string; file: string };
 type SessionState = "running" | "waiting-approval" | "waiting-user";
 type Pane = Session & {
@@ -66,9 +71,6 @@ type Pane = Session & {
   startup?: "accepted" | "ready";
 };
 type StopTarget = Pick<Pane, "pane" | "pid" | "panePid">;
-type MembershipStore = Record<string, unknown> & {
-  "active-workspaces": Record<string, Record<string, unknown>>;
-};
 type ListedSession = {
   id: string;
   file: string;
@@ -229,10 +231,16 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
           if (!operation.temporary) await promoteSession(config, target.session, target.id);
           await snapshotSessions(config, undefined, "repair");
         } catch (error) {
-          throw new Error(`Cannot update open session ${operation.id}: ${errorMessage(error)}`);
+          if (!(error instanceof SnapshotReadError))
+            throw new Error(`Cannot update open session ${operation.id}: ${errorMessage(error)}`);
         }
       }
-      registerWorkspaces(config, [target.cwd]);
+      try {
+        registerWorkspaces(config, [target.cwd]);
+      } catch (error) {
+        if (!(error instanceof SnapshotReadError)) throw error;
+        console.error(`pi-mux: workspace registration deferred: ${errorMessage(error)}`);
+      }
       rememberSessionRoot(config, dirname(target.file));
       if (operation.kind === "new" && operation.detached) {
         const attach = shellCommand([
@@ -713,7 +721,13 @@ async function restoreSessions(
   const candidates = uniqueCandidates(previous?.sessions ?? []).filter(
     (entry) => !temporaryIds.has(entry.id),
   );
-  let state: RestoreState = { version: 1, generation, sessions: candidates };
+  let state: RestoreState = {
+    ...previous,
+    version: 1,
+    generation,
+    cwds: previous?.cwds ?? [],
+    sessions: candidates,
+  };
   await setRestoringSessions(config, candidates);
   writeSnapshot(config, state);
   let failures = 0;
@@ -751,7 +765,7 @@ async function snapshotSessions(
   if (!generation) throw new Error("Dedicated server has not been initialized by pi-mux");
   if (expectedGeneration !== undefined && generation !== expectedGeneration) return;
   const previous = readSnapshot(config);
-  if (previous && previous.generation !== generation) {
+  if (previous && previous.generation !== "" && previous.generation !== generation) {
     if (mode === "repair") throw new Error("Snapshot belongs to another server generation");
     return;
   }
@@ -773,7 +787,13 @@ async function snapshotSessions(
   ]);
   if ((await serverOption(config, "@pi-mux-generation")) !== generation)
     throw new Error("Dedicated server changed during snapshot");
-  writeSnapshot(config, { version: 1, generation, sessions });
+  writeSnapshot(config, {
+    ...previous,
+    version: 1,
+    generation,
+    cwds: previous?.cwds ?? [],
+    sessions,
+  });
 }
 
 async function setRestoringSessions(config: Config, candidates: Candidate[]): Promise<void> {
@@ -828,6 +848,8 @@ function snapshotPath(config: TmuxConfig): string {
   return join(config.stateDirectory, "pi-mux-restore.json");
 }
 
+class SnapshotReadError extends Error {}
+
 function readSnapshot(config: TmuxConfig): RestoreState | undefined {
   const path = snapshotPath(config);
   let raw: unknown;
@@ -835,7 +857,7 @@ function readSnapshot(config: TmuxConfig): RestoreState | undefined {
     raw = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw new Error(`Cannot read snapshot ${path}: ${errorMessage(error)}`);
+    throw new SnapshotReadError(`Cannot read snapshot ${path}: ${errorMessage(error)}`);
   }
   const state = raw as Partial<Snapshot> | null;
   if (
@@ -844,7 +866,7 @@ function readSnapshot(config: TmuxConfig): RestoreState | undefined {
     typeof state.generation !== "string" ||
     !Array.isArray(state.workspaces)
   )
-    throw new Error(`Invalid snapshot: ${path}`);
+    throw new SnapshotReadError(`Invalid snapshot: ${path}`);
   for (const workspace of state.workspaces) {
     if (
       !workspace ||
@@ -852,22 +874,35 @@ function readSnapshot(config: TmuxConfig): RestoreState | undefined {
       !isAbsolute(workspace.cwd) ||
       !Array.isArray(workspace.sessions)
     )
-      throw new Error(`Invalid snapshot workspace: ${path}`);
+      throw new SnapshotReadError(`Invalid snapshot workspace: ${path}`);
     for (const id of workspace.sessions) {
       if (typeof id !== "string" || !SESSION_ID_PATTERN.test(id))
-        throw new Error(`Invalid snapshot candidate: ${path}`);
+        throw new SnapshotReadError(`Invalid snapshot candidate: ${path}`);
     }
   }
   const sessions = state.workspaces.flatMap((workspace) =>
     workspace.sessions.map((id) => ({ id, cwd: workspace.cwd })),
   );
-  uniqueCandidates(sessions);
-  return { version: 1, generation: state.generation, sessions };
+  try {
+    uniqueCandidates(sessions);
+  } catch (error) {
+    throw new SnapshotReadError(errorMessage(error));
+  }
+  if (state.generation === "" && sessions.length > 0)
+    throw new SnapshotReadError(`Invalid snapshot generation: ${path}`);
+  return {
+    version: 1,
+    generation: state.generation,
+    cwds: [...new Set(state.workspaces.map(({ cwd }) => cwd))],
+    sessions,
+  };
 }
 
 function writeSnapshot(config: TmuxConfig, state: RestoreState): void {
-  const workspaces = new Map<string, Workspace>();
-  for (const { id, cwd } of state.sessions) {
+  const workspaces = new Map<string, Workspace>(
+    state.cwds.map((cwd) => [cwd, { cwd, sessions: [] }]),
+  );
+  for (const { id, cwd } of uniqueCandidates(state.sessions)) {
     let workspace = workspaces.get(cwd);
     if (!workspace) {
       workspace = { cwd, sessions: [] };
@@ -1091,11 +1126,11 @@ async function waitForSession(
 
 async function listWorkspaces(config: TmuxConfig): Promise<ListedWorkspace[]> {
   const panes = await livePanes(config, "list");
-  const current = readMembershipStore(config);
-  if (panes.some(({ cwd }) => !Object.hasOwn(current["active-workspaces"], cwd))) {
+  const current = readSnapshot(config);
+  if (panes.some(({ cwd }) => !current?.cwds.includes(cwd))) {
     prepareDirectory(config.stateDirectory);
     return await withLock(config, async () =>
-      collectWorkspaceList(config, await livePanes(config, "list"), "import"),
+      collectWorkspaceList(config, await livePanes(config, "list"), "register"),
     );
   }
   return await collectWorkspaceList(config, panes);
@@ -1104,7 +1139,7 @@ async function listWorkspaces(config: TmuxConfig): Promise<ListedWorkspace[]> {
 async function collectWorkspaceList(
   config: TmuxConfig,
   panes: Pane[],
-  membership: "read" | "import" = "read",
+  registration: "read" | "register" = "read",
 ): Promise<ListedWorkspace[]> {
   const saved = panes.filter((pane) => existsSync(pane.file));
   const unsaved = panes.filter((pane) => !existsSync(pane.file));
@@ -1142,16 +1177,13 @@ async function collectWorkspaceList(
       };
     }),
   );
-  if (membership === "import")
+  if (registration === "register")
     registerWorkspaces(
       config,
       panes.map(({ cwd }) => cwd),
     );
   const workspaces = new Map<string, ListedWorkspace>(
-    Object.keys(readMembershipStore(config)["active-workspaces"]).map((cwd) => [
-      cwd,
-      { cwd, sessions: [], empty: [] },
-    ]),
+    (readSnapshot(config)?.cwds ?? []).map((cwd) => [cwd, { cwd, sessions: [], empty: [] }]),
   );
   for (const { cwd, session } of sessions) workspaces.get(cwd)?.sessions.push(session);
   for (const { cwd, session } of empty) workspaces.get(cwd)?.empty.push(session);
@@ -1245,7 +1277,7 @@ async function historySessions(
   config: TmuxConfig,
   cwdFilter: string | undefined,
 ): Promise<HistoryEntry[]> {
-  const registered = Object.keys(readMembershipStore(config)["active-workspaces"]);
+  const registered = readSnapshot(config)?.cwds ?? [];
   const cwds = cwdFilter === undefined ? registered : registered.filter((cwd) => cwd === cwdFilter);
   if (cwds.length === 0) return [];
   const targetCwds = new Set(cwds);
@@ -1308,48 +1340,21 @@ async function historySessions(
   );
 }
 
-function readMembershipStore(config: TmuxConfig): MembershipStore {
-  const path = join(config.agentDir, "session-state.json");
-  let value: unknown;
-  try {
-    value = JSON.parse(readFileSync(path, "utf8"));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { "active-workspaces": {} };
-    throw new Error(`Cannot read workspace store ${path}: ${errorMessage(error)}`);
-  }
-  if (!isRecord(value) || isRecord(value.workspaces) || !isRecord(value["active-workspaces"]))
-    throw new Error(`Invalid workspace store: ${path}`);
-  for (const [cwd, workspace] of Object.entries(value["active-workspaces"])) {
-    if (
-      !isAbsolute(cwd) ||
-      !isRecord(workspace) ||
-      (workspace["active-sessions"] !== undefined && !isRecord(workspace["active-sessions"]))
-    )
-      throw new Error(`Invalid workspace entry in ${path}: ${cwd}`);
-  }
-  return value as MembershipStore;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function writeMembershipStore(config: TmuxConfig, store: MembershipStore): void {
-  const path = join(config.agentDir, "session-state.json");
-  const temporary = join(config.agentDir, `session-state.${randomUUID()}.tmp`);
-  writeFileSync(temporary, JSON.stringify(store, null, 2) + "\n", { mode: 0o600, flag: "wx" });
-  renameSync(temporary, path);
-}
-
 function registerWorkspaces(config: TmuxConfig, cwds: string[]): void {
-  const store = readMembershipStore(config);
-  let changed = false;
-  for (const cwd of cwds) {
-    if (Object.hasOwn(store["active-workspaces"], cwd)) continue;
-    store["active-workspaces"][cwd] = { "active-sessions": {} };
-    changed = true;
-  }
-  if (changed) writeMembershipStore(config, store);
+  const previous = readSnapshot(config);
+  const registered = [...new Set([...(previous?.cwds ?? []), ...cwds])];
+  if (registered.length === previous?.cwds.length) return;
+  writeSnapshot(config, {
+    ...previous,
+    version: 1,
+    generation: previous?.generation ?? "",
+    cwds: registered,
+    sessions: previous?.sessions ?? [],
+  });
 }
 
 async function closeSession(config: TmuxConfig, id: string, ifTemporary = false): Promise<void> {
@@ -1444,7 +1449,6 @@ async function terminatePanes(config: TmuxConfig, targets: StopTarget[]): Promis
 }
 
 async function unregisterWorkspace(config: TmuxConfig, cwd: string): Promise<void> {
-  readMembershipStore(config);
   readSnapshot(config);
   const panes = await livePanes(config, "list");
   const targets = [
@@ -1487,13 +1491,9 @@ async function unregisterWorkspace(config: TmuxConfig, cwd: string): Promise<voi
     }
     writeSnapshot(config, {
       ...snapshot,
+      cwds: snapshot.cwds.filter((registered) => registered !== cwd),
       sessions: snapshot.sessions.filter((session) => session.cwd !== cwd),
     });
-  }
-  const store = readMembershipStore(config);
-  if (Object.hasOwn(store["active-workspaces"], cwd)) {
-    delete store["active-workspaces"][cwd];
-    writeMembershipStore(config, store);
   }
 }
 
@@ -1626,8 +1626,7 @@ async function livePanes(
     .trimEnd()
     .split("\n")
     .flatMap((line) => {
-      const [pane, session, name, encoded, pid, dead, windowActive, paneActive] =
-        line.split("\t");
+      const [pane, session, name, encoded, pid, dead, windowActive, paneActive] = line.split("\t");
       if (!pane || !session || !name || !encoded || dead !== "0") return [];
       const metadata = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
       if (

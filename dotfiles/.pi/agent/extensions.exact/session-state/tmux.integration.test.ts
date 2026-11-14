@@ -130,9 +130,9 @@ if (sessionFirst) sessionStateExtension(pi);
 toolsExtension(pi, config);
 if (!sessionFirst) sessionStateExtension(pi);
 assert.deepEqual(commandNames, []);
-const storePath = join(directory, "session-state.json");
-const before = existsSync(storePath) ? statSync(storePath, { bigint: true }) : undefined;
-const bytes = before ? readFileSync(storePath, "utf8") : undefined;
+const restorePath = join(directory, "pi-tmux", "pi-mux-restore.json");
+const before = existsSync(restorePath) ? statSync(restorePath, { bigint: true }) : undefined;
+const bytes = before ? readFileSync(restorePath, "utf8") : undefined;
 
 try {
   await dispatch("session_start", { reason: "startup" });
@@ -213,11 +213,11 @@ try {
   }
   assert.deepEqual(commandNames, []);
   if (before) {
-    const after = statSync(storePath, { bigint: true });
+    const after = statSync(restorePath, { bigint: true });
     assert.deepEqual([after.ino, after.mtimeNs], [before.ino, before.mtimeNs]);
-    assert.equal(readFileSync(storePath, "utf8"), bytes);
+    assert.equal(readFileSync(restorePath, "utf8"), bytes);
   } else {
-    assert.equal(existsSync(storePath), false);
+    assert.equal(existsSync(restorePath), false);
   }
   assert.equal(trace.length, 0);
   if (!denied) assert.ok(sandboxCommands.length > 0);
@@ -333,7 +333,7 @@ try {
   assert.match(readFileSync(identity.file, "utf8"), /"type":"session_info".*"name":"Delayed SDK title"/);
   const cliPath = resolve(moduleDir, "../../../../.local/cli.exact/pi-mux/src/main.ts");
   const listed = JSON.parse(execFileSync(process.execPath, [cliPath, "list"], { encoding: "utf8" }));
-  assert.deepEqual(listed, [{ cwd: identity.cwd, sessions: [{ id: identity.id, file: identity.file, state: "waiting-user", title }] }]);
+  assert.deepEqual(listed, [{ cwd: identity.cwd, sessions: [{ id: identity.id, file: identity.file, state: "waiting-user", title }], empty: [] }]);
   assert.equal(cli("show-options", "-pqv", "-t", pane, "@pi-tmux-session"), beforeIdentity);
   await session.prompt("Continue the same conversation");
   await waitFor("later state retains title", () => readOption()?.state === "waiting-user" && readOption()?.title === title);
@@ -368,11 +368,11 @@ describe("session-state with a dedicated headless tmux and real registered Bash"
     TEST_TIMEOUT_MS,
   );
   for (const order of ["session-first", "tools-first"] as const) {
-    for (const initialStore of ["absent", "legacy", "invalid"] as const) {
+    for (const initialRestoreRecord of ["absent", "valid", "invalid"] as const) {
       it(
-        `uses registered Bash with ${order} shutdown and ${initialStore} membership storage`,
+        `uses registered Bash with ${order} shutdown and ${initialRestoreRecord} restore record`,
         async () => {
-          const result = await runScenario(order, false, false, SCENARIO, initialStore);
+          const result = await runScenario(order, false, false, SCENARIO, initialRestoreRecord);
           assert.equal(result.ok, true, result.error ?? "scenario failed");
           assert.ok(result.sandboxCommands.length >= 8);
         },
@@ -404,7 +404,7 @@ async function runScenario(
   denied: boolean,
   race = false,
   scenario = SCENARIO,
-  initialStore: "absent" | "legacy" | "invalid" = "absent",
+  initialRestoreRecord: "absent" | "valid" | "invalid" = "absent",
 ): Promise<ScenarioResult> {
   mkdirSync("/tmp/work/dotfiles", { recursive: true });
   const directory = mkdtempSync("/tmp/work/dotfiles/mvp-tmux-");
@@ -414,23 +414,25 @@ async function runScenario(
   const scriptPath = join(directory, "scenario.mjs");
   const reportPath = join(directory, "result.json");
   writeFileSync(scriptPath, scenario);
-  if (initialStore !== "absent") {
+  if (initialRestoreRecord !== "absent") {
+    const restoreDirectory = join(directory, "pi-tmux");
+    mkdirSync(restoreDirectory, { recursive: true, mode: 0o700 });
     const bytes =
-      initialStore === "invalid"
+      initialRestoreRecord === "invalid"
         ? "{broken"
         : JSON.stringify({
-            "active-workspaces": {
-              [directory]: {
-                "active-sessions": { old: { lock: true, state: "running", custom: "keep" } },
-                pinned: true,
-              },
-            },
-            custom: ["keep"],
+            version: 1,
+            generation: "saved-generation",
+            workspaces: [{ cwd: directory, sessions: ["saved-id"] }],
           });
-    writeFileSync(join(directory, "session-state.json"), bytes);
+    writeFileSync(join(restoreDirectory, "pi-mux-restore.json"), bytes);
   }
+  const homeDirectory = join(directory, "home");
+  mkdirSync(homeDirectory, { mode: 0o700 });
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    HOME: homeDirectory,
+    XDG_CACHE_HOME: join(directory, "cache"),
     XDG_RUNTIME_DIR: runtimeDir,
     PI_CODING_AGENT_DIR: directory,
     PI_TEST_DIRECTORY: directory,

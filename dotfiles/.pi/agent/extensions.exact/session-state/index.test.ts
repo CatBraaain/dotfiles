@@ -114,7 +114,7 @@ async function waitFor(label: string, predicate: () => boolean): Promise<void> {
 
 interface ExtensionHarness {
   agentDir: string;
-  storePath: string;
+  restorePath: string;
   commands: Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>;
   server: FakeTmuxServer;
   notifications: { message: string; level: string | undefined }[];
@@ -238,9 +238,11 @@ async function createExtensionHarness(
   }
   let disposeBashReceiver = connectBashReceiver();
 
+  const restorePath = join(agentDir, "pi-tmux", "pi-mux-restore.json");
+  await mkdir(dirname(restorePath), { recursive: true });
   const harness: ExtensionHarness = {
     agentDir,
-    storePath: join(agentDir, "session-state.json"),
+    restorePath,
     commands,
     server,
     notifications,
@@ -320,14 +322,14 @@ const lifecycleEvents = [
 
 describe("sessionStateExtension in child sessions", () => {
   for (const mode of ["new", "resume", "fork", "vision"] as const) {
-    it(`leaves an absent store absent during the ${mode} child lifecycle`, async () => {
+    it(`leaves an absent restore record absent during the ${mode} child lifecycle`, async () => {
       const h = await createExtensionHarness({
         mode,
         agent: mode === "vision" ? "vision" : "main",
       });
       try {
         for (const event of lifecycleEvents) await h.emit(event);
-        assert.equal(existsSync(h.storePath), false);
+        assert.equal(existsSync(h.restorePath), false);
         assert.deepEqual([...h.commands.keys()], []);
         assert.deepEqual(h.server.commands, []);
       } finally {
@@ -338,27 +340,28 @@ describe("sessionStateExtension in child sessions", () => {
   for (const mode of ["new", "resume", "fork", "vision"] as const) {
     const agent = mode === "vision" ? "vision" : "main";
 
-    it(`does not update membership or publish during the ${mode} child lifecycle`, async () => {
+    it(`does not update the restore record or publish during the ${mode} child lifecycle`, async () => {
       const harness = await createExtensionHarness({ agent, mode });
       try {
-        const legacy = JSON.stringify({
-          "active-workspaces": {
-            [join(harness.agentDir, "workspace: child")]: {
-              "active-sessions": { s1: { lock: true, state: "running", custom: "keep" } },
-              pinned: true,
+        const validRecord = JSON.stringify({
+          version: 1,
+          generation: "saved-generation",
+          workspaces: [
+            {
+              cwd: join(harness.agentDir, "workspace: child"),
+              sessions: ["s1"],
             },
-          },
-          custom: ["keep"],
+          ],
         });
-        writeFileSync(harness.storePath, legacy);
-        const before = statSync(harness.storePath, { bigint: true });
+        writeFileSync(harness.restorePath, validRecord);
+        const before = statSync(harness.restorePath, { bigint: true });
 
         for (const event of lifecycleEvents) {
           await harness.emit(event);
           await finishEventLoopTurn();
           assert.equal(harness.server.commands.length, 0, `event: ${event}`);
-          assert.equal(readFileSync(harness.storePath, "utf8"), legacy, `event: ${event}`);
-          const after = statSync(harness.storePath, { bigint: true });
+          assert.equal(readFileSync(harness.restorePath, "utf8"), validRecord, `event: ${event}`);
+          const after = statSync(harness.restorePath, { bigint: true });
           assert.deepEqual(
             [after.ino, after.mtimeNs],
             [before.ino, before.mtimeNs],
@@ -449,7 +452,7 @@ describe("sessionStateExtension in top-level sessions", () => {
     }
   });
 
-  it("publishes nothing and leaves membership absent outside the managed pane", async () => {
+  it("publishes nothing and leaves the restore record absent outside the managed pane", async () => {
     const harness = await createExtensionHarness({ dedicated: false });
     try {
       for (const event of lifecycleEvents)
@@ -459,7 +462,7 @@ describe("sessionStateExtension in top-level sessions", () => {
         );
       await finishEventLoopTurn();
       assert.deepEqual(harness.server.commands, []);
-      assert.equal(existsSync(harness.storePath), false);
+      assert.equal(existsSync(harness.restorePath), false);
       assert.deepEqual([...harness.commands.keys()], []);
       assert.deepEqual(harness.notifications, []);
     } finally {
@@ -547,7 +550,7 @@ describe("session-state title publication", () => {
           () =>
             h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user", "Saved title"),
         );
-        assert.equal(existsSync(h.storePath), false);
+        assert.equal(existsSync(h.restorePath), false);
       } finally {
         await h.close();
       }
@@ -600,7 +603,7 @@ describe("session-state title publication", () => {
         "cleared title",
         () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "running", null),
       );
-      assert.equal(existsSync(h.storePath), false);
+      assert.equal(existsSync(h.restorePath), false);
     } finally {
       await h.close();
     }
@@ -1371,7 +1374,7 @@ describe("session-state CLI execution ordering", () => {
         await h.emit("ui_prompt_start");
         await h.emit("input");
         await h.emit("session_shutdown");
-        assert.equal(existsSync(h.storePath), false, "input does not create a membership store");
+        assert.equal(existsSync(h.restorePath), false, "input does not create a restore record");
         assert.deepEqual([...h.commands.keys()], []);
         assert.equal(h.server.commands.length, count, "new factories and cleanup remain stopped");
         assert.equal(
@@ -1389,32 +1392,31 @@ describe("session-state CLI execution ordering", () => {
   }
 });
 
-describe("session-state without membership storage", () => {
-  for (const initialStore of ["absent", "legacy", "invalid"] as const) {
+describe("session-state without restore-record access", () => {
+  for (const initialRecord of ["absent", "valid", "invalid"] as const) {
     it(
-      "publishes and cleans up without changing the " + initialStore + " membership store",
+      "publishes and cleans up without changing the " + initialRecord + " restore record",
       async () => {
-        const storeReads = spyOn(fsPromises, "readFile");
+        const restoreReads = spyOn(fsPromises, "readFile");
         try {
           const h = await createExtensionHarness();
           try {
             const bytes =
-              initialStore === "invalid"
+              initialRecord === "invalid"
                 ? "{broken"
                 : JSON.stringify({
-                    "active-workspaces": {
-                      [join(h.agentDir, "workspace: child")]: {
-                        "active-sessions": {
-                          other: { lock: true, state: "running", unknown: [1] },
-                        },
-                        pinned: true,
+                    version: 1,
+                    generation: "saved-generation",
+                    workspaces: [
+                      {
+                        cwd: join(h.agentDir, "workspace: child"),
+                        sessions: ["other"],
                       },
-                    },
-                    unknown: { state: "keep" },
+                    ],
                   });
-            if (initialStore !== "absent") writeFileSync(h.storePath, bytes);
+            if (initialRecord !== "absent") writeFileSync(h.restorePath, bytes);
             const before =
-              initialStore === "absent" ? undefined : statSync(h.storePath, { bigint: true });
+              initialRecord === "absent" ? undefined : statSync(h.restorePath, { bigint: true });
             assert.deepEqual([...h.commands.keys()], []);
             for (const [event, state] of [
               ["session_start", "waiting-user"],
@@ -1437,16 +1439,16 @@ describe("session-state without membership storage", () => {
                   (state === undefined ? undefined : stateOptionValue("s1", state)),
               );
               if (before) {
-                assert.equal(readFileSync(h.storePath, "utf8"), bytes, event);
-                const after = statSync(h.storePath, { bigint: true });
+                assert.equal(readFileSync(h.restorePath, "utf8"), bytes, event);
+                const after = statSync(h.restorePath, { bigint: true });
                 assert.deepEqual([after.ino, after.mtimeNs], [before.ino, before.mtimeNs], event);
               } else {
-                assert.equal(existsSync(h.storePath), false, event);
+                assert.equal(existsSync(h.restorePath), false, event);
               }
-              const membershipReads = storeReads.mock.calls.filter(
-                ([path]) => path === h.storePath,
+              const restoreRecordReads = restoreReads.mock.calls.filter(
+                ([path]) => path === h.restorePath,
               );
-              assert.deepEqual(membershipReads, [], event);
+              assert.deepEqual(restoreRecordReads, [], event);
               assert.deepEqual([...h.commands.keys()], [], event);
               assert.deepEqual(h.notifications, [], event);
             }
@@ -1458,18 +1460,18 @@ describe("session-state without membership storage", () => {
               h.server.commands.filter((command) => command.startsWith("pi-mux state ")).length,
               6,
             );
-            if (initialStore === "absent") {
-              await assert.rejects(readFile(h.storePath, "utf8"), { code: "ENOENT" });
+            if (initialRecord === "absent") {
+              await assert.rejects(readFile(h.restorePath, "utf8"), { code: "ENOENT" });
             } else {
-              assert.equal(await readFile(h.storePath, "utf8"), bytes);
+              assert.equal(await readFile(h.restorePath, "utf8"), bytes);
             }
-            const controlReads = storeReads.mock.calls.filter(([path]) => path === h.storePath);
+            const controlReads = restoreReads.mock.calls.filter(([path]) => path === h.restorePath);
             assert.equal(controlReads.length, 1);
           } finally {
             await h.close();
           }
         } finally {
-          storeReads.mockRestore();
+          restoreReads.mockRestore();
         }
       },
     );

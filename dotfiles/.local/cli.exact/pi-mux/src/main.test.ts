@@ -29,10 +29,8 @@ class CloseFixture {
   readonly id = randomUUID();
   readonly otherId = randomUUID();
   readonly restore: string;
-  readonly membership: string;
   readonly conversation: string;
   readonly env: Record<string, string>;
-  readonly membershipBefore: string;
   readonly conversationBefore = "saved conversation sentinel\n";
   readonly generation = randomUUID();
   pid = 0;
@@ -44,7 +42,6 @@ class CloseFixture {
     this.socket = join(this.directory, "runtime/pi-tmux/server.sock");
     this.cwd = join(this.directory, "workspace");
     this.restore = join(this.directory, "agent/pi-tmux/pi-mux-restore.json");
-    this.membership = join(this.directory, "agent/session-state.json");
     this.conversation = join(this.directory, "agent/sessions/conversation.jsonl");
     this.env = {
       PATH: `${join(this.directory, "bin")}:${process.env.PATH ?? ""}`,
@@ -87,13 +84,6 @@ exec ${JSON.stringify(realTmux)} "$@"
       join(this.directory, "home/.config/tmux/pi.conf"),
       "set -g exit-empty off\nset -g remain-on-exit off\n",
     );
-    this.membershipBefore = JSON.stringify({
-      sentinel: "preserved",
-      "active-workspaces": {
-        [this.cwd]: { "active-sessions": { [this.id]: {}, [this.otherId]: {} } },
-      },
-    });
-    writeFileSync(this.membership, this.membershipBefore);
     writeFileSync(this.conversation, this.conversationBefore);
     writeFileSync(
       this.restore,
@@ -208,7 +198,6 @@ describe("close cleanup", () => {
         );
         assert.deepEqual(snapshot.workspaces, [{ cwd: fixture.cwd, sessions: [fixture.otherId] }]);
         assert.equal(snapshot.generation, fixture.generation);
-        assert.equal(readFileSync(fixture.membership, "utf8"), fixture.membershipBefore);
         assert.equal(readFileSync(fixture.conversation, "utf8"), fixture.conversationBefore);
       } finally {
         await fixture.cleanup();
@@ -239,7 +228,6 @@ describe("close cleanup", () => {
         );
         assert.equal(existsSync(`/proc/${fixture.pid}`), false);
         assert.equal(readFileSync(fixture.restore, "utf8"), before);
-        assert.equal(readFileSync(fixture.membership, "utf8"), fixture.membershipBefore);
         assert.equal(readFileSync(fixture.conversation, "utf8"), fixture.conversationBefore);
       } finally {
         await fixture.cleanup();
@@ -339,12 +327,11 @@ exec ${JSON.stringify(realTmux)} "$@"
     }
   });
 
-  it("publishes and clears in an uninitialized external server independently of invalid membership", async () => {
+  it("publishes and clears in an uninitialized external server without changing the restore record", async () => {
     const fixture = new CloseFixture("none");
     try {
       fixture.start();
       fixture.tmux(["set-option", "-gu", "@pi-mux-generation"]);
-      writeFileSync(fixture.membership, "{broken");
       const before = readFileSync(fixture.restore, "utf8");
       const title = "Quotes ' \"\n #{pane_id}; $(touch /unsafe)";
       for (const state of ["waiting-user", "running", "waiting-approval"] as const) {
@@ -358,7 +345,6 @@ exec ${JSON.stringify(realTmux)} "$@"
           title,
         });
       }
-      assert.equal(readFileSync(fixture.membership, "utf8"), "{broken");
       assert.equal(readFileSync(fixture.restore, "utf8"), before);
       assert.equal(fixture.tmux(["show-options", "-gqv", "@pi-mux-generation"]), "");
       const cleared = notify(fixture, ["--clear"]);
@@ -430,7 +416,6 @@ exec ${JSON.stringify(realTmux)} "$@"
         [fixture.id, fixture.otherId].sort(),
       );
       assert.ok(existsSync(`/proc/${fixture.pid}`));
-      assert.equal(readFileSync(fixture.membership, "utf8"), fixture.membershipBefore);
     } finally {
       await fixture.cleanup();
     }
@@ -514,7 +499,6 @@ class SessionFixture {
   readonly socket: string;
   readonly cwd: string;
   readonly agentDir: string;
-  readonly membership: string;
   readonly env: Record<string, string>;
   private readonly attached: Bun.Subprocess[] = [];
   private readonly panePids: number[] = [];
@@ -526,7 +510,6 @@ class SessionFixture {
     this.socket = join(this.directory, "runtime/pi-tmux/server.sock");
     this.cwd = join(this.directory, "workspace");
     this.agentDir = join(this.directory, "agent");
-    this.membership = join(this.agentDir, "session-state.json");
     this.env = {
       PATH: `${join(this.directory, "bin")}:${process.env.PATH ?? ""}`,
       HOME: join(this.directory, "home"),
@@ -559,8 +542,8 @@ exec ${JSON.stringify(realTmux)} "$@"
       "set -g exit-empty off\nset -g remain-on-exit off\n",
     );
     writeFileSync(
-      this.membership,
-      JSON.stringify({ "active-workspaces": { [this.cwd]: { "active-sessions": {} } } }),
+      join(this.agentDir, "pi-tmux/pi-mux-restore.json"),
+      JSON.stringify({ version: 1, generation: "", workspaces: [{ cwd: this.cwd, sessions: [] }] }),
     );
   }
 
@@ -612,11 +595,7 @@ exec ${JSON.stringify(realTmux)} "$@"
     this.panePids.push(Number(pid));
   }
 
-  private publishPiMetadata(
-    pane: string,
-    pid: string,
-    entry: { id: string; file: string },
-  ): void {
+  private publishPiMetadata(pane: string, pid: string, entry: { id: string; file: string }): void {
     this.tmux([
       "set-option",
       "-p",
@@ -1007,7 +986,6 @@ class HistoryFixture {
   readonly cwd: string;
   readonly otherCwd: string;
   readonly env: Record<string, string>;
-  readonly membership: string;
   readonly preloads: string[] = [];
 
   constructor() {
@@ -1016,7 +994,6 @@ class HistoryFixture {
     this.agentDir = join(this.directory, "agent");
     this.cwd = join(this.directory, "workspace");
     this.otherCwd = join(this.directory, "other");
-    this.membership = join(this.agentDir, "session-state.json");
     this.env = {
       PATH: process.env.PATH ?? "",
       HOME: join(this.directory, "home"),
@@ -1027,12 +1004,14 @@ class HistoryFixture {
     };
     mkdirSync(join(this.agentDir, "pi-tmux", "session-dirs"), { recursive: true, mode: 0o700 });
     writeFileSync(
-      this.membership,
+      join(this.agentDir, "pi-tmux/pi-mux-restore.json"),
       JSON.stringify({
-        "active-workspaces": {
-          [this.cwd]: { "active-sessions": {} },
-          [this.otherCwd]: { "active-sessions": {} },
-        },
+        version: 1,
+        generation: "",
+        workspaces: [
+          { cwd: this.cwd, sessions: [] },
+          { cwd: this.otherCwd, sessions: [] },
+        ],
       }),
     );
   }
@@ -1237,6 +1216,490 @@ spyOn(fs, "statSync").mockImplementation((...args) => {
       ]);
     } finally {
       fixture.cleanup();
+    }
+  });
+});
+
+type RestoreDocument = {
+  version: 1;
+  generation: string;
+  workspaces: { cwd: string; sessions: string[] }[];
+};
+
+function restoreFile(fixture: { agentDir: string }): string {
+  return join(fixture.agentDir, "pi-tmux/pi-mux-restore.json");
+}
+
+function restoreDocument(fixture: { agentDir: string }): RestoreDocument {
+  return JSON.parse(readFileSync(restoreFile(fixture), "utf8"));
+}
+
+describe("unified workspace persistence", () => {
+  it("lists registered empty and stopped workspaces without changing candidates or generation", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      const emptyCwd = join(fixture.directory, "registered-empty");
+      const disappearedCwd = join(fixture.directory, "disappeared");
+      const previous: RestoreDocument = {
+        version: 1,
+        generation: "saved-generation",
+        workspaces: [
+          { cwd: fixture.cwd, sessions: [id] },
+          { cwd: emptyCwd, sessions: [] },
+          { cwd: disappearedCwd, sessions: [] },
+        ],
+      };
+      const bytes = JSON.stringify(previous);
+      writeFileSync(restoreFile(fixture), bytes);
+      const result = fixture.run(["list"]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(
+        JSON.parse(result.stdout),
+        previous.workspaces.map(({ cwd }) => ({ cwd, sessions: [], empty: [] })),
+      );
+      assert.equal(readFileSync(restoreFile(fixture), "utf8"), bytes);
+      assert.equal(existsSync(fixture.socket), false);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("keeps an unregistered workspace absent until explicitly registered again", async () => {
+    const fixture = new SessionFixture();
+    try {
+      assert.equal(fixture.run(["list"]).status, 0);
+      const result = fixture.run(["workspace", "unregister", fixture.cwd]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, "");
+      assert.deepEqual(restoreDocument(fixture).workspaces, []);
+      assert.deepEqual(JSON.parse(fixture.run(["list"]).stdout), []);
+      assert.deepEqual(JSON.parse(fixture.run(["history"]).stdout), []);
+      const registered = fixture.run(["workspace", "register", fixture.cwd]);
+      assert.equal(registered.status, 0, registered.stderr);
+      assert.deepEqual(restoreDocument(fixture).workspaces, [{ cwd: fixture.cwd, sessions: [] }]);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("registers an empty workspace without starting tmux", async () => {
+    const fixture = new SessionFixture();
+    try {
+      rmSync(restoreFile(fixture));
+      const result = fixture.run(["workspace", "register", fixture.cwd]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, "");
+      assert.equal(result.stderr, "");
+      assert.deepEqual(restoreDocument(fixture), {
+        version: 1,
+        generation: "",
+        workspaces: [{ cwd: fixture.cwd, sessions: [] }],
+      });
+      assert.equal(existsSync(fixture.socket), false);
+      assert.deepEqual(JSON.parse(fixture.run(["list"]).stdout), [
+        { cwd: fixture.cwd, sessions: [], empty: [] },
+      ]);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("keeps candidates and registration after a failed atomic save and allows retry", () => {
+    const fixture = new HistoryFixture();
+    try {
+      mkdirSync(fixture.otherCwd);
+      const previous = JSON.stringify({
+        version: 1,
+        generation: "previous",
+        workspaces: [{ cwd: fixture.cwd, sessions: ["retry-session"] }],
+      });
+      writeFileSync(restoreFile(fixture), previous);
+      const failRename = join(fixture.directory, "fail-restore-rename.ts");
+      writeFileSync(
+        failRename,
+        `import { spyOn } from "bun:test";
+import * as fs from "node:fs";
+const original = fs.renameSync;
+spyOn(fs, "renameSync").mockImplementation((...args) => {
+  if (args[1] === ${JSON.stringify(restoreFile(fixture))}) throw new Error("injected snapshot save failure");
+  return Reflect.apply(original, fs, args);
+});
+`,
+      );
+      fixture.preloads.push("--preload", failRename);
+      const failed = fixture.run(["workspace", "register", fixture.otherCwd]);
+      assert.equal(failed.status, 1);
+      assert.match(failed.stderr, /injected snapshot save failure/);
+      assert.equal(readFileSync(restoreFile(fixture), "utf8"), previous);
+      fixture.preloads.length = 0;
+      const retried = fixture.run(["workspace", "register", fixture.otherCwd]);
+      assert.equal(retried.status, 0, retried.stderr);
+      assert.deepEqual(restoreDocument(fixture), {
+        version: 1,
+        generation: "previous",
+        workspaces: [
+          { cwd: fixture.cwd, sessions: ["retry-session"] },
+          { cwd: fixture.otherCwd, sessions: [] },
+        ],
+      });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("serializes concurrent registration without dropping candidates or cwd entries", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      writeFileSync(
+        restoreFile(fixture),
+        JSON.stringify({
+          version: 1,
+          generation: "previous",
+          workspaces: [{ cwd: fixture.cwd, sessions: [id] }],
+        }),
+      );
+      const cwds = Array.from({ length: 6 }, (_, index) =>
+        join(fixture.directory, `workspace-${index}`),
+      );
+      for (const cwd of cwds) mkdirSync(cwd);
+      const commands = [
+        ["list"],
+        ["history"],
+        ...cwds.map((cwd) => ["workspace", "register", cwd]),
+      ];
+      const results = await Promise.all(
+        commands.map(async (args) => {
+          const child = Bun.spawn([process.execPath, "run", source, ...args], {
+            env: fixture.env,
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          const [status, stderr] = await Promise.all([
+            child.exited,
+            new Response(child.stderr).text(),
+          ]);
+          return { status, stderr };
+        }),
+      );
+      for (const result of results) assert.equal(result.status, 0, result.stderr);
+      const snapshot = restoreDocument(fixture);
+      assert.equal(snapshot.generation, "previous");
+      assert.deepEqual(snapshot.workspaces.find(({ cwd }) => cwd === fixture.cwd)?.sessions, [id]);
+      assert.deepEqual(
+        snapshot.workspaces.map(({ cwd }) => cwd).sort(),
+        [fixture.cwd, ...cwds].sort(),
+      );
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("retains empty registrations and failed candidates across snapshot and close", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      const temporaryId = randomUUID();
+      const failedId = randomUUID();
+      const emptyCwd = join(fixture.directory, "empty");
+      const generation = "current-generation";
+      fixture.piSession("normal", { id, file: join(fixture.directory, "normal.jsonl") });
+      fixture.piSession("temporary", {
+        id: temporaryId,
+        file: join(fixture.directory, "temporary.jsonl"),
+        temporary: true,
+      });
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", generation]);
+      fixture.tmux(["set-option", "-g", `@pi-mux-restoring-${failedId}`, "1"]);
+      writeFileSync(
+        restoreFile(fixture),
+        JSON.stringify({
+          version: 1,
+          generation,
+          workspaces: [
+            { cwd: fixture.cwd, sessions: [id, temporaryId, failedId] },
+            { cwd: emptyCwd, sessions: [] },
+          ],
+        }),
+      );
+      const snapshot = fixture.run(["snapshot", generation]);
+      assert.equal(snapshot.status, 0, snapshot.stderr);
+      assert.deepEqual(restoreDocument(fixture).workspaces, [
+        { cwd: fixture.cwd, sessions: [failedId, id] },
+        { cwd: emptyCwd, sessions: [] },
+      ]);
+      const closed = fixture.run(["close", id]);
+      assert.equal(closed.status, 0, closed.stderr);
+      const failedClosed = fixture.run(["close", failedId]);
+      assert.equal(failedClosed.status, 0, failedClosed.stderr);
+      assert.deepEqual(restoreDocument(fixture).workspaces, [
+        { cwd: fixture.cwd, sessions: [] },
+        { cwd: emptyCwd, sessions: [] },
+      ]);
+      const afterClose = fixture.run(["snapshot", generation]);
+      assert.equal(afterClose.status, 0, afterClose.stderr);
+      assert.deepEqual(restoreDocument(fixture).workspaces[0]?.sessions, []);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("adopts a registration-only generation while rejecting stale snapshot hooks", async () => {
+    const fixture = new SessionFixture();
+    try {
+      fixture.plainSession("server");
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "current-generation"]);
+      const previous = JSON.stringify({
+        version: 1,
+        generation: "",
+        workspaces: [{ cwd: fixture.cwd, sessions: [] }],
+      });
+      writeFileSync(restoreFile(fixture), previous);
+      const stale = fixture.run(["snapshot", "old-generation"]);
+      assert.equal(stale.status, 0, stale.stderr);
+      assert.equal(readFileSync(restoreFile(fixture), "utf8"), previous);
+      const current = fixture.run(["snapshot", "current-generation"]);
+      assert.equal(current.status, 0, current.stderr);
+      assert.deepEqual(restoreDocument(fixture), {
+        version: 1,
+        generation: "current-generation",
+        workspaces: [{ cwd: fixture.cwd, sessions: [] }],
+      });
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "another-generation"]);
+      const before = readFileSync(restoreFile(fixture), "utf8");
+      const mismatched = fixture.run(["snapshot", "another-generation"]);
+      assert.equal(mismatched.status, 0, mismatched.stderr);
+      assert.equal(readFileSync(restoreFile(fixture), "utf8"), before);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("keeps registrations and retry candidates after restore failure and removes only missing saved sessions", async () => {
+    const fixture = new SessionFixture();
+    try {
+      writeFileSync(join(fixture.directory, "bin/pi"), "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+      const missingId = randomUUID();
+      const failedId = randomUUID();
+      const failedCwd = join(fixture.directory, "missing-cwd");
+      const emptyCwd = join(fixture.directory, "empty");
+      conversationFile(fixture.agentDir, failedCwd, failedId);
+      writeFileSync(
+        restoreFile(fixture),
+        JSON.stringify({
+          version: 1,
+          generation: "previous-generation",
+          workspaces: [
+            { cwd: fixture.cwd, sessions: [missingId] },
+            { cwd: failedCwd, sessions: [failedId] },
+            { cwd: emptyCwd, sessions: [] },
+          ],
+        }),
+      );
+      const restored = fixture.run(["restore"]);
+      assert.equal(restored.status, 2, restored.stderr);
+      assert.match(restored.stderr, /saved conversation not found; removed/);
+      assert.match(restored.stderr, new RegExp(failedId));
+      const snapshot = restoreDocument(fixture);
+      assert.notEqual(snapshot.generation, "previous-generation");
+      assert.deepEqual(snapshot.workspaces, [
+        { cwd: fixture.cwd, sessions: [] },
+        { cwd: failedCwd, sessions: [failedId] },
+        { cwd: emptyCwd, sessions: [] },
+      ]);
+      const after = fixture.run(["snapshot", snapshot.generation]);
+      assert.equal(after.status, 0, after.stderr);
+      assert.deepEqual(restoreDocument(fixture), snapshot);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("retains empty registrations on running promotion", async () => {
+    const fixture = new CloseFixture("none");
+    try {
+      fixture.start();
+      fixture.tmux(["set-environment", "-t", "target", "PI_TMUX_TEMPORARY", fixture.id]);
+      fixture.tmux(["set-option", "-g", `@pi-mux-restoring-${fixture.otherId}`, "1"]);
+      const emptyCwd = join(fixture.directory, "empty");
+      const previous = JSON.parse(readFileSync(fixture.restore, "utf8"));
+      previous.workspaces.push({ cwd: emptyCwd, sessions: [] });
+      writeFileSync(fixture.restore, JSON.stringify(previous));
+      const result = notify(fixture, ["running", "--title", "null"]);
+      assert.equal(result.status, 0, result.stderr);
+      const snapshot = JSON.parse(readFileSync(fixture.restore, "utf8"));
+      assert.deepEqual(
+        snapshot.workspaces.find(({ cwd }: { cwd: string }) => cwd === emptyCwd),
+        { cwd: emptyCwd, sessions: [] },
+      );
+      assert.deepEqual(
+        snapshot.workspaces[0].sessions.sort(),
+        [fixture.id, fixture.otherId].sort(),
+      );
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("unregisters a live workspace without dropping another workspace or its retry candidate", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      const otherCwd = join(fixture.directory, "other");
+      fixture.piSession("target", { id, file: join(fixture.directory, "target.jsonl") });
+      writeFileSync(
+        restoreFile(fixture),
+        JSON.stringify({
+          version: 1,
+          generation: "current",
+          workspaces: [
+            { cwd: fixture.cwd, sessions: [id] },
+            { cwd: otherCwd, sessions: ["retry-id"] },
+          ],
+        }),
+      );
+      const result = fixture.run(["workspace", "unregister", fixture.cwd]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(fixture.tmux(["list-sessions", "-F", "#{session_id}"]), "");
+      assert.deepEqual(restoreDocument(fixture), {
+        version: 1,
+        generation: "current",
+        workspaces: [{ cwd: otherCwd, sessions: ["retry-id"] }],
+      });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("preserves registration through temporary open, normal promotion, and empty-new reuse", async () => {
+    const fixture = new SessionFixture();
+    try {
+      writeFileSync(
+        join(fixture.directory, "bin/pi"),
+        `#!/usr/bin/env bun
+import { spawnSync } from "node:child_process";
+import { join } from "node:path";
+const fileIndex = process.argv.indexOf("--session");
+const id = process.env.PI_TMUX_SESSION_ID;
+const file = fileIndex >= 0 ? process.argv[fileIndex + 1] : join(process.env.PI_CODING_AGENT_DIR, "sessions", id + ".jsonl");
+const metadata = { id, cwd: process.cwd(), file, pid: process.pid, startup: "ready" };
+const result = spawnSync(${JSON.stringify(realTmux)}, ["-S", ${JSON.stringify(fixture.socket)}, "set-option", "-p", "-t", process.env.TMUX_PANE, "@pi-tmux-session", Buffer.from(JSON.stringify(metadata)).toString("base64")]);
+if (result.status !== 0) process.exit(99);
+await Bun.sleep(300000);
+`,
+        { mode: 0o700 },
+      );
+      writeFileSync(
+        join(fixture.directory, "bin/tmux"),
+        `#!/bin/sh
+if [ "$1" != -S ] || [ "$2" != ${JSON.stringify(fixture.socket)} ]; then exit 64; fi
+if [ "$3" = attach-session ]; then exit 0; fi
+exec ${JSON.stringify(realTmux)} "$@"
+`,
+        { mode: 0o700 },
+      );
+      const id = randomUUID();
+      conversationFile(fixture.agentDir, fixture.cwd, id);
+      writeFileSync(
+        restoreFile(fixture),
+        JSON.stringify({
+          version: 1,
+          generation: "old-generation",
+          workspaces: [{ cwd: fixture.cwd, sessions: [id] }],
+        }),
+      );
+      const temporary = fixture.run(["open", "--temporary", id]);
+      assert.equal(temporary.status, 0, temporary.stderr);
+      assert.deepEqual(restoreDocument(fixture).workspaces, [{ cwd: fixture.cwd, sessions: [] }]);
+      const beforePid = fixture.tmux(["list-panes", "-a", "-F", "#{pane_pid}"]);
+      const normal = fixture.run(["open", id]);
+      assert.equal(normal.status, 0, normal.stderr);
+      assert.equal(fixture.tmux(["list-panes", "-a", "-F", "#{pane_pid}"]), beforePid);
+      assert.deepEqual(restoreDocument(fixture).workspaces, [{ cwd: fixture.cwd, sessions: [id] }]);
+      const firstNew = fixture.run(["new", "--detached"]);
+      assert.equal(firstNew.status, 0, firstNew.stderr);
+      const secondNew = fixture.run(["new", "--detached"]);
+      assert.equal(secondNew.status, 0, secondNew.stderr);
+      assert.equal(secondNew.stdout, firstNew.stdout);
+      const list = fixture.run(["list"]);
+      assert.equal(list.status, 0, list.stderr);
+      const listed = JSON.parse(list.stdout);
+      assert.equal(listed.length, 1);
+      assert.equal(listed[0].sessions[0].id, id);
+      assert.equal(listed[0].empty.length, 1);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20000);
+});
+
+describe("restore failure exit codes", () => {
+  for (const contents of ["{broken", '{"version":1,"generation":"saved","workspaces":{}}']) {
+    it(`returns 2 without changing an invalid restore record: ${contents}`, async () => {
+      const fixture = new SessionFixture();
+      try {
+        writeFileSync(join(fixture.directory, "bin/pi"), "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+        writeFileSync(restoreFile(fixture), contents);
+        const result = fixture.run(["restore"]);
+        assert.equal(result.status, 2, result.stderr);
+        assert.equal(result.stdout, "");
+        assert.match(result.stderr, /snapshot/);
+        assert.equal(readFileSync(restoreFile(fixture), "utf8"), contents);
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  }
+
+  it("returns 2 for an unreadable restore record without replacing it", async () => {
+    const fixture = new SessionFixture();
+    try {
+      writeFileSync(join(fixture.directory, "bin/pi"), "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+      rmSync(restoreFile(fixture));
+      mkdirSync(restoreFile(fixture));
+      const result = fixture.run(["restore"]);
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, /Cannot read snapshot/);
+      assert.equal(statSync(restoreFile(fixture)).isDirectory(), true);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("keeps exit code 1 for missing dependencies before inspecting the restore record", async () => {
+    const fixture = new SessionFixture();
+    try {
+      fixture.env.PATH = join(fixture.directory, "bin");
+      writeFileSync(restoreFile(fixture), "{broken restore");
+      const result = fixture.run(["restore"]);
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /Executable not found on PATH: pi/);
+      assert.equal(readFileSync(restoreFile(fixture), "utf8"), "{broken restore");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("keeps exit code 1 for runtime directory preparation failure", async () => {
+    const fixture = new SessionFixture();
+    try {
+      writeFileSync(join(fixture.directory, "bin/pi"), "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+      const previous = JSON.stringify({
+        version: 1,
+        generation: "saved",
+        workspaces: [],
+      });
+      writeFileSync(restoreFile(fixture), previous);
+      const runtimeDirectory = dirname(fixture.socket);
+      rmSync(runtimeDirectory, { recursive: true });
+      writeFileSync(runtimeDirectory, "blocked runtime directory");
+      const result = fixture.run(["restore"]);
+      assert.equal(result.status, 1, result.stderr);
+      assert.ok(result.stderr.includes(runtimeDirectory));
+      assert.equal(readFileSync(restoreFile(fixture), "utf8"), previous);
+    } finally {
+      await fixture.cleanup();
     }
   });
 });

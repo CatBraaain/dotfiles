@@ -17,11 +17,11 @@
 | `session_shutdown` | 新規公開を止め、optionの除去を試みる |
 | 専用tmux管理外のトップレベル | 公開しない |
 
-## 所属・復元との境界
+## workspace登録・復元との境界
 
 セッション一覧の正本は `pi-mux list` とし、復元用JSONの読込み・更新はpi-muxが担う。session-stateは、自セッションの実行フェーズと保存済みタイトルを [pi-muxのstate操作](../../../../.local/cli.exact/pi-mux/SPEC.md#state) へ通知し、pane optionに公開する。状態metadataを直接書き換えず、終了時の除去も同じ公開CLIへ依頼する。
 
-起動・入力・実行フェーズ遷移・終了の全期間で、pi の agent directory 配下の `session-state.json` を読み書き・再作成しない。ファイルがない場合と旧内容が残る場合のどちらでも、実行フェーズの公開はその内容やI/Oの成否に依存せず動作する。保存済みの所属JSON・復元用JSONを拡張自身は直接読み書きせず、会話JSONLも変更・削除しない。`running` 通知に伴う一時再開からの昇格と復元記録更新はpi-muxが行う。
+起動・入力・実行フェーズ遷移・終了の全期間で、workspace登録と復元記録の取得・更新はpi-muxが担う。拡張自身は保存storeを直接読み書きせず、会話JSONLも変更・削除しない。`running` 通知に伴う一時再開からの昇格と復元記録更新はpi-muxが行う。
 
 ## 管理paneの初期照合
 

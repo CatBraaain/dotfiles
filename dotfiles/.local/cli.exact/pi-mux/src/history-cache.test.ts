@@ -40,7 +40,7 @@ class HistoryCacheFixture {
   readonly otherCwd: string;
   readonly sessionsDirectory: string;
   readonly cacheDirectory: string;
-  readonly membership: string;
+  readonly restoreState: string;
   readonly env: Record<string, string>;
   readonly preloads: string[] = [];
 
@@ -52,7 +52,7 @@ class HistoryCacheFixture {
     this.otherCwd = join(this.directory, "other-workspace");
     this.sessionsDirectory = join(this.agentDir, "sessions");
     this.cacheDirectory = join(this.directory, "cache", "pi-mux", cacheDirectoryName);
-    this.membership = join(this.agentDir, "session-state.json");
+    this.restoreState = join(this.agentDir, "pi-tmux", "pi-mux-restore.json");
     this.env = {
       PATH: process.env.PATH ?? "",
       HOME: join(this.directory, "home"),
@@ -66,12 +66,14 @@ class HistoryCacheFixture {
     mkdirSync(this.cwd, { recursive: true });
     mkdirSync(this.otherCwd, { recursive: true });
     writeFileSync(
-      this.membership,
+      this.restoreState,
       JSON.stringify({
-        "active-workspaces": {
-          [this.cwd]: { "active-sessions": {} },
-          [this.otherCwd]: { "active-sessions": {} },
-        },
+        version: 1,
+        generation: "",
+        workspaces: [
+          { cwd: this.cwd, sessions: [] },
+          { cwd: this.otherCwd, sessions: [] },
+        ],
       }),
     );
   }
@@ -299,7 +301,7 @@ describe("history cache", () => {
         fixture.sessionInfo("Cached title"),
       ]);
       const sourceBefore = readFileSync(file, "utf8");
-      const membershipBefore = readFileSync(fixture.membership, "utf8");
+      const restoreStateBefore = readFileSync(fixture.restoreState, "utf8");
       const first = fixture.history();
       assert.equal(first.error, undefined);
       assert.equal(first.status, 0, first.stderr);
@@ -324,7 +326,7 @@ describe("history cache", () => {
         fixture.expected(file, id, fixture.cwd, "Cached title"),
       ]);
       assert.equal(readFileSync(file, "utf8"), sourceBefore);
-      assert.equal(readFileSync(fixture.membership, "utf8"), membershipBefore);
+      assert.equal(readFileSync(fixture.restoreState, "utf8"), restoreStateBefore);
     } finally {
       fixture.cleanup();
     }
@@ -519,7 +521,7 @@ describe("history cache", () => {
         fixture.header(id),
         fixture.sessionInfo("Initial title"),
       ]);
-      const membershipBefore = readFileSync(fixture.membership, "utf8");
+      const restoreStateBefore = readFileSync(fixture.restoreState, "utf8");
       const initial = fixture.history();
       assert.equal(initial.error, undefined);
       assert.equal(initial.status, 0, initial.stderr);
@@ -540,7 +542,7 @@ describe("history cache", () => {
         fixture.expected(file, id, fixture.cwd, "Updated title"),
       ]);
       assert.equal(readFileSync(file, "utf8"), sourceAfter);
-      assert.equal(readFileSync(fixture.membership, "utf8"), membershipBefore);
+      assert.equal(readFileSync(fixture.restoreState, "utf8"), restoreStateBefore);
       assert.deepEqual(
         fixture.cacheFiles().filter((cachePath) => cachePath.endsWith(".tmp")),
         [],
@@ -700,7 +702,7 @@ describe("history cache", () => {
         fixture.sessionInfo("Still available"),
       ]);
       const sourceBefore = readFileSync(file, "utf8");
-      const membershipBefore = readFileSync(fixture.membership, "utf8");
+      const restoreStateBefore = readFileSync(fixture.restoreState, "utf8");
       mkdirSync(join(fixture.directory, "cache", "pi-mux"), { recursive: true });
       writeFileSync(
         join(fixture.directory, "cache", "pi-mux", cacheDirectoryName),
@@ -712,7 +714,7 @@ describe("history cache", () => {
         fixture.expected(file, id, fixture.cwd, "Still available"),
       ]);
       assert.equal(readFileSync(file, "utf8"), sourceBefore);
-      assert.equal(readFileSync(fixture.membership, "utf8"), membershipBefore);
+      assert.equal(readFileSync(fixture.restoreState, "utf8"), restoreStateBefore);
       rmSync(join(fixture.directory, "cache", "pi-mux", cacheDirectoryName));
       mkdirSync(fixture.cacheDirectory, { recursive: true, mode: 0o700 });
       chmodSync(fixture.cacheDirectory, 0o777);
@@ -1026,9 +1028,14 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
         file: join(custom, `${mineId}.jsonl`),
       });
       const otherId = randomUUID();
-      const other = fixture.writeSession(fixture.otherCwd, otherId, [fixture.header(otherId, fixture.otherCwd)], {
-        file: join(custom, `${otherId}.jsonl`),
-      });
+      const other = fixture.writeSession(
+        fixture.otherCwd,
+        otherId,
+        [fixture.header(otherId, fixture.otherCwd)],
+        {
+          file: join(custom, `${otherId}.jsonl`),
+        },
+      );
       const defaultId = randomUUID();
       fixture.writeSession(fixture.cwd, defaultId, [fixture.header(defaultId)]);
       const mineListed = fixture.history(fixture.cwd);
@@ -1082,9 +1089,14 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
         JSON.stringify({ sessionDir: globalRoot }),
       );
       const projectId = randomUUID();
-      const projectFile = fixture.writeSession(fixture.cwd, projectId, [fixture.header(projectId)], {
-        file: join(projectRoot, `${projectId}.jsonl`),
-      });
+      const projectFile = fixture.writeSession(
+        fixture.cwd,
+        projectId,
+        [fixture.header(projectId)],
+        {
+          file: join(projectRoot, `${projectId}.jsonl`),
+        },
+      );
       const globalId = randomUUID();
       fixture.writeSession(fixture.cwd, globalId, [fixture.header(globalId)], {
         file: join(globalRoot, `${globalId}.jsonl`),

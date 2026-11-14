@@ -271,7 +271,8 @@ exec ${quote([realTmux])} "$@"
   }
 
   function saved(id: string, cwd = cwdA) {
-    const file = join(agent, "sessions", "fixture_" + id + ".jsonl");
+    const group = "--" + cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-") + "--";
+    const file = join(agent, "sessions", group, "fixture_" + id + ".jsonl");
     mkdirSync(dirname(file), { recursive: true });
     const timestamp = new Date().toISOString();
     const entries = [
@@ -572,10 +573,22 @@ async function publishedIdlePane(
   assert.equal(created.code, 0, created.err);
   const [pane, pid] = created.out.trim().split("\t");
   assert.ok(pane);
+  const file = join(f.agent, "sessions", id + ".jsonl");
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(
+    file,
+    JSON.stringify({
+      type: "session",
+      version: 3,
+      id,
+      cwd: f.cwdA,
+      timestamp: new Date().toISOString(),
+    }) + "\n",
+  );
   const metadata = {
     id,
     cwd: f.cwdA,
-    file: join(f.agent, "sessions", id + ".jsonl"),
+    file,
     pid: Number(pid),
     ...(startup === "legacy" ? {} : { startup }),
   };
@@ -772,19 +785,30 @@ describe("pi-mux dedicated tmux settings", () => {
   }
 });
 
+function fixtureEntries(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true })
+    .flatMap((entry) => [
+      entry.name,
+      ...(entry.isDirectory()
+        ? fixtureEntries(join(directory, entry.name)).map((child) => join(entry.name, child))
+        : []),
+    ])
+    .sort();
+}
+
 describe("pi-mux workspace list", () => {
   it(
     "returns an empty JSON array without creating directories or requiring launch resources",
     async () => {
       await fixture(async (f) => {
-        const before = readdirSync(f.root, { recursive: true }).sort();
+        const before = fixtureEntries(f.root);
         const result = await f.run(["list"], f.cwdB, {
           PI_CODING_AGENT_DIR: join(f.root, "absent-agent"),
         });
         assert.equal(result.code, 0, result.err);
         assert.equal(result.out, "[]\n");
         assert.equal(result.err, "");
-        assert.deepEqual(readdirSync(f.root, { recursive: true }).sort(), before);
+        assert.deepEqual(fixtureEntries(f.root), before);
         assert.equal(existsSync(f.socket), false);
         assert.equal(existsSync(dirname(f.socket)), false);
       });
@@ -793,7 +817,7 @@ describe("pi-mux workspace list", () => {
   );
 
   it(
-    "does not use or restore a stopped server's snapshot",
+    "lists stopped registrations without restoring their saved candidates",
     async () => {
       await fixture(async (f) => {
         f.saved("snapshot-only-id");
@@ -802,7 +826,7 @@ describe("pi-mux workspace list", () => {
         const before = readFileSync(path, "utf8");
         const result = await f.run(["list"]);
         assert.equal(result.code, 0, result.err);
-        assert.equal(result.out, "[]\n");
+        assert.deepEqual(JSON.parse(result.out), [{ cwd: f.cwdA, sessions: [], empty: [] }]);
         assert.equal(readFileSync(path, "utf8"), before);
         assert.equal(existsSync(f.socket), false);
         assert.equal(existsSync(dirname(f.socket)), false);
@@ -812,7 +836,7 @@ describe("pi-mux workspace list", () => {
   );
 
   it(
-    "reads live identities even when the restore file is invalid",
+    "rejects an invalid registration record without changing it or stopping live pi",
     async () => {
       await fixture(async (f) => {
         const { metadata } = await publishedIdlePane(f);
@@ -821,14 +845,11 @@ describe("pi-mux workspace list", () => {
         const invalid = "{invalid restore file\n";
         writeFileSync(path, invalid);
         const result = await f.run(["list"]);
-        assert.equal(result.code, 0, result.err);
-        assert.deepEqual(JSON.parse(result.out), [
-          {
-            cwd: metadata.cwd,
-            sessions: [{ id: metadata.id, file: metadata.file, state: null, title: null }],
-          },
-        ]);
+        assert.equal(result.code, 1, result.err);
+        assert.equal(result.out, "");
+        assert.match(result.err, /Cannot read snapshot/);
         assert.equal(readFileSync(path, "utf8"), invalid);
+        assert.ok(existsSync(`/proc/${metadata.pid}`));
       });
     },
     TIMEOUT_MS,
@@ -900,7 +921,7 @@ describe("pi-mux workspace list", () => {
           assert.equal(published.code, 0, published.err);
           const imported = await f.run(["list"]);
           assert.equal(imported.code, 0, imported.err);
-          const before = readdirSync(f.root, { recursive: true }).sort();
+          const before = fixtureEntries(f.root);
           const options = await f.tmux(["show-options", "-g"]);
           const result = await f.run(["list"]);
           assert.equal(result.code, 0, result.err);
@@ -909,11 +930,12 @@ describe("pi-mux workspace list", () => {
             {
               cwd: metadata.cwd,
               sessions: [{ id: metadata.id, file: metadata.file, state, title: null }],
+              empty: [],
             },
           ]);
-          assert.equal(existsSync(metadata.file), false);
+          assert.equal(existsSync(metadata.file), true);
           assert.equal(existsSync(join(f.agent, "pi-tmux")), true);
-          assert.deepEqual(readdirSync(f.root, { recursive: true }).sort(), before);
+          assert.deepEqual(fixtureEntries(f.root), before);
           assert.equal((await f.tmux(["show-options", "-g"])).out, options.out);
         });
       },
@@ -974,6 +996,7 @@ describe("pi-mux workspace list", () => {
               {
                 cwd: metadata.cwd,
                 sessions: [{ id: metadata.id, file: metadata.file, state, title }],
+                empty: [],
               },
             ],
             value,
@@ -1031,6 +1054,7 @@ describe("pi-mux workspace list", () => {
             {
               cwd: metadata.cwd,
               sessions: [{ id: metadata.id, file: metadata.file, state: null, title: null }],
+              empty: [],
             },
           ]);
         });
@@ -1051,9 +1075,10 @@ describe("pi-mux workspace list", () => {
             {
               cwd: metadata.cwd,
               sessions: [{ id: metadata.id, file: metadata.file, state: null, title: null }],
+              empty: [],
             },
           ]);
-          assert.equal(existsSync(metadata.file), false);
+          assert.equal(existsSync(metadata.file), true);
           f.saved(metadata.id);
           f.seed([{ id: metadata.id, cwd: metadata.cwd }]);
           const restored = await f.run(["restore"]);
@@ -1081,7 +1106,8 @@ describe("pi-mux workspace list", () => {
         assert.deepEqual(JSON.parse(result.out), [
           {
             cwd: pane.cwd,
-            sessions: [{ id: pane.id, file: pane.file, state: null, title: null }],
+            sessions: [],
+            empty: [{ id: pane.id, file: pane.file }],
           },
         ]);
         assert.equal(existsSync(pane.file), false);
@@ -1153,7 +1179,7 @@ describe("pi-mux workspace list", () => {
         const result = await f.run(["list"]);
         assert.equal(result.code, 0, result.err);
         assert.deepEqual(JSON.parse(result.out), []);
-        assert.equal(existsSync(join(f.agent, "session-state.json")), false);
+        assert.equal(existsSync(join(f.agent, "pi-tmux/pi-mux-restore.json")), false);
       });
     },
     TIMEOUT_MS,
@@ -1233,7 +1259,7 @@ describe("pi-mux workspace list", () => {
         assert.equal(result.code, 1);
         assert.equal(result.out, "");
         assert.match(result.err, /state access refused/);
-        assert.equal(existsSync(join(f.agent, "session-state.json")), false);
+        assert.equal(existsSync(join(f.agent, "pi-tmux/pi-mux-restore.json")), false);
       });
     },
     TIMEOUT_MS,
@@ -1283,12 +1309,14 @@ describe("pi-mux workspace operations", () => {
           const id = "mixed-initializing-a";
           const file = f.saved(id, f.cwdA);
           f.seed([{ id, cwd: f.cwdA }]);
-          const storePath = join(f.agent, "session-state.json");
+          const storePath = join(f.agent, "pi-tmux/pi-mux-restore.json");
           const original = JSON.stringify({
-            "active-workspaces": {
-              [f.cwdA]: { "active-sessions": {} },
-              [f.cwdB]: { "active-sessions": {} },
-            },
+            version: 1,
+            generation: "previous-server",
+            workspaces: [
+              { cwd: f.cwdA, sessions: [id] },
+              { cwd: f.cwdB, sessions: [] },
+            ],
           });
           writeFileSync(storePath, original);
           const started = join(f.root, "mixed-init-started");
@@ -1372,6 +1400,7 @@ export default function (pi) {
             restoring.kill("SIGKILL");
             await restoring.exited;
             const before = f.snapshot();
+            const recordBefore = readFileSync(storePath, "utf8");
             const saved = readFileSync(file, "utf8");
             const removed = await f.run(["workspace", "unregister", f.cwdA]);
             assert.equal(removed.code, ambiguous ? 1 : 0, removed.err);
@@ -1384,11 +1413,13 @@ export default function (pi) {
             assert.equal(readFileSync(file, "utf8"), saved);
             if (ambiguous) {
               assert.match(removed.err, /Cannot safely identify initializing pi/);
-              assert.equal(readFileSync(storePath, "utf8"), original);
+              assert.equal(readFileSync(storePath, "utf8"), recordBefore);
               assert.deepEqual(f.snapshot(), before);
             } else {
               assert.deepEqual(
-                Object.keys(JSON.parse(readFileSync(storePath, "utf8"))["active-workspaces"]),
+                JSON.parse(readFileSync(storePath, "utf8")).workspaces.map(
+                  ({ cwd }: { cwd: string }) => cwd,
+                ),
                 [f.cwdB],
               );
               assert.deepEqual(f.snapshotCandidates(), []);
@@ -1408,6 +1439,17 @@ export default function (pi) {
     async () => {
       await fixture(async (f) => {
         assert.equal((await f.run(["new", "--detached"], f.cwdA)).code, 0);
+        const live = await firstPane(f);
+        writeFileSync(
+          live.file,
+          JSON.stringify({
+            type: "session",
+            version: 3,
+            id: live.id,
+            cwd: live.cwd,
+            timestamp: new Date().toISOString(),
+          }) + "\n",
+        );
         const wrapper = join(f.bin, "tmux");
         const ready = join(f.root, "list-state-ready");
         const released = join(f.root, "list-state-released");
@@ -1439,12 +1481,7 @@ export default function (pi) {
         const after = await f.run(["list"]);
         assert.equal(after.code, 0, after.err);
         assert.deepEqual(JSON.parse(after.out), []);
-        assert.deepEqual(
-          JSON.parse(readFileSync(join(f.agent, "session-state.json"), "utf8"))[
-            "active-workspaces"
-          ],
-          {},
-        );
+        assert.deepEqual(f.snapshot().workspaces, []);
       });
     },
     TIMEOUT_MS,
@@ -1459,10 +1496,11 @@ export default function (pi) {
         const result = await f.run(["list"]);
         assert.equal(result.code, 0, result.err);
         assert.deepEqual(JSON.parse(result.out), [
-          { cwd: f.cwdB, sessions: [] },
+          { cwd: f.cwdB, sessions: [], empty: [] },
           {
             cwd: f.cwdA,
             sessions: [{ id: metadata.id, file: metadata.file, state: null, title: null }],
+            empty: [],
           },
         ]);
       });
@@ -1523,6 +1561,7 @@ export default function (pi) {
             sessions: [
               { id: otherMetadata.id, file: otherMetadata.file, state: null, title: null },
             ],
+            empty: [],
           },
         ]);
       });
@@ -1568,6 +1607,24 @@ export default function (pi) {
           ).code,
           0,
         );
+        const currentPid = Number(
+          (await f.tmux(["display-message", "-p", "-t", pane!, "#{pane_pid}"])).out.trim(),
+        );
+        const stat = readFileSync(`/proc/${currentPid}/stat`, "utf8");
+        const started = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]!;
+        assert.equal(
+          (
+            await f.tmux([
+              "set-option",
+              "-p",
+              "-t",
+              pane!,
+              "@pi-mux-launch",
+              JSON.stringify({ id: metadata.id, pid: currentPid, started }),
+            ])
+          ).code,
+          0,
+        );
         f.seed([{ id: metadata.id, cwd: f.cwdA }]);
         const removed = await f.run(["workspace", "unregister", f.cwdA]);
         assert.equal(removed.code, 0, removed.err);
@@ -1588,12 +1645,10 @@ export default function (pi) {
         assert.equal((await f.run(["snapshot"])).code, 0);
         const path = join(f.agent, "pi-tmux/pi-mux-restore.json");
         writeFileSync(path, "{invalid");
-        const storePath = join(f.agent, "session-state.json");
-        const store = readFileSync(storePath, "utf8");
+
         const result = await f.run(["workspace", "unregister", f.cwdA]);
         assert.equal(result.code, 1);
         assert.equal(readFileSync(path, "utf8"), "{invalid");
-        assert.equal(readFileSync(storePath, "utf8"), store);
         assert.equal((await firstPane(f)).pid, pane.pid);
       });
     },
@@ -1631,41 +1686,45 @@ export default function (pi) {
         assert.equal(registered.code, 0, registered.err);
         const listed = await f.run(["list"], f.cwdB, extra);
         assert.equal(listed.code, 0, listed.err);
-        assert.deepEqual(JSON.parse(listed.out), [{ cwd: f.cwdA, sessions: [] }]);
+        assert.deepEqual(JSON.parse(listed.out), [{ cwd: f.cwdA, sessions: [], empty: [] }]);
         assert.equal(existsSync(f.socket), false);
         const store = JSON.parse(
-          readFileSync(join(extra.PI_CODING_AGENT_DIR, "session-state.json"), "utf8"),
+          readFileSync(join(extra.PI_CODING_AGENT_DIR, "pi-tmux/pi-mux-restore.json"), "utf8"),
         );
-        assert.deepEqual(store, { "active-workspaces": { [f.cwdA]: { "active-sessions": {} } } });
+        assert.deepEqual(store, {
+          version: 1,
+          generation: "",
+          workspaces: [{ cwd: f.cwdA, sessions: [] }],
+        });
       });
     },
     TIMEOUT_MS,
   );
 
   it(
-    "preserves attributes and locks when registering or listing an existing workspace",
+    "preserves candidates, attributes, and generation when registering or listing an existing workspace",
     async () => {
       await fixture(async (f) => {
-        const storePath = join(f.agent, "session-state.json");
+        const storePath = join(f.agent, "pi-tmux/pi-mux-restore.json");
         const original = JSON.stringify({
           other: { value: 3 },
-          "active-workspaces": {
-            [f.cwdA]: {
-              label: "keep",
-              "active-sessions": { archived: { lock: true, extra: "keep" } },
-            },
-            [f.cwdB]: { "active-sessions": {} },
-          },
+          version: 1,
+          generation: "saved-generation",
+          workspaces: [
+            { cwd: f.cwdA, sessions: ["archived"] },
+            { cwd: f.cwdB, sessions: [] },
+          ],
         });
+        mkdirSync(dirname(storePath), { recursive: true, mode: 0o700 });
         writeFileSync(storePath, original);
         assert.equal((await f.run(["workspace", "register", f.cwdA])).code, 0);
         const listed = await f.run(["list"]);
         assert.deepEqual(JSON.parse(listed.out), [
-          { cwd: f.cwdA, sessions: [] },
-          { cwd: f.cwdB, sessions: [] },
+          { cwd: f.cwdA, sessions: [], empty: [] },
+          { cwd: f.cwdB, sessions: [], empty: [] },
         ]);
         assert.equal(readFileSync(storePath, "utf8"), original);
-        assert.equal(existsSync(join(f.agent, "pi-tmux/pi-mux-restore.json")), false);
+        assert.equal(existsSync(f.socket), false);
       });
     },
     TIMEOUT_MS,
@@ -1677,7 +1736,7 @@ export default function (pi) {
       await fixture(async (f) => {
         const result = await f.run(["workspace", "register", join(f.root, "missing")]);
         assert.equal(result.code, 1);
-        assert.equal(existsSync(join(f.agent, "session-state.json")), false);
+        assert.equal(existsSync(join(f.agent, "pi-tmux/pi-mux-restore.json")), false);
         assert.equal(existsSync(f.socket), false);
       });
     },
@@ -1693,7 +1752,7 @@ export default function (pi) {
         const pane = await firstPane(f);
         assert.equal((await f.tmux(["kill-session", "-t", pane.session])).code, 0);
         const listed = await f.run(["list"]);
-        assert.deepEqual(JSON.parse(listed.out), [{ cwd: f.cwdA, sessions: [] }]);
+        assert.deepEqual(JSON.parse(listed.out), [{ cwd: f.cwdA, sessions: [], empty: [] }]);
       });
     },
     TIMEOUT_MS,
@@ -1725,7 +1784,7 @@ export default function (pi) {
         const listed = await f.run(["list"]);
         assert.equal(listed.code, 0, listed.err);
         assert.deepEqual(JSON.parse(listed.out), [
-          { cwd: f.cwdA, sessions: [{ id, file: pane.file, state: null, title: null }] },
+          { cwd: f.cwdA, sessions: [], empty: [{ id, file: pane.file }] },
         ]);
         const removed = await f.run(["workspace", "unregister", f.cwdA]);
         assert.equal(removed.code, 0, removed.err);
@@ -1760,14 +1819,19 @@ export default function (pi) {
         assert.equal(started.code, 0, started.err);
         const pane = await firstPane(f);
         assert.equal(pane.id, id);
-        assert.equal(existsSync(join(f.agent, "session-state.json")), false);
+        assert.equal(
+          f.snapshot().workspaces.some(({ cwd }) => cwd === f.cwdA),
+          false,
+        );
         const listed = await f.run(["list"]);
         assert.equal(listed.code, 0, listed.err);
         assert.deepEqual(JSON.parse(listed.out), [
-          { cwd: f.cwdA, sessions: [{ id, file: pane.file, state: null, title: null }] },
+          { cwd: f.cwdA, sessions: [], empty: [{ id, file: pane.file }] },
         ]);
         assert.equal((await f.tmux(["kill-session", "-t", pane.session])).code, 0);
-        assert.deepEqual(JSON.parse((await f.run(["list"])).out), [{ cwd: f.cwdA, sessions: [] }]);
+        assert.deepEqual(JSON.parse((await f.run(["list"])).out), [
+          { cwd: f.cwdA, sessions: [], empty: [] },
+        ]);
       });
     },
     TIMEOUT_MS,
@@ -1804,7 +1868,7 @@ export default function (pi) {
         const listed = await f.run(["list"]);
         assert.equal(listed.code, 0, listed.err);
         assert.deepEqual(JSON.parse(listed.out), []);
-        assert.equal(existsSync(join(f.agent, "session-state.json")), false);
+        assert.equal(existsSync(join(f.agent, "pi-tmux/pi-mux-restore.json")), false);
       });
     },
     TIMEOUT_MS,
@@ -1835,11 +1899,7 @@ export default function (pi) {
         assert.equal((await firstPane(f)).pid, other.pid);
         assert.deepEqual(f.snapshotCandidates(), [{ id: other.id, cwd: f.cwdB }]);
         assert.deepEqual(
-          Object.keys(
-            JSON.parse(readFileSync(join(f.agent, "session-state.json"), "utf8"))[
-              "active-workspaces"
-            ],
-          ),
+          f.snapshot().workspaces.map(({ cwd }) => cwd),
           [f.cwdB],
         );
         for (const entry of saved) assert.equal(readFileSync(entry.file, "utf8"), entry.content);
@@ -1876,24 +1936,40 @@ export default function (pi) {
   );
 
   it(
-    "refuses locked workspace removal before stopping its pi",
+    "waits for the shared operation lock before stopping workspace pi",
     async () => {
       await fixture(async (f) => {
         assert.equal((await f.run(["new", "--detached"], f.cwdA)).code, 0);
         const pane = await firstPane(f);
-        const storePath = join(f.agent, "session-state.json");
-        const original = JSON.stringify({
-          "active-workspaces": { [f.cwdA]: { "active-sessions": { [pane.id]: { lock: true } } } },
-        });
-        writeFileSync(storePath, original);
         assert.equal((await f.run(["snapshot"])).code, 0);
         const before = f.snapshot();
-        const result = await f.run(["workspace", "unregister", f.cwdA]);
-        assert.equal(result.code, 1);
-        assert.match(result.err, /locked sessions/);
-        assert.equal(readFileSync(storePath, "utf8"), original);
-        assert.equal((await firstPane(f)).pid, pane.pid);
-        assert.deepEqual(f.snapshot(), before);
+        const lock = createServer();
+        const key = createHash("sha256")
+          .update(realpathSync(join(f.agent, "pi-tmux")))
+          .digest("hex");
+        await waitFor(async () => {
+          try {
+            await new Promise<void>((resolve, reject) => {
+              lock.once("error", reject);
+              lock.listen(`\0pi-mux-${process.getuid!()}-${key}`, resolve);
+            });
+            return true;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
+            return undefined;
+          }
+        });
+        const removal = f.run(["workspace", "unregister", f.cwdA]);
+        try {
+          await Bun.sleep(150);
+          assert.equal((await firstPane(f)).pid, pane.pid);
+          assert.deepEqual(f.snapshot(), before);
+        } finally {
+          await new Promise<void>((resolve) => lock.close(() => resolve()));
+        }
+        const removed = await removal;
+        assert.equal(removed.code, 0, removed.err);
+        assert.deepEqual(f.snapshot().workspaces, []);
       });
     },
     TIMEOUT_MS,
@@ -1905,7 +1981,8 @@ export default function (pi) {
       await fixture(async (f) => {
         assert.equal((await f.run(["new", "--detached"], f.cwdA)).code, 0);
         const pane = await firstPane(f);
-        const storePath = join(f.agent, "session-state.json");
+        assert.equal((await f.run(["snapshot"])).code, 0);
+        const storePath = join(f.agent, "pi-tmux/pi-mux-restore.json");
         const original = readFileSync(storePath, "utf8");
         const wrapper = join(f.bin, "tmux");
         writeFileSync(
@@ -1928,14 +2005,19 @@ export default function (pi) {
   for (const original of [
     "{invalid",
     "[]",
-    JSON.stringify({ workspaces: {}, "active-workspaces": {} }),
-    JSON.stringify({ "active-workspaces": { "/workspace": { "active-sessions": [] } } }),
+    JSON.stringify({ version: 1, generation: "saved", workspaces: {} }),
+    JSON.stringify({
+      version: 1,
+      generation: "saved",
+      workspaces: [{ cwd: "/workspace", sessions: {} }],
+    }),
   ]) {
     it(
-      "preserves an invalid shared store " + original,
+      "preserves an invalid restore record " + original,
       async () => {
         await fixture(async (f) => {
-          const path = join(f.agent, "session-state.json");
+          const path = join(f.agent, "pi-tmux/pi-mux-restore.json");
+          mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
           writeFileSync(path, original);
           for (const args of [
             ["list"],
@@ -2465,7 +2547,7 @@ describe("pi-mux CLI boundaries", () => {
 
 describe("pi-mux snapshot and restoration", () => {
   it(
-    "stores session ID strings grouped by workspace and removes empty workspaces",
+    "stores session ID strings grouped by workspace and retains empty registrations",
     async () => {
       await fixture(async (f) => {
         assert.equal((await f.run(["restore"])).code, 0);
@@ -2507,7 +2589,10 @@ describe("pi-mux snapshot and restoration", () => {
           assert.equal((await f.tmux(["kill-session", "-t", `=${id}`])).code, 0);
         }
         assert.equal((await f.run(["snapshot"])).code, 0);
-        assert.deepEqual(f.snapshot().workspaces, []);
+        assert.deepEqual(f.snapshot().workspaces, [
+          { cwd: f.cwdA, sessions: [] },
+          { cwd: f.cwdB, sessions: [] },
+        ]);
       });
     },
     TIMEOUT_MS,
@@ -2968,6 +3053,49 @@ describe("pi-mux snapshot and restoration", () => {
     },
     TIMEOUT_MS,
   );
+
+  for (const operation of ["new", "open"] as const) {
+    for (const record of ["invalid-json", "invalid-shape", "unreadable"] as const) {
+      it(
+        `continues ${operation} with ${record} recording deferred until the record is repaired`,
+        async () => {
+          await fixture(async (f) => {
+            assert.equal((await f.run(["restore"])).code, 0);
+            const path = join(f.agent, "pi-tmux/pi-mux-restore.json");
+            const previous = readFileSync(path, "utf8");
+            const id = "deferred-open-id";
+            if (operation === "open") f.saved(id, f.cwdA);
+            const invalid =
+              record === "invalid-json"
+                ? "{broken"
+                : JSON.stringify({ version: 1, generation: "saved", workspaces: {} });
+            if (record === "unreadable") {
+              rmSync(path);
+              mkdirSync(path);
+            } else writeFileSync(path, invalid);
+            await f.client("deferred", operation === "new" ? ["new"] : ["open", id], f.cwdA);
+            const target = await firstPane(f);
+            assert.equal(target.cwd, f.cwdA);
+            if (operation === "open") assert.equal(target.id, id);
+            if (record === "unreadable") assert.equal(readdirSync(path).length, 0);
+            else assert.equal(readFileSync(path, "utf8"), invalid);
+            await f.detachAll();
+            assert.equal(await f.exitCode("deferred"), 0);
+            if (record === "unreadable") rmSync(path, { recursive: true });
+            writeFileSync(path, previous);
+            const listed = await f.run(["list"]);
+            assert.equal(listed.code, 0, listed.err);
+            assert.deepEqual(
+              f.snapshot().workspaces.map(({ cwd }) => cwd),
+              [f.cwdA],
+            );
+            assert.equal((await firstPane(f)).pid, target.pid);
+          });
+        },
+        TIMEOUT_MS,
+      );
+    }
+  }
 
   it(
     "keeps the old file when snapshot I/O fails",
@@ -3783,13 +3911,16 @@ describe("pi-mux temporary lifecycle", () => {
             .some((session) => Object.hasOwn(session, "temporary")),
           false,
         );
-        const clear = await f.run([
-          "state",
-          opened.id,
-          "--clear",
-          "--source",
-          JSON.stringify(source),
-        ]);
+        const clear = await waitFor(async () => {
+          const result = await f.run([
+            "state",
+            opened.id,
+            "--clear",
+            "--source",
+            JSON.stringify(source),
+          ]);
+          return result.code === 75 ? undefined : result;
+        });
         assert.deepEqual(clear, { code: 0, out: "", err: "" });
         assert.equal(await paneState(f, opened.pane), undefined);
         assert.equal(f.snapshotCandidates().length, 2);
@@ -3856,10 +3987,9 @@ describe("pi-mux temporary lifecycle", () => {
     "keeps restore candidates untouched when temporary conversation resolution fails",
     async () => {
       await fixture(async (f) => {
-        f.saved("duplicate-id");
+        const file = f.saved("duplicate-id");
         f.seed([{ id: "duplicate-id", cwd: f.cwdA }]);
-        const file = join(f.agent, "sessions/fixture_duplicate-id.jsonl");
-        copyFileSync(file, join(f.agent, "sessions/duplicate.jsonl"));
+        copyFileSync(file, join(dirname(file), "duplicate.jsonl"));
         const before = readFileSync(join(f.agent, "pi-tmux/pi-mux-restore.json"), "utf8");
         const rejected = await f.run(["open", "--temporary", "duplicate-id"]);
         assert.equal(rejected.code, 1);
@@ -4043,12 +4173,13 @@ describe("pi-mux state identity and persistence boundaries", () => {
 
   for (const store of ["absent", "invalid", "unreadable"] as const) {
     it(
-      `publishes and clears on an external uninitialized server with ${store} membership storage`,
+      `publishes and clears on an external uninitialized server with ${store} restore record`,
       async () => {
         await fixture(async (f) => {
           const { pane, metadata } = await publishedIdlePane(f, "legacy", "external-id");
           const source = await notificationSource(f, { pane, pid: metadata.pid });
-          const storePath = join(f.agent, "session-state.json");
+          const storePath = join(f.agent, "pi-tmux/pi-mux-restore.json");
+          mkdirSync(dirname(storePath), { recursive: true, mode: 0o700 });
           if (store === "invalid") writeFileSync(storePath, "{broken");
           if (store === "unreadable") mkdirSync(storePath);
           for (const state of ["waiting-user", "running", "waiting-approval"]) {
@@ -4056,7 +4187,6 @@ describe("pi-mux state identity and persistence boundaries", () => {
             assert.deepEqual(result, { code: 0, out: "", err: "" });
           }
           assert.equal((await f.tmux(["show-options", "-gqv", "@pi-mux-generation"])).out, "");
-          assert.equal(existsSync(join(f.agent, "pi-tmux/pi-mux-restore.json")), false);
           const cleaned = await f.run([
             "state",
             metadata.id,
@@ -4642,13 +4772,15 @@ describe("pi-mux list title fallback", () => {
   );
 
   it(
-    "falls back to null for missing, unreadable, or entry-less session files",
+    "separates missing session files and uses null titles for unreadable or entry-less files",
     async () => {
       await fixture(async (f) => {
         const created = await publishedIdlePane(f, "ready", "created-id");
         const missing = await publishedIdlePane(f, "ready", "missing-id");
         const plain = await publishedIdlePane(f, "ready", "plain-id");
         const createdFile = join(f.agent, "sessions", "created-id.jsonl");
+        rmSync(createdFile);
+        rmSync(missing.metadata.file);
         mkdirSync(createdFile, { recursive: true });
         const plainFile = join(f.agent, "sessions", "plain-id.jsonl");
         mkdirSync(dirname(plainFile), { recursive: true });
@@ -4658,12 +4790,17 @@ describe("pi-mux list title fallback", () => {
         );
         const listed = JSON.parse((await f.run(["list"])).out) as {
           sessions: { id: string; title: string | null }[];
+          empty: { id: string; file: string }[];
         }[];
         const titles = new Map(
           listed.flatMap((workspace) => workspace.sessions).map((entry) => [entry.id, entry.title]),
         );
         assert.equal(titles.get(created.metadata.id), null);
-        assert.equal(titles.get(missing.metadata.id), null);
+        assert.equal(titles.has(missing.metadata.id), false);
+        assert.deepEqual(
+          listed.flatMap((workspace) => workspace.empty),
+          [{ id: missing.metadata.id, file: missing.metadata.file }],
+        );
         assert.equal(titles.get(plain.metadata.id), null);
       });
     },
