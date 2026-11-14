@@ -11,9 +11,17 @@ interface EmptySession {
 }
 
 interface WorkspaceSlot {
+  directory?: string;
   pending: boolean;
   refill: boolean;
   sessions: Map<string, EmptySession>;
+}
+
+interface WorkspaceSuspension {
+  directory?: string;
+  aliases: Set<string>;
+  completed: boolean;
+  absentAliases: Set<string>;
 }
 
 export interface EmptySessionPoolDeps {
@@ -26,6 +34,12 @@ export class EmptySessionPool implements vscode.Disposable {
   private readonly workspaces = new Map<string, WorkspaceSlot>();
   private readonly physicalWorkspaces = new Map<string, WorkspaceSlot>();
   private readonly consumed = new Set<string>();
+  private readonly suspensions = new Map<string, WorkspaceSuspension>();
+  private readonly preparations = new Set<{
+    cwd: string;
+    directoryResolution: Promise<string | undefined>;
+    promise: Promise<void>;
+  }>();
   private disposed = false;
 
   constructor(private readonly deps: EmptySessionPoolDeps) {}
@@ -33,6 +47,16 @@ export class EmptySessionPool implements vscode.Disposable {
   syncWorkspaces(cwds: readonly string[]): void {
     if (this.disposed) return;
     const registered = new Set(cwds);
+    for (const [cwd, suspension] of this.suspensions) {
+      if (!suspension.completed) continue;
+      if ([...suspension.absentAliases].some((alias) => registered.has(alias))) {
+        this.suspensions.delete(cwd);
+        continue;
+      }
+      for (const alias of suspension.aliases) {
+        if (!registered.has(alias)) suspension.absentAliases.add(alias);
+      }
+    }
     for (const cwd of this.workspaces.keys()) {
       if (!registered.has(cwd)) this.workspaces.delete(cwd);
     }
@@ -47,10 +71,57 @@ export class EmptySessionPool implements vscode.Disposable {
     }
   }
 
+  async suspendWorkspace(cwd: string): Promise<void> {
+    const suspension: WorkspaceSuspension = {
+      aliases: new Set([cwd]),
+      completed: false,
+      absentAliases: new Set(),
+    };
+    this.suspensions.set(cwd, suspension);
+    suspension.directory = await workspaceDirectory(cwd);
+    await Promise.all(
+      [...this.preparations].map(async (preparation) => {
+        const directory = await preparation.directoryResolution.catch(() => undefined);
+        if (preparation.cwd !== cwd && directory !== suspension.directory) return;
+        suspension.aliases.add(preparation.cwd);
+        await preparation.promise;
+      }),
+    );
+    for (const [candidate, slot] of this.workspaces) {
+      if (!this.isSuspended(candidate, slot.directory)) continue;
+      slot.sessions.clear();
+      slot.refill = false;
+    }
+  }
+
+  completeUnregister(cwd: string): void {
+    const suspension = this.suspensions.get(cwd);
+    if (suspension !== undefined) suspension.completed = true;
+  }
+
+  async resumeWorkspace(cwd: string): Promise<void> {
+    if (this.disposed || this.suspensions.size === 0) return;
+    const directory = await workspaceDirectory(cwd);
+    let resumed = false;
+    for (const [candidate, suspension] of this.suspensions) {
+      if (!suspension.aliases.has(cwd) && suspension.directory !== directory) continue;
+      this.suspensions.delete(candidate);
+      resumed = true;
+    }
+    if (!resumed) return;
+    for (const slot of new Set(this.workspaces.values())) {
+      if (slot.directory === directory || this.workspaces.get(cwd) === slot) this.ensure(slot);
+    }
+  }
+
   observeOpened(cwd: string, sessionId: string): void {
-    const slot = this.workspaces.get(cwd);
-    if (this.disposed || slot === undefined) return;
-    void this.track(slot, sessionId).catch((error: unknown) => this.report(cwd, error));
+    if (this.disposed) return;
+    void this.resumeWorkspace(cwd)
+      .then(async () => {
+        const slot = this.workspaces.get(cwd);
+        if (slot !== undefined) await this.track(slot, sessionId);
+      })
+      .catch((error: unknown) => this.report(cwd, error));
   }
 
   onSessionFileChanged(file: string): void {
@@ -70,25 +141,45 @@ export class EmptySessionPool implements vscode.Disposable {
     this.disposed = true;
     this.workspaces.clear();
     this.physicalWorkspaces.clear();
+    this.suspensions.clear();
   }
 
   private ensure(slot: WorkspaceSlot): void {
     const cwd = this.registeredCwd(slot);
     if (cwd === undefined || slot.pending) return;
     slot.pending = true;
-    void this.prepare(cwd, slot)
+    const directoryResolution = findPrewarmDirectory(cwd);
+    const promise = this.prepare(cwd, slot, directoryResolution)
       .catch((error: unknown) => this.report(cwd, error))
       .finally(() => {
+        this.preparations.delete(preparation);
         slot.pending = false;
         if (!slot.refill) return;
         slot.refill = false;
         this.ensure(slot);
       });
+    const preparation = { cwd, directoryResolution, promise };
+    this.preparations.add(preparation);
   }
 
-  private async prepare(cwd: string, slot: WorkspaceSlot): Promise<void> {
-    const physicalDirectory = await findPrewarmDirectory(cwd);
-    if (physicalDirectory === undefined || this.registeredCwd(slot) === undefined) return;
+  private async prepare(
+    cwd: string,
+    slot: WorkspaceSlot,
+    directoryResolution: Promise<string | undefined>,
+  ): Promise<void> {
+    const physicalDirectory = await directoryResolution;
+    slot.directory = physicalDirectory;
+    if (physicalDirectory === undefined) return;
+    for (const [candidate, suspension] of this.suspensions) {
+      if (
+        suspension.completed &&
+        suspension.absentAliases.size > 0 &&
+        suspension.directory === physicalDirectory &&
+        !suspension.aliases.has(cwd)
+      )
+        this.suspensions.delete(candidate);
+    }
+    if (this.registeredCwd(slot) === undefined) return;
     const shared = this.physicalWorkspaces.get(physicalDirectory);
     if (shared !== undefined && shared !== slot) {
       this.workspaces.set(cwd, shared);
@@ -127,13 +218,35 @@ export class EmptySessionPool implements vscode.Disposable {
   private registeredCwd(slot: WorkspaceSlot): string | undefined {
     if (this.disposed) return undefined;
     for (const [cwd, registeredSlot] of this.workspaces) {
-      if (registeredSlot === slot) return cwd;
+      if (registeredSlot === slot && !this.isSuspended(cwd, slot.directory)) return cwd;
     }
     return undefined;
   }
 
+  private isSuspended(cwd: string, directory: string | undefined): boolean {
+    for (const suspension of this.suspensions.values()) {
+      if (
+        !suspension.aliases.has(cwd) &&
+        (directory === undefined || suspension.directory !== directory)
+      )
+        continue;
+      suspension.aliases.add(cwd);
+      return true;
+    }
+    return false;
+  }
+
   private report(cwd: string, error: unknown): void {
     if (!this.disposed) this.deps.onError(`Empty Pi session in ${cwd}: ${errorMessage(error)}`);
+  }
+}
+
+async function workspaceDirectory(cwd: string): Promise<string> {
+  try {
+    return await realpath(cwd);
+  } catch (error: unknown) {
+    if (isRecord(error) && error.code === "ENOENT") return cwd;
+    throw error;
   }
 }
 

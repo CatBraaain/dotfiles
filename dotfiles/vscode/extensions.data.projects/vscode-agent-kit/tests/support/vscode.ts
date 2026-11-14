@@ -17,6 +17,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import type { PiMuxWorkspace } from "../../src/piMux";
 
 const root = resolve(__dirname, "../..");
 const dotfiles = process.env.PI_REVIEW_DOTFILES ?? join(homedir(), "projects/dotfiles/dotfiles");
@@ -62,6 +63,7 @@ export class VSCodeFixture {
   readonly tmuxSocket = join(this.directory, "runtime/pi-tmux/server.sock");
   readonly env: Record<string, string> = {
     PATH: `${join(this.directory, "bin")}:${process.env.PATH ?? ""}`,
+    NODE_PATH: join(homedir(), ".pi/agent/node_modules"),
     HOME: join(this.directory, "home"),
     USER: "fixture",
     LANG: "C.UTF-8",
@@ -91,6 +93,24 @@ export class VSCodeFixture {
     this.prepareSessions();
     this.prepareHost();
     this.preparePiMux();
+    for (const cwd of new Set([
+      this.sessions.A.cwd,
+      this.sessions.B.cwd,
+      this.sessions.External.cwd,
+    ])) {
+      this.piMux(["workspace", "register", cwd]);
+    }
+  }
+
+  piMux(args: string[]): string {
+    return execFileSync(join(this.directory, "bin/pi-mux"), args, {
+      env: this.env,
+      encoding: "utf8",
+    });
+  }
+
+  listWorkspaces(): PiMuxWorkspace[] {
+    return JSON.parse(this.piMux(["list"])) as PiMuxWorkspace[];
   }
 
   async launch(): Promise<void> {
@@ -530,11 +550,6 @@ export class VSCodeFixture {
   }
 
   private prepareSessions(): void {
-    const store = {
-      sentinel: "preserved",
-      "active-workspaces": {} as Record<string, { "active-sessions"?: Record<string, unknown> }>,
-    };
-    const activeByCwd = new Map<string, string[]>();
     const cwds = {
       A: this.projectDirectories.A,
       External: "external",
@@ -569,28 +584,9 @@ export class VSCodeFixture {
       );
       write(session, original);
       this.sessions[key] = { id, cwd, session, original };
-      if (key !== "B") {
-        // B starts archived: absent from the active-sessions map. Every other
-        // fixture session is a member of its workspace.
-        const active = activeByCwd.get(cwd) ?? [];
-        active.push(id);
-        activeByCwd.set(cwd, active);
-      }
-    }
-    // The sidebar lists registered workspaces only (the extension's own
-    // settings), so the fixture work folders must be registered or their
-    // groups stay hidden. The "missing" cwd of the Missing fixture stays
-    // unregistered on purpose.
-    for (const folder of [this.projectDirectories.A, this.projectDirectories.B, "external"]) {
-      const cwd = join(this.directory, folder);
-      const active = activeByCwd.get(cwd) ?? [];
-      const activeSessions: Record<string, unknown> = {};
-      for (const id of active) activeSessions[id] = {};
-      store["active-workspaces"][cwd] = { "active-sessions": activeSessions };
     }
     const newestBTime = new Date(statSync(this.sessions.B.session).mtimeMs + 1000);
     utimesSync(this.sessions.B.session, newestBTime, newestBTime);
-    write(join(this.directory, "agent/session-state.json"), JSON.stringify(store));
     write(join(this.directory, "fixtures.json"), JSON.stringify(this.sessions, null, 2));
   }
 
@@ -628,7 +624,12 @@ export class VSCodeFixture {
       join(agentSource, "extensions.exact/tools/background-bash.ts"),
       join(this.directory, "agent/extensions/tools/background-bash.ts"),
     );
-    symlinkSync(join(agentSource, "node_modules"), join(this.directory, "agent/node_modules"));
+    const sourceModules = join(agentSource, "node_modules");
+    const installedModules = join(homedir(), ".pi/agent/node_modules");
+    symlinkSync(
+      existsSync(sourceModules) ? sourceModules : installedModules,
+      join(this.directory, "agent/node_modules"),
+    );
     const guardrails = join(this.directory, "guardrails.yaml");
     write(
       guardrails,

@@ -5,6 +5,31 @@ const liveSession = { id: "A", file: "/saved/A.jsonl", state: "running", title: 
 const emptySession = { id: "empty", file: "/saved/empty.jsonl" };
 
 describe("PiMux", () => {
+  it.each(["registerWorkspace", "unregisterWorkspace"] as const)(
+    "uses exact workspace argv and accepts empty stdout for %s",
+    async (operation) => {
+      const execute = vi.fn().mockResolvedValue("");
+      const cwd = "/project with spaces; $literal";
+      await expect(new PiMux(execute)[operation](cwd)).resolves.toBeUndefined();
+      expect(execute).toHaveBeenCalledExactlyOnceWith(
+        "pi-mux",
+        ["workspace", operation === "registerWorkspace" ? "register" : "unregister", cwd],
+        undefined,
+      );
+    },
+  );
+
+  it.each(["registerWorkspace", "unregisterWorkspace"] as const)(
+    "reports %s failure without retry or fallback",
+    async (operation) => {
+      const execute = vi.fn().mockRejectedValue(new Error("workspace denied"));
+      await expect(new PiMux(execute)[operation]("/project")).rejects.toThrow(
+        /pi-mux workspace .*\/project: workspace denied/,
+      );
+      expect(execute).toHaveBeenCalledOnce();
+    },
+  );
+
   it("runs detached new in the requested cwd and reads the first line ID", async () => {
     const execute = vi
       .fn()

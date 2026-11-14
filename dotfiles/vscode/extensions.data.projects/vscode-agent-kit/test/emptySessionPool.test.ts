@@ -68,12 +68,7 @@ afterEach(async () => {
 
 async function register(cwds: string[]) {
   registeredCwds = cwds;
-  await writeFile(
-    statePath,
-    JSON.stringify({
-      "active-workspaces": Object.fromEntries(cwds.map((cwd) => [cwd, { "active-sessions": {} }])),
-    }),
-  );
+  await writeFile(statePath, "legacy JSON sentinel");
   pool.syncWorkspaces(cwds);
 }
 
@@ -121,8 +116,7 @@ describe("EmptySessionPool", () => {
         ["pi-mux", ["new", "--detached"], other],
       ]),
     );
-    const state = JSON.parse(await readFile(statePath, "utf8"));
-    expect(state["active-workspaces"][root]["active-sessions"]).toEqual({});
+    expect(await readFile(statePath, "utf8")).toBe("legacy JSON sentinel");
     expect(api.createTerminal).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
   });
@@ -514,7 +508,6 @@ describe("EmptySessionPool", () => {
     const terminal = { processId: pid.promise, show: vi.fn(), dispose: vi.fn() };
     api.createTerminal.mockReturnValue(terminal);
     const launcher = new SessionLauncher({
-      statePath,
       registry,
       emptySessions: pool,
       onSessionStarted: vi.fn(),

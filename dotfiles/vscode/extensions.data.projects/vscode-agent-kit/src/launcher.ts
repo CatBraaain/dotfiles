@@ -1,11 +1,9 @@
 import type * as vscode from "vscode";
 import { requireWorkDirectory } from "./workDirectory";
-import { addActiveSession } from "./sessionStateStore";
 import type { TerminalRegistry } from "./terminalRegistry";
 import type { EmptySessionPool } from "./emptySessionPool";
 
 export interface SessionLauncherDeps {
-  statePath: string;
   registry: TerminalRegistry;
   emptySessions?: EmptySessionPool;
   onSessionStarted: (sessionId: string) => void | Promise<void>;
@@ -28,8 +26,6 @@ export class SessionLauncher implements vscode.Disposable {
       terminal.show();
       if (this.disposed) return;
       this.deps.emptySessions?.observeOpened(workDir, sessionId);
-      const registration = addActiveSession(this.deps.statePath, workDir, sessionId);
-      if (!registration.ok) throw new Error(registration.message);
       await this.deps.onSessionStarted(sessionId);
       return previousSessionId;
     });

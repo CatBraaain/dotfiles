@@ -88,6 +88,14 @@ export class PiMux {
     return match[1];
   }
 
+  async registerWorkspace(cwd: string): Promise<void> {
+    await this.command(["workspace", "register", cwd]);
+  }
+
+  async unregisterWorkspace(cwd: string): Promise<void> {
+    await this.command(["workspace", "unregister", cwd]);
+  }
+
   async closeSession(sessionId: string): Promise<void> {
     await this.command(["close", sessionId]);
   }

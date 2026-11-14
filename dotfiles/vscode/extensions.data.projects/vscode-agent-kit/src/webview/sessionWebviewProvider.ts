@@ -1,13 +1,18 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import { registerWorkspace, unregisterWorkspace, type SessionPhase } from "../sessionStateStore";
 import { listSessionSnapshot, sessionFileExists, type SessionSummary } from "../sessionStore";
 import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
 import type { TerminalRegistry } from "../terminalRegistry";
+import type { EmptySessionPool } from "../emptySessionPool";
 import { errorMessage } from "../guards";
 import { archiveReplacement } from "../grouping";
 import { flattenPiMuxSessions, type PiMuxWorkspace } from "../piMux";
-import { parseWebviewRequest, type ExtensionMessage, type WebviewState } from "./protocol";
+import {
+  parseWebviewRequest,
+  type ExtensionMessage,
+  type SessionPhase,
+  type WebviewState,
+} from "./protocol";
 import { sessionViewGroups } from "./sessionViewData";
 import { webviewHtml } from "./webviewHtml";
 
@@ -16,15 +21,16 @@ const LIST_REFRESH_INTERVAL_MS = 1_000;
 
 export interface SessionWebviewDeps {
   extensionUri: string;
-  statePath: string;
   registry: TerminalRegistry;
   startNewSession: (cwd: string) => Promise<string | undefined>;
   onWorkspaces?: (cwds: readonly string[]) => void;
+  emptySessions?: EmptySessionPool;
 }
 
 /** Owns the WebviewView and translates its fixed message protocol into extension actions. */
 export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
+  private registeredCwds = new Set<string>();
   private sessionsById = new Map<string, SessionSummary>();
   private archivedSessionIds = new Set<string>();
   private temporarySessionIds = new Set<string>();
@@ -139,7 +145,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     try {
       const workspaces = await this.deps.registry.mux.list();
       if (this.disposed || version !== this.refreshVersion) return;
-      this.deps.onWorkspaces?.(workspaces.map(({ cwd }) => cwd));
+      this.registeredCwds = new Set(workspaces.map(({ cwd }) => cwd));
+      this.deps.onWorkspaces?.([...this.registeredCwds]);
       const live = flattenPiMuxSessions(workspaces);
       this.temporarySessionIds = new Set(
         live.filter((session) => session.temporary).map(({ id }) => id),
@@ -250,12 +257,11 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "addWorkspace") {
-      await this.addWorkspace(request.path);
+      await this.deps.registry.run(() => this.addWorkspace(request.path));
       return;
     }
     if (request.type === "unregisterWorkspace") {
-      this.unregisterWorkspace(request.cwd);
-      await this.refresh();
+      await this.deps.registry.run(() => this.unregisterWorkspace(request.cwd));
       return;
     }
     if (request.type === "openSession") {
@@ -346,20 +352,35 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       this.postError(`Invalid workspace path: ${errorMessage(error)}`);
       return;
     }
-    const result = registerWorkspace(this.deps.statePath, directory);
-    if (!result.ok) {
-      this.postError(result.message);
+    if (this.registeredCwds.has(directory)) {
+      await this.deps.emptySessions?.resumeWorkspace(directory);
+      this.post({ type: "workspaceAdded" });
+      return;
+    }
+    try {
+      await this.deps.registry.mux.registerWorkspace(directory);
+      await this.deps.emptySessions?.resumeWorkspace(directory);
+    } catch (error) {
+      this.postError(`Failed to register workspace ${directory}: ${errorMessage(error)}`);
       return;
     }
     this.post({ type: "workspaceAdded" });
     await this.refresh();
   }
 
-  private unregisterWorkspace(cwd: string): void {
-    const result = unregisterWorkspace(this.deps.statePath, cwd);
-    if (!result.ok) {
-      this.postError(result.message);
+  private async unregisterWorkspace(cwd: string): Promise<void> {
+    this.refreshVersion += 1;
+    this.stopListPolling();
+    try {
+      await this.deps.emptySessions?.suspendWorkspace(cwd);
+      await this.deps.registry.mux.unregisterWorkspace(cwd);
+      this.deps.emptySessions?.completeUnregister(cwd);
+    } catch (error) {
+      this.postError(`Failed to unregister workspace ${cwd}: ${errorMessage(error)}`);
+      this.scheduleListRefresh();
+      return;
     }
+    await this.refresh();
   }
 
   private async openSession(
@@ -413,6 +434,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
 
     terminal.show();
+    await this.deps.emptySessions?.resumeWorkspace(session.cwd);
     if (temporary) this.temporarySessionIds.add(sessionId);
     else this.temporarySessionIds.delete(sessionId);
     await this.stopTemporaryDisplayedSession(previousSessionId);

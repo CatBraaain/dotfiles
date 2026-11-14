@@ -13,7 +13,3 @@ export function resolveAgentDir(env: PiPathEnv, homeDir: string): string {
 export function resolveSessionDir(env: PiPathEnv, homeDir: string): string {
   return env.PI_CODING_AGENT_SESSION_DIR || join(resolveAgentDir(env, homeDir), "sessions");
 }
-
-export function sessionStatePath(agentDir: string): string {
-  return join(agentDir, "session-state.json");
-}

@@ -7,7 +7,6 @@ import { SessionLauncher } from "../src/launcher";
 import { TerminalRegistry } from "../src/terminalRegistry";
 import { editorTerminals } from "../src/terminals";
 import { fakeRuntimes } from "./runtimeFixtures";
-import { activeSessionIds, readSessionStateStore } from "../src/sessionStateStore";
 import { cleanup, tempDir } from "./fixtures";
 
 const api = vi.hoisted(() => ({ terminals: [], createTerminal: vi.fn() }));
@@ -46,7 +45,6 @@ beforeEach(async () => {
   });
   onSessionStarted = vi.fn();
   launcher = new SessionLauncher({
-    statePath: join(root, "session-state.json"),
     registry,
     onSessionStarted,
   });
@@ -57,9 +55,8 @@ afterEach(async () => {
   await cleanup(root);
 });
 
-function stateIds(): Set<string> {
-  const store = readSessionStateStore(join(root, "session-state.json"));
-  return store.status === "ok" ? activeSessionIds(store.data) : new Set();
+function startedIds(): Set<string> {
+  return new Set(onSessionStarted.mock.calls.map(([id]) => id));
 }
 
 function deferred<T>() {
@@ -108,12 +105,12 @@ describe("SessionLauncher", () => {
         shellArgs: ["open", "new-1"],
       }),
     );
-    expect(stateIds()).toEqual(new Set());
+    expect(startedIds()).toEqual(new Set());
     expect(registry.displayedSessionId).toBeUndefined();
     pid.resolve(123);
     await launching;
     expect(terminal.show).toHaveBeenCalledOnce();
-    expect(stateIds()).toEqual(new Set(["new-1"]));
+    expect(startedIds()).toEqual(new Set(["new-1"]));
     expect(onSessionStarted).toHaveBeenCalledExactlyOnceWith("new-1");
     expect(registry.displayedSessionId).toBe("new-1");
   });
@@ -122,11 +119,11 @@ describe("SessionLauncher", () => {
     await launcher.start(root);
     expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(root);
     expect(api.createTerminal.mock.calls[0][0].shellArgs).toEqual(["open", "new-1"]);
-    expect(stateIds()).toEqual(new Set(["new-1"]));
+    expect(startedIds()).toEqual(new Set(["new-1"]));
   });
 
   it.each(["newSession", "list", "current"] as const)(
-    "shows an existing Terminal before unresolved %s and registers only after attachment",
+    "shows an existing Terminal before unresolved %s and refreshes only after attachment",
     async (method) => {
       const terminal = await existingDisplay();
       const gate = deferred<never>();
@@ -135,7 +132,7 @@ describe("SessionLauncher", () => {
       const launching = launcher.start(root).catch((error: Error) => error);
       await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledOnce());
       expect(registry.displayedSessionId).toBe("old");
-      expect(stateIds()).toEqual(new Set());
+      expect(startedIds()).toEqual(new Set());
       gate.reject(new Error("gate released"));
       expect(await launching).toBeInstanceOf(Error);
       expect(registry.displayedSessionId).toBe("old");
@@ -157,7 +154,7 @@ describe("SessionLauncher", () => {
       const second = launcher.start(nextCwd);
       await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledOnce());
       expect(api.createTerminal).toHaveBeenCalledOnce();
-      expect(stateIds()).toEqual(new Set());
+      expect(startedIds()).toEqual(new Set());
       expect(registry.displayedSessionId).toBeUndefined();
       gate.resolve(undefined);
       await Promise.all([first, second]);
@@ -211,7 +208,7 @@ describe("SessionLauncher", () => {
     const second = launcher.start(root);
     await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledTimes(2));
     expect(registry.displayedSessionId).toBe("old");
-    expect(stateIds()).toEqual(new Set());
+    expect(startedIds()).toEqual(new Set());
     switching.resolve(true);
     await Promise.all([first, second]);
     expect(onSessionStarted.mock.calls.map(([id]) => id)).toEqual(["new-1", "new-2"]);
@@ -223,7 +220,7 @@ describe("SessionLauncher", () => {
     await expect(launcher.start(root)).rejects.toThrow("switch failed");
     expect(registry.displayedSessionId).toBe("old");
     expect(runtimes.client.attachedId).toBe("old");
-    expect(stateIds()).toEqual(new Set());
+    expect(startedIds()).toEqual(new Set());
     expect(terminal.dispose).not.toHaveBeenCalled();
     expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
   });
@@ -231,7 +228,7 @@ describe("SessionLauncher", () => {
   it("normalizes cwd before reserving the empty session", async () => {
     await launcher.start(`${root}/.`);
     expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(root);
-    expect(stateIds()).toEqual(new Set(["new-1"]));
+    expect(startedIds()).toEqual(new Set(["new-1"]));
   });
 
   it.each(["relative/path", "/definitely-missing-pi-launcher-directory"])(
@@ -240,7 +237,7 @@ describe("SessionLauncher", () => {
       await expect(launcher.start(cwd)).rejects.toThrow();
       expect(api.createTerminal).not.toHaveBeenCalled();
       expect(runtimes.mocks.newSession).not.toHaveBeenCalled();
-      expect(stateIds()).toEqual(new Set());
+      expect(startedIds()).toEqual(new Set());
     },
   );
 
@@ -258,15 +255,15 @@ describe("SessionLauncher", () => {
     await launcher.start(root);
     expect(api.createTerminal).toHaveBeenCalledOnce();
     expect(runtimes.live.size).toBe(1);
-    expect(stateIds()).toEqual(new Set(["new-1"]));
+    expect(startedIds()).toEqual(new Set(["new-1"]));
     expect(runtimes.mocks.switch).not.toHaveBeenCalled();
   });
 
-  it("closes a failed cold Terminal without registering, refreshing, or killing Pi", async () => {
+  it("closes a failed cold Terminal without refreshing, or killing Pi", async () => {
     runtimes.mocks.current.mockRejectedValueOnce(new Error("attachment failed"));
     await expect(launcher.start(root)).rejects.toThrow("attachment failed");
     expect(api.createTerminal.mock.results[0].value.dispose).toHaveBeenCalledOnce();
-    expect(stateIds()).toEqual(new Set());
+    expect(startedIds()).toEqual(new Set());
     expect(onSessionStarted).not.toHaveBeenCalled();
     expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
     expect(runtimes.live.size).toBe(1);
@@ -278,17 +275,16 @@ describe("SessionLauncher", () => {
     await launcher.start(alias);
     expect(api.createTerminal.mock.results[0].value.dispose).not.toHaveBeenCalled();
     expect(registry.displayedSessionId).toBe("new-1");
-    expect(stateIds()).toEqual(new Set(["new-1"]));
-    const store = readSessionStateStore(join(root, "session-state.json"));
-    expect(store.status === "ok" && Object.keys(store.data["active-workspaces"])).toEqual([alias]);
+    expect(startedIds()).toEqual(new Set(["new-1"]));
+    expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(alias);
   });
 
-  it("preserves invalid state data when registration fails after connection", async () => {
+  it("starts and refreshes without reading or writing invalid legacy JSON", async () => {
     const path = join(root, "session-state.json");
     await writeFile(path, "{ invalid");
-    await expect(launcher.start(root)).rejects.toThrow();
+    await launcher.start(root);
     expect(await readFile(path, "utf8")).toBe("{ invalid");
-    expect(onSessionStarted).not.toHaveBeenCalled();
+    expect(onSessionStarted).toHaveBeenCalledExactlyOnceWith("new-1");
     expect(runtimes.live.size).toBe(1);
   });
 

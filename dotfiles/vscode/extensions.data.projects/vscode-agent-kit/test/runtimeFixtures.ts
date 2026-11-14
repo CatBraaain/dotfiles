@@ -37,9 +37,23 @@ export function fakeRuntimes() {
     return runtime;
   });
   const muxMocks = {
+    registerWorkspace: vi.fn(async (cwd: string) => {
+      workspaces.add(cwd);
+    }),
+    unregisterWorkspace: vi.fn(async (cwd: string) => {
+      for (const [id, runtime] of live) {
+        if (runtime.cwd !== cwd) continue;
+        live.delete(id);
+        temporary.delete(id);
+        emptyIds.delete(id);
+      }
+      workspaces.delete(cwd);
+    }),
     newSession: vi.fn(async (cwd: string) => {
       const sessionId = `new-${muxMocks.newSession.mock.calls.length}`;
       live.set(sessionId, { sessionId, cwd, target: `pi-${sessionId}` });
+      emptyIds.add(sessionId);
+      workspaces.add(cwd);
       return sessionId;
     }),
     closeSession: vi.fn(async (sessionId: string) => {

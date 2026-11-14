@@ -11,13 +11,14 @@ const api = vi.hoisted(() => ({
   showErrorMessage: vi.fn(),
   onDidCloseTerminal: vi.fn(),
   registerWebviewViewProvider: vi.fn(),
+  createFileSystemWatcher: vi.fn(),
   watcher: { onDidChange: vi.fn(), onDidCreate: vi.fn(), onDidDelete: vi.fn(), dispose: vi.fn() },
 }));
 
 vi.mock("vscode", () => ({
   commands: { registerCommand: api.registerCommand },
   window: api,
-  workspace: { createFileSystemWatcher: () => api.watcher },
+  workspace: { createFileSystemWatcher: api.createFileSystemWatcher },
   Uri: { file: (fsPath: string) => ({ fsPath }) },
   RelativePattern: class {
     constructor(
@@ -30,6 +31,7 @@ vi.mock("vscode", () => ({
 describe("extension commands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    api.createFileSystemWatcher.mockReturnValue(api.watcher);
     vi.spyOn(SessionWebviewProvider.prototype, "refresh").mockResolvedValue();
     vi.stubEnv("PI_CODING_AGENT_DIR", "/fixture/agent");
     vi.stubEnv("PI_CODING_AGENT_SESSION_DIR", "/fixture/sessions");
@@ -67,7 +69,7 @@ describe("extension commands", () => {
     ).toBe(false);
   });
 
-  it("starts workspace prewarming independently of the webview and observes external registration changes", async () => {
+  it("starts list acquisition without a webview and watches only conversation files", () => {
     const sync = vi
       .spyOn(EmptySessionPool.prototype, "syncWorkspaces")
       .mockImplementation(() => {});
@@ -75,12 +77,10 @@ describe("extension commands", () => {
     register();
     expect(sync).not.toHaveBeenCalled();
     expect(refresh).toHaveBeenCalledOnce();
-    for (const method of ["onDidCreate", "onDidChange", "onDidDelete"] as const) {
-      const callback = api.watcher[method].mock.calls[0][0] as () => void;
-      callback();
-    }
-    expect(sync).not.toHaveBeenCalled();
-    expect(refresh).toHaveBeenCalledTimes(4);
+    expect(api.createFileSystemWatcher).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ base: { fsPath: "/fixture/sessions" }, pattern: "**/*.jsonl" }),
+    );
+    expect(api.watcher.onDidDelete).not.toHaveBeenCalled();
   });
 
   it("observes session file creation and changes without relying on state or Refresh", () => {
@@ -90,7 +90,7 @@ describe("extension commands", () => {
       .mockImplementation(() => {});
     register();
     for (const method of ["onDidCreate", "onDidChange"] as const) {
-      const callback = api.watcher[method].mock.calls[1][0] as (uri: { fsPath: string }) => void;
+      const callback = api.watcher[method].mock.calls[0][0] as (uri: { fsPath: string }) => void;
       callback({ fsPath: "/fixture/sessions/first.jsonl" });
     }
     expect(changed.mock.calls).toEqual([

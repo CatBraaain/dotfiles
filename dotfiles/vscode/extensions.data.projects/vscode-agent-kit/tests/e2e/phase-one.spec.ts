@@ -11,7 +11,6 @@ import {
 import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Frame } from "playwright/test";
-import type { SessionStateStoreData } from "../../src/sessionStateStore";
 import { expect, test, type VSCodeFixture } from "../support/vscode";
 
 /** One recorded #status mutation while a workspace registration error arrives. */
@@ -594,15 +593,14 @@ test(
     });
     await test.step("Reconnect to live B without its saved file and do not recreate the file", async () => {
       const runtime = host.sessionRuntime("B")!;
-      const statePath = join(host.directory, "agent/session-state.json");
-      const state = readFileSync(statePath, "utf8");
+      const registeredCwds = host.listWorkspaces().map(({ cwd }) => cwd);
       unlinkSync(host.sessions.B.session);
       await host.closePiDisplay();
       await host.selectSession("B");
       await host.expectNativeDisplay("B");
       expect(host.sessionRuntime("B")?.pid).toBe(runtime.pid);
       expect(existsSync(host.sessions.B.session)).toBe(false);
-      expect(readFileSync(statePath, "utf8")).toBe(state);
+      expect(host.listWorkspaces().map(({ cwd }) => cwd)).toEqual(registeredCwds);
     });
     await test.step("Restart only an exited selected Pi from its saved session", async () => {
       const runtime = host.piProcesses().find((entry) => entry.pid === firstPids.get("A"))!;
@@ -929,14 +927,12 @@ test(
         .tmux(["display-message", "-p", "-t", runtime.target, "#{@pi-tmux-session}"])
         .trim();
       const metadata = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
-      const statePath = join(host.directory, "agent/session-state.json");
       await expect
         .poll(() =>
-          Object.keys(
-            JSON.parse(readFileSync(statePath, "utf8"))["active-workspaces"][folder][
-              "active-sessions"
-            ],
-          ),
+          host
+            .listWorkspaces()
+            .find(({ cwd }) => cwd === folder)
+            ?.empty.map(({ id }) => id),
         )
         .toEqual([metadata.id]);
       expect(existsSync(metadata.file)).toBe(false);
@@ -969,7 +965,7 @@ test(
           metadata,
           runtime,
           snapshot: host.snapshot(),
-          state: JSON.parse(readFileSync(statePath, "utf8")),
+          workspaces: host.listWorkspaces(),
         }),
         contentType: "application/json",
       });
@@ -1040,9 +1036,31 @@ test(
       });
       await expect(menu).toBeVisible();
       await expect(unregister).toBeVisible();
+      await expect
+        .poll(() => host.piProcesses().filter(({ cwd }) => cwd === folder))
+        .toHaveLength(1);
+      await expect
+        .poll(() => host.piProcesses().filter(({ cwd }) => cwd !== folder))
+        .toHaveLength(3);
+      const otherPids = host
+        .piProcesses()
+        .filter(({ cwd }) => cwd !== folder)
+        .map(({ pid }) => pid)
+        .sort((a, b) => a - b);
       await unregister.click({ steps: 15 });
       await expect(frame.getByRole("dialog").describe("No Unregister confirmation")).toBeHidden();
       await expect(group).toHaveCount(0);
+      await expect
+        .poll(() => host.piProcesses().filter(({ cwd }) => cwd === folder))
+        .toHaveLength(0);
+      host.piMux(["restore"]);
+      expect(host.listWorkspaces().some(({ cwd }) => cwd === folder)).toBe(false);
+      expect(
+        host
+          .piProcesses()
+          .map(({ pid }) => pid)
+          .sort((a, b) => a - b),
+      ).toEqual(otherPids);
       await expect(menu).toBeHidden();
       for (const session of Object.values(host.sessions)) {
         expect(readFileSync(session.session, "utf8")).toBe(session.original);
@@ -1123,7 +1141,6 @@ test(
   "Archives directly, stops only its Pi and reopens the saved conversation after Unarchive",
   { annotation: { type: "spec", description: "E2E-13" } },
   async ({ host }, testInfo) => {
-    const statePath = join(host.directory, "agent/session-state.json");
     const aIsListed = (): boolean => {
       const workspaces = JSON.parse(
         execFileSync(join(host.directory, "bin/pi-mux"), ["list"], {
@@ -1147,7 +1164,6 @@ test(
     let temporaryA!: ReturnType<VSCodeFixture["piProcesses"]>[number];
     let sourceA = "";
     let sourceB = "";
-    const restorePath = join(host.directory, "agent/pi-tmux/pi-mux-restore.json");
     let replacementId = "";
     let displayPid = 0;
     await test.step("Start isolated A and B Pi runtimes and an ordinary fixture tmux session", async () => {
@@ -1167,10 +1183,8 @@ test(
       sourceB = readFileSync(host.sessions.B.session, "utf8");
       host.tmux(["new-session", "-d", "-s", "ordinary-fixture", "sleep", "120"]);
       execFileSync(join(host.directory, "bin/pi-mux"), ["snapshot"], { env: host.env });
-      const snapshot = JSON.parse(readFileSync(restorePath, "utf8"));
-      expect(
-        snapshot.workspaces.flatMap((workspace: { sessions: string[] }) => workspace.sessions),
-      ).toContain(aId);
+      host.piMux(["restore"]);
+      expect(aIsListed()).toBe(true);
       const frame = await host.sessionFrame();
       const toggle = frame
         .locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`)
@@ -1196,14 +1210,8 @@ test(
       await expect(frame.getByRole("dialog").describe("No Archive confirmation")).toBeHidden();
       await expect(rowIn(frame, aId)).toHaveCount(0);
       await expect.poll(() => existsSync(`/proc/${initialA.pid}`)).toBe(false);
-      await expect
-        .poll(() => {
-          const snapshot = JSON.parse(readFileSync(restorePath, "utf8"));
-          return snapshot.workspaces.flatMap(
-            (workspace: { sessions: string[] }) => workspace.sessions,
-          );
-        })
-        .not.toContain(aId);
+      host.piMux(["restore"]);
+      expect(aIsListed()).toBe(false);
       expect(host.piProcesses().some((entry) => entry.target === initialA.target)).toBe(false);
       expect(
         host.tmux(["list-sessions", "-F", "#{session_name}"]).trim().split("\n"),
@@ -1239,9 +1247,7 @@ test(
       expect(readFileSync(host.sessions.A.session, "utf8")).toBe(sourceA);
       expect(readFileSync(host.sessions.B.session, "utf8")).toBe(sourceB);
       expect(aIsListed()).toBe(false);
-      expect((JSON.parse(readFileSync(statePath, "utf8")) as { sentinel?: string }).sentinel).toBe(
-        "preserved",
-      );
+      expect(host.listWorkspaces().some(({ cwd }) => cwd === host.sessions.A.cwd)).toBe(true);
       await frame
         .locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`)
         .describe("A workspace All toggle")
@@ -1283,10 +1289,8 @@ test(
         workspaces.flatMap(({ sessions }) => sessions).find(({ id }) => id === aId)?.temporary,
       ).toBe(true);
       execFileSync(join(host.directory, "bin/pi-mux"), ["snapshot"], { env: host.env });
-      const snapshot = JSON.parse(readFileSync(restorePath, "utf8"));
-      expect(
-        snapshot.workspaces.flatMap((workspace: { sessions: string[] }) => workspace.sessions),
-      ).not.toContain(aId);
+      host.piMux(["restore"]);
+      expect(aIsListed()).toBe(false);
       await host.selectSession("A");
       await host.expectNativeDisplay("A");
       expect(host.sessionRuntime("A")?.pid).toBe(temporaryA.pid);
@@ -1317,9 +1321,7 @@ test(
       ).toContain(host.sessions.A.session);
       expect(readFileSync(host.sessions.A.session, "utf8").startsWith(sourceA)).toBe(true);
       expect(readFileSync(host.sessions.B.session, "utf8")).toBe(sourceB);
-      expect((JSON.parse(readFileSync(statePath, "utf8")) as { sentinel?: string }).sentinel).toBe(
-        "preserved",
-      );
+      expect(host.listWorkspaces().some(({ cwd }) => cwd === host.sessions.A.cwd)).toBe(true);
       await testInfo.attach("Unarchive 後（未アーカイブ・再開表示）", {
         body: await host.page.screenshot({ path: testInfo.outputPath("unarchived.png") }),
         contentType: "image/png",
@@ -1437,7 +1439,6 @@ test(
   },
   async ({ host }, testInfo) => {
     testInfo.setTimeout(150_000);
-    const statePath = join(host.directory, "agent/session-state.json");
     const workspaceCwd = host.sessions.A.cwd;
     const phases = [
       { key: "A", state: "running", label: "Running", name: "Running" },
@@ -1450,12 +1451,10 @@ test(
       { key: "External", state: "waiting-user", label: "Waiting for user", name: "Unread" },
       { key: "B", state: "waiting-user", label: "Waiting for user", name: "Standby" },
     ] as const;
-    let sessionStateBytes = "";
+    let registeredCwds: string[] = [];
     await test.step("Prepare four conversations in one workspace in update order", async () => {
       await expect.poll(() => host.piProcesses().length).toBe(3);
-      for (const runtime of host.piProcesses()) host.tmux(["kill-session", "-t", runtime.target]);
-      const store = JSON.parse(readFileSync(statePath, "utf8")) as SessionStateStoreData;
-      const activeSessions = store["active-workspaces"][workspaceCwd]["active-sessions"]!;
+      for (const { cwd } of host.listWorkspaces()) host.piMux(["workspace", "unregister", cwd]);
       const sessionDirectory = dirname(host.sessions.A.session);
       // The list sorts saved rows by history btime (the header timestamp), so
       // the four headers carry distinct timestamps that match the phases
@@ -1475,11 +1474,9 @@ test(
         writeFileSync(session, original);
         if (session !== fixture.session) unlinkSync(fixture.session);
         host.sessions[key] = { ...fixture, cwd: workspaceCwd, session, original };
-        activeSessions[fixture.id] = {};
         if (reverseIndex < phases.length - 1) await sleep(50);
       }
-      store["active-workspaces"] = { [workspaceCwd]: { "active-sessions": activeSessions } };
-      writeFileSync(statePath, JSON.stringify(store));
+      host.piMux(["workspace", "register", workspaceCwd]);
       const frame = await host.sessionFrame();
       await host.refreshSessions();
       await expect(
@@ -1490,7 +1487,7 @@ test(
       await expect(
         frame.locator(".session-row").describe("Four prepared conversations"),
       ).toHaveCount(4);
-      sessionStateBytes = readFileSync(statePath, "utf8");
+      registeredCwds = host.listWorkspaces().map(({ cwd }) => cwd);
     });
     await test.step("Open four existing conversations in live panes", async () => {
       for (const { key } of phases) {
@@ -1558,7 +1555,7 @@ test(
       await test.step(`Show ${phase.state} for live A (SPEC execution phase display)`, async () => {
         host.setSessionPhase("A", phase.state);
         await expectPhase("A", { ...phase, hasUnread: phase.state === "waiting-user" });
-        expect(readFileSync(statePath, "utf8")).toBe(sessionStateBytes);
+        expect(host.listWorkspaces().map(({ cwd }) => cwd)).toEqual(registeredCwds);
       });
     }
 
@@ -1583,7 +1580,7 @@ test(
       for (const phase of [phases[0], phases[2]]) {
         host.setSessionPhase("A", phase.state);
         await expectPhase("A", { ...phase, hasUnread: phase.state === "waiting-user" });
-        expect(readFileSync(statePath, "utf8")).toBe(sessionStateBytes);
+        expect(host.listWorkspaces().map(({ cwd }) => cwd)).toEqual(registeredCwds);
       }
       await openLiveSession("External");
       await expectPhase("A", { ...phases[2], hasUnread: true });

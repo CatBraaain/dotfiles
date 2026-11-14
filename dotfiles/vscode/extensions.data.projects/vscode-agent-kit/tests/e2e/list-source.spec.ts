@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "../support/vscode";
 
@@ -10,8 +10,7 @@ test(
     let id = "";
     let target = "";
     let file = "";
-    let original = "";
-    const statePath = join(host.directory, "agent/session-state.json");
+    let registeredCwds: string[] = [];
     await test.step("Keep the prewarmed unsaved Pi out of the public list rows", async () => {
       await expect.poll(() => host.piProcesses().length).toBe(3);
       const runtime = host.piProcesses().find(({ cwd }) => cwd === host.sessions.A.cwd)!;
@@ -45,7 +44,7 @@ test(
       await expect(
         frame.locator(`[data-session="${id}"]`).describe("Unsaved prewarmed Pi"),
       ).toHaveCount(0);
-      original = readFileSync(statePath, "utf8");
+      registeredCwds = host.listWorkspaces().map(({ cwd }) => cwd);
     });
     await test.step("Apply a public title independently of null state and observe automatic list updates", async () => {
       await host.activateSession("A");
@@ -70,7 +69,7 @@ test(
         .describe("Published running title row");
       await expect(row.locator(".session-name")).toHaveText("Published running title");
       expect(existsSync(file)).toBe(false);
-      expect(readFileSync(statePath, "utf8")).toBe(original);
+      expect(host.listWorkspaces().map(({ cwd }) => cwd)).toEqual(registeredCwds);
     });
     await test.step("Register a workspace while Sessions is hidden and observe background prewarming", async () => {
       await host.page
