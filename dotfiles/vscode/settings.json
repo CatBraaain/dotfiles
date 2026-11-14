@@ -547,6 +547,7 @@
   "rust-analyzer.rustfmt.extraArgs": ["+nightly"],
   "scm.countBadge": "off",
   "scm.defaultViewMode": "tree",
+  "scm.repositories.sortOrder": "name",
   "scm.showHistoryGraph": false,
   "search.exclude": {
     "**/*.js": true,
