@@ -7,6 +7,7 @@
 
 import {
   createElement,
+  memo,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -469,6 +470,19 @@ function descriptorOnClick(
   return () => actions.onSessionClick(sessionId);
 }
 
+const StaticDescriptor = memo(
+  function StaticDescriptor({
+    descriptor,
+    actions,
+  }: {
+    descriptor: ElementDescriptor;
+    actions: DescriptorActions;
+  }): ReactElement {
+    return descriptorToElement(descriptor, actions);
+  },
+  (previous, next) => JSON.stringify(previous.descriptor) === JSON.stringify(next.descriptor),
+);
+
 /** Materialize a descriptor as a React element (SVG tags included). */
 function descriptorToElement(
   descriptor: ElementDescriptor,
@@ -726,7 +740,9 @@ function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactE
   );
   return (
     <>
-      {view.sessions.map((descriptor) => descriptorToElement(descriptor, actions))}
+      {view.sessions.map((descriptor, index) => (
+        <StaticDescriptor key={descriptor.key ?? index} descriptor={descriptor} actions={actions} />
+      ))}
       {workspaceMenu !== null && hasMenuWorkspace && (
         <WorkspaceMenu
           menu={workspaceMenu}

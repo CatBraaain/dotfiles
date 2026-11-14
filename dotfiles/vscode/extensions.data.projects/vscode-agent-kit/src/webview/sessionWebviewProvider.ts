@@ -17,7 +17,7 @@ import { sessionViewGroups } from "./sessionViewData";
 import { webviewHtml } from "./webviewHtml";
 
 export const VIEW_ID = "piSessions.sessions";
-const LIST_REFRESH_INTERVAL_MS = 1_000;
+export const LIST_REFRESH_INTERVAL_MS = 250;
 
 export interface SessionWebviewDeps {
   extensionUri: string;
@@ -35,6 +35,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private archivedSessionIds = new Set<string>();
   private temporarySessionIds = new Set<string>();
   private state: WebviewState | undefined;
+  private postedStateJson: string | undefined;
   private runningSessionIds = new Set<string>();
   private runningObservations = new Map<string, symbol>();
   private unreadSessionIds = new Set<string>();
@@ -53,6 +54,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.stopListPolling();
+    this.postedStateJson = undefined;
     this.view = webviewView;
     const extensionUri = vscode.Uri.file(this.deps.extensionUri);
     const clientRoot = vscode.Uri.joinPath(extensionUri, "dist-webview");
@@ -341,6 +343,9 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
 
   private postState(state: WebviewState): void {
     this.state = state;
+    const stateJson = JSON.stringify(state);
+    if (stateJson === this.postedStateJson) return;
+    this.postedStateJson = stateJson;
     this.post({ type: "sessions", state });
   }
 
@@ -473,6 +478,13 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private post(message: ExtensionMessage): void {
     if (
       message.type === "loading" ||
+      message.type === "sessionsError" ||
+      message.type === "error"
+    ) {
+      this.postedStateJson = undefined;
+    }
+    if (
+      message.type === "loading" ||
       message.type === "sessions" ||
       message.type === "sessionsError"
     ) {
@@ -482,9 +494,15 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     if (view === undefined) return;
     void view.webview.postMessage(message).then(
       (delivered) => {
-        if (!delivered) void vscode.window.showErrorMessage("Failed to update the Sessions view.");
+        if (!delivered) {
+          if (this.view === view) this.postedStateJson = undefined;
+          void vscode.window.showErrorMessage("Failed to update the Sessions view.");
+        }
       },
-      () => void vscode.window.showErrorMessage("Failed to update the Sessions view."),
+      () => {
+        if (this.view === view) this.postedStateJson = undefined;
+        void vscode.window.showErrorMessage("Failed to update the Sessions view.");
+      },
     );
   }
 

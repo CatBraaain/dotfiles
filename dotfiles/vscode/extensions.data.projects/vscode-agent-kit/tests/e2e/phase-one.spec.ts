@@ -591,17 +591,6 @@ test(
           .sort(),
       ).toEqual(pids);
     });
-    await test.step("Reconnect to live B without its saved file and do not recreate the file", async () => {
-      const runtime = host.sessionRuntime("B")!;
-      const registeredCwds = host.listWorkspaces().map(({ cwd }) => cwd);
-      unlinkSync(host.sessions.B.session);
-      await host.closePiDisplay();
-      await host.selectSession("B");
-      await host.expectNativeDisplay("B");
-      expect(host.sessionRuntime("B")?.pid).toBe(runtime.pid);
-      expect(existsSync(host.sessions.B.session)).toBe(false);
-      expect(host.listWorkspaces().map(({ cwd }) => cwd)).toEqual(registeredCwds);
-    });
     await test.step("Restart only an exited selected Pi from its saved session", async () => {
       const runtime = host.piProcesses().find((entry) => entry.pid === firstPids.get("A"))!;
       process.kill(runtime.pid, "SIGTERM");

@@ -10,7 +10,10 @@ import { PiMux, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../src/piMux
 import { TerminalRegistry } from "../src/terminalRegistry";
 import { editorTerminals } from "../src/terminals";
 import { fakeRuntimes } from "./runtimeFixtures";
-import { SessionWebviewProvider } from "../src/webview/sessionWebviewProvider";
+import {
+  LIST_REFRESH_INTERVAL_MS,
+  SessionWebviewProvider,
+} from "../src/webview/sessionWebviewProvider";
 import * as sessionStore from "../src/sessionStore";
 import type { SessionPhase, WebviewState } from "../src/webview/protocol";
 import { sessionListView, type ElementDescriptor } from "../src/webview/client";
@@ -126,7 +129,7 @@ async function finishRefresh(provider: SessionWebviewProvider) {
   await (provider as unknown as { pendingRefresh?: Promise<void> }).pendingRefresh;
 }
 
-async function tick(provider: SessionWebviewProvider, milliseconds = 1000) {
+async function tick(provider: SessionWebviewProvider, milliseconds = LIST_REFRESH_INTERVAL_MS) {
   await vi.advanceTimersByTimeAsync(milliseconds);
   await finishRefresh(provider);
 }
@@ -669,7 +672,11 @@ describe("SessionWebviewProvider", () => {
   describe("automatic list refresh", () => {
     beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
 
-    it("updates membership, title, workspace and phases every second without JSON writes", async () => {
+    it("polls the list every 250 milliseconds", () => {
+      expect(LIST_REFRESH_INTERVAL_MS).toBe(250);
+    });
+
+    it("updates membership, title, workspace and phases at each refresh interval without JSON writes", async () => {
       const fixture = await unreadFixture();
       const { provider, phases, titles, live, workspaces, row, statePath, mocks, sentState } =
         fixture;
@@ -678,7 +685,7 @@ describe("SessionWebviewProvider", () => {
       phases.set(activeSessionId, "running");
       titles.set(activeSessionId, "Live title");
       workspaces.add("/new-empty");
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS - 1);
       expect(mocks.list).not.toHaveBeenCalled();
       await tick(provider, 1);
       expect(row()).toMatchObject({ state: "running", displayName: "Live title" });
@@ -766,23 +773,94 @@ describe("SessionWebviewProvider", () => {
       const { provider, mocks, holdRuntimeQuery } = await unreadFixture();
       mocks.list.mockClear();
       const held = holdRuntimeQuery();
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS);
       await held.started;
-      await vi.advanceTimersByTimeAsync(5000);
+      await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS * 10);
       expect(mocks.list).toHaveBeenCalledOnce();
       held.finish();
       await finishRefresh(provider);
-      await vi.advanceTimersByTimeAsync(999);
+      await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS - 1);
       expect(mocks.list).toHaveBeenCalledOnce();
       await tick(provider, 1);
       expect(mocks.list).toHaveBeenCalledTimes(2);
+    });
+
+    it("skips posting while the list state is unchanged", async () => {
+      const { provider, webview } = await unreadFixture();
+      await tick(provider);
+      webview.postMessage.mockClear();
+      await tick(provider);
+      await tick(provider);
+      const sessionPosts = webview.postMessage.mock.calls.filter(
+        ([message]) => message.type === "sessions",
+      );
+      expect(sessionPosts).toHaveLength(0);
+    });
+
+    it("resends the unchanged list after a polling error and replays the recovered list on ready", async () => {
+      const { provider, webview, mocks, sentState } = await unreadFixture();
+      const state = sentState();
+      mocks.list.mockRejectedValueOnce(new Error("offline"));
+      await tick(provider);
+      expect(webview.postMessage.mock.lastCall?.[0].type).toBe("sessionsError");
+
+      webview.postMessage.mockClear();
+      await tick(provider);
+      expect(webview.postMessage).toHaveBeenCalledExactlyOnceWith({ type: "sessions", state });
+      webview.postMessage.mockClear();
+      await webview.receive({ type: "ready" });
+      expect(webview.postMessage).toHaveBeenCalledExactlyOnceWith({ type: "sessions", state });
+    });
+
+    it("resends the unchanged list after an action error", async () => {
+      const { provider, webview, sentState } = await unreadFixture();
+      const state = sentState();
+      await webview.receive({ type: "openSession", sessionId: "unknown" });
+      expect(webview.postMessage.mock.lastCall?.[0].type).toBe("error");
+
+      webview.postMessage.mockClear();
+      await tick(provider);
+      expect(webview.postMessage).toHaveBeenCalledExactlyOnceWith({ type: "sessions", state });
+    });
+
+    it.each(["false", "rejection"])(
+      "retries an unchanged list after delivery %s",
+      async (failure) => {
+        const { provider, webview, phases, sentState } = await unreadFixture();
+        if (failure === "false") webview.postMessage.mockResolvedValueOnce(false);
+        else webview.postMessage.mockRejectedValueOnce(new Error("delivery failed"));
+        phases.set(activeSessionId, "running");
+        await tick(provider);
+        const state = sentState();
+        expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+          "Failed to update the Sessions view.",
+        );
+
+        webview.postMessage.mockClear();
+        await tick(provider);
+        expect(webview.postMessage).toHaveBeenCalledExactlyOnceWith({ type: "sessions", state });
+        webview.postMessage.mockClear();
+        await tick(provider);
+        expect(webview.postMessage).not.toHaveBeenCalled();
+      },
+    );
+
+    it("posts again when the list state changes", async () => {
+      const { provider, webview, phases, row } = await unreadFixture();
+      await tick(provider);
+      webview.postMessage.mockClear();
+      phases.set(activeSessionId, "running");
+      await tick(provider);
+      const post = webview.postMessage.mock.calls.find(([message]) => message.type === "sessions");
+      expect(post).toBeDefined();
+      expect(row()).toMatchObject({ state: "running" });
     });
 
     it.each(["view", "provider"])("drops replies after %s disposal", async (target) => {
       const { provider, webview, mocks, holdRuntimeQuery } = await unreadFixture();
       const held = holdRuntimeQuery();
       mocks.list.mockClear();
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS);
       await held.started;
       if (target === "view") webview.dispose();
       else provider.dispose();
@@ -798,7 +876,7 @@ describe("SessionWebviewProvider", () => {
       const { provider, webview, phases, row, holdRuntimeQuery } = await unreadFixture();
       phases.set(activeSessionId, "running");
       const held = holdRuntimeQuery();
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS);
       await held.started;
       webview.setVisible(false);
       phases.set(activeSessionId, "waiting-approval");
