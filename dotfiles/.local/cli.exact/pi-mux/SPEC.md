@@ -395,7 +395,7 @@ serverの起動・復元、piの起動・接続、workspace登録は行わない
 | 起動 | `new`・`open`・`restore` は専用serverがなければ起動して復元する |
 | 存続 | クライアントや会話がなくなってもサーバーを存続させる |
 | 設定 | 起動操作で専用設定を適用する。通常tmuxの設定を読み込まず、他のサーバーへ作用しない |
-| マウス | mouseを有効にする。rootテーブルの `C-MouseDrag1Pane`・`C-MouseDrag1Empty` だけを解除し、Ctrl+左ドラッグによるfloating pane作成を無効にする。その他のマウス操作は維持する |
+| マウス | mouseを有効にする。rootテーブルの `C-MouseDrag1Pane` だけを解除し、Ctrl+左ドラッグによるfloating pane作成を無効にする。その他のマウス操作は維持する |
 | status・prefix | `status off`・`prefix None` とし、status barを非表示、prefixキーを無効にする |
 | タイトル | `set-titles on`・`set-titles-string "#{pane_title}"` とし、paneタイトルを接続先端末へ転送する |
 | 修飾キー | `extended-keys on`・`extended-keys-format csi-u` とし、拡張キーの報告形式をCSI-uにする。`extended-keys-format` が未対応の場合は、その設定だけを飛ばす |
