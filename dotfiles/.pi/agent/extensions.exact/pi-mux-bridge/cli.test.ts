@@ -2341,7 +2341,7 @@ describe("pi-mux CLI boundaries", () => {
 
   for (const relative of [false, true]) {
     it(
-      `reopens ${relative ? "a relative" : "an absolute"} project store after runtime loss from another cwd`,
+      `reopens ${relative ? "a relative" : "an absolute"} project store with an explicit root from another cwd after runtime loss`,
       async () => {
         await fixture(async (f) => {
           const store = join(f.root, "project-store");
@@ -2361,7 +2361,9 @@ describe("pi-mux CLI boundaries", () => {
           await f.tmux(["kill-server"]);
           rmSync(f.runtime, { recursive: true });
           mkdirSync(f.runtime, { mode: 0o700 });
-          await f.client("reopen", ["open", first.id], f.cwdB);
+          await f.client("reopen", ["open", first.id], f.cwdB, {
+            PI_CODING_AGENT_SESSION_DIR: store,
+          });
           const reopened = await firstPane(f);
           assert.equal(reopened.id, first.id);
           assert.equal(reopened.file, first.file);
@@ -2369,6 +2371,11 @@ describe("pi-mux CLI boundaries", () => {
           assert.notEqual(reopened.pid, first.pid);
           await f.detachAll();
           assert.equal(await f.exitCode("reopen"), 0);
+          await f.tmux(["kill-server"]);
+          const unconfigured = await f.run(["open", first.id], f.cwdB);
+          assert.notEqual(unconfigured.code, 0);
+          assert.match(unconfigured.err, /Session not found/);
+          assert.ok(existsSync(first.file));
         });
       },
       TIMEOUT_MS,
@@ -2377,7 +2384,7 @@ describe("pi-mux CLI boundaries", () => {
 
   for (const symlink of [false, true]) {
     it(
-      `reopens registered ${symlink ? "symlink" : "ordinary"} storage below the standard root without false ambiguity`,
+      `reopens explicitly selected ${symlink ? "symlink" : "ordinary"} storage below the standard root without false ambiguity`,
       async () => {
         await fixture(async (f) => {
           const standard = join(f.agent, "sessions");
@@ -2407,13 +2414,17 @@ describe("pi-mux CLI boundaries", () => {
           await f.tmux(["kill-server"]);
           rmSync(f.runtime, { recursive: true });
           mkdirSync(f.runtime, { mode: 0o700 });
-          await f.client("reopen", ["open", first.id], f.cwdB);
+          await f.client("reopen", ["open", first.id], f.cwdB, {
+            PI_CODING_AGENT_SESSION_DIR: store,
+          });
           const reopened = await firstPane(f);
           assert.equal(reopened.id, first.id);
           assert.equal(realpathSync(reopened.file), realpathSync(first.file));
           assert.equal(reopened.cwd, f.cwdA);
           assert.notEqual(reopened.pid, first.pid);
-          await f.client("same-file-open", ["open", first.id], f.cwdB);
+          await f.client("same-file-open", ["open", first.id], f.cwdB, {
+            PI_CODING_AGENT_SESSION_DIR: store,
+          });
           await waitFor(async () => {
             const clients = await f.tmux(["list-clients", "-F", "#{client_name}"]);
             return clients.out.trim().split("\n").length === 2 ? true : undefined;
@@ -2429,43 +2440,47 @@ describe("pi-mux CLI boundaries", () => {
   }
 
   it(
-    "retains every concurrently registered project storage directory",
+    "retains every concurrently registered empty workspace in the restore record and list",
     async () => {
       await fixture(async (f) => {
         const directories = Array.from({ length: 8 }, (_, index) =>
           join(f.root, "project-" + index),
         );
-        const stores = directories.map((cwd) => join(cwd, "store"));
-        for (const [index, cwd] of directories.entries()) {
-          mkdirSync(join(cwd, ".pi"), { recursive: true });
-          writeFileSync(
-            join(cwd, ".pi/settings.json"),
-            JSON.stringify({ sessionDir: stores[index] }),
-          );
-        }
+        for (const cwd of directories) mkdirSync(cwd);
         const results = await Promise.all(
-          directories.map((cwd) => f.run(["open", "missing-id"], cwd)),
+          directories.map((cwd) => f.run(["workspace", "register", cwd], cwd)),
         );
-        for (const result of results) assert.match(result.err, /Session not found/);
-        const registry = join(f.agent, "pi-tmux/session-dirs");
-        const recorded = readdirSync(registry)
-          .filter((name) => name.endsWith(".json"))
-          .map((name) => JSON.parse(readFileSync(join(registry, name), "utf8")));
-        assert.deepEqual(recorded.sort(), stores.sort());
+        for (const result of results) assert.equal(result.code, 0, result.err);
+        const expectedWorkspaces = directories.map((cwd) => ({ cwd, sessions: [] }));
+        assert.deepEqual(
+          f.snapshot().workspaces.sort((a, b) => a.cwd.localeCompare(b.cwd)),
+          expectedWorkspaces,
+        );
+        const listed = await f.run(["list"]);
+        assert.equal(listed.code, 0, listed.err);
+        const listedWorkspaces = JSON.parse(listed.out) as {
+          cwd: string;
+          sessions: unknown[];
+          empty: unknown[];
+        }[];
+        assert.deepEqual(
+          listedWorkspaces.sort((a, b) => a.cwd.localeCompare(b.cwd)),
+          expectedWorkspaces.map((workspace) => ({ ...workspace, empty: [] })),
+        );
       });
     },
     TIMEOUT_MS,
   );
 
   it(
-    "rejects duplicate saved IDs before attaching to a live pi and permits an unsaved live ID",
+    "rejects duplicate saved IDs within cwd groups before attaching and permits an unsaved live ID",
     async () => {
       await fixture(async (f) => {
         await f.client("initial", ["new"], f.cwdA);
         const first = await firstPane(f);
         await f.persist(first);
         await f.detachAll();
-        const duplicate = join(f.agent, "sessions/duplicate.jsonl");
+        const duplicate = join(dirname(first.file), "duplicate.jsonl");
         copyFileSync(first.file, duplicate);
         const ambiguous = await f.run(["open", first.id]);
         assert.notEqual(ambiguous.code, 0);
@@ -3698,7 +3713,7 @@ export default function (pi) { pi.on("resources_discover", async () => {
 
 describe("pi-mux conservative failure handling", () => {
   it(
-    "retains a candidate when its registered storage root is inaccessible",
+    "retains a candidate when its selected storage root is inaccessible and retries with the same root",
     async () => {
       await fixture(async (f) => {
         const file = f.saved("inaccessible-id");
@@ -3719,7 +3734,9 @@ describe("pi-mux conservative failure handling", () => {
         } finally {
           chmodSync(restricted, 0o700);
         }
-        const restored = await f.run(["restore"]);
+        const restored = await f.run(["restore"], f.cwdB, {
+          PI_CODING_AGENT_SESSION_DIR: store,
+        });
         assert.equal(restored.code, 0, restored.err);
         assert.equal((await firstPane(f)).id, "inaccessible-id");
         assert.deepEqual(f.snapshotCandidates(), [{ id: "inaccessible-id", cwd: f.cwdA }]);
