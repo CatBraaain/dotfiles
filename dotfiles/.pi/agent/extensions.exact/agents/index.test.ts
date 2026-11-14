@@ -1192,24 +1192,9 @@ describe("拡張の接続", () => {
       mode: "tui",
       ui: {
         ...extension.context.ui,
-        async custom<T>(
-          factory: (
-            _tui: unknown,
-            _theme: unknown,
-            _keybindings: unknown,
-            done: (choice: T) => void,
-          ) => { handleInput(data: string): void },
-        ): Promise<T> {
+        async select() {
           approvalCount++;
-          return new Promise<T>((resolve) => {
-            const component = factory(
-              { terminal: { rows: 40, columns: 120 }, requestRender() {} },
-              { fg: (_token: string, text: string) => text, bold: (text: string) => text },
-              {},
-              resolve,
-            );
-            component.handleInput("2");
-          });
+          return "Allow in this turn";
         },
       },
       async executeTool(name: string) {

@@ -2,36 +2,24 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { afterAll, beforeAll, describe, it } from "bun:test";
 import { parse } from "shell-quote";
-import type { TUI } from "@earendil-works/pi-tui";
 import { getTmuxPaths, PARENT_PI_ENV_KEYS } from "../pi-mux-bridge/shared.ts";
 import {
   registerMainagentTool,
   buildTmuxCommand,
   validateInput,
-  createApprovalDialog,
-  dialogMaxRows,
-  type ApprovalChoice,
-  type ApprovalDialogHandle,
-  type ApprovalTheme,
   type MainagentInput,
 } from "./mainagent.ts";
 
-type CustomDialogOptions = {
-  overlay?: boolean;
-  overlayOptions?: unknown;
-};
-
-type DialogFactory = (
-  tui: TUI,
-  theme: ApprovalTheme,
-  keybindings: unknown,
-  done: (choice: ApprovalChoice) => void,
-) => ApprovalDialogHandle;
+type DialogOptions = { signal?: AbortSignal };
 
 type ApprovalUI = {
-  confirm(title: string, message: string): Promise<boolean>;
-  custom?<T>(factory: DialogFactory, options?: CustomDialogOptions): Promise<T>;
-  input?(title: string, placeholder?: string): Promise<string | undefined>;
+  confirm(title: string, message: string, options?: DialogOptions): Promise<boolean>;
+  select?(
+    title: string,
+    options: string[],
+    dialogOptions?: DialogOptions,
+  ): Promise<string | undefined>;
+  input?(title: string, placeholder?: string, options?: DialogOptions): Promise<string | undefined>;
 };
 
 type ExecuteTool = (
@@ -74,55 +62,44 @@ function bashOutcome(
 }
 
 type ApprovalAnswer = "once" | "turn" | "session" | "deny";
-const ANSWER_KEYS: Record<ApprovalAnswer, string> = {
-  once: "1",
-  turn: "2",
-  session: "3",
-  deny: "4",
+const ANSWER_LABELS: Record<ApprovalAnswer, string> = {
+  once: "Allow once",
+  turn: "Allow in this turn",
+  session: "Allow in this session",
+  deny: "No, deny (reason next)",
 };
 
-const plainTheme: ApprovalTheme = { fg: (_token, text) => text, bold: (text) => text };
-const dummyTui = { terminal: { rows: 40, columns: 120 }, requestRender() {} } as unknown as TUI;
-
 type UiCalls = {
-  dialogOptions: (CustomDialogOptions | undefined)[];
-  components: ApprovalDialogHandle[];
-  confirmCount: number;
+  selections: { title: string; options: string[]; signal?: AbortSignal }[];
+  confirmations: { title: string; message: string; signal?: AbortSignal }[];
   inputTitles: string[];
+  inputSignals: (AbortSignal | undefined)[];
 };
 
 function approvalUi(answer: {
-  dialog?: ApprovalAnswer | Promise<ApprovalAnswer>;
+  dialog?: ApprovalAnswer | Promise<ApprovalAnswer | undefined>;
   confirm?: boolean;
-  input?: string;
+  input?: string | Promise<string | undefined>;
 }): {
   ui: ApprovalUI;
   calls: UiCalls;
 } {
-  const calls: UiCalls = { dialogOptions: [], components: [], confirmCount: 0, inputTitles: [] };
+  const calls: UiCalls = { selections: [], confirmations: [], inputTitles: [], inputSignals: [] };
   return {
     calls,
     ui: {
-      async custom<T>(factory: DialogFactory, options?: CustomDialogOptions): Promise<T> {
-        calls.dialogOptions.push(options);
-        const done = Promise.withResolvers<T>();
-        const component = factory(
-          dummyTui,
-          plainTheme,
-          {},
-          done.resolve as unknown as (choice: ApprovalChoice) => void,
-        );
-        calls.components.push(component);
-        const answerValue = await answer.dialog!;
-        component.handleInput(ANSWER_KEYS[answerValue]);
-        return done.promise;
+      async select(title, options, dialogOptions) {
+        calls.selections.push({ title, options, signal: dialogOptions?.signal });
+        const selected = await answer.dialog;
+        return selected === undefined ? undefined : ANSWER_LABELS[selected];
       },
-      async confirm() {
-        calls.confirmCount++;
+      async confirm(title, message, options) {
+        calls.confirmations.push({ title, message, signal: options?.signal });
         return answer.confirm ?? false;
       },
-      async input(title: string) {
+      async input(title, _placeholder, options) {
         calls.inputTitles.push(title);
+        calls.inputSignals.push(options?.signal);
         return answer.input;
       },
     },
@@ -270,7 +247,7 @@ describe("承認", () => {
     const executor = recordingExecutor();
     await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
     await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
-    assert.equal(calls.dialogOptions.length, 2);
+    assert.equal(calls.selections.length, 2);
     assert.equal(executor.commands.length, 2);
   });
 
@@ -281,7 +258,7 @@ describe("承認", () => {
     await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
     await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
     await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
-    assert.equal(calls.dialogOptions.length, 1);
+    assert.equal(calls.selections.length, 1);
     assert.equal(executor.commands.length, 3);
   });
 
@@ -291,7 +268,7 @@ describe("承認", () => {
     const executor = recordingExecutor();
     await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
     await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
-    assert.equal(calls.dialogOptions.length, 1);
+    assert.equal(calls.selections.length, 1);
     assert.equal(executor.commands.length, 2);
   });
 
@@ -310,7 +287,7 @@ describe("承認", () => {
     assert.equal(result.structuredContent.status, "denied");
     assert.match(result.content[0].text, /denied by user/);
     assert.equal(executor.commands.length, 0);
-    assert.equal(calls.dialogOptions.length, 1);
+    assert.equal(calls.selections.length, 1);
   });
 
   it("Deny の理由入力を結果に含める", async () => {
@@ -331,39 +308,39 @@ describe("承認", () => {
   it("confirm ダイアログの許可は1回限りで、次の呼び出しは再度確認する", async () => {
     const tool = captureTool();
     const { ui, calls } = approvalUi({ confirm: true });
-    const uiWithoutCustom: ApprovalUI = { confirm: ui.confirm, input: ui.input };
+    const uiWithoutSelect: ApprovalUI = { confirm: ui.confirm, input: ui.input };
     const executor = recordingExecutor();
     await tool.execute(
       "t",
       request,
       undefined,
       undefined,
-      mockContext(uiWithoutCustom, executor.executeTool, "/project", "rpc"),
+      mockContext(uiWithoutSelect, executor.executeTool, "/project", "rpc"),
     );
     await tool.execute(
       "t",
       request,
       undefined,
       undefined,
-      mockContext(uiWithoutCustom, executor.executeTool, "/project", "rpc"),
+      mockContext(uiWithoutSelect, executor.executeTool, "/project", "rpc"),
     );
-    assert.equal(calls.confirmCount, 2);
+    assert.equal(calls.confirmations.length, 2);
     assert.equal(executor.commands.length, 2);
   });
 
-  it("TUI モードでも custom UI が無ければ confirm に置き換える", async () => {
+  it("uses confirm when select is unavailable in TUI mode", async () => {
     const tool = captureTool();
     const { ui, calls } = approvalUi({ confirm: true });
-    const uiWithoutCustom: ApprovalUI = { confirm: ui.confirm, input: ui.input };
+    const uiWithoutSelect: ApprovalUI = { confirm: ui.confirm, input: ui.input };
     const executor = recordingExecutor();
     await tool.execute(
       "t",
       request,
       undefined,
       undefined,
-      mockContext(uiWithoutCustom, executor.executeTool),
+      mockContext(uiWithoutSelect, executor.executeTool),
     );
-    assert.equal(calls.confirmCount, 1);
+    assert.equal(calls.confirmations.length, 1);
     assert.equal(executor.commands.length, 1);
   });
 
@@ -383,19 +360,191 @@ describe("承認", () => {
     assert.equal(executor.commands.length, 0);
   });
 
-  it("dialog は中央 overlay で開く", async () => {
+  it("uses the standard select with the four approval labels and cancellation signal", async () => {
+    const tool = captureTool();
+    const controller = new AbortController();
+    const { ui, calls } = approvalUi({ dialog: "once" });
+    const executor = recordingExecutor();
+    await tool.execute(
+      "t",
+      request,
+      controller.signal,
+      undefined,
+      mockContext(ui, executor.executeTool),
+    );
+    assert.deepEqual(calls.selections, [
+      {
+        title: "Allow creating a new main-agent session?\ninitial request: fix the failing build",
+        options: [
+          "Allow once",
+          "Allow in this turn",
+          "Allow in this session",
+          "No, deny (reason next)",
+        ],
+        signal: controller.signal,
+      },
+    ]);
+    assert.equal(calls.confirmations.length, 0);
+  });
+
+  it("offers the four approval choices in RPC mode", async () => {
+    const tool = captureTool();
+    const { ui, calls } = approvalUi({ dialog: "session" });
+    const executor = recordingExecutor();
+    const context = mockContext(ui, executor.executeTool, "/project", "rpc");
+    await tool.execute("t", request, undefined, undefined, context);
+    await tool.execute("t", request, undefined, undefined, context);
+    assert.equal(calls.selections.length, 1);
+    assert.equal(calls.confirmations.length, 0);
+    assert.equal(executor.commands.length, 2);
+  });
+
+  it("shows the specified resolved cwd and an 80-character preview", async () => {
     const tool = captureTool();
     const { ui, calls } = approvalUi({ dialog: "once" });
     const executor = recordingExecutor();
-    await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
-    assert.deepEqual(calls.dialogOptions[0], {
-      overlay: true,
-      overlayOptions: { anchor: "center", width: "94%", maxHeight: "94%" },
+    const prompt = "x".repeat(80) + "\nnot in the preview";
+    await tool.execute(
+      "t",
+      { prompt, cwd: "sub/dir" },
+      undefined,
+      undefined,
+      mockContext(ui, executor.executeTool, "/repo"),
+    );
+    assert.equal(
+      calls.selections[0]?.title,
+      `Allow creating a new main-agent session?\ninitial request: ${"x".repeat(80)}\ncwd: /repo/sub/dir`,
+    );
+    const script = parse(executor.commands[0]!)[2] as string;
+    const tokens = parse(script);
+    assert.equal(tokens.at(-1), prompt);
+  });
+
+  it("treats selection cancellation as denial and requests an optional reason", async () => {
+    const tool = captureTool();
+    const { ui, calls } = approvalUi({});
+    const executor = recordingExecutor();
+    const result = await tool.execute(
+      "t",
+      request,
+      undefined,
+      undefined,
+      mockContext(ui, executor.executeTool),
+    );
+    assert.deepEqual(result.structuredContent, {
+      status: "denied",
+      error: "mainagent denied by user",
     });
+    assert.deepEqual(calls.inputTitles, ["Denied. Optional reason for the agent:"]);
+    assert.equal(executor.commands.length, 0);
+  });
+
+  it("does not require a reason input dialog for denial", async () => {
+    const tool = captureTool();
+    const { ui } = approvalUi({ dialog: "deny" });
+    const executor = recordingExecutor();
+    const result = await tool.execute(
+      "t",
+      request,
+      undefined,
+      undefined,
+      mockContext({ confirm: ui.confirm, select: ui.select }, executor.executeTool),
+    );
+    assert.equal(result.structuredContent.status, "denied");
+    assert.equal(executor.commands.length, 0);
+  });
+
+  for (const reason of ["", "   ", undefined]) {
+    it(`treats an empty or cancelled reason as no reason: ${JSON.stringify(reason)}`, async () => {
+      const tool = captureTool();
+      const { ui } = approvalUi({ dialog: "deny", input: reason });
+      const executor = recordingExecutor();
+      const result = await tool.execute(
+        "t",
+        request,
+        undefined,
+        undefined,
+        mockContext(ui, executor.executeTool),
+      );
+      assert.equal(result.structuredContent.error, "mainagent denied by user");
+      assert.equal(executor.commands.length, 0);
+    });
+  }
+
+  it("does not retain a denied choice for the next invocation", async () => {
+    const tool = captureTool();
+    const executor = recordingExecutor();
+    const denied = approvalUi({ dialog: "deny" });
+    await tool.execute(
+      "t",
+      request,
+      undefined,
+      undefined,
+      mockContext(denied.ui, executor.executeTool),
+    );
+    const allowed = approvalUi({ dialog: "once" });
+    await tool.execute(
+      "t",
+      request,
+      undefined,
+      undefined,
+      mockContext(allowed.ui, executor.executeTool),
+    );
+    assert.equal(allowed.calls.selections.length, 1);
+    assert.equal(executor.commands.length, 1);
   });
 });
 
 describe("interrupted approval", () => {
+  it("passes cancellation to the reason input and stops an aborted denial", async () => {
+    const tool = captureTool();
+    const controller = new AbortController();
+    const pendingReason = Promise.withResolvers<string | undefined>();
+    const { ui, calls } = approvalUi({ dialog: "deny", input: pendingReason.promise });
+    const executor = recordingExecutor();
+    const reasonStarted = Promise.withResolvers<void>();
+    const context = mockContext(
+      {
+        ...ui,
+        async input(title, placeholder, options) {
+          const pending = ui.input!(title, placeholder, options);
+          reasonStarted.resolve();
+          return pending;
+        },
+      },
+      executor.executeTool,
+    );
+    const pending = tool.execute("t", request, controller.signal, undefined, context);
+    await reasonStarted.promise;
+    controller.abort();
+    pendingReason.resolve("reason after abort");
+    await assert.rejects(pending, { name: "AbortError" });
+    assert.deepEqual(calls.inputSignals, [controller.signal]);
+    assert.equal(executor.commands.length, 0);
+  });
+
+  it("passes cancellation to the confirm fallback without executing", async () => {
+    const tool = captureTool();
+    const controller = new AbortController();
+    const { ui, calls } = approvalUi({ confirm: true });
+    const executor = recordingExecutor();
+    const context = mockContext(
+      {
+        async confirm(title, message, options) {
+          const pending = ui.confirm(title, message, options);
+          controller.abort();
+          return pending;
+        },
+      },
+      executor.executeTool,
+    );
+    await assert.rejects(tool.execute("t", request, controller.signal, undefined, context), {
+      name: "AbortError",
+    });
+    assert.equal(calls.confirmations[0]?.signal, controller.signal);
+    assert.equal(executor.commands.length, 0);
+  });
+
   for (const answer of ["once", "turn", "session"] as const) {
     it(`does not execute or retain approval after aborting ${answer}`, async () => {
       const tool = captureTool();
@@ -410,7 +559,7 @@ describe("interrupted approval", () => {
       await assert.rejects(pending, { name: "AbortError" });
       assert.equal(executor.commands.length, 0);
       await tool.execute("t", request, undefined, undefined, context);
-      assert.equal(calls.dialogOptions.length, 2);
+      assert.equal(calls.selections.length, 2);
       assert.equal(executor.commands.length, 1);
     });
   }
@@ -456,7 +605,7 @@ describe("interrupted approval", () => {
       ),
       { name: "AbortError" },
     );
-    assert.equal(calls.dialogOptions.length, 0);
+    assert.equal(calls.selections.length, 0);
     assert.equal(executor.commands.length, 0);
   });
 
@@ -487,7 +636,7 @@ describe("turn 承認の失効", () => {
     await tool.execute("t", request, undefined, undefined, context);
     await handlers.get("input")!({ source: "interactive" });
     await tool.execute("t", request, undefined, undefined, context);
-    assert.equal(calls.dialogOptions.length, 2);
+    assert.equal(calls.selections.length, 2);
   });
 
   it("ユーザーの message_start で turn 承認が失効する", async () => {
@@ -499,7 +648,7 @@ describe("turn 承認の失効", () => {
     await tool.execute("t", request, undefined, undefined, context);
     await handlers.get("message_start")!({ message: { role: "user" } });
     await tool.execute("t", request, undefined, undefined, context);
-    assert.equal(calls.dialogOptions.length, 2);
+    assert.equal(calls.selections.length, 2);
   });
 
   it("assistant と toolResult のメッセージでは失効しない", async () => {
@@ -512,7 +661,7 @@ describe("turn 承認の失効", () => {
     await handlers.get("message_start")!({ message: { role: "assistant" } });
     await handlers.get("message_start")!({ message: { role: "toolResult" } });
     await tool.execute("t", request, undefined, undefined, context);
-    assert.equal(calls.dialogOptions.length, 1);
+    assert.equal(calls.selections.length, 1);
   });
 
   it("session 承認は input イベントの後も有効である", async () => {
@@ -524,7 +673,7 @@ describe("turn 承認の失効", () => {
     await tool.execute("t", request, undefined, undefined, context);
     await handlers.get("input")!({ source: "interactive" });
     await tool.execute("t", request, undefined, undefined, context);
-    assert.equal(calls.dialogOptions.length, 1);
+    assert.equal(calls.selections.length, 1);
   });
 
   it("ダイアログ表示中に失効した turn 回答を拒否する", async () => {
@@ -724,141 +873,5 @@ describe("実行", () => {
       mockContext(ui, executeTool),
     );
     assert.equal(result.isError, true);
-  });
-});
-
-describe("承認ダイアログ", () => {
-  const WIDTH = 80;
-  const DIALOG_CHROME_ROWS = 16;
-
-  function dialogFor(
-    prompt: string,
-    options: { maxRows?: number; cwd?: string; signal?: AbortSignal } = {},
-  ) {
-    const choices: ApprovalChoice[] = [];
-    const component = createApprovalDialog({
-      prompt,
-      cwd: options.cwd ?? "/repo",
-      theme: plainTheme,
-      getMaxRows: () => options.maxRows ?? 40,
-      requestRender: () => {},
-      done: (choice) => choices.push(choice),
-      signal: options.signal,
-    });
-    return { component, choices };
-  }
-
-  it("prompt 全文・選択肢 1-4・cwd・ヒントを表示する", () => {
-    const { component } = dialogFor("fix the failing build", { cwd: "/repo/sub" });
-    const lines = component.render(WIDTH).join("\n");
-    assert.ok(lines.includes("fix the failing build"));
-    assert.ok(lines.includes("prompt:"));
-    assert.ok(lines.includes("cwd: /repo/sub"));
-    assert.ok(lines.includes("1. Allow once"));
-    assert.ok(lines.includes("2. Allow in this turn"));
-    assert.ok(lines.includes("3. Allow in this session"));
-    assert.ok(lines.includes("4. No, deny (reason next)"));
-    assert.ok(lines.includes("up/down scroll · 1-4 select · esc deny"));
-    assert.equal(lines.includes("[1-"), false);
-  });
-
-  it("縦幅が足りない prompt は viewport 行に切り出して range を出す", () => {
-    const prompt = Array.from({ length: 25 }, (_v, i) => `line ${i + 1}`).join("\n");
-    const { component } = dialogFor(prompt, { maxRows: 40 });
-    const lines = component.render(WIDTH);
-    assert.equal(lines.length, DIALOG_CHROME_ROWS + 20);
-    const joined = lines.join("\n");
-    assert.ok(joined.includes("[1-20/25]"));
-    assert.ok(joined.includes("line 1"));
-    assert.equal(joined.includes("line 21"), false);
-  });
-
-  it("上下キーでスクロールし range が動く", () => {
-    const prompt = Array.from({ length: 25 }, (_v, i) => `line ${i + 1}`).join("\n");
-    const { component } = dialogFor(prompt, { maxRows: 40 });
-    assert.ok(component.render(WIDTH).join("\n").includes("[1-20/25]"));
-    component.handleInput("\x1b[A");
-    assert.ok(component.render(WIDTH).join("\n").includes("[1-20/25]"));
-    component.handleInput("\x1b[B");
-    const scrolled = component.render(WIDTH).join("\n");
-    assert.ok(scrolled.includes("[2-21/25]"));
-    assert.ok(scrolled.includes("line 2"));
-    component.handleInput("\x1b[H");
-    assert.ok(component.render(WIDTH).join("\n").includes("[1-20/25]"));
-  });
-
-  it("数字キーで選択し、escape と 4 は deny、他のキーは無視する", () => {
-    const { component, choices } = dialogFor("fix it");
-    component.handleInput("x");
-    component.handleInput("9");
-    assert.deepEqual(choices, []);
-    component.handleInput("1");
-    assert.deepEqual(choices, [{ grant: "once" }]);
-  });
-
-  it("2, 3, 4, escape の回答を対応する結果に変換する", async () => {
-    for (const [key, expected] of [
-      ["2", { grant: "turn" }],
-      ["3", { grant: "session" }],
-      ["4", { denied: true }],
-      ["\x1b", { denied: true }],
-    ] as const) {
-      const { component, choices } = dialogFor("fix it");
-      component.handleInput(key);
-      assert.deepEqual(choices, [expected], `key ${JSON.stringify(key)}`);
-    }
-  });
-
-  it("1 度の回答の後は追加入力を無視する", () => {
-    const { component, choices } = dialogFor("fix it");
-    component.handleInput("1");
-    component.handleInput("4");
-    component.handleInput("\x1b");
-    assert.deepEqual(choices, [{ grant: "once" }]);
-  });
-
-  it("wheel でスクロールする", () => {
-    const prompt = Array.from({ length: 25 }, (_v, i) => `line ${i + 1}`).join("\n");
-    const { component } = dialogFor(prompt, { maxRows: 40 });
-    component.render(WIDTH);
-    const outcome = component.handleMouse({
-      type: "wheel",
-      button: "none",
-      x: 0,
-      y: 0,
-      screenX: 0,
-      screenY: 0,
-      width: WIDTH,
-      height: 20,
-      shift: false,
-      alt: false,
-      ctrl: false,
-      wheelDelta: 5,
-    });
-    assert.deepEqual(outcome, { handled: true });
-    assert.ok(component.render(WIDTH).join("\n").includes("[6-25/25]"));
-  });
-
-  it("abort で閉じ、閉じた後の入力を無視する", () => {
-    const controller = new AbortController();
-    const { component, choices } = dialogFor("fix it", { signal: controller.signal });
-    controller.abort();
-    component.handleInput("1");
-    assert.deepEqual(choices, [{ aborted: true }]);
-  });
-
-  it("dispose は未 abort でも安全に呼べる", () => {
-    const controller = new AbortController();
-    const { component, choices } = dialogFor("fix it", { signal: controller.signal });
-    component.dispose();
-    component.dispose();
-    controller.abort();
-    assert.deepEqual(choices, []);
-  });
-
-  it("dialogMaxRows はターミナル縦の 94% を下限付きで返す", () => {
-    assert.equal(dialogMaxRows(40), 37);
-    assert.equal(dialogMaxRows(100), 94);
-    assert.equal(dialogMaxRows(4), 8);
   });
 });
