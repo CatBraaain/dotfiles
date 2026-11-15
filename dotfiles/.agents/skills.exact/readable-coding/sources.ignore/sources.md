@@ -583,9 +583,9 @@ Ch17 は多数の heuristic の集成のため、本 skill に関連する主要
 ## Code Complete 第2版
 
 - Steve McConnell. Code Complete, Second Edition. Microsoft Press, 2004. ISBN 978-0-7356-1967-8
-- 照合資料: [出版社公開サンプルの目次](https://www.informit.com/content/images/9780735619678/samplepages/9780735619678a.pdf)
+- 照合資料: [出版社公開サンプルの目次・索引](https://www.informit.com/content/images/9780735619678/samplepages/9780735619678a.pdf)
 
-以下は助言IDと原書の節番号・見出しの対応。対象章の本文はサンプル非収録であり、要約の細部（CO7.3 の行数・CO8.1 の空catch等）は未照合。CO22.1 は章題のみ確認でき、境界条件を扱う節の所在は未確定。
+以下は助言IDと原書の節番号・見出しの対応。対象章の本文はサンプル非収録であり、要約の細部（CO7.3 の行数・CO8.1 の空catch等）は未照合。CO22.1 の境界分析は索引で pp.513–514 を参照しており、目次の節開始ページから22.3に位置すると確認した。具体例（0、1、N、最大値、空）は本文未照合。
 
 | 助言ID | 原書の節・見出し | ページ |
 | --- | --- | --- |
@@ -602,7 +602,7 @@ Ch17 は多数の heuristic の集成のため、本 skill に関連する主要
 | CO14.3 | 14.2 Statements Whose Order Doesn't Matter | 351 |
 | CO19.6 | 19.3 Null Statements | 444 |
 | CO19.7 | 19.6 Control Structures and Complexity | 456 |
-| CO22.1 | Ch22 Developer Testing（対応節未確定） | 499 |
+| CO22.1 | 22.3 Bag of Testing Tricks（boundary analysis、目次・索引による所在確認） | 513–514（節開始505） |
 
 ### Ch7 高品質なルーチン
 
