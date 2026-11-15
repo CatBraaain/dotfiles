@@ -16,9 +16,18 @@ import { dispatcherName, shQuote } from "./dispatch";
 const TEMP_ROOT = "/tmp/work/dotfiles";
 const CLI = join(import.meta.dir, "main.ts");
 const TIMEOUT_MS = 20_000;
+const FIXED_PROMPT = readFileSync(join(import.meta.dir, "../dispatch-prompt.md"), "utf8");
+
+function expectedPrompt(id: string): string {
+  return FIXED_PROMPT.split("{{ TICKET_ID }}").join(id);
+}
 
 function isolatedTmux(socket: string, args: string[], env = process.env) {
-  return spawnSync("tmux", ["-S", socket, ...args], { encoding: "utf8", env, timeout: TIMEOUT_MS });
+  return spawnSync("tmux", ["-S", socket, ...args], {
+    encoding: "utf8",
+    env,
+    timeout: TIMEOUT_MS,
+  });
 }
 
 function setup() {
@@ -26,7 +35,7 @@ function setup() {
   const root = mkdtempSync(join(TEMP_ROOT, "ticket-dispatch-e2e-"));
   const home = join(root, "home");
   const cwd = join(root, "project");
-  const work = join(cwd, "work with 'quotes");
+  const work = join(cwd, "work with 'single' \"double\" $HOME `ticks` {{ TICKET_ID }}");
   const store = join(home, ".agents", "tickets", "project");
   const bin = join(root, "stub-bin");
   const records = join(root, "records");
@@ -38,7 +47,8 @@ function setup() {
     `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const args = process.argv.slice(2);
-const id = args[0].split("\\n")[0].slice("ticket=".length);
+if (!args[0].startsWith("ticket ")) throw new Error("ticket ID is missing");
+const id = args[0].split(" に")[0].slice("ticket ".length);
 appendFileSync(join(${JSON.stringify(records)}, "launches"), id + "\\n");
 writeFileSync(join(${JSON.stringify(records)}, id + ".json"), JSON.stringify({ args, cwd: process.cwd() }));
 if (process.env.STUB_WAIT === "1" || process.env.STUB_HOLD_ID === id) await Bun.sleep(60000);
@@ -119,33 +129,53 @@ async function waitFinished(fixture: Fixture, work = fixture.work) {
 }
 
 describe("ticket dispatch real tmux", () => {
-  for (const trailingNewlines of ["\n", "\n\n\n"]) {
-    it(
-      `preserves ${trailingNewlines.length} trailing prompt newlines in the pi argument`,
-      async () => {
-        const fixture = setup();
-        const { root, cwd, work, store, socket, records } = fixture;
-        try {
-          writeTicket(store, "a.v1", "open");
-          const template = `ticket=__TICKET_ID__\n"$HOME" 'single' \`ignored\`.${trailingNewlines}`;
-          writeFileSync(join(work, "fix-prompt-template.txt"), template);
-          startServer(fixture);
-          const start = cli(fixture, ["dispatch", work, "--interval", "0.05"]);
-          assert.equal(start.status, 0, start.stderr);
-          await waitFinished(fixture);
-          const expected = template.replaceAll("__TICKET_ID__", "a.v1");
-          const prompt = readFileSync(join(work, "fix", "prompt-a.v1.txt"), "utf8");
-          const recorded = JSON.parse(readFileSync(join(records, "a.v1.json"), "utf8"));
-          assert.equal(prompt, expected);
-          assert.deepEqual(recorded, { args: [prompt], cwd });
-        } finally {
-          isolatedTmux(socket, ["kill-server"]);
-          rmSync(root, { recursive: true, force: true });
-        }
-      },
-      TIMEOUT_MS + 5000,
-    );
-  }
+  it(
+    "passes the fixed prompt as one pi argument and preserves its trailing newline",
+    async () => {
+      const fixture = setup();
+      const { root, cwd, work, store, socket, records } = fixture;
+      try {
+        writeTicket(store, "a.v1", "open");
+        writeFileSync(join(work, "fix-prompt-template.txt"), "ticket=wrong-cwd-template");
+        startServer(fixture);
+        const start = cli(fixture, ["dispatch", work, "--interval", "0.05"]);
+        assert.equal(start.status, 0, start.stderr);
+        await waitFinished(fixture);
+        const expected = expectedPrompt("a.v1");
+        const prompt = readFileSync(join(work, "fix", "prompt-a.v1.txt"), "utf8");
+        const recorded = JSON.parse(readFileSync(join(records, "a.v1.json"), "utf8"));
+        assert.equal(prompt, expected);
+        assert.ok(prompt.endsWith("\n"));
+        assert.deepEqual(recorded, { args: [expected], cwd });
+      } finally {
+        isolatedTmux(socket, ["kill-server"]);
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it("rejects --template and omits it from usage without starting a dispatcher", () => {
+    const fixture = setup();
+    const { root, socket, records } = fixture;
+    try {
+      startServer(fixture);
+      const result = cli(fixture, ["dispatch", "--template", join(root, "external.txt")]);
+      assert.equal(result.status, 2);
+      assert.match(result.stderr, /unknown option: --template/);
+      const usage = cli(fixture, ["dispatch", "one", "two"]);
+      assert.equal(usage.status, 2);
+      assert.doesNotMatch(usage.stderr, /--template/);
+      assert.equal(
+        isolatedTmux(socket, ["has-session", "-t", `=${dispatcherName("project")}`]).status,
+        1,
+      );
+      assert.equal(existsSync(join(records, "launches")), false);
+    } finally {
+      isolatedTmux(socket, ["kill-server"]);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it(
     "serializes simultaneous starts through the named tmux session",
@@ -155,7 +185,6 @@ describe("ticket dispatch real tmux", () => {
       const env = { ...fixture.env, STUB_WAIT: "1" };
       try {
         writeTicket(store, "a.v1", "open");
-        writeFileSync(join(work, "fix-prompt-template.txt"), "ticket=__TICKET_ID__");
         startServer(fixture, env);
         const command = process.env.TICKET_DISPATCH_BIN
           ? [process.env.TICKET_DISPATCH_BIN]
@@ -213,21 +242,16 @@ describe("ticket dispatch real tmux", () => {
           ["draft", "draft"],
         ])
           writeTicket(store, id!, status!);
-        const template = "ticket=__TICKET_ID__\nagain=__TICKET_ID__\n\"$HOME\" 'single' `ignored`";
-        const templatePath = join(root, "custom template.txt");
-        writeFileSync(templatePath, template);
         startServer(fixture);
         const result = cli(fixture, [
           "dispatch",
-          "work with 'quotes",
+          work,
           "--max",
           "2",
           "--prefix",
           "e2e_",
           "--interval",
           "0.1",
-          "--template",
-          templatePath,
         ]);
         assert.equal(result.status, 0, result.stderr);
         assert.equal(result.stderr, "");
@@ -250,7 +274,7 @@ describe("ticket dispatch real tmux", () => {
         );
         assert.ok(messages.includes("done c status=cancelled"));
         for (const id of ["a.v1", "b", "c", "d"]) {
-          const expected = template.replaceAll("__TICKET_ID__", id);
+          const expected = expectedPrompt(id);
           assert.equal(readFileSync(join(work, "fix", `prompt-${id}.txt`), "utf8"), expected);
           assert.deepEqual(JSON.parse(readFileSync(join(records, `${id}.json`), "utf8")), {
             args: [expected],
@@ -279,7 +303,6 @@ describe("ticket dispatch real tmux", () => {
       try {
         writeTicket(store, "a.v1", "open");
         writeFileSync(join(store, "b.md"), "---\nstatus: blocked\nafter: a.v1\n---\n\n# b\n");
-        writeFileSync(join(cwd, "fix-prompt-template.txt"), "ticket=__TICKET_ID__");
         startServer(fixture, env);
         const start = cli(
           fixture,
@@ -307,7 +330,7 @@ describe("ticket dispatch real tmux", () => {
         assert.match(log, /done c status=cancelled/);
         for (const id of ["a.v1", "b", "c"]) {
           assert.deepEqual(JSON.parse(readFileSync(join(records, `${id}.json`), "utf8")), {
-            args: [`ticket=${id}`],
+            args: [expectedPrompt(id)],
             cwd,
           });
           assert.notEqual(
@@ -339,7 +362,6 @@ describe("ticket dispatch real tmux", () => {
         );
         assert.equal(added.status, 0, added.stderr);
         writeTicket(store, "a.v1", "open");
-        writeFileSync(join(work, "fix-prompt-template.txt"), "ticket=__TICKET_ID__");
         startServer(fixture, env);
         const first = cli(
           fixture,
@@ -375,7 +397,6 @@ describe("ticket dispatch real tmux", () => {
         assert.match(cli(fixture, ["dispatch", "stop"], otherCwd, env).stdout, /already stopped/);
         const secondWork = join(root, "second-work");
         mkdirSync(secondWork);
-        writeFileSync(join(secondWork, "fix-prompt-template.txt"), "ticket=__TICKET_ID__");
         writeTicket(store, "c", "open");
         const restart = cli(
           fixture,
@@ -410,11 +431,11 @@ describe("ticket dispatch real tmux", () => {
         );
         assert.equal(isolatedTmux(socket, ["has-session", "-t", "=changed_c"]).status, 0);
         assert.deepEqual(JSON.parse(readFileSync(join(records, "c.json"), "utf8")), {
-          args: ["ticket=c"],
+          args: [expectedPrompt("c")],
           cwd: otherCwd,
         });
         assert.deepEqual(JSON.parse(readFileSync(join(records, "a.v1.json"), "utf8")), {
-          args: ["ticket=a.v1"],
+          args: [expectedPrompt("a.v1")],
           cwd,
         });
         assert.equal(cli(fixture, ["set", "c", '{"status":"closed"}']).status, 0);
@@ -437,7 +458,6 @@ describe("ticket dispatch real tmux", () => {
       try {
         writeTicket(store, "a.v1", "open");
         writeTicket(store, "b", "open");
-        writeFileSync(join(work, "fix-prompt-template.txt"), "ticket=__TICKET_ID__");
         startServer(fixture);
         for (const [name, metadata] of [
           [

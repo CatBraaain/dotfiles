@@ -1,13 +1,11 @@
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import dispatchPromptPath from "../dispatch-prompt.md" with { type: "file" };
 
-const PLACEHOLDER = "__TICKET_ID__";
-
-const OPTION_KEYS = ["--max", "--interval", "--prefix", "--template"];
+const OPTION_KEYS = ["--max", "--interval", "--prefix"];
 
 export interface DispatchOptions {
-  template: string;
   fixDir: string;
   log: string;
   max: number;
@@ -16,14 +14,14 @@ export interface DispatchOptions {
 }
 
 export const DISPATCH_USAGE =
-  "ticket dispatch [<work-dir>] [--max N] [--interval SEC] [--prefix NAME] [--template FILE]\n       ticket dispatch start [<work-dir>] [--max N] [--interval SEC] [--prefix NAME] [--template FILE]\n       ticket dispatch stop";
+  "ticket dispatch [<work-dir>] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch start [<work-dir>] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch stop";
 
 export function sessionName(prefix: string, id: string): string {
   return prefix + id.split(".").join("_");
 }
 
 export function buildPrompt(template: string, id: string): string {
-  return template.split(PLACEHOLDER).join(id);
+  return template.split("{{ TICKET_ID }}").join(id);
 }
 
 export interface TicketSnapshot {
@@ -127,7 +125,6 @@ export function parseDispatchArgs(argv: string[]): {
   return {
     action: "start",
     options: {
-      template: given.get("--template") ?? join(work, "fix-prompt-template.txt"),
       fixDir: join(work, "fix"),
       log: join(work, "dispatch.log"),
       max,
@@ -213,7 +210,7 @@ export async function startDispatcher(input: {
     console.log(`dispatcher already running: ${name}`);
     return;
   }
-  readFileSync(options.template, "utf8");
+  await Bun.file(dispatchPromptPath).text();
   await input.loadSnapshot();
   mkdirSync(options.fixDir, { recursive: true });
   appendFileSync(options.log, "");
@@ -283,7 +280,7 @@ export interface RunDeps {
 
 export async function run(deps: RunDeps): Promise<void> {
   const { options } = deps;
-  const template = readFileSync(options.template, "utf8");
+  const template = await Bun.file(dispatchPromptPath).text();
   mkdirSync(options.fixDir, { recursive: true });
   const running = new Map(deps.initialRunning);
   const started = new Set(running.keys());

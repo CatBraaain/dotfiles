@@ -1,5 +1,5 @@
 import { afterEach, describe, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import assert from "node:assert/strict";
 import {
@@ -20,8 +20,75 @@ describe("sessionName", () => {
 });
 
 describe("buildPrompt", () => {
-  it("replaces every placeholder occurrence", () => {
-    assert.equal(buildPrompt("fix __TICKET_ID__ then __TICKET_ID__!", "t1"), "fix t1 then t1!");
+  it("replaces every ticket ID placeholder literally", () => {
+    const prompt = buildPrompt("[{{ TICKET_ID }}, {{ TICKET_ID }}]", "t1");
+    assert.equal(prompt, "[t1, t1]");
+  });
+
+  it("preserves replacement syntax, quotes, newlines, and placeholder text inside the ID", () => {
+    const id = '{{ TICKET_ID }}$&$`$\' "double"\\\n';
+    const prompt = buildPrompt("[{{ TICKET_ID }}]", id);
+    assert.equal(prompt, `[${id}]`);
+  });
+
+  it("preserves fixed text and any trailing newlines", () => {
+    for (const ending of ["", "\n", "\n\n\n"]) {
+      const prompt = buildPrompt(`fixed {{ TICKET_ID }} ${ending}`, "t1");
+      assert.equal(prompt, `fixed t1 ${ending}`);
+    }
+  });
+});
+
+describe("fixed prompt asset", () => {
+  it("reads the asset for each run and rejects missing assets before work begins", () => {
+    const { home, options, socket } = fixture();
+    const sourceDir = join(home, "src");
+    mkdirSync(sourceDir);
+    copyFileSync(join(import.meta.dir, "dispatch.ts"), join(sourceDir, "dispatch.ts"));
+    copyFileSync(join(import.meta.dir, "../dispatch-prompt.md"), join(home, "dispatch-prompt.md"));
+    const script = `
+import assert from "node:assert/strict";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { run, startDispatcher } from ${JSON.stringify(join(sourceDir, "dispatch.ts"))};
+const options = ${JSON.stringify(options)};
+const asset = ${JSON.stringify(join(home, "dispatch-prompt.md"))};
+const deps = {
+  options,
+  loadSnapshot: async () => [{ id: "a", status: "open", actionable: true }],
+  log() {},
+  hasSession() { return false; },
+  killSession() {},
+  launch() {},
+  async sleepMs() {},
+};
+for (const text of ["first {{ TICKET_ID }}", "second {{ TICKET_ID }}"]) {
+  writeFileSync(asset, text);
+  await run(deps);
+  assert.equal(readFileSync(options.fixDir + "/prompt-a.txt", "utf8"), text.replace("{{ TICKET_ID }}", "a"));
+}
+rmSync(asset);
+await assert.rejects(run(deps), /ENOENT/);
+await assert.rejects(startDispatcher({
+  project: "sample", options, command: [],
+  loadSnapshot: async () => assert.fail("asset failure must precede ticket reads"),
+}), /ENOENT/);
+`;
+    const result = Bun.spawnSync([process.execPath, "-e", script], {
+      env: { ...process.env, TICKET_TEST_TMUX_SOCKET: socket },
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 5000,
+    });
+    assert.equal(result.exitCode, 0, new TextDecoder().decode(result.stderr));
+  });
+
+  it("rejects --template in internal worker arguments", () => {
+    const result = Bun.spawnSync(
+      [process.execPath, CLI, "__ticket_dispatch_worker", "sample", "--template", "external.txt"],
+      { stdout: "pipe", stderr: "pipe", timeout: 5000 },
+    );
+    assert.equal(result.exitCode, 2);
+    assert.match(new TextDecoder().decode(result.stderr), /unknown option: --template/);
   });
 });
 
@@ -35,7 +102,6 @@ describe("parseDispatchArgs", () => {
 
   it("defaults the work directory to the process cwd", () => {
     assert.deepEqual(parseDispatchArgs([]).options, {
-      template: join(process.cwd(), "fix-prompt-template.txt"),
       fixDir: join(process.cwd(), "fix"),
       log: join(process.cwd(), "dispatch.log"),
       max: 5,
@@ -45,9 +111,8 @@ describe("parseDispatchArgs", () => {
     assert.deepEqual(parseDispatchArgs(["start"]), parseDispatchArgs([]));
   });
 
-  it("uses the given work directory and four defaults", () => {
+  it("uses the given work directory and three option defaults", () => {
     assert.deepEqual(parseDispatchArgs(["w"]).options, {
-      template: "w/fix-prompt-template.txt",
       fixDir: "w/fix",
       log: "w/dispatch.log",
       max: 5,
@@ -61,7 +126,7 @@ describe("parseDispatchArgs", () => {
     assert.deepEqual(parseDispatchArgs(["stop"]), { action: "stop" });
   });
 
-  it("accepts the four overrides and positional option termination", () => {
+  it("accepts the three overrides and positional option termination", () => {
     const parsed = parseDispatchArgs([
       "--max",
       "3",
@@ -69,13 +134,10 @@ describe("parseDispatchArgs", () => {
       "0.2",
       "--prefix",
       "t_",
-      "--template",
-      "custom.txt",
       "--",
       "w",
     ]);
     assert.deepEqual(parsed.options, {
-      template: "custom.txt",
       fixDir: "w/fix",
       log: "w/dispatch.log",
       max: 3,
@@ -85,13 +147,14 @@ describe("parseDispatchArgs", () => {
   });
 
   it("rejects invalid work directory arguments and missing option values", () => {
-    for (const args of [[""], ["a", "b"], ["w", "--max"], ["w", "--template", "--prefix", "x"]]) {
+    for (const args of [[""], ["a", "b"], ["w", "--max"], ["w", "--interval", "--prefix", "x"]]) {
       assert.equal(parseDispatchArgs(args).options, undefined, JSON.stringify(args));
     }
   });
 
   it("rejects removed and unknown flags", () => {
     for (const flag of [
+      "--template",
       "--store",
       "--cwd",
       "--work",
@@ -236,7 +299,6 @@ function fixture() {
   fixtures.push({ home, socket });
   const store = join(home, ".agents", "tickets", basename(home));
   mkdirSync(store, { recursive: true });
-  writeFileSync(join(home, "fix-prompt-template.txt"), "fix __TICKET_ID__ then __TICKET_ID__");
   const options = parseDispatchArgs([home, "--interval", "0.25", "--max", "2"]).options!;
   return { home, store, options, socket };
 }
@@ -301,7 +363,9 @@ describe("dispatch execution", () => {
       killSession: (name) => events.push(`kill ${name}`),
       launch: (id, name, promptFile) => {
         assert.equal(promptFile, join(home, "fix", `prompt-${id}.txt`));
-        assert.equal(readFileSync(promptFile, "utf8"), `fix ${id} then ${id}`);
+        const prompt = readFileSync(promptFile, "utf8");
+        assert.ok(prompt.startsWith(`ticket ${id} に対応する。`));
+        assert.match(prompt, /user はticketを読んでいない前提で/);
         events.push(`start ${name}`);
       },
       sleepMs: async (ms) => {
@@ -450,11 +514,10 @@ describe("dispatch CLI", () => {
     assert.equal(result.stderr, "");
   });
 
-  for (const failedPath of ["template", "log", "fixDir"] as const) {
+  for (const failedPath of ["log", "fixDir"] as const) {
     it(`returns I/O error 1 when ${failedPath} access fails`, () => {
       const { home, options } = fixture();
-      if (failedPath === "template") rmSync(options[failedPath]);
-      else if (failedPath === "log") mkdirSync(options.log);
+      if (failedPath === "log") mkdirSync(options.log);
       else if (failedPath === "fixDir") writeFileSync(options.fixDir, "not a directory");
       const result = invoke(home, [home]);
       assert.equal(result.code, 1, result.stderr);

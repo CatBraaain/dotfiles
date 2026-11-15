@@ -72,32 +72,35 @@ dispatcher は ticket store から起動可能な ticket を探してプロン�
 
 | コマンド | 動作 |
 | --- | --- |
-| `ticket dispatch start [<work-dir>] [--max N] [--interval SEC] [--prefix NAME] [--template FILE]` | dispatcher を detached tmuxセッションで起動する |
-| `ticket dispatch [<work-dir>] [--max N] [--interval SEC] [--prefix NAME] [--template FILE]` | `start` と同じ動作 |
+| `ticket dispatch start [<work-dir>] [--max N] [--interval SEC] [--prefix NAME]` | dispatcher を detached tmuxセッションで起動する |
+| `ticket dispatch [<work-dir>] [--max N] [--interval SEC] [--prefix NAME]` | `start` と同じ動作 |
 | `ticket dispatch stop` | 現在のproject の dispatcher を停止する |
 
 project は「共通の振る舞い」の project未指定時と同じ cwdベースの解決で選ぶ。同じproject に解決される別の cwd・worktree からも同じ dispatcher を操作する。
 
 #### 入力と配置
 
-`<work-dir>` は省略できる。省略時は start を呼び出したプロセスの cwd が `WORK` になる。指定した `<work-dir>` の相対パスは同じ cwd を基準に解決する。stop は位置引数・オプションを受け付けず、ticket store の存在や内容に依存せず操作できる。start は次の4オプションを受け付ける。
+`<work-dir>` は省略できる。省略時は start を呼び出したプロセスの cwd が `WORK` になる。指定した `<work-dir>` の相対パスは同じ cwd を基準に解決する。stop は位置引数・オプションを受け付けず、ticket store の存在や内容に依存せず操作できる。start は次の3オプションを受け付ける。
 
 | オプション | 既定値 | 内容 |
 | --- | --- | --- |
 | `--max N` | `5` | 同時稼働数の上限。1以上の整数 |
 | `--interval SEC` | `30` | tick間隔の秒数。0より大きい有限の数値、小数可 |
 | `--prefix NAME` | `fix_` | piセッション名の接頭辞 |
-| `--template FILE` | `WORK/fix-prompt-template.txt` | プロンプトテンプレートのパス |
 
 | 入出力 | パス・規則 |
 | --- | --- |
-| template | `__TICKET_ID__` の全出現を ticket ID へ置換してプロンプトを生成する |
+| 固定本文 | CLI同梱の `dispatch-prompt.md` の冒頭 `ticket {{ TICKET_ID }}` に ticket ID を文字どおり埋め込む |
 | prompt | `WORK/fix/prompt-<ID>.txt` |
 | log | `WORK/dispatch.log` へ追記する |
 | dispatcher・pi の cwd | start を呼び出したプロセスの cwd |
 | tmux socket | `/run/user/1000/pi-tmux/server.sock`。`TICKET_TEST_TMUX_SOCKET` 指定時はその socket を使う |
 
-template は起動時に読み込む。dispatch は ticket を変更しない。dispatch の引数、ticket読取り、ログ、終了条件は本節に従う。
+固定本文は dispatch の実行ごとに読み込む。作業ディレクトリにテンプレートを用意する必要はなく、ソースからの実行とコンパイル済みCLI のどちらでも同梱本文を使う。dispatch は ticket を変更しない。dispatch の引数、ticket読取り、ログ、終了条件は本節に従う。
+
+#### 固定プロンプトと user への説明
+
+生成するプロンプトは、起動したpi に `ticket {{ TICKET_ID }}` の1件対処を依頼し、作業とticket更新は skill `tickets` に従わせる。pi は user がticketを読んでいない前提で、最初・判断を求めるとき・終了時にチャットで説明する。`closed` にするとdispatcher がセッションを終了するため、必要な承認・記録・説明を済ませて最後に更新する。
 
 #### start と stop
 
@@ -105,7 +108,7 @@ template は起動時に読み込む。dispatch は ticket を変更しない。
 
 | 条件・操作 | 結果 |
 | --- | --- |
-| dispatcher が未起動で start | template・ticket store を読み、fixディレクトリ作成と log書込みが可能なことを確認して、project を識別する名前の detached tmuxセッションを作る |
+| dispatcher が未起動で start | 固定本文・ticket store を読み、fixディレクトリ作成と log書込みが可能なことを確認して、project を識別する名前の detached tmuxセッションを作る |
 | dispatcher用tmuxセッションの作成成功 | セッション名と logパスを stdout へ出し、呼出元CLI は終了コード0で戻る。全ticket の完了を待たない |
 | 同じproject の dispatcher が起動済みで start | 既存セッション名と起動済みである旨を stdout へ出して終了コード0。既存の起動条件・監視を保持する |
 | dispatcher が起動中で stop | dispatcher用セッションだけを終了し、停止した旨を stdout へ出して終了コード0。起動済みpi は作業を続ける |
@@ -147,9 +150,9 @@ ID `X` のセッション名は、`--prefix` に `X` の `.` を `_` へ全置�
 | --- | --- |
 | start の余分な位置引数、空の `<work-dir>`、未知のオプション、値の不足、`--max` / `--interval` の値の不正、stop への引数指定 | usage を呼出元CLI の stderr へ出し、終了コード2 |
 | 新規start の事前確認で ticket の値・状態・環境が不正 | 既存CLI と同じ validationエラーを呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動しない |
-| 新規start の事前確認で template読込み・fixディレクトリ作成・log書込みに失敗 | `I/O error: <エラー内容>` を呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動しない |
+| 新規start の事前確認で固定本文読込み・fixディレクトリ作成・log書込みに失敗 | `I/O error: <エラー内容>` を呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動しない |
 | dispatcher用tmuxセッションの作成、または稼働中dispatcher の停止に失敗 | 操作と理由を呼出元CLI の stderr へ出し、終了コード1 |
-| start成功後に ticket読取り、template読込み、prompt・log書込みなどの継続不能なエラー | エラーを dispatcher の stderr へ出し、log が書込み可能なら同じエラーを追記して dispatcher用セッションを終了する。起動済みpi は作業を続け、呼出元CLI の終了コードは変化しない |
+| start成功後に ticket読取り、固定本文読込み、prompt・log書込みなどの継続不能なエラー | エラーを dispatcher の stderr へ出し、log が書込み可能なら同じエラーを追記して dispatcher用セッションを終了する。起動済みpi は作業を続け、呼出元CLI の終了コードは変化しない |
 
 #### ライフサイクル
 
