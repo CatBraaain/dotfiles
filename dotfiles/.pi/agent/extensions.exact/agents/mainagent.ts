@@ -124,7 +124,7 @@ export function registerMainagentTool(pi: ExtensionAPI): void {
   ): Promise<ApprovalDecision> {
     const generation = turnGeneration;
     const details = [
-      `initial request: ${input.prompt.slice(0, PREVIEW_LENGTH)}`,
+      `prompt: ${input.prompt.slice(0, PREVIEW_LENGTH)}`,
       ...(input.cwd === undefined ? [] : [`cwd: ${sessionCwd}`]),
     ].join("\n");
     if (typeof context.ui.select !== "function") {

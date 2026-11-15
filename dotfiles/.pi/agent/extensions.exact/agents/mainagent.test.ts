@@ -374,7 +374,7 @@ describe("承認", () => {
     );
     assert.deepEqual(calls.selections, [
       {
-        title: "Allow creating a new main-agent session?\ninitial request: fix the failing build",
+        title: "Allow creating a new main-agent session?\nprompt: fix the failing build",
         options: [
           "Allow once",
           "Allow in this turn",
@@ -413,7 +413,7 @@ describe("承認", () => {
     );
     assert.equal(
       calls.selections[0]?.title,
-      `Allow creating a new main-agent session?\ninitial request: ${"x".repeat(80)}\ncwd: /repo/sub/dir`,
+      `Allow creating a new main-agent session?\nprompt: ${"x".repeat(80)}\ncwd: /repo/sub/dir`,
     );
     const script = parse(executor.commands[0]!)[2] as string;
     const tokens = parse(script);
