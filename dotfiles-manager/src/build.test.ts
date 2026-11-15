@@ -1505,10 +1505,7 @@ describe("local build hooks", () => {
 
     await main(root, "linux", homeRoot);
 
-    assert.equal(
-      await readFile(join(distRoot, "app.conf"), "utf8"),
-      "mode=dev\nmode=prod\n",
-    );
+    assert.equal(await readFile(join(distRoot, "app.conf"), "utf8"), "mode=dev\nmode=prod\n");
   });
 
   it("skips transform when the dist-side target does not exist", async () => {
