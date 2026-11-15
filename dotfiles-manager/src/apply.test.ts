@@ -235,6 +235,35 @@ describe("apply classification matrix", () => {
     assert.equal(existsSync(join(homeRoot, "dir/untracked.txt")), true);
   });
 
+  it.each([
+    ["linux", ".local/share/fcitx5/rime"] as const,
+    ["win32", "AppData/Roaming/Rime"] as const,
+  ])("preserves existing Rime userdb fixtures on %s", async (platform, rimePath) => {
+    await put(distRoot, `${rimePath}/default.custom.yaml`, "new settings\n");
+    await put(homeRoot, `${rimePath}/default.custom.yaml`, "old settings\n");
+    const userdbPath = join(homeRoot, rimePath, "userdb", "test.userdb");
+    await mkdir(userdbPath, { recursive: true });
+    const fixtures = new Map([
+      ["CURRENT", Buffer.from([0x00, 0xff, 0x10, 0x80])],
+      ["MANIFEST-000001", Buffer.from([0x4c, 0x53, 0x4d, 0x00, 0xfe])],
+    ]);
+    for (const [name, content] of fixtures) {
+      await writeFile(join(userdbPath, name), content);
+    }
+
+    await diffAndApply(platform);
+
+    assert.equal(
+      await readFile(join(homeRoot, rimePath, "default.custom.yaml"), "utf8"),
+      "new settings\n",
+    );
+    assert.equal((await stat(userdbPath)).isDirectory(), true);
+    assert.deepEqual((await readdir(userdbPath)).sort(), [...fixtures.keys()].sort());
+    for (const [name, content] of fixtures) {
+      assert.deepEqual(await readFile(join(userdbPath, name)), content);
+    }
+  });
+
   it("recursively applies children omitted beneath a type-mismatch directory", async () => {
     await put(distRoot, "entry/inner.txt", "x\n");
     await put(homeRoot, "entry", "i was a file\n");
