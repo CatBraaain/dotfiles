@@ -1,8 +1,19 @@
 // Materialize external.data.yaml entries from GitHub mirrors after all path maps.
 import { type Dirent, existsSync, statSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
+import { editMarkdown, normalizeMarkdownEdits, type MarkdownEdit } from "./build-edit-markdown.ts";
 import {
   guestMirrorPath,
   mirrorRoot,
@@ -11,7 +22,7 @@ import {
   runProcess,
   type WslConnection,
 } from "./wsl.ts";
-import { parse as parseYaml } from "yaml";
+import { parseDocument } from "yaml";
 
 const externalFileName = "external.data.yaml";
 
@@ -24,6 +35,7 @@ type ExternalRepo = {
   ttlMs: number;
   runAfter: string[][];
   edits: TextEdit[];
+  markdownEdits: MarkdownEdit[];
 };
 type ExternalConfig = { repos: ExternalRepo[] };
 type SyncContext = {
@@ -107,6 +119,7 @@ export async function applyExternals(distDir: string, connection?: WslConnection
           join(dirname(configPath), repo.destination),
           repo.entries,
           repo.edits,
+          repo.markdownEdits,
         );
       }),
     );
@@ -125,11 +138,22 @@ async function loadExternalConfig(configPath: string): Promise<ExternalConfig> {
 }
 
 async function readExternalRepos(configPath: string): Promise<ExternalRepo[]> {
-  const doc: unknown = parseYaml(await readFile(configPath, "utf-8"));
+  const document = parseDocument(await readFile(configPath, "utf-8"));
+  if (document.errors.length > 0) throw document.errors[0];
+  const doc: unknown = document.toJS();
   const repos = (doc as { repos?: unknown })?.repos;
   if (!isPlainObject(repos))
     throw new Error(`${basename(configPath)} must have a repos mapping: ${configPath}`);
-  return Object.entries(repos).map(([repo, raw]) => normalizeRepo(`repos.${repo}`, repo, raw));
+  const ordered: unknown = document.toJS({ mapAsMap: true });
+  const orderedRepos: unknown = ordered instanceof Map ? ordered.get("repos") : undefined;
+  return Object.entries(repos).map(([repo, raw]) =>
+    normalizeRepo(
+      `repos.${repo}`,
+      repo,
+      raw,
+      orderedRepos instanceof Map ? orderedRepos.get(repo) : undefined,
+    ),
+  );
 }
 
 async function syncMirror(
@@ -232,13 +256,22 @@ async function copyRepoEntries(
   destinationDir: string,
   entries: string[],
   edits: TextEdit[],
+  markdownEdits: MarkdownEdit[],
 ): Promise<void> {
   const resolvedEdits = edits.map((edit, index) => ({
     ...edit,
     filePath: resolveEditFile(mirrorDir, edit.path),
     index,
   }));
+  const resolvedMarkdownEdits = await Promise.all(
+    markdownEdits.map(async (edit, index) => ({
+      ...edit,
+      filePath: await resolveMarkdownFile(mirrorDir, edit),
+      index,
+    })),
+  );
   const appliedEditIndexes = new Set<number>();
+  const appliedMarkdownIndexes = new Set<number>();
 
   for (const entry of entries) {
     const entryPath = await resolveEntryPath(mirrorDir, entry);
@@ -251,7 +284,10 @@ async function copyRepoEntries(
     }
     const skillDir = entryPath;
     const entryEdits = resolvedEdits.filter(({ filePath }) => isPathInside(skillDir, filePath));
-    if (entryEdits.length === 0) {
+    const entryMarkdownEdits = resolvedMarkdownEdits.filter(({ filePath }) =>
+      isMarkdownPathInside(skillDir, filePath),
+    );
+    if (entryEdits.length === 0 && entryMarkdownEdits.length === 0) {
       await copyTree(skillDir, join(destinationDir, basename(skillDir)), shouldCopySkillEntry);
       continue;
     }
@@ -272,6 +308,21 @@ async function copyRepoEntries(
         }
         appliedEditIndexes.add(edit.index);
       }
+      for (const edit of entryMarkdownEdits) {
+        const filePath = join(stagingDir, relative(skillDir, edit.filePath));
+        try {
+          const source = existsSync(filePath) ? await readFile(filePath, "utf8") : "";
+          await writeFile(filePath, editMarkdown(source, edit));
+        } catch (error) {
+          throw new Error(
+            `${edit.label}: ${error instanceof Error ? error.message : String(error)}`,
+            {
+              cause: error,
+            },
+          );
+        }
+        appliedMarkdownIndexes.add(edit.index);
+      }
       await copyTree(stagingDir, join(destinationDir, basename(skillDir)), shouldCopySkillEntry);
     } finally {
       await rm(stagingDir, { recursive: true, force: true });
@@ -283,6 +334,51 @@ async function copyRepoEntries(
       throw new Error(`edit path is not included in entries: ${edit.path}`);
     }
   }
+  for (const edit of resolvedMarkdownEdits) {
+    if (!appliedMarkdownIndexes.has(edit.index)) {
+      throw new Error(`${edit.label}: edit_markdown path is not included in folder entries`);
+    }
+  }
+}
+
+async function resolveMarkdownFile(mirrorDir: string, edit: MarkdownEdit): Promise<string> {
+  try {
+    const path = edit.path;
+    const filePath = resolve(mirrorDir, path);
+    if (
+      !path ||
+      isAbsolute(path) ||
+      win32.isAbsolute(path) ||
+      /[*?[\]{}\0]/.test(path) ||
+      /[\\/]$/.test(path) ||
+      !isMarkdownPathInside(mirrorDir, filePath)
+    ) {
+      throw new Error("path must be a relative non-glob file inside the repository");
+    }
+    const root = await realpath(mirrorDir);
+    const parent = await realpath(dirname(filePath));
+    if (
+      (parent !== root && !isMarkdownPathInside(root, parent)) ||
+      !statSync(parent).isDirectory()
+    ) {
+      throw new Error("parent directory must exist inside the repository");
+    }
+    const stat = await lstat(filePath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (stat && !stat.isFile()) throw new Error("path must be a regular file");
+    return filePath;
+  } catch (error) {
+    throw new Error(`${edit.label}: ${error instanceof Error ? error.message : String(error)}`, {
+      cause: error,
+    });
+  }
+}
+
+function isMarkdownPathInside(parent: string, candidate: string): boolean {
+  const child = relative(parent, candidate);
+  return child !== "" && child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
 }
 
 function resolveEditFile(mirrorDir: string, path: string): string {
@@ -338,7 +434,7 @@ async function readRevision(
 
 // ------------------------------------------------------------- config format
 
-function normalizeRepo(prefix: string, repo: string, raw: unknown): ExternalRepo {
+function normalizeRepo(prefix: string, repo: string, raw: unknown, ordered: unknown): ExternalRepo {
   if (!isPlainObject(raw)) throw new Error(`${prefix} must be a mapping`);
   if (
     typeof raw.destination !== "string" ||
@@ -351,6 +447,14 @@ function normalizeRepo(prefix: string, repo: string, raw: unknown): ExternalRepo
     (typeof raw.ttlHours !== "number" || !Number.isFinite(raw.ttlHours) || raw.ttlHours <= 0)
   )
     throw new Error(`${prefix}.ttlHours must be a positive number`);
+  const sectionOrder = new Map<string, string[]>();
+  const orderedEdits: unknown = ordered instanceof Map ? ordered.get("edit_markdown") : undefined;
+  if (orderedEdits instanceof Map) {
+    for (const [path, fields] of orderedEdits) {
+      const sections: unknown = fields instanceof Map ? fields.get("sections") : undefined;
+      if (sections instanceof Map) sectionOrder.set(String(path), [...sections.keys()].map(String));
+    }
+  }
   return {
     repo,
     destination: raw.destination,
@@ -358,6 +462,11 @@ function normalizeRepo(prefix: string, repo: string, raw: unknown): ExternalRepo
     ttlMs: (typeof raw.ttlHours === "number" ? raw.ttlHours : defaultTtlHours) * 60 * 60 * 1000,
     runAfter: normalizeCommands(`${prefix}.run_after`, raw.run_after ?? []),
     edits: normalizeEdits(`${prefix}.edit`, raw.edit === undefined ? {} : raw.edit),
+    markdownEdits: normalizeMarkdownEdits(
+      `${prefix}.edit_markdown`,
+      raw.edit_markdown === undefined ? {} : raw.edit_markdown,
+      sectionOrder,
+    ),
   };
 }
 

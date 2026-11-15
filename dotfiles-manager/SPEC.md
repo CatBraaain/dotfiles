@@ -129,11 +129,81 @@ Windows で実行するbuild と内部CLI は、外部取得と GitAlias のた�
 
 mirror がなければ shallow cloneし、存在するときは前回の取得から `ttlHours`（既定6時間）が経過すると `git pull --ff-only` で更新する。`BUILD_FORCE_PULL=1` は更新を強制する。Git pull が非0 を返したときは、mirror にアクセスできれば警告を表示して既存mirror を利用する。WSL/bridge の失敗は pull の警告として扱わず異常終了する。`entries` のファイルやフォルダを `destination` にコピーし、`run_after` が空でなく、clone または更新前後の HEAD に変更があった場合だけ、mirror cwd で `git clean -fdX` の後に `run_after` の argv配列を記載順に実行してからコピーする。WSL mirror を使うWindows ではこれらを同じWSL内で実行し、Windowsローカルmirror では Windows の mirror cwd で実行する。mirror の `.git/build-pull-time` に epochミリ秒を保存し、clone / 成功したpull（HEAD不変を含む）の後、`run_after` より前に更新する。TTL内の省略と失敗したpull では stamp を保持する。
 
-`edit` の `.$append` は取得したフォルダ内の対象ファイルに指定テキストを追記する。同じフォルダの `external.data-machine.yaml` があればリポジトリ単位で共有設定を置き換える。このマシン固有ファイルは `dotfiles/` 内の設置階層によらずgitignore の対象となる。
+同じフォルダの `external.data-machine.yaml` があればリポジトリ単位で共有設定を置き換える。このマシン固有ファイルは `dotfiles/` 内の設置階層によらずgitignore の対象となる。
 
 同じ設定の repo は並列に処理し、失敗時は build を中断する。外部取得はローカルフックの実行ログに現れない。
 
 ルートの `.gitconfig.build.ts` は Linux と Windows で `GitAlias/gitalias` の同じGitHub mirror・既定6時間の更新規則を使い、`gitalias.txt` を dist の `.gitconfig` に追記する。Windows では `context.syncGithubMirror` を使い、WSL が使えるなら §Windows の WSL接続 の mirror を、`wsl.exe` が存在しなければ Windowsローカルmirror を使う。Linux ではフック内のローカル同期が home直下の mirror を同じ規則で同期する。同名の alias が `.gitconfig` に手書きされている場合は手書きの値を有効にする。macOS では追記しない。`.gitconfig` は別ファイルの `.gitconfig.alias` を includeしない。
+
+### 取得ファイルの編集
+
+各repo に `edit` と `edit_markdown` を任意で指定できる。編集パスは取得元リポジトリのルート相対であり、`destination` 相対ではない。両編集は `entries` で選択したフォルダ配下のファイルに適用する。ファイル単体のentry は編集対象にならず、どのフォルダentry にも含まれない編集パスはエラーになる。対象ファイルがない場合は空文字列から開始するが、その親フォルダは取得元に存在する必要がある。
+
+編集は `run_after` 後の取得内容に毎build適用し、mirror の内容を変更しない。`edit`、`edit_markdown` の順に適用してから `destination` へコピーする。フォルダentry のコピーでは、既にdist にある同名ファイルを保持する。
+
+`edit` は `<取得元ファイルパス>.$append` と文字列のmapping とする。対象の末尾が改行でない場合だけ改行を1つ挟み、指定テキストを追記する。空ファイルには区切りを加えない。
+
+### Markdown のfield・節の上書き
+
+`edit_markdown` は取得元ファイルパスをキー、次の2項目を持つmapping を値とする。同じファイルでは `frontmatter`、`sections` の順に適用する。両項目は省略でき、省略した項目は変更しない。空のmapping は何もしない。
+
+| 項目 | 入力 | 結果 |
+| --- | --- | --- |
+| `frontmatter` | field名とYAML値のmapping | 指定field の値を丸ごと上書きし、field がなければ追加する |
+| `sections` | 見出し名とMarkdown本文の文字列のmapping | 一致する節の本文を上書きし、節がなければ文書末尾へ追加する |
+
+```yaml
+repos:
+  example/skills:
+    destination: .
+    entries:
+      - skills/example
+    edit_markdown:
+      skills/example/SKILL.md:
+        frontmatter:
+          description: Use this skill to check project files.
+          metadata:
+            category: development
+        sections:
+          Local workflow: |
+            Follow the project's validation commands.
+```
+
+#### frontmatter
+
+先頭BOM は許容して保持し、frontmatter の認識時には除いて扱う。その先頭行が `---` である場合、次の `---` 行までをYAML frontmatter とする。区切り行は改行を除いて厳密に `---` と一致するものとし、末尾空白を認めない。閉じ区切りがない場合、不正なYAML、キー重複、ルートがmapping でない場合はエラーになる。YAML はstrict に解釈し、ネストしたmapping のキー重複も拒否する。
+
+`frontmatter` のfield名はトップレベルのキーそのものとし、点を含む名前も文字通り扱う。指定値は文字列・数値・真偽値・null・配列・mapping の6種とし、それ以外の型はエラーになる。配列とmapping もfield全体を置き換える。指定外field の値は保持する。frontmatter がない文書では、指定field を持つ `---` 区切りのfrontmatter を先頭（BOM があればその直後）に追加する。
+
+生成するfrontmatter の改行はLF とする。frontmatter更新ではYAML部分の表記が変わることがあるが、後続のMarkdown本文は原文のまま保持する。`sections` だけを指定した場合、既存frontmatter の表記もそのまま保持する。
+
+#### sections
+
+見出しの認識は [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/) のATX見出しとSetext見出しに従い、文書直下の見出しだけを対象とする。frontmatter、コードブロック、引用、リスト内の見出しは節の選択にも境界判定にも使わない。
+
+キーは見出し記号を含まない見出し内容の原文とし、前後の空白を除いて、大文字小文字を区別して一致させる。インライン装飾の解釈や見出しレベルによる絞り込みは行わない。空白除去後に空文字列または同名になるキー、改行を含むキーはエラーになる。
+
+節の本文は見出し全体（Setext の下線行を含む）の直後から、次の同じか浅いレベルの見出しの直前、または文書末尾までとする。深いレベルの小節も本文に含む。
+
+| 一致する見出しの数 | 結果 |
+| --- | --- |
+| 1つ | 見出しの表記とレベルを保持し、本文を指定値で置き換える |
+| 0 | `## <見出し名>` と指定本文からなるレベル2の節を文書末尾へ追加する |
+| 2つ以上 | レベルが異なる場合も、対象を一意に選べないためエラーになる |
+
+すべての選択先は編集前の本文から決める。同時に指定した節同士が包含関係にある場合はエラーになる。追加する節はmapping の記載順に並べる。指定本文に文書直下の見出しがある場合、そのレベルは対象節より深い必要があり、同じか浅い見出しはエラーになる。
+
+置換する本文は、見出しとの間に空行1行を置き、指定値の前後の改行を除いた本文と末尾改行1つで書く。次の節があるときは空行1行で区切る。新規節の追加では、文書が空（先頭BOM を除く）なら先行空行を置かない。それ以外では追加位置の末尾改行だけを補正し、新規節の前に空行1行を設ける。末尾改行がない場合も、改行を補ってこの区切りを設ける。生成する改行はLF とし、編集対象の本文と追加位置の末尾改行の補正範囲以外は、改行コード・空白・装飾を含め元のテキストを保持する。文書全体を再整形しない。
+
+更新後も各指定節を一意に選べ、その本文範囲が今回置換・追加した本文範囲と一致することを必須とし、満たせない場合はエラーになる。同じ `edit_markdown` を結果へ再適用しても内容は変わらず、追加した節は二重化しない。独自の追加節を管理する場合も、同じ見出し名を使い続ける。
+
+#### 入力エラー
+
+この項のパス制約と詳細な入力エラー規則は `edit_markdown` に適用する。既存の `edit` の拒否条件は変更しない。
+
+`edit_markdown`、ファイルごとの値、`frontmatter`、`sections` がmapping でない場合、`sections` の値が文字列でない場合、ファイルごとの値に上記2項目以外がある場合はエラーになる。`edit_markdown` の編集パスは空でない通常ファイルの相対パスとし、絶対パス、取得フォルダの外へ解決されるパス、glob を含むパスはエラーになる。
+
+`edit_markdown` のエラーにはrepo と対象の取得元ファイルパス、原因となるfield名または見出し名を含める。失敗後のbuild の扱いは §エラーと終了コード に従う。
 
 ## build: merge変換
 
