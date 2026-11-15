@@ -1,5 +1,5 @@
-// Applies the checked-in MS-IME key-settings snapshot (msime-stylelist-
-// custom.reg, an export of HKCU\...\IMEJP\StyleList\Custom) to the registry,
+// Applies the checked-in MS-IME key-settings snapshot (key-settings.reg,
+// an export of HKCU\...\IMEJP\StyleList\Custom) to the registry,
 // or with --diff shows what would change, down to the individual key-
 // assignment records inside REG_BINARY values. Apply always backs the current
 // key up to a temp .reg first; --diff never writes the registry.
