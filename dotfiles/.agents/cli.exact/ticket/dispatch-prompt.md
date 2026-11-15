@@ -1,4 +1,4 @@
-ticket {{ TICKET_ID }} に対応する。skill `tickets` に従う。
+ticket {{ TICKET_ID }} に対応する。
 
 user はticketを読んでいない前提で、対象の機能・利用場面から説明する。ticket のタイトルや内部用語だけで話を進めず、次をチャットで伝える。
 
