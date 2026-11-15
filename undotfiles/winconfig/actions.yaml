@@ -1,0 +1,96 @@
+Actions:
+  Appearance:
+    SystemDarkMode: apply
+    AppDarkMode: apply
+
+  Windows:
+    DisableWindowsSuggestions: apply
+    EnableWindowsRestoreLastSession: skip
+
+  Taskbar:
+    AlignTaskbarLeft: apply
+    EnableEndTaskMenu: apply
+    HideSearch: apply
+    HideTaskView: apply
+    HideWidgets: apply
+    ShowClockSeconds: apply
+    MultiMonitorTaskbar: apply
+
+  Desktop:
+    HideRecycleBin: apply
+
+  NotificationCenter:
+    ShowClock: apply
+
+  Settings:
+    HideSuggestions: apply
+
+  StartMenu:
+    DisableBingSearch: apply
+    HideRecommendations: apply
+    HideAccountNotifications: apply
+    CreateGodModeFolder: apply
+
+  FileExplorer:
+    ShowHiddenFiles: apply
+    ShowFileExtensions: apply
+    HideHome: apply
+    HideGallery: apply
+    DisableOneDrive: apply
+    DisableGroupView: apply
+    EnableRestoreLastSession: revert
+    HideRecentFiles: apply
+    HideFrequentFolders: apply
+    DisableShortcutSuffix: apply
+
+  Security:
+    DisableUnsafeFileMarking: apply
+    DisableSmartAppControl: apply
+
+  ContextMenu:
+    ClassicContextMenu: apply
+    ExpandSelectionLimit: apply
+    HideClipchamp: apply
+    HideEditWithPhotos: apply
+    HideEditWithPaint: apply
+    HideEditWithNotepad: apply
+    HideExtractAll: apply
+    HideOpenInWindowsTerminal: apply
+    HidePrint: apply
+    HideCompressedFolder: apply
+    HideSearchMsStore: apply
+    HideShare: apply
+    HideAddToFavorites: apply
+    HidePreviousVersions: apply
+    HideSendTo: apply
+    HideAddToLibrary: apply
+    HideGiveAccessTo: apply
+    HidePinToStartScreen: apply
+
+  MouseKeyboard:
+    DisableMouseAcceleration: apply
+    DisableF1HelpShortcut: apply
+    DisableStickyShift: apply
+    FastKeyRepeat: apply
+    DisableTouchPad: apply
+
+  Sound:
+    DisableSystemSound: apply
+
+  Background:
+    DisableAutoDeleteTemp: apply
+    DisableXboxGameBar: apply
+
+  PowerPlan:
+    HighPerformancePlan: apply
+    DisableAutoSleep: apply
+
+  Personalization:
+    OpenWithCode: apply
+    EditSharexContextMenu: apply
+    EditMouseSensitivity: apply
+    EditWindowsPATH: apply
+    SetAdvancedKeyRepeat: revert
+    DisablePythonAppExecutionAlias: apply
+    HideTortoiseGit: apply
+    BrowserifyExplorerContextMenu: apply

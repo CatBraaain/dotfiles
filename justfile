@@ -64,11 +64,8 @@ managed:
   bun dotfiles-manager managed
 
 [windows]
-winconfig:
-  gsudo { \
-    winconfig schema undotfiles/winconfig/winconfig.yaml --output undotfiles/winconfig/winconfig.schema.json --strict; \
-    winconfig run undotfiles/winconfig/winconfig.yaml; \
-  }
+winconfig *args:
+  gsudo bun undotfiles/winconfig/engine.ts {{args}}
 
 [windows]
 wintasks:

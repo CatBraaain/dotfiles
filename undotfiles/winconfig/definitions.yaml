@@ -1,0 +1,1030 @@
+Definitions:
+  Appearance:
+    SystemDarkMode:
+      description: Enable dark mode for system, including the taskbar and title bar.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize
+          entries:
+            - name: SystemUsesLightTheme
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+    AppDarkMode:
+      description: Enable dark mode for apps.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize
+          entries:
+            - name: AppsUseLightTheme
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+
+  Windows:
+    DisableWindowsSuggestions:
+      description: Disable Windows welcome experience, tips, and SCOOBE.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager
+          entries:
+            # Windows welcome experience
+            - name: SubscribedContent-310093Enabled
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+            # Suggestions in Start
+            - name: SystemPaneSuggestionsEnabled
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+            # Suggestions in LockScreen
+            - name: RotatingLockScreenOverlayEnabled
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+        - path: HKLM\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager
+          entries:
+            # Windows tips
+            - name: SubscribedContent-338388Enabled
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+            # Windows tips
+            - name: SubscribedContent-338389Enabled
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement
+          entries:
+            # Windows SCOOBE experience
+            - name: ScoobeSystemSettingEnabled
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+    EnableWindowsRestoreLastSession:
+      description: Automatically reopens some apps that were opened last time when starting the OS.
+      registries:
+        - path: HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Winlogon
+          entries:
+            - name: RestartApps
+              type: DWord
+              new_value: "1"
+              old_value: "0"
+
+  Taskbar:
+    AlignTaskbarLeft:
+      description: Show Taskbar items on the left, like it was in Windows 10.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced
+          entries:
+            - name: TaskbarAl
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+    EnableEndTaskMenu:
+      description: >-
+        Adds an "End task" option to the taskbar right-click menu,
+        allowing you to terminate unresponsive apps without opening Task Manager.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\TaskbarDeveloperSettings
+          entries:
+            - name: TaskbarEndTask
+              type: DWord
+              new_value: "1"
+              old_value: <NotExist>
+    HideSearch:
+      description: Hide Search button on the Taskbar. You can use Start menu search instead.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Search
+          entries:
+            - name: SearchboxTaskbarMode
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+    HideTaskView:
+      description: Hide Task View button on the Taskbar. You can use Alt+Tab or Win+Tab instead.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced
+          entries:
+            - name: ShowTaskViewButton
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+    HideWidgets:
+      description: Hide Widgets button on the Taskbar, which provides Weather and News information.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced
+          entries:
+            - name: TaskbarDa
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+    ShowClockSeconds:
+      description: Show seconds in the Taskbar clock.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced
+          entries:
+            - name: ShowSecondsInSystemClock
+              type: DWord
+              new_value: "1"
+              old_value: "0"
+    MultiMonitorTaskbar:
+      description: Show Taskbar on all monitors.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced
+          entries:
+            - name: MMTaskbarEnabled
+              type: DWord
+              new_value: "1"
+              old_value: "0"
+            - name: MMTaskbarMode
+              type: DWord
+              new_value: "1"
+              old_value: "0"
+
+  Desktop:
+    HideRecycleBin:
+      description: Hide "Recycle Bin" icon on the Desktop.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel
+          entries:
+            - name: "{645FF040-5081-101B-9F08-00AA002F954E}"
+              type: DWord
+              new_value: "1"
+              old_value: "0"
+
+  NotificationCenter:
+    ShowClock:
+      description: Show time in Notification Center like it was in Windows 10.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced
+          entries:
+            - name: ShowClockInNotificationCenter
+              type: DWord
+              new_value: "1"
+              old_value: "0"
+
+  Settings:
+    HideSuggestions:
+      description: Hide suggestions in Settings.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager
+          entries:
+            - name: SubscribedContent-338393Enabled
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+            - name: SubscribedContent-353694Enabled
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+            - name: SubscribedContent-353696Enabled
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+
+  StartMenu:
+    DisableBingSearch:
+      description: Disable Bing web search in Start menu search.
+      registries:
+        - path: HKCU\Software\Policies\Microsoft\Windows\Explorer
+          entries:
+            - name: DisableSearchBoxSuggestions
+              type: DWord
+              new_value: "1"
+              old_value: "0"
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Search
+          entries:
+            - name: BingSearchEnabled
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+    HideRecommendations:
+      description: Hide recommendations in Start menu.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced
+          entries:
+            - name: Start_IrisRecommendations
+              type: DWord
+              new_value: <NotExist>
+              old_value: "1"
+        - path: HKCU\Software\Policies\Microsoft\Windows\Explorer
+          entries:
+            - name: HideRecommendedSection
+              type: DWord
+              new_value: "1"
+              old_value: <NotExist>
+    HideAccountNotifications:
+      description: Hide Microsoft account-related notifications in Start menu.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced
+          entries:
+            - name: Start_AccountNotifications
+              type: DWord
+              new_value: "0"
+              old_value: <NotExist>
+    CreateGodModeFolder:
+      description: Create a God Mode folder in Start menu, which you can find in Start menu search.
+      script:
+        apply: |-
+          $startMenuPath = "$env:AppData\Microsoft\Windows\Start Menu\Programs"
+          $shortcutPath = "$startMenuPath\GodMode.lnk"
+          $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($shortcutPath)
+          $shortcut.TargetPath = "explorer.exe"
+          $shortcut.Arguments = "shell:::{ED7BA470-8E54-465E-825C-99712043E01C}"
+          $shortcut.IconLocation = "$env:WinDir\System32\shell32.dll, 21"
+          $shortcut.Save()
+        revert: |-
+          $startMenuPath = "$env:AppData\Microsoft\Windows\Start Menu\Programs"
+          $shortcutPath = "$startMenuPath\GodMode.lnk"
+          Remove-Item -Path $shortcutPath
+
+  FileExplorer:
+    ShowHiddenFiles:
+      description: Show hidden files on File Explorer, such as dotfiles or system files.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced
+          entries:
+            - name: Hidden
+              type: DWord
+              new_value: "1"
+              old_value: "0"
+    ShowFileExtensions:
+      description: Show file extensions on File Explorer.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced
+          entries:
+            - name: HideFileExt
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+    HideHome:
+      description: Hide Home on File Explorer and set This PC as default.
+      registries:
+        - path: HKLM\Software\Microsoft\Windows\CurrentVersion\Explorer\Desktop\NameSpace\{f874310e-b6b7-47dc-bc84-b9e6b38f5903}
+          new_existence: <NotExist>
+          old_existence: <Exist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: <NotExist>
+              old_value: CLSID_MSGraphHomeFolder
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced
+          entries:
+            - name: LaunchTo
+              type: DWord
+              new_value: "1"
+              old_value: <NotExist>
+    HideGallery:
+      description: Hide Gallery on File Explorer and set This PC as default.
+      registries:
+        - path: HKLM\Software\Microsoft\Windows\CurrentVersion\Explorer\Desktop\NameSpace\{e88865ea-0e1c-4e20-9aa6-edcd0212c87c}
+          new_existence: <NotExist>
+          old_existence: <Exist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: <NotExist>
+              old_value: "{e88865ea-0e1c-4e20-9aa6-edcd0212c87c}"
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced
+          entries:
+            - name: LaunchTo
+              type: DWord
+              new_value: "1"
+              old_value: <NotExist>
+    DisableOneDrive:
+      description: Disable OneDrive and hide it on File Explorer.
+      registries:
+        - path: HKLM\Software\Policies\Microsoft\Windows\OneDrive
+          entries:
+            - name: DisableFileSyncNGSC
+              type: DWord
+              new_value: "1"
+              old_value: <NotExist>
+    DisableGroupView:
+      description: Disable group view for files and folders in Downloads folder.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\FolderTypes\{885a186e-a440-4ada-812b-db871b942259}\TopViews\{00000000-0000-0000-0000-000000000000}
+          entries:
+            - name: GroupBy
+              type: String
+              new_value: System.Null
+              old_value: <NotExist>
+    EnableRestoreLastSession:
+      description: Automatically restore previously opened tabs when File Explorer is opened.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced
+          entries:
+            - name: PersistBrowsers
+              type: DWord
+              new_value: "1"
+              old_value: "0"
+    HideRecentFiles:
+      description: Hide recently used files on File Explorer, Start Menu, and Taskbar jump lists.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer
+          entries:
+            - name: ShowRecent
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced
+          entries:
+            - name: Start_TrackDocs
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+    HideFrequentFolders:
+      description: Hide frequently used folders on File Explorer's Quick Access.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer
+          entries:
+            - name: ShowFrequent
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+    DisableShortcutSuffix:
+      description: Disable automatically adding the "- Shortcut" suffix to the file name of newly created shortcuts.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\NamingTemplates
+          entries:
+            - name: ShortcutNameTemplate
+              type: String
+              new_value: "%s.lnk"
+              old_value: <NotExist>
+
+  Security:
+    DisableUnsafeFileMarking:
+      description: Disable marking downloaded files as unsafe, which triggers a warning when opening them.
+      registries:
+        - path: HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\Attachments
+          entries:
+            - name: SaveZoneInformation
+              type: DWord
+              new_value: "1"
+              old_value: <NotExist>
+    DisableSmartAppControl:
+      description: Disable Smart App Control, which blocks all unsafe applications without any whitelist exceptions.
+      registries:
+        - path: HKLM\System\CurrentControlSet\Control\CI\Policy
+          entries:
+            - name: VerifiedAndReputablePolicyState
+              type: DWord
+              new_value: "0"
+              old_value: <NotExist>
+      script:
+        apply: "CiTool --refresh --json"
+        revert: "CiTool --refresh --json"
+
+  ContextMenu:
+    ClassicContextMenu:
+      description: Enable good old Context menus like it was in Windows 10.
+      registries:
+        - path: HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+    ExpandSelectionLimit:
+      description: Enable "Open", "Print", and "Edit" Context menu items even when more than 15 items are selected.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer
+          entries:
+            - name: MultipleInvokePromptMinimum
+              type: DWord
+              new_value: "300"
+              old_value: <NotExist>
+    HideClipchamp:
+      description: Hide "Edit with Clipchamp" item in Context menu.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked
+          entries:
+            - name: "{8AB635F8-9A67-4698-AB99-784AD929F3B4}"
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+    HideEditWithPhotos:
+      description: Hide "Edit with Photos" item in Context menu.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked
+          entries:
+            - name: "{BFE0E2A4-C70C-4AD7-AC3D-10D1ECEBB5B4}"
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+    HideEditWithPaint:
+      description: Hide "Edit with Paint" item in Context menu.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked
+          entries:
+            - name: "{2430F218-B743-4FD6-97BF-5C76541B4AE9}"
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+    HideEditWithNotepad:
+      description: Hide "Edit with Notepad" item in Context menu.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked
+          entries:
+            - name: "{CA6CC9F1-867A-481E-951E-A28C5E4F01EA}"
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+    HideExtractAll:
+      description: Hide "Extract all" item in zip file Context menu.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked
+          entries:
+            - name: "{b8cdcb65-b1bf-4b42-9428-1dfdb7ee92af}"
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+            - name: "{EE07CEF5-3441-4CFB-870A-4002C724783A}"
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+    HideOpenInWindowsTerminal:
+      description: Hide "Open in Windows Terminal" item in Context menu.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked
+          entries:
+            - name: "{9F156763-7844-4DC4-B2B1-901F640F5155}"
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+    HidePrint:
+      description: Hide "Print" item in Context menu for script files.
+      registries:
+        - path: HKCR\batfile\shell\print
+          entries:
+            - name: ProgrammaticAccessOnly
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+        - path: HKCR\cmdfile\shell\print
+          entries:
+            - name: ProgrammaticAccessOnly
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+        - path: HKCR\fonfile\shell\print
+          entries:
+            - name: ProgrammaticAccessOnly
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+        - path: HKCR\htmlfile\shell\print
+          entries:
+            - name: ProgrammaticAccessOnly
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+        - path: HKCR\JSEFile\shell\print
+          entries:
+            - name: ProgrammaticAccessOnly
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+        - path: HKCR\JSFile\shell\print
+          entries:
+            - name: ProgrammaticAccessOnly
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+        - path: HKCR\regfile\shell\print
+          entries:
+            - name: ProgrammaticAccessOnly
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+        - path: HKCR\VBEFile\shell\print
+          entries:
+            - name: ProgrammaticAccessOnly
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+        - path: HKCR\VBSFile\shell\print
+          entries:
+            - name: ProgrammaticAccessOnly
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+        - path: HKCR\xhtmlfile\shell\print
+          entries:
+            - name: ProgrammaticAccessOnly
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+        - path: HKCR\zapfile\shell\print
+          entries:
+            - name: ProgrammaticAccessOnly
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+    HideCompressedFolder:
+      description: Hide "Compressed (zipped) Folder" item in the "New" Context menu.
+      registries:
+        - path: HKCR\.zip\CompressedFolder\ShellNew
+          entries:
+            - name: Data
+              type: Binary
+              new_value: <NotExist>
+              old_value: "80 75 5 6 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+            - name: ItemName
+              type: ExpandString
+              new_value: <NotExist>
+              old_value: "@C:\\Windows\\System32\\zipfldr.dll,-10194"
+    HideSearchMsStore:
+      description: Hide "Look for an app in the Microsoft Store" item in the "Open with" dialog.
+      registries:
+        - path: HKLM\Software\Policies\Microsoft\Windows\Explorer
+          entries:
+            - name: NoUseStoreOpenWith
+              type: DWord
+              new_value: "1"
+              old_value: <NotExist>
+    HideShare:
+      description: Hide "Share" item in Context menu.
+      registries:
+        - path: HKCR\AllFilesystemObjects\ShellEx\ContextMenuHandlers\ModernSharing
+          entries:
+            - name: (default)
+              type: String
+              new_value: ""
+              old_value: "{e2bf9676-5f8f-435c-97eb-11607a5bedf7}"
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked
+          entries:
+            - name: "{e2bf9676-5f8f-435c-97eb-11607a5bedf7}"
+              type: String
+              new_value: Share
+              old_value: <NotExist>
+    HideAddToFavorites:
+      description: Hide "Add to Favorites" item in Context menu.
+      registries:
+        - path: HKCR\*\shell\pintohomefile
+          entries:
+            - name: ProgrammaticAccessOnly
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+        - path: HKCR\Folder\shell\pintohome
+          entries:
+            - name: ProgrammaticAccessOnly
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+        - path: HKCR\Drive\shell\pintohome
+          entries:
+            - name: ProgrammaticAccessOnly
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+    HidePreviousVersions:
+      description: Hide "Previous Versions" item in Context menu.
+      registries:
+        - path: HKCU\Software\Classes\AllFilesystemObjects
+          entries:
+            - name: NoPreviousVersions
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+        - path: HKCU\Software\Classes\Folder
+          entries:
+            - name: NoPreviousVersions
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+    HideSendTo:
+      description: Hide "Send To" item in Context menu.
+      registries:
+        - path: HKCR\AllFilesystemObjects\ShellEx\ContextMenuHandlers\SendTo
+          new_existence: <NotExist>
+          old_existence: <Exist>
+    HideAddToLibrary:
+      description: Hide "Add to Library" item in Context menu.
+      registries:
+        - path: HKCR\Folder\ShellEx\ContextMenuHandlers\Library Location
+          entries:
+            - name: (default)
+              type: String
+              new_value: ""
+              old_value: "{3dad6c5d-2167-4cae-9914-f99e41c12cfa}"
+    HideGiveAccessTo:
+      description: Hide "Give access to" item in Context menu.
+      registries:
+        - path: HKCR\Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Blocked
+          entries:
+            - name: "{f81e9010-6ea4-11ce-a7ff-00aa003ca9f6}"
+              type: String
+              new_value: Give access to
+              old_value: <NotExist>
+    HidePinToStartScreen:
+      description: Hide "Pin to Start Screen" item in Context menu.
+      registries:
+        - path: HKCR\Folder\ShellEx\ContextMenuHandlers\PintoStartScreen
+          entries:
+            - name: "(default)"
+              type: String
+              new_value: "-{470C0EBD-5D73-4d58-9CED-E91E22E23282}"
+              old_value: "{470C0EBD-5D73-4d58-9CED-E91E22E23282}"
+
+  MouseKeyboard:
+    DisableMouseAcceleration:
+      description: Disable mouse acceleration.
+      registries:
+        - path: HKCU\Control Panel\Mouse
+          entries:
+            - name: MouseSpeed
+              type: String
+              new_value: "0"
+              old_value: "1"
+            - name: MouseThreshold1
+              type: String
+              new_value: "0"
+              old_value: "6"
+            - name: MouseThreshold2
+              type: String
+              new_value: "0"
+              old_value: "10"
+    DisableF1HelpShortcut:
+      description: Disable F1 shortcut for opening help.
+      registries:
+        - path: HKCU\Software\Classes\Typelib\{8cec5860-07a1-11d9-b15e-000d56bfe6ee}\1.0\0\win64
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: ""
+              old_value: <NotExist>
+    DisableStickyShift:
+      description: Disable Sticky Keys triggered by pressing Shift five times.
+      registries:
+        - path: HKCU\Control Panel\Accessibility\StickyKeys
+          entries:
+            - name: Flags
+              type: String
+              new_value: "506"
+              old_value: "510"
+    FastKeyRepeat:
+      description: Minimize key repeat delay and maximize key repeat rate.
+      registries:
+        - path: HKCU\Control Panel\Keyboard
+          entries:
+            - name: KeyboardDelay
+              type: String
+              new_value: "0" # 250ms
+              old_value: "1" # 500ms
+            - name: KeyboardSpeed
+              type: String
+              new_value: "31" # 33.3ms
+              old_value: "31" # 33.3ms
+    DisableTouchPad:
+      description: Disable touchpad for laptop.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\PrecisionTouchPad\Status
+          entries:
+            - name: Enabled
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+
+  Sound:
+    DisableSystemSound:
+      description: Disable all system sounds.
+      registries:
+        - path: HKCU\AppEvents\Schemes
+          entries:
+            - name: (Default)
+              type: String
+              new_value: .None
+              old_value: .Default
+      script:
+        apply: |-
+          $events = Get-ChildItem -Path "registry::HKCU\AppEvents\Schemes\Apps" | Get-ChildItem
+          foreach ($event in $events) {
+            $soundSet = Get-ChildItem -Path "registry::$($event.Name)"
+            try {
+              if (".default" -in $soundSet.PSChildName) {
+                $noneSound = ""
+                Set-ItemProperty -Path "registry::$($event.Name)\.current" -Name "(Default)" -Value $noneSound
+              }
+            } catch {}
+          }
+        revert: |-
+          $events = Get-ChildItem -Path "registry::HKCU\AppEvents\Schemes\Apps" | Get-ChildItem
+          foreach ($event in $events) {
+            $soundSet = Get-ChildItem -Path "registry::$($event.Name)"
+            if ( (".current" -in $soundSet.PSChildName) -and (".default" -in $soundSet.PSChildName) ) {
+              try {
+                $defaultSound = Get-ItemPropertyValue -Path "registry::$($event.Name)\.default" -Name "(Default)" -ErrorAction SilentlyContinue
+                Set-ItemProperty -Path "registry::$($event.Name)\.current" -Name "(Default)" -Value $defaultSound
+              }
+              catch {}
+            }
+          }
+
+  Background:
+    DisableAutoDeleteTemp:
+      description: Prevent Storage Sense deleting temporary files automatically.
+      registries:
+        - path: HKCU\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy
+          entries:
+            - name: "01"
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+    DisableXboxGameBar:
+      description: Disable Xbox Game Bar.
+      registries:
+        - path: HKCU:\Software\Microsoft\Windows\CurrentVersion\GameDVR
+          entries:
+            - name: AppCaptureEnabled
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+        - path: HKCU:\System\GameConfigStore
+          entries:
+            - name: GameDVR_Enabled
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+        - path: HKCU\Software\Microsoft\GameBar
+          entries:
+            - name: ShowStartupPanel
+              type: DWord
+              new_value: "0"
+              old_value: "1"
+
+  PowerPlan:
+    HighPerformancePlan:
+      description: Set power plan to "High performance".
+      script:
+        apply: powercfg /setactive SCHEME_MIN
+        revert: powercfg /setactive SCHEME_BALANCED
+    DisableAutoSleep:
+      description: Prevent system and monitor from going to sleep automatically.
+      script:
+        apply: |-
+          powercfg /change monitor-timeout-ac 0
+          powercfg /change monitor-timeout-dc 0
+          powercfg /change standby-timeout-ac 0
+          powercfg /change standby-timeout-dc 0
+        revert: |-
+          powercfg /change monitor-timeout-ac 5
+          powercfg /change monitor-timeout-dc 5
+          powercfg /change standby-timeout-ac 15
+          powercfg /change standby-timeout-dc 15
+
+  Personalization:
+    OpenWithCode:
+      description: Add the "Open with Code" item to context menu.
+      registries:
+        - path: HKCR\*\shell\VSCode
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: "Open with WSL Code (&Q)"
+              old_value: <NotExist>
+            - name: Icon
+              type: ExpandString
+              new_value: "%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe"
+              old_value: <NotExist>
+        - path: HKCR\*\shell\VSCode\command
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: ExpandString
+              new_value: 'wsl bash -lc "code $(wslpath ''%V'')"'
+              old_value: <NotExist>
+
+        - path: HKCR\directory\shell\VSCode
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: "Open with WSL Code (&Q)"
+              old_value: <NotExist>
+            - name: Icon
+              type: ExpandString
+              new_value: "%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe"
+              old_value: <NotExist>
+        - path: HKCR\directory\shell\VSCode\command
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: ExpandString
+              new_value: wsl --cd "%V" bash -lc "code ."
+              old_value: <NotExist>
+
+        - path: HKCR\directory\background\shell\VSCode
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: "Open with WSL Code (&Q)"
+              old_value: <NotExist>
+            - name: Icon
+              type: ExpandString
+              new_value: "%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe"
+              old_value: <NotExist>
+        - path: HKCR\directory\background\shell\VSCode\command
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: ExpandString
+              new_value: wsl --cd "%V" bash -lc "code ."
+              old_value: <NotExist>
+
+        - path: HKCR\drive\shell\VSCode
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: "Open with WSL Code (&Q)"
+              old_value: <NotExist>
+            - name: Icon
+              type: ExpandString
+              new_value: "%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe"
+              old_value: <NotExist>
+        - path: HKCR\drive\shell\VSCode\command
+          new_existence: <Exist>
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: ExpandString
+              new_value: wsl --cd "%V" bash -lc "code ."
+              old_value: <NotExist>
+    EditSharexContextMenu:
+      description: Edit ShareX context menu.
+      registries:
+        - path: HKCU\Software\Classes\SystemFileAssociations\image\shell\ShareXImageEditor
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: Edit with ShareX
+              old_value: <NotExist>
+            - name: Icon
+              type: String
+              new_value: '"C:\Program Files\ShareX\ShareX.exe",0'
+              old_value: <NotExist>
+        - path: HKCU\Software\Classes\SystemFileAssociations\image\shell\ShareXImageEditor\command
+          old_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: '"C:\Program Files\ShareX\ShareX.exe" -ImageEditor "%1"'
+              old_value: <NotExist>
+
+        - path: HKCU\Software\Classes\*\shell\ShareX
+          new_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: <NotExist>
+              old_value: Upload with ShareX
+            - name: Icon
+              type: String
+              new_value: <NotExist>
+              old_value: '"C:\Program Files\ShareX\ShareX.exe",0'
+        - path: HKCU\Software\Classes\*\shell\ShareX\command
+          new_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: <NotExist>
+              old_value: '"C:\Program Files\ShareX\ShareX.exe" "%1"'
+        - path: HKCU\Software\Classes\Directory\shell\ShareX
+          new_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: <NotExist>
+              old_value: Upload with ShareX
+            - name: Icon
+              type: String
+              new_value: <NotExist>
+              old_value: '"C:\Program Files\ShareX\ShareX.exe",0'
+        - path: HKCU\Software\Classes\Directory\shell\ShareX\command
+          new_existence: <NotExist>
+          entries:
+            - name: (default)
+              type: String
+              new_value: <NotExist>
+              old_value: '"C:\Program Files\ShareX\ShareX.exe" "%1"'
+    EditMouseSensitivity:
+      description: Set mouse sensitivity.
+      registries:
+        - path: HKCU\Control Panel\Mouse
+          entries:
+            - name: MouseSensitivity
+              type: String
+              new_value: "12"
+              old_value: "10"
+    EditWindowsPATH:
+      description: Edit windows path.
+      script:
+        apply: |-
+          $additionalPaths = @(
+              "C:\Program Files\Git\bin"
+              "C:\Users\USERNAME\.cargo\bin"
+          )
+          $oldPaths = [Environment]::GetEnvironmentVariable("Path", "User").Split(';')
+          $newPaths = $oldPaths + $additionalPaths | Select-Object -Unique
+          $additionalPaths | ? { $oldPaths -notcontains $_ } | % { }
+          [Environment]::SetEnvironmentVariable("Path", ($newPaths -join ';'), "User")
+        revert: |-
+          $additionalPaths = @(
+              "C:\Program Files\Git\bin"
+              "C:\Users\USERNAME\.cargo\bin"
+          )
+          $oldPaths = [Environment]::GetEnvironmentVariable("Path", "User").Split(';')
+          $newPaths = $oldPaths | ? { $additionalPaths -notcontains $_ }
+          $additionalPaths | ? { $oldPaths -notcontains $_ } | % { }
+          [Environment]::SetEnvironmentVariable("Path", ($newPaths -join ';'), "User")
+    SetAdvancedKeyRepeat:
+      description: More Fast Key Repeat
+      registries:
+        - path: HKCU\Control Panel\Accessibility\Keyboard Response
+          entries:
+            - name: AutoRepeatDelay
+              type: String
+              new_value: "200"
+              old_value: "1000"
+            - name: AutoRepeatRate
+              type: String
+              new_value: "30"
+              old_value: "500"
+            - name: DelayBeforeAcceptance
+              type: String
+              new_value: "0"
+              old_value: "1000"
+            - name: Flags
+              type: String
+              new_value: "3"
+              old_value: "126"
+    DisablePythonAppExecutionAlias:
+      description: Disable Python App Execution Alias
+      script:
+        apply: Remove-Item -Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\python*.exe"
+    HideTortoiseGit:
+      description: Hide TortoiseGit
+      registries:
+        - path: HKCR\Directory\Background\shellex\ContextMenuHandlers\TortoiseGit
+          entries:
+            - name: (default)
+              type: String
+              new_value: "-{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+              old_value: "{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+        - path: HKCR\Drive\ShellEx\ContextMenuHandlers\TortoiseGit
+          entries:
+            - name: (default)
+              type: String
+              new_value: "-{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+              old_value: "{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+        - path: HKCR\Directory\ShellEx\ContextMenuHandlers\TortoiseGit
+          entries:
+            - name: (default)
+              type: String
+              new_value: "-{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+              old_value: "{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+        - path: HKCR\Folder\ShellEx\ContextMenuHandlers\TortoiseGit
+          entries:
+            - name: (default)
+              type: String
+              new_value: "-{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+              old_value: "{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+    HideVisualStudio:
+      description: Hide VisualStudio
+      registries:
+        - path: HKCR\Directory\Background\shell\AnyCode
+          entries:
+            - name: (default)
+              type: String
+              new_value: "-{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+              old_value: "{10A0FDD2-B0C0-4CD4-A7AE-E594CE3B91C8}"
+    BrowserifyExplorerContextMenu:
+      description: Set File Explorer contextmenu hotkeys like in browser.
+      registries:
+        - path: HKCR\Folder\shell\opennewtab
+          entries:
+            - name: "MUIVerb"
+              type: String
+              new_value: Open in new tab (&T)
+              old_value: "@windows.storage.dll,-8519"
+        - path: HKCR\Folder\shell\opennewwindow
+          entries:
+            - name: "MUIVerb"
+              type: String
+              new_value: Open in new window (&W)
+              old_value: "@windows.storage.dll,-8517"
