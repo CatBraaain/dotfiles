@@ -38,7 +38,7 @@ export function activate(context: vscode.ExtensionContext): void {
     extensionUri: context.extensionUri.fsPath,
     registry,
     emptySessions,
-    startNewSession: (cwd) => launcher.start(cwd),
+    startNewSession: (cwd, onPresented) => launcher.start(cwd, onPresented),
     onWorkspaces: (cwds) => emptySessions.syncWorkspaces(cwds),
     onSessionFiles: (files) => {
       const directories = new Set(files.map(({ file }) => dirname(file)));

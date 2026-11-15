@@ -39,7 +39,10 @@ describe("session list loading in the mounted client", () => {
 
   beforeEach(async () => {
     page = await browser.newPage();
-    await page.setContent(webviewAppMarkup);
+    await page.route("http://localhost/client", (route) =>
+      route.fulfill({ contentType: "text/html", body: webviewAppMarkup }),
+    );
+    await page.goto("http://localhost/client");
     await page.addStyleTag({ content: webviewStyles });
     await page.evaluate(() => {
       const requests: unknown[] = [];
@@ -94,6 +97,89 @@ describe("session list loading in the mounted client", () => {
       .toContain("Invalid workspace path");
     expect(await page.locator("#status").getAttribute("class")).toBe("error");
   }
+
+  async function newSessionRequests(): Promise<{ cwd: string; requestId: string }[]> {
+    return page.evaluate(() =>
+      (
+        Reflect.get(window, "__requests") as { type: string; cwd: string; requestId: string }[]
+      ).filter((request) => request.type === "newSession"),
+    );
+  }
+
+  it.each(["click", "Enter", "Space"])(
+    "shows the spinner immediately on %s and clears only on completion",
+    async (activation) => {
+      await receive({ type: "sessions", state });
+      await expectLoaded();
+      const button = page.locator('[data-new-session="/workspace/atlas"]');
+      const before = await button.boundingBox();
+      if (activation === "click") await button.click();
+      else await button.press(activation);
+      await expect.poll(() => button.getAttribute("aria-busy")).toBe("true");
+      expect(await button.isEnabled()).toBe(true);
+      expect(await button.locator("path").getAttribute("d")).toBe("M21 12a9 9 0 1 1-6.219-8.56");
+      expect(await button.boundingBox()).toEqual(before);
+      const animation = await button.locator("svg").evaluate((svg) => {
+        const style = getComputedStyle(svg);
+        return {
+          name: style.animationName,
+          duration: style.animationDuration,
+          timing: style.animationTimingFunction,
+        };
+      });
+      expect(animation).toEqual({ name: "session-spin", duration: "1s", timing: "linear" });
+      await receive({ type: "loading" });
+      await receive({ type: "sessions", state });
+      await receive({ type: "error", message: "Unrelated operation failed" });
+      expect(await button.getAttribute("aria-busy")).toBe("true");
+      const [request] = await newSessionRequests();
+      await receive({ type: "newSessionFinished", requestId: request.requestId });
+      await expect.poll(() => button.getAttribute("aria-busy")).toBe("false");
+      expect(await button.locator("path").first().getAttribute("d")).toBe("M5 12h14");
+      expect(await button.boundingBox()).toEqual(before);
+    },
+  );
+
+  it("keeps all same-cwd requests pending and treats other cwds independently", async () => {
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+    const atlas = page.locator('[data-new-session="/workspace/atlas"]');
+    const empty = page.locator('[data-new-session="/workspace/empty"]');
+    await atlas.click();
+    await atlas.click();
+    await empty.click();
+    const requests = await newSessionRequests();
+    expect(requests.map(({ cwd }) => cwd)).toEqual([
+      "/workspace/atlas",
+      "/workspace/atlas",
+      "/workspace/empty",
+    ]);
+    expect(new Set(requests.map(({ requestId }) => requestId)).size).toBe(3);
+    await receive({ type: "newSessionFinished", requestId: requests[0].requestId });
+    expect(await atlas.getAttribute("aria-busy")).toBe("true");
+    await receive({ type: "newSessionFinished", requestId: requests[2].requestId });
+    await expect.poll(() => empty.getAttribute("aria-busy")).toBe("false");
+    expect(await atlas.getAttribute("aria-busy")).toBe("true");
+    await receive({ type: "newSessionFinished", requestId: requests[0].requestId });
+    await receive({ type: "newSessionFinished", requestId: "old-view-request" });
+    expect(await atlas.getAttribute("aria-busy")).toBe("true");
+    await receive({ type: "newSessionFinished", requestId: requests[1].requestId });
+    await expect.poll(() => atlas.getAttribute("aria-busy")).toBe("false");
+  });
+
+  it("keeps the new-session spinner static under reduced motion", async () => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+    const button = page.locator('[data-new-session="/workspace/atlas"]');
+    await button.click();
+    await expect.poll(() => button.getAttribute("aria-busy")).toBe("true");
+    const animation = await button
+      .locator("svg")
+      .evaluate((svg) => getComputedStyle(svg).animationName);
+    expect(animation).toBe("none");
+    expect(await button.locator("path").getAttribute("d")).toBe("M21 12a9 9 0 1 1-6.219-8.56");
+  });
 
   it("keeps workspace input across automatic snapshots until the add acknowledgement", async () => {
     await receive({ type: "sessions", state });

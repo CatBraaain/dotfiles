@@ -24,7 +24,7 @@ export const HISTORY_CHANGE_DELAY_MS = 100;
 export interface SessionWebviewDeps {
   extensionUri: string;
   registry: TerminalRegistry;
-  startNewSession: (cwd: string) => Promise<string | undefined>;
+  startNewSession: (cwd: string, onPresented: () => void) => Promise<string | undefined>;
   onWorkspaces?: (cwds: readonly string[]) => void;
   onSessionFiles?: (files: readonly { file: string; cwd: string }[]) => void;
   emptySessions?: EmptySessionPool;
@@ -373,13 +373,23 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "newSession") {
+      let finished = false;
+      const requestId = request.requestId;
+      const post = this.post.bind(this);
+      function finish(): void {
+        if (finished || requestId === undefined) return;
+        finished = true;
+        post({ type: "newSessionFinished", requestId });
+      }
       let previousSessionId: string | undefined;
       try {
         await requireWorkDirectory(request.cwd);
-        previousSessionId = await this.deps.startNewSession(request.cwd);
+        previousSessionId = await this.deps.startNewSession(request.cwd, finish);
       } catch (error) {
         this.postError(`Failed to start Pi session in ${request.cwd}: ${errorMessage(error)}`);
         return;
+      } finally {
+        finish();
       }
       await this.deps.registry.run(() => this.stopTemporaryDisplayedSession(previousSessionId));
       await this.refresh(false);

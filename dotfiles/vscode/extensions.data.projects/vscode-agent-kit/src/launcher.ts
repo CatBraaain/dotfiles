@@ -14,7 +14,7 @@ export class SessionLauncher implements vscode.Disposable {
 
   constructor(private readonly deps: SessionLauncherDeps) {}
 
-  async start(cwd: string): Promise<string | undefined> {
+  async start(cwd: string, onPresented?: () => void): Promise<string | undefined> {
     const workDir = await requireWorkDirectory(cwd);
     if (this.disposed) return;
     this.deps.registry.presentExisting();
@@ -24,6 +24,7 @@ export class SessionLauncher implements vscode.Disposable {
       const previousSessionId = this.deps.registry.displayedSessionId;
       const { terminal } = await this.deps.registry.open({ sessionId, cwd: workDir });
       terminal.show();
+      onPresented?.();
       if (this.disposed) return;
       this.deps.emptySessions?.observeOpened(workDir, sessionId);
       await this.deps.onSessionStarted(sessionId);

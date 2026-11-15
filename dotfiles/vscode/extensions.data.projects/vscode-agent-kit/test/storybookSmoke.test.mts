@@ -1232,7 +1232,10 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         if (messages === undefined) throw new Error("Bridge message recorder is not installed.");
         return messages.filter((message) => message.type === "newSession");
       }),
-    ).toEqual([{ type: "newSession", cwd: "~/projects/vscode-pi-sessions" }]);
+    ).toEqual([
+      { type: "newSession", cwd: "~/projects/vscode-pi-sessions", requestId: expect.any(String) },
+    ]);
+    expect(await group.locator(".group-new-session").getAttribute("aria-busy")).toBe("false");
     await page.close();
   });
 

@@ -2279,7 +2279,9 @@ describe("SessionWebviewProvider", () => {
     let onSessionStarted: Mock<(sessionId: string) => Promise<void>>;
 
     beforeEach(async () => {
-      fixture = await archivedDisplayFixture({ startNewSession: (cwd) => launcher.start(cwd) });
+      fixture = await archivedDisplayFixture({
+        startNewSession: (cwd, onPresented) => launcher.start(cwd, onPresented),
+      });
       onSessionStarted = vi.fn((_sessionId: string) => fixture.provider.refresh());
       launcher = new SessionLauncher({
         registry: fixture.registry,
@@ -2313,6 +2315,56 @@ describe("SessionWebviewProvider", () => {
           (row) => typeof row !== "string" && row.attrs?.class?.split(" ").includes("selected"),
         );
     }
+
+    it("finishes the request after presentation while the session refresh is pending", async () => {
+      const refresh = deferred<void>();
+      onSessionStarted.mockReturnValueOnce(refresh.promise);
+      const launching = fixture.webview.receive({
+        type: "newSession",
+        cwd: root,
+        requestId: "pending-refresh",
+      });
+      try {
+        await vi.waitFor(() => expect(onSessionStarted).toHaveBeenCalledOnce());
+        const completions = fixture.webview.postMessage.mock.calls.filter(
+          ([message]) => message.type === "newSessionFinished",
+        );
+        expect(completions.map(([message]) => message)).toEqual([
+          { type: "newSessionFinished", requestId: "pending-refresh" },
+        ]);
+        expect(fixture.terminal.show).toHaveBeenCalledTimes(3);
+      } finally {
+        refresh.resolve();
+        await launching;
+      }
+      expect(
+        fixture.webview.postMessage.mock.calls.filter(
+          ([message]) => message.type === "newSessionFinished",
+        ),
+      ).toHaveLength(1);
+    });
+
+    it.each(["invalid cwd", "creation", "connection"] as const)(
+      "finishes the failed request for %s",
+      async (failure) => {
+        if (failure === "creation")
+          fixture.runtimes.mocks.newSession.mockRejectedValueOnce(new Error("creation failed"));
+        if (failure === "connection")
+          fixture.runtimes.mocks.current.mockRejectedValueOnce(new Error("connection failed"));
+        await fixture.webview.receive({
+          type: "newSession",
+          cwd: failure === "invalid cwd" ? join(root, "missing") : root,
+          requestId: "failed-request",
+        });
+        const completions = fixture.webview.postMessage.mock.calls.filter(
+          ([message]) => message.type === "newSessionFinished",
+        );
+        expect(completions.map(([message]) => message)).toEqual([
+          { type: "newSessionFinished", requestId: "failed-request" },
+        ]);
+        expect(vscodeMocks.showErrorMessage).toHaveBeenCalled();
+      },
+    );
 
     it("clears the old row selection before the new session is saved", async () => {
       await fixture.webview.receive({ type: "newSession", cwd: root });
@@ -2492,7 +2544,7 @@ describe("SessionWebviewProvider", () => {
     await webview.receive({ type: "shell", command: "pi" });
 
     expect(startNewSession).toHaveBeenCalledTimes(1);
-    expect(startNewSession).toHaveBeenCalledWith(root);
+    expect(startNewSession).toHaveBeenCalledWith(root, expect.any(Function));
   });
 
   it("launches the requested group cwd for the new session", async () => {
@@ -2505,7 +2557,7 @@ describe("SessionWebviewProvider", () => {
 
     await webview.receive({ type: "newSession", cwd: root });
 
-    expect(startNewSession).toHaveBeenCalledWith(root);
+    expect(startNewSession).toHaveBeenCalledWith(root, expect.any(Function));
   });
 
   it("shows the immediately active new session as selected after its saved fixture arrives and is refreshed", async () => {

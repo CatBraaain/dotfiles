@@ -115,6 +115,39 @@ describe("SessionLauncher", () => {
     expect(registry.displayedSessionId).toBe("new-1");
   });
 
+  it("signals presentation after attachment and show, before the session refresh completes", async () => {
+    const pid = deferred<number>();
+    const refreshed = deferred<void>();
+    processId = pid.promise;
+    onSessionStarted.mockImplementationOnce(() => refreshed.promise);
+    const onPresented = vi.fn();
+    const launching = launcher.start(root, onPresented);
+    await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
+    const terminal = api.createTerminal.mock.results[0].value;
+    expect(onPresented).not.toHaveBeenCalled();
+    pid.resolve(123);
+    await vi.waitFor(() => expect(onSessionStarted).toHaveBeenCalledOnce());
+    expect(onPresented).toHaveBeenCalledOnce();
+    expect(terminal.show.mock.invocationCallOrder[0]).toBeLessThan(
+      onPresented.mock.invocationCallOrder[0],
+    );
+    expect(onPresented.mock.invocationCallOrder[0]).toBeLessThan(
+      onSessionStarted.mock.invocationCallOrder[0],
+    );
+    refreshed.resolve();
+    await launching;
+  });
+
+  it.each(["newSession", "current"] as const)(
+    "does not signal presentation when %s fails",
+    async (method) => {
+      runtimes.mocks[method].mockRejectedValueOnce(new Error("launch failed"));
+      const onPresented = vi.fn();
+      await expect(launcher.start(root, onPresented)).rejects.toThrow("launch failed");
+      expect(onPresented).not.toHaveBeenCalled();
+    },
+  );
+
   it("reserves the empty Pi through a detached new without opening it twice", async () => {
     await launcher.start(root);
     expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(root);

@@ -898,14 +898,30 @@ test(
         .locator("section.group")
         .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
         .describe("Registered work folder group");
-      await group
+      const newSession = group
         .locator(".group-new-session")
-        .describe("Registered group New session button")
-        .click({ steps: 15 });
+        .describe("Registered group New session button");
+      await newSession.evaluate((button) => {
+        button.setAttribute("data-observed-busy", "false");
+        new MutationObserver((changes) => {
+          if (
+            button.getAttribute("aria-busy") === "true" ||
+            changes.some((change) => change.oldValue === "true")
+          )
+            button.setAttribute("data-observed-busy", "true");
+        }).observe(button, {
+          attributes: true,
+          attributeFilter: ["aria-busy"],
+          attributeOldValue: true,
+        });
+      });
+      await newSession.click({ steps: 15 });
       await expect
         .poll(() => host.piProcesses().some((process) => process.cwd === folder))
         .toBe(true);
       await host.expectPiVisible(folder);
+      await expect(newSession).toHaveAttribute("data-observed-busy", "true");
+      await expect(newSession).toHaveAttribute("aria-busy", "false");
       await expect(
         frame
           .locator(".session-row.selected")

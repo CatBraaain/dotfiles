@@ -22,6 +22,7 @@ export interface DemoBridgeRequest {
   sessionId?: string;
   cwd?: string;
   path?: string;
+  requestId?: string;
 }
 
 /** Bridge shape the webview client consumes (ClientBridge-compatible). */
@@ -101,7 +102,11 @@ export function createDemoBridge(): {
   postSessions(): void;
   reset(demoState: DemoState): void;
 } {
-  let listener: (message: { type?: string; state?: unknown }) => void = () => {};
+  let listener: (message: {
+    type?: string;
+    state?: unknown;
+    requestId?: string;
+  }) => void = () => {};
   let store: SessionSummary[] = cloneStore(sampleSessions);
   let metadata = new Map<string, DemoEntry>(SAMPLE_METADATA);
   let displayedSessionId: string | undefined = DISPLAYED_SESSION_ID;
@@ -180,6 +185,8 @@ export function createDemoBridge(): {
       };
       store = [session, ...store];
       metadata.set(session.sessionId, UNARCHIVED);
+      if (request.requestId !== undefined)
+        listener({ type: "newSessionFinished", requestId: request.requestId });
       postSessions();
       return;
     }

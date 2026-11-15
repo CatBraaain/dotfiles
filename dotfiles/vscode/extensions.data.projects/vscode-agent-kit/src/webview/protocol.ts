@@ -1,7 +1,7 @@
 export type WebviewRequest =
   | { type: "ready" }
   | { type: "refresh" }
-  | { type: "newSession"; cwd: string }
+  | { type: "newSession"; cwd: string; requestId?: string }
   | { type: "addWorkspace"; path: string }
   | { type: "unregisterWorkspace"; cwd: string }
   | { type: "openSession"; sessionId: string }
@@ -37,6 +37,7 @@ export type ExtensionMessage =
   | { type: "loading"; displayedSessionId?: string | null }
   | { type: "sessions"; state: WebviewState }
   | { type: "workspaceAdded" }
+  | { type: "newSessionFinished"; requestId: string }
   | { type: "sessionsError" }
   | { type: "error"; message: string };
 
@@ -44,7 +45,12 @@ export function parseWebviewRequest(value: unknown): WebviewRequest | undefined 
   if (!isRecord(value) || typeof value.type !== "string") return undefined;
   if (value.type === "ready" || value.type === "refresh") return { type: value.type };
   if (value.type === "newSession" && isNonEmptyPath(value.cwd)) {
-    return { type: "newSession", cwd: value.cwd };
+    if (value.requestId !== undefined && !isNonEmptyPath(value.requestId)) return undefined;
+    return {
+      type: "newSession",
+      cwd: value.cwd,
+      ...(value.requestId === undefined ? {} : { requestId: value.requestId }),
+    };
   }
   if (value.type === "addWorkspace" && isNonEmptyPath(value.path)) {
     return { type: "addWorkspace", path: value.path };

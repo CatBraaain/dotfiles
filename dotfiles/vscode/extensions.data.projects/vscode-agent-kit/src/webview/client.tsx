@@ -106,6 +106,7 @@ export function sessionListView(
   collapsedCwds: ReadonlySet<string> = new Set(),
   loadStatus: SessionLoadStatus = "loaded",
   workspaceMenuCwd?: string,
+  pendingNewSessionCwds: ReadonlySet<string> = new Set(),
 ): SessionListView {
   const groups = state.groups.map((group) =>
     groupDescriptor(
@@ -114,6 +115,7 @@ export function sessionListView(
       displayedSessionId,
       collapsedCwds,
       workspaceMenuCwd,
+      pendingNewSessionCwds.has(group.cwd),
     ),
   );
   if (groups.length > 0) return { sessions: groups };
@@ -130,6 +132,7 @@ function groupDescriptor(
   displayedSessionId: string | undefined,
   collapsedCwds: ReadonlySet<string>,
   workspaceMenuCwd: string | undefined,
+  isStartingSession: boolean,
 ): ElementDescriptor {
   const isExpanded = !collapsedCwds.has(group.cwd);
   const sessions = visibleGroupSessions(group, mode, collapsedCwds);
@@ -200,8 +203,9 @@ function groupDescriptor(
               "data-new-session": group.cwd,
               title: "New session",
               "aria-label": `New session in ${group.label}`,
+              "aria-busy": String(isStartingSession),
             },
-            children: [plusIcon()],
+            children: [isStartingSession ? spinnerIcon() : plusIcon()],
           },
         ],
       },
@@ -311,7 +315,7 @@ function sessionDescriptor(
 function sessionStatusIcons(session: ClientSession): ElementDescriptor[] {
   if (session.isArchived) return [];
   if (session.state === "running") {
-    return [strokeIcon([{ tag: "path", attrs: { d: "M21 12a9 9 0 1 1-6.219-8.56" } }])];
+    return [spinnerIcon()];
   }
   if (session.state === "waiting-approval") {
     return [
@@ -388,6 +392,10 @@ function unarchiveDescriptor(sessionId: string): ElementDescriptor {
 function chevronIcon(direction: "down" | "right"): ElementDescriptor {
   const path = direction === "down" ? "m6 9 6 6 6-6" : "m9 18 6-6-6-6";
   return strokeIcon([{ tag: "path", attrs: { d: path } }]);
+}
+
+function spinnerIcon(): ElementDescriptor {
+  return strokeIcon([{ tag: "path", attrs: { d: "M21 12a9 9 0 1 1-6.219-8.56" } }]);
 }
 
 function plusIcon(): ElementDescriptor {
@@ -645,6 +653,7 @@ interface ClientSnapshot {
   state: ClientState;
   loadStatus: SessionLoadStatus;
   errorMessage: string;
+  pendingNewSessions: ReadonlyMap<string, string>;
 }
 
 /** Latest-value store fed by the bridge; registered synchronously by
@@ -656,11 +665,14 @@ function createClientStore(): {
   setSessions(state: ClientState): void;
   setError(message: string): void;
   setSessionsError(): void;
+  startNewSession(cwd: string): string;
+  finishNewSession(requestId: string): void;
 } {
   let snapshot: ClientSnapshot = {
     state: { groups: [] },
     loadStatus: "loading",
     errorMessage: "",
+    pendingNewSessions: new Map(),
   };
   const listeners = new Set<() => void>();
   const publish = (next: ClientSnapshot): void => {
@@ -683,9 +695,22 @@ function createClientStore(): {
         loadStatus: "loading",
         errorMessage: "",
       }),
-    setSessions: (state) => publish({ state, loadStatus: "loaded", errorMessage: "" }),
+    setSessions: (state) => publish({ ...snapshot, state, loadStatus: "loaded", errorMessage: "" }),
     setError: (message) => publish({ ...snapshot, errorMessage: message }),
     setSessionsError: () => publish({ ...snapshot, loadStatus: "error" }),
+    startNewSession: (cwd) => {
+      const requestId = crypto.randomUUID();
+      const pendingNewSessions = new Map(snapshot.pendingNewSessions);
+      pendingNewSessions.set(requestId, cwd);
+      publish({ ...snapshot, pendingNewSessions });
+      return requestId;
+    },
+    finishNewSession: (requestId) => {
+      if (!snapshot.pendingNewSessions.has(requestId)) return;
+      const pendingNewSessions = new Map(snapshot.pendingNewSessions);
+      pendingNewSessions.delete(requestId);
+      publish({ ...snapshot, pendingNewSessions });
+    },
   };
 }
 
@@ -729,7 +754,10 @@ function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactE
         else next.add(cwd);
         return next;
       }),
-    onNewSessionClick: (cwd) => bridge.postMessage({ type: "newSession", cwd }),
+    onNewSessionClick: (cwd) => {
+      const requestId = store.startNewSession(cwd);
+      bridge.postMessage({ type: "newSession", cwd, requestId });
+    },
     onWorkspaceMenuOpen: setWorkspaceMenu,
     onWorkspaceMenuToggle: (menu) =>
       setWorkspaceMenu((previous) => (previous?.cwd === menu.cwd ? null : menu)),
@@ -745,6 +773,7 @@ function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactE
     collapsedCwds,
     snapshot.loadStatus,
     workspaceMenu?.cwd,
+    new Set(snapshot.pendingNewSessions.values()),
   );
   return (
     <>
@@ -805,6 +834,9 @@ export function initClient(bridge: ClientBridge): () => void {
     }
     if (message.type === "sessions" && isClientState(message.state)) {
       store.setSessions(message.state);
+    }
+    if (message.type === "newSessionFinished" && typeof message.requestId === "string") {
+      store.finishNewSession(message.requestId);
     }
     if (message.type === "workspaceAdded" && pendingAddWorkspace) {
       closeWorkspaceForm();

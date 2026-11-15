@@ -15,6 +15,10 @@ describe("parseWebviewRequest", () => {
       { type: "newSession", cwd: "/home/user/project" },
     ],
     [
+      { type: "newSession", cwd: "/home/user/project", requestId: "request-1" },
+      { type: "newSession", cwd: "/home/user/project", requestId: "request-1" },
+    ],
+    [
       { type: "addWorkspace", path: "/home/user/project" },
       { type: "addWorkspace", path: "/home/user/project" },
     ],
@@ -89,6 +93,8 @@ describe("parseWebviewRequest", () => {
     { type: "newSession", cwd: "" },
     { type: "newSession", cwd: "   " },
     { type: "newSession", cwd: 3 },
+    { type: "newSession", cwd: "/project", requestId: 3 },
+    { type: "newSession", cwd: "/project", requestId: "" },
     { type: "addWorkspace" },
     { type: "addWorkspace", path: "" },
     { type: "addWorkspace", path: "   " },
