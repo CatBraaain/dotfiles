@@ -35,6 +35,7 @@ test-rime:
     generated="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-rime-unit.XXXXXX")"
     trap 'rm -rf "$generated"' EXIT
     bun zenkaku.build.ts --output "$generated/kagiroi_dotfiles_zenkaku.dict.yaml"
+    bash tests/zenkaku_build.test.sh
     lua5.4 tests/candidate_gate.test.lua lua/kagiroi/candidate_gate.lua
     lua5.4 tests/rime_controls.test.lua lua/kagiroi/rime_controls.lua "$generated/lua/kagiroi/zenkaku_text.lua"
     lua5.4 tests/rime_ascii_toggle.test.lua lua/kagiroi/rime_ascii_toggle.lua lua/kagiroi/rime_controls.lua "$generated/lua/kagiroi/zenkaku_text.lua"

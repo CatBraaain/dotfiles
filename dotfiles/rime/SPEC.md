@@ -382,3 +382,15 @@ Rime の選択スキーマは Kagiroi とする。ローマ字入力は Kagiroi�
 `fcitx5/conf/rime.conf` は、Linux の fcitx5-rime のアプリ内未確定表示を制御する設定として `~/.config/fcitx5/conf/rime.conf` へ配置する。Linux の fcitx5 では、`fcitx5/config` が `Muhenkan` を入力メソッドの無効化に割り当てる。fcitx5 が入力メソッドを無効化している間はキーが Rime に渡らず、fcitx5 の標準トリガーで戻る。Weasel の表示設定は Linux の fcitx5-rime の表示に影響しない。Kagiroi の標準ローマ字processor とスキーマ構成を保ち、Rime が生成するデータベース、ユーザー辞書、学習データは既存内容を保持する。
 
 Windows の Weasel では入力状態の通知とトレイアイコンを表示しない。候補パネルは日本語字形の `Yu Gothic UI` で描画する。CJK統合漢字の字形はフォントが決めるため、中国語フォントのままだと確定テキストと候補で字形がずれる。fcitx5 の候補ウィンドウも同じ理由で `fcitx5/conf/classicui.conf` が日本語字形の `Noto Sans CJK JP` を使う。
+
+## 開発と検証
+
+宣言と生成物の検証は `just test-rime` で実行する。`tests/zenkaku_build.test.sh` は fixture 宣言を `zenkaku.build.ts --declaration` で buildし、異常終了と生成レコードで、次の契約を検証する。
+
+| 契約 | fixture の確認内容 |
+| --- | --- |
+| `conditionals` の入力エラー | `conditionals` の欠落・配列以外、必須フィールドの欠落・不正値・未知フィールド・不正予約語、`prefixes` の宣言で buildが異常終了する |
+| 重複統合 | 同値重複と変換開始条件の同値重複で buildが成功し、重複が1件のレコードへ統合される |
+| 衝突エラー | 異値の生成衝突と変換開始条件の異値衝突で buildが異常終了する |
+| `conditionals` の受理面 | 空配列、文字条件と `$convert` の併記で buildが成功する |
+| `keys` の入力エラーと完全性 | 欠落キー・不明キー・空の値で buildが異常終了し、完全な `keys` は全キーを `zenkaku_text.lua` へ出力する |

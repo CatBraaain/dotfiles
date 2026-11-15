@@ -3,7 +3,7 @@
 // declarative table in zenkaku.data.yaml. Runs in two modes:
 // - local build hook: regenerates them inside dist/ and removes the
 //   declaration copy so it never reaches home
-// - CLI for the test harness: `bun zenkaku.build.ts [--output <path>]`
+// - CLI for the test harness: `bun zenkaku.build.ts [--output <path>] [--declaration <path>]`
 //
 // The aggregation rules (singles win over generated mappings, conflicting
 // generated mappings are an error) mirror the MS-IME engine
@@ -400,9 +400,9 @@ function renderText(decl: Declaration): string {
   return lines.join("\n");
 }
 
-async function compile(outputPath: string): Promise<void> {
+async function compile(outputPath: string, declarationPath = DECLARATION_PATH): Promise<void> {
   const yaml = await loadModule<{ parse: (text: string) => unknown }>("yaml");
-  const declaration = validateDeclaration(yaml.parse(await readFile(DECLARATION_PATH, "utf8")));
+  const declaration = validateDeclaration(yaml.parse(await readFile(declarationPath, "utf8")));
   const runtimeDir = join(dirname(outputPath), "lua/kagiroi");
   await mkdir(runtimeDir, { recursive: true });
   await writeFile(outputPath, renderDictionary(declaration));
@@ -411,20 +411,25 @@ async function compile(outputPath: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const [flag, value] = process.argv.slice(2) as (string | undefined)[];
-  if (flag === undefined) {
-    await compile(join(hookDir, DICTIONARY_NAME));
-    const runsAsBuildHook = process.env.DOTFILES_DIST_DIR !== undefined;
-    if (runsAsBuildHook) {
-      // The declaration rode along into dist just for this hook; drop it so it
-      // never reaches home.
-      await rm(DECLARATION_PATH);
+  const args = process.argv.slice(2);
+  let outputPath: string | undefined;
+  let declarationPath: string | undefined;
+  for (let i = 0; i < args.length; i += 2) {
+    const flag = args[i];
+    const value = args[i + 1];
+    if (flag === "--output" && value !== undefined) outputPath = value;
+    else if (flag === "--declaration" && value !== undefined) declarationPath = value;
+    else {
+      console.error("usage: bun zenkaku.build.ts [--output <path>] [--declaration <path>]");
+      process.exitCode = 1;
+      return;
     }
-  } else if (flag === "--output" && value !== undefined) {
-    await compile(value);
-  } else {
-    console.error("usage: bun zenkaku.build.ts [--output <path>]");
-    process.exitCode = 1;
+  }
+  await compile(outputPath ?? join(hookDir, DICTIONARY_NAME), declarationPath);
+  if (outputPath === undefined && process.env.DOTFILES_DIST_DIR !== undefined) {
+    // The declaration rode along into dist just for this hook; drop it so it
+    // never reaches home.
+    await rm(DECLARATION_PATH);
   }
 }
 
