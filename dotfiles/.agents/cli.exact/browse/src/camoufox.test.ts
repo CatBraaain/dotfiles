@@ -34,6 +34,22 @@ describe("RenderClock", () => {
 
 interface Completion {
   stage: string;
+  responsive?: boolean;
+  reachedProbe?: boolean;
+  healthDeadlines: number[];
+  renderBudgets: number[];
+  polling: number[];
+  idleOptions: unknown[];
+  virtualNow: number;
+  idleTimedOutAt?: number;
+  pageReadsAt: number[];
+  healthStages: {
+    stage: string;
+    signalIndex: number;
+    startedAt: number;
+    finishedAt: number;
+    aborted: boolean;
+  }[];
   html?: string;
   error?: string;
   renders: number;
@@ -177,5 +193,124 @@ describe("startLocalHttpProbe", () => {
     assert.equal(response.ok, true);
     await probe.close();
     await assert.rejects(() => fetch(probe.url));
+  });
+});
+
+describe("functional health and challenge deadlines", () => {
+  for (const scenario of ["health-good", "health-websocket-down", "health-open-timeout"]) {
+    it(`checks local HTTP navigation rather than accepting websocket health alone: ${scenario}`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "browse-health-"));
+      try {
+        const { code, messages } = await launchRender(root, scenario).exited;
+        const report = messages[0]!;
+        assert.equal(code, 0);
+        assert.equal(report.responsive, scenario === "health-good");
+        assert.equal(report.reachedProbe, scenario === "health-good");
+        assert.equal(report.healthDeadlines[0], 5000);
+        assert.ok(report.healthDeadlines.every((ms) => ms > 0 && ms <= 5000));
+        assert.deepEqual(
+          report.commands,
+          scenario === "health-websocket-down" ? [] : ["close", "open", "close"],
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const scenario of ["challenge-detected", "challenge-poll"]) {
+    it(`executes the generated challenge polling program: ${scenario}`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "browse-challenge-"));
+      try {
+        const { code, messages } = await launchRender(root, scenario).exited;
+        const report = messages[0]!;
+        assert.equal(code, scenario === "challenge-detected" ? 1 : 0);
+        assert.deepEqual(report.idleOptions, [{ timeout: 5000 }]);
+        assert.deepEqual(report.polling, scenario === "challenge-detected" ? [] : [250, 250]);
+        assert.deepEqual(report.renderBudgets, [30000]);
+        assert.ok(report.healthDeadlines.every((ms) => ms === 15000));
+        if (scenario === "challenge-detected")
+          assert.match(report.error!, /render: challenge detected/);
+        else assert.equal(report.html, "<html>ready</html>");
+        assert.deepEqual(report.commands, ["close", "open", "run-code", "close"]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+});
+
+describe("shared health and challenge timeout boundaries", () => {
+  for (const scenario of ["health-budget-success", "health-budget-exhausted"]) {
+    it(`shares a five-second budget across websocket, close and open: ${scenario}`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "browse-health-budget-"));
+      try {
+        const { code, messages } = await launchRender(root, scenario).exited;
+        const report = messages[0]!;
+        const succeeded = scenario === "health-budget-success";
+        assert.equal(code, 0);
+        assert.equal(report.responsive, succeeded);
+        assert.equal(report.reachedProbe, succeeded);
+        assert.deepEqual(
+          report.healthDeadlines,
+          succeeded ? [5000, 4000, 3000, 500] : [5000, 4000, 3000, 1],
+        );
+        assert.deepEqual(
+          report.healthStages.map(({ stage, signalIndex }) => [stage, signalIndex]),
+          [
+            ["websocket", 0],
+            ["initial-close", 1],
+            ["open", 2],
+            ["final-close", 3],
+          ],
+        );
+        assert.deepEqual(
+          report.healthStages.map(({ startedAt, finishedAt }) => [startedAt, finishedAt]),
+          succeeded
+            ? [
+                [0, 1000],
+                [1000, 2000],
+                [2000, 4500],
+                [4500, 4900],
+              ]
+            : [
+                [0, 1000],
+                [1000, 2000],
+                [2000, 5000],
+                [5000, 5000],
+              ],
+        );
+        assert.deepEqual(
+          report.healthStages.map(({ aborted }) => aborted),
+          succeeded ? [false, false, false, false] : [false, false, true, false],
+        );
+        assert.equal(report.virtualNow, succeeded ? 4900 : 5000);
+        assert.deepEqual(report.commands, ["close", "open", "close"]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("polls through the five-second networkidle timeout and returns the final DOM", async () => {
+    const root = mkdtempSync(join(tmpdir(), "browse-challenge-timeout-"));
+    try {
+      const { code, messages } = await launchRender(root, "challenge-timeout").exited;
+      const report = messages[0]!;
+      assert.equal(code, 0);
+      assert.equal(report.html, "<html>ready</html>");
+      assert.equal(report.virtualNow, 5000);
+      assert.equal(report.idleTimedOutAt, 5000);
+      assert.deepEqual(report.idleOptions, [{ timeout: 5000 }]);
+      assert.deepEqual(report.polling, Array(20).fill(250));
+      assert.deepEqual(
+        report.pageReadsAt,
+        Array.from({ length: 21 }, (_, index) => index * 250),
+      );
+      assert.deepEqual(report.renderBudgets, [30000]);
+      assert.deepEqual(report.commands, ["close", "open", "run-code", "close"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

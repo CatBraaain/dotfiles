@@ -98,3 +98,70 @@ describe("searchOne result URLs", () => {
     });
   }
 });
+
+describe("search pipeline contract", () => {
+  it("tries Google, DuckDuckGo, then Bing, stopping at the first nonempty response", async () => {
+    const rendered = spyOn(camoufox, "camoufoxRender");
+    spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(Response.json({ results: [] }))
+      .mockResolvedValueOnce(Response.json({ results: [] }))
+      .mockResolvedValueOnce(Response.json({ results: [{ title: "Bing result" }] }));
+    const result = await searchOne("query");
+    assert.equal(result.engine, "bing");
+    assert.deepEqual(
+      rendered.mock.calls.map(([url]) => new URL(url).hostname),
+      ["www.google.com", "duckduckgo.com", "www.bing.com"],
+    );
+  });
+
+  it("retries a challenged engine before falling back to the next engine", async () => {
+    const rendered = spyOn(camoufox, "camoufoxRender")
+      .mockRejectedValueOnce(new Error("render: challenge detected"))
+      .mockRejectedValueOnce(new Error("render: challenge detected"))
+      .mockResolvedValue(html);
+    const prepare = spyOn(camoufox, "recoverCamoufoxBeforeRetry").mockResolvedValue({
+      shouldRetry: true,
+      consumesRecoveryBudget: false,
+    });
+    spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({ results: [{ title: "Duck result" }] }),
+    );
+    const result = await searchOne("query");
+    assert.equal(result.engine, "duckduckgo");
+    assert.deepEqual(
+      rendered.mock.calls.map(([url]) => new URL(url).hostname),
+      ["www.google.com", "www.google.com", "duckduckgo.com"],
+    );
+    assert.equal(prepare.mock.calls.length, 1);
+  });
+
+  it("uses only the successful final attempt for tookMs and applies 15-second parse deadlines", async () => {
+    let now = 0;
+    spyOn(Date, "now").mockImplementation(() => now);
+    spyOn(camoufox, "camoufoxRender").mockImplementation(async () => {
+      now += 70;
+      return html;
+    });
+    let parses = 0;
+    const parseRequest = spyOn(globalThis, "fetch").mockImplementation(
+      Object.assign(
+        async () => {
+          now += 30;
+          return Response.json({ results: ++parses === 1 ? [] : [{ title: "Found" }] });
+        },
+        { preconnect: fetch.preconnect },
+      ),
+    );
+    const deadline = spyOn(AbortSignal, "timeout");
+    const result = await searchOne("query");
+    assert.equal(result.engine, "duckduckgo");
+    assert.equal(result.tookMs, 100);
+    assert.deepEqual(deadline.mock.calls, [[15000], [15000], [15000], [15000]]);
+    const requestSignals = parseRequest.mock.calls.map(([, options]) => options?.signal);
+    assert.equal(new Set(requestSignals).size, 2);
+    for (const [index, signal] of requestSignals.entries()) {
+      assert.ok(signal instanceof AbortSignal);
+      assert.strictEqual(signal, deadline.mock.results[index * 2 + 1]!.value);
+    }
+  });
+});
