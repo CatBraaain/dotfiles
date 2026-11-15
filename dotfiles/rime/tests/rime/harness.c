@@ -10,13 +10,29 @@
  * (schema, n-run correction, first candidate), then common key handling
  * (Zenkaku_Hankaku, Henkan, candidate gate).
  *
- * Usage: harness <user_data_dir> [-v]
+ * Usage: harness <user_data_dir> [--snapshot-dir <dir>] [--update] [-v]
  * Exit status is 0 when every check passes.
+ *
+ * Snapshot mode: every scenario's key inputs and the observed state after
+ * each key (preedit, candidates, options, commit) are recorded per scenario.
+ * Only scenarios whose snapshot file exists in the snapshot dir are guarded:
+ * without --update those files are compared and any difference fails the
+ * run; with --update they are rewritten. --update=<name[,name...]> adds or
+ * rewrites the listed scenarios, --update=all records every scenario.
+ * Snapshot files are YAML tables: one row per input and key prefix, with the
+ * observed state as fields. The harness compares files line by line.
+ * Scenario timings always go to
+ * _timings.txt for every scenario and a run fails when a scenario takes
+ * significantly longer than its recorded baseline.
  */
+#define _POSIX_C_SOURCE 200809L
+#include <ctype.h>
 #include <rime_api.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define kSpace 0x20
 #define kReturn 0xff0d
@@ -51,6 +67,239 @@ static int g_checks = 0;
 static int g_failures = 0;
 static int g_verbose = 0;
 
+/* ---- snapshot recording ----
+ *
+ * Records are appended while scenarios run, then per scenario either written
+ * to <snapshot-dir>/<scenario>.txt (--update) or compared against it. Only
+ * non-destructive reads (get_context, get_status, get_option) are added on
+ * top of the existing test flow; get_commit output is recorded at the points
+ * where tests already consume it. */
+static const char* g_snapshot_dir = NULL;
+static int g_snapshot_update = 0;
+static const char* g_snapshot_update_target = ""; /* "", "all", or a scenario name */
+static char** g_lines = NULL;
+static size_t g_line_count = 0;
+static size_t g_line_capacity = 0;
+
+static void add_line(const char* format, ...) {
+    char buffer[16384];
+    va_list ap;
+    va_start(ap, format);
+    vsnprintf(buffer, sizeof(buffer), format, ap);
+    va_end(ap);
+    if (g_line_count == g_line_capacity) {
+        g_line_capacity = g_line_capacity ? g_line_capacity * 2 : 256;
+        g_lines = realloc(g_lines, g_line_capacity * sizeof(char*));
+        if (!g_lines) {
+            fprintf(stderr, "FAIL: snapshot buffer exhausted\n");
+            exit(2);
+        }
+    }
+    g_lines[g_line_count] = strdup(buffer);
+    if (!g_lines[g_line_count]) {
+        fprintf(stderr, "FAIL: snapshot buffer exhausted\n");
+        exit(2);
+    }
+    ++g_line_count;
+}
+
+static void free_lines(void) {
+    for (size_t i = 0; i < g_line_count; ++i) free(g_lines[i]);
+    free(g_lines);
+    g_lines = NULL;
+    g_line_count = 0;
+    g_line_capacity = 0;
+}
+
+/* Render text as a YAML scalar: plain when safe, double-quoted otherwise. */
+static const char* yaml_scalar(char* out, size_t size, const char* text) {
+    size_t length = strlen(text);
+    int plain = length > 0 && text[length - 1] != ' ' && text[length - 1] != ':';
+    if (plain && strchr("-?:,[]{}#&*!|>'\"%@`", text[0])) plain = 0;
+    for (size_t i = 0; plain && i < length; ++i) {
+        unsigned char c = (unsigned char)text[i];
+        if (c < 0x20) plain = 0;
+        else if (c == ':' && (text[i + 1] == '\0' || text[i + 1] == ' ')) plain = 0;
+        else if (c == '#' && i > 0 && text[i - 1] == ' ') plain = 0;
+    }
+    if (plain) {
+        snprintf(out, size, "%s", text);
+        return out;
+    }
+    size_t o = 0;
+    out[o++] = '"';
+    for (size_t i = 0; text[i] && o + 8 < size; ++i) {
+        unsigned char c = (unsigned char)text[i];
+        if (c == '"' || c == '\\') {
+            out[o++] = '\\';
+            out[o++] = (char)c;
+        } else if (c == '\n') {
+            out[o++] = '\\';
+            out[o++] = 'n';
+        } else {
+            out[o++] = (char)c;
+        }
+    }
+    out[o++] = '"';
+    out[o] = '\0';
+    return out;
+}
+
+static const char* key_display_name(int keycode) {
+    static const struct {
+        int code;
+        const char* name;
+    } table[] = {
+        {kSpace, "space"},         {kReturn, "return"},
+        {kHenkan, "henkan"},       {kMuhenkan, "muhenkan"},
+        {kZenkakuHankaku, "zenkaku_hankaku"},
+        {kShiftL, "shift_l"},      {kHiraganaKatakana, "hiragana_katakana"},
+        {kBackSpace, "backspace"}, {kEscape, "escape"},
+        {kKeypadDecimal, "keypad_decimal"},
+        {kKeypadEnter, "keypad_enter"},
+        {kKeypad0, "keypad_0"},   {kKeypad1, "keypad_1"},
+        {kTab, "tab"},
+        {kUp, "up"},              {kDown, "down"},
+        {kLeft, "left"},          {kRight, "right"},
+        {kPageUp, "page_up"},     {kPageDown, "page_down"},
+        {kF6, "F6"}, {kF7, "F7"}, {kF8, "F8"}, {kF9, "F9"}, {kF10, "F10"},
+    };
+    static char fallback[16];
+    for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i) {
+        if (table[i].code == keycode) return table[i].name;
+    }
+    if (keycode >= 0x20 && keycode <= 0x7e) {
+        fallback[0] = (char)keycode;
+        fallback[1] = '\0';
+        return fallback;
+    }
+    snprintf(fallback, sizeof(fallback), "0x%04x", keycode);
+    return fallback;
+}
+
+/* ---- row-table snapshot layout ----
+ *
+ * A scenario is recorded as a table: one row per (input, key prefix),
+ * holding the state right after that key. Reads like the SPEC operation
+ * table. Row fields:
+ *   入力  typed romaji followed by pressed keys in {BRACES}, e.g.
+ *         kanji{SPACE}{SPACE}. Modifier variants: {SHIFT+L}, {L:UP},
+ *         {CTRL+ZENKAKU_HANKAKU}.
+ *   表示  text as it appears on screen: the highlighted candidate while the
+ *         menu is open, the composition otherwise. (librime's own buffer
+ *         keeps the reading while the menu is open; fcitx5 draws the
+ *         preview, so the row records what a user sees.)
+ *   候補  candidate window contents (omitted when the window is hidden)
+ *   確定  committed text, attached to the row of the state it appeared in */
+static char g_input[1024];
+static char g_keys[2048];
+static int g_row_open = 0;
+
+static void append_input(const char* ascii) {
+    size_t used = strlen(g_input);
+    if (used > 0 && used + 1 < sizeof(g_input)) {
+        g_input[used++] = '+';
+        g_input[used] = '\0';
+    }
+    strncat(g_input, ascii, sizeof(g_input) - 1 - used);
+}
+
+static void append_key(const char* name, int modifier) {
+    char upper[32];
+    size_t n = strlen(name);
+    if (n >= sizeof(upper)) n = sizeof(upper) - 1;
+    for (size_t i = 0; i < n; ++i) upper[i] = (char)toupper((unsigned char)name[i]);
+    upper[n] = '\0';
+    char item[128];
+    if (modifier == 0) {
+        snprintf(item, sizeof(item), "{%s}", upper);
+    } else if (modifier == 1) {
+        snprintf(item, sizeof(item), "{SHIFT+%s}", upper);
+    } else {
+        char body[80];
+        size_t used = 0;
+        if (modifier & 1)
+            used += (size_t)snprintf(body + used, sizeof(body) - used, "SHIFT+");
+        if (modifier & (1 << 2))
+            used += (size_t)snprintf(body + used, sizeof(body) - used, "CTRL+");
+        if (modifier & (1 << 3))
+            used += (size_t)snprintf(body + used, sizeof(body) - used, "ALT+");
+        if (modifier & (1 << 26))
+            used += (size_t)snprintf(body + used, sizeof(body) - used, "SUPER+");
+        int rest = modifier & ~(1 | (1 << 2) | (1 << 3) | (1 << 26) | (1 << 30));
+        if (rest) used += (size_t)snprintf(body + used, sizeof(body) - used, "0x%X+", rest);
+        if (modifier & (1 << 30))
+            used += (size_t)snprintf(body + used, sizeof(body) - used, "UP+");
+        snprintf(item, sizeof(item), "{%s%s}", body, upper);
+    }
+    strncat(g_keys, item, sizeof(g_keys) - strlen(g_keys) - 1);
+}
+
+static void begin_scenario(const char* name) {
+    g_input[0] = '\0';
+    g_keys[0] = '\0';
+    g_row_open = 0;
+    add_line("scenario: %s", name);
+    add_line("cases:");
+}
+
+static void close_case(void) {
+    g_input[0] = '\0';
+    g_keys[0] = '\0';
+    g_row_open = 0;
+}
+
+/* Emit one table row: input + key prefix -> observed state. */
+static void emit_row(void) {
+    char scalar[16384];
+    char label[4096];
+    if (!g_row_open) {
+        if (g_line_count > 0 && g_lines[g_line_count - 1][0] != '\0' &&
+            strcmp(g_lines[g_line_count - 1], "cases:") != 0)
+            add_line("");
+        g_row_open = 1;
+    }
+    snprintf(label, sizeof(label), "%s%s", g_input, g_keys);
+    add_line("  - 入力: %s", yaml_scalar(scalar, sizeof(scalar), label));
+
+    if (!session) return;
+    RIME_STRUCT(RimeContext, context);
+    if (!rime->get_context(session, &context)) return;
+    const char* preedit = context.composition.preedit;
+    const char* preview = context.commit_text_preview;
+    const char* shown = (preview && *preview) ? preview : preedit;
+    if (shown && *shown)
+        add_line("    表示: %s", yaml_scalar(scalar, sizeof(scalar), shown));
+    if (context.menu.num_candidates > 0) {
+        size_t used = 0;
+        scalar[used++] = '[';
+        for (int i = 0; i < context.menu.num_candidates; ++i) {
+            char item[512];
+            yaml_scalar(item, sizeof(item),
+                        context.menu.candidates[i].text
+                            ? context.menu.candidates[i].text
+                            : "");
+            size_t length = strlen(item);
+            if (used + length + 4 >= sizeof(scalar)) break;
+            if (i > 0) {
+                scalar[used++] = ',';
+                scalar[used++] = ' ';
+            }
+            memcpy(scalar + used, item, length);
+            used += length;
+        }
+        scalar[used++] = ']';
+        scalar[used] = '\0';
+        add_line("    候補: %s", scalar);
+    }
+    rime->free_context(&context);
+}
+
+static void record_key(int keycode, int modifier) {
+    append_key(key_display_name(keycode), modifier);
+    emit_row();
+}
+
 static void check(Bool condition, const char* description) {
     ++g_checks;
     if (!condition) {
@@ -59,21 +308,34 @@ static void check(Bool condition, const char* description) {
     }
 }
 
-static void press(int keycode) {
-    rime->process_key(session, keycode, 0);
-}
-
-static void press_shift(int keycode) {
-    rime->process_key(session, keycode, 1);
-}
-
-static void press_modifier(int keycode, int modifier) {
+static void process_key_silent(int keycode, int modifier) {
     rime->process_key(session, keycode, modifier);
 }
 
+static void press(int keycode) {
+    process_key_silent(keycode, 0);
+    record_key(keycode, 0);
+}
+
+static void press_shift(int keycode) {
+    process_key_silent(keycode, 1);
+    record_key(keycode, 1);
+}
+
+static void press_modifier(int keycode, int modifier) {
+    process_key_silent(keycode, modifier);
+    record_key(keycode, modifier);
+}
+
 static void type_text(const char* ascii) {
+    append_input(ascii);
     for (const unsigned char* p = (const unsigned char*)ascii; *p; ++p) {
-        press(*p);
+        process_key_silent(*p, 0);
+    }
+    RIME_STRUCT(RimeContext, context);
+    if (rime->get_context(session, &context)) {
+        if (context.menu.num_candidates > 0) emit_row();
+        rime->free_context(&context);
     }
 }
 
@@ -100,6 +362,13 @@ static Bool take_commit(char* buffer, size_t size) {
     if (rime->get_commit(session, &commit) && commit.text) {
         snprintf(buffer, size, "%s", commit.text);
         result = True;
+        char scalar[4096];
+        if (g_row_open) {
+            add_line("    確定: %s", yaml_scalar(scalar, sizeof(scalar), buffer));
+        } else {
+            add_line("  - 確定: %s", yaml_scalar(scalar, sizeof(scalar), buffer));
+            g_row_open = 1;
+        }
     }
     rime->free_commit(&commit);
     return result;
@@ -157,6 +426,7 @@ static Bool without_last_utf8_character(const char* text, char* result, size_t s
 }
 
 static void fresh_session(void) {
+    close_case();
     if (session) rime->destroy_session(session);
     session = rime->create_session();
     rime->select_schema(session, "kagiroi");
@@ -4546,17 +4816,145 @@ static void on_message(void* context_object, RimeSessionId session_id, const cha
     if (g_verbose) fprintf(stderr, "[%s] %s\n", message_type, message_value);
 }
 
+/* ---- snapshot files and timing baseline ---- */
+
+struct ScenarioTiming {
+    const char* name;
+    long ms;
+};
+
+/* Scenarios faster than this are too noisy for the relative threshold. */
+static const long kPerfNoiseFloorMs = 10;
+static const double kPerfRegressionFactor = 5.0;
+
+static long now_ms(void) {
+    struct timespec ts;
+    timespec_get(&ts, TIME_UTC);
+    return (long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static char* snapshot_path(const char* dir, const char* name, const char* suffix) {
+    size_t size = strlen(dir) + strlen(name) + strlen(suffix) + 2;
+    char* path = malloc(size);
+    if (!path) {
+        fprintf(stderr, "FAIL: out of memory\n");
+        exit(2);
+    }
+    snprintf(path, size, "%s/%s%s", dir, name, suffix);
+    return path;
+}
+
+static void write_lines(const char* path, char** lines, size_t count) {
+    FILE* file = fopen(path, "w");
+    if (!file) {
+        fprintf(stderr, "FAIL: cannot write %s\n", path);
+        ++g_failures;
+        return;
+    }
+    for (size_t i = 0; i < count; ++i) fprintf(file, "%s\n", lines[i]);
+    fclose(file);
+}
+
+/* Returns 0 and fills *out on success; -1 when the file cannot be read. */
+static int read_lines(const char* path, char*** out, size_t* count) {
+    FILE* file = fopen(path, "r");
+    if (!file) return -1;
+    char** lines = NULL;
+    size_t n = 0, capacity = 0;
+    char buffer[16384];
+    while (fgets(buffer, sizeof(buffer), file)) {
+        size_t length = strlen(buffer);
+        while (length > 0 && (buffer[length - 1] == '\n' || buffer[length - 1] == '\r'))
+            buffer[--length] = '\0';
+        if (n == capacity) {
+            capacity = capacity ? capacity * 2 : 256;
+            lines = realloc(lines, capacity * sizeof(char*));
+            if (!lines) {
+                fclose(file);
+                return -1;
+            }
+        }
+        lines[n] = strdup(buffer);
+        if (!lines[n]) {
+            fclose(file);
+            return -1;
+        }
+        ++n;
+    }
+    fclose(file);
+    *out = lines;
+    *count = n;
+    return 0;
+}
+
+static void free_string_array(char** lines, size_t count) {
+    for (size_t i = 0; i < count; ++i) free(lines[i]);
+    free(lines);
+}
+
+static int snapshot_file_exists(const char* path) {
+    FILE* file = fopen(path, "r");
+    if (!file) return 0;
+    fclose(file);
+    return 1;
+}
+
+/* --update accepts a comma-separated list of scenario names, or "all". */
+static int update_target_matches(const char* name) {
+    if (strcmp(g_snapshot_update_target, "all") == 0) return 1;
+    char targets[1024];
+    snprintf(targets, sizeof(targets), "%s", g_snapshot_update_target);
+    for (char* token = strtok(targets, ","); token; token = strtok(NULL, ",")) {
+        if (strcmp(token, name) == 0) return 1;
+    }
+    return 0;
+}
+
+static void report_snapshot_diff(const char* name, char** expected, size_t ecount,
+                                 char** actual, size_t acount) {
+    size_t prefix = 0;
+    while (prefix < ecount && prefix < acount &&
+           strcmp(expected[prefix], actual[prefix]) == 0)
+        ++prefix;
+    size_t suffix = 0;
+    while (suffix < ecount - prefix && suffix < acount - prefix &&
+           strcmp(expected[ecount - 1 - suffix], actual[acount - 1 - suffix]) == 0)
+        ++suffix;
+    if (prefix + suffix == ecount && prefix + suffix == acount) return;
+
+    ++g_failures;
+    fprintf(stderr, "SNAPSHOT DIFF: %s (expected %zu lines, actual %zu lines, first change at line %zu)\n",
+            name, ecount, acount, prefix + 1);
+    size_t context_from = prefix > 2 ? prefix - 2 : 0;
+    for (size_t i = context_from; i < prefix; ++i)
+        fprintf(stderr, "       %3zu  %s\n", i + 1, expected[i]);
+    for (size_t i = prefix; i < ecount - suffix; ++i)
+        fprintf(stderr, "    -  %3zu  %s\n", i + 1, expected[i]);
+    for (size_t i = prefix; i < acount - suffix; ++i)
+        fprintf(stderr, "    +  %3zu  %s\n", i + 1, actual[i]);
+    size_t tail_from = ecount - suffix;
+    for (size_t i = 0; i < 2 && tail_from + i < ecount; ++i)
+        fprintf(stderr, "       %3zu  %s\n", tail_from + i + 1, expected[tail_from + i]);
+}
+
+
 int main(int argc, char* argv[]) {
     const char* user_data_dir = NULL;
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "-v") == 0) {
             g_verbose = 1;
+        } else if (strncmp(argv[i], "--update", 8) == 0 &&
+                   (argv[i][8] == '\0' || argv[i][8] == '=')) {
+            g_snapshot_update = 1;
+            if (argv[i][8] == '=') g_snapshot_update_target = argv[i] + 9;
+        } else if (strcmp(argv[i], "--snapshot-dir") == 0 && i + 1 < argc) {
+            g_snapshot_dir = argv[++i];
         } else {
             user_data_dir = argv[i];
         }
     }
-    if (!user_data_dir) {
-        fprintf(stderr, "usage: harness <user_data_dir> [-v]\n");
+    if (!user_data_dir || !g_snapshot_dir) {
+        fprintf(stderr, "usage: harness <user_data_dir> --snapshot-dir <dir> [--update[=name|all]] [-v]\n");
         return 2;
     }
 
@@ -4588,101 +4986,189 @@ int main(int argc, char* argv[]) {
     }
     rime->join_maintenance_thread();
 
-    static void (*const tests[])(void) = {
+    static const struct {
+        const char* name;
+        void (*fn)(void);
+    } tests[] = {
         /* Runs first: later tests feed the user dictionary and can saturate
          * the learned order the baseline comparison depends on. */
-        test_unlearned_part_of_speech_ranking,
-        test_learning_promotes_committed_candidate,
-        test_learning_promotes_committed_sentences,
-        test_part_of_speech_kana_learning,
+        {"unlearned_part_of_speech_ranking", test_unlearned_part_of_speech_ranking},
+        {"learning_promotes_committed_candidate", test_learning_promotes_committed_candidate},
+        {"learning_promotes_committed_sentences", test_learning_promotes_committed_sentences},
+        {"part_of_speech_kana_learning", test_part_of_speech_kana_learning},
         /* These must also run before any test commits a kyouhakare- sentence:
          * the committed reading's joined entry leads the same reading in a
          * fresh conversion and would shift the baselines below. */
-        test_bunsetsu_hidden_resize_and_hiragana,
-        test_bunsetsu_contexts_keep_separate_choices,
-        test_bunsetsu_candidates_include_alternative_routes,
-        test_bunsetsu_filtered_identity,
-        test_default_schema_is_kagiroi,
-        test_main_dictionary_imports_managed_custom_table,
-        test_registered_phrases_are_selectable,
-        test_ascii_punct_disabled_at_session_start,
-        test_emoji_option_defaults_off,
-        test_n_run_correction,
-        test_n_run_preedit,
-        test_n_run_conversion_reading,
-        test_kan_space_starts_conversion,
-        test_conversion_correction_after_caret_move,
-        test_left_shift_keeps_mode_and_composition,
-        test_shift_preserves_every_state,
-        test_function_keys_do_not_convert_text,
-        test_ahk_shift_l_equal_sequence_stays_japanese,
-        test_zenkaku_hankaku_toggles_ascii,
-        test_zenkaku_hankaku_keeps_composition,
-        test_kana_muhenkan_one_way_switches,
-        test_ascii_off_reservation_exits,
-        test_idle_space_commits_full_width,
-        test_digit_and_keypad_symbol_keys,
-        test_symbols_append_unconfirmed,
-        test_appends_accumulate,
-        test_keypad_symbols_in_conversion_states,
-        test_space_after_append_converts_uncommitted,
-        test_romaji_after_keypad_digits_resumes_kana,
-        test_fullwidth_digit_then_romaji_suffix,
-        test_ascii_keypad_vowels_preserved_on_kana_resumption,
-        test_quote_pairs,
-        test_minus_equal_commit_and_restart,
-        test_shift_letter_switches_ascii_mode,
-        test_ascii_mode_passes_half_width_keys,
-        test_capital_c_k_inputs_edit_and_commit_verbatim,
-        test_ascii_variants_candidates,
-        test_henkan_promotes_katakana,
-        test_henkan_space_enter_chain,
-        test_backspace_escape_return_to_reading,
-        test_typing_key_confirms_selection,
-        test_punctuation_commits_and_restarts,
-        test_menu_esc_keeps_conversion,
-        test_tab_expands_candidates,
-        test_page_size_is_30,
-        test_page_cycling_selects_heads,
-        test_henkan_typing_key_confirms,
-        test_typing_hides_candidates,
-        test_first_space_converts_to_first_candidate,
-        test_space_cycles_candidates,
-        test_arrow_navigation_across_pages,
-        test_arrow_caret_and_segments,
-        test_listed_shortcuts_pass_through,
-        test_modifier_shortcuts_do_not_page,
-        test_minus_equal_on_second_page,
-        test_enter_commits_highlighted_candidate,
-        test_punctuation_appends_unconfirmed,
-        test_romanization_matches_declaration,
-        test_romaji_dictionary_is_declaration_only,
-        test_nn_pair_consumption,
-        test_longest_declared_suffix_preserves_raw_prefix,
-        test_sokuon_hatsuon_and_long_vowel,
-        test_typing_preview_is_reading,
-        test_bunsetsu_selection_and_preview,
-        test_bunsetsu_resize_and_retained_choices,
-        test_bunsetsu_codepoint_limits_and_fallback,
-        test_bunsetsu_whole_edit_and_commit,
-        test_bunsetsu_henkan_exception_and_expansion,
-        test_filtered_candidate_count_and_pages,
-        test_tail_editing_after_caret_movement,
-        test_off_reservation_and_fixed_text,
-        test_retained_list_transitions,
-        test_reading_candidates_include_other_parts_of_speech,
-        test_boundary_learning_from_hidden_commits,
-        test_contextual_learning_survives_engine_restart,
-        check_learned_raw_boundaries,
+        {"bunsetsu_hidden_resize_and_hiragana", test_bunsetsu_hidden_resize_and_hiragana},
+        {"bunsetsu_contexts_keep_separate_choices", test_bunsetsu_contexts_keep_separate_choices},
+        {"bunsetsu_candidates_include_alternative_routes", test_bunsetsu_candidates_include_alternative_routes},
+        {"bunsetsu_filtered_identity", test_bunsetsu_filtered_identity},
+        {"default_schema_is_kagiroi", test_default_schema_is_kagiroi},
+        {"main_dictionary_imports_managed_custom_table", test_main_dictionary_imports_managed_custom_table},
+        {"registered_phrases_are_selectable", test_registered_phrases_are_selectable},
+        {"ascii_punct_disabled_at_session_start", test_ascii_punct_disabled_at_session_start},
+        {"emoji_option_defaults_off", test_emoji_option_defaults_off},
+        {"n_run_correction", test_n_run_correction},
+        {"n_run_preedit", test_n_run_preedit},
+        {"n_run_conversion_reading", test_n_run_conversion_reading},
+        {"kan_space_starts_conversion", test_kan_space_starts_conversion},
+        {"conversion_correction_after_caret_move", test_conversion_correction_after_caret_move},
+        {"left_shift_keeps_mode_and_composition", test_left_shift_keeps_mode_and_composition},
+        {"shift_preserves_every_state", test_shift_preserves_every_state},
+        {"function_keys_do_not_convert_text", test_function_keys_do_not_convert_text},
+        {"ahk_shift_l_equal_sequence_stays_japanese", test_ahk_shift_l_equal_sequence_stays_japanese},
+        {"zenkaku_hankaku_toggles_ascii", test_zenkaku_hankaku_toggles_ascii},
+        {"zenkaku_hankaku_keeps_composition", test_zenkaku_hankaku_keeps_composition},
+        {"kana_muhenkan_one_way_switches", test_kana_muhenkan_one_way_switches},
+        {"ascii_off_reservation_exits", test_ascii_off_reservation_exits},
+        {"idle_space_commits_full_width", test_idle_space_commits_full_width},
+        {"digit_and_keypad_symbol_keys", test_digit_and_keypad_symbol_keys},
+        {"symbols_append_unconfirmed", test_symbols_append_unconfirmed},
+        {"appends_accumulate", test_appends_accumulate},
+        {"keypad_symbols_in_conversion_states", test_keypad_symbols_in_conversion_states},
+        {"space_after_append_converts_uncommitted", test_space_after_append_converts_uncommitted},
+        {"romaji_after_keypad_digits_resumes_kana", test_romaji_after_keypad_digits_resumes_kana},
+        {"fullwidth_digit_then_romaji_suffix", test_fullwidth_digit_then_romaji_suffix},
+        {"ascii_keypad_vowels_preserved_on_kana_resumption", test_ascii_keypad_vowels_preserved_on_kana_resumption},
+        {"quote_pairs", test_quote_pairs},
+        {"minus_equal_commit_and_restart", test_minus_equal_commit_and_restart},
+        {"shift_letter_switches_ascii_mode", test_shift_letter_switches_ascii_mode},
+        {"ascii_mode_passes_half_width_keys", test_ascii_mode_passes_half_width_keys},
+        {"capital_c_k_inputs_edit_and_commit_verbatim", test_capital_c_k_inputs_edit_and_commit_verbatim},
+        {"ascii_variants_candidates", test_ascii_variants_candidates},
+        {"henkan_promotes_katakana", test_henkan_promotes_katakana},
+        {"henkan_space_enter_chain", test_henkan_space_enter_chain},
+        {"backspace_escape_return_to_reading", test_backspace_escape_return_to_reading},
+        {"typing_key_confirms_selection", test_typing_key_confirms_selection},
+        {"punctuation_commits_and_restarts", test_punctuation_commits_and_restarts},
+        {"menu_esc_keeps_conversion", test_menu_esc_keeps_conversion},
+        {"tab_expands_candidates", test_tab_expands_candidates},
+        {"page_size_is_30", test_page_size_is_30},
+        {"page_cycling_selects_heads", test_page_cycling_selects_heads},
+        {"henkan_typing_key_confirms", test_henkan_typing_key_confirms},
+        {"typing_hides_candidates", test_typing_hides_candidates},
+        {"first_space_converts_to_first_candidate", test_first_space_converts_to_first_candidate},
+        {"space_cycles_candidates", test_space_cycles_candidates},
+        {"arrow_navigation_across_pages", test_arrow_navigation_across_pages},
+        {"arrow_caret_and_segments", test_arrow_caret_and_segments},
+        {"listed_shortcuts_pass_through", test_listed_shortcuts_pass_through},
+        {"modifier_shortcuts_do_not_page", test_modifier_shortcuts_do_not_page},
+        {"minus_equal_on_second_page", test_minus_equal_on_second_page},
+        {"enter_commits_highlighted_candidate", test_enter_commits_highlighted_candidate},
+        {"punctuation_appends_unconfirmed", test_punctuation_appends_unconfirmed},
+        {"romanization_matches_declaration", test_romanization_matches_declaration},
+        {"romaji_dictionary_is_declaration_only", test_romaji_dictionary_is_declaration_only},
+        {"nn_pair_consumption", test_nn_pair_consumption},
+        {"longest_declared_suffix_preserves_raw_prefix", test_longest_declared_suffix_preserves_raw_prefix},
+        {"sokuon_hatsuon_and_long_vowel", test_sokuon_hatsuon_and_long_vowel},
+        {"typing_preview_is_reading", test_typing_preview_is_reading},
+        {"bunsetsu_selection_and_preview", test_bunsetsu_selection_and_preview},
+        {"bunsetsu_resize_and_retained_choices", test_bunsetsu_resize_and_retained_choices},
+        {"bunsetsu_codepoint_limits_and_fallback", test_bunsetsu_codepoint_limits_and_fallback},
+        {"bunsetsu_whole_edit_and_commit", test_bunsetsu_whole_edit_and_commit},
+        {"bunsetsu_henkan_exception_and_expansion", test_bunsetsu_henkan_exception_and_expansion},
+        {"filtered_candidate_count_and_pages", test_filtered_candidate_count_and_pages},
+        {"tail_editing_after_caret_movement", test_tail_editing_after_caret_movement},
+        {"off_reservation_and_fixed_text", test_off_reservation_and_fixed_text},
+        {"retained_list_transitions", test_retained_list_transitions},
+        {"reading_candidates_include_other_parts_of_speech", test_reading_candidates_include_other_parts_of_speech},
+        {"boundary_learning_from_hidden_commits", test_boundary_learning_from_hidden_commits},
+        {"contextual_learning_survives_engine_restart", test_contextual_learning_survives_engine_restart},
+        {"learned_raw_boundaries", check_learned_raw_boundaries},
     };
-    for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); ++i) {
-        if (g_verbose) fprintf(stderr, "scenario %zu/%zu\n", i + 1, sizeof(tests) / sizeof(tests[0]));
-        tests[i]();
+    const size_t test_count = sizeof(tests) / sizeof(tests[0]);
+    struct ScenarioTiming timings[test_count];
+    int target_found = strcmp(g_snapshot_update_target, "") == 0 ||
+                       strcmp(g_snapshot_update_target, "all") == 0;
+    int snapshot_files = 0;
+    for (size_t i = 0; i < test_count; ++i) {
+        if (g_verbose)
+            fprintf(stderr, "scenario %zu/%zu %s\n", i + 1, test_count, tests[i].name);
+        size_t start = g_line_count;
+        begin_scenario(tests[i].name);
+        long t0 = now_ms();
+        tests[i].fn();
+        timings[i].name = tests[i].name;
+        timings[i].ms = now_ms() - t0;
+
+        char* path = snapshot_path(g_snapshot_dir, tests[i].name, ".yaml");
+        if (g_snapshot_update) {
+            int matched = update_target_matches(tests[i].name);
+            if (matched) target_found = 1;
+            int update_this = matched ||
+                (g_snapshot_update_target[0] == '\0' && snapshot_file_exists(path));
+            if (update_this) {
+                write_lines(path, &g_lines[start], g_line_count - start);
+                ++snapshot_files;
+            }
+        } else if (snapshot_file_exists(path)) {
+            char** expected = NULL;
+            size_t ecount = 0;
+            if (read_lines(path, &expected, &ecount) != 0) {
+                ++g_failures;
+                fprintf(stderr, "FAIL: snapshot unreadable: %s\n", path);
+            } else {
+                report_snapshot_diff(tests[i].name, expected, ecount,
+                                     &g_lines[start], g_line_count - start);
+                free_string_array(expected, ecount);
+            }
+            ++snapshot_files;
+        }
+        free(path);
     }
+    if (g_snapshot_update && !target_found) {
+        fprintf(stderr, "FAIL: --update=%s matches no scenario\n", g_snapshot_update_target);
+        return 2;
+    }
+
+    char* timings_path = snapshot_path(g_snapshot_dir, "_timings", ".txt");
+    if (g_snapshot_update) {
+        char** rows = malloc(test_count * sizeof(char*));
+        if (rows) {
+            for (size_t i = 0; i < test_count; ++i) {
+                char row[256];
+                snprintf(row, sizeof(row), "%s %ld", tests[i].name, timings[i].ms);
+                rows[i] = strdup(row);
+            }
+            write_lines(timings_path, rows, test_count);
+            free_string_array(rows, test_count);
+        }
+    } else {
+        char** rows = NULL;
+        size_t count = 0;
+        if (read_lines(timings_path, &rows, &count) != 0) {
+            fprintf(stderr, "note: no timing baseline (_timings.txt); run with --update=all to record it\n");
+        } else {
+            for (size_t i = 0; i < test_count; ++i) {
+                for (size_t j = 0; j < count; ++j) {
+                    const char* space = strchr(rows[j], ' ');
+                    if (!space) continue;
+                    size_t name_length = (size_t)(space - rows[j]);
+                    if (strlen(timings[i].name) == name_length &&
+                        strncmp(rows[j], timings[i].name, name_length) == 0) {
+                        long baseline = atol(space + 1);
+                        if (baseline >= kPerfNoiseFloorMs &&
+                            timings[i].ms > (long)(baseline * kPerfRegressionFactor)) {
+                            ++g_failures;
+                            fprintf(stderr, "PERF: %s took %ldms (baseline %ldms, threshold %.0fms)\n",
+                                    timings[i].name, timings[i].ms, baseline,
+                                    baseline * kPerfRegressionFactor);
+                        }
+                        break;
+                    }
+                }
+            }
+            free_string_array(rows, count);
+        }
+    }
+    free(timings_path);
+    free_lines();
 
     if (session) rime->destroy_session(session);
     rime->finalize();
 
     printf("%d checks, %d failures\n", g_checks, g_failures);
+    printf("%d snapshot files %s\n", snapshot_files,
+           g_snapshot_update ? "updated" : "compared");
     return g_failures == 0 ? 0 : 1;
 }

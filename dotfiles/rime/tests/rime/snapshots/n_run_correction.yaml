@@ -1,0 +1,49 @@
+scenario: n_run_correction
+cases:
+  - 入力: kanji{SPACE}
+    表示: 漢字
+  - 入力: kanji{SPACE}{SPACE}
+    表示: 感じ
+    候補: [漢字, 感じ, 幹事, かんじ, 監事, カンジ, 寛治, 幹二, 莞爾, 完治]
+
+  - 入力: kannji{SPACE}
+    表示: 漢字
+  - 入力: kannji{SPACE}{SPACE}
+    表示: 感じ
+    候補: [漢字, 感じ, 幹事, かんじ, 監事, カンジ, 寛治, 幹二, 莞爾, 完治]
+
+  - 入力: kana{SPACE}
+    表示: かな
+  - 入力: kana{SPACE}{SPACE}
+    表示: カナ
+    候補: [かな, カナ, 仮名, 香菜, 哉, 佳奈, 加奈, 花菜, 香奈, 夏菜]
+
+  - 入力: kannna{SPACE}
+    表示: 環奈
+  - 入力: kannna{SPACE}{SPACE}
+    表示: 感な
+    候補: [環奈, 感な, カンナ, かんな, 鉋, 間な, 神奈, 神名, 甘奈, 館な]
+
+  - 入力: kannnna{SPACE}
+    表示: 環奈
+  - 入力: kannnna{SPACE}{SPACE}
+    表示: 感な
+    候補: [環奈, 感な, カンナ, かんな, 鉋, 間な, 神奈, 神名, 甘奈, 館な]
+
+  - 入力: konnnitiha{SPACE}
+    表示: こんにちは
+  - 入力: konnnitiha{SPACE}{SPACE}
+    表示: 今日は
+    候補: [こんにちは, 今日は, コンニチハ, こんにち派, 根日は, コン日は, 今日葉, 婚日は, 今日派, 今日歯]
+
+  - 入力: kannnen{SPACE}
+    表示: 観念
+  - 入力: kannnen{SPACE}{SPACE}
+    表示: 澗年
+    候補: [観念, 澗年, 感年, 間年, 閑念, 感念, 館年, 官年, 缶年, かん年]
+
+  - 入力: kannnnen{SPACE}
+    表示: 観念
+  - 入力: kannnnen{SPACE}{SPACE}
+    表示: 澗年
+    候補: [観念, 澗年, 感年, 間年, 閑念, 感念, 館年, 官年, 缶年, かん年]

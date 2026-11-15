@@ -6,17 +6,24 @@
 # the run exits.
 # Options: --clean  accepted for compatibility; every run deploys from scratch
 #          --verbose print compositions and candidate menus
+#          --update[=<scenario>|all]
+#                  rewrite the guarded snapshots under tests/rime/snapshots/:
+#                  no value refreshes existing files, a scenario name adds or
+#                  rewrites that one file, and all records every scenario.
 set -euo pipefail
 
 mirror="${KAGIROI_MIRROR:-$HOME/mirrors/github.com/rimeinn/rime-kagiroi}"
 shared="${RIME_SHARED_DATA:-/usr/share/rime-data}"
 root="$(cd "$(dirname "$0")/../.." && pwd)"
+snapshots="$root/tests/rime/snapshots"
 
-harness_args=()
+harness_args=(--snapshot-dir "$snapshots")
 for argument in "$@"; do
     case "$argument" in
         --clean) ;;
         --verbose) harness_args+=(-v) ;;
+        --update) harness_args+=(--update); mkdir -p "$snapshots" ;;
+        --update=*) harness_args+=("$argument"); mkdir -p "$snapshots" ;;
         *) echo "unknown option: $argument" >&2; exit 2 ;;
     esac
 done

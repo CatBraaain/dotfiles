@@ -48,6 +48,15 @@ test-rime:
     lua5.4 tests/kagiroi_config.test.lua kagiroi.custom.yaml lua/kagiroi/candidate_gate.lua "$generated/lua/kagiroi/zenkaku_text.lua"
     bash tests/rime/run.sh
 
+# Record rime harness snapshots under dotfiles/rime/tests/rime/snapshots/.
+# Usage: just test-rime-update            (refresh existing snapshot files)
+#        just test-rime-update <scenario> (start guarding that scenario)
+#        just test-rime-update all        (record every scenario)
+# Review the diff before keeping the new files.
+[linux]
+test-rime-update scenario="":
+    bash dotfiles/rime/tests/rime/run.sh {{ if scenario == "" { "--update" } else { "--update=" + scenario } }}
+
 diff:
   bun dotfiles-manager diff
 
