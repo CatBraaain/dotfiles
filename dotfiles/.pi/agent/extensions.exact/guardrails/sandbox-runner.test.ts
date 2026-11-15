@@ -6,19 +6,22 @@ import { join } from "node:path";
 import { Guardrail } from "./guardrail.ts";
 import { SandboxRunner } from "./sandbox-runner.ts";
 import { sanitizeSandboxEnvironment } from "./config.ts";
+import { realBwrapTest } from "./bwrap-test-support.ts";
 
 describe("sandbox executors", () => {
-  it("uses the existing fs mounts, environment, cwd, argv, and request envelope", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "sandbox-executor-"));
-    try {
-      const config = join(directory, "config.yaml");
-      const masked = join(directory, "secret");
-      writeFileSync(masked, "never disclose");
-      writeFileSync(config, `read:\n  - allow: "*"\n  - deny: "${masked}"\n`);
-      const entrypoint = join(directory, "executor.ts");
-      writeFileSync(
-        entrypoint,
-        `
+  realBwrapTest(
+    "uses the existing fs mounts, environment, cwd, argv, and request envelope",
+    async () => {
+      const directory = mkdtempSync(join(tmpdir(), "sandbox-executor-"));
+      try {
+        const config = join(directory, "config.yaml");
+        const masked = join(directory, "secret");
+        writeFileSync(masked, "never disclose");
+        writeFileSync(config, `read:\n  - allow: "*"\n  - deny: "${masked}"\n`);
+        const entrypoint = join(directory, "executor.ts");
+        writeFileSync(
+          entrypoint,
+          `
         import { readFileSync, writeFileSync } from "node:fs";
         const request = JSON.parse(readFileSync(0, "utf8"));
         let secret;
@@ -29,32 +32,33 @@ describe("sandbox executors", () => {
           request, secret, writeError, cwd:process.cwd(), tool:process.argv[2], path:process.env.PATH
         }}}));
       `,
-      );
-      const policy = new Guardrail(directory, config);
-      const runner = new SandboxRunner(directory, (mode) => {
-        assert.equal(mode, "fs");
-        return policy.buildArgs(mode);
-      });
-      const params = { masked, output: join(directory, "output") };
-      const result = await runner.runTool("read", params, {
-        mode: "fs",
-        executor: { entrypoint },
-        session: { sessionId: "fixture" },
-      });
-      assert.equal(result.details.cwd, directory);
-      assert.equal(result.details.tool, "read");
-      assert.equal(result.details.path, sanitizeSandboxEnvironment(process.env).PATH);
-      assert.deepEqual(result.details.request, {
-        toolCallId: "cli",
-        params,
-        session: { sessionId: "fixture" },
-      });
-      assert.notEqual(result.details.secret, "never disclose");
-      assert.equal(result.details.writeError, "EROFS");
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
+        );
+        const policy = new Guardrail(directory, config);
+        const runner = new SandboxRunner(directory, (mode) => {
+          assert.equal(mode, "fs");
+          return policy.buildArgs(mode);
+        });
+        const params = { masked, output: join(directory, "output") };
+        const result = await runner.runTool("read", params, {
+          mode: "fs",
+          executor: { entrypoint },
+          session: { sessionId: "fixture" },
+        });
+        assert.equal(result.details.cwd, directory);
+        assert.equal(result.details.tool, "read");
+        assert.equal(result.details.path, sanitizeSandboxEnvironment(process.env).PATH);
+        assert.deepEqual(result.details.request, {
+          toolCallId: "cli",
+          params,
+          session: { sessionId: "fixture" },
+        });
+        assert.notEqual(result.details.secret, "never disclose");
+        assert.equal(result.details.writeError, "EROFS");
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   for (const entrypoint of ["relative.ts", "", "/tmp/invalid\u0000.ts"]) {
     it(`rejects an invalid executor path ${JSON.stringify(entrypoint)} before building mounts`, async () => {
@@ -90,7 +94,7 @@ describe("sandbox executors", () => {
       /exited with code 1/,
     ],
   ] as const) {
-    it(`fails closed for ${name} without a standard read fallback`, async () => {
+    realBwrapTest(`fails closed for ${name} without a standard read fallback`, async () => {
       const directory = mkdtempSync(join(tmpdir(), "sandbox-fail-"));
       try {
         const config = join(directory, "config.yaml");
@@ -114,7 +118,7 @@ describe("sandbox executors", () => {
     });
   }
 
-  it("kills a supplied executor after its first progress output", async () => {
+  realBwrapTest("kills a supplied executor after its first progress output", async () => {
     const directory = mkdtempSync(join(tmpdir(), "executor-abort-"));
     const controller = new AbortController();
     try {
@@ -150,7 +154,7 @@ describe("sandbox executors", () => {
 });
 
 describe("sandbox cancellation", () => {
-  it("aborts a running bwrap child after receiving its progress", async () => {
+  realBwrapTest("aborts a running bwrap child after receiving its progress", async () => {
     const directory = mkdtempSync(join(tmpdir(), "sandbox-abort-"));
     const controller = new AbortController();
     try {

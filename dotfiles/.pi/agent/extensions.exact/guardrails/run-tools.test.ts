@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SandboxRunner } from "./sandbox-runner.ts";
 import { Guardrail } from "./guardrail.ts";
+import { probeBwrap, realBwrapTest } from "./bwrap-test-support.ts";
 
 const runToolsPath = join(dirname(fileURLToPath(import.meta.url)), "run-tools.ts");
 const piPackageDir = resolve(
@@ -175,7 +176,7 @@ describe("run-tools CLI", () => {
 });
 
 describe("SandboxRunner.runTool（bwrap 統合）", () => {
-  it(
+  realBwrapTest(
     "bwrap 内で write → read のラウンドトリップができる",
     withTempDir(async (dir) => {
       const configPath = join(dir, "config.yaml");
@@ -200,33 +201,27 @@ describe("SandboxRunner.runTool（bwrap 統合）", () => {
     }),
   );
 
-  it(
+  const nestedArgs = [
+    "--unshare-user",
+    "--uid",
+    "0",
+    "--gid",
+    "0",
+    "--ro-bind",
+    "/",
+    "/",
+    "--proc",
+    "/proc",
+    "--dev",
+    "/dev",
+    "--",
+    "sh",
+    "-c",
+    "cat /proc/self/uid_map",
+  ];
+  it.skipIf(!probeBwrap(nestedArgs))(
     'read.allow "*" keeps nested user namespaces usable inside bwrap',
     withTempDir(async (dir) => {
-      const nestedArgs = [
-        "--unshare-user",
-        "--uid",
-        "0",
-        "--gid",
-        "0",
-        "--ro-bind",
-        "/",
-        "/",
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
-        "--",
-        "sh",
-        "-c",
-        "cat /proc/self/uid_map",
-      ];
-      const nestedProbe = spawnSync("bwrap", nestedArgs, { encoding: "utf8" });
-      if (nestedProbe.status !== 0) {
-        console.log("nested user namespaces unavailable, skipping nested bwrap integration test");
-        return;
-      }
-
       const configPath = join(dir, "config.yaml");
       writeFileSync(configPath, 'read:\n  - {allow: "*"}\n');
       const policy = new Guardrail(dir, configPath);

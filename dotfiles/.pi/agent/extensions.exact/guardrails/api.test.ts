@@ -44,6 +44,7 @@ import {
   sanitizeSandboxEnvironment,
 } from "./config.ts";
 import { startStderrTeeReceiver } from "./run-tools";
+import { realBwrapTest } from "./bwrap-test-support.ts";
 
 function sourcePathFromSymlink(symlinkPath: URL): URL {
   const target = readFileSync(symlinkPath, "utf8").trim();
@@ -4092,82 +4093,85 @@ describe("tool path environment expansion", () => {
   }
 
   for (const prefix of ["@", "@~/"]) {
-    it(`keeps ${prefix} values literal through real backend reads and writes`, async () => {
-      const previousHome = process.env.HOME;
-      const cwd = join(directory, "cwd");
-      const home = join(directory, "home");
-      mkdirSync(cwd);
-      mkdirSync(home);
-      process.env.HOME = home;
-      try {
-        const decoy =
-          prefix === "@" ? join(directory, "denied", "note.txt") : join(home, "note.txt");
-        mkdirSync(dirname(decoy), { recursive: true });
-        writeFileSync(decoy, "other fixture");
-        const value = prefix === "@" ? `@${decoy}` : "@~/note.txt";
-        const target = resolve(cwd, value);
-        mkdirSync(dirname(target), { recursive: true });
-        writeFileSync(target, "literal fixture");
-        process.env[variableName] = value;
-        const config = join(directory, "backend.yaml");
-        writeFileSync(
-          config,
-          JSON.stringify({
-            read: [{ allow: "*" }, { deny: decoy }],
-            write: [{ allow: directory }, { deny: decoy }],
-          }),
-        );
-        const guardrail = new Guardrail(cwd, config);
-        const runner = new SandboxRunner(cwd, (mode) => guardrail.buildArgs(mode));
-        const authorized: { operation: string; path: string }[] = [];
-        const executed: string[] = [];
-        Guardrail.prototype.authorizePath = async function (operation, path, context) {
-          authorized.push({ operation, path });
-          return originalAuthorize.call(this, operation, path, context);
-        };
-        runner.runTool = async (toolName, params, options) => {
-          executed.push((params as { path: string }).path);
-          return originalRun.call(runner, toolName, params, options);
-        };
-        const context = { hasUI: false } as ExtensionToolContext;
-        const result = await executeGuardedTool(guardrail, runner, cwd, {
-          id: "literal-read",
-          toolName: "read",
-          params: { path: `\${${variableName}}` },
-          context,
-        });
-        assert.deepEqual(result.content, [{ type: "text", text: "literal fixture" }]);
-        await executeGuardedTool(guardrail, runner, cwd, {
-          id: "literal-write",
-          toolName: "write",
-          params: { path: `\${${variableName}}`, content: "updated fixture" },
-          context,
-        });
-        assert.equal(readFileSync(target, "utf8"), "updated fixture");
-        assert.equal(readFileSync(decoy, "utf8"), "other fixture");
-        assert.deepEqual(authorized, [
-          { operation: "read", path: target },
-          { operation: "write", path: target },
-        ]);
-        assert.deepEqual(executed, [target, target]);
-        const denyConfig = join(directory, "deny-backend.yaml");
-        writeFileSync(denyConfig, JSON.stringify({ read: [{ allow: "*" }, { deny: target }] }));
-        const denyingGuardrail = new Guardrail(cwd, denyConfig);
-        await assert.rejects(
-          executeGuardedTool(denyingGuardrail, runner, cwd, {
-            id: "literal-deny",
+    realBwrapTest(
+      `keeps ${prefix} values literal through real backend reads and writes`,
+      async () => {
+        const previousHome = process.env.HOME;
+        const cwd = join(directory, "cwd");
+        const home = join(directory, "home");
+        mkdirSync(cwd);
+        mkdirSync(home);
+        process.env.HOME = home;
+        try {
+          const decoy =
+            prefix === "@" ? join(directory, "denied", "note.txt") : join(home, "note.txt");
+          mkdirSync(dirname(decoy), { recursive: true });
+          writeFileSync(decoy, "other fixture");
+          const value = prefix === "@" ? `@${decoy}` : "@~/note.txt";
+          const target = resolve(cwd, value);
+          mkdirSync(dirname(target), { recursive: true });
+          writeFileSync(target, "literal fixture");
+          process.env[variableName] = value;
+          const config = join(directory, "backend.yaml");
+          writeFileSync(
+            config,
+            JSON.stringify({
+              read: [{ allow: "*" }, { deny: decoy }],
+              write: [{ allow: directory }, { deny: decoy }],
+            }),
+          );
+          const guardrail = new Guardrail(cwd, config);
+          const runner = new SandboxRunner(cwd, (mode) => guardrail.buildArgs(mode));
+          const authorized: { operation: string; path: string }[] = [];
+          const executed: string[] = [];
+          Guardrail.prototype.authorizePath = async function (operation, path, context) {
+            authorized.push({ operation, path });
+            return originalAuthorize.call(this, operation, path, context);
+          };
+          runner.runTool = async (toolName, params, options) => {
+            executed.push((params as { path: string }).path);
+            return originalRun.call(runner, toolName, params, options);
+          };
+          const context = { hasUI: false } as ExtensionToolContext;
+          const result = await executeGuardedTool(guardrail, runner, cwd, {
+            id: "literal-read",
             toolName: "read",
             params: { path: `\${${variableName}}` },
             context,
-          }),
-          /Access denied:/,
-        );
-        assert.deepEqual(executed, [target, target]);
-      } finally {
-        if (previousHome === undefined) delete process.env.HOME;
-        else process.env.HOME = previousHome;
-      }
-    });
+          });
+          assert.deepEqual(result.content, [{ type: "text", text: "literal fixture" }]);
+          await executeGuardedTool(guardrail, runner, cwd, {
+            id: "literal-write",
+            toolName: "write",
+            params: { path: `\${${variableName}}`, content: "updated fixture" },
+            context,
+          });
+          assert.equal(readFileSync(target, "utf8"), "updated fixture");
+          assert.equal(readFileSync(decoy, "utf8"), "other fixture");
+          assert.deepEqual(authorized, [
+            { operation: "read", path: target },
+            { operation: "write", path: target },
+          ]);
+          assert.deepEqual(executed, [target, target]);
+          const denyConfig = join(directory, "deny-backend.yaml");
+          writeFileSync(denyConfig, JSON.stringify({ read: [{ allow: "*" }, { deny: target }] }));
+          const denyingGuardrail = new Guardrail(cwd, denyConfig);
+          await assert.rejects(
+            executeGuardedTool(denyingGuardrail, runner, cwd, {
+              id: "literal-deny",
+              toolName: "read",
+              params: { path: `\${${variableName}}` },
+              context,
+            }),
+            /Access denied:/,
+          );
+          assert.deepEqual(executed, [target, target]);
+        } finally {
+          if (previousHome === undefined) delete process.env.HOME;
+          else process.env.HOME = previousHome;
+        }
+      },
+    );
   }
 
   it("keeps the authorized path when the environment changes during authorization", async () => {

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it } from "bun:test";
+import { describe } from "bun:test";
+import { realBwrapTest } from "./bwrap-test-support.ts";
 import type {
   ExtensionAPI,
   ExtensionToolContext,
@@ -11,7 +12,7 @@ import type {
 import { createGuardrailsAPI } from "./api.ts";
 
 describe("guardrails API lifetime", () => {
-  it(
+  realBwrapTest(
     "shares a path grant between ask_permission and execution within one instance only",
     withDirectory(async (directory) => {
       const first = fixture(directory);
@@ -46,7 +47,7 @@ describe("guardrails API lifetime", () => {
     }),
   );
 
-  it(
+  realBwrapTest(
     "rejects old execution and permission references after shutdown",
     withDirectory(async (directory) => {
       const { api, tools, handlers } = fixture(directory);
@@ -84,7 +85,7 @@ describe("guardrails API lifetime", () => {
     }),
   );
 
-  it(
+  realBwrapTest(
     "expires turn approvals through the lifecycle registered by the public factory",
     withDirectory(async (directory) => {
       const { api, tools, handlers } = fixture(directory);
