@@ -109,9 +109,10 @@ Actions:
 | 条件 | 動作 |
 | --- | --- |
 | モードが`apply` / `revert` | その方向でタスクを実行する(`revert`実行時は反転) |
-| モードが`skip` | 実行しない。`Skipped: <group> > <task>[skip]`を標準エラーへ出力する |
-| 定義に存在するタスクがActionsに無い | 実行しない。`NoAction: <group> > <task>`を標準エラーへ出力する |
+| モードが`skip`、または定義に存在するタスクがActionsに無い（グループ未指定を含む） | `skip`として実行しない。`Skipped: <group> > <task>[skip]`を出力する |
 | Actionsが定義に無いタスクを参照している | 検証エラーとし、実行前に終了コード1で止める(定義とActionsの乖離を防止する) |
+
+未指定Actionの`skip`補完は、[元CLIの設定ロード処理](https://github.com/CatBraaain/winconfig/blob/bdcf66eafeb63d5e39af513f5261a1be4d9d9844/src/config.ts#L68-L95)に準拠する。通知の出力形式は「結果の集約と表示」に従う。
 
 ## 生成されるPowerShell
 
@@ -139,11 +140,25 @@ Actions:
 
 | 条件 | タスク結果 | 表示 |
 | --- | --- | --- |
-| 1つ以上の操作が失敗 | `failed` | `Failed: <group> > <task>[<mode>] - <最初の失敗理由>` |
+| 1つ以上の操作が失敗 | `failed` | `TaskError: <group> > <task>[<mode>] - <最初の失敗理由>` |
 | 失敗がなく成功した操作が1つ以上ある | `success` | `Success: <group> > <task>[<mode>]`(理由は出さない) |
 | 失敗も成功もなく、空または`<NotChange>`のみ | `skipped` | `Skipped: <group> > <task>[<mode>] - <理由>` |
 
 最終行に`Summary: success=<n> failed=<n> skipped=<n>`を出力する。`<n>`は各分類のタスク件数で、3件数の合計は実行タスク数に等しい。失敗1件以上で終了コード1、それ以外は0である。
+
+選択通知・タスク結果・集計行は、ローカル時刻の`HH:mm:ss.SSS | `を先頭に付け、標準エラーへ出力する。`--print`の標準出力は生成したPowerShellスクリプトだけである。
+
+標準エラーがTTYであり、環境変数`NO_COLOR`が未定義の場合だけ、次のANSI色で着色する。`NO_COLOR`が空文字でも定義されていれば無着色とする。
+
+| ラベル | 色 | ANSIコード |
+| --- | --- | --- |
+| `TaskError` | 赤 | `31` |
+| `Success` | 緑 | `32` |
+| `Skipped` | 黄 | `33` |
+
+着色範囲はラベル文字列（コロンを除く）と、存在する場合の理由だけとする。理由はモード直後の「半角空白・ハイフン・半角空白」の区切りより後を指す。着色した各部分の直後にANSIリセット`0`を出力する。時刻、タスク名、モード、区切り、集計行は無着色とする。
+
+ラベル・着色範囲は[元CLIの結果表示](https://github.com/CatBraaain/winconfig/blob/bdcf66eafeb63d5e39af513f5261a1be4d9d9844/src/engine.ts#L30-L108)、出力先・時刻形式は[元CLIのロガー](https://github.com/CatBraaain/winconfig/blob/bdcf66eafeb63d5e39af513f5261a1be4d9d9844/src/cli.ts#L10-L41)に準拠する。
 
 ## 検証
 

@@ -277,11 +277,7 @@ export function selectRunnableTasks(
   const selection: TaskSelection = { runnables: [], notices: [] };
   for (const [groupName, tasks] of Object.entries(definitions)) {
     for (const [name, body] of Object.entries(tasks)) {
-      const mode = actions[groupName]?.[name];
-      if (mode === undefined) {
-        selection.notices.push(`NoAction: ${groupName} > ${name}`);
-        continue;
-      }
+      const mode = actions[groupName]?.[name] ?? "skip";
       const resolvedMode = reverse ? flipMode(mode) : mode;
       if (resolvedMode === "skip") {
         selection.notices.push(`Skipped: ${groupName} > ${name}[skip]`);
@@ -533,24 +529,41 @@ function Remove-RegistryEntry {
     }
 }
 
+function Write-WinconfigLog {
+    param([string] $Message)
+    [Console]::Error.WriteLine(('{0:HH:mm:ss.fff} | {1}' -f [DateTime]::Now, $Message))
+}
+
+function Format-WinconfigResultText {
+    param([string] $Text, [int] $Color)
+    if ($script:WinconfigUseColor) {
+        '{0}[{1}m{2}{0}[0m' -f [char]27, $Color, $Text
+    } else {
+        $Text
+    }
+}
+
 function Write-WinconfigTaskReport {
     param([pscustomobject] $Result)
     foreach ($line in $Result.rawOutput) {
         Write-Output $line
     }
-    $labels = @{ 'success' = 'Success'; 'failed' = 'Failed'; 'skipped' = 'Skipped' }
-    $label = $labels[$Result.status]
+    $labels = @{ 'success' = 'Success'; 'failed' = 'TaskError'; 'skipped' = 'Skipped' }
+    $colors = @{ 'success' = 32; 'failed' = 31; 'skipped' = 33 }
+    $color = $colors[$Result.status]
+    $label = Format-WinconfigResultText $labels[$Result.status] $color
     if ($Result.status -eq 'success') {
-        Write-Output ('{0}: {1}[{2}]' -f $label, $Result.fullName, $Result.mode)
+        Write-WinconfigLog ('{0}: {1}[{2}]' -f $label, $Result.fullName, $Result.mode)
     } else {
-        Write-Output ('{0}: {1}[{2}] - {3}' -f $label, $Result.fullName, $Result.mode, $Result.reason)
+        $reason = Format-WinconfigResultText $Result.reason $color
+        Write-WinconfigLog ('{0}: {1}[{2}] - {3}' -f $label, $Result.fullName, $Result.mode, $reason)
     }
     $script:WinconfigCounts[$Result.status] += 1
 }
 
 function Write-WinconfigSummary {
     $counts = $script:WinconfigCounts
-    Write-Output ('Summary: success={0} failed={1} skipped={2}' -f $counts['success'], $counts['failed'], $counts['skipped'])
+    Write-WinconfigLog ('Summary: success={0} failed={1} skipped={2}' -f $counts['success'], $counts['failed'], $counts['skipped'])
     if ($counts['failed'] -gt 0) {
         exit 1
     }
@@ -558,11 +571,15 @@ function Write-WinconfigSummary {
 }
 `;
 
-export function generateScript(runnables: RunnableTask[]): string {
+export function generateScript(
+  runnables: RunnableTask[],
+  { colorEnabled = false }: { colorEnabled?: boolean } = {},
+): string {
   const sections = [
     "$ErrorActionPreference = 'Stop'",
     "",
     PS_HELPERS,
+    `$script:WinconfigUseColor = $${colorEnabled}`,
     "$script:WinconfigCounts = @{ success = 0; failed = 0; skipped = 0 }",
     "",
     ...runnables.map((task) => generateTaskScript(task)),
@@ -600,17 +617,17 @@ const EXECUTION_RUNTIME: ExecutionRuntime = {
 
 async function executeScript(script: string, runtime: ExecutionRuntime): Promise<number> {
   if (runtime.platform !== "win32") {
-    console.error("winconfig: execution requires Windows");
+    writeLog("winconfig: execution requires Windows");
     return 1;
   }
   const gsudoPath = runtime.which("gsudo");
   if (gsudoPath === null) {
-    console.error("winconfig: gsudo was not found in PATH");
+    writeLog("winconfig: gsudo was not found in PATH");
     return 1;
   }
   const powershellPath = runtime.which("pwsh") ?? runtime.which("powershell");
   if (powershellPath === null) {
-    console.error("winconfig: neither pwsh nor powershell was found in PATH");
+    writeLog("winconfig: neither pwsh nor powershell was found in PATH");
     return 1;
   }
   const scriptPath = join(tmpdir(), `winconfig-${process.pid}.ps1`);
@@ -645,17 +662,26 @@ function parseArgs(argv: string[]): CliOptions {
   return { reverse: argv.includes("revert"), printOnly: argv.includes("--print") };
 }
 
+function writeLog(message: string): void {
+  const now = new Date();
+  const time = now.toTimeString().slice(0, 8);
+  const milliseconds = String(now.getMilliseconds()).padStart(3, "0");
+  process.stderr.write(`${time}.${milliseconds} | ${message}\n`);
+}
+
 export async function main(
   argv: string[],
   runtime: ExecutionRuntime = EXECUTION_RUNTIME,
 ): Promise<number> {
   const options = parseArgs(argv);
+  const colorEnabled = process.stderr.isTTY === true && process.env.NO_COLOR === undefined;
   const { definitions, actions } = loadConfig(import.meta.dir);
   const { runnables, notices } = selectRunnableTasks(definitions, actions, options.reverse);
   for (const notice of notices) {
-    console.error(notice);
+    const message = colorEnabled ? notice.replace("Skipped", "\x1b[33mSkipped\x1b[0m") : notice;
+    writeLog(message);
   }
-  const script = generateScript(runnables);
+  const script = generateScript(runnables, { colorEnabled: !options.printOnly && colorEnabled });
   if (options.printOnly) {
     process.stdout.write(script);
     return 0;
@@ -669,7 +695,7 @@ if (import.meta.main) {
       process.exitCode = exitCode;
     })
     .catch((error: unknown) => {
-      console.error(error instanceof Error ? error.message : String(error));
+      writeLog(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     });
 }

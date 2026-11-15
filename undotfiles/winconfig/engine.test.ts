@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, it, spyOn } from "bun:test";
 import { parse as parseYaml } from "yaml";
 import {
   generateScript,
@@ -262,10 +262,21 @@ Actions:
     Skipped: skip
 `);
 
-  it("excludes tasks without an action entry as NoAction", () => {
+  it("defaults tasks without an action entry to skip", () => {
     const selection = selectRunnableTasks(definitions, actions, false);
-    assert.ok(selection.notices.includes("NoAction: Sample > NoEntry"));
+    assert.ok(selection.notices.includes("Skipped: Sample > NoEntry[skip]"));
     assert.ok(selection.runnables.every((task) => task.name !== "NoEntry"));
+  });
+
+  it("defaults tasks in an unspecified action group to skip under reverse", () => {
+    const selection = selectRunnableTasks(definitions, {}, true);
+    assert.deepEqual(selection.runnables, []);
+    assert.deepEqual(selection.notices, [
+      "Skipped: Sample > Applied[skip]",
+      "Skipped: Sample > Reverted[skip]",
+      "Skipped: Sample > Skipped[skip]",
+      "Skipped: Sample > NoEntry[skip]",
+    ]);
   });
 
   it("excludes skip tasks with a Skipped notice", () => {
@@ -446,7 +457,7 @@ describe("repository config", () => {
 
   it("selects every tasked definition except the unlisted and skipped ones", () => {
     assert.equal(selection.runnables.length, 65);
-    assert.ok(selection.notices.includes("NoAction: Personalization > HideVisualStudio"));
+    assert.ok(selection.notices.includes("Skipped: Personalization > HideVisualStudio[skip]"));
     assert.ok(
       selection.notices.includes("Skipped: Windows > EnableWindowsRestoreLastSession[skip]"),
     );
@@ -501,7 +512,15 @@ describe("print CLI", () => {
       const result = runCli([...direction, "--print"]);
       assert.equal(result.exitCode, 0);
       assert.equal(result.stdout.toString(), expectedScript);
-      assert.equal(result.stderr.toString(), expectedNotices);
+      const noticeLines = result.stderr.toString().trimEnd().split("\n");
+      for (const line of noticeLines) {
+        assert.match(line, /^\d{2}:\d{2}:\d{2}\.\d{3} \| Skipped: /);
+      }
+      const untimedNotices = result.stderr
+        .toString()
+        .replace(/^\d{2}:\d{2}:\d{2}\.\d{3} \| /gm, "");
+      assert.equal(untimedNotices, expectedNotices);
+      assert.equal(result.stderr.toString().includes("\x1b["), false);
     });
   }
 
@@ -517,6 +536,16 @@ describe("print CLI", () => {
 
 describe("CLI execution boundary", () => {
   const config = loadConfig(import.meta.dir);
+  const stderrTtyDescriptor = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+
+  beforeEach(() => {
+    Object.defineProperty(process.stderr, "isTTY", { configurable: true, value: false });
+  });
+
+  afterEach(() => {
+    if (stderrTtyDescriptor) Object.defineProperty(process.stderr, "isTTY", stderrTtyDescriptor);
+    else Reflect.deleteProperty(process.stderr, "isTTY");
+  });
 
   for (const reverse of [false, true]) {
     for (const powershell of ["pwsh", "powershell"]) {
@@ -651,6 +680,161 @@ describe("CLI execution boundary", () => {
       );
     });
   }
+});
+
+describe("CLI log compatibility", () => {
+  for (const isTTY of [true, false, undefined]) {
+    for (const noColor of [undefined, "", "1"]) {
+      it(`uses parent stderr TTY=${isTTY} and NO_COLOR=${JSON.stringify(noColor)} for notices and elevated reports`, async () => {
+        const ttyDescriptor = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+        const previousNoColor = process.env.NO_COLOR;
+        const stderr = spyOn(process.stderr, "write").mockImplementation(() => true);
+        Object.defineProperty(process.stderr, "isTTY", { configurable: true, value: isTTY });
+        if (noColor === undefined) delete process.env.NO_COLOR;
+        else process.env.NO_COLOR = noColor;
+        try {
+          const colorEnabled = isTTY === true && noColor === undefined;
+          const result = await main([], {
+            platform: "win32",
+            which(command) {
+              return command + ".exe";
+            },
+            async execute(command) {
+              const script = readFileSync(command.at(-1)!, "utf8");
+              assert.ok(script.includes(`$script:WinconfigUseColor = $${colorEnabled}`));
+              return 0;
+            },
+          });
+          assert.equal(result, 0);
+          const config = loadConfig(import.meta.dir);
+          const { notices } = selectRunnableTasks(config.definitions, config.actions, false);
+          const actualLines = stderr.mock.calls.map(([chunk]) => String(chunk));
+          assert.equal(actualLines.length, notices.length);
+          for (const [index, line] of actualLines.entries()) {
+            assert.match(line, /^\d{2}:\d{2}:\d{2}\.\d{3} \| /);
+            const expectedNotice = colorEnabled
+              ? notices[index]!.replace("Skipped", "\x1b[33mSkipped\x1b[0m")
+              : notices[index]!;
+            assert.equal(line.slice("00:00:00.000 | ".length), expectedNotice + "\n");
+          }
+        } finally {
+          stderr.mockRestore();
+          if (ttyDescriptor) Object.defineProperty(process.stderr, "isTTY", ttyDescriptor);
+          else Reflect.deleteProperty(process.stderr, "isTTY");
+          if (previousNoColor === undefined) delete process.env.NO_COLOR;
+          else process.env.NO_COLOR = previousNoColor;
+        }
+      });
+    }
+  }
+});
+
+describe("PowerShell log compatibility", () => {
+  const pwsh = Bun.which("pwsh");
+  const definitions = definitionsFromYaml(`
+Definitions:
+  Sample:
+    Denied:
+      description: Safe exception injection.
+      script:
+        apply: |
+          Write-Output 'raw-before-failure'
+          throw [System.UnauthorizedAccessException]::new('injected denial')
+    Success:
+      description: Safe output only.
+      script:
+        apply: |
+          Write-Output '<PermissionDenied> is raw output'
+          return
+          throw 'unreachable'
+    Empty:
+      description: No operations.
+    Unchanged:
+      description: No registry operations.
+      registries:
+        - path: HKCU\\Software\\NeverTouched
+          new_existence: <NotChange>
+    ExplicitSkip:
+      description: Must not execute.
+      script: { apply: "throw 'unreachable'" }
+    MissingAction:
+      description: Must not execute.
+      script: { apply: "throw 'unreachable'" }
+`);
+  const actions = actionsFromYaml(`
+Actions:
+  Sample:
+    Denied: apply
+    Success: apply
+    Empty: apply
+    Unchanged: apply
+    ExplicitSkip: skip
+`);
+
+  for (const colorEnabled of [false, true]) {
+    it.skipIf(pwsh === null)(
+      `reports exact labels and reasons to timed stderr with color=${colorEnabled}`,
+      () => {
+        withTemporaryDirectory((directory) => {
+          const { runnables } = selectRunnableTasks(definitions, actions, false);
+          const scriptPath = join(directory, "safe-logging.ps1");
+          writeFileSync(scriptPath, "\uFEFF" + generateScript(runnables, { colorEnabled }));
+          const result = Bun.spawnSync([pwsh!, "-NoProfile", "-File", scriptPath], {
+            env: { ...process.env, NO_COLOR: "1" },
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          assert.equal(result.exitCode, 1);
+          assert.deepEqual(result.stdout.toString().trimEnd().split(/\r?\n/), [
+            "raw-before-failure",
+            "<PermissionDenied> is raw output",
+          ]);
+          const reportLines = result.stderr.toString().trimEnd().split(/\r?\n/);
+          for (const line of reportLines) {
+            assert.match(line, /^\d{2}:\d{2}:\d{2}\.\d{3} \| /);
+          }
+          const messages = reportLines.map((line) => line.slice("00:00:00.000 | ".length));
+          const expected = colorEnabled
+            ? [
+                "\x1b[31mTaskError\x1b[0m: Sample > Denied[apply] - \x1b[31mpermission denied (administrator privileges are required)\x1b[0m",
+                "\x1b[32mSuccess\x1b[0m: Sample > Success[apply]",
+                "\x1b[33mSkipped\x1b[0m: Sample > Empty[apply] - \x1b[33mno operations\x1b[0m",
+                "\x1b[33mSkipped\x1b[0m: Sample > Unchanged[apply] - \x1b[33mno operations\x1b[0m",
+                "Summary: success=1 failed=1 skipped=2",
+              ]
+            : [
+                "TaskError: Sample > Denied[apply] - permission denied (administrator privileges are required)",
+                "Success: Sample > Success[apply]",
+                "Skipped: Sample > Empty[apply] - no operations",
+                "Skipped: Sample > Unchanged[apply] - no operations",
+                "Summary: success=1 failed=1 skipped=2",
+              ];
+          assert.deepEqual(messages, expected);
+        });
+      },
+    );
+  }
+
+  it.skipIf(pwsh === null)(
+    "keeps the zero exit code and empty counts when all actions are skipped",
+    () => {
+      withTemporaryDirectory((directory) => {
+        const { runnables } = selectRunnableTasks(definitions, {}, false);
+        const scriptPath = join(directory, "empty-logging.ps1");
+        writeFileSync(scriptPath, generateScript(runnables));
+        const result = Bun.spawnSync([pwsh!, "-NoProfile", "-File", scriptPath], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        assert.equal(result.exitCode, 0);
+        assert.equal(result.stdout.toString(), "");
+        assert.match(
+          result.stderr.toString(),
+          /^\d{2}:\d{2}:\d{2}\.\d{3} \| Summary: success=0 failed=0 skipped=0\r?\n$/,
+        );
+      });
+    },
+  );
 });
 
 describe("just argument forwarding", () => {
