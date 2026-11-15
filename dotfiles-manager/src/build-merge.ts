@@ -513,6 +513,7 @@ function isPlainObject(value: unknown): value is PlainObject {
     typeof value === "object" &&
     value !== null &&
     !Array.isArray(value) &&
+    !(value instanceof Date) &&
     !isNode(value) &&
     !rawJson.isRawJSON(value)
   );
