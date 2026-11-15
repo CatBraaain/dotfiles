@@ -808,6 +808,152 @@ replacements:
     assert.equal(existsSync(join(distRoot, "old/old.txt")), false);
   });
 
+  for (const { name, mode } of [
+    { name: "runs run_after after a successful isolated external clone", mode: "clone" },
+    {
+      name: "aborts an isolated external clone failure without running run_after",
+      mode: "clone-failure",
+    },
+    { name: "runs run_after when an isolated external pull changes HEAD", mode: "updated" },
+    {
+      name: "skips run_after when an isolated external pull leaves HEAD unchanged",
+      mode: "unchanged",
+    },
+  ] as const) {
+    it(name, async () => {
+      const fixtureParent = "/tmp/work/dotfiles";
+      await mkdir(fixtureParent, { recursive: true });
+      const fixtureRoot = await mkdtemp(join(fixtureParent, "external-sync-test-"));
+      try {
+        const fixtureHome = join(fixtureRoot, "home");
+        const mirrorDir = join(fixtureHome, "mirrors/github.com/example/fixture");
+        const gitCalls = join(fixtureRoot, "git-calls.jsonl");
+        const binDir = join(fixtureRoot, "bin");
+        const isClone = mode === "clone" || mode === "clone-failure";
+        const shouldRunAfter = mode === "clone" || mode === "updated";
+        await mkdir(fixtureHome);
+        if (!isClone) {
+          await put(mirrorDir, "payload.txt", "source\n");
+          await put(mirrorDir, ".git/fixture-head", "before\n");
+          await put(mirrorDir, ".git/build-pull-time", "0\n");
+        }
+        const runAfterScript = `import { appendFileSync, writeFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(gitCalls)}, JSON.stringify(["run_after", process.cwd()]) + "\\n");
+appendFileSync("run-after.txt", "ran\\n");
+writeFileSync("payload.txt", "processed\\n");`;
+        await put(
+          fixtureRoot,
+          "dotfiles/external.data.yaml",
+          JSON.stringify({
+            repos: {
+              "example/fixture": {
+                destination: "output",
+                entries: ["payload.txt"],
+                run_after: [[process.execPath, "-e", runAfterScript]],
+              },
+            },
+          }),
+        );
+        await put(
+          fixtureRoot,
+          "bin/git",
+          `#!${process.execPath}
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(gitCalls)}, JSON.stringify(args) + "\\n");
+if (args[0] === "clone") {
+  if (process.env.TEST_EXTERNAL_MODE === "clone-failure") {
+    console.error("fixture clone failure");
+    process.exit(1);
+  }
+  const mirror = args.at(-1);
+  mkdirSync(join(mirror, ".git"), { recursive: true });
+  writeFileSync(join(mirror, "payload.txt"), "source\\n");
+} else if (args[0] === "-C" && args[2] === "rev-parse") {
+  process.stdout.write(readFileSync(join(args[1], ".git/fixture-head"), "utf8"));
+} else if (args[0] === "-C" && args[2] === "pull") {
+  if (process.env.TEST_EXTERNAL_MODE === "updated") {
+    writeFileSync(join(args[1], ".git/fixture-head"), "after\\n");
+  }
+} else if (args[0] !== "-C" || args[2] !== "clean") {
+  console.error("unexpected fixture git command");
+  process.exit(1);
+}
+`,
+        );
+        await chmod(join(binDir, "git"), 0o755);
+        const startedAt = Date.now();
+        const child = Bun.spawn(
+          [
+            process.execPath,
+            "-e",
+            `import { main } from ${JSON.stringify(join(import.meta.dir, "build.ts"))}; await main(${JSON.stringify(fixtureRoot)}, "linux", ${JSON.stringify(fixtureHome)});`,
+          ],
+          {
+            cwd: fixtureRoot,
+            env: {
+              ...process.env,
+              HOME: fixtureHome,
+              TMPDIR: fixtureRoot,
+              PATH: binDir,
+              BUILD_FORCE_PULL: "0",
+              TEST_EXTERNAL_MODE: mode,
+            },
+            stdout: "pipe",
+            stderr: "pipe",
+          },
+        );
+        const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+        const calls = (await readFile(gitCalls, "utf8"))
+          .trimEnd()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        const expectedCalls: string[][] = isClone
+          ? [
+              [
+                "clone",
+                "--depth",
+                "1",
+                "--quiet",
+                "https://github.com/example/fixture.git",
+                mirrorDir,
+              ],
+            ]
+          : [
+              ["-C", mirrorDir, "rev-parse", "HEAD"],
+              ["-C", mirrorDir, "pull", "--ff-only", "--quiet"],
+              ["-C", mirrorDir, "rev-parse", "HEAD"],
+            ];
+        if (shouldRunAfter)
+          expectedCalls.push(["-C", mirrorDir, "clean", "-fdX"], ["run_after", mirrorDir]);
+        assert.deepEqual(calls, expectedCalls);
+        const outputPath = join(fixtureRoot, "dist/output/payload.txt");
+        const runAfterPath = join(mirrorDir, "run-after.txt");
+        if (mode === "clone-failure") {
+          assert.notEqual(code, 0);
+          assert.match(stderr, /git clone failed.*fixture clone failure/);
+          assert.equal(existsSync(mirrorDir), false);
+          assert.equal(existsSync(outputPath), false);
+          assert.equal(existsSync(runAfterPath), false);
+          return;
+        }
+        assert.equal(code, 0, stderr);
+        assert.equal(stderr, "");
+        const expectedPayload = shouldRunAfter ? "processed\n" : "source\n";
+        assert.equal(await readFile(outputPath, "utf8"), expectedPayload);
+        assert.equal(existsSync(runAfterPath), shouldRunAfter);
+        if (shouldRunAfter) assert.equal(await readFile(runAfterPath, "utf8"), "ran\n");
+        const recordedPull = Number(
+          await readFile(join(mirrorDir, ".git/build-pull-time"), "utf8"),
+        );
+        assert.ok(recordedPull >= startedAt);
+      } finally {
+        await rm(fixtureRoot, { recursive: true, force: true });
+      }
+    });
+  }
+
   it("applies parent and child remaps before writing nested external destinations", async () => {
     await put(
       root,
