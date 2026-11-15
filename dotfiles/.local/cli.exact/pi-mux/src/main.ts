@@ -12,14 +12,13 @@ import {
   renameSync,
   statSync,
   writeFileSync,
-  type Stats,
 } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HistorySummaryCache, parseEpochMs, type SavedSessionSummary } from "./history-summary";
+import { HistorySummaryCache } from "./history-summary";
 
 type Operation =
   | { kind: "help" }
@@ -1296,41 +1295,22 @@ async function historySessions(
   const normalIds = new Set<string>();
   const summaries = new HistorySummaryCache();
   for (const { file, archived } of listed.flat()) {
-    let header: ReturnType<typeof readHeader>;
-    try {
-      header = readHeader(file);
-    } catch {
-      continue;
-    }
-    const btime = parseEpochMs(header?.timestamp);
-    if (
-      header?.type !== "session" ||
-      typeof header.id !== "string" ||
-      !SESSION_ID_PATTERN.test(header.id) ||
-      typeof header.cwd !== "string" ||
-      !isAbsolute(header.cwd) ||
-      btime === undefined
-    )
-      continue;
-    if (customRoot && !targetCwds.has(header.cwd)) continue;
-    if (archived && normalIds.has(header.id)) continue;
+    const summary = summaries.resolveHistory(file, (header) => {
+      if (customRoot && !targetCwds.has(header.cwd)) return false;
+      const shadowedByNormalCopy = archived && normalIds.has(header.id);
+      return !shadowedByNormalCopy;
+    });
+    const header = summary?.header;
+    if (!summary || !header) continue;
     if (!archived) normalIds.add(header.id);
-    let stat: Stats;
-    let summary: SavedSessionSummary;
-    try {
-      stat = statSync(file);
-      summary = summaries.resolve(file);
-    } catch {
-      continue;
-    }
     history.push({
       id: header.id,
       cwd: header.cwd,
       file,
       title: summary.title,
-      btime,
+      btime: header.btime,
       mtime: summary.mtime,
-      size: stat.size,
+      size: summary.size,
     });
   }
   return history.sort(

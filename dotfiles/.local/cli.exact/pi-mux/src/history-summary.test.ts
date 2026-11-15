@@ -57,7 +57,7 @@ function sessionInfo(name: unknown): unknown {
 }
 
 describe("history summary read consistency", () => {
-  it("does not save a summary when the original file changes during the read", () => {
+  it("re-resolves the original once when it changes during the read and saves only the stable result", () => {
     const directory = join(temporaryRoot, randomUUID());
     const file = join(directory, "session.jsonl");
     fs.mkdirSync(directory, { recursive: true });
@@ -88,12 +88,11 @@ describe("history summary read consistency", () => {
       const summaries = new HistorySummaryCache();
       const duringUpdate = summaries.resolve(file);
       assert.equal(updated, true);
-      assert.deepEqual(duringUpdate, { title: "Before update", mtime: null });
+      assert.deepEqual(duringUpdate, { title: "After update", mtime: null });
       const cacheDirectory = join(directory, "cache", "pi-mux", "history-titles");
-      assert.deepEqual(fs.readdirSync(cacheDirectory), []);
+      assert.equal(fs.readdirSync(cacheDirectory).length, 1);
       read.mockRestore();
       assert.deepEqual(summaries.resolve(file), { title: "After update", mtime: null });
-      assert.equal(fs.readdirSync(cacheDirectory).length, 1);
       assert.deepEqual(summaries.resolve(file), { title: "After update", mtime: null });
     } finally {
       read.mockRestore();
@@ -165,7 +164,10 @@ describe("history first user message fallback", () => {
 
   it("collapses consecutive whitespace including newlines into single spaces", () => {
     const { file, cacheHome } = writeSummaryFixture([
-      userMessage([{ type: "text", text: "  fix\n\n   the\t" }, { type: "text", text: "\nbuild  " }]),
+      userMessage([
+        { type: "text", text: "  fix\n\n   the\t" },
+        { type: "text", text: "\nbuild  " },
+      ]),
     ]);
     assert.equal(resolveTitleIsolated(cacheHome, file), "fix the build");
   });

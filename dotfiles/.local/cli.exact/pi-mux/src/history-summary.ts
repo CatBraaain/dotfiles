@@ -18,12 +18,19 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
 const SUMMARY_READ_CHUNK_BYTES = 256 * 1024;
-const SUMMARY_CACHE_VERSION = 3;
+const SUMMARY_CACHE_VERSION = 4;
+const SESSION_HEADER_MAX_BYTES = 64 * 1024;
+const SESSION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
 const FIRST_MESSAGE_MAX_CODE_POINTS = 80;
 
 export type SavedSessionSummary = { title: string | null; mtime: number | null };
 
-type StoredSummary = SavedSessionSummary & { fingerprint?: string };
+type SavedSessionHeader = { id: string; cwd: string; btime: number };
+type StoredSummary = SavedSessionSummary & {
+  header: SavedSessionHeader | null;
+  fingerprint?: string;
+};
+type SavedSessionHistory = StoredSummary & { size: number };
 
 export function parseEpochMs(value: unknown): number | undefined {
   if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
@@ -52,22 +59,53 @@ export class HistorySummaryCache {
   }
 
   resolve(file: string): SavedSessionSummary {
-    if (!this.directory) return withoutFingerprint(readSavedSessionSummary(file));
-    const path = join(this.directory, `${createHash("sha256").update(file).digest("hex")}.json`);
-    try {
-      const before = fileFingerprint(statSync(file, { bigint: true }));
-      const cached = this.load(path, file, before);
-      if (cached !== undefined && before === fileFingerprint(statSync(file, { bigint: true })))
-        return cached;
-    } catch {
-      return withoutFingerprint(readSavedSessionSummary(file));
-    }
-    const resolved = readSavedSessionSummary(file);
-    if (resolved.fingerprint !== undefined) this.save(path, file, resolved);
-    return withoutFingerprint(resolved);
+    const summary = this.resolveHistory(file);
+    return { title: summary?.title ?? null, mtime: summary?.mtime ?? null };
   }
 
-  private load(path: string, file: string, fingerprint: string): SavedSessionSummary | undefined {
+  resolveHistory(
+    file: string,
+    acceptHeader?: (header: SavedSessionHeader) => boolean,
+  ): SavedSessionHistory | undefined {
+    return this.resolveFile(file, this.directory, acceptHeader, true);
+  }
+
+  private resolveFile(
+    file: string,
+    directory: string | undefined,
+    acceptHeader: ((header: SavedSessionHeader) => boolean) | undefined,
+    allowsRetry: boolean,
+  ): SavedSessionHistory | undefined {
+    let fd: number | undefined;
+    try {
+      fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK);
+      const before = fstatSync(fd, { bigint: true });
+      if (!before.isFile()) return undefined;
+      const fingerprint = fileFingerprint(before);
+      const path = directory
+        ? join(directory, `${createHash("sha256").update(file).digest("hex")}.json`)
+        : undefined;
+      const cached = path ? this.load(path, file, fingerprint) : undefined;
+      const header = cached ? cached.header : readSavedSessionHeader(fd);
+      if (acceptHeader && (!header || !acceptHeader(header))) return undefined;
+      const resolved = cached ?? readSavedSessionSummary(fd, Number(before.size), header);
+      const stable =
+        fingerprint === fileFingerprint(fstatSync(fd, { bigint: true })) &&
+        fingerprint === fileFingerprint(statSync(file, { bigint: true }));
+      if (!stable) {
+        if (allowsRetry) return this.resolveFile(file, directory, acceptHeader, false);
+        return { ...resolved, size: Number(before.size) };
+      }
+      if (!cached && path && resolved.fingerprint === fingerprint) this.save(path, file, resolved);
+      return { ...resolved, size: Number(before.size) };
+    } catch {
+      return undefined;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  }
+
+  private load(path: string, file: string, fingerprint: string): StoredSummary | undefined {
     let fd: number | undefined;
     try {
       fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -82,12 +120,14 @@ export class HistorySummaryCache {
         record.file !== file ||
         record.fingerprint !== fingerprint ||
         !isValidTitle(record.title) ||
-        !isValidMtime(record.mtime)
+        !isValidMtime(record.mtime) ||
+        !isValidHeader(record.header)
       )
         return undefined;
       return {
         title: record.title as string | null,
         mtime: record.mtime as number | null,
+        header: record.header as SavedSessionHeader | null,
       };
     } catch {
       return undefined;
@@ -125,20 +165,44 @@ function isValidMtime(value: unknown): value is number | null {
   return value === null || (typeof value === "number" && Number.isFinite(value));
 }
 
-function withoutFingerprint(summary: StoredSummary): SavedSessionSummary {
-  return { title: summary.title, mtime: summary.mtime };
+function isValidHeader(value: unknown): value is SavedSessionHeader {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const header = value as Record<string, unknown>;
+  return (
+    typeof header.id === "string" &&
+    SESSION_ID_PATTERN.test(header.id) &&
+    typeof header.cwd === "string" &&
+    isAbsolute(header.cwd) &&
+    typeof header.btime === "number" &&
+    Number.isFinite(header.btime)
+  );
 }
 
-export function readSavedSessionSummary(file: string): StoredSummary {
-  let fd: number | undefined;
+function readSavedSessionHeader(fd: number): SavedSessionHeader | null {
+  const buffer = Buffer.alloc(SESSION_HEADER_MAX_BYTES);
+  const length = readSync(fd, buffer, 0, buffer.length, 0);
+  const firstLine = buffer.subarray(0, length).toString("utf8").split("\n")[0]!;
   try {
-    fd = openSync(file, "r");
-    const before = fstatSync(fd, { bigint: true });
+    const header = JSON.parse(firstLine);
+    if (!header || typeof header !== "object" || Array.isArray(header)) return null;
+    const parsed = { id: header.id, cwd: header.cwd, btime: parseEpochMs(header.timestamp) };
+    return header.type === "session" && isValidHeader(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function readSavedSessionSummary(
+  fd: number,
+  size: number,
+  header: SavedSessionHeader | null,
+): StoredSummary {
+  try {
     let title: string | null = null;
     let titleFound = false;
     let mtime: number | null = null;
     let mtimeFound = false;
-    for (const line of reverseLines(fd, Number(before.size))) {
+    for (const line of reverseLines(fd, size)) {
       if (!line) continue;
       let entry: unknown;
       try {
@@ -161,16 +225,10 @@ export function readSavedSessionSummary(file: string): StoredSummary {
       }
       if (titleFound && mtimeFound) break;
     }
-    if (title === null) title = firstUserMessageTitle(fd, Number(before.size));
-    const fingerprint = fileFingerprint(before);
-    const stable =
-      fingerprint === fileFingerprint(fstatSync(fd, { bigint: true })) &&
-      fingerprint === fileFingerprint(statSync(file, { bigint: true }));
-    return stable ? { title, mtime, fingerprint } : { title, mtime };
+    if (title === null) title = firstUserMessageTitle(fd, size);
+    return { title, mtime, header, fingerprint: fileFingerprint(fstatSync(fd, { bigint: true })) };
   } catch {
-    return { title: null, mtime: null };
-  } finally {
-    if (fd !== undefined) closeSync(fd);
+    return { title: null, mtime: null, header };
   }
 }
 
