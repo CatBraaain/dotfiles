@@ -29,7 +29,6 @@ import systemPromptExtension, {
   assembleHeadContent,
   foldSystemMessages,
   type FoldedSystemState,
-  type TemplateRunState,
 } from "./index.ts";
 import {
   buildSystemPrompt,
