@@ -289,7 +289,10 @@ describe("non-forced runs on the installed ExtensionRunner", () => {
     const loaded = loadSystemPromptExtension();
     await emitSessionStart(loaded);
     const runner = runnerFor([loaded.extension]);
-    const start = await runner.emitBeforeAgentStart("hello", undefined, options);
+    const start = await runner.emitBeforeAgentStart(
+      { messageType: "user", prompt: "hello" },
+      options,
+    );
     // The extension must not introduce a forced prompt: dynamic per-turn
     // options keep flowing exactly as without it.
     assert.equal(start.systemPromptOptions.forceSystemPrompt, undefined);
@@ -308,7 +311,7 @@ describe("non-forced runs on the installed ExtensionRunner", () => {
     const loaded = loadSystemPromptExtension();
     await emitSessionStart(loaded);
     const runner = runnerFor([loaded.extension]);
-    await runner.emitBeforeAgentStart("hello", undefined, options);
+    await runner.emitBeforeAgentStart({ messageType: "user", prompt: "hello" }, options);
 
     const result = await runner.emitContext(messages);
     assert.equal(result.length, messages.length);
@@ -340,7 +343,7 @@ describe("non-forced runs on the installed ExtensionRunner", () => {
     const loaded = loadSystemPromptExtension();
     await emitSessionStart(loaded);
     const runner = runnerFor([loaded.extension]);
-    await runner.emitBeforeAgentStart("hello", undefined, options);
+    await runner.emitBeforeAgentStart({ messageType: "user", prompt: "hello" }, options);
 
     const result = await runner.emitContext(messages);
     const head = result[0] as SystemMessage;
@@ -371,7 +374,7 @@ describe("non-forced runs on the installed ExtensionRunner", () => {
     const loaded = loadSystemPromptExtension();
     await emitSessionStart(loaded);
     const runner = runnerFor([loaded.extension]);
-    await runner.emitBeforeAgentStart("hello", undefined, options);
+    await runner.emitBeforeAgentStart({ messageType: "user", prompt: "hello" }, options);
 
     const result = await runner.emitContext(messages);
     const head = result[0] as SystemMessage;
@@ -384,7 +387,7 @@ describe("non-forced runs on the installed ExtensionRunner", () => {
     const loaded = loadSystemPromptExtension();
     await emitSessionStart(loaded);
     const runner = runnerFor([loaded.extension]);
-    await runner.emitBeforeAgentStart("hello", undefined, options);
+    await runner.emitBeforeAgentStart({ messageType: "user", prompt: "hello" }, options);
 
     const result = await runner.emitContext(transcriptFor(options));
     const head = result[0] as SystemMessage;
@@ -407,7 +410,7 @@ describe("non-forced runs on the installed ExtensionRunner", () => {
     const forced = loadSystemPromptExtension();
     await emitSessionStart(forced);
     const forcedRunner = runnerFor([forcingExtension("\n\nAGENT"), forced.extension]);
-    await forcedRunner.emitBeforeAgentStart("hello", undefined, options);
+    await forcedRunner.emitBeforeAgentStart({ messageType: "user", prompt: "hello" }, options);
     const projected = await forcedRunner.emitContext(messages);
     assert.deepEqual(projected, messages);
   });
@@ -416,7 +419,10 @@ describe("non-forced runs on the installed ExtensionRunner", () => {
     const options = richOptions();
     const loaded = loadSystemPromptExtension();
     const runner = runnerFor([loaded.extension]);
-    const start = await runner.emitBeforeAgentStart("hello", undefined, options);
+    const start = await runner.emitBeforeAgentStart(
+      { messageType: "user", prompt: "hello" },
+      options,
+    );
     // Same re-normalization agent-session applies for the next turn.
     const nextTurn = oracle.normalizeBuildSystemPromptOptions({
       ...start.systemPromptOptions,
@@ -432,7 +438,10 @@ describe("forced runs with an earlier forcing extension", () => {
 
   async function forcedRun(options: BuildSystemPromptOptions): Promise<string | undefined> {
     const runner = runnerFor([forcingExtension(addendum), loadSystemPromptExtension().extension]);
-    const start = await runner.emitBeforeAgentStart("hello", undefined, options);
+    const start = await runner.emitBeforeAgentStart(
+      { messageType: "user", prompt: "hello" },
+      options,
+    );
     return start.systemPromptOptions.forceSystemPrompt;
   }
 
@@ -457,7 +466,10 @@ describe("forced runs with an earlier forcing extension", () => {
       opaqueForcingExtension("completely different forced prompt"),
       loadSystemPromptExtension().extension,
     ]);
-    const start = await runner.emitBeforeAgentStart("hello", undefined, options);
+    const start = await runner.emitBeforeAgentStart(
+      { messageType: "user", prompt: "hello" },
+      options,
+    );
     assert.equal(start.systemPromptOptions.forceSystemPrompt, "completely different forced prompt");
   });
 
@@ -699,7 +711,7 @@ describe("session_start indicator", () => {
     const loaded = loadSystemPromptExtension();
     const runner = runnerFor([loaded.extension]);
     // Establish run state, then start a session with a tui context.
-    await runner.emitBeforeAgentStart("hello", undefined, options);
+    await runner.emitBeforeAgentStart({ messageType: "user", prompt: "hello" }, options);
     const { ctx, customCalls, widgetCalls } = sessionStartCtx("tui", buildSystemPrompt(options));
     await dispatchSessionStart(loaded, ctx);
 
