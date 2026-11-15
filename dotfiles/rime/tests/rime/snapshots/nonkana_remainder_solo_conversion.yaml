@@ -1,0 +1,28 @@
+scenario: nonkana_remainder_solo_conversion
+cases:
+  - 入力: kanji{SPACE}
+    表示: 感じ
+  - 入力: kanji{SPACE}{SPACE}
+    表示: 漢字
+    候補: [感じ, 漢字, 幹事, かんじ, 監事, カンジ, 寛治, 幹二, 莞爾, 完治]
+  - 入力: kanji{SPACE}{SPACE}{BACKSPACE}
+    表示: 漢
+  - 入力: kanji{SPACE}{SPACE}{BACKSPACE}{SPACE}
+    表示: 漢
+  - 入力: kanji{SPACE}{SPACE}{BACKSPACE}{SPACE}{SPACE}
+    表示: 漢
+    候補: [漢]
+  - 入力: kanji{SPACE}{SPACE}{BACKSPACE}{SPACE}{SPACE}{RETURN}
+    確定: 漢
+
+  - 入力: kana{HENKAN}
+    表示: カナ
+  - 入力: kana{HENKAN}{BACKSPACE}
+    表示: カ
+  - 入力: kana{HENKAN}{BACKSPACE}{SPACE}
+    表示: カ
+  - 入力: kana{HENKAN}{BACKSPACE}{SPACE}{SPACE}
+    表示: カ
+    候補: [カ]
+  - 入力: kana{HENKAN}{BACKSPACE}{SPACE}{SPACE}{RETURN}
+    確定: カ

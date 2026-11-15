@@ -1403,6 +1403,118 @@ static void test_backspace_escape_return_to_reading(void) {
     check(!take_commit(commit, sizeof(commit)), "Backspace after the kept conversion must not commit");
 }
 
+/* SPEC: a remainder without dictionary candidates converts into a solo
+ * conversion whose only candidate is the remainder itself; the next Space
+ * opens its list and Enter commits the remainder. */
+static void test_nonkana_remainder_solo_conversion(void) {
+    RIME_STRUCT(RimeContext, context);
+    char commit[256];
+
+    /* The kanji-only remainder of a selected candidate converts solo. */
+    fresh_session();
+    type_text("kanji");
+    press(kSpace);
+    press(kSpace);
+    char selected[256] = "";
+    if (current_menu(&context)) {
+        int highlighted = context.menu.highlighted_candidate_index;
+        if (highlighted >= 0 && highlighted < context.menu.num_candidates &&
+            context.menu.candidates[highlighted].text) {
+            snprintf(selected, sizeof(selected), "%s",
+                     context.menu.candidates[highlighted].text);
+        }
+        rime->free_context(&context);
+    } else {
+        check(False, "the visible candidate menu must keep a queryable context");
+    }
+    char remainder[256] = "";
+    check(selected[0] != '\0' &&
+              without_last_utf8_character(selected, remainder, sizeof(remainder)),
+          "the selected candidate must contain a character to delete");
+    press(kBackSpace);
+    check(composing(), "Backspace must keep the composition open");
+    check(preedit_equals(remainder),
+          "Backspace must delete the selected candidate's last character");
+    press(kSpace);
+    check(composing(), "Space must convert the remainder");
+    check(preedit_equals(remainder),
+          "the solo conversion must keep the remainder as its preedit");
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates == 0,
+              "the solo conversion must keep the candidate list hidden");
+        rime->free_context(&context);
+    } else {
+        check(False, "the solo conversion must keep a queryable context");
+    }
+    press(kSpace);
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates == 1 &&
+                  context.menu.candidates[0].text &&
+                  strcmp(context.menu.candidates[0].text, remainder) == 0,
+              "the solo conversion must list only the remainder");
+        rime->free_context(&context);
+    } else {
+        check(False, "Space must open the solo candidate list");
+    }
+    check(!take_commit(commit, sizeof(commit)),
+          "opening the solo list must not commit");
+    press(kReturn);
+    check(take_commit(commit, sizeof(commit)) &&
+              strcmp(commit, remainder) == 0,
+          "Enter must commit the remainder");
+
+    /* The katakana remainder of the Henkan candidate follows the same path. */
+    fresh_session();
+    type_text("kana");
+    press(kHenkan);
+    char henkan_candidate[256] = "";
+    if (current_menu(&context)) {
+        if (context.composition.preedit) {
+            snprintf(henkan_candidate, sizeof(henkan_candidate), "%s",
+                     context.composition.preedit);
+        }
+        rime->free_context(&context);
+    } else {
+        check(False, "the Henkan conversion must keep a queryable context");
+    }
+    char kana_remainder[256] = "";
+    check(henkan_candidate[0] != '\0' &&
+              without_last_utf8_character(henkan_candidate, kana_remainder,
+                                          sizeof(kana_remainder)),
+          "the Henkan candidate must contain a character to delete");
+    press(kBackSpace);
+    check(composing(), "Backspace must keep the Henkan composition open");
+    check(preedit_equals(kana_remainder),
+          "Backspace must delete the Henkan candidate's last character");
+    press(kSpace);
+    check(composing(), "Space must convert the katakana remainder");
+    check(preedit_equals(kana_remainder),
+          "the katakana solo conversion must keep the remainder as its preedit");
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates == 0,
+              "the katakana solo conversion must keep the candidate list hidden");
+        rime->free_context(&context);
+    } else {
+        check(False, "the katakana solo conversion must keep a queryable context");
+    }
+    press(kSpace);
+    if (current_menu(&context)) {
+        check(context.menu.num_candidates == 1 &&
+                  context.menu.candidates[0].text &&
+                  strcmp(context.menu.candidates[0].text, kana_remainder) == 0,
+              "the katakana solo conversion must list only the remainder");
+        rime->free_context(&context);
+    } else {
+        check(False, "Space must open the katakana solo candidate list");
+    }
+    check(!take_commit(commit, sizeof(commit)),
+          "opening the katakana solo list must not commit");
+    press(kReturn);
+    check(take_commit(commit, sizeof(commit)) &&
+              strcmp(commit, kana_remainder) == 0,
+          "Enter must commit the katakana remainder");
+}
+
 /* SPEC: a letter or digit key during conversion confirms the selected
  * candidate and starts the next input; digits never pick candidates. */
 static void test_typing_key_confirms_selection(void) {
@@ -5047,6 +5159,7 @@ int main(int argc, char* argv[]) {
         {"henkan_promotes_katakana", test_henkan_promotes_katakana},
         {"henkan_space_enter_chain", test_henkan_space_enter_chain},
         {"backspace_escape_return_to_reading", test_backspace_escape_return_to_reading},
+        {"nonkana_remainder_solo_conversion", test_nonkana_remainder_solo_conversion},
         {"typing_key_confirms_selection", test_typing_key_confirms_selection},
         {"punctuation_commits_and_restarts", test_punctuation_commits_and_restarts},
         {"menu_esc_keeps_conversion", test_menu_esc_keeps_conversion},
