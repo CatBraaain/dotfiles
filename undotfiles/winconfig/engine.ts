@@ -581,12 +581,34 @@ export function loadConfig(dir: string): Config {
   return { definitions, actions };
 }
 
-function findPowerShell(): string | null {
-  return Bun.which("pwsh") ?? Bun.which("powershell");
+export interface ExecutionRuntime {
+  platform: NodeJS.Platform;
+  which: (command: string) => string | null;
+  execute: (command: string[]) => Promise<number>;
 }
 
-async function executeScript(script: string): Promise<number> {
-  const powershellPath = findPowerShell();
+async function executeCommand(command: string[]): Promise<number> {
+  const child = Bun.spawn(command, { stdout: "inherit", stderr: "inherit" });
+  return child.exited;
+}
+
+const EXECUTION_RUNTIME: ExecutionRuntime = {
+  platform: process.platform,
+  which: Bun.which,
+  execute: executeCommand,
+};
+
+async function executeScript(script: string, runtime: ExecutionRuntime): Promise<number> {
+  if (runtime.platform !== "win32") {
+    console.error("winconfig: execution requires Windows");
+    return 1;
+  }
+  const gsudoPath = runtime.which("gsudo");
+  if (gsudoPath === null) {
+    console.error("winconfig: gsudo was not found in PATH");
+    return 1;
+  }
+  const powershellPath = runtime.which("pwsh") ?? runtime.which("powershell");
   if (powershellPath === null) {
     console.error("winconfig: neither pwsh nor powershell was found in PATH");
     return 1;
@@ -594,11 +616,15 @@ async function executeScript(script: string): Promise<number> {
   const scriptPath = join(tmpdir(), `winconfig-${process.pid}.ps1`);
   writeFileSync(scriptPath, "\uFEFF" + script, "utf8");
   try {
-    const child = Bun.spawn(
-      [powershellPath, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
-      { stdout: "inherit", stderr: "inherit" },
-    );
-    return await child.exited;
+    return await runtime.execute([
+      gsudoPath,
+      powershellPath,
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
   } finally {
     rmSync(scriptPath, { force: true });
   }
@@ -619,7 +645,10 @@ function parseArgs(argv: string[]): CliOptions {
   return { reverse: argv.includes("revert"), printOnly: argv.includes("--print") };
 }
 
-async function main(argv: string[]): Promise<number> {
+export async function main(
+  argv: string[],
+  runtime: ExecutionRuntime = EXECUTION_RUNTIME,
+): Promise<number> {
   const options = parseArgs(argv);
   const { definitions, actions } = loadConfig(import.meta.dir);
   const { runnables, notices } = selectRunnableTasks(definitions, actions, options.reverse);
@@ -631,7 +660,7 @@ async function main(argv: string[]): Promise<number> {
     process.stdout.write(script);
     return 0;
   }
-  return executeScript(script);
+  return executeScript(script, runtime);
 }
 
 if (import.meta.main) {

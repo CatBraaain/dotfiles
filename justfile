@@ -64,9 +64,12 @@ diff:
 managed:
   bun dotfiles-manager managed
 
+[positional-arguments]
+[script("pwsh", "-NoProfile", "-File")]
 [windows]
 winconfig *args:
-  gsudo bun undotfiles/winconfig/engine.ts {{args}}
+  bun undotfiles/winconfig/engine.ts @args
+  exit $LASTEXITCODE
 
 [windows]
 wintasks:

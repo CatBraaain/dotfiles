@@ -20,10 +20,12 @@ bun undotfiles/winconfig/engine.ts [revert] [--print]
 | --- | --- |
 | 引数なし | Actionsのモードどおりに全タスクを実行する |
 | `revert` | Actionsの`apply`を`revert`へ、`revert`を`apply`へ反転して実行する |
-| `--print` | 実行せず、生成したPowerShellスクリプトを標準出力へ出力する |
+| `--print` | Actions選択・`skip`・`revert`反転に従って生成したPowerShellスクリプトを、実行せずBOMなしで標準出力へ出力する。gsudo・PowerShellの検索・起動は行わない |
 
-- 管理者権限はエンジン自身が昇格せず、呼び出し側(justレシピのgsudo)で確保する
-- 実行は生成スクリプトをUTF-8 BOM付きの一時ファイルへ書き出し、`pwsh`(無ければ`powershell`)の`-NoProfile` `-ExecutionPolicy Bypass` `-File`で実行する
+未知の引数は、外部コマンドを検索・起動する前に終了コード1になる。
+
+- CLIは引数を検証した後、`--print` なしの実行をWindowsでのみ受け付ける。Windows以外では実行前に終了コード1で止める
+- 実行は生成スクリプトをUTF-8 BOM付きの一時ファイルへ書き出し、gsudo経由で `pwsh`(無ければ`powershell`)の`-NoProfile` `-ExecutionPolicy Bypass` `-File`へ渡す。一時ファイルは子プロセス終了・起動失敗の後に削除する。gsudo・PowerShellが見つからない場合は終了コード1で止める
 - 終了コードはPowerShellの終了コードを引き継ぐ(失敗1件以上で1)。定義・Actionsの検証エラーも終了コード1
 
 ## 定義 definitions.yaml
@@ -147,4 +149,3 @@ Actions:
 
 - `engine.test.ts`がロード・検証・モード解決・スクリプト生成を自動テストする(Windows外で実行可)。実行は `cd undotfiles/winconfig && bun test`
 - 型検証はリポジトリルートの`bunx tsc --noEmit`で行う
-- 実機Windowsでの適用は`just winconfig`、解除は`just winconfig revert`が呼び出し口である

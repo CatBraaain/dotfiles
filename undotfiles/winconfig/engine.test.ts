@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
-import { describe, it } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it, spyOn } from "bun:test";
 import { parse as parseYaml } from "yaml";
 import {
   generateScript,
   generateTaskScript,
   loadConfig,
+  main,
   normalizeRegistryPath,
   parseActions,
   parseDefinitions,
@@ -462,4 +466,237 @@ describe("repository config", () => {
     );
     assert.equal(task?.mode, "apply");
   });
+});
+
+function runCli(args: string[]) {
+  return Bun.spawnSync([process.execPath, join(import.meta.dir, "engine.ts"), ...args], {
+    cwd: import.meta.dir,
+    env: { ...process.env, PATH: "" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
+function withTemporaryDirectory(test: (directory: string) => void) {
+  const parent = join(tmpdir(), "work", "dotfiles", "winconfig-script");
+  mkdirSync(parent, { recursive: true });
+  const directory = mkdtempSync(join(parent, "cli-test-"));
+  try {
+    test(directory);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+describe("print CLI", () => {
+  const config = loadConfig(import.meta.dir);
+
+  for (const reverse of [false, true]) {
+    const direction = reverse ? ["revert"] : [];
+    const selection = selectRunnableTasks(config.definitions, config.actions, reverse);
+    const expectedScript = generateScript(selection.runnables);
+    const expectedNotices = selection.notices.join("\n") + "\n";
+
+    it(`prints the ${reverse ? "reversed" : "Actions"} selection without PowerShell`, () => {
+      const result = runCli([...direction, "--print"]);
+      assert.equal(result.exitCode, 0);
+      assert.equal(result.stdout.toString(), expectedScript);
+      assert.equal(result.stderr.toString(), expectedNotices);
+    });
+  }
+
+  for (const args of [["script"], ["script", "revert"], ["--output", "a.ps1"]]) {
+    it(`rejects unknown arguments ${JSON.stringify(args)}`, () => {
+      const result = runCli(args);
+      assert.equal(result.exitCode, 1);
+      assert.equal(result.stdout.toString(), "");
+      assert.match(result.stderr.toString(), /unknown arguments:.*usage:/);
+    });
+  }
+});
+
+describe("CLI execution boundary", () => {
+  const config = loadConfig(import.meta.dir);
+
+  for (const reverse of [false, true]) {
+    for (const powershell of ["pwsh", "powershell"]) {
+      it(`elevates ${reverse ? "revert" : "normal"} execution with ${powershell} and preserves the exit code`, async () => {
+        const gsudoPath = "C:\\Program Files\\gsudo\\gsudo.exe";
+        const powershellPath = `C:\\Program Files\\${powershell}\\${powershell}.exe`;
+        const lookedUp: string[] = [];
+        let scriptPath = "";
+        const expectedScript =
+          "\uFEFF" +
+          generateScript(
+            selectRunnableTasks(config.definitions, config.actions, reverse).runnables,
+          );
+        const result = await main(reverse ? ["revert"] : [], {
+          platform: "win32",
+          which(command) {
+            lookedUp.push(command);
+            if (command === "gsudo") return gsudoPath;
+            return command === powershell ? powershellPath : null;
+          },
+          async execute(command) {
+            scriptPath = command.at(-1)!;
+            assert.deepEqual(command, [
+              gsudoPath,
+              powershellPath,
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              scriptPath,
+            ]);
+            assert.equal(readFileSync(scriptPath, "utf8"), expectedScript);
+            return 7;
+          },
+        });
+        assert.equal(result, 7);
+        assert.equal(existsSync(scriptPath), false);
+        assert.deepEqual(
+          lookedUp,
+          powershell === "pwsh" ? ["gsudo", "pwsh"] : ["gsudo", "pwsh", "powershell"],
+        );
+      });
+    }
+  }
+
+  it("rejects non-Windows execution before command lookup", async () => {
+    const result = await main([], {
+      platform: "linux",
+      which() {
+        throw new Error("unexpected command lookup");
+      },
+      async execute() {
+        throw new Error("unexpected process execution");
+      },
+    });
+    assert.equal(result, 1);
+  });
+
+  for (const missing of ["gsudo", "PowerShell"]) {
+    it(`rejects execution when ${missing} is missing`, async () => {
+      const result = await main([], {
+        platform: "win32",
+        which(command) {
+          return missing === "PowerShell" && command === "gsudo" ? "gsudo.exe" : null;
+        },
+        async execute() {
+          throw new Error("unexpected process execution");
+        },
+      });
+      assert.equal(result, 1);
+    });
+  }
+
+  it("removes the temporary script and propagates a process start failure", async () => {
+    let scriptPath = "";
+    const failure = new Error("mock process start failure");
+    await assert.rejects(
+      main([], {
+        platform: "win32",
+        which(command) {
+          return command + ".exe";
+        },
+        async execute(command) {
+          scriptPath = command.at(-1)!;
+          assert.equal(existsSync(scriptPath), true);
+          throw failure;
+        },
+      }),
+      failure,
+    );
+    assert.equal(existsSync(scriptPath), false);
+  });
+
+  for (const args of [["--print"], ["revert", "--print"]]) {
+    it(`generates ${JSON.stringify(args)} without command lookup on Windows`, async () => {
+      const stdout = spyOn(process.stdout, "write").mockImplementation(() => true);
+      try {
+        const result = await main(args, {
+          platform: "win32",
+          which() {
+            throw new Error("unexpected command lookup");
+          },
+          async execute() {
+            throw new Error("unexpected process execution");
+          },
+        });
+        assert.equal(result, 0);
+        const expected = generateScript(
+          selectRunnableTasks(config.definitions, config.actions, args.includes("revert"))
+            .runnables,
+        );
+        assert.equal(stdout.mock.calls[0]?.[0], expected);
+      } finally {
+        stdout.mockRestore();
+      }
+    });
+  }
+
+  for (const args of [["script"], ["--output", "a.ps1"]]) {
+    it(`rejects ${JSON.stringify(args)} before command lookup or elevation`, async () => {
+      await assert.rejects(
+        main(args, {
+          platform: "win32",
+          which() {
+            throw new Error("unexpected command lookup");
+          },
+          async execute() {
+            throw new Error("unexpected process execution");
+          },
+        }),
+        /unknown arguments:.*usage:/,
+      );
+    });
+  }
+});
+
+describe("just argument forwarding", () => {
+  const just = Bun.which("just");
+  const pwsh = Bun.which("pwsh");
+  const root = join(import.meta.dir, "../..");
+  const justfile = readFileSync(join(root, "justfile"), "utf8");
+  const recipes = justfile
+    .split("[positional-arguments]\n")
+    .slice(1)
+    .map((section) => section.split("\n\n")[0]!);
+
+  it.skipIf(just === null || pwsh === null)(
+    "forwards revert and --print and propagates CLI errors through the Windows recipe",
+    () => {
+      withTemporaryDirectory((directory) => {
+        const recipe = recipes.find((candidate) => candidate.includes("[windows]"));
+        assert.ok(recipe !== undefined);
+        const recipePath = join(directory, "justfile");
+        writeFileSync(recipePath, "[positional-arguments]\n" + recipe.replace("[windows]\n", ""));
+        const command = [just!, "--justfile", recipePath, "--working-directory", root, "winconfig"];
+        const result = Bun.spawnSync([...command, "revert", "--print"], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        assert.equal(result.exitCode, 0, result.stderr.toString());
+        const config = loadConfig(import.meta.dir);
+        const expected = generateScript(
+          selectRunnableTasks(config.definitions, config.actions, true).runnables,
+        );
+        assert.equal(result.stdout.toString(), expected);
+        for (const argument of ["invalid", "日本語 with space"]) {
+          const invalid = Bun.spawnSync([...command, argument], {
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          assert.equal(invalid.exitCode, 1);
+          assert.equal(invalid.stdout.toString(), "");
+          assert.ok(
+            invalid.stderr
+              .toString()
+              .includes(`unknown arguments: ${argument} (usage: bun engine.ts [revert] [--print])`),
+          );
+        }
+      });
+    },
+    15_000,
+  );
 });
