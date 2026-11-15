@@ -128,7 +128,7 @@ describe("session list loading in the mounted client", () => {
         };
       });
       expect(animation).toEqual({ name: "session-spin", duration: "1s", timing: "linear" });
-      await receive({ type: "loading" });
+      await receive({ type: "loading", manual: false });
       await receive({ type: "sessions", state });
       await receive({ type: "error", message: "Unrelated operation failed" });
       expect(await button.getAttribute("aria-busy")).toBe("true");
@@ -210,10 +210,36 @@ describe("session list loading in the mounted client", () => {
     expect(await page.locator("#status").getAttribute("class")).toBe("");
   });
 
+  it("shows the refreshing status only for a manual refresh", async () => {
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+
+    await receive({ type: "loading", manual: false, displayedSessionId: sessionId });
+    await expect.poll(() => page.locator("#status").textContent()).toBe("");
+    expect(await page.locator(".session-row").count()).toBe(1);
+    expect(await page.locator(".selected .session-name").textContent()).toBe("Atlas current");
+
+    await receive({ type: "loading", manual: true, displayedSessionId: sessionId });
+    await expect.poll(() => page.locator("#status").textContent()).toBe("Refreshing sessions…");
+  });
+
+  it("shows only the operation error during an automatic refresh", async () => {
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+
+    await receive({ type: "loading", manual: false, displayedSessionId: sessionId });
+    await failWorkspaceAddition();
+
+    expect(await page.locator("#status").textContent()).toBe("Invalid workspace path");
+    expect(await page.locator(".selected .session-name").textContent()).toBe("Atlas current");
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+  });
+
   it("keeps refreshing and the existing list visible alongside an operation error", async () => {
     await receive({ type: "sessions", state });
     await expectLoaded();
-    await receive({ type: "loading" });
+    await receive({ type: "loading", manual: true });
     await expect.poll(() => page.locator("#status").textContent()).toBe("Refreshing sessions…");
     await failWorkspaceAddition();
     expect(await page.locator("#status").textContent()).toContain("Refreshing sessions…");
@@ -229,7 +255,7 @@ describe("session list loading in the mounted client", () => {
     await expect.poll(() => page.locator("#sessions").textContent()).toBe("No sessions yet");
     await failWorkspaceAddition();
     expect(await page.locator("#sessions").textContent()).toBe("No sessions yet");
-    await receive({ type: "loading" });
+    await receive({ type: "loading", manual: false });
     await expectLoading();
     await receive({ type: "sessions", state });
     await expectLoaded();
@@ -413,11 +439,11 @@ describe("session list loading in the mounted client", () => {
     await expectLoaded();
     await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
     await page.locator('[data-toggle-group="/workspace/empty"]').first().click();
-    await receive({ type: "loading" });
+    await receive({ type: "loading", manual: true });
     await expect.poll(() => page.locator("#status").textContent()).toBe("Refreshing sessions…");
     expect(await page.locator(".session-row").count()).toBe(2);
     expect(await page.locator(".selected .session-name").textContent()).toBe("Atlas current");
-    await receive({ type: "loading" });
+    await receive({ type: "loading", manual: true });
     const updatedState = structuredClone(state);
     updatedState.groups[0].sessions[0].displayName = "Atlas updated";
     await receive({ type: "sessions", state: updatedState });
@@ -435,11 +461,11 @@ describe("session list loading in the mounted client", () => {
   it("syncs the displayed session before a scan completes and retains it on failure", async () => {
     await receive({ type: "sessions", state });
     await expectLoaded();
-    await receive({ type: "loading", displayedSessionId: "unsaved-session" });
+    await receive({ type: "loading", manual: false, displayedSessionId: "unsaved-session" });
 
     await expect.poll(() => page.locator(".selected").count()).toBe(0);
     expect(await page.locator(".session-row").count()).toBe(1);
-    expect(await page.locator("#status").textContent()).toBe("Refreshing sessions…");
+    expect(await page.locator("#status").textContent()).toBe("");
     await receive({ type: "sessionsError" });
     await expect.poll(() => page.locator("#status").textContent()).toBe("");
     expect(await page.locator(".selected").count()).toBe(0);
@@ -449,17 +475,17 @@ describe("session list loading in the mounted client", () => {
   it("clears selection when loading reports no displayed session", async () => {
     await receive({ type: "sessions", state });
     await expectLoaded();
-    await receive({ type: "loading", displayedSessionId: null });
+    await receive({ type: "loading", manual: false, displayedSessionId: null });
 
     await expect.poll(() => page.locator(".selected").count()).toBe(0);
     expect(await page.locator(".session-row").count()).toBe(1);
-    expect(await page.locator("#status").textContent()).toBe("Refreshing sessions…");
+    expect(await page.locator("#status").textContent()).toBe("");
   });
 
-  it("keeps the last list and selected row when a refresh fails", async () => {
+  it("keeps the last list and selected row when a manual refresh fails", async () => {
     await receive({ type: "sessions", state });
     await expectLoaded();
-    await receive({ type: "loading" });
+    await receive({ type: "loading", manual: true });
     await expect.poll(() => page.locator("#status").textContent()).toBe("Refreshing sessions…");
     await receive({ type: "sessionsError" });
     await expect.poll(() => page.locator("#status").textContent()).toBe("");
@@ -470,24 +496,24 @@ describe("session list loading in the mounted client", () => {
   it("replaces a successful empty list with loading during another fetch", async () => {
     await receive({ type: "sessions", state: { groups: [] } });
     await expect.poll(() => page.locator("#sessions").textContent()).toBe("No sessions yet");
-    await receive({ type: "loading" });
+    await receive({ type: "loading", manual: false });
     await expectLoading();
     await receive({ type: "sessionsError" });
     await expect
       .poll(() => page.locator("#sessions").textContent())
       .toBe("Failed to load sessions. Retrying…");
-    await receive({ type: "loading" });
+    await receive({ type: "loading", manual: false });
     await expectLoading();
     await receive({ type: "sessions", state: { groups: [] } });
     await expect.poll(() => page.locator("#sessions").textContent()).toBe("No sessions yet");
     await expect.poll(() => page.locator("#status").textContent()).toBe("");
   });
 
-  it("shows host-initiated reloads without dropping registered empty groups", async () => {
+  it("keeps registered empty groups through a quiet host reload", async () => {
     await receive({ type: "sessions", state: { groups: [state.groups[1]] } });
     await expect.poll(() => page.locator(".group-title").allTextContents()).toEqual(["empty"]);
-    await receive({ type: "loading" });
-    await expect.poll(() => page.locator("#status").textContent()).toBe("Refreshing sessions…");
+    await receive({ type: "loading", manual: false });
+    await expect.poll(() => page.locator("#status").textContent()).toBe("");
     expect(await page.locator(".group-title").allTextContents()).toEqual(["empty"]);
     expect(await page.locator(".empty").count()).toBe(0);
     await receive({ type: "sessions", state });

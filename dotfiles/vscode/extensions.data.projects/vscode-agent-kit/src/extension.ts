@@ -129,7 +129,7 @@ export function activate(context: vscode.ExtensionContext): void {
         for (const watcher of settingsWatchers) watcher.dispose();
       },
     },
-    vscode.commands.registerCommand("piSessions.refreshSessions", () => provider.refresh()),
+    vscode.commands.registerCommand("piSessions.refreshSessions", () => provider.refreshManually()),
     vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
       webviewOptions: { retainContextWhenHidden: true },
     }),

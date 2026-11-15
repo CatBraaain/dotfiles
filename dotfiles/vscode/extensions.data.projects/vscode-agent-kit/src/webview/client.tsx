@@ -652,6 +652,7 @@ function WorkspaceMenu({
 interface ClientSnapshot {
   state: ClientState;
   loadStatus: SessionLoadStatus;
+  manualRefresh: boolean;
   errorMessage: string;
   pendingNewSessions: ReadonlyMap<string, string>;
 }
@@ -661,7 +662,7 @@ interface ClientSnapshot {
 function createClientStore(): {
   subscribe(listener: () => void): () => void;
   getSnapshot(): ClientSnapshot;
-  setLoading(displayedSessionId?: string | null): void;
+  setLoading(manualRefresh: boolean, displayedSessionId?: string | null): void;
   setSessions(state: ClientState): void;
   setError(message: string): void;
   setSessionsError(): void;
@@ -671,6 +672,7 @@ function createClientStore(): {
   let snapshot: ClientSnapshot = {
     state: { groups: [] },
     loadStatus: "loading",
+    manualRefresh: false,
     errorMessage: "",
     pendingNewSessions: new Map(),
   };
@@ -685,7 +687,7 @@ function createClientStore(): {
       return () => listeners.delete(listener);
     },
     getSnapshot: () => snapshot,
-    setLoading: (displayedSessionId) =>
+    setLoading: (manualRefresh, displayedSessionId) =>
       publish({
         ...snapshot,
         state:
@@ -693,11 +695,13 @@ function createClientStore(): {
             ? snapshot.state
             : { ...snapshot.state, displayedSessionId: displayedSessionId ?? undefined },
         loadStatus: "loading",
+        manualRefresh,
         errorMessage: "",
       }),
-    setSessions: (state) => publish({ ...snapshot, state, loadStatus: "loaded", errorMessage: "" }),
+    setSessions: (state) =>
+      publish({ ...snapshot, state, loadStatus: "loaded", manualRefresh: false, errorMessage: "" }),
     setError: (message) => publish({ ...snapshot, errorMessage: message }),
-    setSessionsError: () => publish({ ...snapshot, loadStatus: "error" }),
+    setSessionsError: () => publish({ ...snapshot, loadStatus: "error", manualRefresh: false }),
     startNewSession: (cwd) => {
       const requestId = crypto.randomUUID();
       const pendingNewSessions = new Map(snapshot.pendingNewSessions);
@@ -731,7 +735,9 @@ function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactE
   }, [hasMenuWorkspace]);
   useEffect(() => {
     const loadingText =
-      snapshot.loadStatus === "loading" && snapshot.state.groups.length > 0
+      snapshot.loadStatus === "loading" &&
+      snapshot.manualRefresh &&
+      snapshot.state.groups.length > 0
         ? "Refreshing sessions…"
         : "";
     statusElement.textContent = [loadingText, snapshot.errorMessage]
@@ -827,6 +833,7 @@ export function initClient(bridge: ClientBridge): () => void {
     if (message.type === "loading") {
       const displayedSessionId = message.displayedSessionId;
       store.setLoading(
+        message.manual === true,
         typeof displayedSessionId === "string" || displayedSessionId === null
           ? displayedSessionId
           : undefined,

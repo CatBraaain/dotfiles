@@ -130,6 +130,12 @@ async function finishRefresh(provider: SessionWebviewProvider) {
   await (provider as unknown as { pendingRefresh?: Promise<void> }).pendingRefresh;
 }
 
+function loadingMessages(webview: { postMessage: Mock }) {
+  return webview.postMessage.mock.calls
+    .map(([message]) => message)
+    .filter((message) => message.type === "loading");
+}
+
 async function tick(provider: SessionWebviewProvider, milliseconds = LIST_REFRESH_INTERVAL_MS) {
   await vi.advanceTimersByTimeAsync(milliseconds);
   await finishRefresh(provider);
@@ -426,6 +432,83 @@ describe("SessionWebviewProvider", () => {
       "loading",
       "error",
       "sessions",
+    ]);
+  });
+
+  it("announces the retrieval indicator only for the explicit Refresh action", async () => {
+    const { provider, webview } = await loadingFixture();
+    webview.postMessage.mockClear();
+
+    await webview.receive({ type: "refresh" });
+    await provider.refreshManually();
+
+    expect(loadingMessages(webview)).toEqual([
+      { type: "loading", manual: true, displayedSessionId: null },
+      { type: "loading", manual: true, displayedSessionId: null },
+    ]);
+  });
+
+  it("keeps automatic reloads quiet in the status area", async () => {
+    const { provider, webview } = await loadingFixture();
+    webview.postMessage.mockClear();
+
+    await provider.refresh();
+    await provider.onSessionRootChanged();
+    await provider.refresh(false);
+
+    expect(loadingMessages(webview)).toEqual([
+      { type: "loading", manual: false, displayedSessionId: null },
+      { type: "loading", manual: false, displayedSessionId: null },
+      { type: "loading", manual: false, displayedSessionId: null },
+    ]);
+  });
+
+  it("keeps watcher-triggered refreshes quiet in the status area", async () => {
+    const { provider, webview } = await loadingFixture();
+    const filePath = join(root, "sessions", `${activeSessionId}.jsonl`);
+    webview.postMessage.mockClear();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    await provider.onSessionFileChanged(filePath);
+    await vi.advanceTimersByTimeAsync(HISTORY_CHANGE_DELAY_MS);
+    await finishRefresh(provider);
+
+    expect(loadingMessages(webview)).toEqual([
+      { type: "loading", manual: false, displayedSessionId: null },
+    ]);
+  });
+
+  it("upgrades a queued automatic refresh to the manual indicator", async () => {
+    const { provider, webview, mocks } = await loadingFixture();
+    const held = deferred<PiMuxWorkspace[]>();
+    mocks.list.mockReturnValueOnce(held.promise);
+    webview.postMessage.mockClear();
+
+    const quietRefresh = provider.refresh(false);
+    const manualRefresh = webview.receive({ type: "refresh" });
+    held.resolve([{ cwd: root, sessions: [], empty: [] }]);
+    await Promise.all([quietRefresh, manualRefresh]);
+
+    expect(loadingMessages(webview)).toEqual([
+      { type: "loading", manual: false, displayedSessionId: null },
+      { type: "loading", manual: true, displayedSessionId: null },
+    ]);
+  });
+
+  it("keeps an automatic refresh queued behind a manual one quiet", async () => {
+    const { provider, webview, mocks } = await loadingFixture();
+    const held = deferred<PiMuxWorkspace[]>();
+    mocks.list.mockReturnValueOnce(held.promise);
+    webview.postMessage.mockClear();
+
+    const manualRefresh = provider.refreshManually();
+    const quietRefresh = provider.refresh(false);
+    held.resolve([{ cwd: root, sessions: [], empty: [] }]);
+    await Promise.all([manualRefresh, quietRefresh]);
+
+    expect(loadingMessages(webview)).toEqual([
+      { type: "loading", manual: true, displayedSessionId: null },
+      { type: "loading", manual: false, displayedSessionId: null },
     ]);
   });
 

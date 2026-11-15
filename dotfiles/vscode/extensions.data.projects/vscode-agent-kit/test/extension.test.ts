@@ -273,16 +273,18 @@ describe("extension commands", () => {
     expect(manifest.contributes.views.piSessionViews[0].name).toBe("Sessions");
   });
 
-  it("refreshes the registered Sessions provider from the native title command", async () => {
-    const refresh = vi.spyOn(SessionWebviewProvider.prototype, "refresh").mockResolvedValue();
+  it("refreshes the registered Sessions provider manually from the native title command", async () => {
+    const refreshManually = vi
+      .spyOn(SessionWebviewProvider.prototype, "refreshManually")
+      .mockResolvedValue();
     const command = register("piSessions.refreshSessions");
     const provider = api.registerWebviewViewProvider.mock.calls[0][1];
-    refresh.mockClear();
+    refreshManually.mockClear();
 
     await command();
 
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(refresh.mock.instances[0]).toBe(provider);
+    expect(refreshManually).toHaveBeenCalledOnce();
+    expect(refreshManually.mock.instances[0]).toBe(provider);
     expect(api.showInformationMessage).not.toHaveBeenCalled();
     expect(api.showErrorMessage).not.toHaveBeenCalled();
   });

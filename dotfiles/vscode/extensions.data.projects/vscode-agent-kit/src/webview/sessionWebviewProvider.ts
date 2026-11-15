@@ -47,7 +47,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private latestSelection: symbol | undefined;
   private pendingRefresh: Promise<void> | undefined;
   private refreshRequested = false;
-  private loadingRequested = false;
+  private manualLoadingRequested = false;
   private disposed = false;
   private listRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   private historyChangeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -115,12 +115,19 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   }
 
   async refresh(refreshHistory = true): Promise<void> {
-    if (refreshHistory) {
-      clearTimeout(this.historyChangeTimer);
-      this.historyChangeTimer = undefined;
-      this.history.invalidateAll();
-    }
+    if (refreshHistory) this.invalidateAllHistory();
+    return this.requestRefresh(false);
+  }
+
+  async refreshManually(): Promise<void> {
+    this.invalidateAllHistory();
     return this.requestRefresh(true);
+  }
+
+  private invalidateAllHistory(): void {
+    clearTimeout(this.historyChangeTimer);
+    this.historyChangeTimer = undefined;
+    this.history.invalidateAll();
   }
 
   async onSessionFileChanged(file: string): Promise<void> {
@@ -143,11 +150,11 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     await this.refresh();
   }
 
-  private async requestRefresh(showLoading = false): Promise<void> {
+  private async requestRefresh(manual: boolean): Promise<void> {
     if (this.disposed) return;
     this.refreshVersion += 1;
     this.refreshRequested = true;
-    this.loadingRequested ||= showLoading;
+    this.manualLoadingRequested ||= manual;
     if (this.pendingRefresh !== undefined) return this.pendingRefresh;
     const pending = this.drainRefreshes();
     this.pendingRefresh = pending;
@@ -161,9 +168,9 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private async drainRefreshes(): Promise<void> {
     while (this.refreshRequested && !this.disposed) {
       this.refreshRequested = false;
-      const showLoading = this.loadingRequested;
-      this.loadingRequested = false;
-      await this.refreshSessions(showLoading);
+      const manual = this.manualLoadingRequested;
+      this.manualLoadingRequested = false;
+      await this.refreshSessions(manual);
     }
   }
 
@@ -295,11 +302,12 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     if (this.view?.visible) this.post({ type: "sessionsError" });
   }
 
-  private async refreshSessions(showLoading: boolean): Promise<void> {
+  private async refreshSessions(manual: boolean): Promise<void> {
     const version = this.refreshVersion;
-    if (showLoading && this.view?.visible) {
+    if (this.view?.visible) {
       this.post({
         type: "loading",
+        manual,
         displayedSessionId: this.deps.registry.displayedSessionId ?? null,
       });
     }
@@ -369,7 +377,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "refresh") {
-      await this.refresh();
+      await this.refreshManually();
       return;
     }
     if (request.type === "newSession") {

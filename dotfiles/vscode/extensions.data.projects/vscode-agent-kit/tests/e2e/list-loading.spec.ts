@@ -128,7 +128,7 @@ test(
       const previousNames = await names.allTextContents();
       expect(previousNames.length).toBeGreaterThan(0);
       await host.refreshSessions();
-      await receive({ type: "loading", displayedSessionId: host.sessions.A.id });
+      await receive({ type: "loading", manual: true, displayedSessionId: host.sessions.A.id });
       await expect(status).toHaveText("Refreshing sessions…");
       await expect(names).toHaveText(previousNames);
       await expect(
@@ -138,6 +138,19 @@ test(
       await expect(collapsed).toHaveAttribute("aria-expanded", "false");
       await expect(sessions).not.toContainText("No sessions yet");
       await capture("一覧保持refreshing", "refreshing.png");
+    });
+
+    await test.step("Keep the status area quiet for an automatic refresh", async () => {
+      const names = content
+        .locator(".session-row .session-name")
+        .describe("Retained session names");
+      const previousNames = await names.allTextContents();
+      await receive({ type: "loading", manual: false, displayedSessionId: host.sessions.A.id });
+      await expect(status).toHaveText("");
+      await expect(names).toHaveText(previousNames);
+      await expect(
+        content.locator(".selected .session-name").describe("Retained selected session"),
+      ).toHaveText("Fixture A");
     });
 
     await test.step("Show the empty message only after a successful zero-group response", async () => {
@@ -150,7 +163,7 @@ test(
 
     await test.step("Show a retrieval error guidance in the list area", async () => {
       await host.refreshSessions();
-      await receive({ type: "loading", displayedSessionId: null });
+      await receive({ type: "loading", manual: true, displayedSessionId: null });
       await expect(sessions).toHaveText("Loading sessions…");
       await receive({ type: "sessionsError" });
       await expect(sessions).toHaveText("Failed to load sessions. Retrying…");
