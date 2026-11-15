@@ -563,7 +563,13 @@ function Write-WinconfigTaskReport {
 
 function Write-WinconfigSummary {
     $counts = $script:WinconfigCounts
-    Write-WinconfigLog ('Summary: success={0} failed={1} skipped={2}' -f $counts['success'], $counts['failed'], $counts['skipped'])
+    [Console]::Error.WriteLine()
+    [Console]::Error.WriteLine(('─' * 40))
+    $failedCount = [string] $counts['failed']
+    if ($script:WinconfigUseColor -and $counts['failed'] -gt 0) {
+        $failedCount = Format-WinconfigResultText $failedCount 31
+    }
+    [Console]::Error.WriteLine(('Summary: success={0} failed={1} skipped={2}' -f $counts['success'], $failedCount, $counts['skipped']))
     if ($counts['failed'] -gt 0) {
         exit 1
     }

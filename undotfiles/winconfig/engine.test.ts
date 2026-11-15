@@ -790,26 +790,35 @@ Actions:
             "<PermissionDenied> is raw output",
           ]);
           const reportLines = result.stderr.toString().trimEnd().split(/\r?\n/);
-          for (const line of reportLines) {
+          const taskReportLines = reportLines.slice(0, 4);
+          const summaryLines = reportLines.slice(4);
+          for (const line of taskReportLines) {
             assert.match(line, /^\d{2}:\d{2}:\d{2}\.\d{3} \| /);
           }
-          const messages = reportLines.map((line) => line.slice("00:00:00.000 | ".length));
-          const expected = colorEnabled
+          for (const line of summaryLines) {
+            assert.doesNotMatch(line, /\d{2}:\d{2}:\d{2}\.\d{3} \| /);
+          }
+          const messages = taskReportLines.map((line) => line.slice("00:00:00.000 | ".length));
+          const expectedReports = colorEnabled
             ? [
                 "\x1b[31mTaskError\x1b[0m: Sample > Denied[apply] - \x1b[31mpermission denied (administrator privileges are required)\x1b[0m",
                 "\x1b[32mSuccess\x1b[0m: Sample > Success[apply]",
                 "\x1b[33mSkipped\x1b[0m: Sample > Empty[apply] - \x1b[33mno operations\x1b[0m",
                 "\x1b[33mSkipped\x1b[0m: Sample > Unchanged[apply] - \x1b[33mno operations\x1b[0m",
-                "Summary: success=1 failed=1 skipped=2",
               ]
             : [
                 "TaskError: Sample > Denied[apply] - permission denied (administrator privileges are required)",
                 "Success: Sample > Success[apply]",
                 "Skipped: Sample > Empty[apply] - no operations",
                 "Skipped: Sample > Unchanged[apply] - no operations",
-                "Summary: success=1 failed=1 skipped=2",
               ];
-          assert.deepEqual(messages, expected);
+          assert.deepEqual(messages, expectedReports);
+          const failedCount = colorEnabled ? "\x1b[31m1\x1b[0m" : "1";
+          assert.deepEqual(summaryLines, [
+            "",
+            "─".repeat(40),
+            `Summary: success=1 failed=${failedCount} skipped=2`,
+          ]);
         });
       },
     );
@@ -821,16 +830,140 @@ Actions:
       withTemporaryDirectory((directory) => {
         const { runnables } = selectRunnableTasks(definitions, {}, false);
         const scriptPath = join(directory, "empty-logging.ps1");
-        writeFileSync(scriptPath, generateScript(runnables));
+        writeFileSync(scriptPath, "\uFEFF" + generateScript(runnables));
         const result = Bun.spawnSync([pwsh!, "-NoProfile", "-File", scriptPath], {
           stdout: "pipe",
           stderr: "pipe",
         });
         assert.equal(result.exitCode, 0);
         assert.equal(result.stdout.toString(), "");
-        assert.match(
-          result.stderr.toString(),
-          /^\d{2}:\d{2}:\d{2}\.\d{3} \| Summary: success=0 failed=0 skipped=0\r?\n$/,
+        assert.deepEqual(result.stderr.toString().trimEnd().split(/\r?\n/), [
+          "",
+          "─".repeat(40),
+          "Summary: success=0 failed=0 skipped=0",
+        ]);
+        assert.equal(result.stderr.toString().includes("\x1b["), false);
+      });
+    },
+  );
+
+  it.skipIf(pwsh === null)("keeps the zero failed count uncolored when color is enabled", () => {
+    withTemporaryDirectory((directory) => {
+      const okDefinitions = definitionsFromYaml(`
+Definitions:
+  Sample:
+    Success:
+      description: Safe output only.
+      script:
+        apply: Write-Output ok
+`);
+      const okActions = actionsFromYaml("Actions:\n  Sample:\n    Success: apply\n");
+      const { runnables } = selectRunnableTasks(okDefinitions, okActions, false);
+      const scriptPath = join(directory, "success-logging.ps1");
+      writeFileSync(scriptPath, "\uFEFF" + generateScript(runnables, { colorEnabled: true }));
+      const result = Bun.spawnSync([pwsh!, "-NoProfile", "-File", scriptPath], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      assert.equal(result.exitCode, 0);
+      const lines = result.stderr.toString().trimEnd().split(/\r?\n/);
+      assert.match(lines[0]!, /^\d{2}:\d{2}:\d{2}\.\d{3} \| /);
+      assert.equal(
+        lines[0]!.slice("00:00:00.000 | ".length),
+        "\x1b[32mSuccess\x1b[0m: Sample > Success[apply]",
+      );
+      assert.deepEqual(lines.slice(1), [
+        "",
+        "─".repeat(40),
+        "Summary: success=1 failed=0 skipped=0",
+      ]);
+      assert.equal(result.stderr.toString().includes("failed=\x1b["), false);
+    });
+  });
+});
+
+describe("CiTool output suppression", () => {
+  const pwsh = Bun.which("pwsh");
+  const body = loadConfig(import.meta.dir).definitions.Security?.DisableSmartAppControl;
+
+  for (const mode of ["apply", "revert"] as const) {
+    it.skipIf(pwsh === null)(`suppresses CiTool stdout while keeping the call for ${mode}`, () => {
+      assert.ok(body !== undefined, "Security > DisableSmartAppControl must exist");
+      withTemporaryDirectory((directory) => {
+        const callLogPath = join(directory, "citool-calls.txt");
+        const mock = [
+          "function CiTool {",
+          `    Add-Content -LiteralPath ${psDoubleQuoted(callLogPath)} -Value ('called: ' + ($args -join ' '))`,
+          "    Write-Output '{\"OperationResult\":0}'",
+          "}",
+        ].join("\n");
+        const scriptOnlyBody: DefinitionBody = { ...body, registries: [], scheduled_tasks: [] };
+        const scriptPath = join(directory, "citool.ps1");
+        writeFileSync(
+          scriptPath,
+          "\uFEFF" +
+            mock +
+            "\n" +
+            generateScript([
+              {
+                groupName: "Security",
+                name: "DisableSmartAppControl",
+                body: scriptOnlyBody,
+                mode,
+              },
+            ]),
+        );
+        const result = Bun.spawnSync([pwsh!, "-NoProfile", "-File", scriptPath], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        assert.equal(result.exitCode, 0, result.stderr.toString());
+        assert.equal(result.stdout.toString(), "");
+        assert.ok(
+          result.stderr.toString().includes(`Success: Security > DisableSmartAppControl[${mode}]`),
+        );
+        assert.equal(readFileSync(callLogPath, "utf8").trimEnd(), "called: --refresh --json");
+      });
+    });
+  }
+
+  it.skipIf(pwsh === null)(
+    "reports a CiTool failure instead of swallowing it through Out-Null",
+    () => {
+      assert.ok(body !== undefined, "Security > DisableSmartAppControl must exist");
+      withTemporaryDirectory((directory) => {
+        const mock = [
+          "function CiTool {",
+          "    throw [System.UnauthorizedAccessException]::new('injected CiTool denial')",
+          "}",
+        ].join("\n");
+        const scriptOnlyBody: DefinitionBody = { ...body, registries: [], scheduled_tasks: [] };
+        const scriptPath = join(directory, "citool-failure.ps1");
+        writeFileSync(
+          scriptPath,
+          "\uFEFF" +
+            mock +
+            "\n" +
+            generateScript([
+              {
+                groupName: "Security",
+                name: "DisableSmartAppControl",
+                body: scriptOnlyBody,
+                mode: "apply",
+              },
+            ]),
+        );
+        const result = Bun.spawnSync([pwsh!, "-NoProfile", "-File", scriptPath], {
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        assert.equal(result.exitCode, 1);
+        assert.ok(
+          result.stderr
+            .toString()
+            .includes(
+              "TaskError: Security > DisableSmartAppControl[apply] - permission denied (administrator privileges are required)",
+            ),
         );
       });
     },

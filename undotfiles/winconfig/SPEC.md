@@ -97,6 +97,7 @@ script:
 
 - 本文の終了通知は`return`または`throw`である。`return`はタスク内の実行を終え、そこまでの操作結果で判定する。`throw`は失敗を通知する
 - 本文の通常出力はタスク結果行の前に出力される。出力に`<PermissionDenied>`などの文字列が含まれても、それだけでは失敗と判定しない
+- 定義の`Security > DisableSmartAppControl`の`script`は、`apply`・`revert`の両方向で`CiTool --refresh --json`の標準出力を破棄する
 
 ## actions.yaml
 
@@ -144,9 +145,15 @@ Actions:
 | 失敗がなく成功した操作が1つ以上ある | `success` | `Success: <group> > <task>[<mode>]`(理由は出さない) |
 | 失敗も成功もなく、空または`<NotChange>`のみ | `skipped` | `Skipped: <group> > <task>[<mode>] - <理由>` |
 
-最終行に`Summary: success=<n> failed=<n> skipped=<n>`を出力する。`<n>`は各分類のタスク件数で、3件数の合計は実行タスク数に等しい。失敗1件以上で終了コード1、それ以外は0である。
+全タスクの出力後、標準エラーへ次の順で出力する。
 
-選択通知・タスク結果・集計行は、ローカル時刻の`HH:mm:ss.SSS | `を先頭に付け、標準エラーへ出力する。`--print`の標準出力は生成したPowerShellスクリプトだけである。
+1. 空行1行
+2. `─`（U+2500）40文字の区切り行
+3. `Summary: success=<n> failed=<n> skipped=<n>`の集計行
+
+集計行と区切り行には時刻を付けない。`<n>`は各分類のタスク件数で、3件数の合計は実行タスク数に等しい。失敗1件以上で終了コード1、それ以外は0である。
+
+選択通知・タスク結果は、ローカル時刻の`HH:mm:ss.SSS | `を先頭に付け、標準エラーへ出力する。`--print`の標準出力は生成したPowerShellスクリプトだけである。
 
 標準エラーがTTYであり、環境変数`NO_COLOR`が未定義の場合だけ、次のANSI色で着色する。`NO_COLOR`が空文字でも定義されていれば無着色とする。
 
@@ -156,9 +163,11 @@ Actions:
 | `Success` | 緑 | `32` |
 | `Skipped` | 黄 | `33` |
 
-着色範囲はラベル文字列（コロンを除く）と、存在する場合の理由だけとする。理由はモード直後の「半角空白・ハイフン・半角空白」の区切りより後を指す。着色した各部分の直後にANSIリセット`0`を出力する。時刻、タスク名、モード、区切り、集計行は無着色とする。
+選択通知・タスク結果の着色範囲はラベル文字列（コロンを除く）と、存在する場合の理由だけとする。理由はモード直後の「半角空白・ハイフン・半角空白」の区切りより後を指す。着色した各部分の直後にANSIリセット`0`を出力する。時刻、タスク名、モード、区切りは無着色とする。
 
-ラベル・着色範囲は[元CLIの結果表示](https://github.com/CatBraaain/winconfig/blob/bdcf66eafeb63d5e39af513f5261a1be4d9d9844/src/engine.ts#L30-L108)、出力先・時刻形式は[元CLIのロガー](https://github.com/CatBraaain/winconfig/blob/bdcf66eafeb63d5e39af513f5261a1be4d9d9844/src/cli.ts#L10-L41)に準拠する。
+集計行は、上記の着色条件を満たし、かつ失敗件数が1件以上の場合だけ、`failed=`の数値部分を赤（ANSIコード`31`）にし、その直後にANSIリセット`0`を出力する。失敗件数0の数値、`success`・`skipped`の数値、集計行内のすべてのラベルと区切り行は無着色とする。
+
+選択通知・タスク結果のラベル・着色範囲は[元CLIの結果表示](https://github.com/CatBraaain/winconfig/blob/bdcf66eafeb63d5e39af513f5261a1be4d9d9844/src/engine.ts#L30-L108)、出力先・時刻形式は[元CLIのロガー](https://github.com/CatBraaain/winconfig/blob/bdcf66eafeb63d5e39af513f5261a1be4d9d9844/src/cli.ts#L10-L41)に準拠する。集計表示は本節で定める。
 
 ## 検証
 

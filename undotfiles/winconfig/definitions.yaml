@@ -371,8 +371,8 @@ Definitions:
               new_value: "0"
               old_value: <NotExist>
       script:
-        apply: "CiTool --refresh --json"
-        revert: "CiTool --refresh --json"
+        apply: "CiTool --refresh --json | Out-Null"
+        revert: "CiTool --refresh --json | Out-Null"
 
   ContextMenu:
     ClassicContextMenu:
