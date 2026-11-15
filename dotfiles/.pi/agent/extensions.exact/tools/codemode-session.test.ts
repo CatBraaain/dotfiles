@@ -342,7 +342,7 @@ describe("codemode nested AgentSession pipeline without a model request", () => 
       for (let generation = 0; generation < 3; generation++) {
         if (generation > 0) await session.reload();
         const granted = await executeScript(session, script);
-        assert.match(resultText(granted), /User approved write access/);
+        assert.match(resultText(granted), /User approved Guardrails write access/);
         const cached = await executeScript(session, script);
         assert.match(resultText(cached), /Already granted/);
         assert.equal(prompts, generation + 1);

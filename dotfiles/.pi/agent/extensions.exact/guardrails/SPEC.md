@@ -102,14 +102,12 @@ Vision入力として扱う画像ファイルは、MIMEタイプが `image/*` �
 
 拒否を選択・キャンセルしたとき、拡張は理由入力ダイアログを続けて表示する。入力は任意で、空欄またはキャンセルなら理由なしとして扱う。理由が入力されたときは、拒否のエラーメッセージ（`Access denied by user: <path>` / `Command denied by user: <command>`）に `User reason: <入力>` の行を追記してagent へ返す。
 
-承認を選択したときは、承認の事実を agent へ伝える。承認された確認ダイアログごとに、そのツール呼び出しの最終結果の最終行へ承認ノートを1行追記して返す。ノートを付けるのは `write` / `edit` / `bash` の呼び出しに限り、`read` / `grep` / `find` / `ls` の呼び出しと read の許可の承認にはノートを付けない。ノートは最終結果のみに付き、bash の逐次表示（§7）には含まれない。ヒント文（§7）など他の追記文があるときは、その後に追記する。ノートの形式は確認対象ごとに次のとおり（`<path>` は許可されたパス）。write の許可では、許可されたパスの確定アクション（§3）が未設定のときは bash経由の書き込みも可、`ask` のときは fsツール経由のみ可（§6.1）と区別する。
+承認を選択したときは、承認の事実を agent へ伝える。承認された確認ダイアログごとに、そのツール呼び出しの最終結果の最終行へ承認ノートを1行追記して返す。ノートを付けるのは `write` / `edit` / `bash` の呼び出しに限り、`read` / `grep` / `find` / `ls` の呼び出しと read の許可の承認にはノートを付けない。ノートは最終結果のみに付き、bash の逐次表示（§7）には含まれない。ヒント文（§7）など他の追記文があるときは、その後に追記する。ノートの形式は確認対象ごとに次のとおり（`<path>` は許可されたパス）。write の承認ノートは、Guardrails の共通書込許可が承認範囲に対してセッション内で有効になることと、明示 `deny`・credentials の保護が維持されることを伝える。
 
 | 確認対象 | 承認ノート |
 | --- | --- |
-| write の許可（未設定パス・ファイル単体） | `User approved write access via confirmation (scope: file <path>); writable for the rest of the session, including via bash.` |
-| write の許可（未設定パス・ディレクトリ配下） | `User approved write access via confirmation (scope: directory <path>); the subtree is writable for the rest of the session, including via bash.` |
-| write の許可（`ask` に確定したパス・ファイル単体） | `User approved write access via confirmation (scope: file <path>); writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).` |
-| write の許可（`ask` に確定したパス・ディレクトリ配下） | `User approved write access via confirmation (scope: directory <path>); the subtree is writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).` |
+| write の許可（ファイル単体） | `User approved Guardrails write access via confirmation (scope: file <path>); valid for the rest of the session for all tools using Guardrails; explicit deny and credentials remain protected.` |
+| write の許可（ディレクトリ配下） | `User approved Guardrails write access via confirmation (scope: directory <path>); valid for the rest of the session for all tools using Guardrails; explicit deny and credentials remain protected.` |
 | コマンドの実行 | `User approved this command via confirmation.` |
 | read の許可 | なし |
 
@@ -177,6 +175,8 @@ glob は起動時に既存パスへ展開する。展開はパターンの固定
 
 未設定パスは `deny` だが、agent がユーザーへ許可要求を出せる（明示 `deny` は不可）。承認されると、承認した操作（`read` または `write`）についてセッション内で `allow` になり、セッション終了で破棄される。`read` と `write` の動的許可は別々に管理する。
 
+Guardrails は書込許可をツール非依存の共通状態として管理する。同じ書込許可を利用するすべてのツールには、同じ承認スコープ・有効期間・明示 `deny` と credentials による書込保護が適用される。書込許可は read認可やコマンド実行認可とは別である。
+
 ```mermaid
 flowchart TD
     Denied[未許可] --> Ask{エージェントが許可を要求}
@@ -190,7 +190,8 @@ flowchart TD
 動的許可はパスと操作（`read` / `write`）の組み合わせで管理し、次の規則に従う。
 
 - 許可パスがディレクトリのときは配下のパスにも適用される（ファイルのときはそのファイル単体）。
-- 明示 `deny` は動的許可より優先する。
+- 明示 `deny` と credentials は動的許可より優先する。
+- 書込承認は、要求経路にかかわらず Guardrails の共通 `write` 許可を更新する。承認前の確定アクションが `ask` か未設定かによる差はない。
 - `write` の許可要求では、スコープを「ファイル単体 / 親ディレクトリ配下」から選択できる。
 - `write` の許可パスは §6.1 の実在保証の対象とする（承認時にフェンス外で作成する）。`read` の許可でパスは作成しない。
 
@@ -212,9 +213,9 @@ flowchart TD
 | `write` の解決結果が `ask`、または未設定 | 確認ダイアログ（§2.3） |
 | 確認ダイアログを提供できないUI | エラー |
 
-ダイアログでの承認は `write` の動的許可（ディレクトリスコープ）と同じ効果を持つ: `path` 配下がセッション内で書き込み可になり、bind対象に追加され、実在保証は §6.1 に従う。bash経由で書き込み可能になるのは `path` の確定アクション（§3）が未設定のときだけで、`ask` に確定したパスは fsツールでのみ書き込み可になり、bash からは書けない（§6.1）。ツール結果には承認・拒否・許可済みのいずれかが判別できるテキストを返し、承認のときは `path` 配下がセッション内で書き込み可能になったことと、bash経由で書けるかどうか（§2.3 の承認ノートと同じ区分）を伝える。拒否はエラーではなく、以降の `write` / `edit` は従来どおり個別に確認される。
+ダイアログでの承認は `write` の動的許可（ディレクトリスコープ）と同じ効果を持つ。要求可否は正規化後の元の対象パスで判定し、承認はダイアログに表示したスコープへ適用する。実在保証は §6.1 に従う。ツール結果には承認・拒否・許可済みのいずれかが判別できるテキストを返す。承認のときは §2.3 の承認ノートを返す。静的 `allow` により確認を省略した場合は新しい動的許可を追加せず、元の対象パスが許可済みであることを伝える。拒否はエラーではなく、以降の `write` / `edit` は従来どおり個別に確認される。
 
-`ask_permission` の説明文と promptGuidelines には、編集を伴う作業の着手前に作業場所（worktree作成先やその親ディレクトリ）の書き込み許可をユーザーへ要求するために使う旨と、bash が理由必須でコマンドを差し戻したときにそのコマンドと理由を添えて承認を求めるために使う旨を含める。promptGuidelines は、セッション開始時の `guardrails.yaml` から writeパスを展開し、通常の認可と同じ後勝ち判定で最終アクションごとに `allow` / `ask` / `deny` のパスを分類して列挙する。credentials により遮断されるパスは列挙せず、credentials は列挙された祖先パスより優先する。モデルには、最終アクションが `allow` なら許可要求不要、`ask` なら許可要求可能だが bash からは書けない、明示 `deny` は許可要求不可であることを示す。パスに一致するwriteルールがない場合は一覧に出ず、credentials に遮断されない限り許可要求できる。判定はパスの具体性ではなく最後にマッチしたルールで決まる。`commands` の設定値と `credentials` のパスは列挙しない。編集を伴う作業の前に許可を要求するときは対象（worktree の場合は作成先または親）を指定する。bash が `Read-only file system` で拒否した場合は、要求可能なパスに限り `ask_permission` を使い、ツール結果が示すbash書き込み可否を守る。bash で拒否された書き込みを別コマンドへ書き換えて再試行しない。
+`ask_permission` の説明文と promptGuidelines には、編集を伴う作業の着手前に作業場所（worktree作成先やその親ディレクトリ）の書き込み許可をユーザーへ要求するために使う旨と、bash が理由必須でコマンドを差し戻したときにそのコマンドと理由を添えて承認を求めるために使う旨を含める。promptGuidelines は、セッション開始時の `guardrails.yaml` から writeパスを展開し、通常の認可と同じ後勝ち判定で最終アクションごとに `allow` / `ask` / `deny` のパスを分類して列挙する。credentials により遮断されるパスは列挙せず、credentials は列挙された祖先パスより優先する。モデルには、最終アクションが `allow` なら許可要求不要、`ask` なら許可要求可能で承認後は Guardrails の共通書込許可が更新される、明示 `deny` は許可要求不可であることを示す。パスに一致するwriteルールがない場合は一覧に出ず、credentials に遮断されない限り許可要求できる。判定はパスの具体性ではなく最後にマッチしたルールで決まる。`commands` の設定値と `credentials` のパスは列挙しない。編集を伴う作業の前に許可を要求するときは対象（worktree の場合は作成先または親）を指定する。bash が `Read-only file system` で拒否した場合は、要求可能なパスに限り `ask_permission` を使い、承認済みスコープに書き込みを限定する。bash で拒否された書き込みを別コマンドへ書き換えて再試行しない。
 
 `command` の確認ダイアログと承認範囲は §2.3 に従う。`Allow once` の承認は1回限りの実行承認で、コマンドはその場では実行されない。承認後、エージェントが `bash` で同じコマンド（引用の付け方の違いを除く）を再送すると、確認なしで実行され、承認は消費される。コマンドの一部分だけが一致する別のコマンドには使えない。§2.3 の有効なパターン承認が確認対象に一致するとき、`ask_permission` の再リクエストは確認ダイアログなしで許可済みを返す。ツール結果には承認・拒否・許可済みのいずれかが判別できるテキストを返し、承認のときは承認の単位を区別して伝える: `Allow once` では同じコマンドを bash で再送すれば実行できること、パターン承認では承認されたパターンと §2.3 に定める有効期間を示す。拒否はエラーではなく、以降の当該コマンドの `bash` は `ask_with_reason` の差し戻し（§4）を引き続き受ける。
 
@@ -315,7 +316,7 @@ command と args の各文字列はJavaScript RegExp sourceであり、実行フ
 
 `credentials` のパスは bash の sandbox にのみ `--ro-bind` する。credentials のファイル自体や glob のマッチ先は作成せず、存在するパスだけを起動時に bindする。
 
-bash の sandbox の書き込み可能bind は、`write` の宣言パスのうち §3 の後勝ち走査で `allow` に確定したパスと動的許可のパスだけとする。fsツールは呼び出しごとに同じ走査でアクションを解決するため、この選別で bash と fs の書き込み可否が一致する。`deny` または `ask` に確定したパス（`allow` 宣言パスが後続の `deny`・`ask` 宣言で上書きされた場合を含む）は書き込み可能bind から外れ、書き込み可能bind のパスと同一またはその配下にあるものを書き込み可能bind より後に read-only bindし直す。bwrap は後続のマウントで上書きするため、許可された祖先ディレクトリ配下でも書き込みは `Read-only file system` で失敗し、fsツールが呼び出しごとに deny・ask に解決するパスと同じ保護が bash経由でも強制される。`ask` に確定したパスは fsツールでの承認（動的許可）によって書き込み可能bind に追加されても、read-only bindし直した方が後勝ちするため、bash からは引き続き書けない。存在しないパスと書き込み可能bind の対象外のパスには bindしない（deny・ask宣言だけでパスは作成しない）。このため実在しないdeny・ask確定パスは、書き込み可能bind配下でも bash から作成できる。fs sandbox での denyマスク（下段）も実在パスのみに適用されるのと同じ限定である。
+bash の sandbox の書き込み可能bind は、`write` の宣言パスのうち §3 の後勝ち走査で `allow` に確定したパスと、動的許可が有効な範囲とする。実在する `ask` 確定パスのうち動的許可に含まれない範囲と、明示 `deny` 確定パスは、書き込み可能bind の配下でも read-only に保つ。`ask` の祖先内にある子だけを承認した場合、承認した子は書き込み可能になり、未承認の兄弟や祖先は read-only のままとなる。ディレクトリ承認は配下の `ask` 確定パスにも適用し、明示 `deny` と credentials の保護は維持する。存在しないパスと書き込み可能bind の対象外のパスには bindしない（deny・ask宣言だけでパスは作成しない）。このため実在しないdeny・ask確定パスは、書き込み可能bind配下でも bash から作成できる。fs sandbox での denyマスク（下段）も実在パスのみに適用されるのと同じ限定である。
 
 ### fs sandbox での denyパス・credentialsパスの隠蔽
 
@@ -349,7 +350,7 @@ bashコマンドの sandbox ではこのマスクを行わない。`credentials`
 | entrypoint不在・sandbox内で不可視・worker失敗・不正な応答 | 呼び出しを失敗させる。host実行・標準executorへのfallbackやbind拡大は行わない |
 | `ask_permission` | 許可要求（§3・§4） |
 
-bash のツール結果（stdout/stderr）に `Read-only file system` が含まれるとき、結果の末尾にヒント文を追記する。ヒント文はコマンドを書き換えて再試行しないことを伝え、対象の最終アクションが `ask` または未設定で credentials に遮断されない場合にだけ `ask_permission` で許可要求できることを示す。明示 `deny` は許可できない。許可結果が bash書き込み不可を示した場合は fsツールを使う。
+bash のツール結果（stdout/stderr）に `Read-only file system` が含まれるとき、結果の末尾にヒント文を追記する。ヒント文はコマンドを書き換えて再試行しないことを伝え、対象の最終アクションが `ask` または未設定で credentials に遮断されない場合にだけ `ask_permission` で許可要求できることを示す。明示 `deny` は許可できない。承認は Guardrails の共通書込許可を更新し、その許可を利用するすべてのツールに適用されることと、明示 `deny` と credentials の保護が維持されることを伝える。
 
 - **入力**: argvにtoolName、stdinに `toolCallId`・正規化後の `params`・必要な `session` 情報のJSONを渡す。entrypointは内部descriptorから選び、paramsから採用しない。
 - **出力**: stdout にJSON envelope（`{ ok: true, result }` または `{ ok: false, error }`）を返す。成功時は終了コード0とし、失敗時は非0で終了する。Guardrailsはenvelopeを検査して結果またはエラーを伝達し、workerの成功結果を組み立てない。
@@ -370,7 +371,7 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 各ツール呼び出しは次の構成で `bwrap` を起動する。
 
 1. `--die-with-parent` を設定する。`read.allow` に `"*"` が含まれる場合は `/` を read-only bindしてから、新しいprocfs を `--proc /proc` でマウントする。新しい `/dev` は `--dev /dev` でマウントする。procfs は root bind より後にマウントし、nested user namespace に必要な書き込みを可能にする。bash では、GPU用デバイス `/dev/dxg` と `/dev/dri` をそれぞれ `--dev-bind-try /dev/dxg /dev/dxg` と `--dev-bind-try /dev/dri /dev/dri` で追加公開する。`--dev-bind-try` は対象が存在しない環境では無視される。
-2. 設定済みの allowパスを `--bind-try`、read-onlyパスと credentials を `--ro-bind-try` で bindする。`write` の書き込み可能bind は後勝ちで `allow` に確定したパスのみとし、bash では `deny`・`ask` に確定したパスのうち書き込み可能bind と同一・配下にあるものを、それらより後に `--ro-bind-try` で bindし直す（§6.1）。
+2. 設定済みの allowパスを `--bind-try`、read-onlyパスと credentials を `--ro-bind-try` で bindする。設定由来の `write` の書き込み可能bind は後勝ちで `allow` に確定したパスのみとする。動的許可と bash の read-only 保護は §6.1 に従う。
 3. NixOS で `bun`・実行ファイル・共有ライブラリを解決できるよう `/nix` 等の runtime path（`~/.nix-profile` を含む）を read-only で bindする。piパッケージ自体は `/nix` 配下のため追加の bind不要。
 4. sandbox内で選択されたentrypointをbunで実行し、network namespace は分離しない。ホストで user namespace が利用可能な場合、sandbox内のプロセスは nested user namespace を作成でき、Firefox のプロセスsandbox や GTK の nested `bwrap` helper が起動できる。
 5. abort は bwrapごと child process を停止する。bash の timeout は sandbox内の tool definition が処理する。

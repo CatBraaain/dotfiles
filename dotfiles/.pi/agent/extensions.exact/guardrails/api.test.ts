@@ -2324,7 +2324,6 @@ describe("§2.3 承認ノート", () => {
         operation: "write",
         scope: "file",
         grantedPath: filePath,
-        bashWritable: true,
       });
     }),
   );
@@ -2341,7 +2340,6 @@ describe("§2.3 承認ノート", () => {
         operation: "write",
         scope: "directory",
         grantedPath: dir,
-        bashWritable: true,
       });
     }),
   );
@@ -2360,7 +2358,7 @@ describe("§2.3 承認ノート", () => {
   );
 
   it(
-    "ask に確定したパスへの承認は bash から書けない approval を返す",
+    "approves ask-configured paths in Guardrails",
     withApprovalGuardrail(
       (dir) => `write:\n  - {ask: "${join(dir, "asked.txt")}"}\n`,
       async (dir, guardrail) => {
@@ -2373,7 +2371,29 @@ describe("§2.3 承認ノート", () => {
           operation: "write",
           scope: "file",
           grantedPath: join(dir, "asked.txt"),
-          bashWritable: false,
+        });
+      },
+    ),
+  );
+
+  it(
+    "returns the directory scope for an approved ask-final file",
+    withApprovalGuardrail(
+      (dir) => `write:\n  - {allow: "${dir}"}\n  - {ask: "${join(dir, "locked.txt")}"}\n`,
+      async (dir, guardrail) => {
+        const filePath = join(dir, "locked.txt");
+        writeFileSync(filePath, "original");
+        const approval = await guardrail.authorizePath("write", filePath, {
+          hasUI: true,
+          ui: {
+            confirm: async () => false,
+            select: async () => "Directory (subtree)",
+          },
+        });
+        assert.deepEqual(approval, {
+          operation: "write",
+          scope: "directory",
+          grantedPath: dir,
         });
       },
     ),
@@ -2418,33 +2438,31 @@ describe("§2.3 承認ノート", () => {
   it("writeApprovalNote はスコープごとの承認ノート文言を返す", () => {
     assert.equal(
       writeApprovalNote({ operation: "write", scope: "file", grantedPath: "/tmp/a.txt" }),
-      "User approved write access via confirmation (scope: file /tmp/a.txt); writable for the rest of the session, including via bash.",
+      "User approved Guardrails write access via confirmation (scope: file /tmp/a.txt); valid for the rest of the session for all tools using Guardrails; explicit deny and credentials remain protected.",
     );
     assert.equal(
       writeApprovalNote({ operation: "write", scope: "directory", grantedPath: "/tmp/dir" }),
-      "User approved write access via confirmation (scope: directory /tmp/dir); the subtree is writable for the rest of the session, including via bash.",
+      "User approved Guardrails write access via confirmation (scope: directory /tmp/dir); valid for the rest of the session for all tools using Guardrails; explicit deny and credentials remain protected.",
     );
   });
 
-  it("writeApprovalNote は ask 確定パスの承認で bash 不可の文言を返す", () => {
-    assert.equal(
-      writeApprovalNote({
-        operation: "write",
-        scope: "file",
-        grantedPath: "/tmp/a.txt",
-        bashWritable: false,
-      }),
-      "User approved write access via confirmation (scope: file /tmp/a.txt); writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).",
+  it("describes Guardrails write grants without a closed list of consuming tools", () => {
+    const tools = captureRegisteredTools();
+    const descriptions = ["ask_permission", "write", "edit", "bash"].map(
+      (name) => tools.get(name).description,
     );
-    assert.equal(
-      writeApprovalNote({
-        operation: "write",
-        scope: "directory",
-        grantedPath: "/tmp/dir",
-        bashWritable: false,
-      }),
-      "User approved write access via confirmation (scope: directory /tmp/dir); the subtree is writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).",
-    );
+    for (const description of descriptions) {
+      assert.match(description, /Guardrails write permissions/);
+      assert.match(description, /[Aa]ll tools using/);
+      assert.doesNotMatch(description, /writable via fs tools and bash|including via bash/);
+    }
+    const note = writeApprovalNote({
+      operation: "write",
+      scope: "file",
+      grantedPath: "/tmp/a.txt",
+    });
+    assert.match(note, /Guardrails write access/);
+    assert.match(note, /all tools using Guardrails/);
   });
 
   it("write のディレクトリスコープ承認は subtree の承認ノートを付け、以降の同配下書き込みには付かない", async () => {
@@ -2470,7 +2488,7 @@ describe("§2.3 承認ノート", () => {
       ).then((o) => o.result);
       assert.deepEqual(resultTexts(first), [
         `Successfully wrote 10 bytes to ${filePath}`,
-        `User approved write access via confirmation (scope: directory ${dirname(filePath)}); the subtree is writable for the rest of the session, including via bash.`,
+        `User approved Guardrails write access via confirmation (scope: directory ${dirname(filePath)}); valid for the rest of the session for all tools using Guardrails; explicit deny and credentials remain protected.`,
       ]);
       const second = await runGuardedCall(
         new Map([["write", writeTool]]),
@@ -2512,7 +2530,7 @@ describe("§2.3 承認ノート", () => {
       ).then((o) => o.result);
       assert.deepEqual(resultTexts(result), [
         `Successfully wrote 10 bytes to ${filePath}`,
-        `User approved write access via confirmation (scope: directory ${dirname(filePath)}); the subtree is writable for the rest of the session, including via bash.`,
+        `User approved Guardrails write access via confirmation (scope: directory ${dirname(filePath)}); valid for the rest of the session for all tools using Guardrails; explicit deny and credentials remain protected.`,
       ]);
     } finally {
       restore();
@@ -2541,7 +2559,7 @@ describe("§2.3 承認ノート", () => {
       ).then((o) => o.result);
       assert.deepEqual(resultTexts(result), [
         `Successfully replaced 1 block(s) in ${filePath}.`,
-        `User approved write access via confirmation (scope: directory ${dirname(filePath)}); the subtree is writable for the rest of the session, including via bash.`,
+        `User approved Guardrails write access via confirmation (scope: directory ${dirname(filePath)}); valid for the rest of the session for all tools using Guardrails; explicit deny and credentials remain protected.`,
       ]);
     } finally {
       restore();
@@ -2597,7 +2615,7 @@ describe("§2.3 承認ノート", () => {
       ).then((o) => o.result);
       assert.deepEqual(resultTexts(result), [
         "touch: cannot touch '/outside/x': Read-only file system",
-        "Sandbox blocked this write. Do not rewrite the command and retry with bash. Request access with ask_permission only when the target's effective write action is ask or unset and it is not a credentials path; explicit deny cannot be granted. If the result says bash writes are unavailable, use fs tools instead.",
+        "Sandbox blocked this write. Do not rewrite the command and retry with bash. Request access with ask_permission only when the target's effective write action is ask or unset and it is not a credentials path; explicit deny cannot be granted. Approval updates Guardrails write permissions for the approved scope for all tools using those permissions; explicit deny and credentials remain protected.",
         "User approved this command via confirmation.",
       ]);
     } finally {
@@ -2932,7 +2950,6 @@ describe("§3 許可要求ツール", () => {
         assert.deepEqual(outcome, {
           status: "already granted",
           grantedPath: join(dir, "sub"),
-          bashWritable: true,
         });
       },
     ),
@@ -2980,7 +2997,6 @@ describe("§3 許可要求ツール", () => {
         assert.deepEqual(outcome, {
           status: "already granted",
           grantedPath: join(dir, "sub"),
-          bashWritable: true,
         });
       },
     ),
@@ -3095,7 +3111,6 @@ describe("§3 許可要求ツール", () => {
         assert.deepEqual(outcome, {
           status: "granted",
           grantedPath: join(dir, "work"),
-          bashWritable: true,
         });
         assert.equal(confirmed.length, 1);
         assert.equal(confirmed[0]?.question, "Allow write access to directory subtree?");
@@ -3128,7 +3143,6 @@ describe("§3 許可要求ツール", () => {
         assert.deepEqual(outcome, {
           status: "granted",
           grantedPath: dir,
-          bashWritable: true,
         });
         await guardrail.authorizePath("write", join(dir, "any", "file.txt"), { cwd: dir });
         const args = guardrail.buildArgs("bash");
@@ -3209,7 +3223,6 @@ describe("§3 許可要求ツール", () => {
         assert.deepEqual(outcome, {
           status: "granted",
           grantedPath: dir,
-          bashWritable: true,
         });
         await guardrail.authorizePath("write", join(dir, "other.txt"), { cwd: dir });
       },
@@ -3217,7 +3230,7 @@ describe("§3 許可要求ツール", () => {
   );
 
   it(
-    "ask に確定したパスへの承認は bash から書けないことを結果に含める",
+    "reports the common write grant after approving an ask-configured path",
     withAskPermissionGuardrail(
       (dir) => `read: []\nwrite:\n  - {ask: ${dir}/asked}\n`,
       async (dir, guardrail) => {
@@ -3233,11 +3246,111 @@ describe("§3 許可要求ツール", () => {
         assert.deepEqual(outcome, {
           status: "granted",
           grantedPath: join(dir, "asked"),
-          bashWritable: false,
         });
       },
     ),
   );
+
+  for (const dialog of ["select", "confirm"] as const) {
+    it(
+      `reports the common grant for initial, queued, and repeated requests via ${dialog}`,
+      withAskPermissionGuardrail(
+        (dir) => `write:\n  - {allow: "${dir}"}\n  - {ask: "${join(dir, "locked.txt")}"}\n`,
+        async (dir, guardrail) => {
+          const filePath = join(dir, "locked.txt");
+          writeFileSync(filePath, "original");
+          let dialogCalls = 0;
+          async function approve(): Promise<boolean> {
+            dialogCalls++;
+            return true;
+          }
+          async function selectApproval(): Promise<string> {
+            await approve();
+            return "Yes, allow";
+          }
+          const context = {
+            hasUI: true,
+            ui: {
+              confirm: approve,
+              ...(dialog === "select" ? { select: selectApproval } : {}),
+            },
+          };
+          const firstRequest = guardrail.requestWritePermission(filePath, "edit the file", context);
+          const queuedRequest = guardrail.requestWritePermission(
+            filePath,
+            "edit the file",
+            context,
+          );
+          const [first, queued] = await Promise.all([firstRequest, queuedRequest]);
+          assert.deepEqual(first, { status: "granted", grantedPath: dir });
+          assert.deepEqual(queued, {
+            status: "already granted",
+            grantedPath: dir,
+          });
+          const repeated = await guardrail.requestWritePermission(filePath, "edit the file", {
+            hasUI: true,
+            ui: noDialogUi,
+          });
+          assert.deepEqual(repeated, queued);
+          assert.equal(dialogCalls, 1);
+        },
+      ),
+    );
+  }
+
+  for (const toolName of ["ask_permission", "write", "edit"] as const) {
+    it(
+      `${toolName} reports a common write grant for an ask-final file with a directory scope`,
+      withTempDirectory(async (dir) => {
+        const filePath = join(dir, "locked.txt");
+        const configPath = join(dir, "config.yaml");
+        writeFileSync(filePath, "original");
+        writeFileSync(
+          configPath,
+          `read:\n  - {allow: "*"}\nwrite:\n  - {allow: "${dir}"}\n  - {ask: "${filePath}"}\n`,
+        );
+        const tools = captureRegisteredTools(configPath);
+        const context = {
+          hasUI: true,
+          ui: {
+            confirm: async () => false,
+            select: async () =>
+              toolName === "ask_permission" ? "Yes, allow" : "Directory (subtree)",
+          },
+        };
+        const params = {
+          path: filePath,
+          reason: "edit the file",
+          content: "updated",
+          edits: [{ oldText: "original", newText: "updated" }],
+        };
+        const result = await tools
+          .get(toolName)
+          .execute("first", params, undefined, undefined, context);
+        const note = result.content.at(-1).text;
+        assert.equal(
+          note,
+          `User approved Guardrails write access via confirmation (scope: directory ${dir}); valid for the rest of the session for all tools using Guardrails; explicit deny and credentials remain protected.`,
+        );
+        if (toolName === "ask_permission") {
+          const repeated = await tools
+            .get(toolName)
+            .execute("again", params, undefined, undefined, {
+              hasUI: true,
+              ui: noDialogUi,
+            });
+          assert.deepEqual(repeated.content, [
+            {
+              type: "text",
+              text: `Already granted: Guardrails permits writes to the requested path ${filePath}. All tools using Guardrails write permissions share this permission. No new permission was added.`,
+            },
+          ]);
+        } else {
+          assert.equal(readFileSync(filePath, "utf8"), "updated");
+        }
+      }),
+    );
+  }
 
   it("ask_permission ツールの承認は動的許可と承認文言を返す", async () => {
     // The test runner itself is inside the bash sandbox, so the §6.1 host-side
@@ -3268,7 +3381,7 @@ describe("§3 許可要求ツール", () => {
       assert.deepEqual(result.content, [
         {
           type: "text",
-          text: `User approved write access via confirmation (scope: directory ${probeDirectory}); the subtree is writable for the rest of the session, including via bash.`,
+          text: `User approved Guardrails write access via confirmation (scope: directory ${probeDirectory}); valid for the rest of the session for all tools using Guardrails; explicit deny and credentials remain protected.`,
         },
       ]);
       assert.deepEqual(result.details, {
@@ -3766,7 +3879,7 @@ commands:
     assert.match(permissionTool.promptGuidelines[0], /allow needs no permission request/);
     assert.match(
       permissionTool.promptGuidelines[0],
-      /ask can be requested but remains read-only through bash/,
+      /ask requires approval to update Guardrails write permissions for the approved scope/,
     );
     assert.match(permissionTool.promptGuidelines[0], /deny cannot be granted/);
     assert.match(permissionTool.promptGuidelines[0], /no matching write rule can be requested/);
@@ -3851,7 +3964,10 @@ commands:
       assert.ok(guidance.includes("The last matching rule determines each action"));
       assert.ok(guidance.includes("Credentials override listed ancestors"));
       assert.ok(guidance.includes("no matching write rule can be requested"));
-      assert.match(guidance, /ask can be requested but remains read-only through bash/);
+      assert.match(
+        guidance,
+        /ask requires approval to update Guardrails write permissions for the approved scope/,
+      );
     }),
   );
 
@@ -5373,7 +5489,7 @@ describe("§6.1 bind とパスの実在保証", () => {
   );
 
   it(
-    "ask に確定したパスへの動的許可があっても read-only bind が後勝ちする",
+    "keeps an approved ask path writable in the bash sandbox",
     withGuardrailDir(async (dir, configPath) => {
       const askedFile = join(dir, "asked.txt");
       writeFileSync(askedFile, "x");
@@ -5397,9 +5513,7 @@ describe("§6.1 bind とパスの実在保証", () => {
         askedFile,
         askedFile,
       ]);
-      const roBindAt = args.indexOf(askedFile, grantBindAt + 2);
-      assert.deepEqual(args.slice(roBindAt - 1, roBindAt + 1), ["--ro-bind-try", askedFile]);
-      assert.ok(roBindAt > grantBindAt, "ask re-bind must win over the dynamic grant bind");
+      assert.equal(args.indexOf(askedFile, grantBindAt + 2), -1);
     }),
   );
 

@@ -20,7 +20,6 @@ import {
   credentialPaths,
   prepareWriteDirectories,
   readActionMatch,
-  resolveGrantWritableViaBash,
   warmGlobCache,
   writePaths,
   writePathsByFinalAction,
@@ -30,12 +29,11 @@ export type PathApproval = {
   operation: "read" | "write";
   scope: "file" | "directory";
   grantedPath: string;
-  bashWritable?: boolean;
 };
 
 export type WritePermissionRequest =
-  | { status: "already granted"; grantedPath: string; bashWritable: boolean }
-  | { status: "granted"; grantedPath: string; bashWritable: boolean }
+  | { status: "already granted"; grantedPath: string }
+  | { status: "granted"; grantedPath: string }
   | { status: "denied"; grantedPath: string; reason?: string };
 
 export type CommandPermissionRequest =
@@ -48,17 +46,10 @@ export type CommandPermissionRequest =
     }
   | { status: "denied"; command: string; reason?: string };
 
-/** §2.3 approval note for a write grant approved via a confirmation dialog.
- * Unset paths become writable including via bash; ask-final paths stay
- * read-only in the bash sandbox (§6.1), which the note spells out. */
 export function writeApprovalNote(approval: PathApproval): string {
-  if (approval.bashWritable === false)
-    return approval.scope === "directory"
-      ? `User approved write access via confirmation (scope: directory ${approval.grantedPath}); the subtree is writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).`
-      : `User approved write access via confirmation (scope: file ${approval.grantedPath}); writable via fs tools for the rest of the session, but not via bash (ask-configured paths stay read-only in the bash sandbox).`;
   return approval.scope === "directory"
-    ? `User approved write access via confirmation (scope: directory ${approval.grantedPath}); the subtree is writable for the rest of the session, including via bash.`
-    : `User approved write access via confirmation (scope: file ${approval.grantedPath}); writable for the rest of the session, including via bash.`;
+    ? `User approved Guardrails write access via confirmation (scope: directory ${approval.grantedPath}); valid for the rest of the session for all tools using Guardrails; explicit deny and credentials remain protected.`
+    : `User approved Guardrails write access via confirmation (scope: file ${approval.grantedPath}); valid for the rest of the session for all tools using Guardrails; explicit deny and credentials remain protected.`;
 }
 
 export type ToolUI = {
@@ -254,7 +245,6 @@ export class Guardrail {
       return {
         status: "already granted",
         grantedPath,
-        bashWritable: this.grantWritableViaBash(grantedPath),
       };
     if (!context.hasUI || !context.ui)
       throw new Error(`Access requires confirmation: ${absolutePath}`);
@@ -265,7 +255,6 @@ export class Guardrail {
         return {
           status: "already granted",
           grantedPath,
-          bashWritable: this.grantWritableViaBash(grantedPath),
         };
       return this.confirmWritePermission(grantedPath, reason, ui, matched);
     });
@@ -308,7 +297,6 @@ export class Guardrail {
     return {
       status: "granted",
       grantedPath,
-      bashWritable: this.grantWritableViaBash(grantedPath),
     };
   }
 
@@ -339,7 +327,6 @@ export class Guardrail {
           operation: "write",
           scope,
           grantedPath: grantPath,
-          bashWritable: this.grantWritableViaBash(grantPath),
         };
       }
       if (selectedOption !== ALLOW_OPTION)
@@ -353,13 +340,6 @@ export class Guardrail {
     );
     if (!approved) throw await this.deniedError(`Access denied by user: ${absolutePath}`, ui);
     this.addDynamicGrant(operation, absolutePath, "file");
-    if (operation === "write")
-      return {
-        operation,
-        scope: "file",
-        grantedPath: absolutePath,
-        bashWritable: this.grantWritableViaBash(absolutePath),
-      };
     return { operation, scope: "file", grantedPath: absolutePath };
   }
 
@@ -549,9 +529,5 @@ export class Guardrail {
       if (await ui.confirm("Allow command?", `${display}\n${note}`)) return true;
       throw await this.deniedError(`Command denied by user: ${command}`, ui);
     });
-  }
-
-  private grantWritableViaBash(grantedPath: string): boolean {
-    return resolveGrantWritableViaBash(this.config, this.cwd, this.globCache, grantedPath);
   }
 }

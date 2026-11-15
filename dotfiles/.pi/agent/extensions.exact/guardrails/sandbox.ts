@@ -171,21 +171,6 @@ export function writePathsByFinalAction(
   };
 }
 
-/**
- * Whether a write grant also opens the granted path in the bash sandbox
- * (§6.1): unset paths become writable there via the dynamic-grant bind,
- * while ask-final paths are re-bound read-only after every writable bind,
- * so they stay non-writable in bash even after this fs-side approval.
- */
-export function resolveGrantWritableViaBash(
-  config: GuardrailConfig,
-  cwd: string,
-  globCache: Map<string, string[]>,
-  grantedPath: string,
-): boolean {
-  return resolvePathActionMatch(writePaths(config, cwd, globCache), grantedPath).action !== "ask";
-}
-
 export function readAllPaths(config: GuardrailConfig): boolean {
   return actionPatterns(config.read, "allow").includes("*");
 }
@@ -254,7 +239,6 @@ function addConfiguredMounts(
   },
 ): void {
   const gitMainWorktreePath = resolveGitMainWorktreePath(input.cwd);
-  const mounted = new Set<string>();
   const writableMountPaths: string[] = [];
   const { allow: allowFinalPaths, restricted: restrictedFinalPaths } = writePathsByFinalAction(
     input.config,
@@ -262,13 +246,11 @@ function addConfiguredMounts(
     input.globCache,
   );
 
-  const mount = (path: string, writable: boolean) => {
+  function mount(path: string, writable: boolean): void {
     const normalized = resolve(path);
-    if (mounted.has(`${normalized}:${writable}`)) return;
-    mounted.add(`${normalized}:${writable}`);
     if (writable) writableMountPaths.push(normalized);
     addMount(args, normalized, writable);
-  };
+  }
 
   if (!readAllPaths(input.config)) {
     for (const path of expandPathPatterns(
@@ -284,27 +266,36 @@ function addConfiguredMounts(
     // write grants inside the cwd, turning the whole tree read-only.
     mount(input.cwd, false);
   }
-  // Writable binds mirror the fs tools' per-call resolution (§6.1): only
-  // allow-final paths are mounted writable, so a later deny or ask entry
-  // keeps its paths out of the bash sandbox even when an allow entry
-  // declared them.
   for (const path of allowFinalPaths) mount(path, true);
-  for (const [path, accessModes] of input.dynamicPaths) mount(path, accessModes.has("write"));
-
-  if (input.mode === "bash") {
-    for (const path of credentialPaths(input.config, input.cwd, input.globCache)) {
-      if (existsSync(path)) mount(path, false);
-    }
-    // fs tools resolve deny/ask-final paths per call; the bash sandbox has
-    // no per-path gate, so re-bind them read-only after every writable
-    // bind. Later bwrap mounts win, which keeps a path non-writable even
-    // through an allowed ancestor or a dynamic grant (§6.1) — an ask-final
-    // path stays non-writable in bash even after an fs approval.
-    for (const restrictedPath of restrictedFinalPaths) {
-      if (writableMountPaths.some((writablePath) => pathCovers(writablePath, restrictedPath)))
-        mount(restrictedPath, false);
-    }
+  if (input.mode === "fs") {
+    for (const [path, accessModes] of input.dynamicPaths) mount(path, accessModes.has("write"));
+    return;
   }
+
+  const writeGrants: string[] = [];
+  for (const [path, accessModes] of input.dynamicPaths) {
+    if (accessModes.has("write")) writeGrants.push(path);
+    else mount(path, false);
+  }
+  function hasWriteGrant(path: string): boolean {
+    return writeGrants.some((grant) => pathCovers(grant, path));
+  }
+  const writeSection = writePaths(input.config, input.cwd, input.globCache);
+  const permissionPaths = new Set([
+    ...restrictedFinalPaths,
+    ...writeGrants,
+    ...allowFinalPaths.filter(hasWriteGrant),
+  ]);
+  const orderedPaths = [...permissionPaths].sort(
+    (left, right) => left.split(sep).length - right.split(sep).length,
+  );
+  for (const path of orderedPaths) {
+    const { action, matched } = resolvePathActionMatch(writeSection, path);
+    const writable = (action !== "deny" || matched === undefined) && hasWriteGrant(path);
+    if (writable || writableMountPaths.some((parent) => pathCovers(parent, path)))
+      mount(path, writable);
+  }
+  for (const path of credentialPaths(input.config, input.cwd, input.globCache)) mount(path, false);
 }
 
 function addHiddenPaths(

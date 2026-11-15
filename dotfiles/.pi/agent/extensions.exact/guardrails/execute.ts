@@ -103,7 +103,7 @@ export type GuardedToolRequest = {
 const SUPPORTED_TOOLS = new Set(["read", "write", "edit", "grep", "find", "ls", "bash"]);
 const COMMAND_APPROVAL_NOTE = "User approved this command via confirmation.";
 const EROFS_HINT =
-  "Sandbox blocked this write. Do not rewrite the command and retry with bash. Request access with ask_permission only when the target's effective write action is ask or unset and it is not a credentials path; explicit deny cannot be granted. If the result says bash writes are unavailable, use fs tools instead.";
+  "Sandbox blocked this write. Do not rewrite the command and retry with bash. Request access with ask_permission only when the target's effective write action is ask or unset and it is not a credentials path; explicit deny cannot be granted. Approval updates Guardrails write permissions for the approved scope for all tools using those permissions; explicit deny and credentials remain protected.";
 
 function sessionFromContext(context: GuardedToolContext): ToolSession {
   return {
