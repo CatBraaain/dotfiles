@@ -58,8 +58,10 @@ function parseValueLine(line: string, prefix: string | null, values: RegSnapshot
   const eq = line.indexOf("=");
   if (eq === -1) throw new Error(`unrecognized line: "${line}"`);
   const nameToken = line.slice(0, eq);
+  if (nameToken !== "@" && !nameToken.startsWith('"'))
+    throw new Error(`unrecognized value name: "${nameToken}"`);
   const name = nameToken.startsWith('"')
-    ? unescapeReg(nameToken.slice(1, nameToken.length - 1))
+    ? unquoteRegString(nameToken, "value name")
     : nameToken;
   const fullName = prefix === "" ? name : `${prefix}\\${name}`;
   const payload = line.slice(eq + 1);
@@ -71,7 +73,10 @@ function parseValueLine(line: string, prefix: string | null, values: RegSnapshot
     if (Number.isNaN(value)) throw new Error(`invalid dword value for "${fullName}"`);
     values.set(fullName, { kind: "dword", value });
   } else if (payload.startsWith('"'))
-    values.set(fullName, { kind: "string", value: unescapeReg(payload.slice(1, -1)) });
+    values.set(fullName, {
+      kind: "string",
+      value: unquoteRegString(payload, `value "${fullName}"`),
+    });
   else throw new Error(`unsupported value format for "${fullName}"`);
 }
 
@@ -85,13 +90,27 @@ function unescapeReg(escaped: string): string {
   return out;
 }
 
+function unquoteRegString(token: string, where: string): string {
+  if (!isClosedQuotedString(token))
+    throw new Error(`unterminated quoted string in ${where}: "${token}"`);
+  return unescapeReg(token.slice(1, -1));
+}
+
+function isClosedQuotedString(token: string): boolean {
+  if (token.length < 2 || !token.endsWith('"')) return false;
+  let backslashesBeforeEnd = 0;
+  for (let i = token.length - 2; i >= 0 && token[i] === "\\"; i -= 1)
+    backslashesBeforeEnd += 1;
+  return backslashesBeforeEnd % 2 === 0;
+}
+
 function parseHexBytes(hexList: string): Uint8Array {
   const bytes = hexList
     .split(",")
     .map((token) => token.trim())
     .filter((token) => token !== "")
     .map((token) => {
-      if (!/^[0-9a-fA-F]{1,4}$/.test(token)) throw new Error(`invalid hex byte: "${token}"`);
+      if (!/^[0-9a-fA-F]{1,2}$/.test(token)) throw new Error(`invalid hex byte: "${token}"`);
       return Number.parseInt(token, 16);
     });
   return Uint8Array.from(bytes);
@@ -289,22 +308,23 @@ async function loadSnapshot(): Promise<RegSnapshot> {
 // Exports the live StyleList\Custom to a temp .reg and parses it. Returns
 // null when the key cannot be read (not applied yet, or reg.exe unusable);
 // the registry is never written.
-async function readCurrentSnapshot(): Promise<RegSnapshot | null> {
-  const spawn = await loadSpawnSync();
+export async function readCurrentSnapshot(
+  spawn: SpawnSync,
+  readFileSync: (path: string) => Uint8Array,
+): Promise<RegSnapshot | null> {
   const exportPath = await tempFilePath("key-settings-current");
   const proc = spawn("reg.exe", ["export", ROOT_KEY, exportPath, "/y"], { windowsHide: true });
   if (proc.error !== undefined || proc.status !== 0) return null;
-  return parseRegFileBytes((await loadFs()).readFileSync(exportPath));
-}
-
-function parseRegFileBytes(bytes: Uint8Array): RegSnapshot {
-  return parseRegExport(decodeRegText(bytes, "the exported .reg file"), EXPORT_ROOT_KEY);
+  return parseRegExport(
+    decodeRegText(readFileSync(exportPath), "the exported .reg file"),
+    EXPORT_ROOT_KEY,
+  );
 }
 
 // Backs the current key up before applying. Returns the backup path, or null
 // when the key does not exist yet. A failed export while the key exists is an
 // error: apply must not proceed without its backup.
-async function backupCurrentKey(spawn: SpawnSync): Promise<string | null> {
+export async function backupCurrentKey(spawn: SpawnSync): Promise<string | null> {
   const exists = spawn("reg.exe", ["query", ROOT_KEY], { windowsHide: true });
   if (exists.error !== undefined) throw new Error(`cannot run reg: ${String(exists.error)}`);
   if (exists.status !== 0) return null;
@@ -348,7 +368,10 @@ async function applySnapshot(): Promise<void> {
 
 async function printDiff(): Promise<void> {
   const snapshot = await loadSnapshot();
-  const current = await readCurrentSnapshot();
+  const current = await readCurrentSnapshot(
+    await loadSpawnSync(),
+    (await loadFs()).readFileSync,
+  );
   console.log(buildDiffView(current, snapshot));
 }
 
