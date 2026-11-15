@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-/** Silence threshold since the last stream activity. Owner-fixed at 5 minutes. */
+/** Silence threshold since the last stream activity. User-fixed at 5 minutes. */
 export const IDLE_TIMEOUT_MS = 300_000;
 
 /** Real timer backend: schedule onFire, return its cancel function. */
