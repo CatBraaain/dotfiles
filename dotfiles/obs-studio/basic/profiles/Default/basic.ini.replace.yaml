@@ -7,5 +7,5 @@ replacements:
     replacement: "${1}=true"
   - pattern: "(RecRBTime)=.*"
     replacement: "${1}=1800"
-  - pattern: "(StreamEncoder|FFFilePath|RecEncoder)=.*"
+  - pattern: "(StreamEncoder|RecEncoder)=.*"
     replacement: "${1}=x264"
