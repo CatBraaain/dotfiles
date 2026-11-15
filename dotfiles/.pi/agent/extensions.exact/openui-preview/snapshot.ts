@@ -5,7 +5,11 @@ import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { quote } from "shell-quote";
-import { requestBackgroundBash, type BackgroundBashContext } from "../tools/background-bash.ts";
+import type {
+  BackgroundBashContext,
+  BackgroundBashOutcome,
+  BackgroundBashRequest,
+} from "../tools/background-bash.ts";
 
 export const SHOT_WIDTH = 960;
 export const SHOT_HEIGHT = 1280;
@@ -28,7 +32,7 @@ export type SnapshotCompletion = { ok: true } | { ok: false; error: string };
 export interface ShotOptions {
   outDir: string;
   context: BackgroundBashContext;
-  requestBash: typeof requestBackgroundBash;
+  requestBash: (request: BackgroundBashRequest) => Promise<BackgroundBashOutcome>;
   generatedDir?: string;
   signal?: AbortSignal;
 }

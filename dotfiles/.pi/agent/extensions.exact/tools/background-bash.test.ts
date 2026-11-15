@@ -26,6 +26,7 @@ describe("background Bash lifetime", () => {
   it("fails immediately when the runtime API is not registered", async () => {
     const outcome = await requestBackgroundBash(request);
     assert.equal(outcome.status, "unavailable");
+    await outcome.executionSettled;
   });
 
   it("retains the exact result including isError", async () => {
@@ -111,7 +112,10 @@ describe("background Bash lifetime", () => {
       () => {},
     );
     try {
-      assert.deepEqual(await requestBackgroundBash(request), { status: "failed", error });
+      const outcome = await requestBackgroundBash(request);
+      assert.equal(outcome.status, "failed");
+      if (outcome.status === "failed") assert.strictEqual(outcome.error, error);
+      await outcome.executionSettled;
     } finally {
       dispose();
     }
@@ -128,6 +132,7 @@ describe("background Bash lifetime", () => {
       assert.equal(outcome.status, "failed");
       if (outcome.status === "failed")
         assert.match(String(outcome.error), /Invalid background Bash result/);
+      await outcome.executionSettled;
     } finally {
       dispose();
     }
@@ -146,10 +151,10 @@ describe("background Bash lifetime", () => {
       () => {},
     );
     try {
-      assert.deepEqual(await requestBackgroundBash({ ...request, signal: controller.signal }), {
-        status: "aborted",
-        reason: "cancelled",
-      });
+      const outcome = await requestBackgroundBash({ ...request, signal: controller.signal });
+      assert.equal(outcome.status, "aborted");
+      if (outcome.status === "aborted") assert.strictEqual(outcome.reason, "cancelled");
+      await outcome.executionSettled;
       assert.equal(calls, 0);
     } finally {
       dispose();
@@ -180,6 +185,7 @@ describe("background Bash lifetime", () => {
         delayed.resolve(result);
         await setImmediate();
         assert.strictEqual(await pending, outcome);
+        await outcome.executionSettled;
         if (boundary === "shutdown") {
           assert.equal((await requestBackgroundBash(request)).status, "unavailable");
           const replacement = registerBackgroundBash(
@@ -228,14 +234,15 @@ describe("background Bash lifetime", () => {
     });
   });
 
-  it("fails and aborts only when the outer deadline is exceeded", async () => {
+  it("keeps a timeouted execution running past the outer deadline and tracks its settlement", async () => {
     await withControlledClock(async (advance) => {
       let signal: AbortSignal | undefined;
+      const delayed = Promise.withResolvers<AgentToolResult<unknown>>();
       const dispose = registerBackgroundBash(
         request.context,
         async (input) => {
           signal = input.signal;
-          return new Promise(() => {});
+          return delayed.promise;
         },
         () => {},
       );
@@ -248,12 +255,122 @@ describe("background Bash lifetime", () => {
         advance(2_101);
         const outcome = await pending;
         assert.equal(outcome.status, "failed");
-        assert.equal(signal?.aborted, true);
+        assert.equal(signal?.aborted, false);
+        let settled = false;
+        void outcome.executionSettled.then(() => {
+          settled = true;
+        });
+        await setImmediate();
+        assert.equal(settled, false);
+        delayed.reject(new Error("Bash failed"));
+        await outcome.executionSettled;
+        assert.equal(settled, true);
+        assert.equal((await pending).status, "failed");
       } finally {
         dispose();
       }
     });
   });
+
+  it("aborts a started execution on caller abort even with a timeout", async () => {
+    const started = Promise.withResolvers<AbortSignal>();
+    const delayed = Promise.withResolvers<AgentToolResult<unknown>>();
+    const controller = new AbortController();
+    const dispose = registerBackgroundBash(
+      request.context,
+      async (input) => {
+        started.resolve(input.signal!);
+        return delayed.promise;
+      },
+      () => {},
+    );
+    try {
+      const pending = requestBackgroundBash({
+        ...request,
+        params: { ...request.params, timeout: 25 },
+        signal: controller.signal,
+      });
+      const executionSignal = await started.promise;
+      controller.abort("cancelled");
+      const outcome = await pending;
+      assert.equal(outcome.status, "aborted");
+      assert.equal(executionSignal.aborted, true);
+      delayed.resolve(result);
+      await outcome.executionSettled;
+    } finally {
+      dispose();
+      delayed.resolve(result);
+    }
+  });
+
+  it("keeps a started timeouted execution across API shutdown until it settles", async () => {
+    const started = Promise.withResolvers<AbortSignal>();
+    const delayed = Promise.withResolvers<AgentToolResult<unknown>>();
+    const dispose = registerBackgroundBash(
+      request.context,
+      async (input) => {
+        started.resolve(input.signal!);
+        return delayed.promise;
+      },
+      () => {},
+    );
+    try {
+      const pending = requestBackgroundBash({
+        ...request,
+        params: { ...request.params, timeout: 25 },
+      });
+      const executionSignal = await started.promise;
+      dispose();
+      const outcome = await pending;
+      assert.equal(outcome.status, "unavailable");
+      assert.equal(executionSignal.aborted, false);
+      delayed.resolve(result);
+      await outcome.executionSettled;
+      assert.equal((await pending).status, "unavailable");
+    } finally {
+      dispose();
+      delayed.resolve(result);
+    }
+  });
+
+  for (const boundary of ["deadline", "shutdown"] as const) {
+    it(`keeps caller cancellation active after the ${boundary} result`, async () => {
+      await withControlledClock(async (advance) => {
+        const started = Promise.withResolvers<AbortSignal>();
+        const delayed = Promise.withResolvers<AgentToolResult<unknown>>();
+        const controller = new AbortController();
+        const dispose = registerBackgroundBash(
+          request.context,
+          async (input) => {
+            started.resolve(input.signal!);
+            return delayed.promise;
+          },
+          () => {},
+        );
+        try {
+          const pending = requestBackgroundBash({
+            ...request,
+            params: { ...request.params, timeout: 1 },
+            signal: controller.signal,
+          });
+          const executionSignal = await started.promise;
+          if (boundary === "deadline") advance(3_001);
+          else dispose();
+          const outcome = await pending;
+          assert.equal(outcome.status, boundary === "deadline" ? "failed" : "unavailable");
+          assert.equal(executionSignal.aborted, false);
+          controller.abort("cancel after result");
+          assert.equal(executionSignal.aborted, true);
+          delayed.resolve(result);
+          await outcome.executionSettled;
+          assert.strictEqual(await pending, outcome);
+        } finally {
+          dispose();
+          delayed.resolve(result);
+        }
+      });
+    });
+  }
 
   it("rearms large deadlines without timing out at the timer limit", async () => {
     await withControlledClock(async (advance, scheduledDelays) => {

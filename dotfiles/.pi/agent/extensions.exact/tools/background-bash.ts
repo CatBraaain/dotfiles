@@ -22,8 +22,14 @@ export type BackgroundBashOutcome =
   | { status: "aborted"; reason: unknown }
   | { status: "unavailable"; error: Error };
 
+export type TrackedBackgroundBashOutcome = BackgroundBashOutcome & {
+  executionSettled: Promise<void>;
+};
+
+type BackgroundBashResult = BackgroundBashOutcome;
+
 interface BackgroundBashAPI {
-  execute(request: BackgroundBashRequest): Promise<BackgroundBashOutcome>;
+  execute(request: BackgroundBashRequest): Promise<TrackedBackgroundBashOutcome>;
   dispose(): void;
 }
 
@@ -34,9 +40,9 @@ const registry = (shared[REGISTRY_KEY] ??= new WeakMap<object, BackgroundBashAPI
 
 export function requestBackgroundBash(
   request: BackgroundBashRequest,
-): Promise<BackgroundBashOutcome> {
+): Promise<TrackedBackgroundBashOutcome> {
   if (request.signal?.aborted)
-    return Promise.resolve({ status: "aborted", reason: request.signal.reason });
+    return Promise.resolve(settledExecution({ status: "aborted", reason: request.signal.reason }));
   try {
     const api = registry.get(request.context.modelRegistry);
     return api
@@ -53,7 +59,9 @@ export function registerBackgroundBash(
   assertRuntimeActive: () => void,
 ): () => void {
   const key = context.modelRegistry;
-  const pending = new Set<(outcome: BackgroundBashOutcome) => void>();
+  const pending = new Set<
+    (result: BackgroundBashResult, abortStartedExecution?: boolean) => void
+  >();
   let active = true;
   const api: BackgroundBashAPI = {
     execute(request) {
@@ -66,12 +74,19 @@ export function registerBackgroundBash(
       return new Promise((resolveOutcome) => {
         const controller = new AbortController();
         let settled = false;
+        let started = false;
+        const execution = Promise.withResolvers<void>();
+        const executionSettled = execution.promise;
         const timeoutSeconds = request.params?.timeout;
-        const timeoutMs =
+        const executionTimeoutSeconds =
           typeof timeoutSeconds === "number" &&
           Number.isFinite(timeoutSeconds) &&
           timeoutSeconds > 0
-            ? timeoutSeconds * 1_000 + REQUEST_TIMEOUT_MS
+            ? timeoutSeconds
+            : undefined;
+        const timeoutMs =
+          executionTimeoutSeconds !== undefined
+            ? executionTimeoutSeconds * 1_000 + REQUEST_TIMEOUT_MS
             : REQUEST_TIMEOUT_MS;
         const deadline = Date.now() + timeoutMs;
         let timer: ReturnType<typeof setTimeout>;
@@ -94,18 +109,25 @@ export function registerBackgroundBash(
 
         armTimeout();
 
-        function finish(outcome: BackgroundBashOutcome): void {
+        function finish(result: BackgroundBashResult, abortStartedExecution = false): void {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          request.signal?.removeEventListener("abort", onAbort);
           pending.delete(finish);
-          if (outcome.status !== "completed") controller.abort();
-          resolveOutcome(outcome);
+          if (!started) settleExecution();
+          else if (abortStartedExecution || executionTimeoutSeconds === undefined)
+            controller.abort();
+          resolveOutcome({ ...result, executionSettled });
+        }
+
+        function settleExecution(): void {
+          request.signal?.removeEventListener("abort", onAbort);
+          execution.resolve();
         }
 
         function onAbort(): void {
-          finish({ status: "aborted", reason: request.signal!.reason });
+          controller.abort();
+          finish({ status: "aborted", reason: request.signal!.reason }, true);
         }
 
         pending.add(finish);
@@ -116,21 +138,25 @@ export function registerBackgroundBash(
             try {
               assertRuntimeActive();
             } catch (error) {
-              finish(unavailable("Background Bash runtime is unavailable", error));
+              finish(unavailableResult("Background Bash runtime is unavailable", error));
               return;
             }
+            started = true;
             return execute({ ...request, signal: controller.signal });
           })
           .then(
             (result) => {
-              if (settled) return;
+              settleExecution();
               finish(
                 result && Array.isArray(result.content)
                   ? { status: "completed", result }
                   : { status: "failed", error: new Error("Invalid background Bash result") },
               );
             },
-            (error) => finish({ status: "failed", error }),
+            (error) => {
+              settleExecution();
+              finish({ status: "failed", error });
+            },
           );
       });
     },
@@ -138,7 +164,7 @@ export function registerBackgroundBash(
       if (!active) return;
       active = false;
       if (registry.get(key) === api) registry.delete(key);
-      for (const finish of pending) finish(unavailable("Background Bash API stopped"));
+      for (const finish of pending) finish(unavailableResult("Background Bash API stopped"));
       pending.clear();
     },
   };
@@ -147,6 +173,17 @@ export function registerBackgroundBash(
   return api.dispose;
 }
 
-function unavailable(message: string, cause?: unknown): BackgroundBashOutcome {
+function settledExecution(result: BackgroundBashResult): TrackedBackgroundBashOutcome {
+  return { ...result, executionSettled: Promise.resolve() };
+}
+
+function unavailable(message: string, cause?: unknown): TrackedBackgroundBashOutcome {
+  return settledExecution({
+    status: "unavailable",
+    error: new Error(message, { cause }),
+  });
+}
+
+function unavailableResult(message: string, cause?: unknown): BackgroundBashResult {
   return { status: "unavailable", error: new Error(message, { cause }) };
 }

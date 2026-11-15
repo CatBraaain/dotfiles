@@ -31,10 +31,12 @@ const { requestBackgroundBash } = await import(pathToFileURL(join(moduleDir, "..
 const socket = join(process.env.XDG_RUNTIME_DIR, "pi-tmux", "server.sock");
 const pane = process.env.TMUX_PANE;
 const race = process.env.PI_TEST_RACE === "1";
+const recovery = process.env.PI_TEST_RECOVERY === "1";
 let sessionId = race ? "race-old" : "session-external";
 const notifications = [];
 const trace = [];
 const sandboxCommands = [];
+const executions = [];
 const bus = createEventBus();
 const handlers = new Map();
 const tools = new Map();
@@ -46,7 +48,20 @@ SandboxRunner.prototype.runTool = async function(name, params, options) {
   assert.equal(options.executor, undefined);
   assert.ok(this.buildArgs("bash").includes(directory));
   sandboxCommands.push(params.command);
-  return originalRunTool.call(this, name, params, options);
+  const execution = { command: params.command, timeout: params.timeout, started: Date.now() };
+  executions.push(execution);
+  try {
+    const result = await originalRunTool.call(this, name, params, options);
+    execution.status = "completed";
+    execution.result = result;
+    return result;
+  } catch (error) {
+    execution.status = "failed";
+    execution.error = String(error);
+    throw error;
+  } finally {
+    execution.finished = Date.now();
+  }
 };
 const events = {
   on: bus.on.bind(bus),
@@ -152,6 +167,57 @@ try {
     assert.equal(notifications.length, 0);
     await dispatch("session_shutdown", { reason: "quit" });
     assert.equal(readOption(), "");
+  } else if (recovery) {
+    process.env.PI_TEST_SOCKET = socket;
+    process.env.PI_TEST_PANE = pane;
+    await waitFor("startup", () => readOption() === stateOptionValue(sessionId, "waiting-user"));
+    await dispatch("agent_start");
+    await waitFor("old if-shell accepted by the server", () => existsSync(join(directory, "old-write-started")));
+    assert.match(cli("show-messages", "-J"), /old-write-release/);
+    await waitFor(
+      "inner Bash timeout and recovery warning",
+      () => notifications.some((text) => text.includes("publication interrupted")),
+    );
+    const failed = executions.find((execution) => execution.command.includes(" running "));
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.timeout, 1);
+    assert.match(failed.error, /Command timed out after 1 seconds/);
+    assert.equal(failed.result, undefined);
+    assert.ok(failed.finished - failed.started >= 1_000);
+    await dispatch("agent_settled");
+    assert.equal(executions.filter((execution) => execution.command.includes(" running ")).length, 1);
+    await waitFor("successful retry followed by queued waiting-user", () => {
+      const publications = executions.filter((execution) => execution.command.startsWith("pi-mux state "));
+      return publications.length === 4 && publications[3].finished !== undefined;
+    });
+    const publications = executions.filter((execution) => execution.command.startsWith("pi-mux state "));
+    assert.deepEqual(publications.map((execution) => execution.command.split(" ")[3]), [
+      "waiting-user", "running", "running", "waiting-user",
+    ]);
+    const retried = publications[2];
+    assert.ok(retried.started - failed.finished >= 1_000);
+    assert.equal(retried.command, failed.command);
+    for (const execution of [retried, publications[3]]) {
+      assert.equal(execution.status, "completed", JSON.stringify(execution));
+      assert.equal(execution.result.isError, undefined);
+      assert.equal(execution.result.structuredContent.exit_code, 0);
+      assert.equal(execution.result.structuredContent.truncated, false);
+    }
+    assert.ok(publications[3].started >= retried.finished);
+    assert.match(cli("show-messages", "-J"), /old-write-release/);
+    assert.equal(existsSync(join(directory, "old-job-finished")), false);
+    assert.equal(readOption(), stateOptionValue(sessionId, "waiting-user"));
+    writeFileSync(join(directory, "old-write-release"), "release");
+    await waitFor("old server job retired after waiting-user publication", () =>
+      existsSync(join(directory, "old-job-finished")) && !cli("show-messages", "-J").includes("old-write-release"),
+    );
+    assert.equal(existsSync(join(directory, "old-write-finished")), false);
+    assert.equal(readOption(), stateOptionValue(sessionId, "waiting-user"));
+    assert.equal(notifications.length, 1);
+    assert.match(notifications[0], /publication interrupted \(failed\):.*Command timed out after 1 seconds.*retrying automatically/);
+    await dispatch("session_shutdown", { reason: "quit" });
+    assert.equal(readOption(), "");
+    assert.equal(notifications.length, 1);
   } else if (denied) {
     await waitFor("denied notification", () => notifications.some((text) => text.includes("requires confirmation")));
     assert.equal(sandboxCommands.length, 0);
@@ -208,7 +274,7 @@ try {
       assert.equal(readOption(), "");
       assert.equal(notifications.length, 0);
     } else {
-      assert.ok(notifications.some((text) => text.includes("publication stopped")));
+      assert.ok(notifications.some((text) => text.includes("cannot clear session state option")));
     }
   }
   assert.deepEqual(commandNames, []);
@@ -221,7 +287,7 @@ try {
   }
   assert.equal(trace.length, 0);
   if (!denied) assert.ok(sandboxCommands.length > 0);
-  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: true, trace, sandboxCommands, notifications, pane }));
+  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: true, trace, sandboxCommands, notifications, pane, executions }));
 } catch (error) {
   writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: false, error: String(error.stack ?? error), notifications, trace, sandboxCommands }));
   process.exitCode = 1;
@@ -344,6 +410,7 @@ try {
   process.exitCode = 1;
 } finally {
   releaseTitle.resolve();
+  await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
   session.dispose();
   SandboxRunner.prototype.runTool = originalRunTool;
 }
@@ -382,6 +449,16 @@ describe("session-state with a dedicated headless tmux and real registered Bash"
   }
 
   it(
+    "recovers automatically after a real registered Bash timeout and keeps the latest state",
+    async () => {
+      const result = await runScenario("session-first", false, false, SCENARIO, "absent", true);
+      assert.equal(result.ok, true, result.error ?? "scenario failed");
+      assert.ok(result.sandboxCommands.some((command) => command.includes("pi-mux state")));
+      console.info("recovery evidence: " + JSON.stringify(result));
+    },
+    TEST_TIMEOUT_MS,
+  );
+  it(
     "fails closed at shared authorization without opening UI",
     async () => {
       const result = await runScenario("tools-first", true);
@@ -405,6 +482,7 @@ async function runScenario(
   race = false,
   scenario = SCENARIO,
   initialRestoreRecord: "absent" | "valid" | "invalid" = "absent",
+  recovery = false,
 ): Promise<ScenarioResult> {
   mkdirSync("/tmp/work/dotfiles", { recursive: true });
   const directory = mkdtempSync("/tmp/work/dotfiles/mvp-tmux-");
@@ -448,11 +526,49 @@ async function runScenario(
   const cliSource = fileURLToPath(
     new URL("../../../../.local/cli.exact/pi-mux/src/main.ts", import.meta.url),
   );
-  writeFileSync(
-    join(bin, "pi-mux"),
-    "#!/bin/sh\nexec " + quote([process.execPath, cliSource]) + ' "$@"\n',
-    { mode: 0o755 },
-  );
+  if (recovery) {
+    const actualTmux = execFileSync("which", ["tmux"], { encoding: "utf8" }).trim();
+    env.PI_TEST_TMUX = actualTmux;
+    env.PI_TEST_RECOVERY = "1";
+    const oldValue = JSON.stringify({
+      version: 1,
+      sessionId: "session-external",
+      state: "running",
+      title: "Timed out write",
+    });
+    const delayedJob = [
+      `printf started > ${quote([join(directory, "old-write-started")])}`,
+      `while [ ! -e ${quote([join(directory, "old-write-release")])} ]; do sleep 0.01; done`,
+      `printf finished > ${quote([join(directory, "old-job-finished")])}`,
+    ].join("; ");
+    const writeFinished = `printf written > ${quote([join(directory, "old-write-finished")])}`;
+    const delayedWrite = `set-option -p -t $PI_TEST_PANE @pi_session_state '${oldValue}'; run-shell ${quote([writeFinished])}`;
+    const ifShellLine =
+      '  exec "$PI_TEST_TMUX" -S "$PI_TEST_SOCKET" if-shell ' +
+      quote([delayedJob]) +
+      ' "' +
+      delayedWrite.replaceAll('"', '\\"') +
+      '"';
+    writeFileSync(
+      join(bin, "pi-mux"),
+      [
+        "#!/bin/sh",
+        'if [ "$1" = state ] && [ "$3" = running ] && [ ! -e "$PI_TEST_DIRECTORY/old-write-scheduled" ]; then',
+        '  printf x > "$PI_TEST_DIRECTORY/old-write-scheduled"',
+        ifShellLine,
+        "fi",
+        "exec " + quote([process.execPath, cliSource]) + ' "$@"',
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+  } else {
+    writeFileSync(
+      join(bin, "pi-mux"),
+      "#!/bin/sh\nexec " + quote([process.execPath, cliSource]) + ' "$@"\n',
+      { mode: 0o755 },
+    );
+  }
   if (race) {
     const actualTmux = execFileSync("which", ["tmux"], { encoding: "utf8" }).trim();
     env.PI_TEST_TMUX = actualTmux;
@@ -508,7 +624,7 @@ async function runScenario(
       await delay(20);
     }
     const result = JSON.parse(readFileSync(reportPath, "utf8")) as ScenarioResult;
-    assert.equal(result.ok, true, result.error ?? "scenario failed");
+    assert.equal(result.ok, true, JSON.stringify(result));
     while (cli("list-panes", "-a").split("\n").length > 1) {
       if (Date.now() >= deadline) assert.fail("pane did not disappear after normal process exit");
       await delay(10);

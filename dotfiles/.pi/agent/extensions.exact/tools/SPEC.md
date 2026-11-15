@@ -28,7 +28,7 @@ read / write / edit / grep / find / ls / bash の実行を Guardrails公開API�
 
 ## 背景Bash入口
 
-lifecycle/background処理は、Tools配下のBash専用helperをimportし、型付きの直接APIへ要求できる。要求は `id`、`params`、呼び出し元のruntimeを識別するcontext、モデル・thinking level・会話IDと会話ファイルの必要情報、任意の `signal` を持つ。`params` は登録Bashのschemaを再利用し、文字列の `command` と任意の数値 `timeout` だけを入口で検証する。APIは要求の終端結果をPromiseで返す。
+lifecycle/background処理は、Tools配下のBash専用helperをimportし、型付きの直接APIへ要求できる。要求は `id`、`params`、呼び出し元のruntimeを識別するcontext、モデル・thinking level・会話IDと会話ファイルの必要情報、任意の `signal` を持つ。`params` は登録Bashのschemaを再利用し、文字列の `command` と任意の数値 `timeout` だけを入口で検証する。APIは要求の終端結果をPromiseで返す。すべての結果は、登録Bash経路の実行待機を表す `executionSettled: Promise<void>` を持つ。
 
 初回要求は、`session_start` の全handlerによる初期化が完了した後の `resources_discover` 以降に開始する。この時点で、そのruntimeの背景APIを利用できる。未登録のAPIへの要求は、初期化を待たずに直ちに `unavailable` で決着する。
 
@@ -49,4 +49,8 @@ lifecycle/background処理は、Tools配下のBash専用helperをimportし、型
 
 `params.timeout` はBash実行の期限を秒単位で指定する。要求全体の期限は、指定がある場合はその秒数に2秒を加え、指定がない場合は2秒とする。追加の2秒はsandboxの準備・プロセス起動・結果回収の余裕とし、Bash実行の指定時間は維持する。
 
-1要求につき実行は最大1回とし、終端は一度だけ確定する。中断・期限超過・停止では実行信号をabortし、以後の遅延応答を破棄する。`session_shutdown` で背景APIを停止し、そのruntimeへの新規要求を拒否する。入口の不在・無効・失敗時に別の実行経路へfallbackしない。
+要求結果と実行終端は独立する。`executionSettled` は、登録Bashと共有する実行関数のPromiseが正常または例外で終端した時に解決し、rejectしない。実行がthrowした場合も `failed` の返却前に解決済みとする。開始前の中断・入口不在などで実行しない場合は、解決済みPromiseを返す。要求期限の超過やAPI停止で先に結果を返した場合は、開始済み実行の終端までこのPromiseを未解決のまま保持する。API停止やruntimeの失効後も、返却済みの実行待機は有効とする。
+
+1要求につき実行は最大1回とし、要求結果は一度だけ確定する。要求期限の超過・API停止では未開始の実行を取り消す。開始済み実行に `params.timeout` の指定がある場合は、それだけを理由に実行信号をabortせず、Bash自身のtimeoutによる終端を待つ。指定がない場合は実行信号をabortする。後着の成功・失敗で要求結果を変更せず、`executionSettled` の解決だけを通知する。
+
+呼び出し元の明示的な `signal` 中断は、未決の要求を `aborted` で決着させ、開始済み実行の信号もabortする。開始済み要求のsignal監視と実行待機は、要求結果が先に確定した場合も実行終端まで維持する。`session_shutdown` で背景APIを停止し、そのruntimeへの新規要求を拒否する。入口の不在・無効・失敗時に別の実行経路へfallbackしない。

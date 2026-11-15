@@ -173,7 +173,9 @@ describe("renderPreview", () => {
 });
 
 type Handler = (event: unknown, context?: unknown) => unknown;
-function capture(requestBash: typeof requestBackgroundBash = successfulShot) {
+function capture(
+  requestBash: (request: BackgroundBashRequest) => Promise<BackgroundBashOutcome> = successfulShot,
+) {
   const entries: Array<{ customType: string; data: PreviewDetails }> = [];
   const entryRenderers: string[] = [];
   const legacyRenderers: string[] = [];
