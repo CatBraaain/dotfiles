@@ -1415,7 +1415,8 @@ static void test_typing_key_confirms_selection(void) {
     char selected[256] = "";
     if (current_menu(&context)) {
         int highlighted = context.menu.highlighted_candidate_index;
-        if (highlighted < context.menu.num_candidates &&
+        if (context.menu.candidates && highlighted >= 0 &&
+            highlighted < context.menu.num_candidates &&
             context.menu.candidates[highlighted].text) {
             snprintf(selected, sizeof(selected), "%s",
                      context.menu.candidates[highlighted].text);
@@ -1448,11 +1449,18 @@ static void test_typing_key_confirms_selection(void) {
         check(False, "the menu must exist before the digit key");
         return;
     }
-    check(context.menu.highlighted_candidate_index == 1,
+    int highlighted = context.menu.highlighted_candidate_index;
+    Bool has_highlighted_candidate = context.menu.candidates && highlighted >= 0 &&
+                                     highlighted < context.menu.num_candidates;
+    check(has_highlighted_candidate && highlighted == 1,
           "cycling must select the second candidate before the digit key");
+    if (!has_highlighted_candidate) {
+        rime->free_context(&context);
+        return;
+    }
     snprintf(selected, sizeof(selected), "%s",
-             context.menu.candidates[context.menu.highlighted_candidate_index].text
-                 ? context.menu.candidates[context.menu.highlighted_candidate_index].text
+             context.menu.candidates[highlighted].text
+                 ? context.menu.candidates[highlighted].text
                  : "");
     rime->free_context(&context);
     check(selected[0] != '\0', "the cycled candidate must have text");
@@ -5082,6 +5090,12 @@ int main(int argc, char* argv[]) {
                        strcmp(g_snapshot_update_target, "all") == 0;
     int snapshot_files = 0;
     for (size_t i = 0; i < test_count; ++i) {
+        if (i > 0) {
+            if (session) rime->destroy_session(session);
+            session = 0;
+            rime->finalize();
+            rime->initialize(NULL);
+        }
         if (g_verbose)
             fprintf(stderr, "scenario %zu/%zu %s\n", i + 1, test_count, tests[i].name);
         size_t start = g_line_count;
