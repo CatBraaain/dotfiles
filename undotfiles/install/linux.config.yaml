@@ -125,7 +125,7 @@ work:
   - custom: rustdesk
   - brew-cask: android-commandlinetools
   - custom: android-sdk
-  # OpenDesign: source install into ~/mirrors/open-design. The od wrapper in ~/.local/bin shadows /usr/bin/od.
+  # OpenDesign: source install into ~/mirrors/github.com/nexu-io/open-design. The od wrapper in ~/.local/bin shadows /usr/bin/od.
   - custom: opendesign
   # /tmp on disk: mask the systemd tmpfs mount and age /tmp entries out after 2 days.
   - custom: tmp-disk

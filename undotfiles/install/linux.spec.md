@@ -91,7 +91,7 @@ exec "/opt/musescore-4.7.6-x86_64/AppRun" "$@"
 
 `opendesign`の目的状態は、次の3つを保証することとする。
 
-- `~/mirrors/open-design`が`nexu-io/open-design`のcloneである。
+- `~/mirrors/github.com/nexu-io/open-design`が`nexu-io/open-design`のcloneである。
 - リポジトリ内のdaemonとwebのbuild成果物（`apps/daemon/dist/cli.js`と`apps/web/out/index.html`）がある。
 - リポジトリにcdしてから`corepack pnpm exec od`を実行するwrapperが`~/.local/bin/od`にある。
 
