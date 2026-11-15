@@ -2698,7 +2698,7 @@ static void test_arrow_caret_and_segments(void) {
         check(False, "the typing state must keep a queryable context");
         return;
     }
-    size_t end_caret = context.composition.cursor_pos;
+    int end_caret = context.composition.cursor_pos;
     check(end_caret > 0, "the caret must start at the end of the reading");
     press(kLeft);
     if (!current_menu(&context)) {
