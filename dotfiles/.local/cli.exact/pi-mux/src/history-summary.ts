@@ -20,6 +20,7 @@ import { isAbsolute, join } from "node:path";
 const SUMMARY_READ_CHUNK_BYTES = 256 * 1024;
 const SUMMARY_CACHE_VERSION = 4;
 const SESSION_HEADER_MAX_BYTES = 64 * 1024;
+const SESSION_HEADER_PREFIX_BYTES = 1024;
 const SESSION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
 const FIRST_MESSAGE_MAX_CODE_POINTS = 80;
 
@@ -90,8 +91,8 @@ export class HistorySummaryCache {
       if (acceptHeader && (!header || !acceptHeader(header))) return undefined;
       const resolved = cached ?? readSavedSessionSummary(fd, Number(before.size), header);
       const stable =
-        fingerprint === fileFingerprint(fstatSync(fd, { bigint: true })) &&
-        fingerprint === fileFingerprint(statSync(file, { bigint: true }));
+        sameFingerprint(before, fstatSync(fd, { bigint: true })) &&
+        sameFingerprint(before, statSync(file, { bigint: true }));
       if (!stable) {
         if (allowsRetry) return this.resolveFile(file, directory, acceptHeader, false);
         return { ...resolved, size: Number(before.size) };
@@ -179,9 +180,24 @@ function isValidHeader(value: unknown): value is SavedSessionHeader {
 }
 
 function readSavedSessionHeader(fd: number): SavedSessionHeader | null {
-  const buffer = Buffer.alloc(SESSION_HEADER_MAX_BYTES);
-  const length = readSync(fd, buffer, 0, buffer.length, 0);
-  const firstLine = buffer.subarray(0, length).toString("utf8").split("\n")[0]!;
+  let buffer = Buffer.allocUnsafe(SESSION_HEADER_PREFIX_BYTES);
+  let length = 0;
+  while (length < SESSION_HEADER_MAX_BYTES) {
+    const count = readSync(fd, buffer, length, buffer.length - length, length);
+    if (count === 0) break;
+    const newline = buffer.subarray(length, length + count).indexOf(10);
+    if (newline >= 0) {
+      length += newline;
+      break;
+    }
+    length += count;
+    if (length === buffer.length && length < SESSION_HEADER_MAX_BYTES) {
+      const expanded = Buffer.allocUnsafe(SESSION_HEADER_MAX_BYTES);
+      buffer.copy(expanded, 0, 0, length);
+      buffer = expanded;
+    }
+  }
+  const firstLine = buffer.subarray(0, length).toString("utf8");
   try {
     const header = JSON.parse(firstLine);
     if (!header || typeof header !== "object" || Array.isArray(header)) return null;
@@ -344,4 +360,14 @@ function* reverseLines(fd: number, size: number): Generator<string> {
 
 function fileFingerprint(stat: BigIntStats): string {
   return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+}
+
+function sameFingerprint(a: BigIntStats, b: BigIntStats): boolean {
+  return (
+    a.dev === b.dev &&
+    a.ino === b.ino &&
+    a.size === b.size &&
+    a.mtimeNs === b.mtimeNs &&
+    a.ctimeNs === b.ctimeNs
+  );
 }

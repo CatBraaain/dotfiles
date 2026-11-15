@@ -1,7 +1,7 @@
 import { describe, it, spyOn } from "bun:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { HistorySummaryCache } from "./history-summary";
 
@@ -102,6 +102,41 @@ describe("history summary read consistency", () => {
     }
   });
 
+  it("re-resolves the replacement when the path is swapped after the descriptor stat", () => {
+    const directory = join(temporaryRoot, randomUUID());
+    const file = join(directory, "session.jsonl");
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify(sessionInfo("Before replacement"))}\n`);
+    const previousCacheHome = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = join(directory, "cache");
+    const originalStatSync = fs.statSync;
+    let replaced = false;
+    const stat = spyOn(fs, "statSync").mockImplementation((...args: unknown[]) => {
+      if (!replaced && args[0] === file) {
+        const replacement = `${file}.replacement`;
+        fs.writeFileSync(replacement, `${JSON.stringify(sessionInfo("After replacement"))}\n`);
+        fs.renameSync(replacement, file);
+        replaced = true;
+      }
+      return Reflect.apply(originalStatSync, fs, args);
+    });
+    try {
+      const duringReplacement = new HistorySummaryCache().resolve(file);
+      assert.equal(replaced, true);
+      assert.deepEqual(duringReplacement, { title: "After replacement", mtime: null });
+      stat.mockRestore();
+      assert.deepEqual(new HistorySummaryCache().resolve(file), {
+        title: "After replacement",
+        mtime: null,
+      });
+    } finally {
+      stat.mockRestore();
+      if (previousCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = previousCacheHome;
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("resolves the physically last message or compaction timestamp as the modified time", () => {
     const directory = join(temporaryRoot, randomUUID());
     const file = join(directory, "session.jsonl");
@@ -128,6 +163,154 @@ describe("history summary read consistency", () => {
       if (previousCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
       else process.env.XDG_CACHE_HOME = previousCacheHome;
       fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+  it("reuses a cache entry whose fingerprint joins the five identity fields", () => {
+    const { file, cacheHome } = writeSummaryFixture([sessionInfo("Title in file")]);
+    const stat = fs.statSync(file, { bigint: true });
+    const fingerprint = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+    const cacheDirectory = join(cacheHome, "pi-mux", "history-titles");
+    fs.mkdirSync(cacheDirectory, { recursive: true, mode: 0o700 });
+    const entry = join(cacheDirectory, `${createHash("sha256").update(file).digest("hex")}.json`);
+    fs.writeFileSync(
+      entry,
+      `${JSON.stringify({
+        version: 4,
+        file,
+        fingerprint,
+        title: "Title from cache",
+        mtime: null,
+        header: {
+          id: "cached-session",
+          cwd: "/tmp",
+          btime: Date.parse("2026-01-01T00:00:00.000Z"),
+        },
+      })}\n`,
+      { mode: 0o600 },
+    );
+    assert.equal(resolveTitleIsolated(cacheHome, file), "Title from cache");
+    assert.equal(resolveTitleIsolated(cacheHome, file), "Title from cache");
+  });
+});
+
+describe("history header prefix reads", () => {
+  const header = {
+    type: "session",
+    id: "header-session",
+    cwd: "/tmp/header-workspace",
+    timestamp: "2026-01-01T00:00:00.000Z",
+  };
+  const expectedHeader = {
+    id: header.id,
+    cwd: header.cwd,
+    btime: Date.parse(header.timestamp),
+  };
+  const emptyPaddedHeader = JSON.stringify({ ...header, padding: "" });
+  const cwdPrefix = JSON.stringify({ type: header.type, id: header.id, cwd: "" }).slice(0, -2);
+  const splitCwd = "/" + "x".repeat(1023 - Buffer.byteLength(cwdPrefix) - 1) + "🙂";
+  const cases = [
+    {
+      name: "a header followed by a body",
+      contents: JSON.stringify(header) + "\n{}\n",
+      cwd: header.cwd,
+    },
+    {
+      name: "a header at EOF without a newline",
+      contents: JSON.stringify(header),
+      cwd: header.cwd,
+    },
+    { name: "a CRLF header", contents: JSON.stringify(header) + "\r\n{}\n", cwd: header.cwd },
+    {
+      name: "UTF-8 split across the prefix boundary",
+      contents: JSON.stringify({ ...header, cwd: splitCwd }) + "\n",
+      cwd: splitCwd,
+    },
+    ...[1023, 1024, 1025, 65535, 65536, 65537].map((bytes) => ({
+      name: `a ${bytes}-byte header`,
+      contents:
+        JSON.stringify({
+          ...header,
+          padding: "x".repeat(bytes - Buffer.byteLength(emptyPaddedHeader)),
+        }) + "\n{}\n",
+      cwd: bytes <= 65536 ? header.cwd : null,
+    })),
+    {
+      name: "a malformed first line before a valid header",
+      contents: "{broken\n" + JSON.stringify(header) + "\n",
+      cwd: null,
+    },
+    {
+      name: "an empty first line before a valid header",
+      contents: "\n" + JSON.stringify(header) + "\n",
+      cwd: null,
+    },
+    { name: "an empty file", contents: "", cwd: null },
+  ];
+
+  for (const testCase of cases) {
+    it(`preserves header parsing for ${testCase.name}`, () => {
+      const { file, cacheHome } = writeSummaryFixture([]);
+      fs.writeFileSync(file, testCase.contents);
+      const previous = process.env.XDG_CACHE_HOME;
+      process.env.XDG_CACHE_HOME = cacheHome;
+      try {
+        const actual = new HistorySummaryCache().resolveHistory(file, () => true);
+        if (testCase.cwd === null) assert.equal(actual, undefined);
+        else {
+          assert.deepEqual(actual?.header, { ...expectedHeader, cwd: testCase.cwd });
+          assert.equal(actual?.size, Buffer.byteLength(testCase.contents));
+          assert.equal(actual?.title, null);
+          assert.equal(actual?.mtime, null);
+        }
+      } finally {
+        if (previous === undefined) delete process.env.XDG_CACHE_HOME;
+        else process.env.XDG_CACHE_HOME = previous;
+        fs.rmSync(join(file, ".."), { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("reads only a small prefix when a short header is rejected by the cwd filter", () => {
+    const { file, cacheHome } = writeSummaryFixture([header, userMessage("x".repeat(65536))]);
+    const previous = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = cacheHome;
+    const originalRead = fs.readSync;
+    let bytesRead = 0;
+    const read = spyOn(fs, "readSync").mockImplementation((...args: unknown[]) => {
+      const count: number = Reflect.apply(originalRead, fs, args);
+      bytesRead += count;
+      return count;
+    });
+    try {
+      const actual = new HistorySummaryCache().resolveHistory(file, () => false);
+      assert.equal(actual, undefined);
+      assert.ok(bytesRead > 0 && bytesRead <= 1024);
+      assert.deepEqual(fs.readdirSync(join(cacheHome, "pi-mux", "history-titles")), []);
+    } finally {
+      read.mockRestore();
+      if (previous === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = previous;
+      fs.rmSync(join(file, ".."), { recursive: true, force: true });
+    }
+  });
+
+  it("assembles a UTF-8 header across short reads without decoding partial characters", () => {
+    const { file, cacheHome } = writeSummaryFixture([{ ...header, cwd: splitCwd }]);
+    const previous = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = cacheHome;
+    const originalRead = fs.readSync;
+    const read = spyOn(fs, "readSync").mockImplementation((...args: unknown[]) => {
+      args[3] = Math.min(Number(args[3]), 7);
+      return Reflect.apply(originalRead, fs, args);
+    });
+    try {
+      const actual = new HistorySummaryCache().resolveHistory(file, () => true);
+      assert.deepEqual(actual?.header, { ...expectedHeader, cwd: splitCwd });
+    } finally {
+      read.mockRestore();
+      if (previous === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = previous;
+      fs.rmSync(join(file, ".."), { recursive: true, force: true });
     }
   });
 });

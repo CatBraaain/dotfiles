@@ -1353,7 +1353,7 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
       assert.equal(mineListed.status, 0, mineListed.stderr);
       assert.deepEqual(
         fixture.reads().filter((read) => read.file === other),
-        [{ file: other, length: 64 * 1024 }],
+        [{ file: other, length: 1024 }],
       );
       assert.deepEqual(JSON.parse(mineListed.stdout), [
         fixture.expected(mine, mineId, fixture.cwd, null),
