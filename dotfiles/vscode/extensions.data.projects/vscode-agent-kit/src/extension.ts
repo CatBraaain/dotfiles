@@ -62,12 +62,12 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     function changed(uri: vscode.Uri): void {
       emptySessions.onSessionFileChanged(uri.fsPath);
-      void provider.onSessionFileChanged(uri.fsPath);
+      void provider.onSessionFileChanged();
     }
     watcher.onDidCreate(changed);
     watcher.onDidChange(changed);
-    watcher.onDidDelete((uri) => {
-      void provider.onSessionFileChanged(uri.fsPath);
+    watcher.onDidDelete(() => {
+      void provider.onSessionFileChanged();
     });
     return watcher;
   }

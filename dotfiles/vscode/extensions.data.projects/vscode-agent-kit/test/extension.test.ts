@@ -7,8 +7,6 @@ import { activate } from "../src/extension";
 import { EmptySessionPool } from "../src/emptySessionPool";
 import { SessionWebviewProvider } from "../src/webview/sessionWebviewProvider";
 import { cleanup, tempDir } from "./fixtures";
-import { SessionHistory } from "../src/sessionHistory";
-import { fakeRuntimes } from "./runtimeFixtures";
 
 interface WatcherStub {
   base: { fsPath: string };
@@ -145,16 +143,22 @@ describe("extension commands", () => {
     const historyChanged = vi
       .spyOn(SessionWebviewProvider.prototype, "onSessionFileChanged")
       .mockResolvedValue();
-    vi.spyOn(EmptySessionPool.prototype, "onSessionFileChanged").mockImplementation(() => {});
+    const prewarmChanged = vi
+      .spyOn(EmptySessionPool.prototype, "onSessionFileChanged")
+      .mockImplementation(() => {});
     register();
     await vi.waitFor(() => expect(api.watchers).toHaveLength(1));
     for (const method of ["onDidCreate", "onDidChange", "onDidDelete"] as const) {
       const callback = api.watchers[0][method].mock.calls[0][0] as (uri: {
         fsPath: string;
       }) => void;
-      callback({ fsPath: "/fixture/sessions/A.jsonl" });
+      callback({ fsPath: "/fixture/sessions/unregistered-or-deleted.jsonl" });
     }
-    expect(historyChanged).toHaveBeenCalledTimes(3);
+    expect(historyChanged.mock.calls).toEqual([[], [], []]);
+    expect(prewarmChanged.mock.calls).toEqual([
+      ["/fixture/sessions/unregistered-or-deleted.jsonl"],
+      ["/fixture/sessions/unregistered-or-deleted.jsonl"],
+    ]);
   });
 
   it("watches custom directories published by history or an unsaved Pi and releases removed workspaces", async () => {
@@ -176,37 +180,6 @@ describe("extension commands", () => {
     expect(watcherFor("/custom/history")?.dispose).toHaveBeenCalledOnce();
   });
 
-  it("releases a published custom watcher when successful history becomes empty", async () => {
-    register();
-    await vi.waitFor(() => expect(api.watchers).toHaveLength(1));
-    const provider = api.registerWebviewViewProvider.mock.calls[0][1] as unknown as {
-      deps: ConstructorParameters<typeof SessionWebviewProvider>[0];
-    };
-    const runtimes = fakeRuntimes();
-    const entry = {
-      id: "archived",
-      cwd: "/project",
-      file: "/custom/archived/session.jsonl",
-      title: null,
-      btime: 1,
-      mtime: 2,
-      size: 10,
-    };
-    runtimes.history.set(entry.id, entry);
-    const history = new SessionHistory(runtimes.mux, vi.fn(), provider.deps.onSessionFiles!);
-    try {
-      history.sync([{ cwd: entry.cwd, sessions: [], empty: [] }]);
-      await history.load(() => true);
-      expect(watcherFor("/custom/archived")).toBeDefined();
-      runtimes.history.clear();
-      await history.fileChanged(entry.file);
-      await history.load(() => true);
-      expect(watcherFor("/custom/archived")?.dispose).toHaveBeenCalledOnce();
-    } finally {
-      history.dispose();
-    }
-  });
-
   it("watches a settings-configured session root and routes its files to history", async () => {
     vi.stubEnv("PI_CODING_AGENT_SESSION_DIR", "");
     const agent = join(root, "agent");
@@ -225,7 +198,7 @@ describe("extension commands", () => {
       fsPath: string;
     }) => void;
     created({ fsPath: join(custom, "new.jsonl") });
-    expect(historyChanged).toHaveBeenCalledWith(join(custom, "new.jsonl"));
+    expect(historyChanged).toHaveBeenCalledExactlyOnceWith();
   });
 
   it("re-watches and drops held history when settings move the session root", async () => {

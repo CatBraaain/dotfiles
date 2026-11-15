@@ -1,13 +1,12 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
-import { SessionHistory } from "../sessionHistory";
 import { listSessionSnapshot, sessionFileExists, type SessionSummary } from "../sessionStore";
 import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
 import type { TerminalRegistry } from "../terminalRegistry";
 import type { EmptySessionPool } from "../emptySessionPool";
 import { errorMessage } from "../guards";
 import { archiveReplacement } from "../grouping";
-import { flattenPiMuxSessions, type PiMuxWorkspace } from "../piMux";
+import { flattenPiMuxSessions, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../piMux";
 import {
   parseWebviewRequest,
   type ExtensionMessage,
@@ -20,6 +19,8 @@ import { webviewHtml } from "./webviewHtml";
 export const VIEW_ID = "piSessions.sessions";
 export const LIST_REFRESH_INTERVAL_MS = 250;
 export const HISTORY_CHANGE_DELAY_MS = 100;
+const INITIAL_HISTORY_RETRY_MS = 1_000;
+const MAX_HISTORY_RETRY_MS = 30_000;
 
 export interface SessionWebviewDeps {
   extensionUri: string;
@@ -55,20 +56,17 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private pendingHistoryRefresh: Promise<void> | undefined;
   private latestWorkspaces: PiMuxWorkspace[] = [];
   private listFailed = false;
-  private readonly history: SessionHistory;
+  private historySnapshot: PiMuxHistoryEntry[] | undefined;
+  private historyRequested = true;
+  private historyFailed = false;
+  private historyGeneration = 0;
+  private historyRetryMs = INITIAL_HISTORY_RETRY_MS;
+  private historyRetryTimer: ReturnType<typeof setTimeout> | undefined;
   private latestListMessage:
     | Extract<ExtensionMessage, { type: "loading" | "sessions" | "sessionsError" }>
     | undefined;
 
-  constructor(private readonly deps: SessionWebviewDeps) {
-    this.history = new SessionHistory(
-      deps.registry.mux,
-      () => {
-        void this.refresh(false);
-      },
-      (files) => deps.onSessionFiles?.(files),
-    );
-  }
+  constructor(private readonly deps: SessionWebviewDeps) {}
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.stopListPolling();
@@ -106,7 +104,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     this.disposed = true;
     this.stopListPolling();
     clearTimeout(this.historyChangeTimer);
-    this.history.dispose();
+    clearTimeout(this.historyRetryTimer);
     this.view = undefined;
     this.runningSessionIds.clear();
     this.runningObservations.clear();
@@ -127,26 +125,28 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private invalidateAllHistory(): void {
     clearTimeout(this.historyChangeTimer);
     this.historyChangeTimer = undefined;
-    this.history.invalidateAll();
+    clearTimeout(this.historyRetryTimer);
+    this.historyRetryTimer = undefined;
+    this.historyGeneration += 1;
+    this.historyRequested = true;
   }
 
-  async onSessionFileChanged(file: string): Promise<void> {
+  async onSessionFileChanged(): Promise<void> {
     if (this.disposed) return;
-    try {
-      if (!(await this.history.fileChanged(file)) || this.disposed) return;
-      clearTimeout(this.historyChangeTimer);
-      this.historyChangeTimer = setTimeout(() => {
-        this.historyChangeTimer = undefined;
-        if (this.view?.visible) void this.refresh(false);
-      }, HISTORY_CHANGE_DELAY_MS);
-      this.historyChangeTimer.unref();
-    } catch (error) {
-      this.reportAcquisitionError(error);
-    }
+    this.historyRequested = true;
+    clearTimeout(this.historyChangeTimer);
+    this.historyChangeTimer = setTimeout(() => {
+      this.historyChangeTimer = undefined;
+      if (this.view?.visible) void this.refresh(false);
+    }, HISTORY_CHANGE_DELAY_MS);
+    this.historyChangeTimer.unref();
   }
 
   async onSessionRootChanged(): Promise<void> {
-    this.history.resetEntries();
+    this.historySnapshot = undefined;
+    this.historyFailed = false;
+    this.historyRetryMs = INITIAL_HISTORY_RETRY_MS;
+    this.publishSessionFiles();
     await this.refresh();
   }
 
@@ -204,15 +204,42 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
 
   private acceptWorkspaces(workspaces: PiMuxWorkspace[]): void {
     this.listFailed = false;
+    const previousWorkspaces = this.latestWorkspaces;
+    const registered = new Set(workspaces.map(({ cwd }) => cwd));
+    const removed = [...this.registeredCwds].some((cwd) => !registered.has(cwd));
+    const added = [...registered].some((cwd) => !this.registeredCwds.has(cwd));
+    if (removed) {
+      this.historyGeneration += 1;
+      this.historySnapshot = this.historySnapshot?.filter(({ cwd }) => registered.has(cwd));
+      if (this.pendingHistoryRefresh !== undefined) this.historyRequested = true;
+    }
+    const previousFiles = new Set(
+      previousWorkspaces.flatMap(({ sessions }) => sessions.map(({ file }) => file)),
+    );
+    const newlySaved = workspaces.some(({ sessions }) =>
+      sessions.some(
+        ({ file }) =>
+          !previousFiles.has(file) && !this.historySnapshot?.some((entry) => entry.file === file),
+      ),
+    );
+    this.historyRequested ||= added || newlySaved;
     this.latestWorkspaces = workspaces;
-    this.registeredCwds = new Set(workspaces.map(({ cwd }) => cwd));
-    this.history.sync(workspaces);
+    this.registeredCwds = registered;
+    if (registered.size === 0) {
+      this.historySnapshot = [];
+      this.historyRequested = false;
+      this.historyFailed = false;
+      clearTimeout(this.historyRetryTimer);
+      this.historyRetryTimer = undefined;
+      this.historyRetryMs = INITIAL_HISTORY_RETRY_MS;
+    }
+    this.publishSessionFiles();
     this.deps.onWorkspaces?.([...this.registeredCwds]);
     const live = flattenPiMuxSessions(workspaces);
     this.temporarySessionIds = new Set(
       live.filter(({ temporary }) => temporary).map(({ id }) => id),
     );
-    if (!this.history.failed) {
+    if (!this.historyFailed) {
       this.updateUnread(
         live.map(({ id }) => ({ sessionId: id })),
         {
@@ -242,23 +269,72 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
 
   private async refreshHistory(): Promise<void> {
     if (this.pendingHistoryRefresh !== undefined) return this.pendingHistoryRefresh;
-    if (this.historyChangeTimer !== undefined) return this.publishSessions();
+    if (
+      !this.historyRequested ||
+      this.historyChangeTimer !== undefined ||
+      this.historyRetryTimer !== undefined
+    ) {
+      if (this.historyFailed) this.post({ type: "sessionsError" });
+      else await this.publishSessions();
+      return;
+    }
     const pending = this.loadHistory();
     this.pendingHistoryRefresh = pending;
     try {
       await pending;
+    } catch (error) {
+      this.reportAcquisitionError(error);
     } finally {
       this.pendingHistoryRefresh = undefined;
     }
   }
 
   private async loadHistory(): Promise<void> {
-    try {
-      await this.history.load(() => !this.disposed && !!this.view?.visible);
+    while (
+      this.historyRequested &&
+      !this.disposed &&
+      this.view?.visible &&
+      this.registeredCwds.size > 0 &&
+      this.historyChangeTimer === undefined &&
+      this.historyRetryTimer === undefined
+    ) {
+      const generation = this.historyGeneration;
+      this.historyRequested = false;
+      try {
+        const entries = await this.deps.registry.mux.history();
+        if (this.disposed) return;
+        if (generation !== this.historyGeneration) continue;
+        this.historySnapshot = entries;
+        this.historyFailed = false;
+        this.historyRetryMs = INITIAL_HISTORY_RETRY_MS;
+      } catch (error) {
+        if (this.disposed) return;
+        if (generation !== this.historyGeneration) continue;
+        this.historyFailed = true;
+        this.historyRequested = true;
+        this.historyRetryTimer = setTimeout(() => {
+          this.historyRetryTimer = undefined;
+          if (this.view?.visible) void this.refresh(false);
+        }, this.historyRetryMs);
+        this.historyRetryTimer.unref();
+        this.historyRetryMs = Math.min(this.historyRetryMs * 2, MAX_HISTORY_RETRY_MS);
+        this.reportAcquisitionError(error);
+        return;
+      }
+      this.publishSessionFiles();
       await this.publishSessions();
-    } catch (error) {
-      this.reportAcquisitionError(error);
     }
+  }
+
+  private publishSessionFiles(): void {
+    this.deps.onSessionFiles?.([
+      ...(this.historySnapshot ?? [])
+        .filter(({ cwd }) => this.registeredCwds.has(cwd))
+        .map(({ file, cwd }) => ({ file, cwd })),
+      ...this.latestWorkspaces.flatMap(({ cwd, sessions, empty }) =>
+        [...sessions, ...empty].map(({ file }) => ({ file, cwd })),
+      ),
+    ]);
   }
 
   private async publishSessions(): Promise<void> {
@@ -266,21 +342,23 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       this.disposed ||
       !this.view?.visible ||
       this.listFailed ||
-      this.history.failed ||
-      !this.history.ready
+      this.historyFailed ||
+      this.historySnapshot === undefined
     )
       return;
     const workspaces = this.latestWorkspaces;
+    const history = this.historySnapshot;
     const version = this.refreshVersion;
     const { sessions, registeredCwds, archivedIds } = await listSessionSnapshot(
-      this.history.entries,
+      history,
       workspaces,
     );
     if (
       this.disposed ||
       !this.view?.visible ||
       version !== this.refreshVersion ||
-      workspaces !== this.latestWorkspaces
+      workspaces !== this.latestWorkspaces ||
+      history !== this.historySnapshot
     )
       return;
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
@@ -443,7 +521,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       confirmedDisplay = await this.deps.registry.displayForSession(sessionId);
       if (confirmedDisplay !== undefined) {
         const snapshot = await listSessionSnapshot(
-          this.history.entries,
+          this.historySnapshot ?? [],
           await this.readWorkspaces(),
         );
         replacement = archiveReplacement(snapshot.sessions, snapshot.archivedIds, session);
