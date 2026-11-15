@@ -9,11 +9,11 @@
 | `RC<n>.<m>` | The Art of Readable Code 第 `n` 章の `m` 番目の助言 |
 | `CC<n>.<m>` | Clean Code 第 `n` 章の `m` 番目の助言 |
 | `CO<n>.<m>` | Code Complete 第2版（COmplete）第 `n` 章の `m` 番目の助言 |
-| `RF-<name>` | Refactoring 第2版のカタログ（refactoring.com） |
+| `RF-<name>` | Refactoring の公式カタログ（第2版中心。初版・別名を含む） |
 | `CCJ<n>.<m>` | clean-code-javascript Ch `n` の `m` 番目の助言 |
 | `CCT<n>.<m>` | clean-code-typescript Ch `n` の `m` 番目の助言 |
 
-本文書の各要約は原書の逐語転載ではなく、内容をこの skill の開発用に自前で言い換えたもの。原文は各出典を参照すること。章番号は各書の構成に基づく。監査反映で追加した項目には正本未確認の節番号・便宜番号を含み、正本確認後に振り直す。
+本文書の各要約は原書の逐語転載ではなく、内容をこの skill の開発用に自前で言い換えたもの。原文は各出典を参照すること。RC・CC・CO の `n` は章番号、`m` は本文書内の助言の通し番号であり、原書の節番号ではない。参照を保つため、原書の節番号と異なるだけではIDを振り直さない。今回照合したRC・CC・CO・RFの原典位置と照合範囲は、各出典の冒頭に示す。
 
 判定種別（観点マトリクスの「判定」列）:
 
@@ -34,20 +34,20 @@ SKILL.md の I4（出典のない回避コメント）と D10（const に入れ�
 
 | 項目ID | 項目 | RC | CC | CO | RF | CCJ | CCT | 判定 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| A1 | 抽象名 | 2.2 | 2.1, 2.3, 2.11* | 11.1, 11.6 |  | 1.1 | 1.1 | 採用 |
+| A1 | 抽象名 | 2.2 | 2.1, 2.3, 2.11*, 17.4 | 11.1, 11.6 |  | 1.1 | 1.1 | 採用 |
 | A2 | 単位が読めない名前 | 2.4 |  | 11.4* |  |  |  | 採用 |
 | A3 | 検証状態が読めない名前 | 2.5* |  |  |  |  |  | 採用 |
 | A4 | 真偽が読めない名前 | 2.6 |  | 11.5* |  |  |  | 採用 |
 | A5 | 二重否定 | 2.7 |  |  |  | 2.13 | 2.13 | 採用 |
 | A6 | 範囲の包含が不明な名前 | 3.2, 3.3 |  |  |  |  |  | 採用 |
 | A7 | 意図が一意でない名前 | 3.1 | 2.2* |  |  |  |  | 採用 |
-| A8 | 一貫しない語彙 |  | 2.9, 17.4 |  | change-function-declaration* | 1.2 | 1.3 | 採用 |
+| A8 | 一貫しない語彙 |  | 2.9 |  | change-function-declaration* | 1.2 | 1.3 | 採用 |
 | A9 | 曖昧な動詞 | 2.1 | 3.7* | 7.7 |  | 2.3 | 2.3 | 採用 |
 | A10 | 出所が読めない取得動詞 | 3.4 |  |  |  |  |  | 採用 |
-| A11 | 副作用が読めない動詞 |  | 17.1* |  |  |  |  | 採用 |
+| A11 | 副作用が読めない動詞 |  |  |  |  |  |  | 採用 |
 | A12 | 発音でき検索できる名前 | 2.3* | 2.4, 2.5, 2.8* | 16.4* |  | 1.3, 1.5* | 1.2, 1.4, 1.6* | 採用 |
 | A13 | 冗長な型接頭辞を避ける |  | 2.6 |  |  | 1.6* | 1.7* | 採用 |
-| B1 | 複雑な条件は変数で受ける | 8.1, 8.2, 8.3, 8.5* | 17.2* | 12.1, 19.1 | decompose-conditional, extract-variable | 1.4, 2.12 | 1.5, 2.12 | 採用 |
+| B1 | 複雑な条件は変数で受ける | 8.1, 8.2, 8.3, 8.5* |  | 12.1, 19.1 | decompose-conditional, extract-variable | 1.4, 2.12 | 1.5, 2.12 | 採用 |
 | B2 | magic number | 5.3* |  | 11.7, 12.3 |  |  |  | 採用 |
 | B3 | 同じ条件の繰り返し |  |  |  |  |  |  | 採用 |
 | B4 | 同じ結果の条件をまとめる |  |  |  | consolidate-conditional-expression |  |  | 採用 |
@@ -79,7 +79,7 @@ SKILL.md の I4（出典のない回避コメント）と D10（const に入れ�
 | F5 | 不要な間接化 |  |  |  | inline-function |  |  | 採用 |
 | F6 | 重複の抽出 |  | 3.16 |  | consolidate-duplicate-conditional-fragments* | 2.5 | 2.5 | 採用 |
 | G1 | テスト名 | 14.3 |  |  |  |  | 6.4 | 採用 |
-| G2 | 1テスト1振る舞い | 14.4, 15.1* | 9.3 |  |  | 6.1 | 6.3 | 採用 |
+| G2 | 1テスト1振る舞い | 14.4 | 9.3 |  |  | 6.1 | 6.3 | 採用 |
 | G3 | 失敗メッセージ | 6.2*, 14.2* |  |  |  |  |  | 採用 |
 | H1 | 不要な依存 | 13.2, 13.4 |  |  |  |  |  | 採用 |
 | H2 | 賢いワンライナー |  |  |  | substitute-algorithm* | 2.17 | 2.16 | 採用 |
@@ -89,7 +89,7 @@ SKILL.md の I4（出典のない回避コメント）と D10（const に入れ�
 | I3 | 出典付きの回避コメント |  | 4.2 |  |  |  |  | 採用 |
 | I4 | 出典のない回避コメント |  |  |  |  |  |  | 採用 |
 | I5 | 乖離したコメント |  |  |  |  |  |  | 採用 |
-| — | カタログ全体の前提 | 1.1, 1.2, 5.2*, 5.4*, 6.1, 6.4*, 7.5, 7.6, 13.1, 14.1 | 4.1, 9.2, 12.3 | 7.1, 32.1, 32.2 | rename-variable, replace-inline-code-with-function-call |  | 10.1 | 採用（背景） |
+| — | カタログ全体の前提 | 1.1, 1.2, 5.2*, 5.4*, 6.1, 6.4*, 7.5, 7.6, 13.1, 14.1 | 4.1, 9.2, 12.3, 17.1 | 7.1, 32.1, 32.2 | rename-variable, replace-inline-code-with-function-call |  | 10.1 | 採用（背景） |
 
 ### 未採用の助言
 
@@ -131,15 +131,15 @@ SKILL.md カタログに採用しなかった助言。主題（観点マトリ�
 |  | CO17.3 | goto は対象言語にほぼ不存在 |
 |  | CO19.4 | 構造化プログラミングは現代言語のデフォルト前提 |
 |  | CO19.6 | 空文はリンター（no-empty 系）が担う |
-|  | RC12.2 | 問題の言い換えは設計プロセスの助言。RC12.1 と同様 |
+|  | RC12.2 | 言葉で説明する手法の再帰的適用は設計プロセスの助言。RC12.1 と同様 |
 | ケーススタディは既存技法の適用例として扱う | CC14.1 | 動くコードから段階的に整理する実演。個別操作は I5/E4/F4 の適用例 |
 |  | CC15.1 | 古い JUnit を読みやすくする実演。新規観点なし |
+|  | RC15.1 | 分／時間カウンタの設計・実装例。インタフェースや実装案の比較は個別の設計判断 |
 | テストの入力は最小限で具体的にする | RC14.5 | 入力値の設計判断は文脈依存。形式規約に含めない |
 |  | RC14.6 | 網羅 vs 維持の判断はプロジェクトのQA規約が担う |
 |  | CO22.1 | 境界条件の入力設計は文脈依存（RC14.5/14.6 と同理由） |
 | テストも読みやすさの対象にする | RC14.7 | AGENTS.md が自作helper禁止（node:assert/strict 使用）を定める。G3 の説明変数で担保 |
-| テストは1概念に絞り、独立に走らせる | RC15.2 | テスト基盤の構成はプロジェクト依存 |
-|  | CC9.1 | プロセス規約は本 skill の対象外 |
+| テストは1概念に絞り、独立に走らせる | CC9.1 | プロセス規約は本 skill の対象外 |
 |  | CC9.4 | テストの実行性質はプロジェクト構成依存 |
 |  | CCT6.1 | プロセス規約（CC9.1 と同理由） |
 |  | CCT6.2 | テストの実行性質はプロジェクト構成依存（CC9.4 と同理由） |
@@ -163,6 +163,7 @@ SKILL.md カタログに採用しなかった助言。主題（観点マトリ�
 | エラー処理は例外で正常系から追い出す | CC3.14 | エラーコード vs 例外は言語慣習依存。D5・D7 で読みやすさ効果を採用 |
 |  | CC7.1 | CC3.14 と同理由 |
 |  | CC7.3 | Java 固有の議論 |
+|  | RF-replace-error-code-with-exception | CC3.14・CC7.1 と同理由 |
 |  | RF-replace-exception-with-precheck | 例外 vs 事前チェックは言語慣習・契約設計依存。D5・D7 で読みやすさ効果を採用 |
 | null と特殊ケースは一元化する | CC7.5 | null 返却禁止は言語・型システム依存。A3 の名前による区別で安全を見える化 |
 |  | CC7.6 | 同上 |
@@ -186,7 +187,7 @@ SKILL.md カタログに採用しなかった助言。主題（観点マトリ�
 |  | CC6.2 | 手続き型と OOP のパラダイム選好は設計判断 |
 |  | CC6.3 | 列車衝突の回避はカプセル化の再設計を伴う。中間変数で受ける緩和は B1 が近似 |
 |  | CC6.4 | オブジェクトとデータ構造の混在回避は設計判断 |
-|  | CC6.5 | visitor 等のパターン選択は設計判断 |
+|  | CC6.5 | 構造の隠蔽はカプセル化の設計判断 |
 |  | CC8.1 | 第三者コードの境界ラップは設計判断。H3 に抵触しうる |
 |  | RF-encapsulate-variable | 変数のアクセサ化は OOP 設計判断。主要効果は E2 が担保 |
 |  | RF-encapsulate-record | レコードのクラス化はデータ構造の設計判断。H3 に抵触しうる |
@@ -196,6 +197,7 @@ SKILL.md カタログに採用しなかった助言。主題（観点マトリ�
 |  | RF-replace-function-with-command | コマンドオブジェクトへの置き換えは OOP 設計判断。H3 に抵触しうる |
 |  | RF-replace-constructor-with-factory-function | 生成方法の隠蔽は設計判断 |
 | 値オブジェクト化は設計判断に委ねる | RF-replace-primitive-with-object | フルの Value Object 化は設計判断。軽量版は B5 と A2 で採用済み |
+|  | RF-replace-array-with-object | 初版の項目。位置をフィールドに置き換えるデータ構造の設計判断 |
 |  | RF-change-reference-to-value | 参照 vs 値は設計・言語判断 |
 |  | RF-change-value-to-reference | 同上 |
 | クラスとモジュールは小さく保つ | CCJ4.1 | クラス構文の選択は言語・設計領域 |
@@ -246,10 +248,11 @@ SKILL.md カタログに採用しなかった助言。主題（観点マトリ�
 |  | CC13.1 | 並行性防御原則は言語・実行環境依存（CCJ7.1/7.2 未採用と同理由） |
 |  | CC13.2 | 同期ブロックの最小化は並行固有。精神は D2 が担保 |
 | コメントすべきでないものを書かない | CCJ10.1 | 業務ロジックへのコメント許可は I の原則より緩い。構造と名前で語る |
-|  | RC5.7 | 悪いコードへの説明コメントは CC4.1（採用（背景））と同内容。コードを書き直す |
+|  | RC5.7 | 名前の改善は RC2.1・RC2.2 と A1・A9 で担保する |
 | 関数の切り出しは凝集と結合で判断する | CCT4.2 | 凝集・結合の設計判断。D2・XC7.2 相当は関数で採用 |
 | 失敗は観測可能にする | CCT8.1 | Error 型の統一は言語慣習。D7 で文脈を採用 |
-| 残りの発見法則は既存項目でカバーする | CC17.5 | G29→B1、G30→A5、G10→E1、G11→A8、N5→RC2.9 と既に同内容。T5 はテスト中身の対象外。抜粋方針は Ch17 冒頭で明示済み |
+| 境界条件の扱いは契約・設計に合わせる | CC17.2 | G33 は境界条件のカプセル化。一般の複雑な条件式を変数で受ける B1 とは区別する |
+| 残りの発見法則は既存項目でカバーする | CC17.5 | G28→B1、G29→A5、G10→E1、G11→A8、N5→RC2.9、G34→F1 と主題が重複。T5 はテスト入力設計のため対象外。抜粋方針は Ch17 冒頭で明示済み |
 | 関数は小さく、1つのことをする | CO7.3 | 行数の数値基準は持たない。D2 の抽象レベル・目的で判定 |
 |  | CO19.7 | 複雑度の数値基準は持たない（CO7.3 と同理由） |
 | ループは目的に合った形と出口にする | CO16.1 | ループ形式は言語慣習に従う。C3 のみ採用 |
@@ -262,6 +265,11 @@ SKILL.md カタログに採用しなかった助言。主題（観点マトリ�
 ## The Art of Readable Code
 
 - Dustin Boswell, Trevor Foucher. The Art of Readable Code. O'Reilly Media, 2010. ISBN 978-0-596-80229-2
+- 照合資料: [オライリー・ジャパン公式邦訳目次](https://www.oreilly.co.jp/books/9784873115658/)
+
+RC2.10 は邦訳目次2.3、RC2.11 は2.1の「もっと『カラフル』な単語を探す」、RC5.7 は5.1の「ひどい名前はコメントをつけずに名前を変える」、RC12.2 は12.3の「手法を再帰的に適用する」に対応する。これは見出しの照合であり、原書本文の全要約を確認したものではない。RC4.8 の要約に直接対応する見出しは確認できておらず、本文未照合。
+
+Ch4 の欠落候補とされた “Use Methods to Organize Your Code” は公式邦訳目次の見出しではなく、関連する4.3は「メソッドを使った整列」。原書本文を確認できていないため、独立した追加助言にはしない。Ch15 はテスト基盤ではなく分／時間カウンタの設計・実装例。旧RC15.2「テストの独立性」は同章への帰属根拠がないため削除した。
 
 ### Ch1 コードは理解しやすく
 
@@ -319,7 +327,7 @@ SKILL.md カタログに採用しなかった助言。主題（観点マトリ�
 | RC5.4 | 読み手の予想される質問に答える | コードを読んで「なぜ？」と思う点にコメントする |
 | RC5.5 | 大きな絵をコメント | ファイル・クラスの役割を要約する冒頭コメント |
 | RC5.6 | 弱点の申告 | TODO・FIXME・ハックの明示 |
-| RC5.7 | 悪いコードにコメントしない | 説明コメントを足すより、コードを書き直す |
+| RC5.7 | ひどい名前はコメントせず改名する | コメントで補う代わりに名前を変える（邦訳目次5.1の下位見出し） |
 
 ### Ch6 コメントは正確で簡潔に
 
@@ -380,7 +388,7 @@ SKILL.md カタログに採用しなかった助言。主題（観点マトリ�
 | ID | 助言 | 要約 |
 | --- | --- | --- |
 | RC12.1 | 平易な言葉で説明してから書く | 解決手順を普段の言葉で書き下し、その構造をそのままコードにする |
-| RC12.2 | 問題を別の角度から捉える | 行き詰まったら、より小さい・簡単な問題へ言い換えてから解く |
+| RC12.2 | 言葉で説明する手法を再帰的に適用する | 大きな問題にも、解決策を言葉で説明する手法を再帰的に適用する（邦訳目次12.3） |
 
 ### Ch13 より少ないコードを書く
 
@@ -403,16 +411,20 @@ SKILL.md カタログに採用しなかった助言。主題（観点マトリ�
 | RC14.6 | 完璧を目指さない | テストの網羅より、主要経路の読みやすさと維持可能性を優先 |
 | RC14.7 | 名前付きテストヘルパー | `assertStockEquals(expected, actual)` のような目的名のある helper で意図を語る |
 
-### Ch15 「注意散漫最小化」テスト基盤
+### Ch15 「分／時間カウンタ」を設計・実装する
 
 | ID | 助言 | 要約 |
 | --- | --- | --- |
-| RC15.1 | トップレベルのテスト関数 | テスト本体が読み手に見える位置・形式に置く |
-| RC15.2 | テストの独立性 | 各テストは他に影響せず単独で走る |
+| RC15.1 | カウンタの設計・実装例 | クラスのインタフェースを定義し、素朴な解決策・ベルトコンベヤー設計・時間バケツ設計を比較する |
 
 ## Clean Code
 
 - Robert C. Martin. Clean Code: A Handbook of Agile Software Craftsmanship. Prentice Hall, 2008. ISBN 978-0-13-235088-4
+- 照合資料: [出版社公開サンプル（目次・Ch1本文・索引）](https://www.informit.com/content/images/9780132350884/samplepages/9780132350884.pdf)
+
+CC1.1 は Ch1 “We Are Authors”（p.13）の読みやすさに関する本文を確認した。CC6・8・10〜15・17 の採録項目は目次の見出しと所在を照合したが、各章本文の細部は未照合。目次は各節をCCの助言IDと同じ通し番号では番号付けしていない。Ch17 の F・G・N・T番号は原書の heuristic 番号であり、CC17.x とは別である。
+
+Ch16 “Refactoring SerialDate” は “First, Make It Work”（p.268）、“Then Make It Right”（p.270）、“Conclusion”（p.284）からなる。最終レッスン候補は公開サンプルに本文がなく未照合のため、個別助言としては採録していない。
 
 ### Ch1 きれいなコード
 
@@ -482,7 +494,7 @@ SKILL.md カタログに採用しなかった助言。主題（観点マトリ�
 | CC6.2 | データ/オブジェクトの非対称性 | 手続き型と OOP のトレードオフを認識する |
 | CC6.3 | ディミテルの法則 | 列車衝突（`a.getB().getC()`）を避ける |
 | CC6.4 | ハイブリッド構造の回避 | オブジェクトとデータ構造の混在を避ける |
-| CC6.5 | 構造の隠蔽 | visitor 等で内部構造を露出しない |
+| CC6.5 | 構造の隠蔽 | Hiding Structure（p.99）。具体的な手法の本文は未照合 |
 
 ### Ch7 エラーハンドリング
 
@@ -562,15 +574,35 @@ Ch17 は多数の heuristic の集成のため、本 skill に関連する主要
 
 | ID | 助言 | 要約 |
 | --- | --- | --- |
-| CC17.1 | 意図に反する動作を避ける | 驚きを生むコードは名前・構造から直す（G16 相当） |
-| CC17.2 | 境界条件をカプセル化 | 境界の判定は1箇所に（G5 相当） |
-| CC17.3 | 関数は1つのことを | F1 相当の繰り返し。名前の中の「and」は分割の合図 |
-| CC17.4 | 名前は一意に | 同じ概念に同じ語、違う概念に違う語（N1/N2 相当） |
-| CC17.5 | 未抜粋の heuristic（G29・G30・G10・G11・N5・T5 等） | 条件のカプセル化・否定条件の回避・縦の分離・一貫性など、既存項目と同内容か対象外のものが多い |
+| CC17.1 | 不明瞭な意図を避ける | G16: Obscured Intent（p.295）。副作用の命名だけを指す項目ではない |
+| CC17.2 | 境界条件をカプセル化 | G33: Encapsulate Boundary Conditions（p.304）。G5 は Duplication（p.289）で別の項目 |
+| CC17.3 | 関数は1つのことを | G30: Functions Should Do One Thing（p.302）。F1 は Too Many Arguments（p.288）で別の項目 |
+| CC17.4 | 記述的で抽象レベルに合う名前 | N1: Choose Descriptive Names（p.309）、N2: Choose Names at the Appropriate Level of Abstraction（p.311） |
+| CC17.5 | 未抜粋の heuristic（G28・G29・G10・G11・N5・T5・G34） | 条件のカプセル化・否定条件の回避・縦の分離・一貫性・スコープに合う名前の長さ・境界値テスト・抽象レベルを1段ずつ下げる関数構成 |
 
 ## Code Complete 第2版
 
 - Steve McConnell. Code Complete, Second Edition. Microsoft Press, 2004. ISBN 978-0-7356-1967-8
+- 照合資料: [出版社公開サンプルの目次](https://www.informit.com/content/images/9780735619678/samplepages/9780735619678a.pdf)
+
+以下は助言IDと原書の節番号・見出しの対応。対象章の本文はサンプル非収録であり、要約の細部（CO7.3 の行数・CO8.1 の空catch等）は未照合。CO22.1 は章題のみ確認でき、境界条件を扱う節の所在は未確定。
+
+| 助言ID | 原書の節・見出し | ページ |
+| --- | --- | --- |
+| CO7.3 | 7.4 How Long Can a Routine Be? | 173 |
+| CO7.7 | 7.3 Good Routine Names | 171 |
+| CO7.8 | 7.5 How to Use Routine Parameters | 174 |
+| CO8.1 | 8.4 Exceptions（関連: 8.3 Error-Handling Techniques） | 198（関連194） |
+| CO10.1 | 10.4 Scope | 244 |
+| CO10.2 | 10.2 Making Variable Declarations Easy、10.3 Guidelines for Initializing Variables | 239・240 |
+| CO10.3 | 10.8 Using Each Variable for Exactly One Purpose | 255 |
+| CO12.1 | 12.5 Boolean Variables | 301 |
+| CO12.2 | 12.6 Enumerated Types | 303 |
+| CO12.3 | 12.7 Named Constants | 307 |
+| CO14.3 | 14.2 Statements Whose Order Doesn't Matter | 351 |
+| CO19.6 | 19.3 Null Statements | 444 |
+| CO19.7 | 19.6 Control Structures and Complexity | 456 |
+| CO22.1 | Ch22 Developer Testing（対応節未確定） | 499 |
 
 ### Ch7 高品質なルーチン
 
@@ -694,10 +726,12 @@ Ch17 は多数の heuristic の集成のため、本 skill に関連する主要
 | CO32.2 | コメントは最終手段 | コードで語れるものはコードで語る |
 | CO32.3 | コメントすべきもの | 要約・意図・制約など、コードから読めないものだけ |
 
-## Refactoring 第2版（refactoring.com カタログ）
+## Refactoring（第2版中心・初版を含む公式カタログ）
 
 - Martin Fowler. Refactoring: Improving the Design of Existing Code, 2nd Edition. Addison-Wesley, 2018. ISBN 978-0-13-475759-9
 - オンラインカタログ: https://refactoring.com/catalog/
+
+公式カードの名称・リンク・収録版タグで照合した。以下のRF一覧は公式カタログ全件の網羅表ではない。Extract Interface と Replace Array with Object は初版の個別ページを根拠にし、第2版の項目とは区別する。旧名由来のIDは保持し、リンクと表示名で公式カードの別名であることを示す。Remove Assignments to Parameters は Split Variable の別名のため、別の助言として重複計上しない。
 
 | ID | 助言 | 要約 |
 | --- | --- | --- |
@@ -709,19 +743,19 @@ Ch17 は多数の heuristic の集成のため、本 skill に関連する主要
 | RF-replace-temp-with-query | [Replace Temp with Query](https://refactoring.com/catalog/replaceTempWithQuery.html) | 一時変数を問い合わせ（メソッド）へ置き換える |
 | RF-decompose-conditional | [Decompose Conditional](https://refactoring.com/catalog/decomposeConditional.html) | 条件式と各分岐を、意図を語る関数へ分解する |
 | RF-consolidate-conditional-expression | [Consolidate Conditional Expression](https://refactoring.com/catalog/consolidateConditionalExpression.html) | 同じ結果を返す一連の条件を1つにまとめる |
-| RF-consolidate-duplicate-conditional-fragments | [Consolidate Duplicate Conditional Fragments](https://refactoring.com/catalog/consolidateDuplicateConditionalFragments.html) | 全分岐に重複する断片を条件の外へ出す |
+| RF-consolidate-duplicate-conditional-fragments | [Slide Statements の別名: Consolidate Duplicate Conditional Fragments](https://refactoring.com/catalog/slideStatements.html) | 全分岐に重複する断片を条件の外へ出す |
 | RF-replace-nested-conditional-with-guard-clauses | [Replace Nested Conditional with Guard Clauses](https://refactoring.com/catalog/replaceNestedConditionalWithGuardClauses.html) | ネストした条件をガード節へ置き換える |
 | RF-introduce-special-case | [Introduce Special Case](https://refactoring.com/catalog/introduceSpecialCase.html) | 特殊ケース（null 等）の重複判定を特殊ケースオブジェクトへ集約する |
 | RF-remove-dead-code | [Remove Dead Code](https://refactoring.com/catalog/removeDeadCode.html) | 到達しないコードを削除する |
 | RF-substitute-algorithm | [Substitute Algorithm](https://refactoring.com/catalog/substituteAlgorithm.html) | 実装をより明快なアルゴリズムで置き換える |
 | RF-split-loop | [Split Loop](https://refactoring.com/catalog/splitLoop.html) | 異なる目的を1ループで回している場合、ループを目的ごとに分割する |
 | RF-replace-loop-with-pipeline | [Replace Loop with Pipeline](https://refactoring.com/catalog/replaceLoopWithPipeline.html) | ループと途中変数による配列の集計・変換をパイプライン（filter/map 等）へ置き換える |
-| RF-split-variable | [Split Variable](https://refactoring.com/catalog/splitVariable.html) | 1つの変数に複数の目的がある場合、目的ごとの変数へ分割する |
+| RF-split-variable | [Split Variable](https://refactoring.com/catalog/splitVariable.html) | 1つの変数に複数の目的がある場合、目的ごとの変数へ分割する。Remove Assignments to Parameters は同じ公式カードの別名 |
 | RF-remove-flag-argument | [Remove Flag Argument](https://refactoring.com/catalog/removeFlagArgument.html) | フラグ引数を除去し、呼び出し先を明示する個別の関数へ分ける |
 | RF-introduce-parameter-object | [Introduce Parameter Object](https://refactoring.com/catalog/introduceParameterObject.html) | 同じ引数群が繰り返される場合、1つのオブジェクトへまとめる |
 | RF-separate-query-from-modifier | [Separate Query from Modifier](https://refactoring.com/catalog/separateQueryFromModifier.html) | 値を返す処理と副作用のある処理を別関数へ分ける |
 | RF-slide-statements | [Slide Statements](https://refactoring.com/catalog/slideStatements.html) | 関連する文を近くへ移動させる |
-| RF-remove-control-flag | [Remove Control Flag](https://refactoring.com/catalog/removeControlFlag.html) | 制御フラグによるループ制御を break/continue/return へ置き換える |
+| RF-remove-control-flag | [Replace Control Flag with Break（別名 Remove Control Flag）](https://refactoring.com/catalog/replaceControlFlagWithBreak.html) | 制御フラグによるループ制御を break/continue/return へ置き換える |
 | RF-split-phase | [Split Phase](https://refactoring.com/catalog/splitPhase.html) | 異なる抽象レベルの処理（フェーズ）を分離する |
 | RF-replace-inline-code-with-function-call | [Replace Inline Code with Function Call](https://refactoring.com/catalog/replaceInlineCodeWithFunctionCall.html) | 既存関数と同等の処理をインラインで書いている場合、関数呼び出しへ置き換える |
 | RF-rename-variable | [Rename Variable](https://refactoring.com/catalog/renameVariable.html) | 変数を良い名前に変える |
@@ -744,6 +778,8 @@ Ch17 は多数の heuristic の集成のため、本 skill に関連する主要
 | RF-introduce-assertion | [Introduce Assertion](https://refactoring.com/catalog/introduceAssertion.html) | 前提条件を表明するコードを追加する |
 | RF-parameterize-function | [Parameterize Function](https://refactoring.com/catalog/parameterizeFunction.html) | 似た複数の関数をパラメータで1つにまとめる |
 | RF-preserve-whole-object | [Preserve Whole Object](https://refactoring.com/catalog/preserveWholeObject.html) | オブジェクトから値をばらして渡す代わりに、オブジェクトごと渡す |
+| RF-replace-array-with-object | [Replace Array with Object（初版 p.186、Ruby版 p.201）](https://refactoring.com/catalog/replaceArrayWithObject.html) | 位置ごとに異なる意味を持つ配列を、要素ごとの名前付きフィールドを持つオブジェクトへ置き換える |
+| RF-replace-error-code-with-exception | [Replace Error Code with Exception](https://refactoring.com/catalog/replaceErrorCodeWithException.html) | エラーコードの返却を例外の送出へ置き換える |
 | RF-replace-exception-with-precheck | [Replace Exception with Precheck](https://refactoring.com/catalog/replaceExceptionWithPrecheck.html) | 例外での流れ制御を事前チェックへ置き換える |
 | RF-replace-function-with-command | [Replace Function with Command](https://refactoring.com/catalog/replaceFunctionWithCommand.html) | 複雑な関数をコマンドオブジェクトへ置き換える |
 | RF-replace-constructor-with-factory-function | [Replace Constructor with Factory Function](https://refactoring.com/catalog/replaceConstructorWithFactoryFunction.html) | コンストラクタ直接呼び出しをファクトリ関数へ置き換える |
@@ -753,9 +789,9 @@ Ch17 は多数の heuristic の集成のため、本 skill に関連する主要
 | RF-push-down-method | [Push Down Method](https://refactoring.com/catalog/pushDownMethod.html) | メソッドを継承階層の下位クラスへ移動する |
 | RF-push-down-field | [Push Down Field](https://refactoring.com/catalog/pushDownField.html) | フィールドを継承階層の下位クラスへ移動する |
 | RF-replace-type-code-with-subclasses | [Replace Type Code with Subclasses](https://refactoring.com/catalog/replaceTypeCodeWithSubclasses.html) | 型コードをサブクラスで置き換える |
-| RF-extract-subclass | [Extract Subclass](https://refactoring.com/catalog/extractSubclass.html) | クラスから特化したサブクラスを抽出する |
+| RF-extract-subclass | [Replace Type Code with Subclasses の別名: Extract Subclass](https://refactoring.com/catalog/replaceTypeCodeWithSubclasses.html) | クラスから特化したサブクラスを抽出する |
 | RF-extract-superclass | [Extract Superclass](https://refactoring.com/catalog/extractSuperclass.html) | 共通部分をスーパークラスへ抽出する |
-| RF-extract-interface | [Extract Interface](https://refactoring.com/catalog/extractInterface.html) | インターフェースを抽出する |
+| RF-extract-interface | [Extract Interface（初版 p.341）](https://refactoring.com/catalog/extractInterface.html) | インターフェースを抽出する |
 | RF-collapse-hierarchy | [Collapse Hierarchy](https://refactoring.com/catalog/collapseHierarchy.html) | 過剰に細かい継承階層を統合する |
 | RF-replace-subclass-with-delegate | [Replace Subclass with Delegate](https://refactoring.com/catalog/replaceSubclassWithDelegate.html) | 継承を委譲へ置き換える |
 | RF-replace-superclass-with-delegate | [Replace Superclass with Delegate](https://refactoring.com/catalog/replaceSuperclassWithDelegate.html) | スーパークラスを委譲へ置き換える |
