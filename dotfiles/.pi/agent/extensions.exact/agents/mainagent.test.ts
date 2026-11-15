@@ -399,11 +399,11 @@ describe("承認", () => {
     assert.equal(executor.commands.length, 2);
   });
 
-  it("shows the specified resolved cwd and an 80-character preview", async () => {
+  it("passes the full multiline prompt and specified resolved cwd to select", async () => {
     const tool = captureTool();
     const { ui, calls } = approvalUi({ dialog: "once" });
     const executor = recordingExecutor();
-    const prompt = "x".repeat(80) + "\nnot in the preview";
+    const prompt = "x".repeat(100) + "\n\nlast line\n";
     await tool.execute(
       "t",
       { prompt, cwd: "sub/dir" },
@@ -413,11 +413,36 @@ describe("承認", () => {
     );
     assert.equal(
       calls.selections[0]?.title,
-      `Allow creating a new main-agent session?\nprompt: ${"x".repeat(80)}\ncwd: /repo/sub/dir`,
+      `Allow creating a new main-agent session?\nprompt: ${prompt}\ncwd: /repo/sub/dir`,
     );
     const script = parse(executor.commands[0]!)[2] as string;
     const tokens = parse(script);
     assert.equal(tokens.at(-1), prompt);
+  });
+
+  it("passes the full multiline prompt to confirm without an omitted cwd", async () => {
+    const tool = captureTool();
+    const { ui, calls } = approvalUi({ confirm: true });
+    const executor = recordingExecutor();
+    const prompt = "x".repeat(100) + "\n\nlast line\n";
+    const uiWithoutSelect: ApprovalUI = { confirm: ui.confirm };
+    await tool.execute(
+      "t",
+      { prompt },
+      undefined,
+      undefined,
+      mockContext(uiWithoutSelect, executor.executeTool),
+    );
+    assert.deepEqual(calls.confirmations, [
+      {
+        title: "Allow creating a new main-agent session?",
+        message: `prompt: ${prompt}`,
+        signal: undefined,
+      },
+    ]);
+    assert.equal(calls.selections.length, 0);
+    const script = parse(executor.commands[0]!)[2] as string;
+    assert.equal(parse(script).at(-1), prompt);
   });
 
   it("treats selection cancellation as denial and requests an optional reason", async () => {

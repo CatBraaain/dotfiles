@@ -8,6 +8,7 @@ import type {
 import { quote } from "shell-quote";
 import { Type, type Static } from "typebox";
 import { resultText } from "../shared/tool-text.ts";
+import { showMainagentApproval } from "./mainagent-approval.ts";
 import { getTmuxPaths, PARENT_PI_ENV_KEYS, type TmuxPaths } from "../pi-mux-bridge/shared.ts";
 const MAIN_AGENT_NAME = "main";
 
@@ -18,7 +19,6 @@ const ALLOW_OPTIONS = [
   { label: "Allow in this session", grant: "session" },
 ] as const;
 const DENY_OPTION_LABEL = "No, deny (reason next)";
-const PREVIEW_LENGTH = 80;
 const EXPIRED_TURN_APPROVAL = "Turn approval expired. Request approval again.";
 const parameters = Type.Object({
   prompt: Type.String({
@@ -124,19 +124,19 @@ export function registerMainagentTool(pi: ExtensionAPI): void {
   ): Promise<ApprovalDecision> {
     const generation = turnGeneration;
     const details = [
-      `prompt: ${input.prompt.slice(0, PREVIEW_LENGTH)}`,
+      `prompt: ${input.prompt}`,
       ...(input.cwd === undefined ? [] : [`cwd: ${sessionCwd}`]),
     ].join("\n");
-    if (typeof context.ui.select !== "function") {
+    const useCustomDialog = context.mode === "tui" && typeof context.ui.custom === "function";
+    if (!useCustomDialog && typeof context.ui.select !== "function") {
       const confirmed = await context.ui.confirm(QUESTION, details, { signal });
       signal?.throwIfAborted();
       if (confirmed) return { grant: "once" };
     } else {
-      const selected = await context.ui.select(
-        `${QUESTION}\n${details}`,
-        [...ALLOW_OPTIONS.map((option) => option.label), DENY_OPTION_LABEL],
-        { signal },
-      );
+      const options = [...ALLOW_OPTIONS.map((option) => option.label), DENY_OPTION_LABEL];
+      const selected = useCustomDialog
+        ? await showMainagentApproval(context.ui, QUESTION, details, options, signal)
+        : await context.ui.select(`${QUESTION}\n${details}`, options, { signal });
       signal?.throwIfAborted();
       const choice = ALLOW_OPTIONS.find((option) => option.label === selected);
       if (choice) {
