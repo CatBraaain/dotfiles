@@ -32,8 +32,9 @@ export async function loginTwitter(): Promise<void> {
   await ensureCamoufoxServer(AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));
   syncPlaywrightCliConfig();
   const session = TWITTER_LOGIN_SESSION_KEY;
-  const closePage = (): Promise<void> =>
-    runPlaywrightCli(session, ["close"], AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));
+  const closePage = async (): Promise<void> => {
+    await runPlaywrightCli(session, ["close"], AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));
+  };
   await closePage().catch(() => {});
   try {
     await runPlaywrightCli(
