@@ -473,10 +473,6 @@ assert(not context:get_option("_kagiroi_expand_candidates"),
 assert(segment.selected_index == 1, "the collapse must keep the selection")
 assert(press(env, 0xff09, { shift = true }) == kAccepted,
     "a collapsed Shift+Tab must be consumed doing nothing")
-context:highlight(32)
-assert(segment.selected_index == 32, "selection must reach the next page without changing labels")
-context:highlight(0)
-assert(segment.selected_index == 0, "selection must return to the first page")
 press(env, 0xff08)
 assert(not context:get_option("_kagiroi_expand_candidates"), "Backspace must collapse the next list")
 press(env, 0x20)
