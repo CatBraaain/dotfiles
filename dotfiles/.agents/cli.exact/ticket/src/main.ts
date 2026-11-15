@@ -8,6 +8,14 @@ import { randomUUID } from "node:crypto";
 import { link, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, relative } from "node:path";
+import {
+  dispatch,
+  DISPATCH_USAGE,
+  parseDispatchArgs,
+  startDispatcher,
+  stopDispatcher,
+  workerCommand,
+} from "./dispatch";
 
 const STATUSES = ["draft", "open", "blocked", "locked", "closed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
@@ -17,7 +25,8 @@ const USAGE = `usage: ticket list [-s <s>[,<s>...]] [-p <project>] [-a] [--json]
        ticket create <json> [-p <project>] [--json]
        ticket set [<selector>] <json> [-p <project>] [--json]
        ticket edit [<selector>] <old> <new> [-p <project>] [--json]
-       ticket check [-p <project>] [-a] [--json]`;
+       ticket check [-p <project>] [-a] [--json]
+       ${DISPATCH_USAGE}`;
 
 interface Flags {
   project?: string;
@@ -739,6 +748,32 @@ function hasJsonFlag(argv: string[]): boolean {
 
 async function main(): Promise<void> {
   const [command = "", ...argv] = process.argv.slice(2);
+  if (command === "dispatch" || command === "__ticket_dispatch_worker") {
+    const isWorker = command === "__ticket_dispatch_worker";
+    const dispatchArgs = isWorker ? argv.slice(1) : argv;
+    const parsed = parseDispatchArgs(dispatchArgs);
+    if (parsed.error || !parsed.action)
+      throw new TicketError(2, `${parsed.error}\nusage: ${DISPATCH_USAGE}`);
+    const project = isWorker ? validateProject(argv[0] ?? "") : defaultProject();
+    if (parsed.action === "stop") return stopDispatcher(project);
+    const options = parsed.options!;
+    async function loadSnapshot() {
+      const tickets = await loadTickets(project);
+      const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
+      return tickets.map((ticket) => ({
+        id: ticket.id,
+        status: ticket.status,
+        actionable: isActionable(ticket, byId),
+      }));
+    }
+    if (isWorker) return dispatch(options, loadSnapshot, project);
+    return startDispatcher({
+      project,
+      options,
+      loadSnapshot,
+      command: workerCommand(import.meta.path, dispatchArgs, project),
+    });
+  }
   const { flags, positional } = parseArgs(argv, command);
   switch (command) {
     case "list":
@@ -765,7 +800,7 @@ try {
     error instanceof TicketError
       ? error
       : new TicketError(1, `I/O error: ${(error as Error).message}`);
-  const jsonMode = hasJsonFlag(process.argv.slice(2));
+  const jsonMode = process.argv[2] !== "dispatch" && hasJsonFlag(process.argv.slice(2));
   const errorMessage = jsonMode ? failure.message.replace(/\r?\n/g, "\\n") : failure.message;
   if (jsonMode) output({ error: errorMessage });
   console.error(errorMessage);

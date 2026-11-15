@@ -66,6 +66,95 @@ frontmatter を除く本文全体（H1 を含む）の literal な `<old>` を�
 
 frontmatter、重複field、status、missing after、after cycle を検証する。問題の JSON要素は `file`、`kind`、`detail` を持つ。問題なしは `ok` または空配列を返す。
 
+### `ticket dispatch`
+
+dispatcher は ticket store から起動可能な ticket を探してプロンプトを生成し、tmux 上の piセッションを上限数まで並列起動する。ticket の status とセッションの有無を監視し、空いた稼働枠へ次の起動可能ticket を補充する。稼働とは、同じproject の dispatcher が起動し、今回の監視でまだ解放していない piセッションを指す。
+
+| コマンド | 動作 |
+| --- | --- |
+| `ticket dispatch start [<work-dir>] [--max N] [--interval SEC] [--prefix NAME] [--template FILE]` | dispatcher を detached tmuxセッションで起動する |
+| `ticket dispatch [<work-dir>] [--max N] [--interval SEC] [--prefix NAME] [--template FILE]` | `start` と同じ動作 |
+| `ticket dispatch stop` | 現在のproject の dispatcher を停止する |
+
+project は「共通の振る舞い」の project未指定時と同じ cwdベースの解決で選ぶ。同じproject に解決される別の cwd・worktree からも同じ dispatcher を操作する。
+
+#### 入力と配置
+
+`<work-dir>` は省略できる。省略時は start を呼び出したプロセスの cwd が `WORK` になる。指定した `<work-dir>` の相対パスは同じ cwd を基準に解決する。stop は位置引数・オプションを受け付けず、ticket store の存在や内容に依存せず操作できる。start は次の4オプションを受け付ける。
+
+| オプション | 既定値 | 内容 |
+| --- | --- | --- |
+| `--max N` | `5` | 同時稼働数の上限。1以上の整数 |
+| `--interval SEC` | `30` | tick間隔の秒数。0より大きい有限の数値、小数可 |
+| `--prefix NAME` | `fix_` | piセッション名の接頭辞 |
+| `--template FILE` | `WORK/fix-prompt-template.txt` | プロンプトテンプレートのパス |
+
+| 入出力 | パス・規則 |
+| --- | --- |
+| template | `__TICKET_ID__` の全出現を ticket ID へ置換してプロンプトを生成する |
+| prompt | `WORK/fix/prompt-<ID>.txt` |
+| log | `WORK/dispatch.log` へ追記する |
+| dispatcher・pi の cwd | start を呼び出したプロセスの cwd |
+| tmux socket | `/run/user/1000/pi-tmux/server.sock`。`TICKET_TEST_TMUX_SOCKET` 指定時はその socket を使う |
+
+template は起動時に読み込む。dispatch は ticket を変更しない。dispatch の引数、ticket読取り、ログ、終了条件は本節に従う。
+
+#### start と stop
+
+同じproject の dispatcher は同時に1つだけ動作する。dispatcher の識別は `WORK`・`--prefix` に依存せず、他project の dispatcher・piセッションを停止・引継ぎの対象にしない。
+
+| 条件・操作 | 結果 |
+| --- | --- |
+| dispatcher が未起動で start | template・ticket store を読み、fixディレクトリ作成と log書込みが可能なことを確認して、project を識別する名前の detached tmuxセッションを作る |
+| dispatcher用tmuxセッションの作成成功 | セッション名と logパスを stdout へ出し、呼出元CLI は終了コード0で戻る。全ticket の完了を待たない |
+| 同じproject の dispatcher が起動済みで start | 既存セッション名と起動済みである旨を stdout へ出して終了コード0。既存の起動条件・監視を保持する |
+| dispatcher が起動中で stop | dispatcher用セッションだけを終了し、停止した旨を stdout へ出して終了コード0。起動済みpi は作業を続ける |
+| dispatcher が未起動で stop | 停止済みである旨を stdout へ出して終了コード0 |
+| stop 後に start | 同じproject の残存piセッションを起動済み・稼働中として引き継ぎ、同じticket の pi を二重起動しない |
+
+引き継いだpi のセッション名と cwd は保持する。新しい `WORK`・`--prefix` で start しても残存pi を引き継ぎ、新規起動には今回の start の条件を使う。残存pi の数が今回の `--max` 以上なら、その数が上限未満になるまで新規起動を待つ。
+
+start の成功は dispatcher用tmuxセッションの作成成功を表し、その後の監視継続や pi起動成功を保証しない。ソースからのCLI起動とコンパイル済みCLI のどちらでも同じ動作を提供する。
+
+#### piセッションの起動
+
+ID `X` のセッション名は、`--prefix` に `X` の `.` を `_` へ全置換した文字列を連結した名前である。起動対象ごとに prompt を書き、その内容全体を単一引数として `pi` へ渡す。promptパス内の空白・単一引用符を保持する。
+
+存在確認と kill は、それぞれ `has-session -t =<セッション名>` と `kill-session -t =<セッション名>` の完全一致で行う。他project または dispatcher管理外の既存セッションと名前が衝突する場合は、そのセッションを変更せず、その ticket の起動失敗を記録する。衝突したセッションを稼働中として扱わず、今回の実行中はその ticket を再起動しない。
+
+起動コマンドが失敗した場合は `tmux new-session failed for <セッション名>: <エラー内容>` を dispatcher の stderr と log へ出す。名前の衝突以外の失敗は稼働として登録し、以降の tick の解放条件で判定する。
+
+#### tick と終了
+
+起動時に `dispatcher start max=<max>` を記録する。最初の tick を直ちに行い、その後は `--interval` 秒ごとに次の順で繰り返す。各 tick で ticket store を読み直し、起動可能ticket と稼働中ticket の status を判定する。
+
+| 順 | 条件 | 結果 |
+| --- | --- | --- |
+| 1 | 稼働中ticket の status が `closed` または `cancelled` | `done <ID> status=<status>` を記録し、セッションを kill して稼働枠を解放する |
+| 2 | 1で解放していない稼働中セッションが tmux 上に存在しない | `incomplete <ID> status=<status\|none> session exited without close` を記録し、稼働枠を解放する。その ticket は再起動しない |
+| 3 | 稼働数が `--max` 未満で、起動可能ticket がある | 起動可能ticket を ID の古い順に空き枠の数だけ選び、起動する。起動ごとに `launched <ID> as <セッション名>` を記録する |
+| 4 | 稼働数が0で、起動可能ticket がない | `dispatcher finished` を記録し、dispatcher用セッションを終了する。終了後の ticket の追加・変化は、次回の start で扱う |
+
+1の解放をすべて行ってから2へ進む。同じ tick で解放した稼働枠を3の補充に使う。
+
+起動可能ticket は、「セレクタ」の actionable の条件を満たし、稼働中でも今回の実行で起動済みでもない ticket である。引き継いだ ticket、done や incomplete で解放した ticket も今回の起動済みに含まれ、再び起動しない。実行中に store へ追加された ticket と、`after` の解消で open になった ticket は、次の tick から起動可能になる。
+
+#### ログとエラー
+
+ログはローカル時刻の `[YYYY-MM-DD HH:MM:SS] <メッセージ>` を1行として dispatcher の stdout へ出し、同じ行を log へ追記する。呼出元CLI の stdout は start・stop の操作結果を示す。
+
+| 条件 | 結果 |
+| --- | --- |
+| start の余分な位置引数、空の `<work-dir>`、未知のオプション、値の不足、`--max` / `--interval` の値の不正、stop への引数指定 | usage を呼出元CLI の stderr へ出し、終了コード2 |
+| 新規start の事前確認で ticket の値・状態・環境が不正 | 既存CLI と同じ validationエラーを呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動しない |
+| 新規start の事前確認で template読込み・fixディレクトリ作成・log書込みに失敗 | `I/O error: <エラー内容>` を呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動しない |
+| dispatcher用tmuxセッションの作成、または稼働中dispatcher の停止に失敗 | 操作と理由を呼出元CLI の stderr へ出し、終了コード1 |
+| start成功後に ticket読取り、template読込み、prompt・log書込みなどの継続不能なエラー | エラーを dispatcher の stderr へ出し、log が書込み可能なら同じエラーを追記して dispatcher用セッションを終了する。起動済みpi は作業を続け、呼出元CLI の終了コードは変化しない |
+
+#### ライフサイクル
+
+dispatcher を終了させると監視と補充が止まり、稼働中piセッションは tmux 上に残る。tmux server の終了または OS再起動で dispatcher と piセッションが消え、自動では再開しない。
+
 ## toolラッパー
 
 pi は、5つの tool で `ticket` CLI をラップする。ストア形式、状態遷移、排他、エラーは上の CLI の章が正であり、tool はストアへ直接アクセスしない。
