@@ -545,7 +545,7 @@ async function createCommand(positional: string[], flags: Flags): Promise<void> 
         const path = join(dir, `${id}.md`);
         const temporaryPath = join(dir, `.ticket-new-${process.pid}-${randomUUID()}`);
         try {
-          const content = `${frontmatter}\n${body}`;
+          const content = `${frontmatter}\n\n${body}`;
           await writeFile(temporaryPath, content, { flag: "wx" });
           await link(temporaryPath, path);
           return {

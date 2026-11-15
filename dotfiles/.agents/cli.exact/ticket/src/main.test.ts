@@ -76,6 +76,33 @@ describe("ticket CLI", () => {
     assert.match(await readFile(ticketPath(home, "demo", second), "utf8"), /# two/);
   });
 
+  for (const body of [undefined, "Details"]) {
+    it(`preserves frontmatter spacing through set and edit ${body === undefined ? "without" : "with"} a body`, async () => {
+      const home = await ticketHome();
+      const created = run(home, [
+        "create",
+        JSON.stringify({ title: "Spacing", body }),
+        "--project",
+        "demo",
+        "--json",
+      ]);
+      assert.equal(created.code, 0, created.stderr);
+      const id = (JSON.parse(created.stdout) as { id: string }).id;
+      const path = ticketPath(home, "demo", id);
+      const expectedBody = body === undefined ? "# Spacing\n" : `# Spacing\n\n${body}\n`;
+      assert.equal(await readFile(path, "utf8"), `---\nstatus: open\n---\n\n${expectedBody}`);
+
+      const set = run(home, ["set", id, '{"status":"locked"}', "--project", "demo"]);
+      assert.equal(set.code, 0, set.stderr);
+      const expectedLocked = `---\nstatus: locked\n---\n\n${expectedBody}`;
+      assert.equal(await readFile(path, "utf8"), expectedLocked);
+
+      const edited = run(home, ["edit", id, "Spacing", "Renamed", "--project", "demo"]);
+      assert.equal(edited.code, 0, edited.stderr);
+      assert.equal(await readFile(path, "utf8"), expectedLocked.replace("Spacing", "Renamed"));
+    });
+  }
+
   it("normalizes a unique after prefix to the complete ID", async () => {
     const home = await ticketHome();
     const dependency = create(home, "dependency");
@@ -88,6 +115,11 @@ describe("ticket CLI", () => {
     ]);
     assert.equal(result.code, 0, result.stderr);
     assert.equal((JSON.parse(result.stdout) as { after: string }).after, dependency);
+    const id = (JSON.parse(result.stdout) as { id: string }).id;
+    assert.equal(
+      await readFile(ticketPath(home, "demo", id), "utf8"),
+      `---\nstatus: blocked\nafter: ${dependency}\n---\n\n# dependent\n`,
+    );
   });
 
   it("releases every current blocked dependent when closing a ticket", async () => {
@@ -485,7 +517,7 @@ describe("ticket CLI", () => {
     const shown = run(home, ["show", id, "--project", "demo"]);
     assert.deepEqual(
       shown.stdout,
-      `id: ${id}\nstatus: open\nafter: -\ntitle: First\n\nbody:\n# First\n`,
+      `id: ${id}\nstatus: open\nafter: -\ntitle: First\n\nbody:\n\n# First\n`,
     );
 
     const listed = run(home, ["list", "--project", "demo"]);

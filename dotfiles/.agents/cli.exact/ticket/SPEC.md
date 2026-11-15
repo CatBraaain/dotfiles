@@ -52,7 +52,7 @@ ID、status、after、title、本文全体を返す。テキスト出力は `id:
 
 ### `ticket create <json> [-p <project>] [--json]
 
-JSON は必須の `title` と任意の `status`、`after`、`body` を持つ。body は H1 の後の空行を挟んで置く。after が未解決で status未指定なら blocked で作る。成功時は `created <id>` に status、after、path を続けるテキスト、または JSON共通フィールドを返す。
+JSON は必須の `title` と任意の `status`、`after`、`body` を持つ。作成するファイルでは frontmatter終端と H1 の間に空行を1行置く。body は H1 の後の空行を挟んで置く。after が未解決で status未指定なら blocked で作る。成功時は `created <id>` に status、after、path を続けるテキスト、または JSON共通フィールドを返す。
 
 ### `ticket set [<selector>] <json> [-p <project>] [--json]
 
