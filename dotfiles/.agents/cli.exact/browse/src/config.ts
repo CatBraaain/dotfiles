@@ -43,7 +43,7 @@ export const LOCKED_SUBCOMMAND = "__locked";
 export const SERVER_SUBCOMMAND = "__server";
 
 // Render capacity is a semaphore of flock(1) slot locks (spec: render スロット
-// セマフォ（既定 2 スロット）). The restart lock arbitrates server restarts.
+// セマフォ（既定 4 スロット）). The restart lock arbitrates server restarts.
 export const SLOT_COUNT = 4;
 // Poll interval (seconds, flock -w) while waiting for a busy render slot;
 // short enough to notice an in-flight restart and yield to it (spec: 让位).
