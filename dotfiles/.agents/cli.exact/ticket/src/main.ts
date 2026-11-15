@@ -664,7 +664,7 @@ async function editCommand(positional: string[], flags: Flags): Promise<void> {
       fail(
         `${target.id}: "${old}" appears ${matches} times in the body\nCurrent body:\n${target.body}`,
       );
-    const body = target.body.replace(old, replacement);
+    const body = target.body.replace(old, () => replacement);
     const { frontmatter } = splitFrontmatter(target.content);
     const content = `${frontmatter}\n---\n${body}`;
     await applyChanges(dir, [

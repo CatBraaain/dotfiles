@@ -179,10 +179,13 @@ describe("ticket CLI", () => {
   it("does not treat a literal --json after -- as the output flag", async () => {
     const home = await ticketHome();
     const id = create(home, "literal");
+    const path = ticketPath(home, "demo", id);
+    const before = await readFile(path, "utf8");
     const result = run(home, ["edit", id, "--project", "demo", "--", "missing", "--json"]);
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
     assert.match(result.stderr, /appears 0 times/);
+    assert.equal(await readFile(path, "utf8"), before);
   });
 
   it("returns one JSON error object for JSON-mode validation failures", async () => {
@@ -498,12 +501,36 @@ describe("ticket CLI", () => {
     assert.equal(clean.stdout.trim(), "ok");
   });
 
+  it.each(["$&", "$`", "$'", "$$", "first line\nsecond line\t  "])(
+    "saves replacement text %j literally",
+    async (replacement) => {
+      const home = await ticketHome();
+      const id = create(home, "before needle after");
+      const result = run(home, ["edit", "--project", "demo", "--", id, "needle", replacement]);
+      const expectedContent = `---\nstatus: open\n---\n# before ${replacement} after\n`;
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(await readFile(ticketPath(home, "demo", id), "utf8"), expectedContent);
+    },
+  );
+
   it("supports empty literal replacements", async () => {
     const home = await ticketHome();
-    const id = create(home, "replace");
+    const id = create(home, "before replace after");
     const result = run(home, ["edit", id, "replace", "", "--project", "demo"]);
+    const expectedContent = "---\nstatus: open\n---\n# before  after\n";
     assert.equal(result.code, 0, result.stderr);
-    assert.doesNotMatch(await readFile(ticketPath(home, "demo", id), "utf8"), /replace/);
+    assert.equal(await readFile(ticketPath(home, "demo", id), "utf8"), expectedContent);
+  });
+
+  it("rejects an empty old string without changing the ticket", async () => {
+    const home = await ticketHome();
+    const id = create(home, "unchanged");
+    const path = ticketPath(home, "demo", id);
+    const before = await readFile(path, "utf8");
+    const result = run(home, ["edit", "--project", "demo", "--", id, "", "replacement"]);
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /^usage: ticket list/m);
+    assert.equal(await readFile(path, "utf8"), before);
   });
 
   it("renders the spec text output for create, show, list, edit, and set", async () => {
