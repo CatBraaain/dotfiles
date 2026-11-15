@@ -1,12 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { listSessionSnapshot } from "../src/sessionStore";
 import { groupSessions } from "../src/grouping";
-import {
-  PiMux,
-  type PiMuxHistoryEntry,
-  type PiMuxSession,
-  type PiMuxWorkspace,
-} from "../src/piMux";
+import { type PiMuxHistoryEntry, type PiMuxSession, type PiMuxWorkspace } from "../src/piMux";
 
 const ROOT = "/project";
 
@@ -26,17 +21,6 @@ function historyEntry(
   };
 }
 
-function muxWithHistory(entries: readonly PiMuxHistoryEntry[]) {
-  const history = vi.fn(async () => [...entries]);
-  const mux = new PiMux(
-    vi.fn(async (_executable: string, args: string[]) => {
-      if (args[0] === "history") return JSON.stringify(await history());
-      throw new Error(`Unexpected pi-mux command: ${args.join(" ")}`);
-    }),
-  );
-  return { mux, history };
-}
-
 function live(id: string, file: string, title: string | null = null): PiMuxSession {
   return { id, file, state: null, title };
 }
@@ -47,8 +31,8 @@ function workspace(cwd: string, sessions: PiMuxSession[]): PiMuxWorkspace {
 
 describe("listSessionSnapshot", () => {
   it("uses list identity and cwd even when history entries disagree", async () => {
-    const { mux } = muxWithHistory([historyEntry("header-id", "/other")]);
-    const snapshot = await listSessionSnapshot(mux, [
+    const history = [historyEntry("header-id", "/other")];
+    const snapshot = await listSessionSnapshot(history, [
       workspace(ROOT, [live("mux-id", "/saved/mux-id.jsonl", "Published title")]),
     ]);
     expect(snapshot.sessions).toEqual([
@@ -63,8 +47,8 @@ describe("listSessionSnapshot", () => {
   });
 
   it("retains an unsaved live row without history metadata", async () => {
-    const { mux } = muxWithHistory([]);
-    const snapshot = await listSessionSnapshot(mux, [
+    const history: PiMuxHistoryEntry[] = [];
+    const snapshot = await listSessionSnapshot(history, [
       workspace(ROOT, [live("unsaved", "/saved/unsaved.jsonl")]),
     ]);
     expect(snapshot.sessions).toEqual([
@@ -81,13 +65,13 @@ describe("listSessionSnapshot", () => {
   });
 
   it("prefers the list title and falls back to the history title", async () => {
-    const { mux } = muxWithHistory([historyEntry("A", ROOT, { title: "Saved name" })]);
+    const history = [historyEntry("A", ROOT, { title: "Saved name" })];
     for (const [title, expected] of [
       ["Published", "Published"],
       [null, "Saved name"],
       ["", "Saved name"],
     ] as const) {
-      const { sessions } = await listSessionSnapshot(mux, [
+      const { sessions } = await listSessionSnapshot(history, [
         workspace(ROOT, [live("A", "/saved/A.jsonl", title)]),
       ]);
       expect(sessions[0].displayName).toBe(expected);
@@ -95,8 +79,8 @@ describe("listSessionSnapshot", () => {
   });
 
   it("uses the history btime for start and the mtime for updates", async () => {
-    const { mux } = muxWithHistory([historyEntry("A", ROOT, { btime: 1_000, mtime: 1_234 })]);
-    const snapshot = await listSessionSnapshot(mux, [workspace(ROOT, [])]);
+    const history = [historyEntry("A", ROOT, { btime: 1_000, mtime: 1_234 })];
+    const snapshot = await listSessionSnapshot(history, [workspace(ROOT, [])]);
     expect(snapshot.sessions).toEqual([
       {
         sessionId: "A",
@@ -110,12 +94,12 @@ describe("listSessionSnapshot", () => {
   });
 
   it("forms a registered-cwd union and gives list entries priority over saved duplicates", async () => {
-    const { mux } = muxWithHistory([
+    const history = [
       historyEntry("archived", ROOT),
       historyEntry("A", ROOT),
       historyEntry("outside", "/outside"),
-    ]);
-    const snapshot = await listSessionSnapshot(mux, [
+    ];
+    const snapshot = await listSessionSnapshot(history, [
       workspace(ROOT, [live("A", "/planned.jsonl")]),
       workspace("/empty", []),
     ]);
@@ -128,8 +112,8 @@ describe("listSessionSnapshot", () => {
   });
 
   it("merges temporary Pi with history without hiding unsaved rows or duplicating IDs", async () => {
-    const { mux } = muxWithHistory([historyEntry("history", ROOT)]);
-    const snapshot = await listSessionSnapshot(mux, [
+    const history = [historyEntry("history", ROOT)];
+    const snapshot = await listSessionSnapshot(history, [
       workspace(ROOT, [
         live("normal", "/saved/normal.jsonl"),
         { ...live("temporary", "/saved/temporary.jsonl", "Live temporary title"), temporary: true },
@@ -155,20 +139,20 @@ describe("listSessionSnapshot", () => {
   });
 
   it("moves a temporary Pi to the normal collection when the list attribute disappears", async () => {
-    const { mux } = muxWithHistory([]);
+    const history: PiMuxHistoryEntry[] = [];
     const session = live("A", "/saved/A.jsonl");
-    const temporary = await listSessionSnapshot(mux, [
+    const temporary = await listSessionSnapshot(history, [
       workspace(ROOT, [{ ...session, temporary: true }]),
     ]);
-    const normal = await listSessionSnapshot(mux, [workspace(ROOT, [session])]);
+    const normal = await listSessionSnapshot(history, [workspace(ROOT, [session])]);
     expect(temporary.archivedIds).toEqual(new Set(["A"]));
     expect(normal.archivedIds).toEqual(new Set());
     expect(normal.sessions).toEqual(temporary.sessions);
   });
 
   it("keeps start-time sorting with unknown start times last", async () => {
-    const { mux } = muxWithHistory([historyEntry("known", ROOT, { btime: 5_000 })]);
-    const { sessions } = await listSessionSnapshot(mux, [
+    const history = [historyEntry("known", ROOT, { btime: 5_000 })];
+    const { sessions } = await listSessionSnapshot(history, [
       workspace(ROOT, [
         live("z", "/saved/z.jsonl"),
         live("a", "/saved/a.jsonl"),
@@ -182,22 +166,11 @@ describe("listSessionSnapshot", () => {
     ]);
   });
 
-  it("does not query history when the public list has no workspaces", async () => {
-    const { mux, history } = muxWithHistory([]);
-    expect(await listSessionSnapshot(mux, [])).toEqual({
+  it("returns an empty snapshot without registered workspaces", async () => {
+    expect(await listSessionSnapshot([], [])).toEqual({
       sessions: [],
       registeredCwds: [],
       archivedIds: new Set(),
     });
-    expect(history).not.toHaveBeenCalled();
-  });
-
-  it("propagates history failures instead of treating them as missing files", async () => {
-    const execute = vi.fn(async () => {
-      throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
-    });
-    await expect(listSessionSnapshot(new PiMux(execute), [workspace(ROOT, [])])).rejects.toThrow(
-      "EACCES",
-    );
   });
 });

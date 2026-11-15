@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
+import { SessionHistory } from "../sessionHistory";
 import { listSessionSnapshot, sessionFileExists, type SessionSummary } from "../sessionStore";
 import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
 import type { TerminalRegistry } from "../terminalRegistry";
@@ -18,12 +19,14 @@ import { webviewHtml } from "./webviewHtml";
 
 export const VIEW_ID = "piSessions.sessions";
 export const LIST_REFRESH_INTERVAL_MS = 250;
+export const HISTORY_CHANGE_DELAY_MS = 100;
 
 export interface SessionWebviewDeps {
   extensionUri: string;
   registry: TerminalRegistry;
   startNewSession: (cwd: string) => Promise<string | undefined>;
   onWorkspaces?: (cwds: readonly string[]) => void;
+  onSessionFiles?: (files: readonly { file: string; cwd: string }[]) => void;
   emptySessions?: EmptySessionPool;
   log?: Pick<vscode.LogOutputChannel, "error">;
 }
@@ -47,11 +50,25 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private loadingRequested = false;
   private disposed = false;
   private listRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  private historyChangeTimer: ReturnType<typeof setTimeout> | undefined;
+  private pendingList: Promise<PiMuxWorkspace[]> | undefined;
+  private pendingHistoryRefresh: Promise<void> | undefined;
+  private latestWorkspaces: PiMuxWorkspace[] = [];
+  private listFailed = false;
+  private readonly history: SessionHistory;
   private latestListMessage:
     | Extract<ExtensionMessage, { type: "loading" | "sessions" | "sessionsError" }>
     | undefined;
 
-  constructor(private readonly deps: SessionWebviewDeps) {}
+  constructor(private readonly deps: SessionWebviewDeps) {
+    this.history = new SessionHistory(
+      deps.registry.mux,
+      () => {
+        void this.refresh(false);
+      },
+      (files) => deps.onSessionFiles?.(files),
+    );
+  }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.stopListPolling();
@@ -76,18 +93,20 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     webviewView.onDidChangeVisibility(() => {
       if (this.view !== webviewView) return;
       this.refreshVersion += 1;
-      if (webviewView.visible) void this.refresh();
+      if (webviewView.visible) void this.refresh(false);
     });
     webviewView.webview.html = webviewHtml({
       scriptUri: scriptUri.toString(),
       nonce: randomBytes(16).toString("base64"),
     });
-    void this.refresh();
+    void this.refresh(false);
   }
 
   dispose(): void {
     this.disposed = true;
     this.stopListPolling();
+    clearTimeout(this.historyChangeTimer);
+    this.history.dispose();
     this.view = undefined;
     this.runningSessionIds.clear();
     this.runningObservations.clear();
@@ -95,13 +114,37 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     this.refreshVersion += 1;
   }
 
-  async refresh(): Promise<void> {
+  async refresh(refreshHistory = true): Promise<void> {
+    if (refreshHistory) {
+      clearTimeout(this.historyChangeTimer);
+      this.historyChangeTimer = undefined;
+      this.history.invalidateAll();
+    }
     return this.requestRefresh(true);
+  }
+
+  async onSessionFileChanged(file: string): Promise<void> {
+    if (this.disposed) return;
+    try {
+      if (!(await this.history.fileChanged(file)) || this.disposed) return;
+      clearTimeout(this.historyChangeTimer);
+      this.historyChangeTimer = setTimeout(() => {
+        this.historyChangeTimer = undefined;
+        if (this.view?.visible) void this.refresh(false);
+      }, HISTORY_CHANGE_DELAY_MS);
+      this.historyChangeTimer.unref();
+    } catch (error) {
+      this.reportAcquisitionError(error);
+    }
+  }
+
+  async onSessionRootChanged(): Promise<void> {
+    this.history.resetEntries();
+    await this.refresh();
   }
 
   private async requestRefresh(showLoading = false): Promise<void> {
     if (this.disposed) return;
-    this.stopListPolling();
     this.refreshVersion += 1;
     this.refreshRequested = true;
     this.loadingRequested ||= showLoading;
@@ -112,7 +155,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       await pending;
     } finally {
       this.pendingRefresh = undefined;
-      this.scheduleListRefresh();
     }
   }
 
@@ -131,10 +173,126 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   }
 
   private scheduleListRefresh(): void {
-    if (this.disposed || this.pendingRefresh !== undefined) return;
+    if (this.disposed || this.pendingList !== undefined) return;
     this.stopListPolling();
-    this.listRefreshTimer = setTimeout(() => void this.requestRefresh(), LIST_REFRESH_INTERVAL_MS);
+    this.listRefreshTimer = setTimeout(() => void this.pollList(), LIST_REFRESH_INTERVAL_MS);
     this.listRefreshTimer.unref();
+  }
+
+  private async readWorkspaces(): Promise<PiMuxWorkspace[]> {
+    if (this.pendingList !== undefined) {
+      await this.pendingList.catch(() => undefined);
+      return this.readWorkspaces();
+    }
+    this.stopListPolling();
+    const pending = this.deps.registry.mux.list();
+    this.pendingList = pending;
+    try {
+      return await pending;
+    } finally {
+      this.pendingList = undefined;
+      this.scheduleListRefresh();
+    }
+  }
+
+  private acceptWorkspaces(workspaces: PiMuxWorkspace[]): void {
+    this.listFailed = false;
+    this.latestWorkspaces = workspaces;
+    this.registeredCwds = new Set(workspaces.map(({ cwd }) => cwd));
+    this.history.sync(workspaces);
+    this.deps.onWorkspaces?.([...this.registeredCwds]);
+    const live = flattenPiMuxSessions(workspaces);
+    this.temporarySessionIds = new Set(
+      live.filter(({ temporary }) => temporary).map(({ id }) => id),
+    );
+    if (!this.history.failed) {
+      this.updateUnread(
+        live.map(({ id }) => ({ sessionId: id })),
+        {
+          archivedIds: this.temporarySessionIds,
+          livePhases: phasesFromWorkspaces(workspaces),
+        },
+      );
+    }
+  }
+
+  private async pollList(): Promise<void> {
+    const version = this.refreshVersion;
+    try {
+      const workspaces = await this.readWorkspaces();
+      if (this.disposed || version !== this.refreshVersion) return;
+      this.acceptWorkspaces(workspaces);
+      if (this.view?.visible) {
+        if (this.pendingHistoryRefresh !== undefined) await this.publishSessions();
+        else void this.refreshHistory();
+      }
+    } catch (error) {
+      if (version !== this.refreshVersion) return;
+      this.listFailed = true;
+      this.reportAcquisitionError(error);
+    }
+  }
+
+  private async refreshHistory(): Promise<void> {
+    if (this.pendingHistoryRefresh !== undefined) return this.pendingHistoryRefresh;
+    if (this.historyChangeTimer !== undefined) return this.publishSessions();
+    const pending = this.loadHistory();
+    this.pendingHistoryRefresh = pending;
+    try {
+      await pending;
+    } finally {
+      this.pendingHistoryRefresh = undefined;
+    }
+  }
+
+  private async loadHistory(): Promise<void> {
+    try {
+      await this.history.load(() => !this.disposed && !!this.view?.visible);
+      await this.publishSessions();
+    } catch (error) {
+      this.reportAcquisitionError(error);
+    }
+  }
+
+  private async publishSessions(): Promise<void> {
+    if (
+      this.disposed ||
+      !this.view?.visible ||
+      this.listFailed ||
+      this.history.failed ||
+      !this.history.ready
+    )
+      return;
+    const workspaces = this.latestWorkspaces;
+    const version = this.refreshVersion;
+    const { sessions, registeredCwds, archivedIds } = await listSessionSnapshot(
+      this.history.entries,
+      workspaces,
+    );
+    if (
+      this.disposed ||
+      !this.view?.visible ||
+      version !== this.refreshVersion ||
+      workspaces !== this.latestWorkspaces
+    )
+      return;
+    this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
+    this.archivedSessionIds = archivedIds;
+    this.postState({
+      groups: sessionViewGroups(sessions, {
+        registeredCwds,
+        archivedIds,
+        phases: phasesFromWorkspaces(workspaces),
+        unreadIds: this.unreadSessionIds,
+      }),
+      displayedSessionId: this.deps.registry.displayedSessionId,
+    });
+  }
+
+  private reportAcquisitionError(error: unknown): void {
+    if (this.disposed) return;
+    this.deps.log?.error(`Failed to read Pi sessions: ${errorMessage(error)}`);
+    if (this.view?.visible) this.post({ type: "sessionsError" });
   }
 
   private async refreshSessions(showLoading: boolean): Promise<void> {
@@ -146,47 +304,15 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       });
     }
     try {
-      const workspaces = await this.deps.registry.mux.list();
+      const workspaces = await this.readWorkspaces();
       if (this.disposed || version !== this.refreshVersion) return;
-      this.registeredCwds = new Set(workspaces.map(({ cwd }) => cwd));
-      this.deps.onWorkspaces?.([...this.registeredCwds]);
-      const live = flattenPiMuxSessions(workspaces);
-      this.temporarySessionIds = new Set(
-        live.filter((session) => session.temporary).map(({ id }) => id),
-      );
-      const phases = phasesFromWorkspaces(workspaces);
-      if (!this.view?.visible) {
-        this.updateUnread(
-          flattenPiMuxSessions(workspaces).map(({ id }) => ({ sessionId: id })),
-          {
-            archivedIds: this.temporarySessionIds,
-            livePhases: phases,
-          },
-        );
-        return;
-      }
-      const { sessions, registeredCwds, archivedIds } = await listSessionSnapshot(
-        this.deps.registry.mux,
-        workspaces,
-      );
-      if (this.disposed || !this.view?.visible || version !== this.refreshVersion) return;
-      this.updateUnread(sessions, { archivedIds, livePhases: phases });
-      this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
-      this.archivedSessionIds = archivedIds;
-      this.postState({
-        groups: sessionViewGroups(sessions, {
-          registeredCwds,
-          archivedIds,
-          phases,
-          unreadIds: this.unreadSessionIds,
-        }),
-        displayedSessionId: this.deps.registry.displayedSessionId,
-      });
+      this.acceptWorkspaces(workspaces);
+      if (this.view?.visible) await this.refreshHistory();
     } catch (error) {
       if (this.disposed) return;
-      this.deps.log?.error(`Failed to read Pi sessions: ${errorMessage(error)}`);
-      if (version === this.refreshVersion && this.view?.visible) {
-        this.post({ type: "sessionsError" });
+      if (version === this.refreshVersion) {
+        this.listFailed = true;
+        this.reportAcquisitionError(error);
       }
     }
   }
@@ -256,7 +382,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         return;
       }
       await this.deps.registry.run(() => this.stopTemporaryDisplayedSession(previousSessionId));
-      await this.refresh();
+      await this.refresh(false);
       return;
     }
     if (request.type === "addWorkspace") {
@@ -299,8 +425,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       confirmedDisplay = await this.deps.registry.displayForSession(sessionId);
       if (confirmedDisplay !== undefined) {
         const snapshot = await listSessionSnapshot(
-          this.deps.registry.mux,
-          await this.deps.registry.mux.list(),
+          this.history.entries,
+          await this.readWorkspaces(),
         );
         replacement = archiveReplacement(snapshot.sessions, snapshot.archivedIds, session);
       }
@@ -339,7 +465,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
     if (switched && replacement !== undefined) this.unreadSessionIds.delete(replacement.sessionId);
     if (switchError !== undefined) this.postError(switchError);
-    await this.refresh();
+    await this.refresh(false);
   }
 
   private postState(state: WebviewState): void {
@@ -371,7 +497,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     this.post({ type: "workspaceAdded" });
-    await this.refresh();
+    await this.refresh(false);
   }
 
   private async unregisterWorkspace(cwd: string): Promise<void> {
@@ -386,7 +512,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       this.scheduleListRefresh();
       return;
     }
-    await this.refresh();
+    await this.refresh(false);
   }
 
   private async openSession(
@@ -454,7 +580,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       }
       this.unreadSessionIds.delete(sessionId);
     }
-    await this.refresh();
+    await this.refresh(false);
   }
 
   private async stopTemporaryDisplayedSession(

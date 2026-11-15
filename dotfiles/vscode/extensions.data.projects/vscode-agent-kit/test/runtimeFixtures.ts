@@ -106,12 +106,15 @@ export function fakeRuntimes() {
         target: runtime.target,
       };
     }),
-    history: vi.fn(async (): Promise<PiMuxHistoryEntry[]> =>
-      [...history.values()].sort(
-        (a, b) =>
-          (b.mtime ?? Number.NEGATIVE_INFINITY) - (a.mtime ?? Number.NEGATIVE_INFINITY) ||
-          a.file.localeCompare(b.file),
-      ),
+    history: vi.fn(async (cwd?: string): Promise<PiMuxHistoryEntry[]> =>
+      [...history.values()]
+        .filter((entry) => cwd === undefined || entry.cwd === cwd)
+        .map((entry) => ({ ...entry }))
+        .sort(
+          (a, b) =>
+            (b.mtime ?? Number.NEGATIVE_INFINITY) - (a.mtime ?? Number.NEGATIVE_INFINITY) ||
+            a.file.localeCompare(b.file),
+        ),
     ),
   };
   function clientMatches(clientPid: number | undefined): boolean {

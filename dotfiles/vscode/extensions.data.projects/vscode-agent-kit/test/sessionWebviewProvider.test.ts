@@ -12,6 +12,7 @@ import { editorTerminals } from "../src/terminals";
 import { fakeRuntimes } from "./runtimeFixtures";
 import {
   LIST_REFRESH_INTERVAL_MS,
+  HISTORY_CHANGE_DELAY_MS,
   SessionWebviewProvider,
 } from "../src/webview/sessionWebviewProvider";
 import * as sessionStore from "../src/sessionStore";
@@ -684,6 +685,249 @@ describe("SessionWebviewProvider", () => {
 
     it("polls the list every 250 milliseconds", () => {
       expect(LIST_REFRESH_INTERVAL_MS).toBe(250);
+    });
+
+    it("does not requery unchanged history across list polling intervals", async () => {
+      const { provider, mocks, phases, row } = await unreadFixture();
+      mocks.history.mockClear();
+      mocks.list.mockClear();
+      phases.set(activeSessionId, "running");
+      await tick(provider);
+      phases.set(activeSessionId, "waiting-user");
+      await tick(provider);
+      await tick(provider);
+      expect(mocks.list).toHaveBeenCalledTimes(3);
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+      expect(mocks.history).not.toHaveBeenCalled();
+    });
+
+    it("coalesces file changes and reloads only their workspace", async () => {
+      const { provider, mocks, history, filePath, row, workspaces } = await unreadFixture();
+      workspaces.add("/other");
+      await tick(provider);
+      mocks.history.mockClear();
+      history.get(activeSessionId)!.title = "Saved rename";
+      for (let index = 0; index < 5; index++) await provider.onSessionFileChanged(filePath);
+      await tick(provider, HISTORY_CHANGE_DELAY_MS - 1);
+      expect(mocks.history).not.toHaveBeenCalled();
+      await tick(provider, 1);
+      expect(mocks.history).toHaveBeenCalledExactlyOnceWith(root);
+      expect(row().displayName).toBe("Saved rename");
+    });
+
+    it("detects new and renamed files by header and removes deleted history automatically", async () => {
+      const { provider, mocks, history, row, sentState } = await unreadFixture();
+      const file = await seedSavedSession(unknownSessionId, root, {
+        runtimes: { ...sharedRuntimes, history },
+      });
+      await provider.onSessionFileChanged(file);
+      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      expect(row(unknownSessionId).sessionId).toBe(unknownSessionId);
+      const renamed = join(root, "sessions", "renamed.jsonl");
+      await writeFile(renamed, await readFile(file));
+      await rm(file);
+      history.get(unknownSessionId)!.file = renamed;
+      await provider.onSessionFileChanged(file);
+      await provider.onSessionFileChanged(renamed);
+      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      expect(
+        sentState()
+          .groups.flatMap(({ sessions }) => sessions)
+          .filter(({ sessionId }) => sessionId === unknownSessionId),
+      ).toHaveLength(1);
+      mocks.history.mockClear();
+      await rm(renamed);
+      history.delete(unknownSessionId);
+      await provider.onSessionFileChanged(renamed);
+      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      expect(mocks.history).toHaveBeenCalledExactlyOnceWith(root);
+      expect(
+        sentState()
+          .groups.flatMap(({ sessions }) => sessions)
+          .some(({ sessionId }) => sessionId === unknownSessionId),
+      ).toBe(false);
+    });
+
+    it("keeps list polling and completion tracking running during slow history acquisition", async () => {
+      const { provider, mocks, phases, row, history } = await unreadFixture();
+      const held = deferred<PiMuxHistoryEntry[]>();
+      mocks.history.mockReturnValueOnce(held.promise);
+      mocks.list.mockClear();
+      const refresh = provider.refresh();
+      await vi.waitFor(() => expect(mocks.history.mock.lastCall).toEqual([root]));
+      phases.set(activeSessionId, "running");
+      await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS);
+      expect(row().state).toBe("running");
+      phases.set(activeSessionId, "waiting-user");
+      await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS);
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+      expect(mocks.list).toHaveBeenCalledTimes(3);
+      held.resolve([...history.values()]);
+      await refresh;
+    });
+
+    it("coalesces changes arriving during history acquisition without overlapping queries", async () => {
+      const { provider, mocks, filePath, history, row } = await unreadFixture();
+      const held = deferred<PiMuxHistoryEntry[]>();
+      const stale = [...history.values()].map((entry) => ({ ...entry, title: "Stale" }));
+      mocks.history.mockClear();
+      mocks.history.mockReturnValueOnce(held.promise);
+      const refresh = provider.refresh();
+      await vi.waitFor(() => expect(mocks.history).toHaveBeenCalledOnce());
+      history.get(activeSessionId)!.title = "Latest saved title";
+      await provider.onSessionFileChanged(filePath);
+      await provider.onSessionFileChanged(filePath);
+      await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS * 3);
+      expect(mocks.history).toHaveBeenCalledOnce();
+      held.resolve(stale);
+      await refresh;
+      expect(mocks.history.mock.calls).toEqual([[root], [root]]);
+      expect(row().displayName).toBe("Latest saved title");
+    });
+
+    it("discovers a newly saved live file even when it appeared before its custom directory watcher", async () => {
+      const { provider, mocks, history, live, files, row } = await unreadFixture();
+      const customFile = join(root, "custom", "new.jsonl");
+      history.set(unknownSessionId, {
+        id: unknownSessionId,
+        cwd: root,
+        file: customFile,
+        title: "New custom session",
+        btime: 123,
+        mtime: 456,
+        size: 100,
+      });
+      live.set(unknownSessionId, { sessionId: unknownSessionId, cwd: root, target: "pi-new" });
+      files.set(unknownSessionId, customFile);
+      mocks.history.mockClear();
+      await tick(provider);
+      expect(mocks.history).toHaveBeenCalledExactlyOnceWith(root);
+      expect(row(unknownSessionId).displayName).toBe("New custom session");
+      await tick(provider);
+      expect(mocks.history).toHaveBeenCalledOnce();
+    });
+
+    it("defers hidden history changes until show and reuses unchanged history on later shows", async () => {
+      const { provider, mocks, webview, history, filePath, row } = await unreadFixture();
+      webview.setVisible(false);
+      mocks.history.mockClear();
+      webview.postMessage.mockClear();
+      history.get(activeSessionId)!.title = "Changed while hidden";
+      await provider.onSessionFileChanged(filePath);
+      await tick(provider, HISTORY_CHANGE_DELAY_MS + LIST_REFRESH_INTERVAL_MS);
+      expect(mocks.history).not.toHaveBeenCalled();
+      expect(webview.postMessage).not.toHaveBeenCalled();
+      webview.setVisible(true);
+      await webview.receive({ type: "ready" });
+      expect(row().displayName).toBe("Changed while hidden");
+      expect(mocks.history).toHaveBeenCalledExactlyOnceWith(root);
+      mocks.history.mockClear();
+      webview.setVisible(false);
+      webview.setVisible(true);
+      await webview.receive({ type: "ready" });
+      expect(mocks.history).not.toHaveBeenCalled();
+    });
+
+    it("discards an in-flight history response after workspace removal", async () => {
+      const { provider, mocks, workspaces, live, history, sentState } = await unreadFixture();
+      const held = deferred<PiMuxHistoryEntry[]>();
+      mocks.history.mockReturnValueOnce(held.promise);
+      const refresh = provider.refresh();
+      await vi.waitFor(() => expect(mocks.history.mock.lastCall).toEqual([root]));
+      workspaces.delete(root);
+      live.clear();
+      await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS);
+      expect(sentState().groups).toEqual([]);
+      held.resolve([...history.values()]);
+      await refresh;
+      expect(sentState().groups).toEqual([]);
+    });
+
+    it("preserves the list on history errors and backs off retries independently of list polling", async () => {
+      const { provider, mocks, filePath, sentState } = await unreadFixture();
+      const original = sentState();
+      const readHistory = mocks.history.getMockImplementation()!;
+      mocks.history.mockRejectedValue(new Error("history unavailable"));
+      mocks.history.mockClear();
+      await provider.onSessionFileChanged(filePath);
+      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      expect(mocks.history).toHaveBeenCalledOnce();
+      expect(sentState()).toEqual(original);
+      await tick(provider, 999);
+      expect(mocks.history).toHaveBeenCalledOnce();
+      await tick(provider, 1);
+      expect(mocks.history).toHaveBeenCalledTimes(2);
+      await tick(provider, 1_999);
+      expect(mocks.history).toHaveBeenCalledTimes(2);
+      mocks.history.mockImplementation(readHistory);
+      await tick(provider, 1);
+      expect(mocks.history).toHaveBeenCalledTimes(3);
+      expect(sentState()).toEqual(original);
+    });
+
+    it("runs manual Refresh immediately even while file notifications are being coalesced", async () => {
+      const { provider, mocks, filePath, history, row } = await unreadFixture();
+      history.get(activeSessionId)!.title = "Manual refresh title";
+      await provider.onSessionFileChanged(filePath);
+      mocks.history.mockClear();
+      await provider.refresh();
+      expect(mocks.history).toHaveBeenCalledExactlyOnceWith(root);
+      expect(row().displayName).toBe("Manual refresh title");
+      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      expect(mocks.history).toHaveBeenCalledOnce();
+    });
+
+    it("retries an initial history failure automatically without querying it on every list tick", async () => {
+      const runtime = providerRuntimes();
+      runtime.mocks.history.mockRejectedValueOnce(new Error("initial history failure"));
+      const { provider } = createProvider({
+        registry: new TerminalRegistry(editorTerminals(), runtime.mux),
+      });
+      const webview = createView();
+      provider.resolveWebviewView(webview.view as never);
+      await webview.receive({ type: "ready" });
+      expect(webview.postMessage.mock.lastCall?.[0].type).toBe("sessionsError");
+      await tick(provider, 999);
+      expect(runtime.mocks.history).toHaveBeenCalledOnce();
+      await tick(provider, 1);
+      expect(runtime.mocks.history).toHaveBeenCalledTimes(2);
+      expect(webview.postMessage.mock.lastCall?.[0].type).toBe("sessions");
+    });
+
+    it("does not acquire history for an empty workspace registry", async () => {
+      const runtime = providerRuntimes();
+      runtime.workspaces.clear();
+      const { provider } = createProvider({
+        registry: new TerminalRegistry(editorTerminals(), runtime.mux),
+      });
+      const webview = createView();
+      provider.resolveWebviewView(webview.view as never);
+      await webview.receive({ type: "ready" });
+      expect(runtime.mocks.history).not.toHaveBeenCalled();
+      expect(webview.postMessage.mock.lastCall?.[0].state.groups).toEqual([]);
+    });
+
+    it("reads all registered history on manual Refresh but not on Archive", async () => {
+      const { provider, mocks, workspaces, webview } = await unreadFixture();
+      workspaces.add("/other");
+      await tick(provider);
+      mocks.history.mockClear();
+      await webview.receive({ type: "refresh" });
+      expect(mocks.history.mock.calls).toEqual([[root], ["/other"]]);
+      mocks.history.mockClear();
+      await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+      expect(mocks.history).not.toHaveBeenCalled();
+    });
+
+    it("reloads every workspace and drops saved metadata when the session root changes", async () => {
+      const { provider, mocks, workspaces, history, row } = await unreadFixture();
+      workspaces.add("/other");
+      await tick(provider);
+      mocks.history.mockClear();
+      history.clear();
+      await provider.onSessionRootChanged();
+      expect(mocks.history.mock.calls).toEqual([[root], ["/other"]]);
+      expect(row(activeSessionId).displayName).toBe("Untitled");
     });
 
     it("updates membership, title, workspace and phases at each refresh interval without JSON writes", async () => {
@@ -2090,7 +2334,7 @@ describe("SessionWebviewProvider", () => {
 
     it("clears the old selection while the new session list scan is pending", async () => {
       const sessions = await sessionStore.listSessionSnapshot(
-        fixture.registry.mux,
+        await fixture.registry.mux.history(),
         await fixture.registry.mux.list(),
       );
       let finish!: (result: typeof sessions) => void;
