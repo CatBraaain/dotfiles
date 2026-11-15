@@ -1,5 +1,8 @@
+import { createHash } from "node:crypto";
+import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { subagentSessionDir } from "../agents/index.ts";
 import {
@@ -39,6 +42,40 @@ const shared = globalThis as typeof globalThis & {
 };
 const publicationProcess = (shared[PUBLICATION_PROCESS_KEY] ??= { queue: Promise.resolve() });
 
+const PROBE_TAG = "DEBUG-pistateprobe-20261115";
+
+function probe(kind: string, fields: Record<string, unknown> = {}): void {
+  const record = { tag: PROBE_TAG, ts: new Date().toISOString(), pid: process.pid, kind, ...fields };
+  try {
+    appendFileSync(
+      process.env.PI_STATE_PROBE_LOG ?? "/tmp/work/dotfiles/state-probe/events.jsonl",
+      `${JSON.stringify(record)}\n`,
+    );
+  } catch {}
+}
+
+function sha256Prefix(path: string): string | undefined {
+  try {
+    return createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 12);
+  } catch {
+    return undefined;
+  }
+}
+
+function probeLoadedVersion(): void {
+  try {
+    probe("loaded", {
+      cwd: process.cwd(),
+      url: import.meta.url,
+      indexSha256: sha256Prefix(fileURLToPath(import.meta.url)),
+      tmuxSha256: sha256Prefix(fileURLToPath(new URL("./tmux.ts", import.meta.url))),
+      nodeVersion: process.version,
+    });
+  } catch {}
+}
+
+probeLoadedVersion();
+
 export type { SessionState } from "./tmux.ts";
 
 interface PublicationGeneration {
@@ -62,6 +99,10 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
   let isAgentRunActive = false;
   let isWaitingForApproval = false;
 
+  function identityFields(): { sessionId: string | undefined; pane: string | undefined } {
+    return { sessionId: generation?.sessionId, pane: generation?.binding?.paneId };
+  }
+
   function enqueuePublication(gen: PublicationGeneration, task: () => Promise<void>): void {
     publicationProcess.queue = publicationProcess.queue.then(task).catch((error) => {
       if (!gen.controller.signal.aborted) gen.notify(errorMessage(error));
@@ -83,6 +124,13 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
     )
       return;
     const sessionId = gen.sessionId;
+    probe("schedule", {
+      sessionId,
+      pane: gen.binding?.paneId,
+      state,
+      title,
+      pending: gen.pending,
+    });
     gen.pending++;
     enqueuePublication(gen, async () => {
       try {
@@ -90,6 +138,13 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
           if (!(await waitForPriorExecution(gen))) return;
           gen.lastPublished = undefined;
           const outcome = await publishState(gen.run, gen.binding, sessionId, state, title);
+          probe("publish-outcome", {
+            sessionId,
+            pane: gen.binding?.paneId,
+            state,
+            status: outcome.status,
+            ...(outcome.status === "failed" ? { message: outcome.message } : {}),
+          });
           if (gen.controller.signal.aborted) return;
           const recovery = await recoveryRetry(gen, "session state publication");
           if (recovery === "aborted") return;
@@ -151,6 +206,7 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
         if (recovery === "retry") continue;
         gen.recoveryNotified = false;
         if (detection.status === "managed") gen.binding = detection.binding;
+        probe("pane-detection", { ...identityFields(), status: detection.status });
         if (detection.status === "failed")
           gen.notify(`cannot confirm managed tmux pane: ${detection.message}`);
         if (detection.status === "aborted") gen.notify("managed tmux pane check was interrupted");
@@ -172,18 +228,26 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("agent_start", () => {
+    probe("agent_start", { ...identityFields(), waitingApproval: isWaitingForApproval });
     isAgentRunActive = true;
     if (!isWaitingForApproval) scheduleStatePublication("running");
   });
   pi.on("ui_prompt_start", () => {
     isWaitingForApproval = true;
+    probe("ui_prompt_start", { ...identityFields(), waitingApproval: isWaitingForApproval });
     scheduleStatePublication("waiting-approval");
   });
   pi.on("ui_prompt_end", () => {
     isWaitingForApproval = false;
+    probe("ui_prompt_end", { ...identityFields(), waitingApproval: isWaitingForApproval });
     scheduleStatePublication(isAgentRunActive ? "running" : "waiting-user");
   });
-  pi.on("agent_settled", () => {
+  pi.on("agent_settled", (event) => {
+    probe("agent_settled", {
+      ...identityFields(),
+      aborted: event.aborted,
+      waitingApproval: isWaitingForApproval,
+    });
     isAgentRunActive = false;
     if (!isWaitingForApproval) scheduleStatePublication("waiting-user");
   });
@@ -197,13 +261,30 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
     enqueuePublication(gen, async () => {
       if (!gen.binding) return;
       if (publicationProcess.execution && !publicationProcess.execution.settled) {
+        probe("cleanup-skipped", {
+          sessionId: gen.sessionId,
+          pane: gen.binding?.paneId,
+          reason: "prior-execution-unsettled",
+        });
         gen.notify("cannot clear session state option: previous Bash execution is still running");
         return;
       }
       try {
         const outcome = await unsetStateOption(gen.run, gen.binding, gen.sessionId);
+        probe("cleanup-outcome", {
+          sessionId: gen.sessionId,
+          pane: gen.binding?.paneId,
+          status: outcome.status,
+          ...(outcome.status === "failed" ? { message: outcome.message } : {}),
+        });
         reportCleanupOutcome(gen, outcome);
       } catch (error) {
+        probe("cleanup-outcome", {
+          sessionId: gen.sessionId,
+          pane: gen.binding?.paneId,
+          status: "thrown",
+          message: errorMessage(error),
+        });
         gen.notify(`cannot clear session state option: ${errorMessage(error)}`);
       }
     });
@@ -240,7 +321,10 @@ async function waitToRetry(gen: PublicationGeneration, milliseconds: number): Pr
 
 async function waitForPriorExecution(gen: PublicationGeneration): Promise<boolean> {
   const execution = publicationProcess.execution;
-  if (execution && !execution.settled) return executionSettledOrAborted(gen, execution.promise);
+  if (execution && !execution.settled) {
+    probe("wait-prior-execution", { sessionId: gen.sessionId, pane: gen.binding?.paneId });
+    return executionSettledOrAborted(gen, execution.promise);
+  }
   return !gen.controller.signal.aborted;
 }
 
@@ -266,8 +350,13 @@ function makeBashRunner(context: BackgroundBashContext): {
   run: BashRunner;
   lastOutcome: () => TrackedBackgroundBashOutcome | undefined;
 } {
+  const sessionId = context.sessionManager?.getSessionId();
+  let executionSequence = 0;
   let lastOutcome: TrackedBackgroundBashOutcome | undefined;
   async function run(command: string): Promise<TrackedBackgroundBashOutcome> {
+    const execId = ++executionSequence;
+    const requestedAt = Date.now();
+    probe("bg-request", { sessionId, execId, command });
     const completion = Promise.withResolvers<void>();
     const execution: ExecutionBoundary = { settled: false, promise: completion.promise };
     publicationProcess.execution = execution;
@@ -276,9 +365,21 @@ function makeBashRunner(context: BackgroundBashContext): {
       params: { command, timeout: TMUX_COMMAND_TIMEOUT_S },
       context,
     });
+    const outcomeAt = Date.now();
+    probe("bg-outcome", {
+      sessionId,
+      execId,
+      status: outcome.status,
+      elapsedMs: outcomeAt - requestedAt,
+    });
     outcome.executionSettled.then(() => {
       execution.settled = true;
       completion.resolve();
+      probe("bg-settled", {
+        sessionId,
+        execId,
+        settledAfterOutcomeMs: Date.now() - outcomeAt,
+      });
     });
     lastOutcome = outcome;
     return outcome;
