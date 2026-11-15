@@ -71,6 +71,7 @@ work:
   - brew: hyperfine
   - brew: jq
   - brew: keep-sorted
+  - brew: officecli
   - brew: pdfcpu
   - brew: rtk
   - brew: sd
@@ -81,7 +82,6 @@ work:
   - bun: "@openai/codex"
   - bun: "@playwright/cli"
   - bun: cursor-agent
-  - bun: officecli
   - uv: "trafilatura[all]"
   - uv: "mineru[all]"
   - go: github.com/karust/openserp
