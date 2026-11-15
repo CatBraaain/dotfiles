@@ -18,10 +18,12 @@ pi がモデルへ送るsystem prompt の標準部分を、この拡張が保持
 | force run / 全文が拡張の標準描画と前方一致しない | 何もしない | 送信内容は拡張がない場合と同一になる |
 | 常時 | ツール定義を扱わない | ツール宣言（名前・説明・引数）は拡張がない場合と同一になる |
 | 常時 | セッション履歴を書き換えない | transcript の記録は pi標準どおり。拡張による置換は送信時にのみ現れる |
-| TUIモードでセッション開始（新規起動・復元） | 折りたたみインジケータ（実効system prompt の総文字数・行数の要約1行）をエディタ下端の widget（エディタとフッターの間。他拡張の上端widget とは別枠）に表示する | `📜 system prompt: <文字数> chars / <行数> lines / click to view` の形式で表示する。全文は自動表示されない。表示は閲覧のみ |
-| TUIモード / インジケータ表示中 | ctrl+shift+p、`/system-prompt` コマンド、またはインジケータのクリックで展開する | 展開時点の実効system prompt全文（ctx.getSystemPrompt()）をスクロール可能なオーバーレイで開く。esc・q・Enter で閉じられ、閉じてもセッション継続に影響しない |
-| UIなしモード（RPC・JSON・print）でセッション開始 | 何もしない | インジケータも全文表示も発生しない |
-| 閲覧表示中・インジケータ表示中 | prompt・tools・transcript を変更しない | 表示は読み取りのみ。閲覧の開閉によって送信内容や履歴は変わらない |
+| モデルリクエストの送信時 / 対応するpayload形式 | 全context handler・force projection後に、この拡張の `before_provider_request` が受け取るpayloadからsystem指示本文を取得する | そのセッションの直近requestの本文として更新する。複数のsystem指示本文はpayload内の順序を保ち、空行1行で連結する。本文がない場合は空文字列を保持する |
+| モデルリクエストの送信時 / 未対応または不正なpayload形式 | 直近requestの本文を取得不能として扱う | 以前の本文を保持せず、取得不能の状態へ更新する |
+| 直近requestの本文を取得済み（空本文を含む） / `/view-system-prompt` を実行 | 保持している本文を `/tmp/<session_id>_system_prompt.md` へ書き出し、pi の `externalEditor` 設定に従って外部エディタで開く | ファイルの内容が、コマンド実行時点で保持している直近requestの本文になる。同じセッションでは同じファイルを上書きする |
+| 初回送信前 / `/view-system-prompt` を実行 | まだ送信内容がないことを案内する | ファイルへの書き出しと外部エディタの起動を行わない |
+| 直近requestの本文が取得不能 / `/view-system-prompt` を実行 | 本文を取得できないことを案内する | ファイルへの書き出しと外部エディタの起動を行わない |
+| 閲覧用ファイルを外部エディタで編集 | 閲覧用ファイルだけを変更する | 保持している送信内容・以降の送信内容・設定・tools・transcript は変わらない |
 | 拡張の文面・組み立て定義を編集 | 以降のリクエストへ反映する | 編集後の文面で生成される。pi本体の更新では拡張の文面は変わらない |
 | セッション開始 / `~/.agents/SYSTEM_PROMPT.yaml` が存在 | 正本を読み込み、必須セクション（`preamble`・`tools`・`rules`・`skills`・`cwd`・`project_context`）の全定義を検証した上で、`sections` の定義を拡張の組み立てへ差し替える | 定義したセクションが正本文面になる。docs省略時は下記のとおり扱い、その他の無定義セクション（`addendum` 等）は基準版と同一のまま |
 | 有効な正本で `docs` を省略 | 正本から標準部分を生成する | pi標準のdocs本文とタグを出力しない。他拡張が所有するセクションと追記は保持する |
@@ -34,7 +36,9 @@ pi がモデルへ送るsystem prompt の標準部分を、この拡張が保持
 
 run開始後に skills の読み出しツールが read から bash へ切り替わる場合のみ、skillsセクションの案内文が run開始時の文言になる。
 
-インジケータの要約はセッション開始時のプロンプトから作る。全文閲覧のオーバーレイは展開の時点で実効プロンプトを読み直し、それ以降の変更は次の展開まで反映されない。クリックによる展開はマウスイベントを配信するfullscreenモードでのみ機能し、通常モードでは ctrl+shift+p と `/system-prompt` コマンドが常に利用できる。これらの表示は上記の送信時置換の経路と独立して動く。
+閲覧は `/view-system-prompt` の実行時に行う。`<session_id>` は閲覧対象の piセッションIDであり、閲覧用ファイルには本文だけを書き出す。
+
+対応するチャットAPIは `openai-completions`・`mistral-conversations`・`openai-responses`・`azure-openai-responses`・`openai-codex-responses`・`anthropic-messages`・`bedrock-converse-stream`・`google-generative-ai`・`google-vertex`・`pi-messages`。同じpayload形式を使うカスタムAPIも取得できる。
 
 ## 正本テンプレートの DSL
 
@@ -44,4 +48,4 @@ run開始後に skills の読み出しツールが read から bash へ切り替
 - ランタイム変数は run開始時に凍結する: `CODING_AGENT`（pi固定）、`FILE_READ_TOOL`（`read` または `bash`。skillファイルを読める選択ツールがないときは未提供）、`SKILL_READ_PHRASE`（read なら `the read tool to load`、bash なら `bash to load`。pi の案内文の言い回し差異を吸収する）、`MODEL`・`PROVIDER`（run のコンテキストから取得できるときのみ）、`CWD`（run の cwd、バックスラッシュをスラッシュへ正規化）、`README_PATH`・`DOCS_PATH`・`EXAMPLES_PATH`（実行中pi の README・docs・examples のパス）
 - 正本ファイルの `variables` と同名のランタイム変数があるときはランタイム値を優先する
 - 正本の既定文面（このリポジトリの `dotfiles/.agents/SYSTEM_PROMPT.yaml`）は基準版とは異なる独自文面であり、`docs` を定義しない
-- 正本テンプレートの反映は送信時置換と同様に transcript を書き換えない。閲覧オーバーレイは pi本体の実効プロンプト（ctx.getSystemPrompt()）を開くため、正本の反映は含まない
+- 正本テンプレートの反映は送信時置換と同様に transcript を書き換えない

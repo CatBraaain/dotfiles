@@ -28,14 +28,6 @@
 // runtime data) replaces that section's build. Template-owned sections
 // always keep their template build (even on mid-run tool changes), and
 // template sections the transcript does not carry yet are appended.
-//
-// Separately from both request paths, every `session_start` shows a
-// collapsed indicator below the editor that summarizes the effective
-// prompt (size in characters and lines). The full viewer opens only through
-// intentional actions — the ctrl+shift+p shortcut, the /system-prompt
-// command, or clicking the indicator (fullscreen mode only) — see
-// renderer.ts. Both are display-only and leave the prompt, tools, and
-// transcript untouched.
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -49,7 +41,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { getDocsPath, getExamplesPath, getReadmePath } from "@earendil-works/pi-coding-agent";
 import { buildRuleLines, buildSystemPromptSections } from "./builder.ts";
-import { PROMPT_VIEW_SHORTCUT, setPromptIndicator, showSystemPromptViewer } from "./renderer.ts";
+import { openPromptSnapshot } from "./renderer.ts";
+import { promptFromPayload } from "./payload.ts";
 import {
   buildRuntimeVariables,
   parseSystemPromptTemplate,
@@ -119,29 +112,41 @@ export default function systemPromptExtension(
   // instances never share it.
   let runState: RunPromptState | undefined;
   let customTemplate: SystemPromptTemplate | undefined;
+  let snapshot: { sessionId: string; prompt: string | undefined } | undefined;
 
   pi.on("session_start", (_event, ctx) => {
     // A new session invalidates the previous run's prompt options.
     runState = undefined;
     // Reload the canonical template so edits land on the next session.
     customTemplate = loadSystemPromptTemplate(ctx, templatePath());
-    // Show the collapsed prompt indicator; the full viewer never opens
-    // automatically, only through the triggers registered below.
-    setPromptIndicator(ctx);
+    snapshot = undefined;
   });
-  pi.registerShortcut(PROMPT_VIEW_SHORTCUT, {
-    description: "View the effective system prompt",
-    handler: (ctx) => {
-      // Fire-and-forget: key handling must not wait for the viewer to close.
-      void showSystemPromptViewer(ctx).catch(() => {});
-    },
-  });
-  pi.registerCommand("system-prompt", {
-    description: "Show the effective system prompt in a scrollable overlay",
+  pi.registerCommand("view-system-prompt", {
+    description: "View the last sent system prompt in the external editor",
     handler: async (_args, ctx) => {
-      // Fire-and-forget: command dispatch must not wait for the viewer to close.
-      void showSystemPromptViewer(ctx).catch(() => {});
+      const current =
+        snapshot?.sessionId === ctx.sessionManager.getSessionId() ? snapshot : undefined;
+      if (current !== undefined && current.prompt === undefined) {
+        ctx.ui.notify(
+          "The system prompt could not be read from the last request payload.",
+          "warning",
+        );
+        return;
+      }
+      await openPromptSnapshot(ctx, current?.prompt);
     },
+  });
+  pi.on("before_provider_request", (event, ctx) => {
+    const current = {
+      sessionId: ctx.sessionManager.getSessionId(),
+      prompt: undefined as string | undefined,
+    };
+    snapshot = current;
+    try {
+      current.prompt = promptFromPayload(event.payload);
+    } catch {
+      warn(ctx, "The system prompt could not be read from the last request payload.");
+    }
   });
   pi.on("before_agent_start", (event, ctx) => {
     const options = event.systemPromptOptions;

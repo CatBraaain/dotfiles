@@ -11,6 +11,7 @@
 //   nothing.
 
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,7 +24,7 @@ import {
   type Extension,
   type NormalizedBuildSystemPromptOptions,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { registerBackgroundBash } from "../tools/background-bash.ts";
 import YAML from "yaml";
 import systemPromptExtension, {
   assembleHeadContent,
@@ -155,33 +156,16 @@ function runnerFor(extensions: Extension[]): ExtensionRunner {
   return new ExtensionRunner(extensions, {} as never, "/w", {} as never, {} as never);
 }
 
-interface ViewerCustomCall {
-  factory: (
-    tui: { terminal: { rows: number; columns: number }; requestRender: () => void },
-    theme: { fg: (token: string, text: string) => string; bold: (text: string) => string },
-    keybindings: unknown,
-    done: (result: void) => void,
-  ) => { render: (width: number) => string[] };
-  options: { overlay?: boolean } | undefined;
-}
-
-/** A recorded ctx.ui.setWidget request. */
-interface WidgetCall {
-  key: string;
-  content: unknown;
-  options: { placement?: string } | undefined;
-}
-
 /** Session-start context mock that records ctx.ui widget and custom requests. */
 function sessionStartCtx(mode: "tui" | "rpc" | "json" | "print", prompt = "") {
-  const customCalls: ViewerCustomCall[] = [];
-  const widgetCalls: WidgetCall[] = [];
+  const customCalls: unknown[] = [];
+  const widgetCalls: unknown[] = [];
   const ctx = {
     mode,
     hasUI: mode === "tui" || mode === "rpc",
     getSystemPrompt: () => prompt,
     ui: {
-      custom: (factory: ViewerCustomCall["factory"], options?: ViewerCustomCall["options"]) => {
+      custom: (factory: unknown, options?: unknown) => {
         customCalls.push({ factory, options });
         return Promise.resolve(undefined);
       },
@@ -203,7 +187,6 @@ async function dispatchSessionStart(loaded: LoadedExtension, ctx: unknown): Prom
 /** Start a fresh session so the extension resets its run state. */
 async function emitSessionStart(loaded: LoadedExtension): Promise<void> {
   // The runner has no session_start emit helper; dispatch to the handler directly.
-  // A non-tui context keeps the session-start viewer out of these tests.
   for (const handler of loaded.handlers.get("session_start") ?? []) {
     await handler({ type: "session_start", reason: "new" }, sessionStartCtx("print"));
   }
@@ -624,151 +607,260 @@ describe("canonical template sections in assembleHeadContent", () => {
   });
 });
 
-describe("session_start indicator", () => {
-  const plainViewerTheme = {
-    fg: (_token: string, text: string) => text,
-    bold: (text: string) => text,
-  };
-
-  /** Build the component the factory handed to ctx.ui.custom. */
-  function viewerComponent(call: ViewerCustomCall): { render: (width: number) => string[] } {
-    return call.factory(
-      { terminal: { rows: 200, columns: 80 }, requestRender: () => {} },
-      plainViewerTheme,
-      undefined,
+describe("sent prompt snapshots", () => {
+  function fixture() {
+    mkdirSync("/tmp/work/dotfiles", { recursive: true });
+    const registration = captureRegistration();
+    const sessionId = randomUUID();
+    const notifications: string[] = [];
+    const ctx = {
+      cwd: "/tmp/work/dotfiles",
+      modelRegistry: {},
+      sessionManager: { getSessionId: () => sessionId },
+      isProjectTrusted: () => false,
+      ui: { notify: (message: string) => notifications.push(message) },
+    };
+    const opened: string[] = [];
+    const path = `/tmp/${sessionId}_system_prompt.md`;
+    const dispose = registerBackgroundBash(
+      ctx,
+      async () => {
+        opened.push(readFileSync(path, "utf8"));
+        return { content: [], details: undefined, structuredContent: { exit_code: 0 } };
+      },
       () => {},
     );
+    async function dispatch(name: string, event = {}, context: unknown = ctx) {
+      let result: any;
+      for (const handler of registration.handlers.get(name) ?? [])
+        result = await handler(event, context);
+      return result;
+    }
+    async function send(payload: unknown) {
+      await dispatch("before_provider_request", { payload });
+    }
+    async function open(context: unknown = ctx) {
+      await registration.commands[0]!.options.handler("", context);
+    }
+    function close() {
+      dispose();
+      rmSync(path, { force: true });
+    }
+    return { ...registration, ctx, notifications, opened, path, dispatch, send, open, close };
   }
 
-  /** Build the component the factory handed to ctx.ui.setWidget. */
-  function widgetComponent(call: WidgetCall): {
-    render: (width: number) => string[];
-    handleMouse: (event: unknown) => unknown;
-  } {
-    const factory = call.content as (
-      tui: unknown,
-      theme: unknown,
-    ) => { render: (width: number) => string[]; handleMouse: (event: unknown) => unknown };
-    return factory(undefined, plainViewerTheme);
-  }
-
-  it("shows a collapsed indicator instead of opening the viewer", async () => {
-    const prompt = buildSystemPrompt(richOptions());
-    const loaded = loadSystemPromptExtension();
-    const { ctx, customCalls, widgetCalls } = sessionStartCtx("tui", prompt);
-
-    await dispatchSessionStart(loaded, ctx);
-    // The full overlay never opens on its own.
-    assert.equal(customCalls.length, 0);
-    assert.equal(widgetCalls.length, 1);
-    assert.equal(widgetCalls[0]!.key, "system-prompt");
-    assert.equal(widgetCalls[0]!.options?.placement, "belowEditor");
-
-    const rendered = widgetComponent(widgetCalls[0]!).render(80) as string[];
-    assert.equal(rendered.length, 1);
-    assert.equal(
-      rendered[0],
-      `📜 system prompt: ${prompt.length} chars / ${prompt.split("\n").length} lines / click to view`,
+  function requestRunner(test: ReturnType<typeof fixture>) {
+    const runner = new ExtensionRunner(
+      [extensionFrom("system-prompt", test.handlers)],
+      {} as never,
+      test.ctx.cwd,
+      test.ctx.sessionManager as never,
+      test.ctx.modelRegistry as never,
     );
-    // The collapsed line carries a summary, never the prompt itself.
-    assert.equal(rendered[0]!.includes(prompt), false);
-  });
+    const errors: unknown[] = [];
+    runner.onError((error) => errors.push(error));
+    runner.setUIContext(
+      {
+        ...runner.getUIContext(),
+        notify: (message) => test.notifications.push(message),
+      },
+      "rpc",
+    );
+    return { runner, errors };
+  }
 
-  it("expands into the full prompt overlay when the indicator is activated", async () => {
-    const prompt = buildSystemPrompt(richOptions());
-    const loaded = loadSystemPromptExtension();
-    const { ctx, customCalls, widgetCalls } = sessionStartCtx("tui", prompt);
-    await dispatchSessionStart(loaded, ctx);
-
-    widgetComponent(widgetCalls[0]!).handleMouse({
-      type: "click",
-      button: "left",
-    });
-    assert.equal(customCalls.length, 1);
-    assert.equal(customCalls[0]!.options?.overlay, true);
-    const rendered = viewerComponent(customCalls[0]!).render(80);
-    const expected = new Text(prompt, 1, 0).render(80);
-    assert.deepEqual(rendered.slice(2, -1), expected);
-    assert.equal(rendered[0], "System prompt");
-  });
-
-  it("shows nothing when the session has no terminal UI", async () => {
-    for (const mode of ["rpc", "json", "print"] as const) {
-      const loaded = loadSystemPromptExtension();
-      const { ctx, customCalls, widgetCalls } = sessionStartCtx(
-        mode,
-        buildSystemPrompt(richOptions()),
-      );
-      await dispatchSessionStart(loaded, ctx);
-      assert.equal(widgetCalls.length, 0);
-      assert.equal(customCalls.length, 0);
+  it("ignores malformed tool metadata when reading the latest context through ExtensionRunner", async () => {
+    const test = fixture();
+    const { runner, errors } = requestRunner(test);
+    try {
+      await runner.emitBeforeProviderRequest({ instructions: "Old", input: [] });
+      await test.open();
+      const payload = {
+        context: {
+          messages: [
+            {
+              role: "system",
+              content: "New prompt",
+              toolsAdded: 42,
+              toolsRemoved: 42,
+            },
+          ],
+        },
+      };
+      assert.equal(await runner.emitBeforeProviderRequest(payload), payload);
+      await test.open();
+      assert.deepEqual(test.opened, ["Old", "New prompt"]);
+      assert.deepEqual(errors, []);
+      assert.deepEqual(test.notifications, []);
+    } finally {
+      test.close();
     }
   });
 
-  it("coexists with the run-state reset in the same session_start", async () => {
-    const options = richOptions();
-    const loaded = loadSystemPromptExtension();
-    const runner = runnerFor([loaded.extension]);
-    // Establish run state, then start a session with a tui context.
-    await runner.emitBeforeAgentStart({ messageType: "user", prompt: "hello" }, options);
-    const { ctx, customCalls, widgetCalls } = sessionStartCtx("tui", buildSystemPrompt(options));
-    await dispatchSessionStart(loaded, ctx);
-
-    // The indicator was requested...
-    assert.equal(widgetCalls.length, 1);
-    assert.equal(customCalls.length, 0);
-    // ...and the reset still happened: context_with_system leaves the
-    // messages alone until the next run captures fresh options.
-    const messages = transcriptFor(options);
-    const result = await runner.emitContext(messages);
-    assert.deepEqual(result, messages);
+  it("discards the old snapshot for malformed context text through ExtensionRunner", async () => {
+    const test = fixture();
+    const { runner, errors } = requestRunner(test);
+    try {
+      await runner.emitBeforeProviderRequest({ instructions: "Old", input: [] });
+      await test.open();
+      const payload = { context: { messages: [{ role: "system", content: 42 }] } };
+      assert.equal(await runner.emitBeforeProviderRequest(payload), payload);
+      await test.open();
+      assert.deepEqual(test.opened, ["Old"]);
+      assert.match(test.notifications.at(-1)!, /could not be read from the last request payload/);
+      assert.deepEqual(errors, []);
+    } finally {
+      test.close();
+    }
   });
-});
 
-describe("intentional viewer triggers", () => {
-  it("registers the ctrl+shift+p shortcut and the /system-prompt command", () => {
+  it("keeps capture unavailable when extraction throws without interrupting ExtensionRunner", async () => {
+    const test = fixture();
+    const { runner, errors } = requestRunner(test);
+    try {
+      await runner.emitBeforeProviderRequest({ instructions: "Old", input: [] });
+      await test.open();
+      const payload = Object.defineProperty({}, "context", {
+        enumerable: true,
+        get() {
+          throw new Error("Unreadable payload context");
+        },
+      });
+      assert.equal(await runner.emitBeforeProviderRequest(payload), payload);
+      await test.open();
+      assert.deepEqual(test.opened, ["Old"]);
+      assert.match(test.notifications.at(-1)!, /could not be read from the last request payload/);
+      assert.deepEqual(errors, []);
+      await runner.emitBeforeProviderRequest({ instructions: "Recovered", input: [] });
+      await test.open();
+      assert.deepEqual(test.opened, ["Old", "Recovered"]);
+    } finally {
+      test.close();
+    }
+  });
+
+  it("registers only the new command and never displays a widget or overlay", async () => {
     const { shortcuts, commands } = captureRegistration();
-    assert.deepEqual(
-      shortcuts.map((shortcut) => shortcut.key),
-      ["ctrl+shift+p"],
-    );
+    assert.deepEqual(shortcuts, []);
     assert.deepEqual(
       commands.map((command) => command.name),
-      ["system-prompt"],
+      ["view-system-prompt"],
     );
+    for (const mode of ["tui", "rpc", "json", "print"] as const) {
+      const loaded = loadSystemPromptExtension();
+      const { ctx, customCalls, widgetCalls } = sessionStartCtx(mode, "prompt");
+      await dispatchSessionStart(loaded, ctx);
+      assert.deepEqual(customCalls, []);
+      assert.deepEqual(widgetCalls, []);
+    }
   });
 
-  it("opens the overlay viewer from the shortcut handler in tui mode", async () => {
-    const prompt = buildSystemPrompt(richOptions());
-    const { shortcuts } = captureRegistration();
-    const { ctx, customCalls } = sessionStartCtx("tui", prompt);
-
-    // Shortcut handlers receive only the extension context.
-    await shortcuts[0]!.options.handler(ctx);
-    assert.equal(customCalls.length, 1);
-    assert.equal(customCalls[0]!.options?.overlay, true);
+  it("explains the initial state even after a context has been prepared", async () => {
+    const test = fixture();
+    try {
+      await test.dispatch("before_agent_start", { systemPromptOptions: richOptions() });
+      await test.dispatch("context_with_system", { messages: transcriptFor(richOptions()) });
+      await test.open();
+      assert.match(test.notifications[0]!, /No system prompt has been sent/);
+      assert.deepEqual(test.opened, []);
+    } finally {
+      test.close();
+    }
   });
 
-  it("opens the overlay viewer from the command handler in tui mode", async () => {
-    const prompt = buildSystemPrompt(richOptions());
-    const { commands } = captureRegistration();
-    const { ctx, customCalls } = sessionStartCtx("tui", prompt);
-
-    await commands[0]!.options.handler("", ctx);
-    assert.equal(customCalls.length, 1);
-    assert.equal(customCalls[0]!.options?.overlay, true);
+  it("refreshes from each payload without relying on earlier run or context references", async () => {
+    const test = fixture();
+    try {
+      await test.send({ instructions: "First", input: [] });
+      await test.open();
+      await test.send({ messages: [{ role: "developer", content: "Second" }] });
+      await test.open();
+      assert.deepEqual(test.opened, ["First", "Second"]);
+      assert.deepEqual(test.notifications, []);
+    } finally {
+      test.close();
+    }
   });
 
-  it("does nothing outside tui mode from the registered triggers", async () => {
-    const { shortcuts, commands } = captureRegistration();
-    for (const mode of ["rpc", "json", "print"] as const) {
-      const shortcutCtx = sessionStartCtx(mode, buildSystemPrompt(richOptions()));
-      await shortcuts[0]!.options.handler(shortcutCtx.ctx);
-      assert.equal(shortcutCtx.customCalls.length, 0);
+  it("opens an empty file for a recognized payload with no system instructions", async () => {
+    const test = fixture();
+    try {
+      await test.send({ input: [{ role: "user", content: "User" }] });
+      await test.open();
+      assert.deepEqual(test.opened, [""]);
+      assert.deepEqual(test.notifications, []);
+    } finally {
+      test.close();
+    }
+  });
 
-      const commandCtx = sessionStartCtx(mode, buildSystemPrompt(richOptions()));
-      await commands[0]!.options.handler("", commandCtx.ctx);
-      assert.equal(commandCtx.customCalls.length, 0);
+  for (const payload of [{ unknown: "unsupported" }, { instructions: 42 }]) {
+    it(`discards the previous value when the latest payload is unavailable: ${JSON.stringify(payload)}`, async () => {
+      const test = fixture();
+      try {
+        await test.send({ instructions: "Old", input: [] });
+        await test.open();
+        await test.send(payload);
+        await test.open();
+        assert.deepEqual(test.opened, ["Old"]);
+        assert.equal(readFileSync(test.path, "utf8"), "Old");
+        assert.match(test.notifications[0]!, /could not be read from the last request payload/);
+        await test.send({ instructions: "Recovered", input: [] });
+        await test.open();
+        assert.deepEqual(test.opened, ["Old", "Recovered"]);
+      } finally {
+        test.close();
+      }
+    });
+  }
+
+  it("does not expose another session's captured payload", async () => {
+    const test = fixture();
+    try {
+      await test.send({ instructions: "Private", input: [] });
+      const other = { ...test.ctx, sessionManager: { getSessionId: () => "other-id" } };
+      await test.open(other);
+      assert.match(test.notifications[0]!, /No system prompt has been sent/);
+      assert.deepEqual(test.opened, []);
+    } finally {
+      test.close();
+    }
+  });
+
+  it("resets captured state when a new session or fork starts", async () => {
+    const test = fixture();
+    try {
+      await test.send({ instructions: "Old", input: [] });
+      const fork = { ...test.ctx, sessionManager: { getSessionId: () => "fork-id" } };
+      await test.dispatch("session_start", { reason: "fork" }, fork);
+      await test.open(fork);
+      assert.match(test.notifications.pop()!, /No system prompt has been sent/);
+      await test.dispatch("session_start", { reason: "new" });
+      await test.open();
+      assert.match(test.notifications.pop()!, /No system prompt has been sent/);
+      assert.deepEqual(test.opened, []);
+    } finally {
+      test.close();
+    }
+  });
+
+  it("ignores file edits when viewing and preparing the next request", async () => {
+    const test = fixture();
+    try {
+      const options = richOptions();
+      const messages = transcriptFor(options);
+      await test.dispatch("before_agent_start", { systemPromptOptions: options });
+      const original = await test.dispatch("context_with_system", { messages });
+      await test.send({ instructions: "Actual payload", input: [] });
+      await test.open();
+      writeFileSync(test.path, "user edit");
+      await test.open();
+      const next = await test.dispatch("context_with_system", { messages });
+      assert.deepEqual(test.opened, ["Actual payload", "Actual payload"]);
+      assert.deepEqual(next, original);
+      assert.deepEqual(messages, transcriptFor(options));
+    } finally {
+      test.close();
     }
   });
 });
