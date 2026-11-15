@@ -168,10 +168,10 @@ pi の read ツールは、SKILL.md に対する offset・limit を無視し、�
 
 検証は、今回の要求と成果物を照合し、要求された変更点と維持条件の成否を確認できるものを選ぶ。コマンドの成功や旧成果物との一致は、実際に確認した条件の証拠として扱う。
 
-編集後は必ず該当するリンター、フォーマッター、タイプチェック、テストを実行すること。完了報告では、実行した検証はコマンドと結果を根拠として示し、未実行の検証は理由を示す。プロジェクトに既存の設定・依存があればそれを優先し、なければ以下のデフォルトを使う。
+編集後は必ず該当するリンター、フォーマッター、タイプチェック、テストを実行すること。完了報告では、実行した検証はコマンドと結果を根拠として示し、未実行の検証は理由を示す。検証項目ごとにプロジェクトの既存設定・依存を優先し、指定のない項目には以下のデフォルトを使う。
 
 - **Python**: `ruff format`, `ruff check`, `ty`, `pytest`
-- **JavaScript/TypeScript**: `vp fmt`, `vp lint`, `vp test`
+- **JavaScript/TypeScript**: `vp fmt '!**/*.md'`, `vp lint`, `vp test`。Markdown は下記の専用コマンドで整形する。デフォルトのフォーマット指定はCLI引数で渡し、その適用だけのためにプロジェクトへ設定ファイルを追加しない。
 - **justfile**: `just --fmt --indentation '  ' --justfile <file>`（2スペースインデント）
 - **Markdown**: `~/.bun/bin/prettier --parser markdown --plugin="$HOME/.bun/install/global/node_modules/prettier-markdown-table/index.js" --write <file.md>`
 
