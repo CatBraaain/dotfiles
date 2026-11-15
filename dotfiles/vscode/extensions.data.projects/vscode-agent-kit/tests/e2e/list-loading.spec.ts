@@ -148,16 +148,21 @@ test(
       await capture("成功空", "successful-empty.png");
     });
 
-    await test.step("Show a retrieval error without an empty or loading message", async () => {
+    await test.step("Show a retrieval error guidance in the list area", async () => {
       await host.refreshSessions();
       await receive({ type: "loading", displayedSessionId: null });
       await expect(sessions).toHaveText("Loading sessions…");
-      await receive({ type: "sessionsError", message: "Failed to read Pi sessions" });
-      await expect(status).toHaveText("Failed to read Pi sessions");
-      await expect(status).toHaveClass("error");
-      await expect(sessions).toHaveText("");
-      await expect(status).not.toContainText("Refreshing sessions…");
+      await receive({ type: "sessionsError" });
+      await expect(sessions).toHaveText("Failed to load sessions. Retrying…");
+      await expect(status).toHaveText("");
+      await expect(status).not.toHaveClass(/error/);
       await capture("取得error", "retrieval-error.png");
+    });
+
+    await test.step("Clear the error guidance when the next retrieval succeeds", async () => {
+      await receive({ type: "sessions", state: { groups: [] } });
+      await expect(sessions).toHaveText("No sessions yet");
+      await expect(status).toHaveText("");
     });
 
     await testInfo.attach("Window and protocol observation", {

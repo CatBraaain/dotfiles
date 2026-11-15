@@ -37,7 +37,7 @@ export type ExtensionMessage =
   | { type: "loading"; displayedSessionId?: string | null }
   | { type: "sessions"; state: WebviewState }
   | { type: "workspaceAdded" }
-  | { type: "sessionsError"; message: string }
+  | { type: "sessionsError" }
   | { type: "error"; message: string };
 
 export function parseWebviewRequest(value: unknown): WebviewRequest | undefined {

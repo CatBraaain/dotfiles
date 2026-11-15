@@ -219,7 +219,9 @@ function createProvider(
   return { provider, statePath };
 }
 
-async function archiveFixture() {
+async function archiveFixture(
+  options: { log?: ConstructorParameters<typeof SessionWebviewProvider>[0]["log"] } = {},
+) {
   const runtimes = providerRuntimes();
   const filePath = await seedSavedSession(activeSessionId, root, { runtimes });
   await seedSavedSession(inactiveSessionId, root, { runtimes });
@@ -235,7 +237,7 @@ async function archiveFixture() {
     dispose: vi.fn(() => registry.onTerminalClosed(terminal as never)),
   };
   mockTerminal(runtimes.mocks, terminal, registry, root);
-  const { provider, statePath } = createProvider({ registry });
+  const { provider, statePath } = createProvider({ registry, log: options.log });
 
   const webview = createView();
   provider.resolveWebviewView(webview.view as never);
@@ -243,8 +245,10 @@ async function archiveFixture() {
   return { ...runtimes, registry, terminal, provider, statePath, webview, filePath };
 }
 
-async function unreadFixture() {
-  const fixture = await archiveFixture();
+async function unreadFixture(
+  options: { log?: ConstructorParameters<typeof SessionWebviewProvider>[0]["log"] } = {},
+) {
+  const fixture = await archiveFixture(options);
   for (const sessionId of [activeSessionId, inactiveSessionId]) {
     fixture.live.set(sessionId, { sessionId, cwd: root, target: `pi-${sessionId}` });
   }
@@ -371,10 +375,7 @@ describe("SessionWebviewProvider", () => {
     const ready = webview.receive({ type: "ready" });
     held.reject(new Error("list unavailable"));
     await ready;
-    expect(webview.postMessage).toHaveBeenLastCalledWith({
-      type: "sessionsError",
-      message: "Failed to read Pi sessions: list unavailable",
-    });
+    expect(webview.postMessage).toHaveBeenLastCalledWith({ type: "sessionsError" });
   });
 
   it("serializes overlapping refreshes and discards the superseded reply", async () => {
@@ -407,10 +408,7 @@ describe("SessionWebviewProvider", () => {
     const newRefresh = provider.refresh();
     held.resolve([]);
     await Promise.all([oldRefresh, newRefresh]);
-    expect(webview.postMessage).toHaveBeenLastCalledWith({
-      type: "sessionsError",
-      message: "Failed to read Pi sessions: latest failure",
-    });
+    expect(webview.postMessage).toHaveBeenLastCalledWith({ type: "sessionsError" });
   });
 
   it("announces loading and reports operation errors separately during acquisition", async () => {
@@ -597,27 +595,39 @@ describe("SessionWebviewProvider", () => {
     ).toBeUndefined();
   });
 
-  it("reports an acquisition error when the initial pi-mux query fails", async () => {
+  it("logs the acquisition error and reports the retrieval state without a notification", async () => {
     await seedSavedSession(activeSessionId);
-    const { mocks, live } = sharedRuntimes;
+    const { mocks } = sharedRuntimes;
     const registry = createRegistry();
-    live.set(activeSessionId, {
-      sessionId: activeSessionId,
-      cwd: root,
-      target: `pi-${activeSessionId}`,
-    });
     mocks.list.mockRejectedValue(new Error("lookup failed"));
-    const { provider } = createProvider({ registry });
+    const logError = vi.fn();
+    const { provider } = createProvider({ registry, log: { error: logError } });
 
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
 
     await provider.refresh();
 
-    expect(webview.postMessage.mock.lastCall?.[0].type).toBe("sessionsError");
-    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
-      expect.stringContaining("lookup failed"),
-    );
+    expect(logError).toHaveBeenCalledWith("Failed to read Pi sessions: lookup failed");
+    expect(webview.postMessage.mock.lastCall?.[0]).toEqual({ type: "sessionsError" });
+    expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it("logs a hidden-view acquisition failure without a notification or webview post", async () => {
+    const { mocks } = sharedRuntimes;
+    mocks.list.mockRejectedValue(new Error("lookup failed"));
+    const logError = vi.fn();
+    const { provider } = createProvider({ log: { error: logError } });
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    webview.setVisible(false);
+    webview.postMessage.mockClear();
+
+    await provider.refresh();
+
+    expect(logError).toHaveBeenCalledWith("Failed to read Pi sessions: lookup failed");
+    expect(webview.postMessage).not.toHaveBeenCalled();
+    expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
   });
 
   it("projects mux phases into icons without JSON phase writes", async () => {
@@ -803,6 +813,7 @@ describe("SessionWebviewProvider", () => {
       mocks.list.mockRejectedValueOnce(new Error("offline"));
       await tick(provider);
       expect(webview.postMessage.mock.lastCall?.[0].type).toBe("sessionsError");
+      expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
 
       webview.postMessage.mockClear();
       await tick(provider);
@@ -1151,7 +1162,10 @@ describe("SessionWebviewProvider", () => {
     });
 
     it("consumes a completion acknowledged before its runtime query finishes", async () => {
-      const { provider, mocks, webview, setPhase, row, holdRuntimeQuery } = await unreadFixture();
+      const logError = vi.fn();
+      const { provider, mocks, webview, setPhase, row, holdRuntimeQuery } = await unreadFixture({
+        log: { error: logError },
+      });
       await webview.receive({ type: "openSession", sessionId: activeSessionId });
       await setPhase("running");
       const held = holdRuntimeQuery();
@@ -1180,9 +1194,7 @@ describe("SessionWebviewProvider", () => {
       await vi.waitFor(() => expect(mocks.history.mock.calls.length).toBe(historyCalls + 1));
       releaseHistory();
       await opening;
-      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
-        "Failed to read Pi sessions: lookup failed",
-      );
+      expect(logError).toHaveBeenCalledWith("Failed to read Pi sessions: lookup failed");
       expect(row().hasUnread).toBe(false);
       await completion;
       await provider.refresh();
@@ -3167,23 +3179,19 @@ describe("SessionWebviewProvider", () => {
     expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();
   });
 
-  it("shows an error and sends no list when history cannot be read", async () => {
+  it("logs the history read failure and sends the retrieval error state without a notification", async () => {
     sharedRuntimes.mocks.history.mockRejectedValue(new Error("EACCES: permission denied"));
-    const { provider } = createProvider();
+    const logError = vi.fn();
+    const { provider } = createProvider({ log: { error: logError } });
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
 
     await provider.refresh();
 
-    expect(vscodeMocks.showErrorMessage.mock.calls[0]?.[0]).toMatch(
-      /^Failed to read Pi sessions: /,
-    );
-    const lastCall = webview.postMessage.mock.calls.at(-1)?.[0];
-    expect(lastCall).toEqual({
-      type: "sessionsError",
-      message: expect.stringMatching(/^Failed to read Pi sessions: /),
-    });
+    expect(logError).toHaveBeenCalledWith("Failed to read Pi sessions: EACCES: permission denied");
+    expect(webview.postMessage.mock.lastCall?.[0]).toEqual({ type: "sessionsError" });
     expect(webview.postMessage.mock.calls.some((call) => call[0].type === "sessions")).toBe(false);
+    expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
   });
 
   it("ignores invalid old metadata when acquiring the list", async () => {

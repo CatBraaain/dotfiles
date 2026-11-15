@@ -65,6 +65,13 @@ export interface SessionListView {
   sessions: ElementDescriptor[];
 }
 
+/** Guidance shown in the list area while no group is displayable. */
+const EMPTY_LIST_MESSAGES = {
+  loading: "Loading sessions…",
+  error: "Failed to load sessions. Retrying…",
+  loaded: "No sessions yet",
+} as const;
+
 /** Message bridge to the extension host (or a preview stub). */
 export interface ClientBridge {
   postMessage(request: unknown): void;
@@ -110,9 +117,11 @@ export function sessionListView(
     ),
   );
   if (groups.length > 0) return { sessions: groups };
-  if (loadStatus === "error") return { sessions: [] };
-  const emptyText = loadStatus === "loading" ? "Loading sessions…" : "No sessions yet";
-  return { sessions: [{ tag: "p", attrs: { class: "empty" }, children: [emptyText] }] };
+  return {
+    sessions: [
+      { tag: "p", attrs: { class: "empty" }, children: [EMPTY_LIST_MESSAGES[loadStatus]] },
+    ],
+  };
 }
 
 function groupDescriptor(
@@ -646,7 +655,7 @@ function createClientStore(): {
   setLoading(displayedSessionId?: string | null): void;
   setSessions(state: ClientState): void;
   setError(message: string): void;
-  setSessionsError(message: string): void;
+  setSessionsError(): void;
 } {
   let snapshot: ClientSnapshot = {
     state: { groups: [] },
@@ -676,8 +685,7 @@ function createClientStore(): {
       }),
     setSessions: (state) => publish({ state, loadStatus: "loaded", errorMessage: "" }),
     setError: (message) => publish({ ...snapshot, errorMessage: message }),
-    setSessionsError: (message) =>
-      publish({ ...snapshot, loadStatus: "error", errorMessage: message }),
+    setSessionsError: () => publish({ ...snapshot, loadStatus: "error" }),
   };
 }
 
@@ -804,8 +812,8 @@ export function initClient(bridge: ClientBridge): () => void {
     if (message.type === "error" && typeof message.message === "string") {
       store.setError(message.message);
     }
-    if (message.type === "sessionsError" && typeof message.message === "string") {
-      store.setSessionsError(message.message);
+    if (message.type === "sessionsError") {
+      store.setSessionsError();
     }
   });
 

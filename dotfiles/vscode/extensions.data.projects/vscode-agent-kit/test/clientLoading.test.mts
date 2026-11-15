@@ -312,14 +312,14 @@ describe("session list loading in the mounted client", () => {
     },
   );
 
-  it("shows a first-load error without presenting a successful empty list", async () => {
+  it("shows the retrieval guidance in the list area without a status error", async () => {
     await expectLoading();
-    await receive({ type: "sessionsError", message: "Failed to read Pi sessions" });
+    await receive({ type: "sessionsError" });
     await expect
-      .poll(() => page.locator("#status").textContent())
-      .toBe("Failed to read Pi sessions");
-    await expect.poll(() => page.locator("#sessions").textContent()).toBe("");
-    expect(await page.locator("#status").getAttribute("class")).toBe("error");
+      .poll(() => page.locator("#sessions").textContent())
+      .toBe("Failed to load sessions. Retrying…");
+    expect(await page.locator("#status").textContent()).toBe("");
+    expect(await page.locator("#status").getAttribute("class")).toBe("");
   });
 
   it("keeps rows, selection, modes, and collapsed groups through a manual refresh", async () => {
@@ -354,10 +354,8 @@ describe("session list loading in the mounted client", () => {
     await expect.poll(() => page.locator(".selected").count()).toBe(0);
     expect(await page.locator(".session-row").count()).toBe(1);
     expect(await page.locator("#status").textContent()).toBe("Refreshing sessions…");
-    await receive({ type: "sessionsError", message: "Could not reload sessions" });
-    await expect
-      .poll(() => page.locator("#status").textContent())
-      .toBe("Could not reload sessions");
+    await receive({ type: "sessionsError" });
+    await expect.poll(() => page.locator("#status").textContent()).toBe("");
     expect(await page.locator(".selected").count()).toBe(0);
     expect(await page.locator(".session-row").count()).toBe(1);
   });
@@ -377,10 +375,8 @@ describe("session list loading in the mounted client", () => {
     await expectLoaded();
     await receive({ type: "loading" });
     await expect.poll(() => page.locator("#status").textContent()).toBe("Refreshing sessions…");
-    await receive({ type: "sessionsError", message: "Could not reload sessions" });
-    await expect
-      .poll(() => page.locator("#status").textContent())
-      .toBe("Could not reload sessions");
+    await receive({ type: "sessionsError" });
+    await expect.poll(() => page.locator("#status").textContent()).toBe("");
     expect(await page.locator(".selected .session-name").textContent()).toBe("Atlas current");
     expect(await page.locator(".session-row").count()).toBe(1);
   });
@@ -390,8 +386,10 @@ describe("session list loading in the mounted client", () => {
     await expect.poll(() => page.locator("#sessions").textContent()).toBe("No sessions yet");
     await receive({ type: "loading" });
     await expectLoading();
-    await receive({ type: "sessionsError", message: "Could not reload sessions" });
-    await expect.poll(() => page.locator("#sessions").textContent()).toBe("");
+    await receive({ type: "sessionsError" });
+    await expect
+      .poll(() => page.locator("#sessions").textContent())
+      .toBe("Failed to load sessions. Retrying…");
     await receive({ type: "loading" });
     await expectLoading();
     await receive({ type: "sessions", state: { groups: [] } });

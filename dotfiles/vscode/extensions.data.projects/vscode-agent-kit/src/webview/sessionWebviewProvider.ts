@@ -25,6 +25,7 @@ export interface SessionWebviewDeps {
   startNewSession: (cwd: string) => Promise<string | undefined>;
   onWorkspaces?: (cwds: readonly string[]) => void;
   emptySessions?: EmptySessionPool;
+  log?: Pick<vscode.LogOutputChannel, "error">;
 }
 
 /** Owns the WebviewView and translates its fixed message protocol into extension actions. */
@@ -182,10 +183,10 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         displayedSessionId: this.deps.registry.displayedSessionId,
       });
     } catch (error) {
-      if (!this.disposed && version === this.refreshVersion) {
-        const message = `Failed to read Pi sessions: ${errorMessage(error)}`;
-        if (this.view?.visible) this.postError(message, "sessionsError");
-        else void vscode.window.showErrorMessage(message);
+      if (this.disposed) return;
+      this.deps.log?.error(`Failed to read Pi sessions: ${errorMessage(error)}`);
+      if (version === this.refreshVersion && this.view?.visible) {
+        this.post({ type: "sessionsError" });
       }
     }
   }
@@ -506,9 +507,9 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     );
   }
 
-  private postError(message: string, type: "error" | "sessionsError" = "error"): void {
+  private postError(message: string): void {
     void vscode.window.showErrorMessage(message);
-    this.post({ type, message });
+    this.post({ type: "error", message });
   }
 }
 

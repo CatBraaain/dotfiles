@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
   onDidCloseTerminal: vi.fn(),
   registerWebviewViewProvider: vi.fn(),
   createFileSystemWatcher: vi.fn(),
+  createOutputChannel: vi.fn(),
   watcher: { onDidChange: vi.fn(), onDidCreate: vi.fn(), onDidDelete: vi.fn(), dispose: vi.fn() },
 }));
 
@@ -32,6 +33,7 @@ describe("extension commands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.createFileSystemWatcher.mockReturnValue(api.watcher);
+    api.createOutputChannel.mockReturnValue({ dispose: vi.fn() });
     vi.spyOn(SessionWebviewProvider.prototype, "refresh").mockResolvedValue();
     vi.stubEnv("PI_CODING_AGENT_DIR", "/fixture/agent");
     vi.stubEnv("PI_CODING_AGENT_SESSION_DIR", "/fixture/sessions");
@@ -75,6 +77,7 @@ describe("extension commands", () => {
       .mockImplementation(() => {});
     const refresh = vi.spyOn(SessionWebviewProvider.prototype, "refresh").mockResolvedValue();
     register();
+    expect(api.createOutputChannel).toHaveBeenCalledWith("Pi Sessions", { log: true });
     expect(sync).not.toHaveBeenCalled();
     expect(refresh).toHaveBeenCalledOnce();
     expect(api.createFileSystemWatcher).toHaveBeenCalledExactlyOnceWith(

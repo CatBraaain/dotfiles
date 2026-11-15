@@ -11,9 +11,11 @@ export function activate(context: vscode.ExtensionContext): void {
   const homeDir = homedir();
   const sessionDir = resolveSessionDir(process.env, homeDir);
   const registry = new TerminalRegistry(editorTerminals());
+  const log = vscode.window.createOutputChannel("Pi Sessions", { log: true });
 
   context.subscriptions.push(
     vscode.window.onDidCloseTerminal((closed) => registry.onTerminalClosed(closed)),
+    log,
   );
 
   const emptySessions = new EmptySessionPool({
@@ -33,6 +35,7 @@ export function activate(context: vscode.ExtensionContext): void {
     emptySessions,
     startNewSession: (cwd) => launcher.start(cwd),
     onWorkspaces: (cwds) => emptySessions.syncWorkspaces(cwds),
+    log,
   });
 
   const sessionWatcher = vscode.workspace.createFileSystemWatcher(
