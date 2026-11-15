@@ -307,6 +307,7 @@ export function parseProviderUrgency(
 
 const USAGE_MINUTE_MS = 60_000;
 const MIN_USAGE_REMAINING_MINUTES = 60;
+const USAGE_URGENCY_EXPONENT = 2.5;
 
 export function urgencyOfFact(
   { long, longResetsAt, longWindowMinutes }: ProviderUsageFacts,
@@ -323,7 +324,7 @@ export function urgencyOfFact(
   );
   const resetRate = remainingMinutes / longWindowMinutes;
   if (!Number.isFinite(resetRate)) return null;
-  const urgency = long / 100 / (resetRate * resetRate);
+  const urgency = long / 100 / resetRate ** USAGE_URGENCY_EXPONENT;
   return Number.isFinite(urgency) ? urgency : null;
 }
 

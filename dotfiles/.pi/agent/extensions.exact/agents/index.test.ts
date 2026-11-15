@@ -36,7 +36,7 @@ import { ERROR_OUTPUT_PREVIEW_LIMIT } from "../shared/tool-text.ts";
 import { renderersOf } from "../chat-renderer/index.ts";
 import { CLASS_CHANGE_EVENT, requestClassChange } from "./class-change.ts";
 import { parseCronExpression } from "./cron.ts";
-import { runUsage } from "./usage.ts";
+import { runUsage, scoreCandidates } from "./usage.ts";
 import { registerBackgroundBash } from "../tools/background-bash.ts";
 import { parseUsageJson } from "../provider-usage/index.ts";
 import type { ModelCandidate } from "./routing.ts";
@@ -6212,7 +6212,7 @@ agents:
 describe("parseProviderUrgency", () => {
   const nowMs = Date.parse("2026-06-17T00:00:00Z");
 
-  it("keeps exact provider names and calculates the quadratic urgency", () => {
+  it("keeps exact provider names and calculates urgency with exponent 2.5", () => {
     const stdout = usageFixture(
       [
         { provider: "command-code", long: 50, remainingFraction: 0.5 },
@@ -6226,11 +6226,11 @@ describe("parseProviderUrgency", () => {
     assert.deepEqual(
       parseProviderUrgency(stdout, nowMs),
       new Map([
-        ["command-code", 2],
+        ["command-code", 2.82842712474619],
         ["commandcode", 0.5],
         ["zai", 0],
-        ["openai-codex", 4],
-        ["other", 16],
+        ["openai-codex", 5.65685424949238],
+        ["other", 32],
       ]),
     );
   });
@@ -6271,9 +6271,9 @@ describe("urgencyOfFact", () => {
   const facts = { long: 50, longResetsAt: resetAt, longWindowMinutes: 300 };
 
   it.each([
-    { long: 50, remainingMinutes: 150, expected: 2 },
-    { long: 90, remainingMinutes: 150, expected: 3.6 },
-    { long: 50, remainingMinutes: 75, expected: 8 },
+    { long: 50, remainingMinutes: 150, expected: 2.82842712474619 },
+    { long: 90, remainingMinutes: 150, expected: 5.091168824543142 },
+    { long: 50, remainingMinutes: 75, expected: 16 },
     { long: 50, remainingMinutes: 300, expected: 0.5 },
     { long: 0, remainingMinutes: 150, expected: 0 },
   ])(
@@ -6286,17 +6286,23 @@ describe("urgencyOfFact", () => {
 
   it.each([300, 10080, 43200])("uses the supplied %s-minute window", (longWindowMinutes) => {
     const longResetsAt = new Date(nowMs + (longWindowMinutes / 2) * minuteMs).toISOString();
-    assert.equal(urgencyOfFact({ ...facts, longResetsAt, longWindowMinutes }, nowMs), 2);
+    assert.equal(
+      urgencyOfFact({ ...facts, longResetsAt, longWindowMinutes }, nowMs),
+      2.82842712474619,
+    );
   });
 
   it.each([1, 6, 59, 60])("clamps %s remaining minutes to one hour", (minutes) => {
     const longResetsAt = new Date(nowMs + minutes * minuteMs).toISOString();
-    assert.equal(urgencyOfFact({ ...facts, longResetsAt, longWindowMinutes: 240 }, nowMs), 8);
+    assert.equal(urgencyOfFact({ ...facts, longResetsAt, longWindowMinutes: 240 }, nowMs), 16);
   });
 
   it("allows a reset rate above one for a window shorter than one hour", () => {
     const longResetsAt = new Date(nowMs + minuteMs).toISOString();
-    assert.equal(urgencyOfFact({ ...facts, longResetsAt, longWindowMinutes: 30 }, nowMs), 0.125);
+    assert.equal(
+      urgencyOfFact({ ...facts, longResetsAt, longWindowMinutes: 30 }, nowMs),
+      0.08838834764831843,
+    );
   });
 
   it("uses only the supplied scoring clock", () => {
@@ -6304,8 +6310,8 @@ describe("urgencyOfFact", () => {
       throw new Error("Unexpected clock read");
     });
     try {
-      assert.equal(urgencyOfFact(facts, nowMs), 2);
-      assert.equal(urgencyOfFact(facts, nowMs + 75 * minuteMs), 8);
+      assert.equal(urgencyOfFact(facts, nowMs), 2.82842712474619);
+      assert.equal(urgencyOfFact(facts, nowMs + 75 * minuteMs), 16);
     } finally {
       clock.mockRestore();
     }
@@ -6371,6 +6377,41 @@ describe("usage scoring and ordering", () => {
       }),
     );
   }
+
+  it("ranks zai above codex for the supplied remaining-quota snapshot", () => {
+    const nowMs = Date.parse("2026-06-17T00:00:00Z");
+    const snapshot = [
+      { provider: "openai-codex", long: 79, remainingMinutes: 5239, longWindowMinutes: 10080 },
+      { provider: "zai", long: 7, remainingMinutes: 1621, longWindowMinutes: 10080 },
+      { provider: "commandcode", long: 68, remainingMinutes: 14524, longWindowMinutes: 43200 },
+    ];
+    const stdout = JSON.stringify(
+      snapshot.map(({ remainingMinutes, ...facts }) => ({
+        ...facts,
+        longResetsAt: new Date(nowMs + remainingMinutes * 60_000).toISOString(),
+      })),
+    );
+    const urgencies = parseProviderUrgency(stdout, nowMs);
+    assert.ok(urgencies);
+    assert.equal(urgencies.get("openai-codex"), 4.056555530493307);
+    assert.equal(urgencies.get("zai"), 6.74981443092305);
+
+    const candidates = snapshot.map(({ provider }) => ({ provider, model: "m" }));
+    const ranked = scoreCandidates(
+      candidates,
+      urgencies,
+      {
+        "openai-codex": [{ multiply: { provider: "openai-codex" } }],
+        zai: [{ multiply: { provider: "zai" } }],
+        commandcode: [{ multiply: { provider: "commandcode" } }, { multiply: 0.1 }],
+      },
+      new Date(nowMs),
+    );
+    assert.deepEqual(
+      ranked.map(({ provider }) => provider),
+      ["zai", "openai-codex", "commandcode"],
+    );
+  });
 
   it("takes the scoring clock after the CLI has finished", async () => {
     let nowMs = Date.parse("2026-06-17T00:00:00Z");
@@ -6700,8 +6741,6 @@ describe("usage scoring and ordering", () => {
     );
     try {
       await extension.sessionStart();
-      // a は settings: [] で provider 設定（urgency 4）を置換してスコア 1、b は継承して 4。
-      // 置換が漏れて継承されると a も 4 で同点となり順序が a, b に変わる。
       assert.deepEqual(
         extension.selectedModels.map((model) => (model as { provider: string; id: string }).id),
         ["b", "a"],
@@ -6749,8 +6788,6 @@ describe("usage scoring and ordering", () => {
     );
     try {
       await extension.sessionStart();
-      // codex は cross-provider 参照で zai の urgency 3、zai は自己参照 3 × weight 0.5、
-      // cmd は事実に無い provider なので 1。
       assert.deepEqual(
         extension.selectedModels.map((model) => {
           const { provider, id } = model as { provider: string; id: string };

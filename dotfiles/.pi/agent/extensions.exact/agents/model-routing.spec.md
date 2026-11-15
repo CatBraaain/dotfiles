@@ -108,7 +108,7 @@ modes:
 
 `<provider>.urgency` は、最後の `.` で provider 部分と field 部分に分割し、field は `urgency` のみを認める（それ以外は設定エラー）。provider 部分は usage JSON の `provider` と完全一致で照合し、その行の `long`・`longResetsAt`・`longWindowMinutes` から拡張内部で算出するurgencyを倍率に使う。参照先providerの候補の有無には依存せず、自己参照と別provider参照を同じように扱う。参照するprovider名は設定の `multiply` で指定する。
 
-算出式は `resetRate = max((resetMs - nowMs) / 60000, 60) / longWindowMinutes`、`urgency = (long / 100) / (resetRate * resetRate)` とする。`resetMs` は `longResetsAt` をepochミリ秒へ変換した値、`nowMs` は拡張が採点する時点の現在時刻である。リセットまでの残り時間は60分を下限とし、resetRateとurgencyの丸めは行わない。
+算出式は `resetRate = max((resetMs - nowMs) / 60000, 60) / longWindowMinutes`、`urgency = (long / 100) / resetRate**2.5` とする。`resetMs` は `longResetsAt` をepochミリ秒へ変換した値、`nowMs` は拡張が採点する時点の現在時刻である。リセットまでの残り時間は60分を下限とし、resetRateとurgencyの丸めは行わない。
 
 | 入力の状態 | 扱い |
 | --- | --- |
