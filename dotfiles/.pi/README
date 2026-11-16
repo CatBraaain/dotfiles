@@ -18,7 +18,6 @@ pi の設定ディレクトリ。公式リファレンスは https://pi.dev/docs
     ├── npm_packages.requirements.md   # npm 依存整理の要件
     ├── config.exact/                  # ~/.agents/config/ への symlink
     ├── extensions.exact/       # 自作拡張機能
-    ├── prompts.exact/          # プロンプトテンプレート
     └── skills.exact/           # pi 固有の skill 用（通常は空。.keep で空を維持）
 ```
 
