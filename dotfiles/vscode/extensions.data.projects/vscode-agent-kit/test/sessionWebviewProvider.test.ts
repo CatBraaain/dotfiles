@@ -3358,6 +3358,114 @@ describe("SessionWebviewProvider", () => {
       provider.dispose();
     });
 
+    it.each(["openSession", "unarchiveSession"])(
+      "cancels an attaching %s quietly when its workspace is unregistered",
+      async (type) => {
+        const { webview, mocks, terminal, registry } = await archiveFixture();
+        const held = deferred<Awaited<ReturnType<PiMux["current"]>>>();
+        mocks.current.mockReturnValueOnce(held.promise);
+        const opening = webview.receive({ type, sessionId: activeSessionId });
+        await vi.waitFor(() => expect(mocks.current).toHaveBeenCalledOnce());
+        const queued = webview.receive({ type: "unarchiveSession", sessionId: inactiveSessionId });
+        const removing = webview.receive({ type: "unregisterWorkspace", cwd: root });
+        registry.onTerminalClosed(terminal as never);
+        held.resolve({ id: activeSessionId, cwd: root, file: "/late.jsonl", target: "late" });
+        await Promise.all([opening, queued, removing]);
+        expect(mocks.unregisterWorkspace).toHaveBeenCalledExactlyOnceWith(root);
+        expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+        expect(webview.postMessage.mock.calls.some(([message]) => message.type === "error")).toBe(
+          false,
+        );
+        expect(terminal.show).not.toHaveBeenCalled();
+        expect(registry.displayedSessionId).toBeUndefined();
+        expect(vscodeMocks.createTerminal).toHaveBeenCalledOnce();
+      },
+    );
+
+    it("finishes unregister before a late attachment reply without restoring the display", async () => {
+      const { webview, mocks, terminal, registry } = await archiveFixture();
+      const held = deferred<Awaited<ReturnType<PiMux["current"]>>>();
+      mocks.current.mockReturnValueOnce(held.promise);
+      const opening = webview.receive({ type: "openSession", sessionId: activeSessionId });
+      await vi.waitFor(() => expect(mocks.current).toHaveBeenCalledOnce());
+      await webview.receive({ type: "unregisterWorkspace", cwd: root });
+      await opening;
+      expect(terminal.dispose).toHaveBeenCalledOnce();
+      held.resolve({ id: inactiveSessionId, cwd: root, file: "/late.jsonl", target: "late" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(mocks.switch).not.toHaveBeenCalled();
+      expect(terminal.show).not.toHaveBeenCalled();
+      expect(registry.displayedSessionId).toBeUndefined();
+      expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+      expect(webview.postMessage.mock.calls.some(([message]) => message.type === "error")).toBe(
+        false,
+      );
+    });
+
+    it("keeps an attaching open when another workspace is unregistered", async () => {
+      const { webview, mocks, terminal, registry, workspaces } = await archiveFixture();
+      const other = join(root, "other");
+      workspaces.add(other);
+      const held = deferred<Awaited<ReturnType<PiMux["current"]>>>();
+      mocks.current.mockReturnValueOnce(held.promise);
+      const opening = webview.receive({ type: "openSession", sessionId: activeSessionId });
+      await vi.waitFor(() => expect(mocks.current).toHaveBeenCalledOnce());
+      const removing = webview.receive({ type: "unregisterWorkspace", cwd: other });
+      held.resolve({ id: activeSessionId, cwd: root, file: "/attached.jsonl", target: "attached" });
+      await Promise.all([opening, removing]);
+      expect(terminal.show).toHaveBeenCalledOnce();
+      expect(registry.displayedSessionId).toBe(activeSessionId);
+      expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+    });
+
+    it("reports a terminal closing during attachment without an unregister request", async () => {
+      const { webview, mocks, terminal, registry } = await archiveFixture();
+      const held = deferred<Awaited<ReturnType<PiMux["current"]>>>();
+      mocks.current.mockReturnValueOnce(held.promise);
+      const opening = webview.receive({ type: "openSession", sessionId: activeSessionId });
+      await vi.waitFor(() => expect(mocks.current).toHaveBeenCalledOnce());
+      registry.onTerminalClosed(terminal as never);
+      await opening;
+      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("Pi display closed during attachment"),
+      );
+      expect(webview.postMessage.mock.calls.some(([message]) => message.type === "error")).toBe(
+        true,
+      );
+      held.resolve(undefined);
+    });
+
+    it("reports unregister failure after cancelling the attaching open", async () => {
+      const { webview, mocks } = await archiveFixture();
+      const held = deferred<Awaited<ReturnType<PiMux["current"]>>>();
+      mocks.current.mockReturnValueOnce(held.promise);
+      mocks.unregisterWorkspace.mockRejectedValueOnce(new Error("unregister denied"));
+      const opening = webview.receive({ type: "openSession", sessionId: activeSessionId });
+      await vi.waitFor(() => expect(mocks.current).toHaveBeenCalledOnce());
+      await webview.receive({ type: "unregisterWorkspace", cwd: root });
+      await opening;
+      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledExactlyOnceWith(
+        `Failed to unregister workspace ${root}: unregister denied`,
+      );
+      expect(webview.postMessage.mock.lastCall?.[0]).toEqual({
+        type: "error",
+        message: `Failed to unregister workspace ${root}: unregister denied`,
+      });
+      held.resolve(undefined);
+    });
+
+    it("cancels a queued open before it creates a display", async () => {
+      const { webview, registry } = await archiveFixture();
+      const held = deferred<void>();
+      const blocking = registry.run(() => held.promise);
+      const opening = webview.receive({ type: "openSession", sessionId: activeSessionId });
+      const removing = webview.receive({ type: "unregisterWorkspace", cwd: root });
+      held.resolve();
+      await Promise.all([blocking, opening, removing]);
+      expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();
+      expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+    });
+
     it("retains the registered group without restart or refresh after unregister fails", async () => {
       const { webview, mocks, live, workspaces } = await archiveFixture();
       const groups = webview.postMessage.mock.lastCall?.[0].state.groups;

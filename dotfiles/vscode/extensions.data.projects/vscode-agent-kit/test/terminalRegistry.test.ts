@@ -59,6 +59,93 @@ function setup(restored?: vscode.Terminal) {
 afterEach(() => vi.useRealTimers());
 
 describe("TerminalRegistry", () => {
+  it("opens with a request signal when static AbortSignal helpers are unavailable", async () => {
+    const { registry } = setup();
+    const controller = new AbortController();
+    vi.stubGlobal("AbortSignal", {});
+    try {
+      await registry.open(session("A"), "select", controller.signal);
+      expect(registry.displayedSessionId).toBe("A");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects an already aborted request before creating a display", async () => {
+    const { registry, displays, mocks } = setup();
+    const controller = new AbortController();
+    const reason = new Error("workspace removed");
+    controller.abort(reason);
+    await expect(registry.open(session("A"), "select", controller.signal)).rejects.toBe(reason);
+    expect(displays.create).not.toHaveBeenCalled();
+    expect(mocks.list).not.toHaveBeenCalled();
+  });
+
+  it("handles cancellation between display creation and attachment without an unhandled rejection", async () => {
+    const { registry, displays, mocks } = setup();
+    const controller = new AbortController();
+    const reason = new Error("workspace removed before attachment");
+    const added = vi.spyOn(controller.signal, "addEventListener");
+    const create = displays.create.getMockImplementation()!;
+    displays.create.mockImplementation((request) => {
+      const terminal = create(request);
+      queueMicrotask(() => controller.abort(reason));
+      return terminal;
+    });
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      await expect(registry.open(session("A"), "select", controller.signal)).rejects.toBe(reason);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(added).not.toHaveBeenCalled();
+      expect(mocks.current).not.toHaveBeenCalled();
+      expect(registry.displayedSessionId).toBeUndefined();
+      expect(displays.create.mock.results[0].value.dispose).toHaveBeenCalledOnce();
+    } finally {
+      process.removeListener("unhandledRejection", unhandled);
+    }
+  });
+
+  it.each(["success", "failure", "cancel"])(
+    "removes the request abort listener after attachment ends with %s",
+    async (outcome) => {
+      const { registry, mocks } = setup();
+      const controller = new AbortController();
+      const added = vi.spyOn(controller.signal, "addEventListener");
+      const removed = vi.spyOn(controller.signal, "removeEventListener");
+      const reason = new Error("workspace removed");
+      let release!: (current: PiMuxCurrentSession | undefined) => void;
+      if (outcome === "failure") mocks.current.mockRejectedValueOnce(new Error("lookup denied"));
+      if (outcome === "cancel") {
+        mocks.current.mockReturnValueOnce(
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+        );
+      }
+      const opening = registry.open(session("A"), "select", controller.signal);
+      if (outcome === "cancel") {
+        const cancelled = opening.catch((error: unknown) => error);
+        await vi.waitFor(() => expect(mocks.current).toHaveBeenCalledOnce());
+        controller.abort(reason);
+        expect(await cancelled).toBe(reason);
+        release(undefined);
+      } else if (outcome === "failure") {
+        await expect(opening).rejects.toThrow("lookup denied");
+      } else {
+        await opening;
+      }
+      expect(added).toHaveBeenCalledExactlyOnceWith("abort", expect.any(Function), { once: true });
+      const listener = added.mock.calls[0][1];
+      expect(removed).toHaveBeenCalledExactlyOnceWith("abort", listener);
+      if (outcome === "success") {
+        controller.abort(reason);
+        expect(registry.displayedSessionId).toBe("A");
+      }
+    },
+  );
+
   it("switches live same-cwd conversations on one display in arrival order", async () => {
     const { registry, mocks, live, displays } = setup();
     const original = [...live.values()];

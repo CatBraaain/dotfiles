@@ -53,12 +53,16 @@ export class TerminalRegistry implements vscode.Disposable {
   async open(
     launch: PiSession,
     intent: "select" | "unarchive" = "select",
+    signal?: AbortSignal,
   ): Promise<{ runtime: PiRuntime; terminal: vscode.Terminal }> {
     try {
+      signal?.throwIfAborted();
       const workspaces = await this.mux.list();
+      signal?.throwIfAborted();
       const isAlive = hasLiveSession(workspaces, launch.sessionId);
-      return await this.connect(launch, isAlive && intent === "select");
+      return await this.connect(launch, isAlive && intent === "select", signal);
     } catch (error) {
+      signal?.throwIfAborted();
       throw new Error(`Pi session ${launch.sessionId} in ${launch.cwd}: ${errorMessage(error)}`);
     }
   }
@@ -206,8 +210,9 @@ export class TerminalRegistry implements vscode.Disposable {
     return next;
   }
 
-  private async connect(session: PiSession, reuseDisplay: boolean) {
+  private async connect(session: PiSession, reuseDisplay: boolean, signal?: AbortSignal) {
     const { terminal, created } = await this.changeDisplay(async () => {
+      signal?.throwIfAborted();
       let restored = this.currentDisplay();
       if (restored !== undefined) {
         const options = restored.creationOptions;
@@ -218,13 +223,15 @@ export class TerminalRegistry implements vscode.Disposable {
         }
       }
       this.requireActive();
+      signal?.throwIfAborted();
       const terminal = restored ?? this.terminals.create(session);
       this.display = terminal;
       return { terminal, created: restored === undefined };
     });
     try {
-      const runtime = await this.waitForClient(terminal, session);
+      const runtime = await this.waitForClient(terminal, session, signal);
       this.requireActive();
+      signal?.throwIfAborted();
       if (this.closed.has(terminal)) throw new Error("Pi display closed during attachment");
       this.displayedSession = runtime.sessionId;
       this.displayedSessionCwd = runtime.cwd;
@@ -252,11 +259,21 @@ export class TerminalRegistry implements vscode.Disposable {
     }
   }
 
-  private async waitForClient(terminal: vscode.Terminal, session: PiSession): Promise<PiRuntime> {
+  private async waitForClient(
+    terminal: vscode.Terminal,
+    session: PiSession,
+    requestSignal?: AbortSignal,
+  ): Promise<PiRuntime> {
     this.requireActive();
+    requestSignal?.throwIfAborted();
     const controller = new AbortController();
+    const signal = controller.signal;
+    function abortRequest(): void {
+      controller.abort(requestSignal?.reason);
+    }
+    requestSignal?.addEventListener("abort", abortRequest, { once: true });
     const closed = new Promise<never>((_resolve, reject) => {
-      controller.signal.addEventListener("abort", () => reject(controller.signal.reason), {
+      signal.addEventListener("abort", () => reject(signal.reason), {
         once: true,
       });
     });
@@ -264,8 +281,9 @@ export class TerminalRegistry implements vscode.Disposable {
     try {
       if (this.closed.has(terminal))
         controller.abort(new Error("Pi display closed during attachment"));
-      return await Promise.race([this.pollClient(terminal, session, controller.signal), closed]);
+      return await Promise.race([this.pollClient(terminal, session, signal), closed]);
     } finally {
+      requestSignal?.removeEventListener("abort", abortRequest);
       controller.abort();
       this.attachments.delete(terminal);
     }
@@ -285,6 +303,7 @@ export class TerminalRegistry implements vscode.Disposable {
       signal.throwIfAborted();
       if (terminal.exitStatus !== undefined) break;
       const runtime = await this.runtimeFor(current, session, pid);
+      signal.throwIfAborted();
       if (runtime !== undefined) return runtime;
       await sleep(50, undefined, { signal });
     }

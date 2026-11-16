@@ -5,7 +5,7 @@ import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory
 import type { TerminalRegistry } from "../terminalRegistry";
 import type { EmptySessionPool } from "../emptySessionPool";
 import { errorMessage } from "../guards";
-import { archiveReplacement } from "../grouping";
+import { archiveReplacement, cwdGroupKey } from "../grouping";
 import { flattenPiMuxSessions, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../piMux";
 import {
   parseWebviewRequest,
@@ -46,6 +46,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private unreadSessionIds = new Set<string>();
   private refreshVersion = 0;
   private latestSelection: symbol | undefined;
+  private readonly pendingOpens = new Map<AbortController, string>();
   private pendingRefresh: Promise<void> | undefined;
   private refreshRequested = false;
   private manualLoadingRequested = false;
@@ -486,16 +487,16 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "unregisterWorkspace") {
+      for (const [controller, cwd] of this.pendingOpens) {
+        if (cwdGroupKey(cwd) === cwdGroupKey(request.cwd)) controller.abort();
+      }
       await this.deps.registry.run(() => this.unregisterWorkspace(request.cwd));
       return;
     }
     if (request.type === "openSession") {
       const selection = Symbol();
       this.latestSelection = selection;
-      await this.deps.registry.run(async () => {
-        if (selection !== this.latestSelection) return;
-        await this.openSession(request.sessionId);
-      });
+      await this.queueOpenSession(request.sessionId, "select", selection);
       return;
     }
     if (request.type === "archiveSession") {
@@ -503,7 +504,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "unarchiveSession") {
-      await this.deps.registry.run(() => this.openSession(request.sessionId, "unarchive"));
+      await this.queueOpenSession(request.sessionId, "unarchive");
       return;
     }
   }
@@ -611,21 +612,34 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     await this.refresh(false);
   }
 
-  private async openSession(
+  private async queueOpenSession(
     sessionId: string,
-    intent: "select" | "unarchive" = "select",
+    intent: "select" | "unarchive",
+    selection?: symbol,
   ): Promise<void> {
-    const session = this.sessionsById.get(sessionId);
-    if (session === undefined) {
-      this.postError(`Session not found: ${sessionId}`);
-      return;
+    const controller = new AbortController();
+    const cwd = this.sessionsById.get(sessionId)?.cwd;
+    if (cwd !== undefined) this.pendingOpens.set(controller, cwd);
+    try {
+      await this.deps.registry.run(async () => {
+        if (controller.signal.aborted) return;
+        if (selection !== undefined && selection !== this.latestSelection) return;
+        const session = this.sessionsById.get(sessionId);
+        if (session === undefined) {
+          this.postError(`Session not found: ${sessionId}`);
+          return;
+        }
+        await this.openKnownSession(session, intent, controller.signal);
+      });
+    } finally {
+      this.pendingOpens.delete(controller);
     }
-    await this.openKnownSession(session, intent);
   }
 
   private async openKnownSession(
     session: SessionSummary,
     intent: "select" | "unarchive",
+    signal: AbortSignal,
   ): Promise<void> {
     const previousSessionId = this.deps.registry.displayedSessionId;
     const { sessionId } = session;
@@ -635,17 +649,21 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         !(await sessionFileExists(session.filePath)) &&
         !(await this.deps.registry.mux.aliveSessionIds([sessionId]))?.has(sessionId)
       ) {
+        if (signal.aborted) return;
         this.postError(`Session file no longer exists: ${sessionId}`);
         return;
       }
     } catch (error) {
+      if (signal.aborted) return;
       this.postError(`Failed to read session file: ${errorMessage(error)}`);
       return;
     }
 
     let terminal: vscode.Terminal;
     try {
+      signal.throwIfAborted();
       await requireWorkDirectory(session.cwd);
+      signal.throwIfAborted();
       ({ terminal } = await this.deps.registry.open(
         {
           sessionId,
@@ -653,16 +671,20 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
           ...(temporary ? { temporary: true as const } : {}),
         },
         intent,
+        signal,
       ));
     } catch (error) {
+      if (signal.aborted) return;
       this.postError(
         `Failed to open session ${sessionId} in ${session.cwd}: ${errorMessage(error)}`,
       );
       return;
     }
 
+    if (signal.aborted) return;
     terminal.show();
     await this.deps.emptySessions?.resumeWorkspace(session.cwd);
+    if (signal.aborted) return;
     if (temporary) this.temporarySessionIds.add(sessionId);
     else this.temporarySessionIds.delete(sessionId);
     await this.stopTemporaryDisplayedSession(previousSessionId);
