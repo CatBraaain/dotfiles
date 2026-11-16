@@ -23,6 +23,20 @@ async function until(predicate: () => boolean): Promise<void> {
   }
 }
 
+function failNextAuthRead(provider: ReturnType<typeof fakeProvider>["provider"], error: unknown) {
+  const auth = provider.auth;
+  let failing = true;
+  Object.defineProperty(provider, "auth", {
+    get() {
+      if (failing) {
+        failing = false;
+        throw error;
+      }
+      return auth;
+    },
+  });
+}
+
 function registrationFault() {
   let failing = false;
   let provider: ReturnType<typeof fakeProvider>["provider"];
@@ -97,21 +111,21 @@ describe("provider preparation lifecycle", () => {
     const h = await gateFixture({}, { deferPreparation: true });
     const originals = h.registry.getRegisteredProviderIds();
     const preparation = h.gates.ensure();
-    const stopped = assert.rejects(preparation, /owner is closed/);
+    const stopped = assert.rejects(preparation, /recontext extension has stopped/);
     h.gates.close();
     await stopped;
     await tick();
     await tick();
     assert.deepEqual(h.registry.getRegisteredProviderIds(), originals);
     assert.strictEqual(h.registry.getRegisteredNativeProvider(h.provider.id), h.provider);
-    await assert.rejects(h.gates.ensure(), /owner is closed/);
+    await assert.rejects(h.gates.ensure(), /recontext extension has stopped/);
     h.gates.close();
   });
 
-  it("stops a partial owner's timer without restoring over a foreign or replacement owner", async () => {
+  it("stops partial preparation without restoring over a newer provider registration", async () => {
     const h = await gateFixture({}, { deferPreparation: true });
     const pending = h.gates.ensure();
-    const stopped = assert.rejects(pending, /owner is closed/);
+    const stopped = assert.rejects(pending, /recontext extension has stopped/);
     await until(() => h.registry.getRegisteredProviderIds().length > 1);
     const wrappedId = h.registry.getRegisteredProviderIds().find((id) => id !== h.provider.id)!;
     const foreign = fakeProvider(wrappedId).provider;
@@ -225,11 +239,17 @@ describe("provider preparation lifecycle", () => {
     }
   });
 
-  it("preserves a draining summary's queue across a partial close and new owner", async () => {
+  it("preserves a draining summary's queue after a partial close fails and fresh checks start", async () => {
     const h = await gateFixture({}, { deferPreparation: true });
+    const firstProvider = fakeProvider(h.registry.getAll()[0]!.provider);
+    h.registry.registerProvider(firstProvider.provider);
     const pending = h.gates.ensure();
-    const stopped = assert.rejects(pending, /owner is closed/);
-    await until(() => h.registry.getRegisteredProviderIds().length > 1);
+    const stopped = assert.rejects(pending, /recontext extension has stopped/);
+    await until(
+      () =>
+        h.registry.getRegisteredNativeProvider(firstProvider.provider.id) !==
+        firstProvider.provider,
+    );
     const nextProvider = fakeProvider(h.provider.id);
     const change: ProviderUpdate = {
       registry: h.registry,
@@ -261,11 +281,12 @@ describe("provider preparation lifecycle", () => {
     }
     const first = request();
     await entered.promise;
-    h.gates.close();
+    failNextAuthRead(firstProvider.provider, new Error("Synthetic close failure during summary"));
+    assert.throws(() => h.gates.close(), /Synthetic close failure during summary/);
     await stopped;
-    const nextOwner = installProviderGates(h.pi, () => h.ctx);
+    const nextGates = installProviderGates(h.pi, () => h.ctx);
     try {
-      await nextOwner.ensure();
+      await nextGates.ensure();
       assert.equal((await request()).stopReason, "aborted");
       assert.deepEqual(
         nextProvider.state.requests.map((capture) => capture.kind),
@@ -273,7 +294,7 @@ describe("provider preparation lifecycle", () => {
       );
       release.resolve();
       await first;
-      await until(() => !nextOwner.isBusy());
+      await until(() => !nextGates.isBusy());
       assert.equal((await request()).stopReason, "stop");
       assert.equal(nextProvider.state.maxActive, 1);
       assert.deepEqual(
@@ -282,10 +303,108 @@ describe("provider preparation lifecycle", () => {
       );
     } finally {
       release.resolve();
-      nextOwner.close();
+      nextGates.close();
       h.gates.close();
     }
   });
+});
+
+describe("provider restoration failures", () => {
+  for (const failureCount of [1, 2]) {
+    it(`restores remaining providers before reporting close failures (count: ${failureCount})`, async () => {
+      const h = await gateFixture({}, { deferPreparation: true });
+      const providerIds = [...new Set(h.registry.getAll().map((model) => model.provider))];
+      const faulted = providerIds.slice(0, failureCount).map((id) => fakeProvider(id));
+      faulted.forEach((fake) => h.registry.registerProvider(fake.provider));
+      const originals = new Map(
+        providerIds.map((id) => [id, h.registry.getRegisteredNativeProvider(id)]),
+      );
+      const failures = faulted.map((fake, index) =>
+        index === 0
+          ? new Error(`Synthetic close failure for ${fake.provider.id}`)
+          : `Synthetic close failure for ${fake.provider.id}`,
+      );
+      try {
+        await h.gates.ensure();
+        const foreign = fakeProvider(providerIds[failureCount]!);
+        h.registry.registerProvider(foreign.provider);
+        faulted.forEach((fake, index) => failNextAuthRead(fake.provider, failures[index]));
+        assert.throws(
+          () => h.gates.close(),
+          (error) => {
+            for (const id of providerIds.slice(failureCount)) {
+              const expected = id === foreign.provider.id ? foreign.provider : originals.get(id);
+              assert.strictEqual(h.registry.getRegisteredNativeProvider(id), expected, id);
+            }
+            assert.ok(error instanceof AggregateError);
+            assert.equal(error.errors.length, failureCount);
+            assert.deepEqual(
+              error.errors.map((failure: Error) => failure.cause),
+              failures,
+            );
+            for (const fake of faulted) {
+              assert.ok(error.message.includes(fake.provider.id));
+              assert.ok(error.message.includes(`Synthetic close failure for ${fake.provider.id}`));
+            }
+            return true;
+          },
+        );
+        assert.doesNotThrow(() => h.gates.close());
+      } finally {
+        h.gates.close();
+      }
+    });
+
+    it(`recovers summary and normal dispatch after one-shot close failures on SDK reload (count: ${failureCount})`, async () => {
+      const predecessors: ReturnType<typeof fakeProvider>[] = [];
+      function extension(pi: ExtensionAPI): void {
+        pi.on("session_start", (_event, ctx) => {
+          if (predecessors.length) return;
+          const ids = [...new Set(ctx.modelRegistry.getAll().map((model) => model.provider))];
+          for (const id of ids.slice(0, failureCount)) {
+            const fake = fakeProvider(id);
+            predecessors.push(fake);
+            ctx.modelRegistry.registerProvider(fake.provider);
+          }
+        });
+        recontextExtension(pi);
+      }
+      const h = await preparationFixture({ extension });
+      try {
+        await h.session.prompt("before restoration failure", { source: "extension" });
+        assert.deepEqual(
+          h.fake.state.requests.map((request) => request.kind),
+          ["summary", "normal"],
+        );
+        predecessors.forEach((fake) =>
+          failNextAuthRead(
+            fake.provider,
+            new Error(`Synthetic reload close failure for ${fake.provider.id}`),
+          ),
+        );
+        await h.session.reload();
+        seedConversation(h.manager, 12_500);
+        const beforeRecovery = h.fake.state.requests.length;
+        await h.session.prompt("after restoration failure", { source: "extension" });
+        assert.deepEqual(
+          h.fake.state.requests.slice(beforeRecovery).map((request) => request.kind),
+          ["summary", "normal"],
+        );
+        assert.equal(h.session.getLastAssistantText(), "Normal reply");
+        assert.equal(h.errors.length, 1);
+        const notification = h.errors[0]!;
+        assert.equal(notification.event, "session_shutdown");
+        for (const fake of predecessors) {
+          assert.ok(
+            notification.error.includes(`Synthetic reload close failure for ${fake.provider.id}`),
+          );
+        }
+        assert.deepEqual(h.notices, []);
+      } finally {
+        await h.dispose();
+      }
+    });
+  }
 });
 
 describe("AgentSession preparation boundaries", () => {
@@ -535,7 +654,7 @@ describe("registration failure stops ordinary dispatch through public APIs", () 
     });
   }
 
-  it("resumes protected dispatch with a new SDK owner after a registration failure and reload", async () => {
+  it("resumes protected dispatch after a registration failure and SDK reload", async () => {
     const fault = registrationFault();
     let injected = false;
     function extension(pi: ExtensionAPI): void {

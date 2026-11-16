@@ -445,7 +445,7 @@ describe("effective cap preflight", () => {
   }
 });
 
-describe("session serialization and provider ownership", () => {
+describe("session serialization and provider wrapper restoration", () => {
   it("serializes an already-running warm request before summary and ordinary dispatch", async () => {
     const h = await gateFixture();
     try {
@@ -628,7 +628,7 @@ describe("session serialization and provider ownership", () => {
     }
   });
 
-  it("does not restore an old predecessor over a new foreign owner", async () => {
+  it("does not restore an old provider over a newer registration", async () => {
     const h = await gateFixture();
     const foreign = fakeProvider(h.provider.id).provider;
     h.registry.registerProvider(foreign);

@@ -136,7 +136,7 @@ export function installProviderGates(
   }
 
   function ensure(): Promise<void> {
-    if (closed) return Promise.reject(new Error("Provider preparation owner is closed"));
+    if (closed) return Promise.reject(new Error("recontext extension has stopped"));
     if (failure) return Promise.reject(failure.error);
     if (preparation) return preparation.promise;
     let pending: string[] = [];
@@ -189,11 +189,13 @@ export function installProviderGates(
     const previous = registrations.get(providerId);
     const current = registry.getRegisteredNativeProvider(providerId);
     if (previous?.ready && current === previous.wrapper) return;
-    const ownsCurrent = previous !== undefined && current === previous.wrapper;
-    const native = ownsCurrent ? previous.native : current;
-    const base = ownsCurrent ? previous.base : (native ?? registry.getProvider(providerId));
+    const isCurrentWrapper = previous !== undefined && current === previous.wrapper;
+    const native = isCurrentWrapper ? previous.native : current;
+    const base = isCurrentWrapper ? previous.base : (native ?? registry.getProvider(providerId));
     if (!base) return;
-    const legacy = ownsCurrent ? previous.legacy : registry.getRegisteredProviderConfig(providerId);
+    const legacy = isCurrentWrapper
+      ? previous.legacy
+      : registry.getRegisteredProviderConfig(providerId);
     function stream<T extends Api>(
       model: Model<T>,
       context: TranscriptContext,
@@ -460,16 +462,28 @@ export function installProviderGates(
     closed = true;
     if (timer !== undefined) clearTimeout(timer);
     timer = undefined;
-    preparation?.reject(new Error("Provider preparation owner is closed"));
+    preparation?.reject(new Error("recontext extension has stopped"));
     preparation = undefined;
     lifetime.abort();
     unsubscribe();
+    const errors: Error[] = [];
     try {
-      for (const providerId of registrations.keys()) restore(providerId);
+      for (const providerId of registrations.keys()) {
+        try {
+          restore(providerId);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          errors.push(
+            new Error(`Failed to restore provider "${providerId}": ${message}`, { cause: error }),
+          );
+        }
+      }
     } finally {
       queue.owners--;
       releaseQueue();
     }
+    if (errors.length)
+      throw new AggregateError(errors, errors.map((error) => error.message).join("\n"));
   }
 
   function releaseQueue(): void {
@@ -515,7 +529,7 @@ function failedMessage(
     content: [],
     timestamp: Date.now(),
     stopReason,
-    errorMessage: `recontext: ${error instanceof Error ? error.message : String(error)}`,
+    errorMessage: `recontext extension: ${error instanceof Error ? error.message : String(error)}`,
     usage: {
       input: 0,
       output: 0,

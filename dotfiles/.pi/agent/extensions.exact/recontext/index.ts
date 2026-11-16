@@ -37,36 +37,36 @@ export default function recontextExtension(pi: ExtensionAPI): void {
   const pendingRequests = new Map<string, HandoffPayload>();
   let currentContext: ExtensionContext;
   let gates: ProviderGates | undefined;
-  let widgetOwner: ProviderGates | undefined;
+  let widgetGates: ProviderGates | undefined;
   pi.on("session_start", (_event, ctx) => {
     currentContext = ctx;
     gates?.close();
     gates = installProviderGates(pi, () => currentContext);
   });
   pi.on("session_shutdown", (_event, ctx) => {
-    const owner = gates;
+    const closingGates = gates;
     gates = undefined;
-    if (owner) clearPreparationWidget(owner, ctx);
-    owner?.close();
+    if (closingGates) clearPreparationWidget(closingGates, ctx);
+    closingGates?.close();
   });
   pi.on("resources_discover", (_event, ctx) => {
-    const owner = gates;
-    if (!owner) return;
+    const preparingGates = gates;
+    if (!preparingGates) return;
     let started = false;
     function prepareInBackground(): void {
-      if (!owner || started || gates !== owner) return;
+      if (!preparingGates || started || gates !== preparingGates) return;
       started = true;
-      void owner.ensure().then(
-        () => clearPreparationWidget(owner, ctx),
+      void preparingGates.ensure().then(
+        () => clearPreparationWidget(preparingGates, ctx),
         (error) => {
-          if (gates !== owner) return;
-          clearPreparationWidget(owner, ctx);
-          ctx.ui.notify(`recontext: ${errorMessage(error)}`, "error");
+          if (gates !== preparingGates) return;
+          clearPreparationWidget(preparingGates, ctx);
+          ctx.ui.notify(`recontext extension: ${errorMessage(error)}`, "error");
         },
       );
     }
     if (ctx.mode === "tui") {
-      widgetOwner = owner;
+      widgetGates = preparingGates;
       ctx.ui.setWidget(PREPARATION_WIDGET, () => ({
         render() {
           prepareInBackground();
@@ -182,25 +182,25 @@ export default function recontextExtension(pi: ExtensionAPI): void {
     );
   });
 
-  function clearPreparationWidget(owner: ProviderGates, ctx: ExtensionContext): void {
-    if (widgetOwner !== owner) return;
-    widgetOwner = undefined;
+  function clearPreparationWidget(preparingGates: ProviderGates, ctx: ExtensionContext): void {
+    if (widgetGates !== preparingGates) return;
+    widgetGates = undefined;
     ctx.ui.setWidget(PREPARATION_WIDGET, undefined);
   }
 
   async function ensureGates(ctx: ExtensionContext): Promise<boolean> {
     currentContext = ctx;
-    const owner = gates;
+    const currentGates = gates;
     try {
-      if (!owner) throw new Error("Provider preparation owner is closed");
-      await owner.ensure();
+      if (!currentGates) throw new Error("recontext extension has stopped");
+      await currentGates.ensure();
       return true;
     } catch (error) {
       ctx.abort();
-      ctx.ui.notify(`recontext: ${errorMessage(error)}`, "error");
+      ctx.ui.notify(`recontext extension: ${errorMessage(error)}`, "error");
       return false;
     } finally {
-      if (owner) clearPreparationWidget(owner, ctx);
+      if (currentGates) clearPreparationWidget(currentGates, ctx);
     }
   }
 

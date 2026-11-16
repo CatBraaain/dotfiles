@@ -24,13 +24,13 @@ function fixture() {
 }
 
 describe("provider update handoff", () => {
-  it("uses ordinary registration when recontext has no listener", () => {
+  it("uses ordinary registration when the recontext extension has no listener", () => {
     const h = fixture();
     registerProviderUpdate(h.pi, h.ctx, "fake", { models: [] });
     assert.deepEqual(h.calls, ["fake"]);
   });
 
-  it("lets the active owner finish registration synchronously without a duplicate", () => {
+  it("lets the recontext extension finish registration synchronously without a duplicate", () => {
     const h = fixture();
     h.pi.events.on(PROVIDER_UPDATE_EVENT, (value) => {
       const update = value as ProviderUpdate;
