@@ -504,9 +504,9 @@ async function waitFor<T>(check: () => T | undefined | Promise<T | undefined>): 
 type MuxFixture = Awaited<ReturnType<typeof createFixture>>;
 
 function enableStatePublisher(f: MuxFixture): void {
-  symlinkSync(
-    resolve(EXTENSION_DIR, "../session-state"),
-    join(f.agent, "extensions/session-state"),
+  writeFileSync(
+    join(f.agent, "extensions/session-state.ts"),
+    `export { default } from ${JSON.stringify(resolve(EXTENSION_DIR, "../session-state/index.ts"))};\n`,
   );
   writeFileSync(join(f.bin, "pi-mux"), "#!/bin/sh\nexec " + quote(CLI_COMMAND) + ' "$@"\n', {
     mode: 0o700,
