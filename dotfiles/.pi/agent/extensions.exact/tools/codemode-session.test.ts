@@ -472,16 +472,24 @@ describe("codemode nested AgentSession pipeline without a model request", () => 
           `try { await tools.${scenario.name}(${JSON.stringify(args)}); } catch (error) { text(error.message); }`,
         );
         assert.equal(result.isError, undefined);
-        assert.equal(calls.length, 1);
+        const expectedCallCount = scenario.name === "bash" ? 2 : 1;
+        assert.equal(calls.length, expectedCallCount);
         assert.equal(calls[0]!.toolName, scenario.name);
         assert.deepEqual(calls[0]!.input, args);
         assert.equal(calls[0]!.parentToolCallId, "script");
-        assert.equal(results.length, 1);
-        assert.equal(results[0]!.parentToolCallId, "script");
-        assert.equal(results[0]!.toolCallId, calls[0]!.toolCallId);
-        assert.equal(results[0]!.isError, true);
+        if (scenario.name === "bash") {
+          assert.equal(calls[1]!.toolName, "bash");
+          assert.equal(calls[1]!.parentToolCallId, calls[0]!.toolCallId);
+          assert.match(calls[1]!.input.command as string, /^rtk rewrite /);
+          assert.equal(calls[1]!.input.timeout, 2);
+        }
+        assert.equal(results.length, expectedCallCount);
+        const mainResult = results.find((result) => result.toolCallId === calls[0]!.toolCallId);
+        assert.ok(mainResult);
+        assert.equal(mainResult.parentToolCallId, "script");
+        assert.equal(mainResult.isError, true);
         assert.ok(
-          results[0]!.content.some(
+          mainResult.content.some(
             (block) => block.type === "text" && block.text.includes(scenario.diagnostic),
           ),
         );

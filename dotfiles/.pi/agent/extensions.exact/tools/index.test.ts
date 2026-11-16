@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -19,6 +20,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { quote } from "shell-quote";
 import { requestBackgroundBash } from "./background-bash.ts";
 import toolsExtension from "./index.ts";
 import { Guardrail } from "../guardrails/guardrail.ts";
@@ -534,7 +536,193 @@ describe("tools with the guardrails public API", () => {
   });
 });
 
-function withFixture(test: (fixture: Fixture) => Promise<void>): () => Promise<void> {
+describe("registered Bash RTK authorization", () => {
+  it(
+    "uses the sandboxed Bash for rewrite and main execution without recursive rewrites",
+    withFixture(async ({ tools, context, directory }) => {
+      const marker = join(directory, "must-not-exist");
+      const command = `git log --format='日本語'; $(touch ${quote([marker])})\nprintf '$HOME'`;
+      const rewritten = "printf rewritten";
+      const input = { command, timeout: 10 };
+      const originalRun = SandboxRunner.prototype.runTool;
+      const originalAuthorize = Guardrail.prototype.authorizeCommand;
+      const authorized: string[] = [];
+      const executed: string[] = [];
+      Guardrail.prototype.authorizeCommand = async function (command, context, mode) {
+        authorized.push(command);
+        return originalAuthorize.call(this, command, context, mode);
+      };
+      SandboxRunner.prototype.runTool = async function (name, params, options) {
+        const command = (params as { command: string }).command;
+        executed.push(command);
+        if (!command.startsWith("rtk rewrite "))
+          return originalRun.call(this, name, params, options);
+        const stub =
+          `rtk() { [ "$#" = 2 ] && [ "$1" = rewrite ] && [ "$2" = ${quote([input.command])} ] || return 2; ` +
+          `printf '%s\\n' ${quote([rewritten])}; printf diagnostic >&2; return 3; }; `;
+        return originalRun.call(
+          this,
+          name,
+          { ...(params as Record<string, unknown>), command: stub + command },
+          options,
+        );
+      };
+      try {
+        const result = await tools
+          .get("bash")!
+          .execute("rtk", input, undefined, undefined, context);
+        const rewriteCommand = `${quote(["rtk", "rewrite", command])} 2>/dev/null`;
+        assert.deepEqual(authorized, [rewriteCommand, rewritten]);
+        assert.deepEqual(executed, [rewriteCommand, rewritten]);
+        assert.deepEqual(result.content, [{ type: "text", text: "rewritten" }]);
+        assert.deepEqual(input, { command, timeout: 10 });
+        assert.equal(existsSync(marker), false);
+      } finally {
+        SandboxRunner.prototype.runTool = originalRun;
+        Guardrail.prototype.authorizeCommand = originalAuthorize;
+      }
+    }, "registered"),
+  );
+
+  it(
+    "authorizes the original command normally when rewriting is denied",
+    withFixture(async ({ tools, context }) => {
+      const originalRun = SandboxRunner.prototype.runTool;
+      const originalAuthorize = Guardrail.prototype.authorizeCommand;
+      const authorized: string[] = [];
+      const executed: string[] = [];
+      Guardrail.prototype.authorizeCommand = async function (command, context, mode) {
+        authorized.push(command);
+        if (command.startsWith("rtk rewrite ")) throw new Error("Access denied: rewrite");
+        return originalAuthorize.call(this, command, context, mode);
+      };
+      SandboxRunner.prototype.runTool = async (_name, params) => {
+        executed.push((params as { command: string }).command);
+        return { content: [{ type: "text", text: "original" }], details: {} };
+      };
+      try {
+        await tools
+          .get("bash")!
+          .execute("rewrite-denied", { command: "printf original" }, undefined, undefined, context);
+        assert.equal(authorized.length, 2);
+        assert.match(authorized[0]!, /^rtk rewrite /);
+        assert.equal(authorized[1], "printf original");
+        assert.deepEqual(executed, ["printf original"]);
+      } finally {
+        SandboxRunner.prototype.runTool = originalRun;
+        Guardrail.prototype.authorizeCommand = originalAuthorize;
+      }
+    }, "registered"),
+  );
+
+  it(
+    "does not fall back to the original command when main authorization rejects the rewrite",
+    withFixture(async ({ tools, context }) => {
+      const originalRun = SandboxRunner.prototype.runTool;
+      const originalAuthorize = Guardrail.prototype.authorizeCommand;
+      const executed: string[] = [];
+      Guardrail.prototype.authorizeCommand = async function (command, context, mode) {
+        if (command === "printf rewritten") throw new Error("Access denied: rewritten main");
+        return originalAuthorize.call(this, command, context, mode);
+      };
+      SandboxRunner.prototype.runTool = async (_name, params) => {
+        executed.push((params as { command: string }).command);
+        return {
+          content: [],
+          details: {},
+          structuredContent: { output: "printf rewritten", exit_code: 0, truncated: false },
+        };
+      };
+      try {
+        await assert.rejects(
+          tools
+            .get("bash")!
+            .execute("main-denied", { command: "printf original" }, undefined, undefined, context),
+          /Access denied: rewritten main/,
+        );
+        assert.equal(executed.length, 1);
+        assert.match(executed[0]!, /^rtk rewrite /);
+      } finally {
+        SandboxRunner.prototype.runTool = originalRun;
+        Guardrail.prototype.authorizeCommand = originalAuthorize;
+      }
+    }, "registered"),
+  );
+
+  it(
+    "discards partial rewrite stdout on the real two-second Bash timeout",
+    withFixture(async ({ tools, context }) => {
+      const originalRun = SandboxRunner.prototype.runTool;
+      const executed: Record<string, unknown>[] = [];
+      SandboxRunner.prototype.runTool = async function (name, params, options) {
+        executed.push(params as Record<string, unknown>);
+        const command = (params as { command: string }).command;
+        const stub = "rtk() { printf 'printf partial'; sleep 3; }; ";
+        return originalRun.call(
+          this,
+          name,
+          command.startsWith("rtk rewrite ")
+            ? { ...(params as Record<string, unknown>), command: stub + command }
+            : params,
+          options,
+        );
+      };
+      try {
+        const result = await tools
+          .get("bash")!
+          .execute("timeout", { command: "printf original" }, undefined, undefined, context);
+        assert.deepEqual(result.content, [{ type: "text", text: "original" }]);
+        assert.equal(executed.length, 2);
+        assert.equal(executed[0]!.timeout, 2);
+        assert.equal(executed[1]!.command, "printf original");
+      } finally {
+        SandboxRunner.prototype.runTool = originalRun;
+      }
+    }, "registered"),
+  );
+
+  it(
+    "does not execute either main command after cancellation during rewriting",
+    withFixture(async ({ tools, context }) => {
+      const originalRun = SandboxRunner.prototype.runTool;
+      const executed: string[] = [];
+      const controller = new AbortController();
+      SandboxRunner.prototype.runTool = async (_name, params, options) => {
+        executed.push((params as { command: string }).command);
+        assert.strictEqual(options.signal, controller.signal);
+        controller.abort(new Error("cancelled rewrite"));
+        return {
+          content: [],
+          details: {},
+          structuredContent: { output: "printf rewritten", exit_code: 0, truncated: false },
+        };
+      };
+      try {
+        await assert.rejects(
+          tools
+            .get("bash")!
+            .execute(
+              "cancel-rewrite",
+              { command: "printf original" },
+              controller.signal,
+              undefined,
+              context,
+            ),
+          /cancelled rewrite/,
+        );
+        assert.equal(executed.length, 1);
+        assert.match(executed[0]!, /^rtk rewrite /);
+      } finally {
+        SandboxRunner.prototype.runTool = originalRun;
+      }
+    }, "registered"),
+  );
+});
+
+function withFixture(
+  test: (fixture: Fixture) => Promise<void>,
+  rtkMode: "stub" | "registered" = "stub",
+): () => Promise<void> {
   return async () => {
     const directory = mkdtempSync(join(tmpdir(), "guardrails-direct-"));
     try {
@@ -555,6 +743,20 @@ function withFixture(test: (fixture: Fixture) => Promise<void>): () => Promise<v
             name,
             arguments: args,
           };
+          if (
+            rtkMode === "stub" &&
+            (args as { command: string }).command.startsWith("rtk rewrite ")
+          )
+            return {
+              toolCall,
+              result: {
+                content: [],
+                details: {},
+                structuredContent: { output: "", exit_code: 1, truncated: false },
+                isError: true,
+              },
+              isError: true,
+            };
           try {
             const result = await tools
               .get("bash")!

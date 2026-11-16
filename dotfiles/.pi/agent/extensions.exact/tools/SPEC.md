@@ -26,6 +26,18 @@ Tools は pi の標準tool factory からツール定義（schema・説明文）
 
 read / write / edit / grep / find / ls / bash の実行を Guardrails公開APIへ直接依頼する。通常のSDK経路の引数検証・tool hooks・実行イベント・履歴はSDKのまま維持する。codemodeを登録し、結果は呼び出し元へ返す。Guardrails初期化が失敗した場合は原因を通知し、7ツールと背景Bash入口のすべてを同じ初期化エラーで実行不可にする。
 
+## BashのRTK書換え
+
+登録 `bash` は `tool_call` の後、認可・実行の前にRTKによるコマンド書換えを試みる。他の拡張の `tool_call` handler は書換え前のコマンドを見る。起動時のRTK実行・version確認・警告は行わない。
+
+| 条件・書換え結果 | 本処理へ渡すコマンド |
+| --- | --- |
+| 空入力、`rtk ` 始まり、`RTK_DISABLED=1` | 元のコマンド |
+| 終了コード `0` または `3`、非空の標準出力 | 標準出力の前後空白を除いたコマンド |
+| 書換えの認可拒否、失敗、2秒の実行timeout、不正・打ち切り済みの結果、空出力 | 元のコマンド |
+
+書換えCLIは、元コマンド全体を単一の引数として登録Bash経由で実行し、同じsandboxとコマンド承認を適用する。標準エラーは書換え結果に含めない。内部の `rtk ` コマンドには再度書換えを適用しない。呼び出し元の中断信号を引き継ぎ、中断済みの結果を採用しない。本処理には元または書換え後のコマンドを渡し、どちらも通常のGuardrails認可・実行を通す。
+
 ## 背景Bash入口
 
 lifecycle/background処理は、Tools配下のBash専用helperをimportし、型付きの直接APIへ要求できる。要求は `id`、`params`、呼び出し元のruntimeを識別するcontext、モデル・thinking level・会話IDと会話ファイルの必要情報、任意の `signal` を持つ。`params` は登録Bashのschemaを再利用し、文字列の `command` と任意の数値 `timeout` だけを入口で検証する。APIは要求の終端結果をPromiseで返す。すべての結果は、登録Bash経路の実行待機を表す `executionSettled: Promise<void>` を持つ。

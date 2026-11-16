@@ -23,6 +23,7 @@ import {
 } from "../guardrails/api.ts";
 import { registerBackgroundBash } from "./background-bash.ts";
 import { registerCodemode } from "./codemode.ts";
+import { rewriteBashCommand } from "./rtk.ts";
 
 export default function toolsExtension(pi: ExtensionAPI, configPath?: string): void {
   const { guardrails, initializationError } = initializeGuardrails(pi, configPath);
@@ -109,7 +110,12 @@ function registerGuardedTool(
     description: definition.description + (TOOL_GUIDANCE[definition.name] ?? ""),
     ...(definition.name === "edit" ? { renderShell: "default" as const } : {}),
     async execute(id, params, signal, onUpdate, context) {
-      return execute({ id, params: params as Record<string, unknown>, signal, onUpdate, context });
+      const input = params as Record<string, unknown>;
+      const guardedParams =
+        definition.name === "bash" && typeof input.command === "string"
+          ? { ...input, command: await rewriteBashCommand(input.command, context, signal) }
+          : input;
+      return execute({ id, params: guardedParams, signal, onUpdate, context });
     },
   });
 }
