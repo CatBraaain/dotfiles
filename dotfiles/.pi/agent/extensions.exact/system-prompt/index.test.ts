@@ -198,6 +198,7 @@ function richOptions(): BuildSystemPromptOptions & NormalizedBuildSystemPromptOp
     customPrompt: undefined,
     forceSystemPrompt: undefined,
     selectedTools: ["read", "edit"],
+    hiddenTools: [],
     toolSnippets: { read: "Read files", edit: "Edit files" },
     toolGuidelines: { edit: ["Read the file before editing"] },
     promptGuidelines: ["Answer concisely"],

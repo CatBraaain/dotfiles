@@ -36,7 +36,7 @@ describe("real bwrap safety boundaries", () => {
           ui: { confirm: async () => true },
         });
         assert.equal(grant.status, "granted");
-        assert.equal(grant.bashWritable, true);
+        assert.equal(grant.grantedPath, target);
         const afterGrant = await observe(runner, "write", path, mode);
         assert.equal(afterGrant, "written");
         assert.equal(readFileSync(path, "utf8"), "sandbox write");

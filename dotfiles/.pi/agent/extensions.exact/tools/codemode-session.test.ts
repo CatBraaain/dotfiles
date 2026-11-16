@@ -114,6 +114,8 @@ function renderLines(definition: ToolDefinition, result: AgentToolResult<unknown
     lastComponent: undefined,
     cwd: process.cwd(),
     executionStarted: true,
+    durationMs: undefined,
+    outputPad: 1,
     argsComplete: true,
     isPartial: false,
     expanded: false,

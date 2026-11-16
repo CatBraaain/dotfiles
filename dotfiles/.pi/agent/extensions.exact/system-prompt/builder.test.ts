@@ -217,14 +217,19 @@ describe("builder matches the installed Pi", () => {
 
 describe("normalizeBuildSystemPromptOptions port", () => {
   it("fills the same defaults and copies every collection", () => {
-    const input = richOptions();
+    const input = { ...richOptions(), hiddenTools: ["bash"] };
     const own = normalizeBuildSystemPromptOptions(input);
     const reference = oracle.normalizeBuildSystemPromptOptions(input);
     assert.deepEqual(own, reference);
     own.selectedTools.push("mutated");
+    own.hiddenTools.push("mutated");
     own.sections.dynamic = "mutated";
     own.skills[0]!.name = "mutated";
     assert.deepEqual(oracle.normalizeBuildSystemPromptOptions(input), reference);
+  });
+
+  it("defaults hiddenTools to an empty list", () => {
+    assert.deepEqual(normalizeBuildSystemPromptOptions({ cwd: "/w" }).hiddenTools, []);
   });
 
   it("defaults selectedTools to the standard set", () => {

@@ -82,6 +82,8 @@ function renderContext(overrides: Partial<ToolRenderContext> = {}): ToolRenderCo
     state: {},
     cwd: process.cwd(),
     executionStarted: true,
+    durationMs: undefined,
+    outputPad: 1,
     argsComplete: true,
     isPartial: false,
     expanded: false,
@@ -116,8 +118,11 @@ const standard = standardDefinition();
 const shortened = codemodeRenderers(() => standard)!;
 
 describe("codemode registration", () => {
-  it("keeps renderCall by reference and wraps only renderResult", () => {
-    assert.strictEqual(shortened.renderCall, standard.renderCall);
+  it("preserves the standard call body and wraps the result renderer", () => {
+    const args = { code: "return 1;" };
+    const expected = renderLines(standard.renderCall!(args, plainTheme, renderContext()));
+    const actual = renderLines(shortened.renderCall!(args, plainTheme, renderContext()));
+    assert.deepEqual(actual, expected);
     assert.notStrictEqual(shortened.renderResult, standard.renderResult);
   });
 
@@ -168,6 +173,7 @@ describe("codemode registration", () => {
       registered: [fake],
       getExposure: () => "direct",
       getNamespace: () => undefined,
+      getPromptGuidelines: () => [],
     };
     assert.deepEqual(definition!.prepareLoadout!(loadout)?.hiddenDeclarations, []);
     mode = "only";
@@ -524,13 +530,18 @@ describe("codemode standard execution delegation", () => {
     assert.equal(result.details!.calls[0]!.status, "ok");
     assert.ok(updates.some((update) => update.details!.calls[0]?.status === "running"));
     assert.ok(updates.some((update) => update.details!.calls[0]?.status === "ok"));
-    assert.match(
-      result.content
-        .filter((block) => block.type === "text")
-        .map((block) => block.text)
-        .join("\n"),
-      /1\nnested body\n\[\]/,
-    );
+    const textBlocks = result.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text);
+    const expectedOutput = [
+      "==> text 1/3 <==",
+      "1",
+      "==> text 2/3 <==",
+      "nested body",
+      "==> text 3/3 <==",
+      "[]",
+    ].join("\n");
+    assert.equal(textBlocks.at(-1), expectedOutput);
     const restored = await definition.execute(
       "restore",
       { code: 'return load("count");' },

@@ -139,7 +139,7 @@ export default function skillStatusExtension(pi: ExtensionAPI): void {
 
   pi.on("before_agent_start", (event, ctx) => {
     registerSkillPaths(state, event.systemPromptOptions.skills ?? [], ctx.cwd);
-    const parsedSkill = parseSkillBlock(event.prompt);
+    const parsedSkill = "prompt" in event ? parseSkillBlock(event.prompt) : undefined;
     if (parsedSkill && state.pendingExplicitSkillName === parsedSkill.name) {
       if (markSkillFired(state, parsedSkill.name)) persistFiredSkills(pi, state);
     }

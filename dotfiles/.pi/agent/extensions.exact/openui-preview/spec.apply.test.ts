@@ -521,7 +521,9 @@ describe("OpenUI skill generation", () => {
           await page.goto("https://openui-fixture.invalid/");
           await page.addScriptTag({ content: await javascript.text() });
           const browserNames = await page.evaluate(
-            () => (window as typeof window & { __fixtureComponents: string[] }).__fixtureComponents,
+            () =>
+              (globalThis as typeof globalThis & { __fixtureComponents: string[] })
+                .__fixtureComponents,
           );
           assert.ok(browserNames, errors.join("\n"));
           assert.deepEqual(browserNames.sort(), expectedNames);
@@ -531,7 +533,9 @@ describe("OpenUI skill generation", () => {
               : 'root = Stack([CardHeader("configured")])';
           assert.deepEqual(validateOpenuiLang(selectedRoot, fixture.homeHookDir), { ok: true });
           await page.evaluate((source) => {
-            const runtime = window as typeof window & { __mountOpenui: (source: string) => void };
+            const runtime = globalThis as typeof globalThis & {
+              __mountOpenui: (source: string) => void;
+            };
             runtime.__mountOpenui(source);
           }, selectedRoot);
           await page.getByText("configured", { exact: true }).waitFor();

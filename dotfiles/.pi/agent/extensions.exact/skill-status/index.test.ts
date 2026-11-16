@@ -216,6 +216,35 @@ describe("発火", () => {
     assert.deepEqual(widgetCalls.at(-1)?.[1], ["🎯 skills: skill-b"]);
   });
 
+  it("does not count a custom message as an explicit skill invocation", () => {
+    const entries: any[] = [];
+    const { handlers, commands } = captureExtension(entries);
+    commands.push({ name: "skill:skill-a", source: "skill" });
+    const { context, widgetCalls } = widgetContext();
+    handlers.get("input")!({ text: "/skill:skill-a", source: "interactive" }, context);
+    handlers.get("before_agent_start")!(
+      {
+        messageType: "custom",
+        message: { role: "custom", content: skillPrompt("skill-a") },
+        systemPromptOptions: skillOptions("skill-a"),
+      },
+      context,
+    );
+    handlers.get("before_agent_start")!(
+      {
+        messageType: "user",
+        prompt: skillPrompt("skill-a"),
+        systemPromptOptions: skillOptions("skill-a"),
+      },
+      context,
+    );
+    assert.deepEqual(entries, []);
+    assert.deepEqual(
+      widgetCalls.map((call) => call[1]),
+      [undefined, undefined],
+    );
+  });
+
   it("skill 名を通常入力に含めても既存の表示を変更しない", () => {
     const { handlers, commands } = captureExtension();
     commands.push({ name: "skill:skill-a", source: "skill" });
