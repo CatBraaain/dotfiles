@@ -296,7 +296,7 @@ describe("PiMux", () => {
     );
   });
 
-  it("parses the history list with null mtime for conversations without message entries", async () => {
+  it("parses mixed numeric and null btime histories including empty conversations", async () => {
     const entries = [
       {
         id: "newer",
@@ -312,7 +312,7 @@ describe("PiMux", () => {
         cwd: "/project",
         file: "/saved/empty.jsonl",
         title: null,
-        btime: 60,
+        btime: null,
         mtime: null,
         size: 0,
       },
@@ -327,7 +327,13 @@ describe("PiMux", () => {
     "{}",
     '[{"id":"A"}]',
     '[{"id":"A","cwd":"/c","file":"/f","title":null,"mtime":1,"size":1}]',
-    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":null,"mtime":1,"size":1}]',
+    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":true,"mtime":1,"size":1}]',
+    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":{},"mtime":1,"size":1}]',
+    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":[],"mtime":1,"size":1}]',
+    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":1e400,"mtime":1,"size":1}]',
+    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":-1e400,"mtime":1,"size":1}]',
+    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":NaN,"mtime":1,"size":1}]',
+    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":Infinity,"mtime":1,"size":1}]',
     '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":"1","mtime":1,"size":1}]',
     '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":1,"mtime":"1","size":1}]',
     '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":1,"mtime":1,"size":"1"}]',

@@ -60,7 +60,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 
 拡張機能は `pi-mux list` を workspace と稼働 Pi の正本とする。応答は `[{cwd,sessions:[{id,file,state,title,temporary?:true}],empty:[{id,file,temporary?:true}]}]` の JSON 配列であり、cwd と file は絶対パス、state と title は文字列または null である。`temporary` は一時 Pi にだけ `true` で存在し、省略は通常 Pi を表す。`false` やその他の値は不正応答として扱う。`sessions` には会話ファイルが存在する pane だけが載り、未作成分は `empty` に載る。空 workspace は `sessions: []`・`empty: []` として含まれる。独自の所属集合や復元集合を保存しない。
 
-保存済み会話は `pi-mux history` から得る。応答は `[{id,cwd,file,title,btime,mtime,size}]` の JSON 配列（`mtime` 降順、`mtime` が `null` の要素は後方、同値は `file` 昇順）であり、pi-mux が登録済み workspace の保存会話の `*.jsonl` を列挙し（既定の保存先では group ディレクトリ直下、`PI_CODING_AGENT_SESSION_DIR` 指定時はその直下）、各ファイルのヘッダー id・cwd を正とする。`btime` は会話ファイル先頭行（ヘッダー）の `timestamp` をミリ秒へ解釈した値（セッション開始日時）、`mtime` はファイル内で物理的に最後の `message`/`compaction` エントリの `timestamp`（ミリ秒、該当エントリが無いとき `null`）である。title はセッション名（最後の `session_info` の `name`）で解決し、解決できないとき最初の user メッセージ（80 code points で丸め）を使い、いずれも無いとき `null` になる。
+保存済み会話は `pi-mux history` から得る。応答は `[{id,cwd,file,title,btime,mtime,size}]` の JSON 配列（`mtime` 降順、`mtime` が `null` の要素は後方、同値は `file` 昇順）であり、pi-mux が登録済み workspace の保存会話の `*.jsonl` を列挙し（既定の保存先では group ディレクトリ直下、`PI_CODING_AGENT_SESSION_DIR` 指定時はその直下）、各ファイルのヘッダー id・cwd を正とする。`btime` は初回 user メッセージの送信日時（Unix epoch ミリ秒）で、初回 user メッセージが未保存なら `null` になる。有限の `number` と `null` のみを受け入れ、それ以外は不正応答として扱う。`mtime` はファイル内で物理的に最後の `message`/`compaction` エントリの `timestamp`（ミリ秒、該当エントリが無いとき `null`）である。title はセッション名（最後の `session_info` の `name`）で解決し、解決できないとき最初の user メッセージ（80 code points で丸め）を使い、いずれも無いとき `null` になる。
 
 | 項目 | 値 |
 | --- | --- |
@@ -98,7 +98,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 
 ### 開始日時・更新日時
 
-開始日時は、history エントリの `btime`（会話ファイル先頭行（ヘッダー）の `timestamp` をミリ秒へ解釈した値）を使う。更新日時は、history エントリの `mtime`（ファイル内で物理的に最後の `message`/`compaction` エントリの `timestamp`、ミリ秒）を使い、`mtime` が `null` のときは更新日時が無いものとして日時欄は空欄とする。稼働 Pi が history に無いときは日時不明として一覧に残し、日時欄は空欄とする。
+開始日時は history エントリの `btime` を使い、`null` のときも開始日時不明として一覧に残す。更新日時は `mtime` を使い、`null` のときは日時欄を空欄とする。稼働 Pi が history に無いときは日時不明として一覧に残し、日時欄は空欄とする。
 
 ### 表示名
 

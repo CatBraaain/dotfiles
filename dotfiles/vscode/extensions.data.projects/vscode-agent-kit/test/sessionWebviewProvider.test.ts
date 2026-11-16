@@ -827,6 +827,85 @@ describe("SessionWebviewProvider", () => {
       expect(mocks.history).not.toHaveBeenCalled();
     });
 
+    it("reflects the first user btime from CLI history without changing undated display or sorting", async () => {
+      const entries: PiMuxHistoryEntry[] = [
+        {
+          id: "known",
+          cwd: root,
+          file: join(root, "known.jsonl"),
+          title: "Known conversation",
+          btime: 100,
+          mtime: 50,
+          size: 10,
+        },
+        ...["empty-b", "empty-a"].map((id) => ({
+          id,
+          cwd: root,
+          file: join(root, `${id}.jsonl`),
+          title: null,
+          btime: null,
+          mtime: null,
+          size: 1,
+        })),
+      ];
+      const execute = vi.fn(async (_executable: string, args: string[]) => {
+        if (args[0] === "history") return JSON.stringify(entries);
+        return JSON.stringify([
+          {
+            cwd: root,
+            sessions: entries.map(({ id, file }) => ({ id, file, state: null, title: null })),
+            empty: [],
+          },
+        ]);
+      });
+      const registry = new TerminalRegistry(editorTerminals(), new PiMux(execute));
+      const { provider } = createProvider({ registry });
+      const webview = createView();
+      function sentState(): WebviewState {
+        return webview.postMessage.mock.calls
+          .filter(([message]) => message.type === "sessions")
+          .at(-1)![0].state;
+      }
+      provider.resolveWebviewView(webview.view as never);
+      await webview.receive({ type: "ready" });
+
+      expect(sentState().groups[0].sessions.map(({ sessionId }) => sessionId)).toEqual([
+        "known",
+        "empty-a",
+        "empty-b",
+      ]);
+      expect(sentState().groups[0].sessions[1]).toMatchObject({
+        displayName: "Untitled",
+        updatedAtMs: null,
+      });
+      expect(JSON.stringify(sessionListView(sentState()))).toContain(
+        '"class":"session-timestamp"},"children":[""]',
+      );
+
+      const firstUser = entries.find(({ id }) => id === "empty-a")!;
+      firstUser.btime = 200;
+      firstUser.mtime = 200;
+      await provider.onSessionFileChanged();
+      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      expect(sentState().groups[0].sessions.map(({ sessionId }) => sessionId)).toEqual([
+        "empty-a",
+        "known",
+        "empty-b",
+      ]);
+      expect(sentState().groups[0].sessions[0].updatedAtMs).toBe(200);
+
+      entries[0].mtime = 400;
+      await provider.onSessionFileChanged();
+      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      expect(sentState().groups[0].sessions.map(({ sessionId }) => sessionId)).toEqual([
+        "empty-a",
+        "known",
+        "empty-b",
+      ]);
+      expect(sentState().groups[0].sessions[1].updatedAtMs).toBe(400);
+      expect(execute).toHaveBeenCalledWith("pi-mux", ["history"], undefined);
+    });
+
     it("coalesces file changes into one full history query", async () => {
       const { provider, mocks, history, row, workspaces } = await unreadFixture();
       workspaces.add("/other");
