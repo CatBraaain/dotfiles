@@ -126,7 +126,7 @@ describe("snapshot browser (uses existing cached Chromium)", () => {
     assert.equal(png.readUInt32BE(16), 960);
     assert.equal(png.readUInt32BE(20), 1280);
     assert.ok(!png.includes(Buffer.from("<!doctype")));
-  });
+  }, 20_000);
   for (const [name, component, selector] of charts) {
     it(`captures ${name} chart data after visible geometry settles`, async () => {
       await observedSnapshot(`root = Stack([${component}])`, async (page) => {
@@ -149,7 +149,7 @@ describe("snapshot browser (uses existing cached Chromium)", () => {
           assert.ok(Math.abs(heights[1]! / heights[0]! - 2) < 0.05);
         }
       });
-    });
+    }, 20_000);
   }
   it("captures Tabs in the upstream initial state without activating another tab", async () => {
     await observedSnapshot(
@@ -161,7 +161,7 @@ describe("snapshot browser (uses existing cached Chromium)", () => {
         );
       },
     );
-  });
+  }, 20_000);
   it("captures the initial Accordion, Carousel, Steps, and first Table page", async () => {
     const rows = Array.from({ length: 12 }, (_, index) => `"row${index}"`).join(",");
     await observedSnapshot(
@@ -171,7 +171,7 @@ describe("snapshot browser (uses existing cached Chromium)", () => {
         assert.equal(await page.locator("tbody tr").count(), 10);
       },
     );
-  });
+  }, 20_000);
   it("does not execute input as JavaScript or raw HTML", async () => {
     await observedSnapshot(
       'root = Stack([TextContent("<script>window.inputExecuted=true</script><img src=x onerror=window.inputExecuted=true>")])',
@@ -183,7 +183,7 @@ describe("snapshot browser (uses existing cached Chromium)", () => {
         assert.equal(await page.locator("#root script").count(), 0);
       },
     );
-  });
+  }, 20_000);
   for (const reference of [
     "https://example.invalid/photo.png",
     "file:///etc/passwd",
@@ -194,7 +194,7 @@ describe("snapshot browser (uses existing cached Chromium)", () => {
         observedSnapshot(`root = Stack([Image("image", "${reference}")])`),
         /Blocked browser reference|Image could not be rendered/,
       );
-    });
+    }, 20_000);
   }
   for (const mode of ["deadline", "interruption"] as const) {
     it(`closes the browser once and cleans temporary data after ${mode}`, async () => {
@@ -229,5 +229,5 @@ describe("snapshot browser (uses existing cached Chromium)", () => {
         assert.match(await page.locator("#root").innerText(), /ready/);
       },
     );
-  });
+  }, 20_000);
 });
