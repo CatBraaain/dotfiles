@@ -55,7 +55,7 @@ class MemoryTerminal implements Terminal {
   setProgramStatus(): void {}
 }
 
-function approvalHarness(mode: "regular" | "fullscreen", details: string) {
+function approvalHarness(mode: "regular" | "fullscreen", prompt: string, cwd?: string) {
   const terminal = new MemoryTerminal();
   const tui = mode === "regular" ? new TuiMainScreen(terminal) : new TuiAltScreen(terminal);
   tui.addChild(new Text(Array.from({ length: 70 }, () => "BACKGROUND CHAT").join("\n")));
@@ -64,7 +64,7 @@ function approvalHarness(mode: "regular" | "fullscreen", details: string) {
     tui,
     theme,
     QUESTION,
-    details,
+    { prompt, cwd },
     OPTIONS,
     (answer) => {
       answers.push(answer);
@@ -88,6 +88,76 @@ function approvalHarness(mode: "regular" | "fullscreen", details: string) {
 
 for (const mode of ["regular", "fullscreen"] as const) {
   describe(`${mode} approval overlay`, () => {
+    it("puts field labels on separate frame tops and only values inside matching frames", () => {
+      const harness = approvalHarness(mode, "first line\nsecond line", "/repo/child");
+      try {
+        const lines = harness.frame();
+        const cells = lines.map((line) => line.slice(2, -2));
+        const promptIndex = cells.findIndex((line) => line.startsWith("┌─ prompt "));
+        const cwdIndex = cells.findIndex((line) => line.startsWith("┌─ cwd "));
+        const cellWidth = harness.terminal.columns - 4;
+        const bottom = "└" + "─".repeat(cellWidth - 2) + "┘";
+        assert.equal(promptIndex, 3);
+        assert.equal(cwdIndex, promptIndex + 5);
+        assert.equal(cells[promptIndex + 1]?.slice(2, -2).trimEnd(), "first line");
+        assert.equal(cells[promptIndex + 2]?.slice(2, -2).trimEnd(), "second line");
+        assert.equal(cells[promptIndex + 3], bottom);
+        assert.equal(cells[promptIndex + 4]?.trim(), "");
+        assert.equal(cells[cwdIndex + 1]?.slice(2, -2).trimEnd(), "/repo/child");
+        assert.equal(cells[cwdIndex + 2], bottom);
+        assert.equal(visibleWidth(cells[promptIndex]!), cellWidth);
+        assert.equal(visibleWidth(cells[cwdIndex]!), cellWidth);
+        assert.equal(lines.filter((line) => line.startsWith("├")).length, 2);
+        assert.equal(
+          lines.some((line) => /prompt:|cwd:/.test(line)),
+          false,
+        );
+      } finally {
+        harness.tui.stop();
+      }
+    });
+
+    it("keeps cwd-like prompt text inside the prompt cell when cwd is omitted", () => {
+      const harness = approvalHarness(mode, "first line\ncwd: prompt text");
+      try {
+        const lines = harness.frame();
+        const promptIndex = lines.findIndex((line) => line.includes("┌─ prompt "));
+        assert.ok(promptIndex > 0);
+        assert.ok(lines[promptIndex + 1]?.includes("first line"));
+        assert.ok(lines[promptIndex + 2]?.includes("cwd: prompt text"));
+        assert.equal(
+          lines.some((line) => line.includes("┌─ cwd ")),
+          false,
+        );
+        assert.equal(lines.filter((line) => line.startsWith("├")).length, 2);
+      } finally {
+        harness.tui.stop();
+      }
+    });
+
+    it("fits field titles and values within narrow and resized terminal widths", () => {
+      const harness = approvalHarness(mode, "日本語🙂".repeat(30), "/repo/child");
+      try {
+        harness.terminal.rows = 200;
+        for (const columns of [42, 16, 10, 8, 6, 4, 2, 1, 0, 80]) {
+          harness.terminal.columns = columns;
+          harness.terminal.resize();
+          const lines = harness.component.render(columns).map(stripTerminalSequences);
+          assert.ok(
+            lines.every((line) => visibleWidth(line) <= columns),
+            `columns: ${columns}`,
+          );
+          if (columns >= 16) {
+            assert.ok(lines.some((line) => line.includes("┌─ prompt ")));
+            assert.ok(lines.some((line) => line.includes("┌─ cwd ")));
+          }
+          if (columns === 10) assert.ok(lines.some((line) => line.includes("┌─ pr┐")));
+        }
+      } finally {
+        harness.tui.stop();
+      }
+    });
+
     it("shows untrusted conceal, clear-screen and OSC sequences literally in raw terminal output", () => {
       const details =
         "benign \x1b[8mHIDDEN DANGEROUS REQUEST\x1b[28m done \x1b[2J\n\nlast\r\t\x1b]2;FAKE TITLE\x07\n";
@@ -103,9 +173,9 @@ for (const mode of ["regular", "fullscreen"] as const) {
         assert.equal(raw.includes("done \x1b[2J"), false);
         assert.equal(raw.includes("\x1b]2;FAKE TITLE"), false);
         const lines = harness.component.render(160).map(stripTerminalSequences);
-        assert.equal(lines[4]!.slice(1, -1).trim(), "");
-        assert.ok(lines[5]?.includes("last\\x0d"));
-        assert.equal(lines[6]!.slice(1, -1).trim(), "");
+        assert.equal(lines[5]!.slice(4, -4).trim(), "");
+        assert.ok(lines[6]?.includes("last\\x0d"));
+        assert.equal(lines[7]!.slice(4, -4).trim(), "");
       } finally {
         harness.tui.stop();
       }
@@ -190,8 +260,9 @@ for (const mode of ["regular", "fullscreen"] as const) {
         const start = harness.frame();
         harness.terminal.input("\x1b[B");
         const down = harness.frame();
-        assert.ok(start[3]?.includes("line-0"));
-        assert.ok(down[3]?.includes("line-1"));
+        assert.ok(start[3]?.includes("┌─ prompt "));
+        assert.ok(start[4]?.includes("line-0"));
+        assert.ok(down[3]?.includes("line-0"));
         harness.terminal.input("\x1b[A");
         assert.deepEqual(harness.frame(), start);
         harness.terminal.input("\x1b[6~");
@@ -205,8 +276,40 @@ for (const mode of ["regular", "fullscreen"] as const) {
       }
     });
 
+    it("scrolls through a long prompt into the cwd cell while keeping choices fixed", () => {
+      const prompt = Array.from({ length: 100 }, (_, index) => `line-${index}`).join("\n");
+      const harness = approvalHarness(mode, prompt, "/repo/child");
+      try {
+        const first = harness.frame();
+        const choiceRows = OPTIONS.map((option) =>
+          first.findIndex((line) => line.includes(option)),
+        );
+        assert.ok(first[3]?.includes("┌─ prompt "));
+        assert.ok(first[4]?.includes("line-0"));
+        for (let page = 0; page < 110; page++) {
+          harness.terminal.input("\x1b[6~");
+          harness.frame();
+        }
+        const last = harness.frame();
+        const cwdIndex = last.findIndex((line) => line.includes("/repo/child"));
+        assert.ok(cwdIndex > 0);
+        assert.ok(last[cwdIndex - 1]?.includes("┌─ cwd "));
+        assert.equal(last[cwdIndex - 2]?.slice(2, -2).trim(), "");
+        assert.ok(last[cwdIndex - 3]?.includes("└"));
+        assert.ok(last[cwdIndex - 4]?.includes("line-99"));
+        assert.deepEqual(
+          OPTIONS.map((option) => last.findIndex((line) => line.includes(option))),
+          choiceRows,
+        );
+        harness.terminal.input("\r");
+        assert.deepEqual(harness.answers, [OPTIONS[0]]);
+      } finally {
+        harness.tui.stop();
+      }
+    });
+
     it("reflows wide text on resize and keeps the final line reachable with fixed choices", () => {
-      const harness = approvalHarness(mode, "prompt: " + "日本語🙂".repeat(250) + "\n\nLAST\n");
+      const harness = approvalHarness(mode, "日本語🙂".repeat(250) + "\n\nLAST\n");
       try {
         for (const [columns, rows] of [
           [80, 24],
@@ -418,7 +521,7 @@ describe("approval lifecycle and tool routing", () => {
     const pending = showMainagentApproval(
       harness.ui,
       QUESTION,
-      "prompt: test",
+      { prompt: "test" },
       OPTIONS,
       controller.signal,
     );
@@ -436,7 +539,7 @@ describe("approval lifecycle and tool routing", () => {
     const controller = new AbortController();
     controller.abort();
     await assert.rejects(
-      showMainagentApproval(harness.ui, QUESTION, "x", OPTIONS, controller.signal),
+      showMainagentApproval(harness.ui, QUESTION, { prompt: "x" }, OPTIONS, controller.signal),
       { name: "AbortError" },
     );
     assert.equal(harness.calls.custom, 0);
@@ -477,7 +580,9 @@ describe("approval lifecycle and tool routing", () => {
             .map(stripTerminalSequences)
             .join("\n");
           assert.ok(rendered.includes("FINAL\\x1b[8m hidden\\x1b[28m\\x0d\\x09"));
-          assert.ok(rendered.includes("cwd: /repo/child"));
+          assert.ok(rendered.includes("┌─ cwd "));
+          assert.ok(rendered.includes("/repo/child"));
+          assert.equal(rendered.includes("cwd:"), false);
           harness.getComponent()!.handleInput!("\r");
         }
         const result = await pending;

@@ -135,7 +135,13 @@ export function registerMainagentTool(pi: ExtensionAPI): void {
     } else {
       const options = [...ALLOW_OPTIONS.map((option) => option.label), DENY_OPTION_LABEL];
       const selected = useCustomDialog
-        ? await showMainagentApproval(context.ui, QUESTION, details, options, signal)
+        ? await showMainagentApproval(
+            context.ui,
+            QUESTION,
+            { prompt: input.prompt, cwd: input.cwd === undefined ? undefined : sessionCwd },
+            options,
+            signal,
+          )
         : await context.ui.select(`${QUESTION}\n${details}`, options, { signal });
       signal?.throwIfAborted();
       const choice = ALLOW_OPTIONS.find((option) => option.label === selected);
