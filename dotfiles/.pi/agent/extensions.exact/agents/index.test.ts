@@ -7659,19 +7659,21 @@ describe("shipped agents.yaml through the shared usage entry", () => {
     const sol = { provider: "openai-codex", model: "gpt-<LATEST>-sol" };
     const luna = { provider: "openai-codex", model: "gpt-6-luna" };
     const commandcode = { provider: "commandcode", model: "z-ai/glm-<LATEST>-flash" };
-    const weightedFlash = { ...flash, settings: [{ multiply: { provider: "zai" } }] };
+    const latestLuna = { provider: "openai-codex", model: "gpt-<LATEST>-luna" };
+    const flagship = { provider: "zai", model: "glm-<LATEST>" };
+    const astra = { provider: "openai-codex", model: "gpt-<LATEST>-astra" };
     assert.equal(shipped.defaultMode, "standard");
     assert.deepEqual(shipped.modes.standard, {
-      high: [{ provider: "zai", model: "glm-<LATEST>" }, sol, commandcode, weightedFlash],
-      middle: [flash, sol, commandcode, weightedFlash],
-      low: [luna, flash, commandcode, weightedFlash],
-      vision: [luna, flash, commandcode, weightedFlash],
+      high: [flagship, sol, commandcode, flash],
+      middle: [flash, sol, commandcode],
+      low: [luna, flash, commandcode],
+      vision: [latestLuna, flash, commandcode],
     });
     assert.deepEqual(shipped.modes.max, {
-      high: [{ provider: "openai-codex", model: "gpt-<LATEST>-astra" }],
-      middle: [{ provider: "openai-codex", model: "gpt-<LATEST>-astra" }],
-      low: [sol],
-      vision: shipped.modes.standard!.vision,
+      high: [astra, flagship],
+      middle: [astra, flagship],
+      low: [sol, flagship],
+      vision: [sol, flash],
     });
     assert.deepEqual(
       Object.fromEntries(
@@ -7733,17 +7735,22 @@ describe("shipped agents.yaml through the shared usage entry", () => {
     const parsed = parseAgentConfig(readFileSync(shippedPath, "utf8"));
     assert.equal(parsed.error, undefined);
     assert.ok(parsed.config);
-    assert.equal(parsed.config.settings?.zai?.length, 2);
+    assert.equal(parsed.config.settings?.zai?.length, 3);
     assert.equal(parsed.config.settings?.deepseek?.length, 2);
     assert.deepEqual(parsed.config.settings?.commandcode, [
       { multiply: { provider: "commandcode" } },
+      { multiply: 0.1 },
     ]);
 
-    const usageJson = usageFixture([
-      { provider: "zai", long: 2, remainingFraction: 1 },
-      { provider: "openai-codex", long: 50, remainingFraction: 1 },
-      { provider: "commandcode", long: 30, remainingFraction: 1 },
-    ]);
+    const nowMs = Date.parse("2026-06-17T12:00:00Z");
+    const usageJson = usageFixture(
+      [
+        { provider: "zai", long: 2, remainingFraction: 1 },
+        { provider: "openai-codex", long: 50, remainingFraction: 1 },
+        { provider: "commandcode", long: 30, remainingFraction: 1 },
+      ],
+      nowMs,
+    );
     const extension = captureAgentsExtension(
       { config: parsed.config },
       {
@@ -7773,17 +7780,15 @@ describe("shipped agents.yaml through the shared usage entry", () => {
       },
       () => {},
     );
-    const appliedModelKeys = () =>
-      extension.selectedModels.map((model) => {
+    function appliedModelKeys() {
+      return extension.selectedModels.map((model) => {
         const { provider, id } = model as { provider: string; id: string };
         return `${provider}/${id}`;
       });
+    }
+    const clock = spyOn(Date, "now").mockReturnValue(nowMs);
     try {
       await extension.sessionStart();
-      // main の既定 class middle。urgency: codex 0.5 > commandcode 0.3 > zai 0.02。
-      // <LATEST> は glm-5.3（5.2 でなく）と gpt-6.1-sol（6.0 でなく）へ解決される。
-      // zai の2候補（provider設定と settings 置換）は同じモデルへ解決されるため、
-      // 適用試行は先に到達した方だけで同モデル早期リターンに至る。
       assert.deepEqual(appliedModelKeys(), [
         "openai-codex/gpt-6.1-sol",
         "commandcode/z-ai/glm-5.3-flash",
@@ -7796,9 +7801,9 @@ describe("shipped agents.yaml through the shared usage entry", () => {
       const highApplied = appliedModelKeys().slice(3);
       assert.equal(highApplied[0], "openai-codex/gpt-6.1-sol");
       assert.equal(highApplied[1], "commandcode/z-ai/glm-5.3-flash");
-      // フラグシップ glm-<LATEST> は glm-5.3 へ解決される（最終 fallback と併存）。
       assert.deepEqual(highApplied.slice(2).sort(), ["zai/glm-5.3", "zai/glm-5.3-flash"]);
     } finally {
+      clock.mockRestore();
       dispose();
       extension.restore();
     }

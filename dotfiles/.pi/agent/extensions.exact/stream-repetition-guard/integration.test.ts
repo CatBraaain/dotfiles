@@ -217,6 +217,7 @@ describe("real SDK session with a free in-process provider", () => {
               runtimeHost: { session },
               chatContainer: new Container(),
               footer: { invalidate() {} },
+              programStatus: { handleEvent() {} },
               ui: { requestRender() {} },
               pendingTools: new Map(),
               entriesRenderedByBoundaryCompaction: new Set(),

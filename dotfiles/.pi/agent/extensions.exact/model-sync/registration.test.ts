@@ -17,7 +17,7 @@ async function fixture() {
     streamSimple: fake.provider.streamSimple,
   };
   h.registry.registerProvider("openai", legacy);
-  h.gates.ensure();
+  await h.gates.ensure();
   return {
     ...h,
     synced: fake,
@@ -94,7 +94,7 @@ describe("model-sync atomic registration cooperation", () => {
     }
   });
 
-  it("reinstalls the gate after a rejected update and reports the original registration error", async () => {
+  it("blocks requests after a rejected update until a successful registration", async () => {
     const h = await fixture();
     try {
       assert.throws(
@@ -107,18 +107,19 @@ describe("model-sync atomic registration cooperation", () => {
       assert.ok(h.registry.getRegisteredNativeProvider("openai"));
       seedConversation(h.manager, 12_500);
       const model = h.registry.find("openai", "physical")!;
-      assert.equal(
-        (
-          await h.registry
-            .streamSimple(
-              model,
-              { messages: convertToLlm(h.manager.buildSessionProjection().messages) },
-              { sessionId: h.manager.getSessionId() },
-            )
-            .result()
-        ).stopReason,
-        "stop",
-      );
+      const context = { messages: convertToLlm(h.manager.buildSessionProjection().messages) };
+      const options = { sessionId: h.manager.getSessionId() };
+      await assert.rejects(h.gates.ensure(), /api/i);
+      const blocked = await h.registry.streamSimple(model, context, options).result();
+      assert.equal(blocked.stopReason, "aborted");
+      assert.match(blocked.errorMessage ?? "", /api.*required.*streamSimple/i);
+      assert.equal(h.synced.state.requests.length, 0);
+
+      registerProviderUpdate(h.pi, h.ctx, "openai", h.legacy);
+      await h.gates.ensure();
+      assert.ok(h.registry.getRegisteredNativeProvider("openai"));
+      const recovered = await h.registry.streamSimple(model, context, options).result();
+      assert.equal(recovered.stopReason, "stop");
       assert.deepEqual(
         h.synced.state.requests.map((request) => request.kind),
         ["summary", "normal"],
@@ -133,7 +134,7 @@ describe("model-sync atomic registration cooperation", () => {
     try {
       const native = fakeProvider("openai");
       h.registry.registerProvider(native.provider);
-      h.gates.ensure();
+      await h.gates.ensure();
       registerModels(
         h.pi,
         h.ctx,

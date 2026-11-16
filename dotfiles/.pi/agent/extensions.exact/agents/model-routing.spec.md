@@ -4,7 +4,7 @@ mode・classによる候補選択、usageによる採点、モデル適用と手
 
 ## mode の選択
 
-モデル候補の取得には実効mode の `modes.<mode>.<実効class>` だけを使う。全modeが同じclass名集合を持ち、候補・順序・重み・settings はmodeごとに指定する。`vision` も同じ規則に従う。配布設定の `max` は high/middle に Astra、low に Sol を置き、vision は standard と同じ候補から始める。
+モデル候補の取得には実効mode の `modes.<mode>.<実効class>` だけを使う。全modeが同じclass名集合を持ち、候補・順序・重み・settings はmodeごとに指定する。`vision` も同じ規則に従う。
 
 初期mode は次の優先順で決める。セッション開始・`/new`・セッション切替・分岐では、この初期modeへ戻す。
 
