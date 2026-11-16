@@ -1,8 +1,9 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -107,6 +108,10 @@ class HistoryCacheFixture {
       cwd,
       timestamp: "2026-01-01T00:00:00.000Z",
     };
+  }
+
+  userMessage(timestamp: unknown = "2026-01-01T00:00:00.000Z", content: unknown = []) {
+    return { type: "message", timestamp, message: { role: "user", content } };
   }
 
   sessionInfo(name?: unknown, options: { type?: unknown; includeName?: boolean } = {}) {
@@ -257,7 +262,7 @@ spyOn(promises, "readdir").mockImplementation((...args) => {
     id: string,
     cwd: string,
     title: string | null,
-    times: { btime?: number; mtime?: number | null } = {},
+    times: { btime?: number | null; mtime?: number | null } = {},
   ) {
     const stat = statSync(file);
     return {
@@ -265,8 +270,8 @@ spyOn(promises, "readdir").mockImplementation((...args) => {
       cwd,
       file,
       title,
-      btime: times.btime ?? Date.parse("2026-01-01T00:00:00.000Z"),
-      mtime: times.mtime ?? null,
+      btime: times.btime === undefined ? Date.parse("2026-01-01T00:00:00.000Z") : times.btime,
+      mtime: times.mtime === undefined ? Date.parse("2026-01-01T00:00:00.000Z") : times.mtime,
       size: stat.size,
     };
   }
@@ -291,12 +296,204 @@ spyOn(promises, "readdir").mockImplementation((...args) => {
   }
 }
 
+describe("history birth time", () => {
+  it("uses first submission order instead of preparation order and keeps it across appends and cache reads", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const preparedFirstId = randomUUID();
+      const preparedSecondId = randomUUID();
+      const preparedFirst = fixture.writeSession(fixture.cwd, preparedFirstId, [
+        fixture.header(preparedFirstId),
+      ]);
+      const preparedSecond = fixture.writeSession(fixture.cwd, preparedSecondId, [
+        { ...fixture.header(preparedSecondId), timestamp: "2026-01-01T00:00:01.000Z" },
+      ]);
+      const emptyExpected = [
+        fixture.expected(preparedFirst, preparedFirstId, fixture.cwd, null, {
+          btime: null,
+          mtime: null,
+        }),
+        fixture.expected(preparedSecond, preparedSecondId, fixture.cwd, null, {
+          btime: null,
+          mtime: null,
+        }),
+      ].sort((a, b) => a.file.localeCompare(b.file));
+      for (let iteration = 0; iteration < 2; iteration++) {
+        const empty = fixture.history();
+        assert.equal(empty.status, 0, empty.stderr);
+        assert.deepEqual(JSON.parse(empty.stdout), emptyExpected);
+      }
+      const submittedFirstMs = Date.parse("2026-01-01T00:00:02.000Z");
+      const submittedSecondMs = Date.parse("2026-01-01T00:00:03.000Z");
+      appendFileSync(
+        preparedSecond,
+        JSON.stringify(fixture.userMessage(submittedFirstMs, "Second prepared")) + "\n",
+      );
+      appendFileSync(
+        preparedFirst,
+        JSON.stringify(fixture.userMessage(submittedSecondMs, "First prepared")) + "\n",
+      );
+      const expected = [
+        fixture.expected(preparedFirst, preparedFirstId, fixture.cwd, "First prepared", {
+          btime: submittedSecondMs,
+          mtime: submittedSecondMs,
+        }),
+        fixture.expected(preparedSecond, preparedSecondId, fixture.cwd, "Second prepared", {
+          btime: submittedFirstMs,
+          mtime: submittedFirstMs,
+        }),
+      ];
+      for (let iteration = 0; iteration < 2; iteration++) {
+        const result = fixture.history();
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(JSON.parse(result.stdout), expected);
+      }
+      const laterMs = submittedSecondMs + 1000;
+      appendFileSync(
+        preparedFirst,
+        JSON.stringify(fixture.userMessage(laterMs, "Later request")) + "\n",
+      );
+      const afterAppend = [
+        fixture.expected(preparedFirst, preparedFirstId, fixture.cwd, "First prepared", {
+          btime: submittedSecondMs,
+          mtime: laterMs,
+        }),
+        expected[1],
+      ];
+      for (let iteration = 0; iteration < 3; iteration++) {
+        if (iteration === 2) rmSync(fixture.cacheDirectory, { recursive: true });
+        const result = fixture.history();
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(JSON.parse(result.stdout), afterAppend);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("uses an image-only first user entry timestamp while taking the title from later text", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const firstTimestamp = "2026-01-02T00:00:00.000Z";
+      const laterTimestamp = "2026-01-03T00:00:00.000Z";
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        {
+          type: "message",
+          timestamp: firstTimestamp,
+          message: {
+            role: "user",
+            timestamp: 42,
+            content: [{ type: "image", data: "image", mimeType: "image/png" }],
+          },
+        },
+        fixture.userMessage(laterTimestamp, "Later text title"),
+      ]);
+      for (let iteration = 0; iteration < 2; iteration++) {
+        const result = fixture.history();
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(JSON.parse(result.stdout), [
+          fixture.expected(file, id, fixture.cwd, "Later text title", {
+            btime: Date.parse(firstTimestamp),
+            mtime: Date.parse(laterTimestamp),
+          }),
+        ]);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("round-trips null birth time through the cache even with a name or assistant activity", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.sessionInfo("Named before input"),
+        {
+          type: "message",
+          timestamp: "2026-01-02T00:00:00.000Z",
+          message: { role: "assistant", content: "Background activity" },
+        },
+      ]);
+      fixture.traceReads();
+      for (let iteration = 0; iteration < 2; iteration++) {
+        const result = fixture.history();
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(JSON.parse(result.stdout), [
+          fixture.expected(file, id, fixture.cwd, "Named before input", {
+            btime: null,
+            mtime: Date.parse("2026-01-02T00:00:00.000Z"),
+          }),
+        ]);
+        if (iteration === 0) assert.ok(fixture.reads().length > 0);
+        else assert.deepEqual(fixture.reads(), []);
+      }
+      const cacheFile = fixture.cacheFileFor(file);
+      assert.ok(cacheFile);
+      assert.equal(JSON.parse(readFileSync(cacheFile, "utf8")).btime, null);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("rebuilds version 4 caches instead of returning the header creation time", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const firstTimestamp = "2026-01-02T00:00:00.000Z";
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.userMessage(firstTimestamp, "Actual request"),
+        fixture.sessionInfo("Named"),
+      ]);
+      const stat = statSync(file, { bigint: true });
+      mkdirSync(fixture.cacheDirectory, { recursive: true, mode: cacheDirectoryMode });
+      const cacheFile = join(
+        fixture.cacheDirectory,
+        `${createHash("sha256").update(file).digest("hex")}.json`,
+      );
+      writeFileSync(
+        cacheFile,
+        JSON.stringify({
+          version: 4,
+          file,
+          fingerprint: [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":"),
+          title: "Named",
+          mtime: Date.parse(firstTimestamp),
+          header: { id, cwd: fixture.cwd, btime: Date.parse(fixture.header(id).timestamp) },
+        }),
+        { mode: cacheFileMode },
+      );
+      for (let iteration = 0; iteration < 2; iteration++) {
+        const result = fixture.history();
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(JSON.parse(result.stdout), [
+          fixture.expected(file, id, fixture.cwd, "Named", {
+            btime: Date.parse(firstTimestamp),
+            mtime: Date.parse(firstTimestamp),
+          }),
+        ]);
+      }
+      assert.equal(JSON.parse(readFileSync(cacheFile, "utf8")).version, 5);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
 describe("history cache", () => {
   it("does not read session bytes on repeated history calls", () => {
     const fixture = new HistoryCacheFixture();
     try {
       const id = randomUUID();
-      fixture.writeSession(fixture.cwd, id, [fixture.header(id), fixture.sessionInfo("Cached")]);
+      fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.userMessage(),
+        fixture.sessionInfo("Cached"),
+      ]);
       fixture.traceReads();
       const cold = fixture.history();
       assert.equal(cold.status, 0, cold.stderr);
@@ -318,6 +515,7 @@ describe("history cache", () => {
       const id = randomUUID();
       file = fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         fixture.sessionInfo("Private"),
       ]);
       assert.equal(fixture.history().status, 0);
@@ -341,7 +539,10 @@ describe("history cache", () => {
     const fixture = new HistoryCacheFixture();
     try {
       const id = randomUUID();
-      const file = fixture.writeSession(fixture.cwd, id, [fixture.header(id)]);
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.userMessage(),
+      ]);
       assert.equal(fixture.history().status, 0);
       const invalidHeaders = [
         { ...fixture.header(id), type: "message" },
@@ -371,6 +572,7 @@ describe("history cache", () => {
         const id = randomUUID();
         const file = fixture.writeSession(fixture.cwd, id, [
           fixture.header(id),
+          fixture.userMessage(),
           fixture.sessionInfo("Before"),
         ]);
         assert.equal(fixture.history().status, 0);
@@ -382,7 +584,12 @@ describe("history cache", () => {
           timestamp: "2026-02-01T00:00:00.000Z",
         };
         const contents =
-          [nextHeader, fixture.sessionInfo("After"), { type: "message", timestamp: 1000 }]
+          [
+            nextHeader,
+            fixture.userMessage(nextHeader.timestamp),
+            fixture.sessionInfo("After"),
+            { type: "message", timestamp: 1000 },
+          ]
             .map((entry) => JSON.stringify(entry))
             .join("\n") + "\n";
         const preload = join(fixture.directory, "mutate-cache-read.ts");
@@ -437,6 +644,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const id = randomUUID();
       const file = fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         fixture.sessionInfo("Before"),
       ]);
       const preload = join(fixture.directory, "mutate-header-read.ts");
@@ -475,7 +683,10 @@ spyOn(fs, "readSync").mockImplementation((...args) => {
     const fixture = new HistoryCacheFixture();
     try {
       const id = randomUUID();
-      const file = fixture.writeSession(fixture.cwd, id, [fixture.header(id)]);
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.userMessage(),
+      ]);
       const preload = join(fixture.directory, "keep-changing.ts");
       writeFileSync(
         preload,
@@ -509,19 +720,20 @@ spyOn(fs, "readSync").mockImplementation((...args) => {
       const newId = randomUUID();
       const file = fixture.writeSession(fixture.cwd, oldId, [
         fixture.header(oldId),
+        fixture.userMessage(),
         fixture.sessionInfo("Normal"),
       ]);
       const archived = fixture.writeSession(
         fixture.cwd,
         oldId,
-        [fixture.header(oldId), fixture.sessionInfo("Archive")],
+        [fixture.header(oldId), fixture.userMessage(), fixture.sessionInfo("Archive")],
         { file: join(dirname(file), "archive", "old.jsonl") },
       );
       assert.equal(fixture.history().status, 0);
       const cacheFile = fixture.cacheFileFor(file);
       assert.ok(cacheFile);
       const replacement =
-        [fixture.header(newId), fixture.sessionInfo("Replacement")]
+        [fixture.header(newId), fixture.userMessage(), fixture.sessionInfo("Replacement")]
           .map((entry) => JSON.stringify(entry))
           .join("\n") + "\n";
       const preload = join(fixture.directory, "replace-normal.ts");
@@ -568,6 +780,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const id = randomUUID();
       const file = fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         fixture.sessionInfo("Original"),
       ]);
       const cold = fixture.history();
@@ -594,6 +807,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const id = randomUUID();
       const file = fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         fixture.sessionInfo("Cached title"),
       ]);
       const sourceBefore = readFileSync(file, "utf8");
@@ -605,14 +819,14 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       assert.equal(cacheFiles.length, 1);
       const cacheFile = cacheFiles[0]!;
       const cache = JSON.parse(readFileSync(cacheFile, "utf8"));
-      assert.equal(cache.version, 4);
+      assert.equal(cache.version, 5);
       assert.deepEqual(cache.header, {
         id,
         cwd: fixture.cwd,
         btime: Date.parse(fixture.header(id).timestamp),
       });
       assert.equal(cache.title, "Cached title");
-      assert.equal(cache.mtime, null);
+      assert.equal(cache.mtime, Date.parse("2026-01-01T00:00:00.000Z"));
       assert.equal(cache.file, file);
       assert.equal(typeof cache.fingerprint, "string");
       assert.equal(statSync(fixture.cacheDirectory).mode & 0o777, cacheDirectoryMode);
@@ -659,7 +873,11 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       ];
       const expected = cases.map(({ entries, title }) => {
         const id = randomUUID();
-        const file = fixture.writeSession(fixture.cwd, id, [fixture.header(id), ...entries]);
+        const file = fixture.writeSession(fixture.cwd, id, [
+          fixture.header(id),
+          fixture.userMessage(),
+          ...entries,
+        ]);
         return fixture.expected(file, id, fixture.cwd, title);
       });
       const result = fixture.history();
@@ -688,6 +906,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
           id,
           [
             fixture.header(id),
+            fixture.userMessage(),
             fixture.sessionInfo("Title before giant message"),
             { type: "message", text: longUnicodeValue },
           ],
@@ -716,6 +935,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
         file,
         [
           JSON.stringify(fixture.header(id)),
+          JSON.stringify(fixture.userMessage()),
           JSON.stringify(fixture.sessionInfo("Older title")),
           '{"ty\\u0070e":"session_\\u0069nfo","na\\u006de":"\\u6700\\u7d42"}',
           '{"type":"session_info","name":',
@@ -743,7 +963,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const file = fixture.writeSession(
         fixture.cwd,
         id,
-        [fixture.header(id), fixture.sessionInfo("Complete final title")],
+        [fixture.header(id), fixture.userMessage(), fixture.sessionInfo("Complete final title")],
         { trailingNewline: false },
       );
       const result = fixture.history();
@@ -761,7 +981,10 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
     const fixture = new HistoryCacheFixture();
     try {
       const id = randomUUID();
-      const file = fixture.writeSession(fixture.cwd, id, [fixture.header(id)]);
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.userMessage(),
+      ]);
       const initial = fixture.history();
       assert.equal(initial.status, 0, initial.stderr);
       assert.deepEqual(JSON.parse(initial.stdout), [fixture.expected(file, id, fixture.cwd, null)]);
@@ -785,6 +1008,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const id = randomUUID();
       const file = fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         { type: "message", timestamp: "2026-01-02T00:00:00.000Z" },
       ]);
       const first = fixture.history();
@@ -820,6 +1044,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const id = randomUUID();
       const file = fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         fixture.sessionInfo("Initial title"),
       ]);
       const restoreStateBefore = readFileSync(fixture.restoreState, "utf8");
@@ -859,6 +1084,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const id = randomUUID();
       const file = fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         fixture.sessionInfo("First title"),
       ]);
       const fixedTime = new Date("2026-01-01T00:00:00.000Z");
@@ -867,7 +1093,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const originalIdentity = statSync(file, { bigint: true });
       const first = fixture.history();
       assert.equal(first.status, 0, first.stderr);
-      const replacement = `${JSON.stringify(fixture.header(id))}\n${JSON.stringify(fixture.sessionInfo("Other title"))}\n`;
+      const replacement = `${JSON.stringify(fixture.header(id))}\n${JSON.stringify(fixture.userMessage())}\n${JSON.stringify(fixture.sessionInfo("Other title"))}\n`;
       assert.equal(Buffer.byteLength(replacement), originalStat.size);
       writeFileSync(file, replacement);
       utimesSync(file, originalStat.atime, originalStat.mtime);
@@ -892,21 +1118,25 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const truncatedId = randomUUID();
       const truncated = fixture.writeSession(fixture.cwd, truncatedId, [
         fixture.header(truncatedId),
+        fixture.userMessage(),
         fixture.sessionInfo("Before truncate"),
       ]);
       const removedId = randomUUID();
       const removed = fixture.writeSession(fixture.cwd, removedId, [
         fixture.header(removedId),
+        fixture.userMessage(),
         fixture.sessionInfo("Remove me"),
       ]);
       const renamedId = randomUUID();
       const renamedOriginal = fixture.writeSession(fixture.cwd, renamedId, [
         fixture.header(renamedId),
+        fixture.userMessage(),
         fixture.sessionInfo("Rename me"),
       ]);
       const replacedId = randomUUID();
       const replaced = fixture.writeSession(fixture.cwd, replacedId, [
         fixture.header(replacedId),
+        fixture.userMessage(),
         fixture.sessionInfo("Replace me"),
       ]);
       const initial = fixture.history();
@@ -922,7 +1152,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const temporaryReplacement = `${replaced}.temporary`;
       writeFileSync(
         temporaryReplacement,
-        `${JSON.stringify(fixture.header(replacementId, replacementCwd))}\n${JSON.stringify(fixture.sessionInfo("New identity"))}\n`,
+        `${JSON.stringify(fixture.header(replacementId, replacementCwd))}\n${JSON.stringify(fixture.userMessage())}\n${JSON.stringify(fixture.sessionInfo("New identity"))}\n`,
       );
       renameSync(temporaryReplacement, replaced);
       const updated = fixture.history();
@@ -948,7 +1178,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       );
       assert.deepEqual(
         history.find((entry: { id: string }) => entry.id === truncatedId),
-        fixture.expected(truncated, truncatedId, fixture.cwd, null),
+        fixture.expected(truncated, truncatedId, fixture.cwd, null, { btime: null, mtime: null }),
       );
     } finally {
       fixture.cleanup();
@@ -972,12 +1202,14 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
         { corrupt: undefined, field: "header", invalid: { id: "valid", cwd: "/", btime: "old" } },
         { corrupt: undefined, field: "title", invalid: 42 },
         { corrupt: undefined, field: "mtime", invalid: "yesterday" },
+        { corrupt: undefined, field: "btime", invalid: "yesterday" },
         { corrupt: undefined, field: "fingerprint", invalid: "incorrect-fingerprint" },
       ];
       for (const [index, testCase] of cases.entries()) {
         const id = randomUUID();
         const file = fixture.writeSession(fixture.cwd, id, [
           fixture.header(id),
+          fixture.userMessage(),
           fixture.sessionInfo(`Source ${index}`),
         ]);
         fixture.history();
@@ -1009,6 +1241,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const id = randomUUID();
       const file = fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         fixture.sessionInfo("Still available"),
       ]);
       const sourceBefore = readFileSync(file, "utf8");
@@ -1059,6 +1292,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const id = randomUUID();
       const file = fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         fixture.sessionInfo("Initial"),
       ]);
       const initial = fixture.history();
@@ -1066,7 +1300,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const replacementId = randomUUID();
       const replacementCwd = fixture.otherCwd;
       const movedFile = fixture.sessionFile(replacementCwd, replacementId);
-      const movedContents = `${JSON.stringify(fixture.header(replacementId, replacementCwd))}\n${JSON.stringify(fixture.sessionInfo("Moved header"))}\n`;
+      const movedContents = `${JSON.stringify(fixture.header(replacementId, replacementCwd))}\n${JSON.stringify(fixture.userMessage())}\n${JSON.stringify(fixture.sessionInfo("Moved header"))}\n`;
       mkdirSync(dirname(movedFile), { recursive: true });
       rmSync(file);
       writeFileSync(movedFile, movedContents);
@@ -1084,7 +1318,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
         .cacheFiles()
         .map((cacheFile) => JSON.parse(readFileSync(cacheFile, "utf8")));
       assert.ok(
-        cache.every((record) => record.version === 4 && typeof record.fingerprint === "string"),
+        cache.every((record) => record.version === 5 && typeof record.fingerprint === "string"),
       );
       assert.equal(readFileSync(movedFile, "utf8"), movedContents);
     } finally {
@@ -1099,10 +1333,13 @@ describe("standard session lookup", () => {
       const fixture = new HistoryCacheFixture();
       try {
         const id = randomUUID();
-        const original = fixture.writeSession(fixture.cwd, id, [fixture.header(id)]);
+        const original = fixture.writeSession(fixture.cwd, id, [
+          fixture.header(id),
+          fixture.userMessage(),
+        ]);
         const file = join(dirname(original), "unrelated-filename.jsonl");
         renameSync(original, file);
-        fixture.writeSession(fixture.cwd, id, [fixture.header(id)], {
+        fixture.writeSession(fixture.cwd, id, [fixture.header(id), fixture.userMessage()], {
           file: join(dirname(file), "archive", `${id}.jsonl`),
         });
         fixture.mockTmux(id, file);
@@ -1131,15 +1368,23 @@ describe("standard session lookup", () => {
       const fixture = new HistoryCacheFixture();
       try {
         const id = randomUUID();
-        fixture.writeSession(fixture.cwd, randomUUID(), [fixture.header(randomUUID())]);
+        fixture.writeSession(fixture.cwd, randomUUID(), [
+          fixture.header(randomUUID()),
+          fixture.userMessage(),
+        ]);
         const file = join(
           dirname(fixture.sessionFile(fixture.otherCwd, id)),
           "archive",
           "saved.jsonl",
         );
-        fixture.writeSession(fixture.otherCwd, id, [fixture.header(id, fixture.otherCwd)], {
-          file,
-        });
+        fixture.writeSession(
+          fixture.otherCwd,
+          id,
+          [fixture.header(id, fixture.otherCwd), fixture.userMessage()],
+          {
+            file,
+          },
+        );
         fixture.mockTmux(id, file);
         if (operation === "restore")
           writeFileSync(
@@ -1166,7 +1411,10 @@ describe("standard session lookup", () => {
     const fixture = new HistoryCacheFixture();
     try {
       const id = randomUUID();
-      const file = fixture.writeSession(fixture.cwd, id, [fixture.header("different-id")]);
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header("different-id"),
+        fixture.userMessage(),
+      ]);
       fixture.mockTmux(id, file);
       fixture.traceReads(true);
       const result = fixture.run(["open", "--temporary", id]);
@@ -1182,8 +1430,14 @@ describe("standard session lookup", () => {
     const fixture = new HistoryCacheFixture();
     try {
       const id = randomUUID();
-      const file = fixture.writeSession(fixture.cwd, id, [fixture.header(id)]);
-      fixture.writeSession(fixture.otherCwd, id, [fixture.header(id, fixture.otherCwd)]);
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.userMessage(),
+      ]);
+      fixture.writeSession(fixture.otherCwd, id, [
+        fixture.header(id, fixture.otherCwd),
+        fixture.userMessage(),
+      ]);
       fixture.mockTmux(id, file);
       fixture.traceReads(true);
       const result = fixture.run(["open", "--temporary", id]);
@@ -1200,7 +1454,7 @@ describe("standard session lookup", () => {
     try {
       const id = randomUUID();
       for (const cwd of [fixture.cwd, fixture.otherCwd])
-        fixture.writeSession(cwd, id, [fixture.header(id, cwd)], {
+        fixture.writeSession(cwd, id, [fixture.header(id, cwd), fixture.userMessage()], {
           file: join(dirname(fixture.sessionFile(cwd, id)), "archive", `${id}.jsonl`),
         });
       fixture.mockTmux(id, fixture.sessionFile(fixture.cwd, id));
@@ -1219,12 +1473,13 @@ describe("standard session lookup", () => {
       const id = randomUUID();
       const file = fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         fixture.sessionInfo("Normal"),
       ]);
       fixture.writeSession(
         fixture.cwd,
         id,
-        [fixture.header(id), fixture.sessionInfo("Archived duplicate")],
+        [fixture.header(id), fixture.userMessage(), fixture.sessionInfo("Archived duplicate")],
         {
           file: join(dirname(file), "archive", `${id}.jsonl`),
         },
@@ -1233,7 +1488,7 @@ describe("standard session lookup", () => {
       const archived = fixture.writeSession(
         fixture.cwd,
         archivedId,
-        [fixture.header(archivedId), fixture.sessionInfo("Archive only")],
+        [fixture.header(archivedId), fixture.userMessage(), fixture.sessionInfo("Archive only")],
         {
           file: join(dirname(file), "archive", `${archivedId}.jsonl`),
         },
@@ -1253,14 +1508,21 @@ describe("standard session lookup", () => {
     const fixture = new HistoryCacheFixture();
     try {
       const healthyId = randomUUID();
-      const healthy = fixture.writeSession(fixture.cwd, healthyId, [fixture.header(healthyId)]);
+      const healthy = fixture.writeSession(fixture.cwd, healthyId, [
+        fixture.header(healthyId),
+        fixture.userMessage(),
+      ]);
       const unreadableId = randomUUID();
       const unreadable = fixture.writeSession(fixture.cwd, unreadableId, [
         fixture.header(unreadableId),
+        fixture.userMessage(),
       ]);
       chmodSync(unreadable, 0o000);
       const deletedId = randomUUID();
-      const deleted = fixture.writeSession(fixture.cwd, deletedId, [fixture.header(deletedId)]);
+      const deleted = fixture.writeSession(fixture.cwd, deletedId, [
+        fixture.header(deletedId),
+        fixture.userMessage(),
+      ]);
       const failOpen = join(fixture.directory, "fail-open.ts");
       writeFileSync(
         failOpen,
@@ -1308,7 +1570,7 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
       ];
       const excludedIds = excludedDirectories.map((directory) => {
         const id = randomUUID();
-        fixture.writeSession(fixture.cwd, id, [fixture.header(id)], {
+        fixture.writeSession(fixture.cwd, id, [fixture.header(id), fixture.userMessage()], {
           file: join(directory, `${id}.jsonl`),
         });
         return id;
@@ -1334,20 +1596,28 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
       const custom = join(fixture.directory, "custom-sessions");
       fixture.env.PI_CODING_AGENT_SESSION_DIR = custom;
       const mineId = randomUUID();
-      const mine = fixture.writeSession(fixture.cwd, mineId, [fixture.header(mineId)], {
-        file: join(custom, `${mineId}.jsonl`),
-      });
+      const mine = fixture.writeSession(
+        fixture.cwd,
+        mineId,
+        [fixture.header(mineId), fixture.userMessage()],
+        {
+          file: join(custom, `${mineId}.jsonl`),
+        },
+      );
       const otherId = randomUUID();
       const other = fixture.writeSession(
         fixture.otherCwd,
         otherId,
-        [fixture.header(otherId, fixture.otherCwd)],
+        [fixture.header(otherId, fixture.otherCwd), fixture.userMessage()],
         {
           file: join(custom, `${otherId}.jsonl`),
         },
       );
       const defaultId = randomUUID();
-      fixture.writeSession(fixture.cwd, defaultId, [fixture.header(defaultId)]);
+      fixture.writeSession(fixture.cwd, defaultId, [
+        fixture.header(defaultId),
+        fixture.userMessage(),
+      ]);
       fixture.traceReads();
       const mineListed = fixture.history(fixture.cwd);
       assert.equal(mineListed.status, 0, mineListed.stderr);
@@ -1374,11 +1644,19 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
       const custom = join(fixture.directory, "custom-sessions");
       fixture.env.PI_CODING_AGENT_SESSION_DIR = custom;
       const id = randomUUID();
-      const file = fixture.writeSession(fixture.cwd, id, [fixture.header(id)], {
-        file: join(custom, `${id}.jsonl`),
-      });
+      const file = fixture.writeSession(
+        fixture.cwd,
+        id,
+        [fixture.header(id), fixture.userMessage()],
+        {
+          file: join(custom, `${id}.jsonl`),
+        },
+      );
       const defaultId = randomUUID();
-      fixture.writeSession(fixture.cwd, defaultId, [fixture.header(defaultId)]);
+      fixture.writeSession(fixture.cwd, defaultId, [
+        fixture.header(defaultId),
+        fixture.userMessage(),
+      ]);
       fixture.mockTmux(id, file);
       const result = fixture.run(["open", "--temporary", id]);
       assert.equal(result.status, 0, result.stderr);
@@ -1407,15 +1685,20 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
       const projectFile = fixture.writeSession(
         fixture.cwd,
         projectId,
-        [fixture.header(projectId)],
+        [fixture.header(projectId), fixture.userMessage()],
         {
           file: join(projectRoot, `${projectId}.jsonl`),
         },
       );
       const globalId = randomUUID();
-      fixture.writeSession(fixture.cwd, globalId, [fixture.header(globalId)], {
-        file: join(globalRoot, `${globalId}.jsonl`),
-      });
+      fixture.writeSession(
+        fixture.cwd,
+        globalId,
+        [fixture.header(globalId), fixture.userMessage()],
+        {
+          file: join(globalRoot, `${globalId}.jsonl`),
+        },
+      );
       const result = fixture.history(fixture.cwd);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), [
@@ -1435,9 +1718,14 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
         JSON.stringify({ sessionDir: globalRoot }),
       );
       const id = randomUUID();
-      const file = fixture.writeSession(fixture.cwd, id, [fixture.header(id)], {
-        file: join(globalRoot, `${id}.jsonl`),
-      });
+      const file = fixture.writeSession(
+        fixture.cwd,
+        id,
+        [fixture.header(id), fixture.userMessage()],
+        {
+          file: join(globalRoot, `${id}.jsonl`),
+        },
+      );
       const result = fixture.history(fixture.cwd);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), [fixture.expected(file, id, fixture.cwd, null)]);
@@ -1451,7 +1739,10 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
     try {
       fixture.env.PI_CODING_AGENT_SESSION_DIR = "";
       const id = randomUUID();
-      const file = fixture.writeSession(fixture.cwd, id, [fixture.header(id)]);
+      const file = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.userMessage(),
+      ]);
       const result = fixture.history(fixture.cwd);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), [fixture.expected(file, id, fixture.cwd, null)]);
@@ -1507,6 +1798,7 @@ describe("shared list and history cache", () => {
         const id = randomUUID();
         const file = fixture.writeSession(fixture.cwd, id, [
           fixture.header(id),
+          fixture.userMessage(),
           fixture.sessionInfo("Shared title"),
         ]);
         fixture.mockTmux(id, file, true);
@@ -1537,6 +1829,7 @@ describe("shared list and history cache", () => {
       const id = randomUUID();
       const file = fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         fixture.sessionInfo("Saved title"),
       ]);
       fixture.mockTmux(id, file, true);
@@ -1568,6 +1861,7 @@ describe("shared list and history cache", () => {
       const id = randomUUID();
       const file = fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         fixture.sessionInfo("Initial"),
       ]);
       fixture.mockTmux(id, file, true);
@@ -1586,7 +1880,13 @@ describe("shared list and history cache", () => {
         const history = fixture.history();
         assert.equal(history.status, 0, history.stderr);
         assert.deepEqual(JSON.parse(history.stdout), [
-          fixture.expected(file, id, fixture.cwd, expected),
+          fixture.expected(
+            file,
+            id,
+            fixture.cwd,
+            expected,
+            title === null ? { btime: null, mtime: null } : {},
+          ),
         ]);
       }
     } finally {
@@ -1600,6 +1900,7 @@ describe("shared list and history cache", () => {
       const id = randomUUID();
       const file = fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         fixture.sessionInfo("First title"),
       ]);
       const fixedTime = new Date("2026-01-01T00:00:00.000Z");
@@ -1609,6 +1910,7 @@ describe("shared list and history cache", () => {
       const before = statSync(file, { bigint: true });
       fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         fixture.sessionInfo("Other title"),
       ]);
       utimesSync(file, fixedTime, fixedTime);
@@ -1635,6 +1937,7 @@ describe("shared list and history cache", () => {
       const id = randomUUID();
       const file = fixture.writeSession(fixture.cwd, id, [
         fixture.header(id),
+        fixture.userMessage(),
         fixture.sessionInfo("Available title"),
       ]);
       fixture.mockTmux(id, file, true);

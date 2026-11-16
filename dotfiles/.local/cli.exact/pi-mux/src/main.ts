@@ -86,7 +86,7 @@ type HistoryEntry = {
   cwd: string;
   file: string;
   title: string | null;
-  btime: number;
+  btime: number | null;
   mtime: number | null;
   size: number;
 };
@@ -1308,7 +1308,7 @@ async function historySessions(
       cwd: header.cwd,
       file,
       title: summary.title,
-      btime: header.btime,
+      btime: summary.btime,
       mtime: summary.mtime,
       size: summary.size,
     });

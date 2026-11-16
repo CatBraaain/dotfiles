@@ -727,17 +727,13 @@ function conversationFile(
             name: options.title,
           },
         ]),
-    ...(options.message === undefined
-      ? []
-      : [
-          {
-            type: "message",
-            id: "e2",
-            parentId: null,
-            timestamp: "2026-01-01T00:00:02.000Z",
-            message: { role: "user", content: options.message },
-          },
-        ]),
+    {
+      type: "message",
+      id: "e2",
+      parentId: null,
+      timestamp: "2026-01-01T00:00:02.000Z",
+      message: { role: "user", content: options.message ?? [] },
+    },
     ...(options.activity === undefined ? [] : [{ type: "message", timestamp: options.activity }]),
   ];
   writeFileSync(file, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
@@ -745,7 +741,7 @@ function conversationFile(
   return file;
 }
 
-const fixtureBtimeMs = Date.parse("2026-01-01T00:00:00.000Z");
+const fixtureBtimeMs = Date.parse("2026-01-01T00:00:02.000Z");
 
 function historyEntry(
   file: string,
@@ -761,7 +757,7 @@ function historyEntry(
     file,
     title,
     btime: times.btime ?? fixtureBtimeMs,
-    mtime: times.mtime ?? null,
+    mtime: times.mtime === undefined ? fixtureBtimeMs : times.mtime,
     size: stat.size,
   };
 }

@@ -175,10 +175,11 @@ describe("history summary read consistency", () => {
     fs.writeFileSync(
       entry,
       `${JSON.stringify({
-        version: 4,
+        version: 5,
         file,
         fingerprint,
         title: "Title from cache",
+        btime: null,
         mtime: null,
         header: {
           id: "cached-session",

@@ -18,7 +18,7 @@ import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
 const SUMMARY_READ_CHUNK_BYTES = 256 * 1024;
-const SUMMARY_CACHE_VERSION = 4;
+const SUMMARY_CACHE_VERSION = 5;
 const SESSION_HEADER_MAX_BYTES = 64 * 1024;
 const SESSION_HEADER_PREFIX_BYTES = 1024;
 const SESSION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
@@ -28,6 +28,7 @@ export type SavedSessionSummary = { title: string | null; mtime: number | null }
 
 type SavedSessionHeader = { id: string; cwd: string; btime: number };
 type StoredSummary = SavedSessionSummary & {
+  btime: number | null;
   header: SavedSessionHeader | null;
   fingerprint?: string;
 };
@@ -121,12 +122,14 @@ export class HistorySummaryCache {
         record.file !== file ||
         record.fingerprint !== fingerprint ||
         !isValidTitle(record.title) ||
-        !isValidMtime(record.mtime) ||
+        !isValidTime(record.btime) ||
+        !isValidTime(record.mtime) ||
         !isValidHeader(record.header)
       )
         return undefined;
       return {
         title: record.title as string | null,
+        btime: record.btime as number | null,
         mtime: record.mtime as number | null,
         header: record.header as SavedSessionHeader | null,
       };
@@ -162,7 +165,7 @@ function isValidTitle(value: unknown): value is string | null {
   );
 }
 
-function isValidMtime(value: unknown): value is number | null {
+function isValidTime(value: unknown): value is number | null {
   return value === null || (typeof value === "number" && Number.isFinite(value));
 }
 
@@ -241,10 +244,15 @@ function readSavedSessionSummary(
       }
       if (titleFound && mtimeFound) break;
     }
-    if (title === null) title = firstUserMessageTitle(fd, size);
-    return { title, mtime, header, fingerprint: fileFingerprint(fstatSync(fd, { bigint: true })) };
+    const firstUser = readFirstUserMessage(fd, size, title);
+    return {
+      ...firstUser,
+      mtime,
+      header,
+      fingerprint: fileFingerprint(fstatSync(fd, { bigint: true })),
+    };
   } catch {
-    return { title: null, mtime: null, header };
+    return { title: null, btime: null, mtime: null, header };
   }
 }
 
@@ -276,7 +284,14 @@ function* forwardLines(fd: number, size: number): Generator<string> {
   if (parts.length > 0) yield Buffer.concat(parts).toString("utf8");
 }
 
-function firstUserMessageTitle(fd: number, size: number): string | null {
+function readFirstUserMessage(
+  fd: number,
+  size: number,
+  sessionTitle: string | null,
+): { title: string | null; btime: number | null } {
+  let title = sessionTitle;
+  let btime: number | null = null;
+  let firstUserFound = false;
   for (const line of forwardLines(fd, size)) {
     if (!line) continue;
     let entry: unknown;
@@ -292,13 +307,14 @@ function firstUserMessageTitle(fd: number, size: number): string | null {
     if (!message || typeof message !== "object" || Array.isArray(message)) continue;
     const { role, content } = message as Record<string, unknown>;
     if (role !== "user") continue;
-    const text = messageText(content);
-    if (!text) continue;
-    const shaped = shapeFirstMessageTitle(text);
-    if (!shaped) continue;
-    return shaped;
+    if (!firstUserFound) {
+      btime = parseEpochMs(record.timestamp) ?? null;
+      firstUserFound = true;
+    }
+    if (title === null) title = shapeFirstMessageTitle(messageText(content)) || null;
+    if (title !== null) break;
   }
-  return null;
+  return { title, btime };
 }
 
 function messageText(content: unknown): string {
