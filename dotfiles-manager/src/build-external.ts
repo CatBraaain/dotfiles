@@ -32,6 +32,7 @@ type ExternalRepo = {
   repo: string;
   destination: string;
   entries: string[];
+  exclude: string[];
   ttlMs: number;
   runAfter: string[][];
   edits: TextEdit[];
@@ -120,6 +121,7 @@ export async function applyExternals(distDir: string, connection?: WslConnection
           repo.entries,
           repo.edits,
           repo.markdownEdits,
+          repo.exclude,
         );
       }),
     );
@@ -257,7 +259,9 @@ async function copyRepoEntries(
   entries: string[],
   edits: TextEdit[],
   markdownEdits: MarkdownEdit[],
+  exclude: string[],
 ): Promise<void> {
+  const excludedPatterns = exclude.map((pattern) => new Bun.Glob(pattern));
   const resolvedEdits = edits.map((edit, index) => ({
     ...edit,
     filePath: resolveEditFile(mirrorDir, edit.path),
@@ -275,20 +279,30 @@ async function copyRepoEntries(
 
   for (const entry of entries) {
     const entryPath = await resolveEntryPath(mirrorDir, entry);
+    const repoPath = relative(mirrorDir, entryPath).split(sep).join("/");
+    const entryExcluded = isExcludedPath(repoPath, excludedPatterns);
     // A file entry lands under the destination as-is and is never an edit
     // target.
     if (statSync(entryPath).isFile()) {
+      if (entryExcluded) continue;
       await mkdir(destinationDir, { recursive: true });
       await copyFile(entryPath, join(destinationDir, basename(entryPath)));
       continue;
     }
     const skillDir = entryPath;
+    const targetDir = join(destinationDir, basename(skillDir));
+    function shouldCopyEntry(entry: Dirent, targetPath: string): boolean {
+      const sourcePath = join(repoPath, relative(targetDir, targetPath)).split(sep).join("/");
+      return (
+        shouldCopySkillEntry(entry, targetPath) && !isExcludedPath(sourcePath, excludedPatterns)
+      );
+    }
     const entryEdits = resolvedEdits.filter(({ filePath }) => isPathInside(skillDir, filePath));
     const entryMarkdownEdits = resolvedMarkdownEdits.filter(({ filePath }) =>
       isMarkdownPathInside(skillDir, filePath),
     );
     if (entryEdits.length === 0 && entryMarkdownEdits.length === 0) {
-      await copyTree(skillDir, join(destinationDir, basename(skillDir)), shouldCopySkillEntry);
+      if (!entryExcluded) await copyTree(skillDir, targetDir, shouldCopyEntry);
       continue;
     }
 
@@ -323,7 +337,7 @@ async function copyRepoEntries(
         }
         appliedMarkdownIndexes.add(edit.index);
       }
-      await copyTree(stagingDir, join(destinationDir, basename(skillDir)), shouldCopySkillEntry);
+      if (!entryExcluded) await copyTree(stagingDir, targetDir, shouldCopyEntry);
     } finally {
       await rm(stagingDir, { recursive: true, force: true });
     }
@@ -339,6 +353,14 @@ async function copyRepoEntries(
       throw new Error(`${edit.label}: edit_markdown path is not included in folder entries`);
     }
   }
+}
+
+function isExcludedPath(path: string, patterns: Bun.Glob[]): boolean {
+  const segments = path.split("/");
+  return segments.some((_, index) => {
+    const prefix = segments.slice(0, index + 1).join("/");
+    return patterns.some((pattern) => pattern.match(prefix));
+  });
 }
 
 async function resolveMarkdownFile(mirrorDir: string, edit: MarkdownEdit): Promise<string> {
@@ -459,6 +481,10 @@ function normalizeRepo(prefix: string, repo: string, raw: unknown, ordered: unkn
     repo,
     destination: raw.destination,
     entries: normalizePathEntries(`${prefix}.entries`, raw.entries),
+    exclude: normalizePathEntries(
+      `${prefix}.exclude`,
+      raw.exclude === undefined ? [] : raw.exclude,
+    ),
     ttlMs: (typeof raw.ttlHours === "number" ? raw.ttlHours : defaultTtlHours) * 60 * 60 * 1000,
     runAfter: normalizeCommands(`${prefix}.run_after`, raw.run_after ?? []),
     edits: normalizeEdits(`${prefix}.edit`, raw.edit === undefined ? {} : raw.edit),

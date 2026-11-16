@@ -158,6 +158,8 @@ repos:
     destination: .
     entries:
       - packages/shared-skills/skills/frontend
+    exclude:
+      - "**/*.test.ts"
     run_after:
       # Only the frontend skill is copied; the next command builds its required assets.
       - [bun, install, --ignore-scripts]

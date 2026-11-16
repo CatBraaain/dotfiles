@@ -135,6 +135,27 @@ mirror がなければ shallow cloneし、存在するときは前回の取得�
 
 ルートの `.gitconfig.build.ts` は Linux と Windows で `GitAlias/gitalias` の同じGitHub mirror・既定6時間の更新規則を使い、`gitalias.txt` を dist の `.gitconfig` に追記する。Windows では `context.syncGithubMirror` を使い、WSL が使えるなら §Windows の WSL接続 の mirror を、`wsl.exe` が存在しなければ Windowsローカルmirror を使う。Linux ではフック内のローカル同期が home直下の mirror を同じ規則で同期する。同名の alias が `.gitconfig` に手書きされている場合は手書きの値を有効にする。macOS では追記しない。`.gitconfig` は別ファイルの `.gitconfig.alias` を includeしない。
 
+### 取得ファイルの除外
+
+各repo に `exclude` を任意で指定し、`entries` で選択した取得内容から不要なファイルやフォルダを除外できる。値はglobパターンの文字列配列とし、省略時と空配列では従来どおりコピーする。配列でない値や文字列でない要素は入力エラーになり、エラーにはrepo と `exclude`、要素のエラーではその添字を含める。
+
+- パターンは取得元リポジトリのルートからの相対パスを基準とし、区切りはOS にかかわらず `/` とする。`destination` や各entry からの相対パスではない。glob の構文と照合は `Bun.Glob.match` に従う。
+- コピー対象自身と祖先フォルダの取得元パスのいずれかが、いずれかのパターンに一致すると除外する。ファイルはそのファイルだけ、フォルダはその配下ごとコピーしない。`entries` で明示したファイルやフォルダにも同じ除外を適用する。一致しないパターンはコピー結果を変えない。
+- 各entry は除外の適用前に取得元で解決し、一致先が0件または複数ならエラーになる。解決したentry がすべて除外される場合は、コピーせず正常に完了する。
+- `run_after` と取得ファイルの編集・入力検証は除外の指定によって変わらず、編集で生成したファイルもコピー時の除外対象になる。除外は当該repo からのコピーだけに適用し、mirror や既にdist にある同名エントリを削除しない。
+
+次の設定は、`skills/example` のうち、直下と子孫フォルダの `*.test.ts` だけをコピー対象から除く。
+
+```yaml
+repos:
+  example/skills:
+    destination: .
+    entries:
+      - skills/example
+    exclude:
+      - "**/*.test.ts"
+```
+
 ### 取得ファイルの編集
 
 各repo に `edit` と `edit_markdown` を任意で指定できる。編集パスは取得元リポジトリのルート相対であり、`destination` 相対ではない。両編集は `entries` で選択したフォルダ配下のファイルに適用する。ファイル単体のentry は編集対象にならず、どのフォルダentry にも含まれない編集パスはエラーになる。対象ファイルがない場合は空文字列から開始するが、その親フォルダは取得元に存在する必要がある。
