@@ -512,14 +512,17 @@ describe("EmptySessionPool", () => {
       emptySessions: pool,
       onSessionStarted: vi.fn(),
     });
-    const launching = launcher.start(root).catch((error: Error) => error);
+    const launching = launcher.start(root);
     await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
     expect(api.createTerminal).toHaveBeenCalledWith(
       expect.objectContaining({ shellArgs: ["open", "new-1"] }),
     );
     expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(root);
+    await launching;
+    expect(terminal.show).toHaveBeenCalledOnce();
+    expect(runtimes.mocks.current).not.toHaveBeenCalled();
     registry.onTerminalClosed(terminal as never);
-    expect(await launching).toBeInstanceOf(Error);
+    expect(registry.displayedSessionId).toBe("new-1");
     launcher.dispose();
     pool.dispose();
     background.resolve("Pi session late\n");

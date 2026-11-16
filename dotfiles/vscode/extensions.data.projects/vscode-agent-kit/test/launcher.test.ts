@@ -90,13 +90,13 @@ describe("SessionLauncher", () => {
     expect(registry.displayedSessionId).not.toBe("queued");
   });
 
-  it("creates the display Terminal before attachment resolves and shows it after attaching", async () => {
+  it("creates and shows the display Terminal without waiting for its process ID", async () => {
     const pid = deferred<number>();
     processId = pid.promise;
     const launching = launcher.start(root);
     await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
     const terminal = api.createTerminal.mock.results[0].value;
-    expect(terminal.show).not.toHaveBeenCalled();
+    await launching;
     expect(api.createTerminal).toHaveBeenCalledWith(
       expect.objectContaining({
         cwd: { fsPath: homedir() },
@@ -105,17 +105,15 @@ describe("SessionLauncher", () => {
         shellArgs: ["open", "new-1"],
       }),
     );
-    expect(startedIds()).toEqual(new Set());
-    expect(registry.displayedSessionId).toBeUndefined();
+    expect(runtimes.mocks.current).not.toHaveBeenCalled();
     pid.resolve(123);
-    await launching;
     expect(terminal.show).toHaveBeenCalledOnce();
     expect(startedIds()).toEqual(new Set(["new-1"]));
     expect(onSessionStarted).toHaveBeenCalledExactlyOnceWith("new-1");
     expect(registry.displayedSessionId).toBe("new-1");
   });
 
-  it("signals presentation after attachment and show, before the session refresh completes", async () => {
+  it("signals presentation after show without waiting for the process ID or session refresh", async () => {
     const pid = deferred<number>();
     const refreshed = deferred<void>();
     processId = pid.promise;
@@ -124,9 +122,9 @@ describe("SessionLauncher", () => {
     const launching = launcher.start(root, onPresented);
     await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
     const terminal = api.createTerminal.mock.results[0].value;
-    expect(onPresented).not.toHaveBeenCalled();
-    pid.resolve(123);
     await vi.waitFor(() => expect(onSessionStarted).toHaveBeenCalledOnce());
+    expect(runtimes.mocks.current).not.toHaveBeenCalled();
+    pid.resolve(123);
     expect(onPresented).toHaveBeenCalledOnce();
     expect(terminal.show.mock.invocationCallOrder[0]).toBeLessThan(
       onPresented.mock.invocationCallOrder[0],
@@ -138,7 +136,7 @@ describe("SessionLauncher", () => {
     await launching;
   });
 
-  it.each(["newSession", "current"] as const)(
+  it.each(["newSession", "list"] as const)(
     "does not signal presentation when %s fails",
     async (method) => {
       runtimes.mocks[method].mockRejectedValueOnce(new Error("launch failed"));
@@ -179,22 +177,22 @@ describe("SessionLauncher", () => {
     async (otherCwd) => {
       const nextCwd = otherCwd ? join(root, "other") : root;
       if (otherCwd) await mkdir(nextCwd);
+      const terminal = await existingDisplay();
       const gate = deferred<Awaited<ReturnType<typeof runtimes.mux.current>>>();
       runtimes.mocks.current.mockReturnValueOnce(gate.promise);
       const first = launcher.start(root);
       await vi.waitFor(() => expect(runtimes.mocks.current).toHaveBeenCalledOnce());
-      const terminal = api.createTerminal.mock.results[0].value;
       const second = launcher.start(nextCwd);
-      await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledTimes(2));
       expect(api.createTerminal).toHaveBeenCalledOnce();
       expect(startedIds()).toEqual(new Set());
-      expect(registry.displayedSessionId).toBeUndefined();
+      expect(registry.displayedSessionId).toBe("old");
       gate.resolve(undefined);
       await Promise.all([first, second]);
       expect(onSessionStarted.mock.calls.map(([id]) => id)).toEqual(["new-1", "new-2"]);
       expect(registry.displayedSessionId).toBe("new-2");
       expect(api.createTerminal).toHaveBeenCalledOnce();
-      expect(terminal.show).toHaveBeenCalledTimes(3);
+      expect(terminal.show).toHaveBeenCalledTimes(4);
     },
   );
 
@@ -209,10 +207,10 @@ describe("SessionLauncher", () => {
     processId = secondPid.promise;
     const second = launcher.start(root);
     await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledTimes(2));
-    secondPid.resolve(123);
     await second;
+    secondPid.resolve(123);
     expect(api.createTerminal.mock.results[1].value.show).toHaveBeenCalledOnce();
-    expect(await first).toBeInstanceOf(Error);
+    expect(await first).toBeUndefined();
     expect(registry.displayedSessionId).toBe("new-2");
     pid.resolve(123);
   });
@@ -292,10 +290,11 @@ describe("SessionLauncher", () => {
     expect(runtimes.mocks.switch).not.toHaveBeenCalled();
   });
 
-  it("closes a failed cold Terminal without refreshing, or killing Pi", async () => {
-    runtimes.mocks.current.mockRejectedValueOnce(new Error("attachment failed"));
-    await expect(launcher.start(root)).rejects.toThrow("attachment failed");
-    expect(api.createTerminal.mock.results[0].value.dispose).toHaveBeenCalledOnce();
+  it("reports Terminal creation failure without refreshing or killing Pi", async () => {
+    api.createTerminal.mockImplementationOnce(() => {
+      throw new Error("Terminal creation failed");
+    });
+    await expect(launcher.start(root)).rejects.toThrow("Terminal creation failed");
     expect(startedIds()).toEqual(new Set());
     expect(onSessionStarted).not.toHaveBeenCalled();
     expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();

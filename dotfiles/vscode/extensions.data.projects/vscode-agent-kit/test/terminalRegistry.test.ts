@@ -110,7 +110,7 @@ describe("TerminalRegistry", () => {
   it.each(["success", "failure", "cancel"])(
     "removes the request abort listener after attachment ends with %s",
     async (outcome) => {
-      const { registry, mocks } = setup();
+      const { registry, mocks } = setup(displayTerminal());
       const controller = new AbortController();
       const added = vi.spyOn(controller.signal, "addEventListener");
       const removed = vi.spyOn(controller.signal, "removeEventListener");
@@ -324,7 +324,7 @@ describe("TerminalRegistry", () => {
   );
 
   it("switches while the client attachment cannot be resolved yet", async () => {
-    const { registry, mocks } = setup();
+    const { registry, mocks } = setup(displayTerminal());
     mocks.current.mockResolvedValueOnce(undefined);
     await registry.open(session("A"));
     expect(mocks.current).toHaveBeenCalledTimes(2);
@@ -351,8 +351,8 @@ describe("TerminalRegistry", () => {
 
   it("waits through long lifecycle preparation until the client attaches", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
-    const { registry, mocks, live, displays } = setup();
-    live.delete("A");
+    const restored = displayTerminal();
+    const { registry, mocks, displays } = setup(restored);
     let release!: (session: PiMuxCurrentSession | undefined) => void;
     mocks.current.mockImplementationOnce(
       () =>
@@ -365,37 +365,36 @@ describe("TerminalRegistry", () => {
     vi.setSystemTime(Date.now() + 150_000);
     release(undefined);
     const result = await opening;
-    expect(result.runtime.target).toBe("pi-A");
+    expect(result.terminal).toBe(restored);
     expect(mocks.current).toHaveBeenCalledTimes(2);
-    expect(displays.create.mock.results[0].value.dispose).not.toHaveBeenCalled();
-    expect(displays.create).toHaveBeenCalledOnce();
+    expect(restored.dispose).not.toHaveBeenCalled();
+    expect(displays.create).not.toHaveBeenCalled();
   });
 
   it("rejects a close during attachment even when a resolved session is returned", async () => {
-    const { registry, mocks, displays } = setup();
+    const existing = displayTerminal();
+    const { registry, mocks } = setup(existing);
     mocks.current.mockImplementationOnce(async () => {
-      registry.onTerminalClosed(displays.create.mock.results[0].value);
+      registry.onTerminalClosed(existing);
       return { id: "A", cwd: "/project", file: "/sessions/A.jsonl", target: "pi-A" };
     });
     await expect(registry.open(session("A"))).rejects.toThrow(/closed/);
-    expect(displays.create.mock.results[0].value.dispose).not.toHaveBeenCalled();
+    expect(existing.dispose).not.toHaveBeenCalled();
     expect(registry.displayedSessionId).toBeUndefined();
     expect(mocks.switch).not.toHaveBeenCalled();
   });
 
   it("stops waiting on user close before the Terminal process ID is available", async () => {
-    const { registry, displays, mocks } = setup();
-    const create = displays.create.getMockImplementation()!;
+    const existing = displayTerminal();
+    const { registry, displays } = setup(existing);
     let releasePid!: (pid: number) => void;
-    displays.create.mockImplementationOnce((request) => {
-      const terminal = create(request);
-      Object.defineProperty(terminal, "processId", {
-        value: new Promise<number>((resolve) => {
+    const processId = vi.fn(
+      () =>
+        new Promise<number>((resolve) => {
           releasePid = resolve;
         }),
-      });
-      return terminal;
-    });
+    );
+    Object.defineProperty(existing, "processId", { get: processId });
     let outcome = "pending";
     const opening = registry
       .run(() => registry.open(session("A")))
@@ -408,14 +407,14 @@ describe("TerminalRegistry", () => {
         },
       );
     try {
-      await vi.waitFor(() => expect(displays.create).toHaveBeenCalledOnce());
-      const terminal = displays.create.mock.results[0].value;
+      await vi.waitFor(() => expect(processId).toHaveBeenCalledOnce());
+      const terminal = existing;
       registry.onTerminalClosed(terminal);
       await vi.waitFor(() => expect(outcome).toContain("closed"), { timeout: 500 });
       expect(terminal.dispose).not.toHaveBeenCalled();
       await registry.run(() => registry.open(session("B")));
       expect(registry.displayedSessionId).toBe("B");
-      expect(mocks.current).toHaveBeenCalledOnce();
+      expect(displays.create).toHaveBeenCalledOnce();
     } finally {
       releasePid(123);
       await opening;
@@ -423,7 +422,8 @@ describe("TerminalRegistry", () => {
   });
 
   it("stops waiting on user close while a query is in flight and ignores its late result", async () => {
-    const { registry, displays, mocks } = setup();
+    const existing = displayTerminal();
+    const { registry, mocks } = setup(existing);
     let release!: (session: PiMuxCurrentSession | undefined) => void;
     mocks.current.mockImplementationOnce(
       () =>
@@ -444,7 +444,7 @@ describe("TerminalRegistry", () => {
       );
     try {
       await vi.waitFor(() => expect(mocks.current).toHaveBeenCalledOnce());
-      registry.onTerminalClosed(displays.create.mock.results[0].value);
+      registry.onTerminalClosed(existing);
       await vi.waitFor(() => expect(outcome).toContain("closed"), { timeout: 500 });
       await registry.run(() => registry.open(session("B")));
       expect(registry.displayedSessionId).toBe("B");
@@ -456,56 +456,61 @@ describe("TerminalRegistry", () => {
   });
 
   it("fails on Terminal exit during preparation without publishing a selection", async () => {
-    const { registry, displays, mocks } = setup();
+    const existing = displayTerminal();
+    const { registry, mocks } = setup(existing);
     mocks.current.mockImplementationOnce(async () => {
-      Object.defineProperty(displays.create.mock.results[0].value, "exitStatus", {
+      Object.defineProperty(existing, "exitStatus", {
         value: { code: 7 },
         configurable: true,
       });
       return undefined;
     });
     await expect(registry.open(session("A"))).rejects.toThrow(/exited/);
-    expect(displays.create.mock.results[0].value.dispose).toHaveBeenCalledOnce();
+    expect(existing.dispose).not.toHaveBeenCalled();
     expect(registry.displayedSessionId).toBeUndefined();
   });
 
-  it("fails on a missing process ID without querying the client", async () => {
+  it("opens a new Terminal without waiting for its process ID", async () => {
     const { registry, displays, mocks } = setup();
-    const create = displays.create.getMockImplementation()!;
-    displays.create.mockImplementationOnce((request) => {
-      const terminal = create(request);
-      Object.defineProperty(terminal, "processId", { value: Promise.resolve(undefined) });
-      return terminal;
-    });
-    await expect(registry.open(session("A"))).rejects.toThrow(/process/);
+    const terminal = displayTerminal();
+    const processId = vi.fn(() => Promise.resolve(undefined));
+    Object.defineProperty(terminal, "processId", { get: processId });
+    displays.create.mockReturnValueOnce(terminal);
+    const result = await registry.open(session("A"));
+    expect(result.terminal).toBe(terminal);
+    expect(processId).not.toHaveBeenCalled();
     expect(mocks.current).not.toHaveBeenCalled();
-    expect(displays.create.mock.results[0].value.dispose).toHaveBeenCalledOnce();
+    expect(terminal.dispose).not.toHaveBeenCalled();
   });
 
-  it("removes a failed new display but preserves Pi and allows retry", async () => {
+  it("preserves Pi when creating a new display fails and allows retry", async () => {
     const { registry, mocks, displays, live } = setup();
-    mocks.current.mockRejectedValueOnce(new Error("client failed"));
-    await expect(registry.open(session("A"))).rejects.toThrow("client failed");
-    expect(displays.create.mock.results[0].value.dispose).toHaveBeenCalledOnce();
+    displays.create.mockImplementationOnce(() => {
+      throw new Error("creation failed");
+    });
+    await expect(registry.open(session("A"))).rejects.toThrow("creation failed");
     expect(live.has("A")).toBe(true);
+    expect(mocks.current).not.toHaveBeenCalled();
     await registry.open(session("A"));
     expect(displays.create).toHaveBeenCalledTimes(2);
   });
 
   it("does not wait for a second close event if the display closed during attachment", async () => {
-    const { registry, mocks, displays } = setup();
+    const existing = displayTerminal();
+    const { registry, mocks } = setup(existing);
     mocks.current.mockImplementationOnce(async () => {
-      registry.onTerminalClosed(displays.create.mock.results[0].value);
+      registry.onTerminalClosed(existing);
       throw new Error("closed during attachment");
     });
     await expect(registry.open(session("A"))).rejects.toThrow("closed during attachment");
-    expect(displays.create.mock.results[0].value.dispose).not.toHaveBeenCalled();
+    expect(existing.dispose).not.toHaveBeenCalled();
     await registry.open(session("A"));
-    expect(displays.create).toHaveBeenCalledTimes(2);
+    expect(registry.displayedSessionId).toBe("A");
   });
 
   it("releases a pending attachment on dispose without closing the display or killing Pi", async () => {
-    const { registry, mocks, displays } = setup();
+    const existing = displayTerminal();
+    const { registry, mocks } = setup(existing);
     let release!: (session: PiMuxCurrentSession | undefined) => void;
     mocks.current.mockReturnValueOnce(
       new Promise((resolve) => {
@@ -516,7 +521,7 @@ describe("TerminalRegistry", () => {
     await vi.waitFor(() => expect(mocks.current).toHaveBeenCalledOnce());
     registry.dispose();
     expect(await opening).toBeInstanceOf(Error);
-    expect(displays.create.mock.results[0].value.dispose).not.toHaveBeenCalled();
+    expect(existing.dispose).not.toHaveBeenCalled();
     expect(mocks.closeSession).not.toHaveBeenCalled();
     await expect(registry.open(session("A"))).rejects.toThrow("disposed");
     release(undefined);
@@ -582,6 +587,66 @@ describe("TerminalRegistry", () => {
     expect(live.has("A")).toBe(false);
     expect(live.has("B")).toBe(true);
   });
+
+  it("waits for an opening client before archiving into a replacement on the same tab", async () => {
+    const { registry, mocks, displays, client, live } = setup();
+    const cwd = process.cwd();
+    const { terminal } = await registry.open(session("A", cwd));
+    expect(mocks.current).not.toHaveBeenCalled();
+    client.attachedId = undefined;
+    let attach!: (current: PiMuxCurrentSession) => void;
+    const attaching = new Promise<PiMuxCurrentSession>((resolve) => {
+      attach = resolve;
+    });
+    mocks.current.mockResolvedValueOnce(undefined).mockReturnValueOnce(attaching);
+    const stopping = registry.run(() => registry.stop("A", { replacement: session("B", cwd) }));
+    try {
+      await vi.waitFor(() => expect(mocks.current).toHaveBeenCalledTimes(2), { timeout: 500 });
+      expect(mocks.closeSession).not.toHaveBeenCalled();
+      expect(mocks.switch).not.toHaveBeenCalled();
+      expect(terminal.dispose).not.toHaveBeenCalled();
+      client.attachedId = "A";
+      attach({ id: "A", cwd, file: "/sessions/A.jsonl", target: "pi-A" });
+      expect(await stopping).toEqual({ switched: true, switchError: undefined });
+      expect(mocks.switch).toHaveBeenCalledExactlyOnceWith("B", 123);
+      expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith("A");
+      expect(terminal.dispose).not.toHaveBeenCalled();
+      expect(displays.create).toHaveBeenCalledOnce();
+      expect(registry.displayedSessionId).toBe("B");
+      expect(live.has("A")).toBe(false);
+      expect(live.has("B")).toBe(true);
+    } finally {
+      attach({ id: "A", cwd, file: "/sessions/A.jsonl", target: "pi-A" });
+      await stopping;
+    }
+  });
+
+  it.each(["closed", "exited", "lookup failed"] as const)(
+    "finishes Archive when an unattached display fails: %s",
+    async (failure) => {
+      const { registry, mocks, live } = setup();
+      const cwd = process.cwd();
+      const { terminal } = await registry.open(session("A", cwd));
+      mocks.current.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => {
+        if (failure === "closed") registry.onTerminalClosed(terminal);
+        if (failure === "exited") {
+          Object.defineProperty(terminal, "exitStatus", { value: { code: 1 }, configurable: true });
+        }
+        if (failure === "lookup failed") throw new Error(failure);
+        return undefined;
+      });
+      const result = await registry.run(() =>
+        registry.stop("A", { replacement: session("B", cwd) }),
+      );
+      expect(result.switched).toBe(false);
+      expect(result.switchError).toContain(failure);
+      expect(mocks.switch).not.toHaveBeenCalled();
+      expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith("A");
+      expect(registry.displayedSessionId).toBeUndefined();
+      expect(live.has("A")).toBe(false);
+      expect(live.has("B")).toBe(true);
+    },
+  );
 
   it("restores the original client when stopping after a switch fails", async () => {
     const { registry, live, mocks, client } = setup();

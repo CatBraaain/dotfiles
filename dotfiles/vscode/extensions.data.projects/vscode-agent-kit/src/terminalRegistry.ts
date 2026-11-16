@@ -1,7 +1,7 @@
 import type * as vscode from "vscode";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { DisplayTerminals } from "./terminals";
-import type { PiMuxCurrentSession, PiRuntime } from "./piMux";
+import type { PiMuxCurrentSession } from "./piMux";
 import { PiMux, hasLiveSession, type PiSession } from "./piMux";
 import { errorMessage } from "./guards";
 import { requireWorkDirectory } from "./workDirectory";
@@ -54,7 +54,7 @@ export class TerminalRegistry implements vscode.Disposable {
     launch: PiSession,
     intent: "select" | "unarchive" = "select",
     signal?: AbortSignal,
-  ): Promise<{ runtime: PiRuntime; terminal: vscode.Terminal }> {
+  ): Promise<{ terminal: vscode.Terminal }> {
     try {
       signal?.throwIfAborted();
       const workspaces = await this.mux.list();
@@ -156,10 +156,15 @@ export class TerminalRegistry implements vscode.Disposable {
       throw new Error(`Pi display is no longer attached: ${sessionId}`);
     }
     const previous = await this.mux.current(pid);
-    if (previous === undefined) throw new Error(`Pi display is no longer attached: ${sessionId}`);
+    if (previous === undefined) {
+      await this.waitForClient(display, { sessionId, cwd: displayedCwd });
+    }
+    if (this.closed.has(display) || display.exitStatus !== undefined) {
+      throw new Error(`Pi display is no longer attached: ${sessionId}`);
+    }
     if (!(await this.mux.switch(replacement.sessionId, pid)))
       throw new Error(`Pi session is no longer running: ${replacement.sessionId}`);
-    return { clientPid: pid, previousId: previous.id };
+    return { clientPid: pid, previousId: previous?.id ?? sessionId };
   }
 
   onTerminalClosed(terminal: vscode.Terminal): void {
@@ -229,13 +234,13 @@ export class TerminalRegistry implements vscode.Disposable {
       return { terminal, created: restored === undefined };
     });
     try {
-      const runtime = await this.waitForClient(terminal, session, signal);
+      if (!created) await this.waitForClient(terminal, session, signal);
       this.requireActive();
       signal?.throwIfAborted();
       if (this.closed.has(terminal)) throw new Error("Pi display closed during attachment");
-      this.displayedSession = runtime.sessionId;
-      this.displayedSessionCwd = runtime.cwd;
-      return { runtime, terminal };
+      this.displayedSession = session.sessionId;
+      this.displayedSessionCwd = session.cwd;
+      return { terminal };
     } catch (error) {
       if (created && !this.disposed) await this.changeDisplay(() => this.closeDisplay(terminal));
       throw error;
@@ -263,7 +268,7 @@ export class TerminalRegistry implements vscode.Disposable {
     terminal: vscode.Terminal,
     session: PiSession,
     requestSignal?: AbortSignal,
-  ): Promise<PiRuntime> {
+  ): Promise<void> {
     this.requireActive();
     requestSignal?.throwIfAborted();
     const controller = new AbortController();
@@ -293,7 +298,7 @@ export class TerminalRegistry implements vscode.Disposable {
     terminal: vscode.Terminal,
     session: PiSession,
     signal: AbortSignal,
-  ): Promise<PiRuntime> {
+  ): Promise<void> {
     const pid = await terminal.processId;
     signal.throwIfAborted();
     if (pid === undefined) throw new Error(`Pi display process did not start in ${session.cwd}`);
@@ -302,24 +307,11 @@ export class TerminalRegistry implements vscode.Disposable {
       const current = await this.mux.current(pid);
       signal.throwIfAborted();
       if (terminal.exitStatus !== undefined) break;
-      const runtime = await this.runtimeFor(current, session, pid);
+      if (current?.id === session.sessionId) return;
+      await this.mux.switch(session.sessionId, pid);
       signal.throwIfAborted();
-      if (runtime !== undefined) return runtime;
       await sleep(50, undefined, { signal });
     }
     throw new Error(`Pi display exited before attaching pid=${pid} in ${session.cwd}`);
-  }
-
-  /** Interpret `pi-mux current`: a matching session attaches; anything else switches first. */
-  private async runtimeFor(
-    current: PiMuxCurrentSession | undefined,
-    session: PiSession,
-    clientPid: number,
-  ): Promise<PiRuntime | undefined> {
-    if (current?.id !== session.sessionId) {
-      await this.mux.switch(session.sessionId, clientPid);
-      return undefined;
-    }
-    return { sessionId: session.sessionId, cwd: session.cwd, target: current.target };
   }
 }
