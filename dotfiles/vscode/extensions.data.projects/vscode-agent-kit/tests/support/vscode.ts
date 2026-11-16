@@ -18,6 +18,12 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { PiMuxWorkspace } from "../../src/piMux";
+import {
+  FIXTURE_MODEL,
+  FIXTURE_PROVIDER,
+  startFixedResponseProvider,
+  type FixedResponseProvider,
+} from "./fixedResponseProvider";
 
 const root = resolve(__dirname, "../..");
 const dotfiles = process.env.PI_REVIEW_DOTFILES ?? join(homedir(), "projects/dotfiles/dotfiles");
@@ -83,6 +89,7 @@ export class VSCodeFixture {
   };
   readonly sessions: Record<string, SessionFixture> = {};
   readonly gitBefore: Record<string, string> = {};
+  responseProvider?: FixedResponseProvider;
   app!: ElectronApplication;
   page!: Page;
   private traceStarted = false;
@@ -728,12 +735,38 @@ function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-export const test = baseTest.extend<{ host: VSCodeFixture }>({
-  host: async ({ playwright }, use, testInfo) => {
+export const test = baseTest.extend<{ host: VSCodeFixture; fixedResponse: boolean }>({
+  fixedResponse: [false, { option: true }],
+  host: async ({ playwright, fixedResponse }, use, testInfo) => {
     void playwright;
     const host = new VSCodeFixture();
     const tracePath = testInfo.outputPath("electron-trace.zip");
     try {
+      if (fixedResponse) {
+        host.responseProvider = await startFixedResponseProvider();
+        const settingsPath = join(host.directory, "agent/settings.json");
+        write(
+          settingsPath,
+          JSON.stringify({
+            ...JSON.parse(readFileSync(settingsPath, "utf8")),
+            defaultProvider: FIXTURE_PROVIDER,
+            defaultModel: FIXTURE_MODEL,
+          }),
+        );
+        write(
+          join(host.directory, "agent/models.json"),
+          JSON.stringify({
+            providers: {
+              [FIXTURE_PROVIDER]: {
+                baseUrl: host.responseProvider.baseUrl,
+                api: "openai-completions",
+                apiKey: "fixture-not-a-secret",
+                models: [{ id: FIXTURE_MODEL, contextWindow: 128000, maxTokens: 1024 }],
+              },
+            },
+          }),
+        );
+      }
       await host.launch();
       await test.step("Check the A/B work folder paths and names", async () => {
         const frame = await host.sessionFrame();
@@ -765,7 +798,11 @@ export const test = baseTest.extend<{ host: VSCodeFixture }>({
         ),
         contentType: "application/json",
       });
-      await host.close(tracePath);
+      try {
+        await host.close(tracePath);
+      } finally {
+        await host.responseProvider?.close();
+      }
       if (existsSync(tracePath))
         await testInfo.attach("trace", {
           path: tracePath,

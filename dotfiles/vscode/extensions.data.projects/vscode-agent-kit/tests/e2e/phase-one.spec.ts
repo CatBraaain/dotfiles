@@ -12,6 +12,13 @@ import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Frame } from "playwright/test";
 import { expect, test, type VSCodeFixture } from "../support/vscode";
+import { PiMux } from "../../src/piMux";
+import {
+  FIXTURE_MODEL,
+  FIXTURE_PROMPT,
+  FIXTURE_PROVIDER,
+  FIXTURE_REPLY,
+} from "../support/fixedResponseProvider";
 
 /** One recorded #status mutation while a workspace registration error arrives. */
 interface RegistrationStatusObservation {
@@ -1131,16 +1138,199 @@ test(
   },
 );
 
-test(
-  "実 Pi の最初の assistant 応答による新規セッションの検出と active 付与",
-  { annotation: { type: "spec", description: "E2E-9" } },
-  async () => {
-    test.skip(
-      true,
-      "No model credentials or provider are configured in the isolated fixture. Synthetic JSONL detection is not evidence of a real Pi assistant response.",
-    );
-  },
-);
+test.describe("First assistant response through a loopback fixture provider", () => {
+  test.use({ fixedResponse: true });
+
+  test(
+    "Lists the new session after real Pi saves its first assistant response and reuses its Terminal",
+    {
+      annotation: [
+        { type: "spec", description: "E2E-9" },
+        {
+          type: "scope",
+          description:
+            "Real Pi processes and saves a fixed loopback HTTP response. This does not test model inference or an external provider.",
+        },
+      ],
+    },
+    async ({ host }, testInfo) => {
+      const folder = host.sessions.A.cwd;
+      const mux = new PiMux(async (_executable, args) => host.piMux(args));
+      let session!: NonNullable<Awaited<ReturnType<PiMux["current"]>>>;
+      let runtime!: ReturnType<VSCodeFixture["piProcesses"]>[number];
+      let displayPid = 0;
+      const existingSources = new Map<string, string>();
+
+      function savedEntries(): Record<string, unknown>[] {
+        if (!existsSync(session.file)) return [];
+        const source = readFileSync(session.file, "utf8");
+        return source
+          .slice(0, source.lastIndexOf("\n"))
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as Record<string, unknown>);
+      }
+
+      await test.step("Open a new Pi from its workspace and record its unsaved session ID", async () => {
+        await expect.poll(() => host.piProcesses().length, { timeout: 30_000 }).toBe(3);
+        await host.activateSession("B");
+        await expect.poll(() => host.sessionRuntime("B")).toBeDefined();
+        const frame = await host.sessionFrame();
+        const group = frame
+          .locator("section.group")
+          .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
+          .describe("New conversation workspace");
+        await group
+          .locator(".group-new-session")
+          .describe("New session button")
+          .click({ steps: 15 });
+        await host.page.locator(".terminal.xterm").describe("Focus the Pi Terminal").click();
+        await host.expectPiVisible(folder);
+        displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
+        await expect.poll(() => mux.current(displayPid)).toMatchObject({ cwd: folder });
+        session = (await mux.current(displayPid))!;
+        runtime = host.piProcesses().find((process) => process.target === session.target)!;
+        expect(runtime).toMatchObject({ cwd: folder });
+        expect(existsSync(session.file)).toBe(false);
+        expect(Object.values(host.sessions).map(({ id }) => id)).not.toContain(session.id);
+        await expect(group.locator(".session-row")).toHaveCount(0);
+        await expect(frame.locator(".session-row.selected")).toHaveCount(0);
+        await expect(
+          host.page.locator(".terminal.xterm").describe("Real Pi TUI with the fixture model"),
+        ).toContainText(FIXTURE_MODEL);
+        for (const fixture of Object.values(host.sessions)) {
+          const source = readFileSync(fixture.session, "utf8");
+          expect(source.startsWith(fixture.original)).toBe(true);
+          existingSources.set(fixture.session, source);
+        }
+      });
+
+      await test.step("Send a prompt through the Terminal and let real Pi save a successful assistant reply", async () => {
+        const input = host.page
+          .getByRole("textbox", { name: /^Terminal [0-9]+/ })
+          .describe("Real Pi prompt input");
+        await input.pressSequentially(FIXTURE_PROMPT, { delay: 120 });
+        await input.press("Enter");
+        await expect
+          .poll(() => savedEntries())
+          .toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ type: "session", id: session.id, cwd: folder }),
+              expect.objectContaining({
+                type: "message",
+                message: expect.objectContaining({
+                  role: "user",
+                  content: expect.arrayContaining([{ type: "text", text: FIXTURE_PROMPT }]),
+                }),
+              }),
+              expect.objectContaining({
+                type: "message",
+                message: expect.objectContaining({
+                  role: "assistant",
+                  provider: FIXTURE_PROVIDER,
+                  model: FIXTURE_MODEL,
+                  stopReason: "stop",
+                  content: [{ type: "text", text: FIXTURE_REPLY }],
+                }),
+              }),
+            ]),
+          );
+        expect(host.responseProvider?.requests).toEqual([{ model: FIXTURE_MODEL, stream: true }]);
+        await expect(
+          host.page.locator(".terminal.xterm").describe("Saved Pi reply in the TUI"),
+        ).toContainText(FIXTURE_REPLY);
+      });
+
+      await test.step("Find the unarchived selected row without Refresh and match its public Terminal session", async () => {
+        const frame = await host.sessionFrame();
+        const row = frame
+          .locator(".session-row")
+          .filter({ has: frame.locator(`[data-session="${session.id}"]`) })
+          .describe("Automatically detected new conversation");
+        await expect(frame.locator(`[data-mode-toggle="${folder}"]`)).toHaveAttribute(
+          "data-mode",
+          "unarchived",
+        );
+        await expect(row).toBeVisible();
+        await expect(row).not.toHaveClass(/archived/);
+        await expect(row).toHaveClass(/selected/);
+        await expect(frame.locator(".session-row.selected")).toHaveCount(1);
+        await expect
+          .poll(() => mux.current(displayPid))
+          .toMatchObject({
+            id: session.id,
+            cwd: folder,
+            file: session.file,
+          });
+        const saved = host.listWorkspaces().find(({ cwd }) => cwd === folder)!.sessions;
+        expect(saved).toEqual(
+          expect.arrayContaining([expect.objectContaining({ id: session.id, file: session.file })]),
+        );
+      });
+
+      await test.step("Switch away and reselect the saved conversation without replacing Pi or its Terminal", async () => {
+        const original = readFileSync(session.file, "utf8");
+        await host.selectSession("B");
+        await expect.poll(async () => (await mux.current(displayPid))?.id).toBe(host.sessions.B.id);
+        const frame = await host.sessionFrame();
+        await frame
+          .locator(`[data-session="${session.id}"] .session-name`)
+          .describe("Reselect the new saved conversation")
+          .click({ steps: 15 });
+        await host.page
+          .locator(".terminal.xterm")
+          .describe("Focus the reselected Pi Terminal")
+          .click();
+        await host.expectPiVisible(folder);
+        await expect
+          .poll(() => mux.current(displayPid))
+          .toMatchObject({
+            id: session.id,
+            cwd: folder,
+            file: session.file,
+          });
+        expect(
+          host
+            .snapshot()
+            .terminals.filter((terminal) => terminal.owned)
+            .map(({ pid }) => pid),
+        ).toEqual([displayPid]);
+        expect(host.piProcesses().find((process) => process.pid === runtime.pid)).toMatchObject({
+          pid: runtime.pid,
+          cwd: folder,
+        });
+        await expect(
+          frame.locator(`.session-row.selected [data-session="${session.id}"]`),
+        ).toBeVisible();
+        expect(readFileSync(session.file, "utf8")).toBe(original);
+        for (const [file, before] of existingSources)
+          expect(readFileSync(file, "utf8")).toBe(before);
+        for (const [cwd, before] of Object.entries(host.gitBefore))
+          expect(host.gitState(cwd)).toBe(before);
+        await testInfo.attach(
+          "First assistant session evidence (fixed response, not model inference)",
+          {
+            body: JSON.stringify(
+              {
+                endpoint: host.responseProvider?.baseUrl,
+                requests: host.responseProvider?.requests,
+                session,
+                runtime,
+                displayPid,
+                entries: savedEntries(),
+                workspaces: host.listWorkspaces(),
+                snapshot: host.snapshot(),
+              },
+              null,
+              2,
+            ),
+            contentType: "application/json",
+          },
+        );
+      });
+    },
+  );
+});
 
 test(
   "Archives directly, stops only its Pi and reopens the saved conversation after Unarchive",

@@ -26,7 +26,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 | E2E-3 | SCM から Sessions へ戻っても、Refresh なしで一覧を復元する | 一覧と拡張機能の操作どおりの再配信 | なし | 保存 E2E |
 | E2E-6 | New Workspace で入力したフルパスのワークスペースを登録できる | New Workspace アクションどおりの登録 | フォーム入力／ワークスペース追加後 | 保存 E2E |
 | E2E-7 | 未登録 cwd の保存会話を表示せず、削除した保存済み会話を自動で一覧から外す | データソースどおりの一覧更新、Terminal なし、workspace 登録不変、他の原本・Git 不変 | なし | 保存 E2E |
-| E2E-9 | New Session で起動し、会話を保存した新しいセッションの未アーカイブ表示 | New Session アクションどおりの起動と未アーカイブ表示 | なし（未実行） | 保存 E2E（未実行。tickets 管理） |
+| E2E-9 | New Session で起動し、会話を保存した新しいセッションの未アーカイブ表示 | New Session アクションどおりの起動と未アーカイブ表示 | なし | 保存 E2E（実 Pi が loopback の固定HTTP応答を処理・保存。モデル推論は検証しない） |
 | E2E-10 | 登録済みワークスペースの `New session` で、その cwd で新しい Pi を起動できる | New Session アクションどおりの起動 | 登録 cwd で起動 | 保存 E2E |
 | E2E-11 | ワークスペース登録を解除する | ワークスペース登録解除どおりの対象 cwd の Pi 終了・登録と復元候補の除去・一覧更新 | Unregister menu／Workspace unregistered | 保存 E2E |
 | E2E-12 | New Workspace のキャンセルと無効なパスを安全に扱える | New Workspace アクションどおりの安全処理 | なし | 保存 E2E |
