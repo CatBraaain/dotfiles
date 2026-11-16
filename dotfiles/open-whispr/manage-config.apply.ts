@@ -374,6 +374,7 @@ export function buildHarnessSource(): string {
     [
       'const { app, BrowserWindow, session } = require("electron");',
       'const nodeCrypto = require("node:crypto");',
+      'const nodeFs = require("node:fs");',
       'const nodePath = require("node:path");',
       'const nodeUrl = require("node:url");',
       "",
@@ -451,8 +452,15 @@ export function buildHarnessSource(): string {
     let database = null;
     let dictionary = null;
     let missing = [];
+    let migrationDir = null;
+    let migrated = false;
+    const databasePath = nodePath.join(profile, "transcriptions.db");
     let result;
     function wordKey(word) { return word.trim().toLowerCase(); }
+    async function backupDatabase(source, destination) {
+      const backup = await source.backup(destination);
+      if (backup.totalPages === 0) throw new Error("database backup did not transfer any pages");
+    }
     try {
       for (const target of targets) before[target.key] = await readKey(target.key);
       if (words.length > 0) {
@@ -463,15 +471,37 @@ export function buildHarnessSource(): string {
         if (typeof DatabaseManager.prototype.getDictionary !== "function" ||
             typeof DatabaseManager.prototype.applyDictionaryChanges !== "function")
           throw new Error("installed app does not support dictionary delta registration");
-        database = new SQLite(nodePath.join(profile, "transcriptions.db"), { fileMustExist: true });
+        database = new SQLite(databasePath, { fileMustExist: true });
         dictionary = Object.create(DatabaseManager.prototype);
         dictionary.db = database;
-        dictionary._dictionaryWriteStatements();
+        try {
+          dictionary._dictionaryWriteStatements();
+        } catch (error) {
+          if (error.code !== "SQLITE_ERROR" || !error.message.startsWith("no such column:")) throw error;
+          if (typeof dictionary.initDatabase !== "function")
+            throw new Error("installed app does not support database migration: " + error.message);
+          migrationDir = nodeFs.mkdtempSync(nodePath.join(profile, ".openwhispr-db-migration-"));
+          await backupDatabase(database, nodePath.join(migrationDir, "transcriptions.db"));
+          database.close();
+          database = null;
+          dictionary.db = null;
+          dictionary.activeAccountId = null;
+          const userDataPath = app.getPath("userData");
+          try {
+            app.setPath("userData", migrationDir);
+            dictionary.initDatabase();
+          } finally {
+            database = dictionary.db;
+            app.setPath("userData", userDataPath);
+          }
+          dictionary._dictionaryWriteStatements();
+          migrated = true;
+        }
         const existing = new Set(dictionary.getDictionary().map(wordKey));
         missing = words.filter((word) => !existing.has(wordKey(word)));
       }
       const changedTargets = targets.filter((target) => before[target.key] !== target.value);
-      if (changedTargets.length === 0 && missing.length === 0) {
+      if (changedTargets.length === 0 && missing.length === 0 && !migrated) {
         result = { status: "unchanged" };
       } else {
         if (missing.length > 0) database.exec("BEGIN IMMEDIATE");
@@ -494,12 +524,18 @@ export function buildHarnessSource(): string {
             throw new Error("dictionary verification failed");
         }
         if (database && database.inTransaction) database.exec("COMMIT");
+        if (migrated) {
+          if (["-wal", "-shm", "-journal"].some((suffix) => nodeFs.existsSync(databasePath + suffix)))
+            throw new Error("profile database still has SQLite sidecar files; close all database connections");
+          if (!nodeFs.statSync(databasePath).isFile()) throw new Error("existing database file is missing");
+          await backupDatabase(database, databasePath);
+        }
         result = { status: "applied", applied: applied, dictionaryAdded: missing.length };
       }
     } catch (error) {
       if (database && database.inTransaction) {
         try { database.exec("ROLLBACK"); }
-        catch (rollbackError) { restoreFailed.push("dictionary"); }
+        catch (rollbackError) { if (!migrationDir) restoreFailed.push("dictionary"); }
       }
       for (const key of applied) {
         try {
@@ -522,6 +558,15 @@ export function buildHarnessSource(): string {
         catch (closeError) {
           if (!result) throw closeError;
           result.detail = [result.detail, "database close failed: " + String(closeError && closeError.message || closeError)].filter(Boolean).join("; ");
+        }
+      }
+      if (migrationDir) {
+        try {
+          if (database && database.open)
+            result.detail = [result.detail, "staged database retained at " + migrationDir + ": connection is still open"].filter(Boolean).join("; ");
+          else nodeFs.rmSync(migrationDir, { recursive: true, force: true });
+        } catch (cleanupError) {
+          result.detail = [result.detail, "staged database retained at " + migrationDir + ": " + String(cleanupError && cleanupError.message || cleanupError)].filter(Boolean).join("; ");
         }
       }
     }

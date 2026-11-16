@@ -1,7 +1,7 @@
 import { describe, it, beforeAll, afterAll } from "bun:test";
 import assert from "node:assert/strict";
 import { Database as FixtureDatabase } from "bun:sqlite";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -1113,6 +1113,34 @@ describe("e2e with the installed Electron runtime", () => {
     }
   }
 
+  function createLegacyDictionaryFixture(): void {
+    createDictionaryFixture();
+    const db = new FixtureDatabase(join(profileDir, "transcriptions.db"));
+    try {
+      db.exec(`
+        ALTER TABLE custom_dictionary DROP COLUMN shared_at;
+        ALTER TABLE custom_dictionary DROP COLUMN shared_at_dirty;
+        ALTER TABLE custom_dictionary DROP COLUMN fallback_retired;
+        DROP TABLE snippets;
+        CREATE TABLE snippets (
+          id INTEGER PRIMARY KEY,
+          trigger TEXT NOT NULL,
+          replacement TEXT NOT NULL,
+          client_snippet_id TEXT,
+          cloud_id TEXT,
+          sync_status TEXT DEFAULT 'pending',
+          deleted_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO snippets (trigger, replacement, client_snippet_id)
+        VALUES ('owner snippet', 'preserve me', 'owner-snippet');
+      `);
+    } finally {
+      db.close();
+    }
+  }
+
   function dictionarySnapshot() {
     const db = new FixtureDatabase(join(profileDir, "transcriptions.db"), { readonly: true });
     try {
@@ -1219,10 +1247,10 @@ describe("e2e with the installed Electron runtime", () => {
   );
 
   maybeIt(
-    "keeps the dictionary and storage unchanged while the app singleton is locked",
+    "keeps the legacy dictionary and storage unchanged while the app singleton is locked",
     async () => {
       await seedProfile();
-      createDictionaryFixture();
+      createLegacyDictionaryFixture();
       declareDictionary(["new-locked-word"]);
       const before = dictionarySnapshot();
       await startHoldHelper();
@@ -1298,23 +1326,284 @@ describe("e2e with the installed Electron runtime", () => {
   );
 
   maybeIt(
-    "fails on incompatible dictionary schema without migrations or storage changes",
+    "migrates a legacy dictionary DB with the installed app and remains idempotent",
+    async () => {
+      await seedProfile();
+      createLegacyDictionaryFixture();
+      declareDictionary(["pi", "new-migrated-word"]);
+      const before = dictionarySnapshot();
+      const result = await runDeclaredHook();
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(parseStatusLine(result.stdout).status, "applied");
+      const after = dictionarySnapshot();
+      for (const [index, row] of before.rows.entries()) {
+        for (const [key, value] of Object.entries(row))
+          assert.equal(after.rows[index]![key as keyof typeof row], value, key);
+      }
+      assert.ok(after.rows.some((row) => row.word === "new-migrated-word"));
+      assert.ok(after.schema.some((row) => (row as { name: string }).name === "notes"));
+      assert.deepEqual(after.snippets, before.snippets);
+      assert.deepEqual(
+        readdirSync(profileDir).filter((name) => name.startsWith(".openwhispr-db-migration-")),
+        [],
+      );
+      const second = await runDeclaredHook();
+      assert.equal(second.exitCode, 0, second.stderr);
+      assert.equal(parseStatusLine(second.stdout).status, "unchanged");
+      assert.deepEqual(dictionarySnapshot(), after);
+    },
+    180_000,
+  );
+
+  maybeIt(
+    "preserves the existing DB inode and access controls during legacy migration",
+    async () => {
+      await seedProfile();
+      createLegacyDictionaryFixture();
+      const dbPath = join(profileDir, "transcriptions.db");
+      const hasAclTools =
+        process.platform === "linux" &&
+        spawnSync("setfacl", ["--version"]).status === 0 &&
+        spawnSync("getfacl", ["--version"]).status === 0;
+      if (hasAclTools) {
+        const acl = spawnSync("setfacl", ["-m", `u:${process.getuid!()}:---`, dbPath], {
+          encoding: "utf8",
+        });
+        assert.equal(acl.status, 0, acl.stderr);
+      }
+      const aclBefore = hasAclTools
+        ? spawnSync("getfacl", ["-cpn", dbPath], { encoding: "utf8" }).stdout
+        : undefined;
+      const before = statSync(dbPath);
+      declareDictionary(["preserve-access-controls"]);
+      const result = await runDeclaredHook();
+      assert.equal(result.exitCode, 0, result.stderr);
+      if (hasAclTools) {
+        const aclAfter = spawnSync("getfacl", ["-cpn", dbPath], { encoding: "utf8" });
+        assert.equal(aclAfter.status, 0, aclAfter.stderr);
+        assert.equal(aclAfter.stdout, aclBefore);
+      }
+      const after = statSync(dbPath);
+      assert.deepEqual(
+        [after.dev, after.ino, after.uid, after.gid, after.mode],
+        [before.dev, before.ino, before.uid, before.gid, before.mode],
+      );
+      assert.ok(dictionarySnapshot().rows.some((row) => row.word === "preserve-access-controls"));
+    },
+    180_000,
+  );
+
+  for (const journalMode of ["DELETE", "WAL"]) {
+    maybeIt(
+      `rolls back an interrupted SQLite backup into an existing ${journalMode} DB`,
+      () => {
+        const backupDir = mkdtempSync(join(e2eRoot, "backup-interruption-"));
+        const script = `
+          const assert = require("node:assert/strict");
+          const path = require("node:path");
+          const SQLite = require(process.argv[1]);
+          (async () => {
+            const source = new SQLite(path.join(process.argv[2], "source.db"));
+            const destination = new SQLite(path.join(process.argv[2], "destination.db"));
+            try {
+              source.exec("CREATE TABLE payload (value BLOB); INSERT INTO payload VALUES (zeroblob(1048576))");
+              destination.pragma("journal_mode = " + process.argv[3]);
+              destination.exec("CREATE TABLE owner_data (value TEXT); INSERT INTO owner_data VALUES ('preserve me')");
+              const before = destination.serialize();
+              let transferredPages = 0;
+              await assert.rejects(source.backup(destination.name, {
+                progress({ totalPages, remainingPages }) {
+                  transferredPages = totalPages - remainingPages;
+                  if (transferredPages > 0 && remainingPages > 0)
+                    throw new Error("fixture interrupted backup");
+                  return 1;
+                },
+              }), /fixture interrupted backup/);
+              assert.ok(transferredPages > 0);
+              const restored = new SQLite(destination.name, { readonly: true });
+              try { assert.deepEqual(restored.serialize(), before); }
+              finally { restored.close(); }
+              console.log(JSON.stringify({ journalMode: process.argv[3], transferredPages }));
+            } finally {
+              source.close();
+              destination.close();
+            }
+          })().catch((error) => { console.error(error); process.exitCode = 1; });
+        `;
+        const result = spawnSync(
+          join(runtimeDir, e2ePlatform === "win32" ? "electron.exe" : "electron"),
+          [
+            "-e",
+            script,
+            join(e2eAppDir, "resources", "app.asar", "node_modules", "better-sqlite3"),
+            backupDir,
+            journalMode,
+          ],
+          {
+            env: { ...hookEnv({}), ELECTRON_RUN_AS_NODE: "1", DISPLAY: "", WAYLAND_DISPLAY: "" },
+            encoding: "utf8",
+            timeout: 20_000,
+          },
+        );
+        assert.equal(result.status, 0, result.stderr);
+        assert.ok((JSON.parse(result.stdout) as { transferredPages: number }).transferredPages > 0);
+      },
+      30_000,
+    );
+  }
+
+  maybeIt(
+    "includes uncheckpointed WAL rows in legacy DB migration",
+    async () => {
+      await seedProfile();
+      createLegacyDictionaryFixture();
+      const dbPath = join(profileDir, "transcriptions.db");
+      const writer = spawnSync(
+        "bun",
+        [
+          "-e",
+          'const { Database } = require("bun:sqlite"); const db = new Database(process.argv[1]); db.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0"); db.query("INSERT INTO custom_dictionary (word) VALUES (?)").run("wal-only-word"); process.kill(process.pid, "SIGKILL");',
+          dbPath,
+        ],
+        { env: hookEnv({}), encoding: "utf8" },
+      );
+      assert.equal(writer.signal, "SIGKILL", writer.stderr);
+      assert.ok(statSync(dbPath + "-wal").size > 32);
+      declareDictionary(["after-wal-migration"]);
+      const result = await runDeclaredHook();
+      assert.equal(result.exitCode, 0, result.stderr);
+      const words = dictionarySnapshot().rows.map((row) => row.word);
+      assert.ok(words.includes("wal-only-word"));
+      assert.ok(words.includes("after-wal-migration"));
+    },
+    180_000,
+  );
+
+  for (const failure of ["migration", "registration", "verification"] as const) {
+    maybeIt(
+      `keeps the entire legacy DB and storage unchanged after a ${failure} failure`,
+      async () => {
+        await seedProfile();
+        createLegacyDictionaryFixture();
+        const dbPath = join(profileDir, "transcriptions.db");
+        const db = new FixtureDatabase(dbPath);
+        try {
+          if (failure === "migration")
+            db.exec("DROP TABLE snippets; CREATE TABLE snippets (trigger TEXT, replacement TEXT)");
+          else
+            db.exec(
+              failure === "registration"
+                ? "CREATE TRIGGER fail_registration BEFORE INSERT ON custom_dictionary WHEN NEW.word = 'failed-word' BEGIN SELECT RAISE(ABORT, 'fixture registration failure'); END"
+                : "CREATE TRIGGER fail_verification BEFORE INSERT ON custom_dictionary WHEN NEW.word = 'failed-word' BEGIN SELECT RAISE(IGNORE); END",
+            );
+        } finally {
+          db.close();
+        }
+        declareDictionary(["failed-word"]);
+        const before = readFileSync(dbPath);
+        const storageBefore = await dumpStorage();
+        const result = await runDeclaredHook();
+        assert.equal(result.exitCode, 5, result.stderr);
+        assert.match(
+          result.stderr,
+          failure === "migration"
+            ? /no such column: id/
+            : failure === "registration"
+              ? /fixture registration failure/
+              : /dictionary verification failed/,
+        );
+        assert.deepEqual(readFileSync(dbPath), before);
+        assert.deepEqual(await dumpStorage(), storageBefore);
+        assert.deepEqual(
+          readdirSync(profileDir).filter((name) => name.startsWith(".openwhispr-db-migration-")),
+          [],
+        );
+      },
+      180_000,
+    );
+  }
+
+  maybeIt(
+    "reports applied when migration is the only required change",
+    async () => {
+      await seedProfile();
+      writeFileSync(join(keysDir, MANAGED_KEYS_FILE), e2eYaml);
+      assert.equal((await runDeclaredHook()).exitCode, 0);
+      createLegacyDictionaryFixture();
+      declareDictionary(["pi"]);
+      const storageBefore = await dumpStorage();
+      const result = await runDeclaredHook();
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(parseStatusLine(result.stdout).status, "applied");
+      assert.deepEqual(await dumpStorage(), storageBefore);
+      assert.equal(dictionarySnapshot().rows.length, 3);
+    },
+    180_000,
+  );
+
+  maybeIt(
+    "refuses DB replacement while another SQLite connection keeps source sidecars",
+    async () => {
+      await seedProfile();
+      createLegacyDictionaryFixture();
+      const dbPath = join(profileDir, "transcriptions.db");
+      const reader = new FixtureDatabase(dbPath);
+      try {
+        reader.exec("PRAGMA journal_mode = WAL; BEGIN");
+        reader.query("SELECT word FROM custom_dictionary").all();
+        declareDictionary(["must-not-replace"]);
+        const before = dictionarySnapshot();
+        const storageBefore = await dumpStorage();
+        const result = await runDeclaredHook();
+        assert.equal(result.exitCode, 5, result.stderr);
+        assert.match(result.stderr, /profile database still has SQLite sidecar files/);
+        assert.deepEqual(dictionarySnapshot(), before);
+        assert.deepEqual(await dumpStorage(), storageBefore);
+        assert.equal(existsSync(dbPath + "-shm"), true);
+      } finally {
+        reader.close();
+      }
+    },
+    180_000,
+  );
+
+  maybeIt(
+    "fails without reporting success when a rollback-mode reader blocks DB promotion",
+    async () => {
+      await seedProfile();
+      createLegacyDictionaryFixture();
+      const dbPath = join(profileDir, "transcriptions.db");
+      const reader = new FixtureDatabase(dbPath);
+      try {
+        reader.exec("BEGIN");
+        reader.query("SELECT word FROM custom_dictionary").all();
+        declareDictionary(["must-not-report-success"]);
+        const before = dictionarySnapshot();
+        const storageBefore = await dumpStorage();
+        const result = await runDeclaredHook();
+        assert.equal(result.exitCode, 5, result.stderr);
+        assert.match(result.stderr, /database backup did not transfer any pages/);
+        assert.deepEqual(dictionarySnapshot(), before);
+        assert.deepEqual(await dumpStorage(), storageBefore);
+      } finally {
+        reader.close();
+      }
+    },
+    180_000,
+  );
+
+  maybeIt(
+    "does not initialize an existing empty DB",
     async () => {
       await seedProfile();
       createDictionaryFixture();
-      const db = new FixtureDatabase(join(profileDir, "transcriptions.db"));
-      try {
-        db.exec("ALTER TABLE custom_dictionary DROP COLUMN shared_at_dirty");
-      } finally {
-        db.close();
-      }
-      declareDictionary(["requires-schema"]);
-      const before = dictionarySnapshot();
+      const dbPath = join(profileDir, "transcriptions.db");
+      writeFileSync(dbPath, "");
+      declareDictionary(["requires-existing-dictionary"]);
       const storageBefore = await dumpStorage();
       const result = await runDeclaredHook();
       assert.equal(result.exitCode, 5, result.stderr);
-      assert.match(result.stderr, /shared_at_dirty/);
-      assert.deepEqual(dictionarySnapshot(), before);
+      assert.equal(statSync(dbPath).size, 0);
       assert.deepEqual(await dumpStorage(), storageBefore);
     },
     180_000,
