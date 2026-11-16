@@ -2248,7 +2248,7 @@ describe("mode routing boundaries", () => {
       assert.deepEqual(extension.notifications, []);
     } finally {
       process.stderr.write = previousWrite;
-      process.exitCode = previousExitCode;
+      process.exitCode = previousExitCode ?? 0;
       extension.restore();
     }
   });
