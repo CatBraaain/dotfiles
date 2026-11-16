@@ -4,7 +4,8 @@
 // load_cookies accepts; the fetch backends then call the twikit_client.py
 // wrapper (twifork) for tweets, user timelines and search.
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import twikitClientScript from "../scripts/twikit_client.py" with { type: "text" };
 import { parseRunCodeResult, runPlaywrightCli, syncPlaywrightCliConfig } from "./camoufox";
 import {
   LOGIN_POLL_INTERVAL_MS,
@@ -125,16 +126,11 @@ function assertTwitterCookies(): void {
   }
 }
 
-// The wrapper ships under scripts/ next to package.json (the CLI project
-// directory); bun resolves the CLI entry the same way for the deployed
-// ~/.agents/cli/browse.
-const twikitClientScript = join(dirname(import.meta.dir), "scripts", "twikit_client.py");
-
 async function runTwikitClient(args: string[]): Promise<string> {
   return runWithStdin(
     "uv",
-    ["run", "--no-project", twikitClientScript, ...args],
-    "",
+    ["run", "--no-project", "--script", "-", ...args],
+    twikitClientScript,
     TWIKIT_TIMEOUT_MS,
   ).catch((error: unknown) => {
     throw new Error(
