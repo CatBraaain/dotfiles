@@ -5,6 +5,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PassThrough } from "node:stream";
+import { executeCancellableBashRequest } from "./run-tools.ts";
 import { SandboxRunner } from "./sandbox-runner.ts";
 import { Guardrail } from "./guardrail.ts";
 import { probeBwrap, realBwrapTest } from "./bwrap-test-support.ts";
@@ -33,6 +35,41 @@ function withTempDir(test: (dir: string) => Promise<void> | void): () => Promise
     }
   };
 }
+
+describe("cancellable Bash input", () => {
+  for (const [name, input, pattern] of [
+    ["empty input", "", /Missing tool request/],
+    ["malformed JSON", "{invalid\n", /JSON/],
+    ["null request", "null\n", /Invalid tool request/],
+    ["array request", "[]\n", /Invalid tool request/],
+    ["missing params", "{}\n", /Invalid tool request/],
+    ["invalid call ID", '{"params":{},"toolCallId":2}\n', /Invalid tool call ID/],
+    ["invalid session", '{"params":{},"session":[]}\n', /Invalid tool session/],
+    [
+      "invalid session field",
+      '{"params":{},"session":{"provider":2}}\n',
+      /Invalid tool session field/,
+    ],
+    ["extra control input", '{"params":{}}\n{}\n', /Unexpected sandbox control input/],
+  ] as const) {
+    it(`rejects ${name}`, async () => {
+      const stream = new PassThrough();
+      const pending = executeCancellableBashRequest(stream);
+      const rejection = assert.rejects(pending, pattern);
+      stream.end(input);
+      await rejection;
+      assert.equal(stream.destroyed, true);
+    });
+  }
+
+  it("reports a failed control stream", async () => {
+    const stream = new PassThrough();
+    const pending = executeCancellableBashRequest(stream);
+    const rejection = assert.rejects(pending, /fixture input failed/);
+    stream.destroy(new Error("fixture input failed"));
+    await rejection;
+  });
+});
 
 describe("run-tools CLI", () => {
   it(

@@ -8,6 +8,8 @@
 import { readFileSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
+import type { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import type {
   AgentToolResult,
@@ -144,7 +146,9 @@ export function startStderrTeeReceiver(): Promise<{
 export async function executeToolRequest(
   toolName: string,
   request: ToolRequest,
+  signal?: AbortSignal,
 ): Promise<AgentToolResult<any>> {
+  signal?.throwIfAborted();
   if (toolName === "read" && request.imageMimeType !== undefined) {
     const { path } = request.params as { path: string };
     return {
@@ -174,7 +178,7 @@ export async function executeToolRequest(
         request.toolCallId ?? "cli",
         // JSON boundary: the bash definition validates its own params at runtime.
         request.params as BashToolInput,
-        undefined,
+        signal,
         undefined,
         context as never,
       );
@@ -204,11 +208,77 @@ export async function executeToolRequest(
   );
 }
 
+function parseToolRequest(text: string): ToolRequest {
+  const request: unknown = JSON.parse(text);
+  if (
+    typeof request !== "object" ||
+    request === null ||
+    Array.isArray(request) ||
+    !("params" in request)
+  )
+    throw new Error("Invalid tool request");
+  if ("toolCallId" in request && typeof request.toolCallId !== "string")
+    throw new Error("Invalid tool call ID");
+  if ("imageMimeType" in request && typeof request.imageMimeType !== "string")
+    throw new Error("Invalid image MIME type");
+  if ("session" in request) {
+    const session = request.session;
+    if (typeof session !== "object" || session === null || Array.isArray(session))
+      throw new Error("Invalid tool session");
+    for (const key of ["sessionId", "sessionFile", "provider", "modelId", "reasoningLevel"]) {
+      if (key in session && typeof (session as Record<string, unknown>)[key] !== "string")
+        throw new Error(`Invalid tool session field: ${key}`);
+    }
+  }
+  return request as ToolRequest;
+}
+
+export async function executeCancellableBashRequest(
+  input: Readable,
+): Promise<AgentToolResult<any>> {
+  const controller = new AbortController();
+  const lines = createInterface({ input });
+  const firstLine = Promise.withResolvers<string>();
+  let received = false;
+  let protocolError: Error | undefined;
+  function fail(error: Error): void {
+    protocolError = error;
+    controller.abort();
+    firstLine.reject(error);
+  }
+  lines.on("line", (line) => {
+    if (received) fail(new Error("Unexpected sandbox control input"));
+    else {
+      received = true;
+      firstLine.resolve(line);
+    }
+  });
+  lines.on("close", () => {
+    controller.abort();
+    if (!received) firstLine.reject(new Error("Missing tool request"));
+  });
+  lines.on("error", fail);
+  try {
+    const request = parseToolRequest(await firstLine.promise);
+    const result = await executeToolRequest("bash", request, controller.signal);
+    if (protocolError) throw protocolError;
+    return result;
+  } catch (error) {
+    throw protocolError ?? error;
+  } finally {
+    lines.close();
+    input.destroy();
+  }
+}
+
 if (import.meta.main) {
   const toolName = process.argv[2] ?? "";
   try {
-    const request = JSON.parse(readFileSync(0, "utf8")) as ToolRequest;
-    const result = await executeToolRequest(toolName, request);
+    const cancellable = process.argv[3] === "--cancel-on-stdin-close";
+    if (cancellable && toolName !== "bash") throw new Error("Cancellation protocol requires Bash");
+    const result = cancellable
+      ? await executeCancellableBashRequest(process.stdin)
+      : await executeToolRequest(toolName, parseToolRequest(readFileSync(0, "utf8")));
     process.stdout.write(JSON.stringify({ ok: true, result }));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -12,6 +12,7 @@ type RunOptions = {
   signal?: AbortSignal;
   timeout?: number;
   mode?: SandboxMode;
+  cooperativeCancellation?: boolean;
 };
 
 type RunResult = { exitCode: number | null; stdout: Buffer; stderr: Buffer };
@@ -54,13 +55,19 @@ export class SandboxRunner {
       session: options.session,
       imageMimeType: options.imageMimeType,
     });
-    const execution = await this.run("bun", [entrypoint, toolName], {
-      input: request,
-      mode: options.mode,
-      signal: options.signal,
-      env: { ...process.env, GUARDRAIL_PI_PACKAGE_DIR: this.piPackageDir },
-      onData: options.onData,
-    });
+    const cooperativeCancellation = toolName === "bash" && options.executor === undefined;
+    const execution = await this.run(
+      "bun",
+      [entrypoint, toolName, ...(cooperativeCancellation ? ["--cancel-on-stdin-close"] : [])],
+      {
+        input: request,
+        cooperativeCancellation,
+        mode: options.mode,
+        signal: options.signal,
+        env: { ...process.env, GUARDRAIL_PI_PACKAGE_DIR: this.piPackageDir },
+        onData: options.onData,
+      },
+    );
     const response = parseRunToolsResponse(execution);
     if (!response.ok) throw new Error(response.error);
     return response.result;
@@ -98,14 +105,23 @@ export class SandboxRunner {
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let timedOut = false;
+      let processError: Error | undefined;
+      let inputError: Error | undefined;
+      function stopExecution(): void {
+        if (options.cooperativeCancellation) child.stdin?.end();
+        else child.kill("SIGKILL");
+      }
+      child.stdin?.on("error", (error: Error) => {
+        inputError = error;
+      });
       const timeoutHandle =
         options.timeout && options.timeout > 0
           ? setTimeout(() => {
               timedOut = true;
-              child.kill("SIGKILL");
+              stopExecution();
             }, options.timeout * 1000)
           : undefined;
-      const onAbort = () => child.kill("SIGKILL");
+      const onAbort = stopExecution;
       options.signal?.addEventListener("abort", onAbort, { once: true });
       child.stdout?.on("data", (chunk: Buffer) => {
         stdout.push(chunk);
@@ -115,19 +131,38 @@ export class SandboxRunner {
         stderr.push(chunk);
         options.onData?.(chunk, "stderr");
       });
-      child.on("error", rejectRun);
+      child.on("error", (error: Error) => {
+        processError = error;
+      });
       child.on("close", (exitCode) => {
         if (timeoutHandle) clearTimeout(timeoutHandle);
         options.signal?.removeEventListener("abort", onAbort);
-        if (options.signal?.aborted) return rejectRun(new Error("aborted"));
-        if (timedOut) return rejectRun(new Error(`timeout:${options.timeout}`));
-        resolveRun({
+        if (processError) return rejectRun(processError);
+        if (inputError)
+          return rejectRun(new Error("Sandbox worker input failed", { cause: inputError }));
+        const execution = {
           exitCode,
           stdout: Buffer.concat(stdout),
           stderr: Buffer.concat(stderr),
-        });
+        };
+        if (options.cooperativeCancellation && (options.signal?.aborted || timedOut)) {
+          const response = parseRunToolsResponse(execution);
+          if (!response.ok)
+            return rejectRun(
+              new Error(
+                timedOut ? `timeout:${options.timeout}: ${response.error}` : response.error,
+              ),
+            );
+        }
+        if (options.signal?.aborted) return rejectRun(new Error("aborted"));
+        if (timedOut) return rejectRun(new Error(`timeout:${options.timeout}`));
+        resolveRun(execution);
       });
-      if (options.input !== undefined) child.stdin?.end(options.input);
+      if (options.input !== undefined) {
+        if (options.cooperativeCancellation) child.stdin?.write(`${options.input}\n`);
+        else child.stdin?.end(options.input);
+      }
+      if (options.signal?.aborted) onAbort();
     });
   }
 }

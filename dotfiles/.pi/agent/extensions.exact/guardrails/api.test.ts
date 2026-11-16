@@ -5790,7 +5790,8 @@ describe("§7 bash の stderr 逐次表示", () => {
             stderr: Buffer.concat(stderr),
           }),
         );
-        child.stdin?.end(runOptions.input);
+        if (runOptions.cooperativeCancellation) child.stdin?.write(`${runOptions.input}\n`);
+        else child.stdin?.end(runOptions.input);
       });
     };
     try {

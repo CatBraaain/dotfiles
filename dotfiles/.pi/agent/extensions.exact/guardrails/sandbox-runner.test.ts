@@ -184,6 +184,80 @@ describe("sandbox cancellation", () => {
     }
   });
 
+  for (const [name, source, pattern] of [
+    [
+      "worker error",
+      'console.log(JSON.stringify({ok:false,error:"fixture worker failed"})); process.exit(1)',
+      /fixture worker failed/,
+    ],
+    ["invalid response", 'console.log("invalid"); process.exit(1)', /^Error: ready$/],
+  ] as const) {
+    realBwrapTest(`preserves ${name} during cooperative cancellation`, async () => {
+      const directory = mkdtempSync(join(tmpdir(), "sandbox-cancel-error-"));
+      const controller = new AbortController();
+      try {
+        const config = join(directory, "config.yaml");
+        const entrypoint = join(directory, "worker.ts");
+        writeFileSync(config, 'read:\n  - allow: "*"\n');
+        writeFileSync(
+          entrypoint,
+          `import { readFileSync } from "node:fs"; process.stderr.write("ready"); readFileSync(0); ${source}`,
+        );
+        const policy = new Guardrail(directory, config);
+        const runner = new SandboxRunner(directory, (mode) => policy.buildArgs(mode));
+        (runner as unknown as { runToolsPath: string }).runToolsPath = entrypoint;
+        await assert.rejects(
+          runner.runTool(
+            "bash",
+            { command: "unused" },
+            {
+              mode: "bash",
+              signal: controller.signal,
+              onData(data) {
+                if (data.toString().includes("ready")) controller.abort();
+              },
+            },
+          ),
+          pattern,
+        );
+      } finally {
+        controller.abort();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+  }
+
+  realBwrapTest(
+    "uses cooperative cancellation for an outer sandbox timeout",
+    async () => {
+      const directory = mkdtempSync(join(tmpdir(), "sandbox-outer-timeout-"));
+      try {
+        const config = join(directory, "config.yaml");
+        writeFileSync(config, 'read:\n  - allow: "*"\nwrite:\n  - allow: /tmp\n');
+        const policy = new Guardrail(directory, config);
+        const runner = new SandboxRunner(directory, (mode) => policy.buildArgs(mode));
+        const runtime = runner as unknown as {
+          run(command: string, args: string[], options: object): Promise<unknown>;
+          runToolsPath: string;
+          piPackageDir: string;
+        };
+        await assert.rejects(
+          runtime.run("bun", [runtime.runToolsPath, "bash", "--cancel-on-stdin-close"], {
+            input: JSON.stringify({ params: { command: "sleep 10" } }),
+            mode: "bash",
+            cooperativeCancellation: true,
+            timeout: 2,
+            env: { GUARDRAIL_PI_PACKAGE_DIR: runtime.piPackageDir },
+          }),
+          /timeout:2/,
+        );
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+    15_000,
+  );
+
   it("never starts an already aborted request", async () => {
     let mountBuilds = 0;
     const runner = new SandboxRunner(process.cwd(), () => {

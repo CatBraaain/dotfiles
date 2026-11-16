@@ -362,7 +362,7 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 - `edit` は pi標準の `oldText` / `newText` 形式を使い、行ハッシュアンカー形式は使わない。
 - ツールの最終結果はコマンド完了時に一度に返る。bash では、コマンド実行中に子プロセスの stderr への書き出しを行単位で onUpdate として送出し、実行中の進捗表示に使う（描画は chat-renderer SPEC §bash）。stdout は run-tools CLI の JSON envelope に使うため、送出の対象外である。送出はツールの最終結果を変えず、最終結果は完了時に一度に返る。
 
-通常のSDK経路で拒否された呼び出しはエラー結果となり、pi の `tool_result` イベントでも観測できる。承認・拒否の理由と結果は呼び出し元へ返り、別要求の結果と混ざらない。進捗は `onUpdate`、最終結果はツールの戻り値で返す。開始前・確認待ち後・実行枠待ち後にキャンセル済みなら、隔離実行を開始しない。実行中のキャンセルは下記の bwrap停止に従う。
+通常のSDK経路で拒否された呼び出しはエラー結果となり、pi の `tool_result` イベントでも観測できる。承認・拒否の理由と結果は呼び出し元へ返り、別要求の結果と混ざらない。進捗は `onUpdate`、最終結果はツールの戻り値で返す。開始前・確認待ち後・実行枠待ち後にキャンセル済みなら、隔離実行を開始しない。実行中のキャンセルは下記「実行中のキャンセルと timeout」に従う。
 
 `session_shutdown` 後は、取得済みAPIの `execute` と登録済み `ask_permission` の新規呼び出しを `guardrails API is no longer active` で拒否する。再読み込み時は公開APIを新しく取得し、前の動的許可・コマンド承認を持ち越さない。`ask_permission` と各ツールの実行は同じ有効期間を持つ。
 
@@ -378,7 +378,22 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 2. 設定済みの allowパスを `--bind-try`、read-onlyパスと credentials を `--ro-bind-try` で bindする。設定由来の `write` の書き込み可能bind は後勝ちで `allow` に確定したパスのみとする。動的許可と bash の read-only 保護は §6.1 に従う。
 3. NixOS で `bun`・実行ファイル・共有ライブラリを解決できるよう `/nix` 等の runtime path（`~/.nix-profile` を含む）を read-only で bindする。piパッケージ自体は `/nix` 配下のため追加の bind不要。
 4. sandbox内で選択されたentrypointをbunで実行し、network namespace は分離しない。ホストで user namespace が利用可能な場合、sandbox内のプロセスは nested user namespace を作成でき、Firefox のプロセスsandbox や GTK の nested `bwrap` helper が起動できる。
-5. abort は bwrapごと child process を停止する。bash の timeout は sandbox内の tool definition が処理する。
+5. 実行中のキャンセルと timeout は次の契約に従う。
+
+### 実行中のキャンセルと timeout
+
+公開APIへのBash要求は、呼び出し経路によらず同じキャンセル契約を持つ。既定executorでは、中断をsandbox内のSDK標準Bashへ伝達する。SDKが管理するshellの終了と標準tool definitionの終了を待ち、workerとbwrapの終了後に実行Promiseを中断エラーで終端する。呼び出し元が要求結果を先に確定した場合も、この実行終端の条件は変わらない。
+
+| 条件 | 結果 |
+| --- | --- |
+| Bashの `params.timeout` に達する | sandbox内のSDK標準Bashが停止と終了待機を行い、標準tool definitionのtimeout結果を返す |
+| 既定Bashのsandbox実行自体にtimeoutを適用する | キャンセルと同じ中断伝達・終了待機を行い、実行Promiseをtimeoutエラーで終端する |
+| 中断の通知失敗・workerの異常終了 | 実行エラーとして返す。下位の終了未確認を停止完了として扱わない |
+| 非Bashまたは差替えexecutorのキャンセル | bwrapのchild processを停止し、終了を待って実行Promiseを終端する |
+
+SDK管理下の終了待機は、`setsid` 等で離脱した子孫や、正常終了後に残る常駐プロセス全体の終了確認とは区別する。既定Bashでは、SDKの停止対象から離脱した子孫が存続する場合がある。
+
+キャンセルによる変更は、通常完了・非ゼロ終了のツール結果、stderr進捗、認可・承認状態、隔離構成、差替えexecutorの既存の入出力契約を維持する。
 
 ### 7.1 WSL の child process環境
 
