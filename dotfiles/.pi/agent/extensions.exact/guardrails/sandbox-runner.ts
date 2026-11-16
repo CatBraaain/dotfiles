@@ -33,6 +33,7 @@ export class SandboxRunner {
     options: {
       mode: SandboxMode;
       executor?: { entrypoint: string };
+      imageMimeType?: string;
       signal?: AbortSignal;
       session?: ToolSession;
       onData?: (data: Buffer, stream: "stdout" | "stderr") => void;
@@ -51,6 +52,7 @@ export class SandboxRunner {
       toolCallId: "cli",
       params,
       session: options.session,
+      imageMimeType: options.imageMimeType,
     });
     const execution = await this.run("bun", [entrypoint, toolName], {
       input: request,

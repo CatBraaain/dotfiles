@@ -545,6 +545,40 @@ function withFixture(test: (fixture: Fixture) => Promise<void>): () => Promise<v
       );
       const tools = new Map<string, ToolDefinition>();
       const registered: string[] = [];
+      const context = {
+        hasUI: false,
+        async executeTool(name: string, args: unknown, options?: { signal?: AbortSignal }) {
+          assert.equal(name, "bash");
+          const toolCall = {
+            type: "toolCall" as const,
+            id: "fixture-bash",
+            name,
+            arguments: args,
+          };
+          try {
+            const result = await tools
+              .get("bash")!
+              .execute(
+                toolCall.id,
+                args as never,
+                options?.signal,
+                undefined,
+                context as ExtensionToolContext,
+              );
+            return { toolCall, result, isError: result.isError === true };
+          } catch (error) {
+            return {
+              toolCall,
+              result: {
+                content: [{ type: "text" as const, text: String(error) }],
+                details: {},
+                isError: true,
+              },
+              isError: true,
+            };
+          }
+        },
+      } as ExtensionToolContext;
       const api = {
         events: createEventBus(),
         registerTool(tool: ToolDefinition) {
@@ -554,12 +588,7 @@ function withFixture(test: (fixture: Fixture) => Promise<void>): () => Promise<v
         on() {},
       } as unknown as ExtensionAPI;
       toolsExtension(api, config);
-      await test({
-        tools,
-        registered,
-        directory,
-        context: { hasUI: false } as ExtensionToolContext,
-      });
+      await test({ tools, registered, directory, context });
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

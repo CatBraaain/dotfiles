@@ -167,11 +167,39 @@ function captureRegisteredTools(
   }
   const api = {
     events: createEventBus(),
-    registerTool: (tool: any) => registered.set(tool.name, tool),
+    registerTool: (tool: any) =>
+      registered.set(tool.name, {
+        ...tool,
+        execute(
+          id: string,
+          params: any,
+          signal: AbortSignal | undefined,
+          onUpdate: any,
+          context: any,
+        ) {
+          const mimeType = params.path?.endsWith(".png")
+            ? "image/png"
+            : params.path?.endsWith(".svg")
+              ? "image/svg+xml"
+              : "text/plain";
+          return tool.execute(id, params, signal, onUpdate, {
+            ...context,
+            executeTool: context?.executeTool ?? mockImageDetection(mimeType),
+          });
+        },
+      }),
     on,
   } as any;
   toolsExtension(api, configPath);
   return registered;
+}
+
+function mockImageDetection(mimeType = "text/plain"): ExtensionToolContext["executeTool"] {
+  return async () => ({
+    toolCall: { type: "toolCall", id: "mime", name: "bash", arguments: {} },
+    result: { content: [{ type: "text", text: mimeType }], details: {} },
+    isError: false,
+  });
 }
 
 async function runGuardedCall(
@@ -4234,6 +4262,7 @@ describe("tool path environment expansion", () => {
             JSON.stringify({
               read: [{ allow: "*" }, { deny: decoy }],
               write: [{ allow: directory }, { deny: decoy }],
+              commands: [{ file: [{ allow: [] }] }],
             }),
           );
           const guardrail = new Guardrail(cwd, config);
@@ -4248,7 +4277,10 @@ describe("tool path environment expansion", () => {
             executed.push((params as { path: string }).path);
             return originalRun.call(runner, toolName, params, options);
           };
-          const context = { hasUI: false } as ExtensionToolContext;
+          const context = {
+            hasUI: false,
+            executeTool: mockImageDetection(),
+          } as ExtensionToolContext;
           const result = await executeGuardedTool(guardrail, runner, cwd, {
             id: "literal-read",
             toolName: "read",

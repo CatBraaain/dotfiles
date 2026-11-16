@@ -302,7 +302,10 @@ describe("codemode nested AgentSession pipeline without a model request", () => 
     "returns the complete SKILL.md as a string through the real nested read",
     withTemporarySession(async (directory, sessions) => {
       const configPath = join(directory, "guardrails.yaml");
-      writeFileSync(configPath, 'read:\n  - allow: "*"\n');
+      writeFileSync(
+        configPath,
+        'read:\n  - allow: "*"\ncommands:\n  - file|bwrap:\n      - allow: []\n',
+      );
       const path = join(directory, "SKILL.md");
       const body = "日本語\r\n".repeat(12000);
       writeFileSync(path, body);
@@ -312,12 +315,12 @@ describe("codemode nested AgentSession pipeline without a model request", () => 
         { name: "tools", factory: (pi) => toolsExtension(pi, configPath) },
       ]);
       const session = await createSession(directory, settings, loader, sessions);
-      session.setActiveToolsByName(["read", "codemode"]);
+      session.setActiveToolsByName(["read", "bash", "codemode"]);
       const result = await executeScript(
         session,
         `const body = await tools.read(${JSON.stringify({ path, offset: 99999, limit: 1 })}); text({isString: typeof body === "string", length: body.length, exact: body === ${JSON.stringify(body)}});`,
       );
-      assert.equal(result.isError, undefined);
+      assert.equal(result.isError, undefined, resultText(result));
       assert.match(resultText(result), /"isString":true/);
       assert.match(resultText(result), new RegExp(`"length":${body.length}`));
       assert.match(resultText(result), /"exact":true/);

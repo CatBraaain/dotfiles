@@ -1,7 +1,10 @@
-import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { quote } from "shell-quote";
 import { extname, resolve } from "node:path";
-import type { AgentToolResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolResult,
+  ExtensionContext,
+  ExtensionToolContext,
+} from "@earendil-works/pi-coding-agent";
 import { Guardrail, writeApprovalNote, type PathApproval, type ToolContext } from "./guardrail.ts";
 import { SandboxRunner } from "./sandbox-runner.ts";
 import { withNormalizedPath } from "./normalize-path.ts";
@@ -39,9 +42,13 @@ export async function executeGuardedTool(
     }
   }
   signal?.throwIfAborted();
+  const detectedMimeType =
+    toolName === "read"
+      ? await imageMimeType(params.path as string, guardrail, runner, request)
+      : null;
   const result =
-    toolName === "read" && isVisionImageFile(resolve(cwd, params.path as string))
-      ? readImage(resolve(cwd, params.path as string), context)
+    toolName === "read" && isVisionImageFile(params.path as string, detectedMimeType)
+      ? await readImage(params.path as string, detectedMimeType, runner, request)
       : await runner.runTool(toolName as ToolName, params, {
           mode: toolName === "bash" ? "bash" : "fs",
           executor: request.executor,
@@ -63,8 +70,14 @@ export async function executeGuardedTool(
   };
 }
 
-function readImage(imagePath: string, context: GuardedToolContext): AgentToolResult<unknown> {
-  const model = context?.model;
+async function readImage(
+  imagePath: string,
+  mimeType: string | null,
+  runner: SandboxRunner,
+  request: GuardedToolRequest,
+): Promise<AgentToolResult<unknown>> {
+  request.signal?.throwIfAborted();
+  const model = request.context?.model;
   if (!modelSupportsImages(model ?? {})) {
     return {
       content: [{ type: "text", text: imageReadErrorMessage(imagePath, model) }],
@@ -72,20 +85,20 @@ function readImage(imagePath: string, context: GuardedToolContext): AgentToolRes
       isError: true,
     };
   }
-  return {
-    content: [
-      {
-        type: "image",
-        data: readFileSync(imagePath).toString("base64"),
-        mimeType: imageMimeType(imagePath) ?? "application/octet-stream",
-      },
-    ],
-    details: {},
-  };
+  return runner.runTool(
+    "read",
+    { path: imagePath },
+    {
+      mode: "fs",
+      signal: request.signal,
+      imageMimeType: mimeType ?? "application/octet-stream",
+    },
+  );
 }
 
 export type GuardedToolContext = Pick<ExtensionContext, "hasUI" | "model" | "thinkingLevel"> & {
   ui?: ToolContext["ui"];
+  executeTool?: ExtensionToolContext["executeTool"];
   sessionManager?: Pick<ExtensionContext["sessionManager"], "getSessionId" | "getSessionFile">;
 };
 
@@ -126,15 +139,37 @@ const IMAGE_EXTENSIONS = new Set([
   ".tif",
 ]);
 
-function imageMimeType(path: string): string | null {
-  const result = spawnSync("file", ["--brief", "--mime-type", "--", path], { encoding: "utf8" });
-  return result.status === 0 ? result.stdout.trim() || null : null;
+async function imageMimeType(
+  path: string,
+  guardrail: Guardrail,
+  runner: SandboxRunner,
+  request: GuardedToolRequest,
+): Promise<string | null> {
+  if (typeof request.context?.executeTool !== "function")
+    throw new Error("Image detection requires the registered bash tool via context.executeTool");
+  const fileArgs = ["file", "-E", "--dereference", "--brief", "--mime-type", "--", path];
+  await guardrail.authorizeCommand(quote(fileArgs), request.context, request.approvalMode);
+  request.signal?.throwIfAborted();
+  const outcome = await request.context.executeTool(
+    "bash",
+    { command: quote(["bwrap", ...runner.buildArgs("fs"), ...fileArgs]) },
+    { signal: request.signal },
+  );
+  request.signal?.throwIfAborted();
+  const output = outcome.result.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
+  if (outcome.isError || outcome.result.isError)
+    throw new Error(`Image detection failed for ${path}: ${output}`);
+  const mimeType = output.split(/\r?\n/, 1)[0]?.trim() || null;
+  if (mimeType !== null && !/^[\w.+-]+\/[\w.+-]+$/.test(mimeType))
+    throw new Error(`Invalid image detection response for ${path}: ${output}`);
+  return mimeType;
 }
 
-function isVisionImageFile(
-  imagePath: string,
-  detectedMimeType = imageMimeType(imagePath),
-): boolean {
+function isVisionImageFile(imagePath: string, detectedMimeType: string | null): boolean {
   if (detectedMimeType === "image/svg+xml") return false;
   return detectedMimeType === null
     ? IMAGE_EXTENSIONS.has(extname(imagePath).toLowerCase())

@@ -30,6 +30,7 @@ export type ToolRequest = {
   toolCallId?: string;
   params: unknown;
   session?: ToolSession;
+  imageMimeType?: string;
 };
 
 async function importPiTools(): Promise<typeof import("@earendil-works/pi-coding-agent")> {
@@ -144,6 +145,19 @@ export async function executeToolRequest(
   toolName: string,
   request: ToolRequest,
 ): Promise<AgentToolResult<any>> {
+  if (toolName === "read" && request.imageMimeType !== undefined) {
+    const { path } = request.params as { path: string };
+    return {
+      content: [
+        {
+          type: "image",
+          data: readFileSync(path).toString("base64"),
+          mimeType: request.imageMimeType,
+        },
+      ],
+      details: {},
+    };
+  }
   const pi = await importPiTools();
   const cwd = process.cwd();
   if (toolName === "bash") {

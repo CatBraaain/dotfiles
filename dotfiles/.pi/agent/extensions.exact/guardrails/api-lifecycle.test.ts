@@ -75,6 +75,25 @@ describe("guardrails API lifetime", () => {
         /API is no longer active/,
       );
       const replacement = fixture(directory);
+      context.executeTool = async (name, args, options) => {
+        const result = await replacement.api.execute({
+          id: "nested",
+          toolName: name,
+          params: args as Record<string, unknown>,
+          context,
+          signal: options?.signal,
+        });
+        return {
+          toolCall: {
+            type: "toolCall",
+            id: "nested",
+            name,
+            arguments: { command: (args as { command: string }).command },
+          },
+          result,
+          isError: result.isError === true,
+        };
+      };
       const result = await replacement.api.execute({
         id: "new",
         toolName: "read",
@@ -128,7 +147,7 @@ function fixture(directory: string) {
   const config = join(directory, "config.yaml");
   writeFileSync(
     config,
-    `read:\n  - allow: "*"\nwrite:\n  - ask: "${directory}/requested"\ncommands:\n  - echo:\n      - ask_with_reason: []\n`,
+    `read:\n  - allow: "*"\nwrite:\n  - ask: "${directory}/requested"\ncommands:\n  - echo:\n      - ask_with_reason: []\n  - file|bwrap:\n      - allow: []\n`,
   );
   const tools = new Map<string, ToolDefinition>();
   const handlers = new Map<string, (event: unknown) => unknown>();

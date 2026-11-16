@@ -12,7 +12,10 @@ describe("guarded execution boundary", () => {
     const directory = mkdtempSync(join(tmpdir(), "guarded-execute-"));
     try {
       const config = join(directory, "config.yaml");
-      writeFileSync(config, `read:\n  - ask: ${directory}\n`);
+      writeFileSync(
+        config,
+        `read:\n  - ask: ${directory}\ncommands:\n  - file:\n      - allow: []\n`,
+      );
       const guardrail = new Guardrail(directory, config);
       const runner = new SandboxRunner(directory, (mode) => guardrail.buildArgs(mode));
       const dialog = Promise.withResolvers<boolean>();
@@ -31,6 +34,10 @@ describe("guarded execution boundary", () => {
         params: { path: join(directory, "input.txt") },
         context: {
           hasUI: true,
+          executeTool: async () => ({
+            isError: false,
+            result: { content: [{ type: "text", text: "text/plain" }], details: {} },
+          }),
           ui: {
             confirm: async () => {
               shown.resolve();
