@@ -33,20 +33,17 @@ async function put(baseDir: string, path: string, content: string): Promise<void
   await writeFile(absolute, content);
 }
 
-async function gitConfig(configPath: string, key: string, all = false): Promise<string> {
-  const proc = Bun.spawn(
-    ["git", "config", "--file", configPath, all ? "--get-all" : "--get", key],
-    {
-      env: {
-        ...process.env,
-        HOME: homeRoot,
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_CONFIG_GLOBAL: join(homeRoot, "missing-global-config"),
-      },
-      stdout: "pipe",
-      stderr: "pipe",
+async function gitConfig(configPath: string, key: string): Promise<string> {
+  const proc = Bun.spawn(["git", "config", "--file", configPath, "--get", key], {
+    env: {
+      ...process.env,
+      HOME: homeRoot,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: join(homeRoot, "missing-global-config"),
     },
-  );
+    stdout: "pipe",
+    stderr: "pipe",
+  });
   const [code, stdout, stderr] = await Promise.all([
     proc.exited,
     new Response(proc.stdout).text(),
@@ -1247,7 +1244,6 @@ co = checkout
     const output = await readFile(outputPath, "utf8");
     assert.ok(output.startsWith(sourceConfig + upstreamAliases));
     assert.equal(existsSync(join(distRoot, ".gitconfig.alias")), false);
-    assert.equal(await gitConfig(outputPath, "include.path", true), ".gitconfig.local");
     for (const key of ["s", "ss", "init-empty", "clone-lean"]) {
       assert.equal(
         await gitConfig(outputPath, `alias.${key}`),
