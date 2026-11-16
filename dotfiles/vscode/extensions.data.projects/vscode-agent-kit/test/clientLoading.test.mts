@@ -37,8 +37,12 @@ describe("session list loading in the mounted client", () => {
     browser = await chromium.launch({ headless: true });
   });
 
-  beforeEach(async () => {
+  beforeEach(async ({ task }) => {
     page = await browser.newPage();
+    if (task.name.includes("connection")) {
+      await page.clock.install({ time: 0 });
+      await page.clock.pauseAt(1000);
+    }
     await page.route("http://localhost/client", (route) =>
       route.fulfill({ contentType: "text/html", body: webviewAppMarkup }),
     );
@@ -81,6 +85,7 @@ describe("session list loading in the mounted client", () => {
   async function expectLoaded(): Promise<void> {
     await expect.poll(() => page.locator(".session-row").count()).toBe(1);
     await expect.poll(() => page.locator("#status").textContent()).toBe("");
+    await expect.poll(() => page.locator("#connection-status").textContent()).toBe("");
   }
 
   async function failWorkspaceAddition(): Promise<void> {
@@ -105,6 +110,173 @@ describe("session list loading in the mounted client", () => {
       ).filter((request) => request.type === "newSession"),
     );
   }
+
+  async function connectionRequest(): Promise<string> {
+    return page.evaluate(() => {
+      const requests = Reflect.get(window, "__requests") as { type: string; requestId: string }[];
+      return requests.filter((request) => request.type === "ready").at(-1)!.requestId;
+    });
+  }
+
+  it("places connection feedback above the list while retaining operation feedback in the footer", async () => {
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+    await receive({ type: "loading", manual: true });
+    await receive({ type: "error", message: "Operation failed" });
+    await page.clock.runFor(15000);
+    const connection = page.locator("#connection-status");
+    expect(await connection.count()).toBe(1);
+    await expect.poll(() => connection.textContent()).toBe("Connection lost. Retrying…");
+    expect(await connection.getAttribute("role")).toBe("status");
+    expect(await connection.getAttribute("aria-live")).toBe("polite");
+    expect(await page.locator("#status").textContent()).toBe(
+      "Refreshing sessions…\nOperation failed",
+    );
+    const positions = await page.evaluate(() => {
+      const connection = document.querySelector("#connection-status")!;
+      const sessions = document.querySelector("#sessions")!;
+      const operation = document.querySelector("#status")!;
+      return {
+        precedesList: Boolean(
+          connection.compareDocumentPosition(sessions) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ),
+        aboveList:
+          connection.getBoundingClientRect().bottom <= sessions.getBoundingClientRect().top,
+        operationInFooter: operation.closest("footer") !== null,
+        operationFollowsList: Boolean(
+          sessions.compareDocumentPosition(operation) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ),
+      };
+    });
+    expect(positions).toEqual({
+      precedesList: true,
+      aboveList: true,
+      operationInFooter: true,
+      operationFollowsList: true,
+    });
+    await receive({ type: "loading", manual: true, requestId: await connectionRequest() });
+    await expect.poll(() => connection.textContent()).toBe("");
+    expect(await connection.isVisible()).toBe(false);
+    expect(await page.locator("#status").textContent()).toBe(
+      "Refreshing sessions…\nOperation failed",
+    );
+  });
+
+  it("shows a connection error only after ten seconds and recovers without losing the list", async () => {
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+    await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
+    await page.locator('[data-toggle-group="/workspace/empty"]').first().click();
+    await page.clock.runFor(5000);
+    const requestId = await connectionRequest();
+    await page.clock.runFor(9999);
+    expect(await page.locator("#connection-status").textContent()).toBe("");
+    await page.clock.runFor(1);
+    await expect
+      .poll(() => page.locator("#connection-status").textContent())
+      .toContain("Connection lost");
+    expect(await page.locator("#connection-status").getAttribute("class")).toBe("error");
+    expect(await page.locator(".session-row").count()).toBe(2);
+    await page.screenshot({ path: "/tmp/work/vscode-pi-sessions/connection-error.png" });
+    const updated = structuredClone(state);
+    updated.groups[0].sessions[0].displayName = "Recovered session";
+    await receive({ type: "sessions", state: updated, requestId });
+    await expect.poll(() => page.locator("#connection-status").textContent()).toBe("");
+    expect(await page.locator(".selected .session-name").textContent()).toBe("Recovered session");
+    await page.screenshot({ path: "/tmp/work/vscode-pi-sessions/connection-recovered.png" });
+    expect(await page.locator(".session-row").count()).toBe(2);
+    expect(
+      await page
+        .locator('[data-toggle-group="/workspace/empty"]')
+        .first()
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
+
+  it("detects initial connection loss and retries without receiving any list", async () => {
+    await page.clock.runFor(10000);
+    await expect
+      .poll(() => page.locator("#connection-status").textContent())
+      .toContain("Connection lost");
+    await expectLoading();
+    const expired = await connectionRequest();
+    await page.clock.runFor(5000);
+    const requestId = await connectionRequest();
+    expect(requestId).not.toBe(expired);
+    await receive({ type: "sessions", state, requestId: expired });
+    expect(await page.locator(".session-row").count()).toBe(0);
+    await receive({ type: "sessions", state, requestId });
+    await expectLoaded();
+  });
+
+  it("keeps long acquisitions healthy through connection replies and preserves operation errors", async () => {
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+    await receive({ type: "loading", manual: true });
+    await receive({ type: "error", message: "Operation failed" });
+    for (let index = 0; index < 4; index += 1) {
+      await page.clock.runFor(5000);
+      await receive({ type: "loading", manual: true, requestId: await connectionRequest() });
+    }
+    await expect
+      .poll(() => page.locator("#status").textContent())
+      .toBe("Refreshing sessions…\nOperation failed");
+    await page.clock.runFor(15000);
+    await expect
+      .poll(() => page.locator("#connection-status").textContent())
+      .toContain("Connection lost");
+    await receive({ type: "sessionsError", requestId: await connectionRequest() });
+    await expect.poll(() => page.locator("#status").textContent()).toBe("Operation failed");
+    expect(await page.locator(".session-row").count()).toBe(1);
+  });
+
+  it("preserves operation errors on successful connection replay only", async () => {
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+    await receive({ type: "error", message: "Operation failed" });
+    await page.clock.runFor(5000);
+    await receive({ type: "sessions", state, requestId: await connectionRequest() });
+    await expect.poll(() => page.locator("#status").textContent()).toBe("Operation failed");
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+  });
+
+  it("ignores stale connection replies after a normal push", async () => {
+    const requestId = await connectionRequest();
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+    await receive({ type: "loading", manual: true, requestId });
+    expect(await page.locator("#status").textContent()).toBe("");
+    await page.clock.runFor(15000);
+    await expect
+      .poll(() => page.locator("#connection-status").textContent())
+      .toContain("Connection lost");
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+  });
+
+  it("restarts the connection deadline after hidden time", async () => {
+    await page.clock.runFor(9000);
+    await page.evaluate(() => {
+      Object.defineProperty(document, "hidden", { configurable: true, value: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    const previous = await connectionRequest();
+    await page.clock.runFor(60000);
+    expect(await connectionRequest()).toBe(previous);
+    expect(await page.locator("#connection-status").textContent()).toBe("");
+    await page.evaluate(() => {
+      Object.defineProperty(document, "hidden", { configurable: true, value: false });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(await connectionRequest()).not.toBe(previous);
+    await page.clock.runFor(9999);
+    expect(await page.locator("#connection-status").textContent()).toBe("");
+    await page.clock.runFor(1);
+    await expect
+      .poll(() => page.locator("#connection-status").textContent())
+      .toContain("Connection lost");
+  });
 
   it.each(["click", "Enter", "Space"])(
     "shows the spinner immediately on %s and clears only on completion",

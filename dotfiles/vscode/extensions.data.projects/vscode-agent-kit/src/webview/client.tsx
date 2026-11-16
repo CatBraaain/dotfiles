@@ -654,6 +654,7 @@ interface ClientSnapshot {
   loadStatus: SessionLoadStatus;
   manualRefresh: boolean;
   errorMessage: string;
+  connectionError: boolean;
   pendingNewSessions: ReadonlyMap<string, string>;
 }
 
@@ -662,8 +663,13 @@ interface ClientSnapshot {
 function createClientStore(): {
   subscribe(listener: () => void): () => void;
   getSnapshot(): ClientSnapshot;
-  setLoading(manualRefresh: boolean, displayedSessionId?: string | null): void;
-  setSessions(state: ClientState): void;
+  setLoading(
+    manualRefresh: boolean,
+    displayedSessionId?: string | null,
+    errorMessage?: string,
+  ): void;
+  setSessions(state: ClientState, errorMessage?: string): void;
+  setConnectionError(connectionError: boolean): void;
   setError(message: string): void;
   setSessionsError(): void;
   startNewSession(cwd: string): string;
@@ -674,6 +680,7 @@ function createClientStore(): {
     loadStatus: "loading",
     manualRefresh: false,
     errorMessage: "",
+    connectionError: false,
     pendingNewSessions: new Map(),
   };
   const listeners = new Set<() => void>();
@@ -687,7 +694,7 @@ function createClientStore(): {
       return () => listeners.delete(listener);
     },
     getSnapshot: () => snapshot,
-    setLoading: (manualRefresh, displayedSessionId) =>
+    setLoading: (manualRefresh, displayedSessionId, errorMessage = "") =>
       publish({
         ...snapshot,
         state:
@@ -696,10 +703,11 @@ function createClientStore(): {
             : { ...snapshot.state, displayedSessionId: displayedSessionId ?? undefined },
         loadStatus: "loading",
         manualRefresh,
-        errorMessage: "",
+        errorMessage,
       }),
-    setSessions: (state) =>
-      publish({ ...snapshot, state, loadStatus: "loaded", manualRefresh: false, errorMessage: "" }),
+    setSessions: (state, errorMessage = "") =>
+      publish({ ...snapshot, state, loadStatus: "loaded", manualRefresh: false, errorMessage }),
+    setConnectionError: (connectionError) => publish({ ...snapshot, connectionError }),
     setError: (message) => publish({ ...snapshot, errorMessage: message }),
     setSessionsError: () => publish({ ...snapshot, loadStatus: "error", manualRefresh: false }),
     startNewSession: (cwd) => {
@@ -722,9 +730,15 @@ interface SessionsAppProps {
   bridge: ClientBridge;
   store: ReturnType<typeof createClientStore>;
   statusElement: HTMLElement;
+  connectionStatusElement: HTMLElement;
 }
 
-function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactElement {
+function SessionsApp({
+  bridge,
+  store,
+  statusElement,
+  connectionStatusElement,
+}: SessionsAppProps): ReactElement {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [modes, setModes] = useState<ReadonlyMap<string, ViewMode>>(() => new Map());
   const [collapsedCwds, setCollapsedCwds] = useState<ReadonlySet<string>>(() => new Set<string>());
@@ -740,11 +754,14 @@ function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactE
       snapshot.state.groups.length > 0
         ? "Refreshing sessions…"
         : "";
+    connectionStatusElement.textContent = snapshot.connectionError
+      ? "Connection lost. Retrying…"
+      : "";
     statusElement.textContent = [loadingText, snapshot.errorMessage]
       .filter((text) => text !== "")
       .join("\n");
-    statusElement.className = snapshot.errorMessage === "" ? "" : "error";
-  }, [snapshot, statusElement]);
+    statusElement.className = snapshot.errorMessage !== "" ? "error" : "";
+  }, [snapshot, statusElement, connectionStatusElement]);
 
   const actions: DescriptorActions = {
     onModeToggle: (cwd) =>
@@ -807,12 +824,14 @@ function SessionsApp({ bridge, store, statusElement }: SessionsAppProps): ReactE
 export function initClient(bridge: ClientBridge): () => void {
   const sessionsElement = document.querySelector("#sessions");
   const statusElement = document.querySelector("#status");
+  const connectionStatusElement = document.querySelector("#connection-status");
   const formElement = document.querySelector("#workspace-form");
   const pathInput = document.querySelector("#workspace-path");
   const newWorkspaceButton = document.querySelector('[data-action="toggleWorkspaceForm"]');
   if (
     !(sessionsElement instanceof HTMLElement) ||
     !(statusElement instanceof HTMLElement) ||
+    !(connectionStatusElement instanceof HTMLElement) ||
     !(formElement instanceof HTMLElement) ||
     !(pathInput instanceof HTMLInputElement) ||
     !(newWorkspaceButton instanceof HTMLElement)
@@ -820,6 +839,44 @@ export function initClient(bridge: ClientBridge): () => void {
     throw new Error("Sessions webview markup is incomplete.");
   }
   const store = createClientStore();
+  const CONNECTION_IDLE_MS = 5_000;
+  const CONNECTION_TIMEOUT_MS = 10_000;
+  let connectionTimer: ReturnType<typeof setTimeout> | undefined;
+  let pendingConnectionId: string | undefined;
+  let disposed = false;
+
+  function stopConnectionCheck(): void {
+    clearTimeout(connectionTimer);
+    connectionTimer = undefined;
+    pendingConnectionId = undefined;
+  }
+
+  function checkConnection(): void {
+    stopConnectionCheck();
+    if (disposed || document.hidden) return;
+    const requestId = crypto.randomUUID();
+    pendingConnectionId = requestId;
+    connectionTimer = setTimeout(() => {
+      store.setConnectionError(true);
+      connectionTimer = setTimeout(checkConnection, CONNECTION_IDLE_MS);
+    }, CONNECTION_TIMEOUT_MS);
+    bridge.postMessage({ type: "ready", requestId });
+  }
+
+  function acceptConnection(): void {
+    stopConnectionCheck();
+    store.setConnectionError(false);
+    if (!disposed && !document.hidden)
+      connectionTimer = setTimeout(checkConnection, CONNECTION_IDLE_MS);
+  }
+
+  function onVisibilityChange(): void {
+    stopConnectionCheck();
+    store.setConnectionError(false);
+    if (!document.hidden) checkConnection();
+  }
+
+  document.addEventListener("visibilitychange", onVisibilityChange);
   let pendingAddWorkspace = false;
   const closeWorkspaceForm = (): void => {
     formElement.hidden = true;
@@ -829,7 +886,19 @@ export function initClient(bridge: ClientBridge): () => void {
     pendingAddWorkspace = false;
   };
   bridge.onMessage((message) => {
-    if (!isRecord(message)) return;
+    if (disposed || !isRecord(message)) return;
+    const isListMessage =
+      message.type === "loading" ||
+      message.type === "sessionsError" ||
+      (message.type === "sessions" && isClientState(message.state));
+    const isReplay = isListMessage && message.requestId !== undefined;
+    if (
+      isReplay &&
+      (pendingConnectionId === undefined || message.requestId !== pendingConnectionId)
+    )
+      return;
+    const errorMessage = isReplay ? store.getSnapshot().errorMessage : "";
+    if (isListMessage) acceptConnection();
     if (message.type === "loading") {
       const displayedSessionId = message.displayedSessionId;
       store.setLoading(
@@ -837,10 +906,11 @@ export function initClient(bridge: ClientBridge): () => void {
         typeof displayedSessionId === "string" || displayedSessionId === null
           ? displayedSessionId
           : undefined,
+        errorMessage,
       );
     }
     if (message.type === "sessions" && isClientState(message.state)) {
-      store.setSessions(message.state);
+      store.setSessions(message.state, errorMessage);
     }
     if (message.type === "newSessionFinished" && typeof message.requestId === "string") {
       store.finishNewSession(message.requestId);
@@ -891,12 +961,22 @@ export function initClient(bridge: ClientBridge): () => void {
   document.addEventListener("keydown", onKeyDown);
 
   const root = createRoot(sessionsElement);
-  root.render(<SessionsApp bridge={bridge} store={store} statusElement={statusElement} />);
+  root.render(
+    <SessionsApp
+      bridge={bridge}
+      store={store}
+      statusElement={statusElement}
+      connectionStatusElement={connectionStatusElement}
+    />,
+  );
 
   const disposeScrollbar = initDocumentScrollbar();
-  bridge.postMessage({ type: "ready" });
+  checkConnection();
 
   return () => {
+    disposed = true;
+    stopConnectionCheck();
+    document.removeEventListener("visibilitychange", onVisibilityChange);
     disposeScrollbar();
     document.removeEventListener("click", onDocumentClick);
     document.removeEventListener("keydown", onKeyDown);

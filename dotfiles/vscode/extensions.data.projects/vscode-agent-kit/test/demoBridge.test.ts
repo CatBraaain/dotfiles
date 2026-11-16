@@ -55,6 +55,20 @@ const piToolsOtherId = "4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83";
 const worktreeId = "5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94";
 
 describe("createDemoBridge", () => {
+  it("replays current sessions with the connection request id", () => {
+    const demo = createDemoBridge();
+    const listener = vi.fn();
+    demo.bridge.onMessage(listener);
+    demo.bridge.postMessage({ type: "ready", requestId: "connection-1" });
+    expect(listener).toHaveBeenLastCalledWith({
+      type: "sessions",
+      state: expect.any(Object),
+      requestId: "connection-1",
+    });
+    const state = listener.mock.lastCall?.[0].state;
+    demo.postSessions();
+    expect(listener).toHaveBeenLastCalledWith({ type: "sessions", state });
+  });
   it("sends every session with archive marks and the displayed session", () => {
     const { postSessions, last } = setup();
 

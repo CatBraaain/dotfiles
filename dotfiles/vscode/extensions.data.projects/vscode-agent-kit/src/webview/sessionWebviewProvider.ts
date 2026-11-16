@@ -451,6 +451,11 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     const request = parseWebviewRequest(message);
     if (request === undefined) return;
     if (request.type === "ready") {
+      if (request.requestId !== undefined) {
+        if (this.latestListMessage !== undefined)
+          this.post({ ...this.latestListMessage, requestId: request.requestId });
+        return;
+      }
       if (this.latestListMessage !== undefined) this.post(this.latestListMessage);
       await this.pendingRefresh;
       return;
@@ -721,32 +726,32 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   }
 
   private post(message: ExtensionMessage): void {
+    const isListMessage =
+      message.type === "loading" || message.type === "sessions" || message.type === "sessionsError";
+    const isReplay = isListMessage && message.requestId !== undefined;
     if (
-      message.type === "loading" ||
-      message.type === "sessionsError" ||
-      message.type === "error"
+      !isReplay &&
+      (message.type === "loading" || message.type === "sessionsError" || message.type === "error")
     ) {
       this.postedStateJson = undefined;
     }
-    if (
-      message.type === "loading" ||
-      message.type === "sessions" ||
-      message.type === "sessionsError"
-    ) {
-      this.latestListMessage = message;
-    }
+    if (isListMessage && !isReplay) this.latestListMessage = message;
     const view = this.view;
     if (view === undefined) return;
+    function reportDeliveryFailure(): void {
+      if (!isListMessage)
+        void vscode.window.showErrorMessage("Failed to update the Sessions view.");
+    }
     void view.webview.postMessage(message).then(
       (delivered) => {
         if (!delivered) {
           if (this.view === view) this.postedStateJson = undefined;
-          void vscode.window.showErrorMessage("Failed to update the Sessions view.");
+          reportDeliveryFailure();
         }
       },
       () => {
         if (this.view === view) this.postedStateJson = undefined;
-        void vscode.window.showErrorMessage("Failed to update the Sessions view.");
+        reportDeliveryFailure();
       },
     );
   }

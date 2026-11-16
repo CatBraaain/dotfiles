@@ -9,6 +9,10 @@ const customSessionId = "spec-d5-549bc7eb-1e89-4eb1-ab9d-16ff3be54fe7";
 describe("parseWebviewRequest", () => {
   it.each([
     [{ type: "ready" }, { type: "ready" }],
+    [
+      { type: "ready", requestId: "connection-1" },
+      { type: "ready", requestId: "connection-1" },
+    ],
     [{ type: "refresh" }, { type: "refresh" }],
     [
       { type: "newSession", cwd: "/home/user/project" },
@@ -62,6 +66,9 @@ describe("parseWebviewRequest", () => {
     undefined,
     null,
     "refresh",
+    { type: "ready", requestId: "" },
+    { type: "ready", requestId: " " },
+    { type: "ready", requestId: 1 },
     { type: "setMode", mode: "unarchived" },
     { type: "setMode", mode: "all" },
     { type: "openSession" },

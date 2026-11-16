@@ -26,6 +26,8 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 
 Layout: Sessions ビュータイトル — 見出しと一覧の更新操作を一行にまとめる → VS Code 標準ビュータイトル（[参照](https://code.visualstudio.com/api/references/contribution-points#contributes.menus)）; scroll owner: `html`（Webview document）; anti-patterns: Webview 内の重複した見出しと更新ツールバー。
 
+Layout: 一覧の通信エラー — 通信障害を一覧より先に読み、通常時は領域を空けない → stack（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/stacking/stack.md)）; scroll owner: `html`（document）; anti-patterns: 見た目だけの並べ替え、フッターへの混在、空の表示領域。
+
 Layout: New workspace フッター — 一覧が短いときも長いときも操作の下余白を一覧の上余白に揃える → sticky-footer の document 内下端追従版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/viewport-shell/sticky-footer.md)）; scroll owner: `html`（document）; anti-patterns: 上下で異なる外側余白、入力への切替による高さの増減、一覧だけの別スクロール領域。
 
 Layout: ワークスペース見出し — 左の開閉・名前・省略メニュー、右のモード切替・New session を一列に配置する → split-nav の固定操作幅版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/in-line-grouping/split-nav.md)）; scroll owner: `html`（document）; anti-patterns: 操作の折り返し、名前による操作の押し出し。名前を省略して操作幅を保つ。
@@ -39,7 +41,8 @@ Layout: ワークスペースのメニュー — 一覧を押し下げず起動�
 | 全体の余白 | Webview viewport を基準に、アプリが上と左右12pxを一度だけ確保する。`body` の padding は0。下はフッターの12pxで確保する。グループ間は12px |
 | ビュータイトル | VS Code 標準の `Sessions` タイトルと右側の refresh アイコン。寸法・配色・hover・focus は VS Code 標準に従う |
 | フッター | 一覧の下。上境界線（境界トークン）と上下・左右12pxの余白で区切る。操作の下余白は、一覧の長さとスクロール位置によらず一覧の上余白と同じ12pxとする |
-| 状態・エラー表示 | 文字があるときだけフッターの操作より上に表示し、高さ16px以上、操作との間隔8pxとする。空のときは表示領域と間隔を確保せず、上境界線の下端から操作の上端まで12pxとする |
+| 取得状態・操作エラー表示 | 文字があるときだけフッターの操作より上に表示し、高さ16px以上、操作との間隔8pxとする。空のときは表示領域と間隔を確保せず、上境界線の下端から操作の上端まで12pxとする |
+| 通信エラー表示 | 一覧より前の document フローに配置する。12px文字・`errorForeground`・高さ16px以上とし、一覧との間隔は8px。空のときは表示領域と間隔を確保しない |
 | フォーム（開いたとき） | New workspace と同じ位置・幅・高さ。開閉で周囲の配置とスクロール範囲を保つ |
 | グループ見出し | 高さ24px、右の補助操作との間隔4px。chevron と名前の共通領域はアプリ左端の余白から8px左へ広げ、chevron ボタンと名前の間隔は0pxとする。chevron の操作領域は24px四方を保つ。見出し名の内側余白は常時左0px・右6px。文字は14px・600・20px行で省略表示。名前の直後に省略メニューボタンの領域を確保し、残る空間で右端のモード切替・New session と分ける。長い名前は省略し、chevron・省略メニュー・右の補助操作は24px四方を保つ |
 | セッション行 | 高さ32px、見出し直後の行は上余白4px。行の左端はグループ見出しの開閉領域と揃え、アプリ左端の余白から8px左へ広げる。ボタンの内側の左余白は4px、アイコン・表示名の間隔は8pxとし、表示名の文字開始位置をグループ見出し名と揃える。hover・選択の背景面とfocus ringはボタン全体に描く。既存の状態アイコンは表示名の左側に置き、ボタンの一部として操作できる。文字・状態アイコン・日時・行操作の位置と幅は各状態で維持する |
@@ -49,7 +52,7 @@ Layout: ワークスペースのメニュー — 一覧を押し下げず起動�
 
 ## 部品
 
-New workspace フッターの主操作はワークスペースの登録。情報の優先順は一覧、状態・エラー、登録操作。New workspace とフルパス入力欄は同じ領域を使い、左側の folder-plus アイコン、状態・エラー表示と入力のヒントを保持する。操作とキー入力は SPEC「New Workspace アクション」に従う。
+New workspace フッターの主操作はワークスペースの登録。情報の優先順は一覧、取得状態・操作エラー、登録操作。New workspace とフルパス入力欄は同じ領域を使い、左側の folder-plus アイコン、状態・エラー表示と入力のヒントを保持する。操作とキー入力は SPEC「New Workspace アクション」に従う。
 
 セッション一覧の主操作は会話の選択・再開。情報の優先順は表示名、実行フェーズ、更新日時。表示名・日時・フェーズのヒント・選択表示・右端の Archive / Unarchive を保持する。左端の状態アイコンは既存の線画 SVG を使い、状態との対応は SPEC「実行フェーズの表示」に従う。追加のバッジや説明行は設けない。
 

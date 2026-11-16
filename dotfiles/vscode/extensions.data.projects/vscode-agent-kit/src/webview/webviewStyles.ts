@@ -72,9 +72,10 @@ export const webviewStyles = `
     .session-row.archived .session-name, .session-row.archived .session-timestamp { color: var(--vscode-descriptionForeground); }
     .session-row.selected .session-name, .session-row.selected .session-timestamp { color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); }
     .session-row.selected:focus-within .session-name, .session-row.selected:focus-within .session-timestamp { color: var(--vscode-list-activeSelectionForeground, var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground))); }
-    .empty, #status { color: var(--vscode-descriptionForeground); font-size: 12px; }
+    .empty, #status, #connection-status { color: var(--vscode-descriptionForeground); font-size: 12px; }
     .empty { padding: 24px 8px; text-align: center; }
-    #status { min-height: 16px; margin: 0; overflow-wrap: anywhere; }
-    #status:empty { display: none; }
-    #status.error { color: var(--vscode-errorForeground); }
+    #status, #connection-status { min-height: 16px; margin: 0; overflow-wrap: anywhere; }
+    #connection-status { margin-bottom: 8px; }
+    #status:empty, #connection-status:empty { display: none; }
+    #status.error, #connection-status.error { color: var(--vscode-errorForeground); }
 `;

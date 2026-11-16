@@ -3,6 +3,8 @@ import { chmod, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:f
 import { homedir } from "node:os";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { chromium } from "playwright";
+import { webviewAppMarkup } from "../src/webview/webviewHtml";
 import { SessionLauncher } from "../src/launcher";
 import { EmptySessionPool } from "../src/emptySessionPool";
 import * as workDirectory from "../src/workDirectory";
@@ -334,6 +336,60 @@ async function loadingFixture() {
 }
 
 describe("SessionWebviewProvider", () => {
+  it("recovers the mounted client from a dropped provider connection with an unchanged list", async () => {
+    const { provider, webview } = await loadingFixture();
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      await page.route("http://localhost/client", (route) =>
+        route.fulfill({ contentType: "text/html", body: webviewAppMarkup }),
+      );
+      await page.goto("http://localhost/client");
+      await page.clock.install({ time: 0 });
+      await page.clock.pauseAt(1000);
+      let connected = true;
+      webview.postMessage.mockImplementation(async (message) => {
+        if (!connected) return false;
+        await page.evaluate(
+          (message) => window.dispatchEvent(new MessageEvent("message", { data: message })),
+          message,
+        );
+        return true;
+      });
+      await page.exposeFunction("sendToProvider", async (request: unknown) => {
+        if (connected) await webview.receive(request);
+      });
+      await page.evaluate(() => {
+        Object.assign(window, {
+          acquireVsCodeApi: () => ({ postMessage: Reflect.get(window, "sendToProvider") }),
+        });
+      });
+      await page.addScriptTag({
+        type: "module",
+        content: await readFile(join(process.cwd(), "dist-webview/webview/client.js"), "utf8"),
+      });
+      await expect.poll(() => page.locator(".group-title").count()).toBe(1);
+      const names = await page.locator(".session-name").allTextContents();
+      connected = false;
+      await page.clock.runFor(5000);
+      await page.clock.runFor(9999);
+      expect(await page.locator("#status").textContent()).toBe("");
+      await page.clock.runFor(1);
+      await expect
+        .poll(() => page.locator("#connection-status").textContent())
+        .toContain("Connection lost");
+      expect(await page.locator(".session-name").allTextContents()).toEqual(names);
+      connected = true;
+      await page.clock.runFor(5000);
+      await expect.poll(() => page.locator("#connection-status").textContent()).toBe("");
+      expect(await page.locator("#status").textContent()).toBe("");
+      expect(await page.locator(".session-name").allTextContents()).toEqual(names);
+      expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+    } finally {
+      await browser.close();
+      provider.dispose();
+    }
+  });
   it.each(["process ID", "pending current", "failing current"] as const)(
     "shows a new Terminal and completes selection without waiting for %s",
     async (blocked) => {
@@ -397,6 +453,45 @@ describe("SessionWebviewProvider", () => {
       type: "sessions",
       state: expect.objectContaining({ groups: [expect.objectContaining({ cwd: root })] }),
     });
+  });
+
+  it("answers connection checks immediately during a held acquisition without another query", async () => {
+    const { provider, mocks, webview } = await loadingFixture();
+    const held = deferred<PiMuxWorkspace[]>();
+    mocks.list.mockReturnValueOnce(held.promise);
+    const refreshing = provider.refreshManually();
+    await webview.receive({ type: "ready", requestId: "connection-1" });
+    expect(webview.postMessage).toHaveBeenLastCalledWith({
+      type: "loading",
+      manual: true,
+      displayedSessionId: null,
+      requestId: "connection-1",
+    });
+    expect(mocks.list).toHaveBeenCalledOnce();
+    held.resolve([]);
+    await refreshing;
+    expect(webview.postMessage.mock.lastCall?.[0].type).toBe("sessions");
+  });
+
+  it("replays correlated success and failure without caching the correlation or querying", async () => {
+    const { provider, mocks, webview } = await loadingFixture();
+    await webview.receive({ type: "ready", requestId: "connection-success" });
+    expect(webview.postMessage).toHaveBeenLastCalledWith({
+      type: "sessions",
+      state: expect.any(Object),
+      requestId: "connection-success",
+    });
+    expect(mocks.list).not.toHaveBeenCalled();
+    mocks.list.mockRejectedValueOnce(new Error("offline"));
+    await provider.refresh();
+    await webview.receive({ type: "ready", requestId: "connection-error" });
+    expect(webview.postMessage).toHaveBeenLastCalledWith({
+      type: "sessionsError",
+      requestId: "connection-error",
+    });
+    await webview.receive({ type: "ready" });
+    expect(webview.postMessage).toHaveBeenLastCalledWith({ type: "sessionsError" });
+    expect(mocks.list).toHaveBeenCalledOnce();
   });
 
   it("replays completed success and acquisition errors without another query on ready", async () => {
@@ -1483,9 +1578,7 @@ describe("SessionWebviewProvider", () => {
         phases.set(activeSessionId, "running");
         await tick(provider);
         const state = sentState();
-        expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
-          "Failed to update the Sessions view.",
-        );
+        expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
 
         webview.postMessage.mockClear();
         await tick(provider);
@@ -4025,33 +4118,18 @@ describe("SessionWebviewProvider", () => {
     expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
   });
 
-  it("notifies when postMessage reports the webview was not updated", async () => {
-    const { provider } = createProvider();
-    const webview = createView();
-    webview.postMessage.mockResolvedValueOnce(false);
-    provider.resolveWebviewView(webview.view as never);
-
-    await provider.refresh();
-    await vi.waitFor(() => {
-      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
-        "Failed to update the Sessions view.",
-      );
-    });
-  });
-
-  it("notifies when postMessage rejects", async () => {
-    const { provider } = createProvider();
-    const webview = createView();
-    webview.postMessage.mockRejectedValueOnce(new Error("webview gone"));
-    provider.resolveWebviewView(webview.view as never);
-
-    await provider.refresh();
-    await vi.waitFor(() => {
-      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
-        "Failed to update the Sessions view.",
-      );
-    });
-  });
+  it.each(["false", "rejection"])(
+    "does not notify when initial loading delivery returns %s",
+    async (failure) => {
+      const { provider } = createProvider();
+      const webview = createView();
+      if (failure === "false") webview.postMessage.mockResolvedValueOnce(false);
+      else webview.postMessage.mockRejectedValueOnce(new Error("webview gone"));
+      provider.resolveWebviewView(webview.view as never);
+      await provider.refresh();
+      expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it("closes the confirmed conversation while retaining old membership and its source", async () => {
     const { webview, registry, terminal, live, mocks, filePath } = await archiveFixture();

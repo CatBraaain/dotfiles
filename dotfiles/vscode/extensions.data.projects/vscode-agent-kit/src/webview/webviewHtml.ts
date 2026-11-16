@@ -9,6 +9,7 @@ export interface WebviewHtmlOptions {
 
 /** Fixed view markup inside <body>; the stories catalog renders the same tree. */
 export const webviewAppMarkup = `<main id="app">
+    <p id="connection-status" class="error" role="status" aria-live="polite"></p>
     <section id="sessions" aria-live="polite"></section>
     <footer class="footer">
       <p id="status" role="status" aria-live="polite"></p>

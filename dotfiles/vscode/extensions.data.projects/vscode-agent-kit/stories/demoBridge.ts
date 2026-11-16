@@ -120,7 +120,7 @@ export function createDemoBridge(): {
     REGISTERED_ONLY_CWD,
   ];
 
-  function postSessions(): void {
+  function postSessions(requestId?: string): void {
     const archivedIds = new Set(
       [...metadata].filter(([, entry]) => entry.archived).map(([sessionId]) => sessionId),
     );
@@ -131,6 +131,7 @@ export function createDemoBridge(): {
     );
     listener({
       type: "sessions",
+      ...(requestId === undefined ? {} : { requestId }),
       state: {
         groups: sessionViewGroups(store, {
           registeredCwds,
@@ -147,6 +148,10 @@ export function createDemoBridge(): {
   }
 
   function handleRequest(request: DemoBridgeRequest): void {
+    if (request.type === "ready") {
+      postSessions(request.requestId);
+      return;
+    }
     if (request.type === "refresh") {
       postSessions();
       return;
