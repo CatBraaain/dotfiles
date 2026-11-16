@@ -46,6 +46,8 @@ export function fakeProvider(
     maxActive: 0,
     summaryText: "Saved goals and pending work.",
     summaryReason: "stop" as TerminalReason,
+    summaryUsage: undefined as AssistantMessage["usage"] | undefined,
+    summaryFailure: undefined as "throw" | "reject" | undefined,
     normalReason: "stop" as TerminalReason,
     normalContent: undefined as AssistantMessage["content"] | undefined,
     authRevision: "synthetic-v1",
@@ -64,6 +66,13 @@ export function fakeProvider(
     const capture = { kind, model, context, options };
     state.requests.push(capture);
     state.timeline.push(`${kind}:start`);
+    if (kind === "summary" && state.summaryFailure) {
+      const error = new Error("Synthetic failure: secret-key and request-payload");
+      if (state.summaryFailure === "throw") throw error;
+      const rejected = createAssistantMessageEventStream();
+      rejected.result = () => Promise.reject(error);
+      return rejected;
+    }
     state.active++;
     state.maxActive = Math.max(state.maxActive, state.active);
     const output = createAssistantMessageEventStream();
@@ -89,6 +98,7 @@ export function fakeProvider(
           kind === "summary" ? state.summaryText : "Normal reply",
           reason,
         );
+        if (kind === "summary" && state.summaryUsage) message.usage = state.summaryUsage;
         if (kind === "normal" && state.normalContent) message.content = state.normalContent;
         if (reason === "toolUse" && !state.normalContent)
           message.content.push({

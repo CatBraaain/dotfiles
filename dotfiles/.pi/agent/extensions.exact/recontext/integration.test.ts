@@ -14,6 +14,8 @@ import {
 import recontextExtension from "./index.ts";
 import { fakeProvider, memoryRuntime, seedConversation } from "./test-fixture.ts";
 import { REPLACEMENT_STATE } from "./projection.ts";
+import { AUTO_COMPACTION_REQUEST } from "./provider-gate.ts";
+import { collectUsageSummary } from "../footer/index.ts";
 
 interface FixtureOptions {
   virtual?: boolean;
@@ -242,6 +244,94 @@ function currentModelText(h: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("real AgentSession automatic compaction", () => {
+  for (const summaryReason of ["stop", "error", "aborted"] as const) {
+    it(`keeps summary ${summaryReason} usage out of standard and footer totals`, async () => {
+      const h = await fixture({ virtual: true });
+      try {
+        h.state.summaryReason = summaryReason;
+        h.state.summaryUsage = {
+          input: 1200,
+          output: 90,
+          cacheRead: 300,
+          cacheWrite: 40,
+          totalTokens: 1630,
+          cost: { input: 0.012, output: 0.009, cacheRead: 0.003, cacheWrite: 0.004, total: 0.028 },
+        };
+        const before = h.session.getSessionStats();
+        const footerBefore = collectUsageSummary(h.manager.getEntries());
+        await h.session.prompt("new user prompt", { source: "extension" });
+        const after = h.session.getSessionStats();
+        assert.deepEqual(after.tokens, before.tokens);
+        assert.equal(after.cost, before.cost);
+        assert.deepEqual(collectUsageSummary(h.manager.getEntries()), footerBefore);
+        const logs = h.manager
+          .getEntries()
+          .filter(
+            (entry) => entry.type === "custom" && entry.customType === AUTO_COMPACTION_REQUEST,
+          );
+        assert.equal(logs.length, 1);
+        assert.match(JSON.stringify(logs), /physical/);
+        assert.match(JSON.stringify(logs), /0.028/);
+        assert.doesNotMatch(
+          currentModelText(h),
+          /recontext-auto-compaction-request|finishedAt|requestId/,
+        );
+        assert.deepEqual(
+          h.callbacks,
+          summaryReason === "stop" ? ["payload", "response:200", "stream"] : [],
+        );
+        if (summaryReason === "stop") {
+          await h.session.reload();
+          await h.session.prompt("after reload", { source: "extension" });
+          assert.equal(
+            h.manager
+              .getEntries()
+              .filter(
+                (entry) => entry.type === "custom" && entry.customType === AUTO_COMPACTION_REQUEST,
+              ).length,
+            1,
+          );
+        }
+        assert.deepEqual(h.errors, []);
+      } finally {
+        h.dispose();
+      }
+    });
+  }
+
+  it("records interruption in the shutdown hook before a replacement session and ignores late usage", async () => {
+    const h = await fixture();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    try {
+      h.state.beforeReply = async (capture) => {
+        if (capture.kind !== "summary") return;
+        started.resolve();
+        await release.promise;
+      };
+      const pending = h.session.prompt("new user prompt", { source: "extension" });
+      await started.promise;
+      await h.session.extensionRunner.emit({ type: "session_shutdown", reason: "new" });
+      const logs = h.manager
+        .getEntries()
+        .filter((entry) => entry.type === "custom" && entry.customType === AUTO_COMPACTION_REQUEST);
+      assert.equal(logs.length, 1);
+      assert.match(JSON.stringify(logs), /owner_closed/);
+      await pending;
+      h.manager.newSession();
+      release.resolve();
+      for (let i = 0; i < 30; i++) await Promise.resolve();
+      assert.deepEqual(h.manager.getEntries(), []);
+      assert.deepEqual(
+        h.state.requests.map((request) => request.kind),
+        ["summary"],
+      );
+      assert.deepEqual(h.errors, []);
+    } finally {
+      release.resolve();
+      h.dispose();
+    }
+  });
   it("uses physical routing and both context transformations once before the final provider fork", async () => {
     const h = await fixture({ virtual: true, transform: true });
     try {

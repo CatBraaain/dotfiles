@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 import {
   createAssistantMessageEventStream,
   type Api,
@@ -30,6 +31,24 @@ import {
   replaceRequestMessages,
 } from "./projection.ts";
 import { PROVIDER_UPDATE_EVENT, type ProviderUpdate } from "./provider-update.ts";
+
+export const AUTO_COMPACTION_REQUEST = "recontext-auto-compaction-request";
+
+export interface AutoCompactionRequest {
+  version: 1;
+  requestId: string;
+  startedAt: string;
+  finishedAt: string;
+  provider: string;
+  model: string;
+  api: Api;
+  sessionId: string;
+  leafId: string | null;
+  outcome: "success" | "error" | "aborted";
+  reason: string;
+  stopReason?: AssistantMessage["stopReason"];
+  usage?: AssistantMessage["usage"];
+}
 
 interface Registration {
   wrapper: Provider;
@@ -75,6 +94,7 @@ export function installProviderGates(
   queue.owners++;
   sessionQueues.set(sessionId, queue);
   let closed = false;
+  let interruptSummary: (() => void) | undefined;
   let active = false;
   let preparation: ReturnType<typeof Promise.withResolvers<void>> | undefined;
   let failure: { error: unknown } | undefined;
@@ -308,9 +328,10 @@ export function installProviderGates(
       Number.isFinite(options.timeoutMs) && options.timeoutMs! > 0
         ? options.timeoutMs!
         : SUMMARY_TIMEOUT_MS;
+    const timeout = AbortSignal.timeout(timeoutMs);
     const signals = [
       lifetime.signal,
-      AbortSignal.timeout(timeoutMs),
+      timeout,
       ...(options.signal ? [options.signal] : []),
       ...(ctx.signal ? [ctx.signal] : []),
     ];
@@ -320,65 +341,122 @@ export function installProviderGates(
       ...summaryRequestOptions(model, options, candidate.maxTokens, simple),
       signal,
     };
-    const summaryStream = simple
-      ? base.streamSimple(model, candidate.summaryContext, summaryOptions as SimpleStreamOptions)
-      : base.stream(model, candidate.summaryContext, summaryOptions as ApiStreamOptions<Api>);
-    const result = summaryStream.result();
-    let settled = false;
-    lease.completion = result.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
-    let summary: AssistantMessage;
-    try {
-      summary = await abortable(result, signal);
-    } catch (error) {
-      if (!settled) {
-        queue.draining++;
-        void lease.completion.then(() => {
-          queue.draining--;
+    const requestId = randomUUID();
+    const startedAt = new Date().toISOString();
+    let summary: AssistantMessage | undefined;
+    let recorded = false;
+    let outcome: AutoCompactionRequest["outcome"] = "error";
+    let reason = "provider_throw";
+    function record(result: AutoCompactionRequest["outcome"], resultReason: string): void {
+      if (recorded) return;
+      recorded = true;
+      interruptSummary = undefined;
+      if (closed || getContext().sessionManager !== manager || manager.getSessionId() !== sessionId)
+        return;
+      try {
+        pi.appendEntry<AutoCompactionRequest>(AUTO_COMPACTION_REQUEST, {
+          version: 1,
+          requestId,
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          provider: model.provider,
+          model: model.id,
+          api: model.api,
+          sessionId,
+          leafId,
+          outcome: result,
+          reason: resultReason,
+          ...(summary ? { stopReason: summary.stopReason, usage: requestUsage(summary) } : {}),
         });
+      } catch {
+        ctx.ui.notify("recontext: could not save the automatic compaction request log", "warning");
       }
-      throw error;
     }
-    signal.throwIfAborted();
-    const text = summary.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("");
-    if (
-      summary.stopReason !== "stop" ||
-      !text.trim() ||
-      summary.content.some((block) => block.type === "toolCall")
-    )
-      throw new Error(
-        `Summary was not accepted (${summary.stopReason}${text.trim() ? "" : ", empty"})`,
+    function interrupt(): void {
+      record("aborted", "owner_closed");
+    }
+    interruptSummary = interrupt;
+    try {
+      const summaryStream = simple
+        ? base.streamSimple(model, candidate.summaryContext, summaryOptions as SimpleStreamOptions)
+        : base.stream(model, candidate.summaryContext, summaryOptions as ApiStreamOptions<Api>);
+      const result = summaryStream.result();
+      let settled = false;
+      lease.completion = result.then(
+        (message) => {
+          summary = message;
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
       );
-    if (manager.getSessionId() !== sessionId || manager.getLeafId() !== leafId)
-      throw new Error("The session or branch changed during summarization");
-    const state = createReplacement(manager, projection, candidate.targetIds, text);
-    if (!isReplacementCurrent(manager, pendingProjection(manager).entries, state))
-      throw new Error("The summarized prefix changed before replacement");
-    const compressed = {
-      ...context,
-      messages: replaceRequestMessages(
-        context.messages,
-        matchMessageSources(context.messages, projection),
-        state,
-      ),
-    };
-    if (!requestFits(model, compressed, options, simple))
-      throw new Error("The generated summary does not fit the normal request budget");
-    pi.appendEntry(REPLACEMENT_STATE, state);
-    return compressed;
+      reason = "stream_rejected";
+      let response: AssistantMessage;
+      try {
+        response = await abortable(result, signal);
+      } catch (error) {
+        if (!settled) {
+          queue.draining++;
+          void lease.completion.then(() => {
+            queue.draining--;
+          });
+        }
+        throw error;
+      }
+      signal.throwIfAborted();
+      const text = response.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("");
+      if (
+        response.stopReason !== "stop" ||
+        !text.trim() ||
+        response.content.some((block) => block.type === "toolCall")
+      ) {
+        reason = "summary_tool_call";
+        if (!text.trim()) reason = "empty_summary";
+        if (response.stopReason !== "stop") reason = `stop_${response.stopReason}`;
+        if (response.stopReason === "aborted") outcome = "aborted";
+        throw new Error(
+          `Summary was not accepted (${response.stopReason}${text.trim() ? "" : ", empty"})`,
+        );
+      }
+      reason = "branch_changed";
+      if (manager.getSessionId() !== sessionId || manager.getLeafId() !== leafId)
+        throw new Error("The session or branch changed during summarization");
+      reason = "prefix_changed";
+      const state = createReplacement(manager, projection, candidate.targetIds, text);
+      if (!isReplacementCurrent(manager, pendingProjection(manager).entries, state))
+        throw new Error("The summarized prefix changed before replacement");
+      const compressed = {
+        ...context,
+        messages: replaceRequestMessages(
+          context.messages,
+          matchMessageSources(context.messages, projection),
+          state,
+        ),
+      };
+      reason = "summary_over_budget";
+      if (!requestFits(model, compressed, options, simple))
+        throw new Error("The generated summary does not fit the normal request budget");
+      reason = "replacement_failed";
+      pi.appendEntry(REPLACEMENT_STATE, state);
+      outcome = "success";
+      reason = "applied";
+      return compressed;
+    } finally {
+      if (signal.aborted) {
+        outcome = "aborted";
+        reason = timeout.aborted ? "timeout" : "aborted";
+      }
+      record(outcome, reason);
+    }
   }
 
   function close(): void {
     if (closed) return;
+    interruptSummary?.();
     closed = true;
     if (timer !== undefined) clearTimeout(timer);
     timer = undefined;
@@ -404,6 +482,24 @@ export function installProviderGates(
   }
 
   return { ensure, close, isBusy };
+}
+
+function requestUsage(message: AssistantMessage): AssistantMessage["usage"] {
+  const { input, output, cacheRead, cacheWrite, totalTokens, cost } = message.usage;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens,
+    cost: {
+      input: cost.input,
+      output: cost.output,
+      cacheRead: cost.cacheRead,
+      cacheWrite: cost.cacheWrite,
+      total: cost.total,
+    },
+  };
 }
 
 function failedMessage(

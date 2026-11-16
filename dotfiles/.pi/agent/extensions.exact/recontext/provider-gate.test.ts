@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import { convertToLlm } from "@earendil-works/pi-coding-agent";
 import { normalizeContext, type Api } from "@earendil-works/pi-ai";
-import { installProviderGates } from "./provider-gate.ts";
+import {
+  AUTO_COMPACTION_REQUEST,
+  installProviderGates,
+  type AutoCompactionRequest,
+} from "./provider-gate.ts";
 import { pendingProjection, REPLACEMENT_STATE } from "./projection.ts";
 import {
   SUMMARY_INSTRUCTION,
@@ -169,7 +173,14 @@ describe("final provider preflight", () => {
           h.state.requests.map((request) => request.kind),
           ["summary"],
         );
-        assert.deepEqual(h.manager.getEntries(), raw);
+        assert.deepEqual(
+          h.manager
+            .getEntries()
+            .filter(
+              (entry) => entry.type !== "custom" || entry.customType !== AUTO_COMPACTION_REQUEST,
+            ),
+          raw,
+        );
         assert.deepEqual(callbacks, []);
         assert.equal(h.notices.length, 1);
       } finally {
@@ -623,5 +634,235 @@ describe("session serialization and provider ownership", () => {
     h.registry.registerProvider(foreign);
     h.gates.close();
     assert.strictEqual(h.registry.getRegisteredNativeProvider(h.provider.id), foreign);
+  });
+});
+
+const returnedUsage = {
+  input: 1_200,
+  output: 90,
+  cacheRead: 300,
+  cacheWrite: 40,
+  totalTokens: 1_630,
+  cost: { input: 0.012, output: 0.009, cacheRead: 0.003, cacheWrite: 0.004, total: 0.028 },
+};
+
+function requestLogs(h: Awaited<ReturnType<typeof gateFixture>>): AutoCompactionRequest[] {
+  return h.manager
+    .getEntries()
+    .flatMap((entry) =>
+      entry.type === "custom" && entry.customType === AUTO_COMPACTION_REQUEST
+        ? [entry.data as AutoCompactionRequest]
+        : [],
+    );
+}
+
+describe("automatic compaction request history", () => {
+  for (const [stopReason, outcome, reason] of [
+    ["stop", "success", "applied"],
+    ["error", "error", "stop_error"],
+    ["aborted", "aborted", "stop_aborted"],
+    ["length", "error", "stop_length"],
+    ["toolUse", "error", "stop_toolUse"],
+  ] as const) {
+    it(`records the returned usage and safe result for ${stopReason}`, async () => {
+      const h = await gateFixture();
+      try {
+        seedConversation(h.manager, 12_500);
+        const originalLeaf = h.manager.getLeafId();
+        const rawMessages = h.manager.getEntries().filter((entry) => entry.type === "message");
+        h.state.summaryReason = stopReason;
+        h.state.summaryUsage = returnedUsage;
+        await send(h, { apiKey: "secret-request-key" });
+        const logs = requestLogs(h);
+        assert.equal(logs.length, 1);
+        const log = logs[0]!;
+        assert.deepEqual(
+          {
+            outcome: log.outcome,
+            reason: log.reason,
+            stopReason: log.stopReason,
+            usage: log.usage,
+          },
+          { outcome, reason, stopReason, usage: returnedUsage },
+        );
+        assert.equal(log.version, 1);
+        assert.match(log.requestId, /^[0-9a-f-]{36}$/);
+        assert.ok(Date.parse(log.finishedAt) >= Date.parse(log.startedAt));
+        assert.equal(log.provider, h.model.provider);
+        assert.equal(log.model, h.model.id);
+        assert.equal(log.api, h.model.api);
+        assert.equal(log.sessionId, h.manager.getSessionId());
+        assert.equal(log.leafId, originalLeaf);
+        assert.doesNotMatch(
+          JSON.stringify(log),
+          /OLD |Saved goals|secret-request-key|Synthetic summary|payload|content/,
+        );
+        assert.deepEqual(
+          h.manager.getEntries().filter((entry) => entry.type === "message"),
+          rawMessages,
+        );
+        assert.equal(states(h).length, outcome === "success" ? 1 : 0);
+      } finally {
+        h.gates.close();
+      }
+    });
+  }
+
+  for (const [text, reason] of [
+    [" \n", "empty_summary"],
+    ["x".repeat(100_000), "summary_over_budget"],
+  ]) {
+    it(`keeps usage when the summary is not adopted: ${reason}`, async () => {
+      const h = await gateFixture();
+      try {
+        seedConversation(h.manager, 12_500);
+        h.state.summaryUsage = returnedUsage;
+        h.state.summaryText = text!;
+        assert.equal((await send(h)).stopReason, "aborted");
+        const [log] = requestLogs(h);
+        assert.equal(log!.outcome, "error");
+        assert.equal(log!.reason, reason);
+        assert.deepEqual(log!.usage, returnedUsage);
+      } finally {
+        h.gates.close();
+      }
+    });
+  }
+
+  for (const failure of ["throw", "reject"] as const) {
+    it(`records ${failure} without inventing usage or saving the provider error text`, async () => {
+      const h = await gateFixture();
+      try {
+        seedConversation(h.manager, 12_500);
+        h.state.summaryFailure = failure;
+        assert.equal((await send(h)).stopReason, "aborted");
+        const logs = requestLogs(h);
+        assert.equal(logs.length, 1);
+        assert.equal(logs[0]!.outcome, "error");
+        assert.equal(logs[0]!.reason, failure === "throw" ? "provider_throw" : "stream_rejected");
+        assert.equal(logs[0]!.usage, undefined);
+        assert.equal(logs[0]!.stopReason, undefined);
+        assert.doesNotMatch(JSON.stringify(logs), /secret-key|request-payload/);
+      } finally {
+        h.gates.close();
+      }
+    });
+  }
+
+  for (const change of ["branch", "new-input"] as const) {
+    it(`records returned usage on ${change} without applying the summary`, async () => {
+      const h = await gateFixture();
+      try {
+        const ids = seedConversation(h.manager, 12_500);
+        h.state.summaryUsage = returnedUsage;
+        h.state.beforeReply = (capture) => {
+          if (capture.kind !== "summary") return;
+          if (change === "branch") h.manager.branch(ids.old);
+          else h.manager.appendMessage({ role: "user", content: "NEW", timestamp: 100 });
+        };
+        await send(h);
+        const [log] = requestLogs(h);
+        assert.equal(log!.reason, "branch_changed");
+        assert.equal(log!.leafId, ids.pending);
+        assert.deepEqual(log!.usage, returnedUsage);
+        assert.equal(states(h).length, 0);
+      } finally {
+        h.gates.close();
+      }
+    });
+  }
+
+  for (const cancellation of ["abort", "timeout", "shutdown"] as const) {
+    it(`finalizes ${cancellation} once and ignores a late summary result`, async () => {
+      const h = await gateFixture();
+      const started = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      try {
+        seedConversation(h.manager, 12_500);
+        h.state.summaryUsage = returnedUsage;
+        h.state.beforeReply = async (capture) => {
+          if (capture.kind !== "summary") return;
+          started.resolve();
+          await release.promise;
+        };
+        const pending = send(h, {
+          signal: h.controller.signal,
+          timeoutMs: cancellation === "timeout" ? 20 : 10_000,
+        });
+        await started.promise;
+        if (cancellation === "abort") h.controller.abort();
+        if (cancellation === "shutdown") h.gates.close();
+        assert.equal((await pending).stopReason, "aborted");
+        const logs = requestLogs(h);
+        assert.equal(logs.length, 1);
+        assert.equal(logs[0]!.outcome, "aborted");
+        assert.equal(
+          logs[0]!.reason,
+          cancellation === "shutdown"
+            ? "owner_closed"
+            : cancellation === "timeout"
+              ? "timeout"
+              : "aborted",
+        );
+        assert.equal(logs[0]!.usage, undefined);
+        const entryCount = h.manager.getEntries().length;
+        release.resolve();
+        for (let i = 0; i < 30 && h.gates.isBusy(); i++) await Promise.resolve();
+        assert.equal(h.gates.isBusy(), false);
+        assert.deepEqual(requestLogs(h), logs);
+        assert.equal(h.manager.getEntries().length, entryCount);
+      } finally {
+        release.resolve();
+        h.gates.close();
+      }
+    });
+  }
+
+  it("does not recreate history on normal retry or reload, but gives a new dispatch a new ID", async () => {
+    const h = await gateFixture();
+    let reloaded: ReturnType<typeof installProviderGates> | undefined;
+    try {
+      const ids = seedConversation(h.manager, 12_500);
+      h.state.normalReason = "error";
+      await send(h);
+      const original = requestLogs(h);
+      commitDrafts(h.manager, pendingProjection(h.manager).drafts);
+      await send(h);
+      h.gates.close();
+      reloaded = installProviderGates(h.pi, () => h.ctx);
+      await reloaded.ensure();
+      await send(h);
+      assert.deepEqual(requestLogs(h), original);
+      h.manager.branch(ids.pending);
+      assert.deepEqual(requestLogs(h), original);
+      await send(h);
+      const retried = requestLogs(h);
+      assert.equal(retried.length, 2);
+      assert.notEqual(retried[0]!.requestId, retried[1]!.requestId);
+    } finally {
+      reloaded?.close();
+      h.gates.close();
+    }
+  });
+
+  it("keeps a successful compression and normal dispatch when request logging fails", async () => {
+    const h = await gateFixture();
+    try {
+      seedConversation(h.manager, 12_500);
+      const append = h.pi.appendEntry.bind(h.pi);
+      h.pi.appendEntry = (customType, data) => {
+        if (customType === AUTO_COMPACTION_REQUEST) throw new Error("Synthetic write failure");
+        return append(customType, data);
+      };
+      assert.equal((await send(h)).stopReason, "stop");
+      assert.equal(states(h).length, 1);
+      assert.match(h.notices[0]!, /could not save/);
+      assert.deepEqual(
+        h.state.requests.map((request) => request.kind),
+        ["summary", "normal"],
+      );
+    } finally {
+      h.gates.close();
+    }
   });
 });
