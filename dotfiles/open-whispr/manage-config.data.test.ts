@@ -1,4 +1,3 @@
-import { describe, it, beforeAll, afterAll } from "bun:test";
 import assert from "node:assert/strict";
 import { Database as FixtureDatabase } from "bun:sqlite";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -38,13 +37,12 @@ import {
 } from "./manage-config.apply.ts";
 
 const hookScriptPath = join(import.meta.dir, "manage-config.apply.ts");
+const fixtureTimeoutMs = 5_000;
+const e2eHookTimeoutMs = 180_000;
 
-function expectHookError(run: () => unknown, code: string): void {
-  assert.throws(run, (error: unknown) => error instanceof HookError && error.code === code);
-}
-
-describe("resolvePaths", () => {
-  it("resolves Linux production defaults under HOME", () => {
+function verifyPaths(): void {
+  // resolves Linux production defaults under HOME
+  {
     const expectedProfileDir = join("/home/example", ".config", "open-whispr");
     const paths = resolvePaths("linux", { HOME: "/home/example" });
     assert.equal(paths.managedKeysDir, import.meta.dir);
@@ -52,9 +50,9 @@ describe("resolvePaths", () => {
     assert.equal(paths.appDir, "/opt/OpenWhispr");
     assert.equal(paths.appBinaryName, "open-whispr-app");
     assert.equal(paths.isE2E, false);
-  });
-
-  it("resolves Windows production defaults from APPDATA and LOCALAPPDATA", () => {
+  }
+  // resolves Windows production defaults from APPDATA and LOCALAPPDATA
+  {
     const paths = resolvePaths("win32", {
       APPDATA: join(tmpdir(), "appdata"),
       LOCALAPPDATA: join(tmpdir(), "localappdata"),
@@ -64,21 +62,24 @@ describe("resolvePaths", () => {
     assert.equal(paths.managedKeysDir, import.meta.dir);
     assert.equal(paths.appDir, join(join(tmpdir(), "localappdata"), "Programs", "OpenWhispr"));
     assert.equal(paths.appBinaryName, "OpenWhispr.exe");
-  });
-
-  it("rejects Windows without APPDATA", () => {
-    expectHookError(() => resolvePaths("win32", { LOCALAPPDATA: "/x" }), "INVALID_INPUT");
-  });
-
-  it("rejects Linux without HOME", () => {
-    expectHookError(() => resolvePaths("linux", {}), "INVALID_INPUT");
-  });
-
-  it("rejects unsupported platforms", () => {
-    expectHookError(() => resolvePaths("darwin", { HOME: "/home/example" }), "INVALID_INPUT");
-  });
-
-  it("honors e2e overrides only for paths under tmpdir", () => {
+  }
+  // rejects Windows without APPDATA
+  assert.throws(
+    () => resolvePaths("win32", { LOCALAPPDATA: "/x" }),
+    (error: unknown) => error instanceof HookError && error.code === "INVALID_INPUT",
+  );
+  // rejects Linux without HOME
+  assert.throws(
+    () => resolvePaths("linux", {}),
+    (error: unknown) => error instanceof HookError && error.code === "INVALID_INPUT",
+  );
+  // rejects unsupported platforms
+  assert.throws(
+    () => resolvePaths("darwin", { HOME: "/home/example" }),
+    (error: unknown) => error instanceof HookError && error.code === "INVALID_INPUT",
+  );
+  // honors e2e overrides only for paths under tmpdir
+  {
     const keysDir = join(tmpdir(), "openwhispr-unit-keys");
     const profileDir = join(tmpdir(), "openwhispr-unit-profile");
     const paths = resolvePaths("linux", {
@@ -89,86 +90,83 @@ describe("resolvePaths", () => {
     assert.equal(paths.isE2E, true);
     assert.equal(paths.managedKeysDir, keysDir);
     assert.equal(paths.profileDir, profileDir);
-  });
-
-  it("rejects an e2e managed keys dir outside tmpdir", () => {
-    expectHookError(
-      () =>
-        resolvePaths("linux", {
-          OPENWHISPR_E2E: "1",
-          OPENWHISPR_E2E_PROFILE: join(tmpdir(), "profile"),
-          OPENWHISPR_E2E_MANAGED_KEYS: "/home/example/keys",
-        }),
-      "INVALID_INPUT",
-    );
-  });
-
-  it("rejects an e2e profile outside tmpdir", () => {
-    expectHookError(
-      () =>
-        resolvePaths("linux", {
-          OPENWHISPR_E2E: "1",
-          OPENWHISPR_E2E_PROFILE: "/home/example/.config/open-whispr",
-          OPENWHISPR_E2E_MANAGED_KEYS: join(tmpdir(), "keys"),
-        }),
-      "INVALID_INPUT",
-    );
-  });
-});
-
-describe("validateManagedKeys and loadManagedKeys", () => {
-  function writeDeclaration(root: string, yamlText: string): string {
-    mkdirSync(root, { recursive: true });
-    writeFileSync(join(root, MANAGED_KEYS_FILE), yamlText, "utf8");
-    return root;
   }
+  // rejects an e2e managed keys dir outside tmpdir
+  assert.throws(
+    () =>
+      resolvePaths("linux", {
+        OPENWHISPR_E2E: "1",
+        OPENWHISPR_E2E_PROFILE: join(tmpdir(), "profile"),
+        OPENWHISPR_E2E_MANAGED_KEYS: "/home/example/keys",
+      }),
+    (error: unknown) => error instanceof HookError && error.code === "INVALID_INPUT",
+  );
+  // rejects an e2e profile outside tmpdir
+  assert.throws(
+    () =>
+      resolvePaths("linux", {
+        OPENWHISPR_E2E: "1",
+        OPENWHISPR_E2E_PROFILE: "/home/example/.config/open-whispr",
+        OPENWHISPR_E2E_MANAGED_KEYS: join(tmpdir(), "keys"),
+      }),
+    (error: unknown) => error instanceof HookError && error.code === "INVALID_INPUT",
+  );
+}
 
-  it("expands inline values including multiline block scalars", () => {
-    const root = writeDeclaration(
-      mkdtempSync(join(tmpdir(), "openwhispr-keys-")),
-      [
-        "keys:",
-        "  - key: customPrompt.cleanup",
-        "    value: |",
-        "      cleanup text",
-        "      second line",
-        "  - key: useDictationAgent",
-        '    value: "false"',
-        "",
-      ].join("\n"),
-    );
-    assert.deepEqual(loadManagedKeys(root), [
-      { key: "customPrompt.cleanup", value: "cleanup text\nsecond line\n" },
-      { key: "useDictationAgent", value: "false" },
-    ]);
-  });
-
-  it("loads the shipped declaration and computes a stable hash", () => {
-    const targets = loadManagedKeys(import.meta.dir);
-    const keys = targets.map((target) => target.key);
-    assert.deepEqual(keys.sort(), [
-      "customPrompt.cleanup",
-      "notifyMeetingDetection",
-      "snippets",
-      "useDictationAgent",
-    ]);
-    assert.match(managedKeysSha256(targets), /^[0-9a-f]{64}$/);
-    assert.equal(managedKeysSha256(targets), managedKeysSha256(loadManagedKeys(import.meta.dir)));
-  });
-
-  it("declares the dot-files pronunciation snippet replacing . files and .files with dotfiles", () => {
-    const targets = loadManagedKeys(import.meta.dir);
-    const entry = targets.find((target) => target.key === "snippets");
-    assert.ok(entry, "snippets entry must exist in the shipped declaration");
-    const snippets = JSON.parse(entry.value) as unknown;
-    assert.deepEqual(snippets, [
-      { trigger: ". files", replacement: "dotfiles" },
-      { trigger: ".files", replacement: "dotfiles" },
-    ]);
-  });
-
-  it("rejects duplicate keys", () => {
-    expectHookError(
+function verifyManagedKeys(): void {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "openwhispr-checks-"));
+  try {
+    function writeDeclaration(root: string, yamlText: string): string {
+      mkdirSync(root, { recursive: true });
+      writeFileSync(join(root, MANAGED_KEYS_FILE), yamlText, "utf8");
+      return root;
+    }
+    // expands inline values including multiline block scalars
+    {
+      const root = writeDeclaration(
+        join(fixtureRoot, "inline"),
+        [
+          "keys:",
+          "  - key: customPrompt.cleanup",
+          "    value: |",
+          "      cleanup text",
+          "      second line",
+          "  - key: useDictationAgent",
+          '    value: "false"',
+          "",
+        ].join("\n"),
+      );
+      assert.deepEqual(loadManagedKeys(root), [
+        { key: "customPrompt.cleanup", value: "cleanup text\nsecond line\n" },
+        { key: "useDictationAgent", value: "false" },
+      ]);
+    }
+    // loads the shipped declaration and computes a stable hash
+    {
+      const targets = loadManagedKeys(import.meta.dir);
+      const keys = targets.map((target) => target.key);
+      assert.deepEqual(keys.sort(), [
+        "customPrompt.cleanup",
+        "notifyMeetingDetection",
+        "snippets",
+        "useDictationAgent",
+      ]);
+      assert.match(managedKeysSha256(targets), /^[0-9a-f]{64}$/);
+      assert.equal(managedKeysSha256(targets), managedKeysSha256(loadManagedKeys(import.meta.dir)));
+    }
+    // declares the dot-files pronunciation snippet replacing . files and .files with dotfiles
+    {
+      const targets = loadManagedKeys(import.meta.dir);
+      const entry = targets.find((target) => target.key === "snippets");
+      assert.ok(entry, "snippets entry must exist in the shipped declaration");
+      const snippets = JSON.parse(entry.value) as unknown;
+      assert.deepEqual(snippets, [
+        { trigger: ". files", replacement: "dotfiles" },
+        { trigger: ".files", replacement: "dotfiles" },
+      ]);
+    }
+    // rejects duplicate keys
+    assert.throws(
       () =>
         validateManagedKeys({
           keys: [
@@ -176,67 +174,70 @@ describe("validateManagedKeys and loadManagedKeys", () => {
             { key: "a", value: "2" },
           ],
         }),
-      "INVALID_INPUT",
+      (error: unknown) => error instanceof HookError && error.code === "INVALID_INPUT",
     );
-  });
-
-  it("rejects a non-string value", () => {
-    expectHookError(
+    // rejects a non-string value
+    assert.throws(
       () => validateManagedKeys({ keys: [{ key: "a", value: false }] }),
-      "INVALID_INPUT",
+      (error: unknown) => error instanceof HookError && error.code === "INVALID_INPUT",
     );
-  });
+    // rejects empty keys arrays
+    assert.throws(
+      () => validateManagedKeys({ keys: [] }),
+      (error: unknown) => error instanceof HookError && error.code === "INVALID_INPUT",
+    );
+    // rejects an invalid YAML declaration
+    {
+      const root = writeDeclaration(join(fixtureRoot, "invalid"), "keys: [broken");
+      assert.throws(
+        () => loadManagedKeys(root),
+        (error: unknown) => error instanceof HookError && error.code === "INVALID_INPUT",
+      );
+    }
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
 
-  it("rejects empty keys arrays", () => {
-    expectHookError(() => validateManagedKeys({ keys: [] }), "INVALID_INPUT");
-  });
-
-  it("rejects an invalid YAML declaration", () => {
-    const root = writeDeclaration(mkdtempSync(join(tmpdir(), "openwhispr-keys-")), "keys: [broken");
-    expectHookError(() => loadManagedKeys(root), "INVALID_INPUT");
-  });
-});
-
-describe("dictionary declarations", () => {
-  it("keeps all 89 approved spellings in their original order", () => {
+function verifyDictionaryDeclarations(): void {
+  // keeps all 89 approved spellings in their original order
+  {
     const { dictionary } = loadManagedConfig(import.meta.dir);
     assert.equal(dictionary.length, 89);
     assert.equal(
       sha256Hex(JSON.stringify(dictionary)),
       "0fd58a18f63bf17732cbf0dd1fa068e7f27fffe09c8d434d6b88552a68931c5f",
     );
-  });
-
-  it("preserves storage-only declarations and removes empty words", () => {
-    assert.deepEqual(validateDictionary(undefined), []);
-    assert.deepEqual(validateDictionary([]), []);
-    assert.deepEqual(validateDictionary(["", "  ", "\t"]), []);
-  });
-
-  it("trims words and keeps the first spelling for case-insensitive duplicates", () => {
-    assert.deepEqual(validateDictionary([" Bun ", "bun", "BUN", "日本語句", " 日本語句 "]), [
-      "Bun",
-      "日本語句",
-    ]);
-  });
-
-  for (const invalid of [null, "word", [123], [null], ["bad\0word"]]) {
-    it(`rejects invalid dictionary input ${JSON.stringify(invalid)}`, () => {
-      expectHookError(() => validateDictionary(invalid), "INVALID_INPUT");
-    });
   }
-
-  it("includes dictionary words in the declaration hash", () => {
+  // preserves storage-only declarations and removes empty words
+  assert.deepEqual(validateDictionary(undefined), []);
+  assert.deepEqual(validateDictionary([]), []);
+  assert.deepEqual(validateDictionary(["", "  ", "\t"]), []);
+  // trims words and keeps the first spelling for case-insensitive duplicates
+  assert.deepEqual(validateDictionary([" Bun ", "bun", "BUN", "日本語句", " 日本語句 "]), [
+    "Bun",
+    "日本語句",
+  ]);
+  for (const invalid of [null, "word", [123], [null], ["bad\0word"]]) {
+    // rejects invalid dictionary input ${JSON.stringify(invalid)}
+    assert.throws(
+      () => validateDictionary(invalid),
+      (error: unknown) => error instanceof HookError && error.code === "INVALID_INPUT",
+    );
+  }
+  // includes dictionary words in the declaration hash
+  {
     const keys = [{ key: "a", value: "b" }];
     assert.equal(managedKeysSha256(keys), managedKeysSha256(keys, []));
     assert.notEqual(managedKeysSha256(keys), managedKeysSha256(keys, ["Bun"]));
     assert.notEqual(managedKeysSha256(keys, ["Bun"]), managedKeysSha256(keys, ["Godot"]));
     assert.equal(managedKeysSha256(keys, ["Bun"]), managedKeysSha256(keys, ["Bun"]));
-  });
-});
+  }
+}
 
-describe("status line", () => {
-  it("formats a machine-readable single line", () => {
+function verifyStatusLines(): void {
+  // formats a machine-readable single line
+  {
     const line = formatStatusLine({
       status: "applied",
       code: "OK",
@@ -244,66 +245,52 @@ describe("status line", () => {
     });
     assert.equal(line, "status=applied code=OK keys_sha256=abc123");
     assert.equal(line.includes("\n"), false);
-  });
-
-  it("marks an unknown key hash with a dash", () => {
+  }
+  // marks an unknown key hash with a dash
+  {
     const line = formatStatusLine({
       status: "error",
       code: "LOCKED",
       keysSha256: null,
     });
     assert.equal(line, "status=error code=LOCKED keys_sha256=-");
-  });
-});
+  }
+}
 
-describe("harness source guards", () => {
+function verifyHarnessGuards(): void {
   const source = buildHarnessSource();
+  // requires an absolute expected profile before anything else
+  assert.ok(source.includes("OW_HARNESS_PROFILE"));
+  assert.ok(source.includes("isAbsolute"));
+  assert.ok(source.includes("process.exit(90)"));
+  // acquires the singleton lock and reports LOCKED on contention
+  assert.ok(source.includes("requestSingleInstanceLock"));
+  assert.ok(source.includes('status: "locked"'));
+  assert.ok(source.includes("app.exit(23)"));
+  // uses a hidden sandboxed window without node integration
+  assert.ok(source.includes("show: false"));
+  assert.ok(source.includes("sandbox: true"));
+  assert.ok(source.includes("nodeIntegration: false"));
+  // serves an inert file-protocol document and denies other requests and permissions
+  assert.ok(source.includes('protocol.handle("file"'));
+  assert.ok(source.includes('startsWith("file:")'));
+  assert.ok(source.includes("setPermissionRequestHandler"));
+  assert.ok(source.includes("callback(false)"));
+  // never enables remote debugging or disables the sandbox
+  assert.equal(source.includes("remote-debugging"), false);
+  assert.equal(source.includes("inspect"), false);
+  assert.equal(source.includes("--no-sandbox"), false);
+  // writes only targets passed via environment and restores failed keys
+  assert.ok(source.includes("OW_HARNESS_TARGETS_JSON"));
+  assert.ok(source.includes("restore-failed"));
+  assert.equal(buildHarnessPackageJson().includes("open-whispr-config-harness"), true);
+  // reads and writes every declared target key
+  assert.ok(source.includes("target.key"));
+  assert.ok(source.includes("readKey(target.key)"));
+  assert.ok(source.includes("setKey(target.key"));
+}
 
-  it("requires an absolute expected profile before anything else", () => {
-    assert.ok(source.includes("OW_HARNESS_PROFILE"));
-    assert.ok(source.includes("isAbsolute"));
-    assert.ok(source.includes("process.exit(90)"));
-  });
-
-  it("acquires the singleton lock and reports LOCKED on contention", () => {
-    assert.ok(source.includes("requestSingleInstanceLock"));
-    assert.ok(source.includes('status: "locked"'));
-    assert.ok(source.includes("app.exit(23)"));
-  });
-
-  it("uses a hidden sandboxed window without node integration", () => {
-    assert.ok(source.includes("show: false"));
-    assert.ok(source.includes("sandbox: true"));
-    assert.ok(source.includes("nodeIntegration: false"));
-  });
-
-  it("serves an inert file-protocol document and denies other requests and permissions", () => {
-    assert.ok(source.includes('protocol.handle("file"'));
-    assert.ok(source.includes('startsWith("file:")'));
-    assert.ok(source.includes("setPermissionRequestHandler"));
-    assert.ok(source.includes("callback(false)"));
-  });
-
-  it("never enables remote debugging or disables the sandbox", () => {
-    assert.equal(source.includes("remote-debugging"), false);
-    assert.equal(source.includes("inspect"), false);
-    assert.equal(source.includes("--no-sandbox"), false);
-  });
-
-  it("writes only targets passed via environment and restores failed keys", () => {
-    assert.ok(source.includes("OW_HARNESS_TARGETS_JSON"));
-    assert.ok(source.includes("restore-failed"));
-    assert.equal(buildHarnessPackageJson().includes("open-whispr-config-harness"), true);
-  });
-
-  it("reads and writes every declared target key", () => {
-    assert.ok(source.includes("target.key"));
-    assert.ok(source.includes("readKey(target.key)"));
-    assert.ok(source.includes("setKey(target.key"));
-  });
-});
-
-describe("storage failure recovery in the generated harness", () => {
+async function verifyStorageRecovery(): Promise<void> {
   for (const failure of [
     "registration",
     "verification",
@@ -313,21 +300,24 @@ describe("storage failure recovery in the generated harness", () => {
     "window-destroy",
     "app-quit",
   ] as const) {
-    it(`keeps registration and cleanup consistent for ${failure}`, async () => {
-      const before = new Map([
-        ["first", "old-first"],
-        ["second", "old-second"],
-      ]);
-      const storage = new Map(before);
-      const reads = new Map<string, number>();
-      let injected = false;
-      let payload: { status: string; restoreFailed: string[]; detail?: string } | undefined;
-      let flushCount = 0;
-      const db = new FixtureDatabase(":memory:");
+    // keeps registration and cleanup consistent for ${failure}
+    const before = new Map([
+      ["first", "old-first"],
+      ["second", "old-second"],
+    ]);
+    const storage = new Map(before);
+    const reads = new Map<string, number>();
+    let injected = false;
+    let payload: { status: string; restoreFailed: string[]; detail?: string } | undefined;
+    let flushCount = 0;
+    const db = new FixtureDatabase(":memory:");
+    const databaseClose = db.close.bind(db);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
       db.exec(
         "CREATE TABLE custom_dictionary (word TEXT); INSERT INTO custom_dictionary VALUES ('Existing')",
       );
-      const databaseClose = db.close.bind(db);
+
       let closedWords: unknown[] = [];
       db.close = function () {
         closedWords = db.query("SELECT word FROM custom_dictionary ORDER BY rowid").all();
@@ -373,6 +363,10 @@ describe("storage failure recovery in the generated harness", () => {
       };
       const nodeRequire = createRequire(import.meta.url);
       await new Promise<void>((resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`storage recovery fixture timed out: ${failure}`)),
+          fixtureTimeoutMs,
+        );
         const electron = {
           app: {
             setPath() {},
@@ -472,9 +466,12 @@ describe("storage failure recovery in the generated harness", () => {
         if (failure === "window-destroy" || failure === "app-quit")
           assert.match(payload.detail ?? "", /harness shutdown failed/);
       }
-    });
+    } finally {
+      clearTimeout(timeout);
+      databaseClose();
+    }
   }
-});
+}
 
 function buildAsarFixture(packageName: string): Buffer {
   const packageJson = Buffer.from(JSON.stringify({ name: packageName, version: "9.9.9" }), "utf8");
@@ -501,17 +498,19 @@ function buildAsarFixture(packageName: string): Buffer {
   return Buffer.concat([header, packageJson]);
 }
 
-describe("asar package identity", () => {
-  it("extracts the package name from an asar archive", () => {
+function verifyAsarIdentity(): void {
+  // extracts the package name from an asar archive
+  {
     const asar = buildAsarFixture("open-whispr-fixture");
     assert.equal(parseAsarPackageName(asar), "open-whispr-fixture");
-  });
-
-  it("rejects malformed asar bytes", () => {
-    expectHookError(() => parseAsarPackageName(Buffer.from([1, 2, 3])), "INVALID_INPUT");
-  });
-
-  it("rejects an asar without a package.json entry", () => {
+  }
+  // rejects malformed asar bytes
+  assert.throws(
+    () => parseAsarPackageName(Buffer.from([1, 2, 3])),
+    (error: unknown) => error instanceof HookError && error.code === "INVALID_INPUT",
+  );
+  // rejects an asar without a package.json entry
+  {
     const json = Buffer.from(JSON.stringify({ files: {} }), "utf8");
     const header = Buffer.alloc(16 + json.length);
     header.writeUInt32LE(4, 0);
@@ -519,29 +518,35 @@ describe("asar package identity", () => {
     header.writeUInt32LE(4 + json.length, 8);
     header.writeUInt32LE(json.length, 12);
     header.write(JSON.stringify({ files: {} }), 16, "utf8");
-    expectHookError(() => parseAsarPackageName(Buffer.concat([header, json])), "INVALID_INPUT");
-  });
-});
+    assert.throws(
+      () => parseAsarPackageName(Buffer.concat([header, json])),
+      (error: unknown) => error instanceof HookError && error.code === "INVALID_INPUT",
+    );
+  }
+}
 
-describe("hook lock and recovery record", () => {
-  it("excludes concurrent registration runs for the same profile", async () => {
-    const profileDir = join(tmpdir(), `openwhispr-lock-fixture-${Date.now()}`);
-    const release = await acquireHookLock(profileDir, 300);
-    try {
-      await assert.rejects(
-        acquireHookLock(profileDir, 300),
-        (error: unknown) => error instanceof HookError && error.code === "LOCKED",
-      );
-    } finally {
-      await release();
+async function verifyHookLockAndRecovery(): Promise<void> {
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "openwhispr-checks-"));
+  try {
+    // excludes concurrent registration runs for the same profile
+    {
+      const profileDir = join(fixtureRoot, "lock");
+      const release = await acquireHookLock(profileDir, 300);
+      try {
+        await assert.rejects(
+          acquireHookLock(profileDir, 300),
+          (error: unknown) => error instanceof HookError && error.code === "LOCKED",
+        );
+      } finally {
+        await release();
+      }
+      const releaseAgain = await acquireHookLock(profileDir, 300);
+      await releaseAgain();
     }
-    const releaseAgain = await acquireHookLock(profileDir, 300);
-    await releaseAgain();
-  });
+    // writes and clears a recovery record
+    {
+      const profileDir = join(fixtureRoot, "recovery");
 
-  it("writes and clears a recovery record", async () => {
-    const profileDir = join(tmpdir(), `openwhispr-recovery-fixture-${Date.now()}`);
-    await (async () => {
       const { writeRecoveryRecord } = await import("./manage-config.apply.ts");
       await writeRecoveryRecord(profileDir, {
         phase: "verify",
@@ -557,12 +562,11 @@ describe("hook lock and recovery record", () => {
       assert.ok(existsSync(recoveryRecordPath(profileDir)));
       await clearRecoveryRecord(profileDir);
       assert.equal(existsSync(recoveryRecordPath(profileDir)), false);
-    })();
-  });
-});
-
-const e2eEnabled = process.env.OPENWHISPR_E2E === "1";
-const maybeIt = e2eEnabled ? it : it.skip;
+    }
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+}
 
 type StatusLine = { status: string; code: string; keysSha256: string };
 
@@ -578,8 +582,9 @@ function parseStatusLine(stdout: string): StatusLine {
   };
 }
 
-describe("config registration with an uninitialized profile", () => {
-  const fixtureRoots: string[] = [];
+async function verifyUninitializedProfiles(): Promise<void> {
+  const cacheDir = mkdtempSync(join(tmpdir(), "openwhispr-check-cache-"));
+  const fixtureRoots = [cacheDir];
   const fixtureYaml = [
     "keys:",
     "  - key: customPrompt.cleanup",
@@ -591,7 +596,6 @@ describe("config registration with an uninitialized profile", () => {
     '    value: "false"',
     "",
   ].join("\n");
-
   function createFixture() {
     const root = mkdtempSync(join(tmpdir(), "openwhispr-uninitialized-"));
     fixtureRoots.push(root);
@@ -611,6 +615,7 @@ describe("config registration with an uninitialized profile", () => {
       APPDATA: root,
       LOCALAPPDATA: root,
       BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+      BUN_INSTALL_CACHE_DIR: cacheDir,
       OPENWHISPR_E2E: "1",
       OPENWHISPR_E2E_MANAGED_KEYS: keysDir,
       OPENWHISPR_E2E_PROFILE: profileDir,
@@ -618,7 +623,6 @@ describe("config registration with an uninitialized profile", () => {
     };
     return { root, appDir, profileDir, keysDir, platform, env };
   }
-
   function snapshot(root: string) {
     return readdirSync(root, { recursive: true, encoding: "utf8" })
       .sort()
@@ -627,7 +631,6 @@ describe("config registration with an uninitialized profile", () => {
         return [entry, statSync(path).isDirectory() ? null : readFileSync(path).toString("hex")];
       });
   }
-
   function runtimeEntries() {
     return readdirSync(tmpdir())
       .filter((entry) =>
@@ -636,12 +639,9 @@ describe("config registration with an uninitialized profile", () => {
       .sort();
   }
 
-  afterAll(() => {
-    for (const root of fixtureRoots) rmSync(root, { recursive: true, force: true });
-  });
-
-  for (const profileState of ["missing", "unrecognized-files"] as const) {
-    it(`skips a ${profileState} profile without creating runtime or changing files`, async () => {
+  try {
+    for (const profileState of ["missing", "unrecognized-files"] as const) {
+      // skips a ${profileState} profile without creating runtime or changing files
       const fixture = createFixture();
       if (profileState === "unrecognized-files") {
         mkdirSync(fixture.profileDir);
@@ -672,51 +672,52 @@ describe("config registration with an uninitialized profile", () => {
         ),
         false,
       );
-    });
-  }
-
-  it("validates and hashes dictionary declarations before an unchanged-profile skip", async () => {
-    const fixture = createFixture();
-    const declaration = join(fixture.keysDir, MANAGED_KEYS_FILE);
-    writeFileSync(declaration, fixtureYaml + '\ndictionary: ["Bun", "日本語句"]\n');
-    const before = snapshot(fixture.root);
-    const config = loadManagedConfig(fixture.keysDir);
-    const outcome = await manageConfig(fixture);
-    assert.equal(outcome.status, "skipped");
-    assert.equal(outcome.keysSha256, managedKeysSha256(config.keys, config.dictionary));
-    assert.deepEqual(snapshot(fixture.root), before);
-  });
-
-  it("rejects invalid dictionary data even when the profile is unrecognized", async () => {
-    const fixture = createFixture();
-    writeFileSync(join(fixture.keysDir, MANAGED_KEYS_FILE), fixtureYaml + "\ndictionary: [123]\n");
-    const before = snapshot(fixture.root);
-    const outcome = await manageConfig(fixture);
-    assert.equal(outcome.code, "INVALID_INPUT");
-    assert.equal(outcome.keysSha256, null);
-    assert.deepEqual(snapshot(fixture.root), before);
-  });
-
-  it("skips without waiting for or releasing an existing hook lock", async () => {
-    const fixture = createFixture();
-    const release = await acquireHookLock(fixture.profileDir, 300);
-    const lockPath = join(
-      tmpdir(),
-      `openwhispr-manage-config-${sha256Hex(fixture.profileDir).slice(0, 16)}.lock`,
-    );
-    const lockBefore = statSync(lockPath);
-    try {
+    }
+    // validates and hashes dictionary declarations before an unchanged-profile skip
+    {
+      const fixture = createFixture();
+      const declaration = join(fixture.keysDir, MANAGED_KEYS_FILE);
+      writeFileSync(declaration, fixtureYaml + '\ndictionary: ["Bun", "日本語句"]\n');
+      const before = snapshot(fixture.root);
+      const config = loadManagedConfig(fixture.keysDir);
       const outcome = await manageConfig(fixture);
       assert.equal(outcome.status, "skipped");
-      assert.equal(outcome.code, "OK");
-      assert.equal(statSync(lockPath).mtimeMs, lockBefore.mtimeMs);
-    } finally {
-      await release();
+      assert.equal(outcome.keysSha256, managedKeysSha256(config.keys, config.dictionary));
+      assert.deepEqual(snapshot(fixture.root), before);
     }
-  });
-
-  for (const invalidDeclaration of ["missing", "blank-value", "nul-value", "badyaml"] as const) {
-    it(`rejects a ${invalidDeclaration} managed keys file before skipping`, async () => {
+    // rejects invalid dictionary data even when the profile is unrecognized
+    {
+      const fixture = createFixture();
+      writeFileSync(
+        join(fixture.keysDir, MANAGED_KEYS_FILE),
+        fixtureYaml + "\ndictionary: [123]\n",
+      );
+      const before = snapshot(fixture.root);
+      const outcome = await manageConfig(fixture);
+      assert.equal(outcome.code, "INVALID_INPUT");
+      assert.equal(outcome.keysSha256, null);
+      assert.deepEqual(snapshot(fixture.root), before);
+    }
+    // skips without waiting for or releasing an existing hook lock
+    {
+      const fixture = createFixture();
+      const release = await acquireHookLock(fixture.profileDir, 300);
+      const lockPath = join(
+        tmpdir(),
+        `openwhispr-manage-config-${sha256Hex(fixture.profileDir).slice(0, 16)}.lock`,
+      );
+      const lockBefore = statSync(lockPath);
+      try {
+        const outcome = await manageConfig(fixture);
+        assert.equal(outcome.status, "skipped");
+        assert.equal(outcome.code, "OK");
+        assert.equal(statSync(lockPath).mtimeMs, lockBefore.mtimeMs);
+      } finally {
+        await release();
+      }
+    }
+    for (const invalidDeclaration of ["missing", "blank-value", "nul-value", "badyaml"] as const) {
+      // rejects a ${invalidDeclaration} managed keys file before skipping
       const fixture = createFixture();
       const invalidYaml = {
         "blank-value": 'keys:\n  - key: a\n    value: " \\n"\n',
@@ -738,11 +739,9 @@ describe("config registration with an uninitialized profile", () => {
       assert.equal(outcome.keysSha256, null);
       assert.match(outcome.detail ?? "", /managed key/);
       assert.deepEqual(snapshot(fixture.root), before);
-    });
-  }
-
-  for (const invalidApp of ["missing", "malformed", "wrong-name"] as const) {
-    it(`rejects a ${invalidApp} app before skipping`, async () => {
+    }
+    for (const invalidApp of ["missing", "malformed", "wrong-name"] as const) {
+      // rejects a ${invalidApp} app before skipping
       const fixture = createFixture();
       const asarPath = join(fixture.appDir, "resources", "app.asar");
       if (invalidApp === "missing") rmSync(fixture.appDir, { recursive: true });
@@ -758,11 +757,9 @@ describe("config registration with an uninitialized profile", () => {
       assert.equal(outcome.keysSha256, managedKeysSha256(loadManagedKeys(fixture.keysDir)));
       assert.match(outcome.detail ?? "", /installed app/);
       assert.deepEqual(snapshot(fixture.root), before);
-    });
-  }
-
-  for (const marker of ["Preferences", "Local Storage"] as const) {
-    it(`does not skip a profile recognized by ${marker}`, async () => {
+    }
+    for (const marker of ["Preferences", "Local Storage"] as const) {
+      // does not skip a profile recognized by ${marker}
       const fixture = createFixture();
       mkdirSync(fixture.profileDir);
       if (marker === "Preferences") writeFileSync(join(fixture.profileDir, marker), "{}");
@@ -776,60 +773,66 @@ describe("config registration with an uninitialized profile", () => {
       assert.equal(outcome.code, "INVALID_INPUT");
       assert.match(outcome.detail ?? "", /installed app binary is missing/);
       assert.deepEqual(snapshot(fixture.root), before);
-    });
+    }
+    // returns CLI exit 0 with plain stdout detail and empty stderr
+    {
+      const fixture = createFixture();
+      const before = snapshot(fixture.root);
+      const runtimesBefore = runtimeEntries();
+      const child = Bun.spawn([process.execPath, hookScriptPath], {
+        env: fixture.env,
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: fixtureTimeoutMs,
+        killSignal: "SIGKILL",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      assert.equal(exitCode, 0);
+      assert.deepEqual(parseStatusLine(stdout), {
+        status: "skipped",
+        code: "OK",
+        keysSha256: managedKeysSha256(loadManagedKeys(fixture.keysDir)),
+      });
+      assert.match(stdout, /launch and quit OpenWhispr, then run apply again/);
+      assert.ok(stdout.includes(fixture.profileDir));
+      assert.equal(stdout.includes("\u001b"), false);
+      assert.equal(stderr, "");
+      assert.deepEqual(snapshot(fixture.root), before);
+      assert.deepEqual(runtimeEntries(), runtimesBefore);
+    }
+    // keeps CLI input errors on stderr with exit 2
+    {
+      const fixture = createFixture();
+      rmSync(join(fixture.keysDir, MANAGED_KEYS_FILE));
+      const before = snapshot(fixture.root);
+      const child = Bun.spawn([process.execPath, hookScriptPath], {
+        env: fixture.env,
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: fixtureTimeoutMs,
+        killSignal: "SIGKILL",
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      assert.equal(exitCode, 2);
+      assert.equal(stdout, "status=error code=INVALID_INPUT keys_sha256=-\n");
+      assert.match(stderr, /managed keys file is missing/);
+      assert.ok(stderr.includes(join(fixture.keysDir, MANAGED_KEYS_FILE)));
+      assert.deepEqual(snapshot(fixture.root), before);
+    }
+  } finally {
+    for (const root of fixtureRoots) rmSync(root, { recursive: true, force: true });
   }
+}
 
-  it("returns CLI exit 0 with plain stdout detail and empty stderr", async () => {
-    const fixture = createFixture();
-    const before = snapshot(fixture.root);
-    const runtimesBefore = runtimeEntries();
-    const child = Bun.spawn([process.execPath, hookScriptPath], {
-      env: fixture.env,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [exitCode, stdout, stderr] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ]);
-    assert.equal(exitCode, 0);
-    assert.deepEqual(parseStatusLine(stdout), {
-      status: "skipped",
-      code: "OK",
-      keysSha256: managedKeysSha256(loadManagedKeys(fixture.keysDir)),
-    });
-    assert.match(stdout, /launch and quit OpenWhispr, then run apply again/);
-    assert.ok(stdout.includes(fixture.profileDir));
-    assert.equal(stdout.includes("\u001b"), false);
-    assert.equal(stderr, "");
-    assert.deepEqual(snapshot(fixture.root), before);
-    assert.deepEqual(runtimeEntries(), runtimesBefore);
-  });
-
-  it("keeps CLI input errors on stderr with exit 2", async () => {
-    const fixture = createFixture();
-    rmSync(join(fixture.keysDir, MANAGED_KEYS_FILE));
-    const before = snapshot(fixture.root);
-    const child = Bun.spawn([process.execPath, hookScriptPath], {
-      env: fixture.env,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [exitCode, stdout, stderr] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ]);
-    assert.equal(exitCode, 2);
-    assert.equal(stdout, "status=error code=INVALID_INPUT keys_sha256=-\n");
-    assert.match(stderr, /managed keys file is missing/);
-    assert.ok(stderr.includes(join(fixture.keysDir, MANAGED_KEYS_FILE)));
-    assert.deepEqual(snapshot(fixture.root), before);
-  });
-});
-
-describe("e2e with the installed Electron runtime", () => {
+async function verifyInstalledRuntime(): Promise<void> {
   const e2ePlatform = process.platform === "win32" ? ("win32" as const) : ("linux" as const);
   const e2eAppDir =
     e2ePlatform === "win32"
@@ -861,40 +864,44 @@ describe("e2e with the installed Electron runtime", () => {
   let runtimeDir = "";
   let holdChild: ChildProcess | null = null;
   let holdCleanup: (() => Promise<void>) | null = null;
-
-  const harnessEnv = (): Record<string, string | undefined> => {
+  function harnessEnv(): Record<string, string | undefined> {
     const env: Record<string, string | undefined> = { ...process.env };
     delete env.DISPLAY;
     delete env.WAYLAND_DISPLAY;
     return env;
-  };
-
-  const hookEnv = (overrides: Record<string, string>): Record<string, string> => ({
-    PATH: process.env.PATH ?? "",
-    HOME: "/tmp",
-    OPENWHISPR_E2E: "1",
-    ...(e2ePlatform === "win32"
-      ? {
-          APPDATA: process.env.APPDATA ?? "",
-          LOCALAPPDATA: process.env.LOCALAPPDATA ?? "",
-          SystemRoot: process.env.SystemRoot ?? "C:\\Windows",
-          TEMP: process.env.TEMP ?? "",
-          TMP: process.env.TMP ?? "",
-        }
-      : {}),
-    ...overrides,
-  });
-
-  const hookOverrides = (extra: Record<string, string>): Record<string, string> => ({
-    OPENWHISPR_E2E_APP_DIR: e2eAppDir,
-    ...extra,
-  });
-
+  }
+  function hookEnv(overrides: Record<string, string>): Record<string, string> {
+    return {
+      PATH: process.env.PATH ?? "",
+      HOME: "/tmp",
+      OPENWHISPR_E2E: "1",
+      ...(e2ePlatform === "win32"
+        ? {
+            APPDATA: process.env.APPDATA ?? "",
+            LOCALAPPDATA: process.env.LOCALAPPDATA ?? "",
+            SystemRoot: process.env.SystemRoot ?? "C:\\Windows",
+            TEMP: process.env.TEMP ?? "",
+            TMP: process.env.TMP ?? "",
+          }
+        : {}),
+      ...overrides,
+    };
+  }
+  function hookOverrides(extra: Record<string, string>): Record<string, string> {
+    return {
+      OPENWHISPR_E2E_APP_DIR: e2eAppDir,
+      ...extra,
+    };
+  }
   async function runHookScript(
     overrides: Record<string, string>,
   ): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
     return await new Promise((resolve) => {
-      const child = spawn("bun", [hookScriptPath], { env: hookEnv(overrides) });
+      const child = spawn("bun", [hookScriptPath], {
+        env: hookEnv(overrides),
+        timeout: e2eHookTimeoutMs,
+        killSignal: "SIGKILL",
+      });
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
@@ -903,8 +910,7 @@ describe("e2e with the installed Electron runtime", () => {
       child.on("close", (exitCode) => resolve({ exitCode, stdout, stderr }));
     });
   }
-
-  async function startHoldHelper(): Promise<void> {
+  async function startHoldHelper(): Promise<ChildProcess | null> {
     const run = await runHarnessMode({
       mode: "hold",
       runtimeDir,
@@ -922,8 +928,8 @@ describe("e2e with the installed Electron runtime", () => {
     );
     holdChild = run.child;
     holdCleanup = run.cleanup;
+    return run.child;
   }
-
   async function stopHoldHelper(): Promise<void> {
     const child = holdChild;
     holdChild = null;
@@ -943,7 +949,6 @@ describe("e2e with the installed Electron runtime", () => {
     await holdCleanup?.();
     holdCleanup = null;
   }
-
   async function seedProfile(): Promise<void> {
     const run = await runHarnessMode({
       mode: "seed",
@@ -960,7 +965,6 @@ describe("e2e with the installed Electron runtime", () => {
     });
     assert.equal(run.outcome.kind, "ok", `seed run failed: ${JSON.stringify(run.outcome)}`);
   }
-
   async function dumpStorage(): Promise<Record<string, string>> {
     const run = await runHarnessMode({
       mode: "dump",
@@ -974,9 +978,7 @@ describe("e2e with the installed Electron runtime", () => {
     assert.equal(run.outcome.kind, "ok", `dump run failed: ${JSON.stringify(run.outcome)}`);
     return run.outcome.kind === "ok" ? (run.outcome.payload.storage ?? {}) : {};
   }
-
-  beforeAll(async () => {
-    if (!e2eEnabled) return;
+  try {
     e2eRoot = mkdtempSync(join(tmpdir(), "openwhispr-hook-e2e-"));
     keysDir = join(e2eRoot, "keys");
     mkdirSync(keysDir, { recursive: true });
@@ -985,16 +987,9 @@ describe("e2e with the installed Electron runtime", () => {
     const { ensureShadowRuntime } = await import("./manage-config.apply.ts");
     runtimeDir = await ensureShadowRuntime(e2eAppDir, e2ePlatform);
     await seedProfile();
-  }, 120_000);
 
-  afterAll(async () => {
-    if (!e2eEnabled) return;
-    await stopHoldHelper();
-  });
-
-  maybeIt(
-    "applies the managed keys with unicode fidelity and preserves unrelated keys",
-    async () => {
+    // applies the managed keys with unicode fidelity and preserves unrelated keys
+    {
       await seedProfile();
       const result = await runHookScript(
         hookOverrides({
@@ -1011,13 +1006,9 @@ describe("e2e with the installed Electron runtime", () => {
       assert.equal(storage.useDictationAgent, "false");
       assert.equal(storage.model, "preserve-fixture-model");
       assert.equal(storage.otherPrompt, "preserve-fixture-prompt");
-    },
-    180_000,
-  );
-
-  maybeIt(
-    "is unchanged on an idempotent second run",
-    async () => {
+    }
+    // is unchanged on an idempotent second run
+    {
       const result = await runHookScript(
         hookOverrides({
           OPENWHISPR_E2E_MANAGED_KEYS: keysDir,
@@ -1027,15 +1018,11 @@ describe("e2e with the installed Electron runtime", () => {
       const status = parseStatusLine(result.stdout);
       assert.deepEqual([status.status, status.code], ["unchanged", "OK"], result.stderr);
       assert.equal(result.exitCode, 0);
-    },
-    120_000,
-  );
-
-  maybeIt(
-    "aborts with LOCKED before writing when the singleton lock is held",
-    async () => {
+    }
+    // aborts with LOCKED before writing when the singleton lock is held
+    {
       await seedProfile();
-      await startHoldHelper();
+      const holdChild = await startHoldHelper();
       try {
         const result = await runHookScript(
           hookOverrides({
@@ -1067,23 +1054,19 @@ describe("e2e with the installed Electron runtime", () => {
         },
         { ...seededValues, model: "preserve-fixture-model" },
       );
-    },
-    180_000,
-  );
-
-  function declareDictionary(words: string[]): void {
-    writeFileSync(
-      join(keysDir, MANAGED_KEYS_FILE),
-      e2eYaml + "\ndictionary: " + JSON.stringify(words),
-    );
-  }
-
-  function createDictionaryFixture(): void {
-    for (const suffix of ["", "-wal", "-shm"])
-      rmSync(join(profileDir, "transcriptions.db" + suffix), { force: true });
-    const db = new FixtureDatabase(join(profileDir, "transcriptions.db"));
-    try {
-      db.exec(`
+    }
+    function declareDictionary(words: string[]): void {
+      writeFileSync(
+        join(keysDir, MANAGED_KEYS_FILE),
+        e2eYaml + "\ndictionary: " + JSON.stringify(words),
+      );
+    }
+    function createDictionaryFixture(): void {
+      for (const suffix of ["", "-wal", "-shm"])
+        rmSync(join(profileDir, "transcriptions.db" + suffix), { force: true });
+      const db = new FixtureDatabase(join(profileDir, "transcriptions.db"));
+      try {
+        db.exec(`
         CREATE TABLE custom_dictionary (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           word TEXT NOT NULL UNIQUE,
@@ -1108,16 +1091,15 @@ describe("e2e with the installed Electron runtime", () => {
         CREATE TABLE snippets (trigger TEXT, replacement TEXT);
         INSERT INTO snippets VALUES ('owner snippet', 'preserve me');
       `);
-    } finally {
-      db.close();
+      } finally {
+        db.close();
+      }
     }
-  }
-
-  function createLegacyDictionaryFixture(): void {
-    createDictionaryFixture();
-    const db = new FixtureDatabase(join(profileDir, "transcriptions.db"));
-    try {
-      db.exec(`
+    function createLegacyDictionaryFixture(): void {
+      createDictionaryFixture();
+      const db = new FixtureDatabase(join(profileDir, "transcriptions.db"));
+      try {
+        db.exec(`
         ALTER TABLE custom_dictionary DROP COLUMN shared_at;
         ALTER TABLE custom_dictionary DROP COLUMN shared_at_dirty;
         ALTER TABLE custom_dictionary DROP COLUMN fallback_retired;
@@ -1136,46 +1118,42 @@ describe("e2e with the installed Electron runtime", () => {
         INSERT INTO snippets (trigger, replacement, client_snippet_id)
         VALUES ('owner snippet', 'preserve me', 'owner-snippet');
       `);
-    } finally {
-      db.close();
+      } finally {
+        db.close();
+      }
     }
-  }
-
-  function dictionarySnapshot() {
-    const db = new FixtureDatabase(join(profileDir, "transcriptions.db"), { readonly: true });
-    try {
-      return {
-        rows: db.query("SELECT * FROM custom_dictionary ORDER BY id").all() as Array<{
-          word: string;
-          deleted_at: string | null;
-          source: string;
-          sync_status: string;
-          client_dict_id: string;
-          cloud_id: string | null;
-          shared_at: string | null;
-          shared_at_dirty: number;
-          fallback_retired: number;
-        }>,
-        schema: db.query("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").all(),
-        snippets: db.query("SELECT * FROM snippets").all(),
-      };
-    } finally {
-      db.close();
+    function dictionarySnapshot() {
+      const db = new FixtureDatabase(join(profileDir, "transcriptions.db"), { readonly: true });
+      try {
+        return {
+          rows: db.query("SELECT * FROM custom_dictionary ORDER BY id").all() as Array<{
+            word: string;
+            deleted_at: string | null;
+            source: string;
+            sync_status: string;
+            client_dict_id: string;
+            cloud_id: string | null;
+            shared_at: string | null;
+            shared_at_dirty: number;
+            fallback_retired: number;
+          }>,
+          schema: db.query("SELECT type, name, sql FROM sqlite_master ORDER BY type, name").all(),
+          snippets: db.query("SELECT * FROM snippets").all(),
+        };
+      } finally {
+        db.close();
+      }
     }
-  }
-
-  async function runDeclaredHook() {
-    return await runHookScript(
-      hookOverrides({
-        OPENWHISPR_E2E_MANAGED_KEYS: keysDir,
-        OPENWHISPR_E2E_PROFILE: profileDir,
-      }),
-    );
-  }
-
-  maybeIt(
-    "adds all approved dictionary words without changing existing attributes or other tables",
-    async () => {
+    async function runDeclaredHook() {
+      return await runHookScript(
+        hookOverrides({
+          OPENWHISPR_E2E_MANAGED_KEYS: keysDir,
+          OPENWHISPR_E2E_PROFILE: profileDir,
+        }),
+      );
+    }
+    // adds all approved dictionary words without changing existing attributes or other tables
+    {
       await seedProfile();
       createDictionaryFixture();
       const words = loadManagedConfig(import.meta.dir).dictionary;
@@ -1224,13 +1202,9 @@ describe("e2e with the installed Electron runtime", () => {
       assert.equal(second.exitCode, 0, second.stderr);
       assert.equal(parseStatusLine(second.stdout).status, "unchanged");
       assert.deepEqual(dictionarySnapshot(), after);
-    },
-    180_000,
-  );
-
-  maybeIt(
-    "reports applied when only dictionary additions are needed",
-    async () => {
+    }
+    // reports applied when only dictionary additions are needed
+    {
       createDictionaryFixture();
       declareDictionary(["pi", "日本語句", " 日本語句 "]);
       const storageBefore = await dumpStorage();
@@ -1242,18 +1216,14 @@ describe("e2e with the installed Electron runtime", () => {
         dictionarySnapshot().rows.map((row) => row.word),
         ["PI", "owner-only", "Godot", "日本語句"],
       );
-    },
-    180_000,
-  );
-
-  maybeIt(
-    "keeps the legacy dictionary and storage unchanged while the app singleton is locked",
-    async () => {
+    }
+    // keeps the legacy dictionary and storage unchanged while the app singleton is locked
+    {
       await seedProfile();
       createLegacyDictionaryFixture();
       declareDictionary(["new-locked-word"]);
       const before = dictionarySnapshot();
-      await startHoldHelper();
+      const holdChild = await startHoldHelper();
       try {
         const result = await runDeclaredHook();
         assert.equal(result.exitCode, 3, result.stderr);
@@ -1267,49 +1237,39 @@ describe("e2e with the installed Electron runtime", () => {
         (await dumpStorage())["customPrompt.cleanup"],
         seededValues["customPrompt.cleanup"],
       );
-    },
-    180_000,
-  );
-
-  for (const failure of ["registration", "verification"] as const) {
-    maybeIt(
-      `restores all changed storage and dictionary rows after a ${failure} failure`,
-      async () => {
-        await seedProfile();
-        createDictionaryFixture();
-        declareDictionary(["first-added-word", "failed-word"]);
-        const db = new FixtureDatabase(join(profileDir, "transcriptions.db"));
-        try {
-          db.exec(
-            failure === "registration"
-              ? "CREATE TRIGGER fail_registration BEFORE INSERT ON custom_dictionary WHEN NEW.word = 'failed-word' BEGIN SELECT RAISE(ABORT, 'fixture registration failure'); END"
-              : "CREATE TRIGGER fail_verification BEFORE INSERT ON custom_dictionary WHEN NEW.word = 'failed-word' BEGIN SELECT RAISE(IGNORE); END",
-          );
-        } finally {
-          db.close();
-        }
-        const before = dictionarySnapshot();
-        const storageBefore = await dumpStorage();
-        const result = await runDeclaredHook();
-        assert.equal(result.exitCode, 5, result.stderr);
-        assert.equal(parseStatusLine(result.stdout).code, "APPLY_FAILED");
-        assert.match(
-          result.stderr,
+    }
+    for (const failure of ["registration", "verification"] as const) {
+      // restores all changed storage and dictionary rows after a ${failure} failure
+      await seedProfile();
+      createDictionaryFixture();
+      declareDictionary(["first-added-word", "failed-word"]);
+      const db = new FixtureDatabase(join(profileDir, "transcriptions.db"));
+      try {
+        db.exec(
           failure === "registration"
-            ? /fixture registration failure/
-            : /dictionary verification failed/,
+            ? "CREATE TRIGGER fail_registration BEFORE INSERT ON custom_dictionary WHEN NEW.word = 'failed-word' BEGIN SELECT RAISE(ABORT, 'fixture registration failure'); END"
+            : "CREATE TRIGGER fail_verification BEFORE INSERT ON custom_dictionary WHEN NEW.word = 'failed-word' BEGIN SELECT RAISE(IGNORE); END",
         );
-        assert.deepEqual(dictionarySnapshot(), before);
-        assert.deepEqual(await dumpStorage(), storageBefore);
-        assert.equal(existsSync(recoveryRecordPath(profileDir)), false);
-      },
-      180_000,
-    );
-  }
-
-  maybeIt(
-    "fails without initializing a missing dictionary DB or changing storage",
-    async () => {
+      } finally {
+        db.close();
+      }
+      const before = dictionarySnapshot();
+      const storageBefore = await dumpStorage();
+      const result = await runDeclaredHook();
+      assert.equal(result.exitCode, 5, result.stderr);
+      assert.equal(parseStatusLine(result.stdout).code, "APPLY_FAILED");
+      assert.match(
+        result.stderr,
+        failure === "registration"
+          ? /fixture registration failure/
+          : /dictionary verification failed/,
+      );
+      assert.deepEqual(dictionarySnapshot(), before);
+      assert.deepEqual(await dumpStorage(), storageBefore);
+      assert.equal(existsSync(recoveryRecordPath(profileDir)), false);
+    }
+    // fails without initializing a missing dictionary DB or changing storage
+    {
       await seedProfile();
       for (const suffix of ["", "-wal", "-shm"])
         rmSync(join(profileDir, "transcriptions.db" + suffix), { force: true });
@@ -1321,13 +1281,9 @@ describe("e2e with the installed Electron runtime", () => {
       assert.match(result.stderr, /database|SQLITE|open/i);
       assert.equal(existsSync(join(profileDir, "transcriptions.db")), false);
       assert.deepEqual(await dumpStorage(), before);
-    },
-    180_000,
-  );
-
-  maybeIt(
-    "migrates a legacy dictionary DB with the installed app and remains idempotent",
-    async () => {
+    }
+    // migrates a legacy dictionary DB with the installed app and remains idempotent
+    {
       await seedProfile();
       createLegacyDictionaryFixture();
       declareDictionary(["pi", "new-migrated-word"]);
@@ -1351,13 +1307,9 @@ describe("e2e with the installed Electron runtime", () => {
       assert.equal(second.exitCode, 0, second.stderr);
       assert.equal(parseStatusLine(second.stdout).status, "unchanged");
       assert.deepEqual(dictionarySnapshot(), after);
-    },
-    180_000,
-  );
-
-  maybeIt(
-    "preserves the existing DB inode and access controls during legacy migration",
-    async () => {
+    }
+    // preserves the existing DB inode and access controls during legacy migration
+    {
       await seedProfile();
       createLegacyDictionaryFixture();
       const dbPath = join(profileDir, "transcriptions.db");
@@ -1389,16 +1341,11 @@ describe("e2e with the installed Electron runtime", () => {
         [before.dev, before.ino, before.uid, before.gid, before.mode],
       );
       assert.ok(dictionarySnapshot().rows.some((row) => row.word === "preserve-access-controls"));
-    },
-    180_000,
-  );
-
-  for (const journalMode of ["DELETE", "WAL"]) {
-    maybeIt(
-      `rolls back an interrupted SQLite backup into an existing ${journalMode} DB`,
-      () => {
-        const backupDir = mkdtempSync(join(e2eRoot, "backup-interruption-"));
-        const script = `
+    }
+    for (const journalMode of ["DELETE", "WAL"]) {
+      // rolls back an interrupted SQLite backup into an existing ${journalMode} DB
+      const backupDir = mkdtempSync(join(e2eRoot, "backup-interruption-"));
+      const script = `
           const assert = require("node:assert/strict");
           const path = require("node:path");
           const SQLite = require(process.argv[1]);
@@ -1430,31 +1377,26 @@ describe("e2e with the installed Electron runtime", () => {
             }
           })().catch((error) => { console.error(error); process.exitCode = 1; });
         `;
-        const result = spawnSync(
-          join(runtimeDir, e2ePlatform === "win32" ? "electron.exe" : "electron"),
-          [
-            "-e",
-            script,
-            join(e2eAppDir, "resources", "app.asar", "node_modules", "better-sqlite3"),
-            backupDir,
-            journalMode,
-          ],
-          {
-            env: { ...hookEnv({}), ELECTRON_RUN_AS_NODE: "1", DISPLAY: "", WAYLAND_DISPLAY: "" },
-            encoding: "utf8",
-            timeout: 20_000,
-          },
-        );
-        assert.equal(result.status, 0, result.stderr);
-        assert.ok((JSON.parse(result.stdout) as { transferredPages: number }).transferredPages > 0);
-      },
-      30_000,
-    );
-  }
-
-  maybeIt(
-    "includes uncheckpointed WAL rows in legacy DB migration",
-    async () => {
+      const result = spawnSync(
+        join(runtimeDir, e2ePlatform === "win32" ? "electron.exe" : "electron"),
+        [
+          "-e",
+          script,
+          join(e2eAppDir, "resources", "app.asar", "node_modules", "better-sqlite3"),
+          backupDir,
+          journalMode,
+        ],
+        {
+          env: { ...hookEnv({}), ELECTRON_RUN_AS_NODE: "1", DISPLAY: "", WAYLAND_DISPLAY: "" },
+          encoding: "utf8",
+          timeout: 20_000,
+        },
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok((JSON.parse(result.stdout) as { transferredPages: number }).transferredPages > 0);
+    }
+    // includes uncheckpointed WAL rows in legacy DB migration
+    {
       await seedProfile();
       createLegacyDictionaryFixture();
       const dbPath = join(profileDir, "transcriptions.db");
@@ -1475,57 +1417,47 @@ describe("e2e with the installed Electron runtime", () => {
       const words = dictionarySnapshot().rows.map((row) => row.word);
       assert.ok(words.includes("wal-only-word"));
       assert.ok(words.includes("after-wal-migration"));
-    },
-    180_000,
-  );
-
-  for (const failure of ["migration", "registration", "verification"] as const) {
-    maybeIt(
-      `keeps the entire legacy DB and storage unchanged after a ${failure} failure`,
-      async () => {
-        await seedProfile();
-        createLegacyDictionaryFixture();
-        const dbPath = join(profileDir, "transcriptions.db");
-        const db = new FixtureDatabase(dbPath);
-        try {
-          if (failure === "migration")
-            db.exec("DROP TABLE snippets; CREATE TABLE snippets (trigger TEXT, replacement TEXT)");
-          else
-            db.exec(
-              failure === "registration"
-                ? "CREATE TRIGGER fail_registration BEFORE INSERT ON custom_dictionary WHEN NEW.word = 'failed-word' BEGIN SELECT RAISE(ABORT, 'fixture registration failure'); END"
-                : "CREATE TRIGGER fail_verification BEFORE INSERT ON custom_dictionary WHEN NEW.word = 'failed-word' BEGIN SELECT RAISE(IGNORE); END",
-            );
-        } finally {
-          db.close();
-        }
-        declareDictionary(["failed-word"]);
-        const before = readFileSync(dbPath);
-        const storageBefore = await dumpStorage();
-        const result = await runDeclaredHook();
-        assert.equal(result.exitCode, 5, result.stderr);
-        assert.match(
-          result.stderr,
-          failure === "migration"
-            ? /no such column: id/
-            : failure === "registration"
-              ? /fixture registration failure/
-              : /dictionary verification failed/,
-        );
-        assert.deepEqual(readFileSync(dbPath), before);
-        assert.deepEqual(await dumpStorage(), storageBefore);
-        assert.deepEqual(
-          readdirSync(profileDir).filter((name) => name.startsWith(".openwhispr-db-migration-")),
-          [],
-        );
-      },
-      180_000,
-    );
-  }
-
-  maybeIt(
-    "reports applied when migration is the only required change",
-    async () => {
+    }
+    for (const failure of ["migration", "registration", "verification"] as const) {
+      // keeps the entire legacy DB and storage unchanged after a ${failure} failure
+      await seedProfile();
+      createLegacyDictionaryFixture();
+      const dbPath = join(profileDir, "transcriptions.db");
+      const db = new FixtureDatabase(dbPath);
+      try {
+        if (failure === "migration")
+          db.exec("DROP TABLE snippets; CREATE TABLE snippets (trigger TEXT, replacement TEXT)");
+        else
+          db.exec(
+            failure === "registration"
+              ? "CREATE TRIGGER fail_registration BEFORE INSERT ON custom_dictionary WHEN NEW.word = 'failed-word' BEGIN SELECT RAISE(ABORT, 'fixture registration failure'); END"
+              : "CREATE TRIGGER fail_verification BEFORE INSERT ON custom_dictionary WHEN NEW.word = 'failed-word' BEGIN SELECT RAISE(IGNORE); END",
+          );
+      } finally {
+        db.close();
+      }
+      declareDictionary(["failed-word"]);
+      const before = readFileSync(dbPath);
+      const storageBefore = await dumpStorage();
+      const result = await runDeclaredHook();
+      assert.equal(result.exitCode, 5, result.stderr);
+      assert.match(
+        result.stderr,
+        failure === "migration"
+          ? /no such column: id/
+          : failure === "registration"
+            ? /fixture registration failure/
+            : /dictionary verification failed/,
+      );
+      assert.deepEqual(readFileSync(dbPath), before);
+      assert.deepEqual(await dumpStorage(), storageBefore);
+      assert.deepEqual(
+        readdirSync(profileDir).filter((name) => name.startsWith(".openwhispr-db-migration-")),
+        [],
+      );
+    }
+    // reports applied when migration is the only required change
+    {
       await seedProfile();
       writeFileSync(join(keysDir, MANAGED_KEYS_FILE), e2eYaml);
       assert.equal((await runDeclaredHook()).exitCode, 0);
@@ -1537,13 +1469,9 @@ describe("e2e with the installed Electron runtime", () => {
       assert.equal(parseStatusLine(result.stdout).status, "applied");
       assert.deepEqual(await dumpStorage(), storageBefore);
       assert.equal(dictionarySnapshot().rows.length, 3);
-    },
-    180_000,
-  );
-
-  maybeIt(
-    "refuses DB replacement while another SQLite connection keeps source sidecars",
-    async () => {
+    }
+    // refuses DB replacement while another SQLite connection keeps source sidecars
+    {
       await seedProfile();
       createLegacyDictionaryFixture();
       const dbPath = join(profileDir, "transcriptions.db");
@@ -1563,13 +1491,9 @@ describe("e2e with the installed Electron runtime", () => {
       } finally {
         reader.close();
       }
-    },
-    180_000,
-  );
-
-  maybeIt(
-    "fails without reporting success when a rollback-mode reader blocks DB promotion",
-    async () => {
+    }
+    // fails without reporting success when a rollback-mode reader blocks DB promotion
+    {
       await seedProfile();
       createLegacyDictionaryFixture();
       const dbPath = join(profileDir, "transcriptions.db");
@@ -1588,13 +1512,9 @@ describe("e2e with the installed Electron runtime", () => {
       } finally {
         reader.close();
       }
-    },
-    180_000,
-  );
-
-  maybeIt(
-    "does not initialize an existing empty DB",
-    async () => {
+    }
+    // does not initialize an existing empty DB
+    {
       await seedProfile();
       createDictionaryFixture();
       const dbPath = join(profileDir, "transcriptions.db");
@@ -1605,31 +1525,21 @@ describe("e2e with the installed Electron runtime", () => {
       assert.equal(result.exitCode, 5, result.stderr);
       assert.equal(statSync(dbPath).size, 0);
       assert.deepEqual(await dumpStorage(), storageBefore);
-    },
-    180_000,
-  );
-
-  for (const declaration of [undefined, [], ["", " ", "\t"]]) {
-    maybeIt(
-      `keeps storage-only registration independent of the DB for ${JSON.stringify(declaration)}`,
-      async () => {
-        await seedProfile();
-        for (const suffix of ["", "-wal", "-shm"])
-          rmSync(join(profileDir, "transcriptions.db" + suffix), { force: true });
-        if (declaration === undefined) writeFileSync(join(keysDir, MANAGED_KEYS_FILE), e2eYaml);
-        else declareDictionary(declaration);
-        const result = await runDeclaredHook();
-        assert.equal(result.exitCode, 0, result.stderr);
-        assert.equal(parseStatusLine(result.stdout).status, "applied");
-        assert.equal(existsSync(join(profileDir, "transcriptions.db")), false);
-      },
-      180_000,
-    );
-  }
-
-  maybeIt(
-    "rejects an invalid declaration without touching the profile",
-    async () => {
+    }
+    for (const declaration of [undefined, [], ["", " ", "\t"]]) {
+      // keeps storage-only registration independent of the DB for ${JSON.stringify(declaration)}
+      await seedProfile();
+      for (const suffix of ["", "-wal", "-shm"])
+        rmSync(join(profileDir, "transcriptions.db" + suffix), { force: true });
+      if (declaration === undefined) writeFileSync(join(keysDir, MANAGED_KEYS_FILE), e2eYaml);
+      else declareDictionary(declaration);
+      const result = await runDeclaredHook();
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(parseStatusLine(result.stdout).status, "applied");
+      assert.equal(existsSync(join(profileDir, "transcriptions.db")), false);
+    }
+    // rejects an invalid declaration without touching the profile
+    {
       const brokenKeysDir = join(e2eRoot, "broken-keys");
       mkdirSync(brokenKeysDir, { recursive: true });
       writeFileSync(join(brokenKeysDir, MANAGED_KEYS_FILE), "keys: [broken", "utf8");
@@ -1642,7 +1552,26 @@ describe("e2e with the installed Electron runtime", () => {
       const status = parseStatusLine(result.stdout);
       assert.deepEqual([status.status, status.code], ["error", "INVALID_INPUT"], result.stderr);
       assert.equal(result.exitCode, 2);
-    },
-    120_000,
-  );
-});
+    }
+  } finally {
+    await stopHoldHelper();
+    if (e2eRoot) rmSync(e2eRoot, { recursive: true, force: true });
+  }
+}
+
+verifyPaths();
+verifyManagedKeys();
+verifyDictionaryDeclarations();
+verifyStatusLines();
+verifyHarnessGuards();
+await verifyStorageRecovery();
+verifyAsarIdentity();
+await verifyHookLockAndRecovery();
+await verifyUninitializedProfiles();
+console.log("OpenWhispr config checks passed");
+if (process.env.OPENWHISPR_E2E === "1") {
+  await verifyInstalledRuntime();
+  console.log("OpenWhispr E2E checks passed");
+} else {
+  console.log("OpenWhispr E2E checks skipped (OPENWHISPR_E2E is not 1)");
+}

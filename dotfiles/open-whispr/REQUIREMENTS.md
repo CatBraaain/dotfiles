@@ -51,5 +51,5 @@ apply の実行で、`managed-keys.data.yaml` に宣言した localStorage キ�
 - 個人辞書には不足する宣言語だけが正規表記で追加され、アプリ既存の移行に伴う更新を除き、既存語の表記・属性・共有状態と宣言されていない語が保持される。再実行しても重複せず、storage と辞書の両方が宣言を満たすと `unchanged` になる
 - 辞書だけが不足する状態からも追加が行われ、`applied` になる。捕捉できる登録・検証失敗では、変更した storage と個人辞書が適用前の状態へ戻る
 - アプリ既存のDB移行を経て辞書登録できる。移行途中・登録・検証の失敗ではDB全体と storage が適用前の状態を保ち、再実行は冪等である
-- worktree で `bun test` と `OPENWHISPR_E2E=1 bun test` が通る
+- worktree の `dotfiles/open-whispr/` で `bun run manage-config.data.test.ts` が通る。実アプリを使う隔離検証は `OPENWHISPR_E2E=1 bun run manage-config.data.test.ts` で実行する
 - Linux・Windows の隔離環境で、実アプリ・実プロファイルに触れずに動作する
