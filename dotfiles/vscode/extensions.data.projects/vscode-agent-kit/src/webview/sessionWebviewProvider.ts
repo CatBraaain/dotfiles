@@ -623,6 +623,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     selection?: symbol,
   ): Promise<void> {
     const controller = new AbortController();
+    const present = this.deps.registry.preparePresentation();
     const cwd = this.sessionsById.get(sessionId)?.cwd;
     if (cwd !== undefined) this.pendingOpens.set(controller, cwd);
     try {
@@ -634,7 +635,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
           this.postError(`Session not found: ${sessionId}`);
           return;
         }
-        await this.openKnownSession(session, intent, controller.signal);
+        await this.openKnownSession(session, intent, controller.signal, present);
       });
     } finally {
       this.pendingOpens.delete(controller);
@@ -645,6 +646,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     session: SessionSummary,
     intent: "select" | "unarchive",
     signal: AbortSignal,
+    present: (terminal: vscode.Terminal) => void,
   ): Promise<void> {
     const previousSessionId = this.deps.registry.displayedSessionId;
     const { sessionId } = session;
@@ -687,7 +689,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
 
     if (signal.aborted) return;
-    terminal.show();
+    present(terminal);
     await this.deps.emptySessions?.resumeWorkspace(session.cwd);
     if (signal.aborted) return;
     if (temporary) this.temporarySessionIds.add(sessionId);

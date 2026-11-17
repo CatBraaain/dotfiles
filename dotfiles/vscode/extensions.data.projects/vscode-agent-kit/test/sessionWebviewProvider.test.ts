@@ -23,6 +23,7 @@ import { sessionListView, type ElementDescriptor } from "../src/webview/client";
 import { cleanup, header, messageEntry, tempDir, writeJsonl } from "./fixtures";
 const vscodeMocks = vi.hoisted(() => ({
   terminals: [],
+  state: { focused: false },
   createTerminal: vi.fn(),
   showErrorMessage: vi.fn(),
   clipboardWriteText: vi.fn(),
@@ -3697,7 +3698,10 @@ describe("SessionWebviewProvider", () => {
         expect(registry.displayedSessionId).toBe(activeSessionId);
         expect(sentState().displayedSessionId).toBe(activeSessionId);
         expect(row().hasUnread).toBe(false);
-        expect(readPid).not.toHaveBeenCalled();
+        expect(readPid).toHaveBeenCalledOnce();
+        expect(terminal.show.mock.invocationCallOrder[0]).toBeLessThan(
+          readPid.mock.invocationCallOrder[0],
+        );
         expect(mocks.current).not.toHaveBeenCalled();
         expect(mocks.switch).not.toHaveBeenCalled();
         expect(terminal.dispose).not.toHaveBeenCalled();

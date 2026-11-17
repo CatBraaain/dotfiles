@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { homedir } from "node:os";
 import type * as vscode from "vscode";
+import { TabInputTerminal } from "vscode";
 import { TerminalRegistry } from "../src/terminalRegistry";
 import { editorTerminals } from "../src/terminals";
 import type { PiMuxCurrentSession, PiSession } from "../src/piMux";
@@ -9,11 +10,15 @@ import { fakeRuntimes } from "./runtimeFixtures";
 const windowMock = vi.hoisted(() => ({
   terminals: [] as vscode.Terminal[],
   createTerminal: vi.fn(),
+  state: { focused: false },
+  activeTerminal: undefined as vscode.Terminal | undefined,
+  tabGroups: { activeTabGroup: { activeTab: undefined as { input: unknown } | undefined } },
 }));
 vi.mock("vscode", () => ({
   window: windowMock,
   Uri: { file: (fsPath: string) => ({ fsPath }) },
   TerminalLocation: { Editor: 1 },
+  TabInputTerminal: class {},
 }));
 
 function displayTerminal(cwd = "/project"): vscode.Terminal {
@@ -40,6 +45,7 @@ function setup(restored?: vscode.Terminal) {
       return terminal;
     }),
     find: vi.fn(() => restored),
+    canFocus: vi.fn(() => false),
   };
   const registry = new TerminalRegistry(displays, runtimes.mux);
   if (restored !== undefined) closeAutomatically(restored);
@@ -59,6 +65,56 @@ function setup(restored?: vscode.Terminal) {
 afterEach(() => vi.useRealTimers());
 
 describe("TerminalRegistry", () => {
+  it("shows immediately and focuses the same display once its process starts", async () => {
+    const { registry, displays } = setup();
+    const { terminal } = await registry.open(session("A"));
+    let ready!: (pid: number | undefined) => void;
+    Object.defineProperty(terminal, "processId", {
+      value: new Promise<number | undefined>((resolve) => {
+        ready = resolve;
+      }),
+    });
+    displays.canFocus.mockReturnValue(true);
+    registry.preparePresentation()(terminal);
+    expect(terminal.show).toHaveBeenCalledOnce();
+    ready(123);
+    await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledTimes(2));
+    expect(displays.canFocus).toHaveBeenCalledWith(terminal);
+    expect(displays.create).toHaveBeenCalledOnce();
+  });
+
+  it.each(["newer request", "another input", "closed", "disposed", "missing process"])(
+    "does not reclaim focus after %s",
+    async (change) => {
+      const { registry, displays } = setup();
+      const { terminal } = await registry.open(session("A"));
+      let ready!: (pid: number | undefined) => void;
+      Object.defineProperty(terminal, "processId", {
+        value: new Promise<number | undefined>((resolve) => {
+          ready = resolve;
+        }),
+      });
+      displays.canFocus.mockReturnValue(true);
+      registry.preparePresentation()(terminal);
+      if (change === "newer request") registry.preparePresentation();
+      if (change === "another input") displays.canFocus.mockReturnValue(false);
+      if (change === "closed") registry.onTerminalClosed(terminal);
+      if (change === "disposed") registry.dispose();
+      ready(change === "missing process" ? undefined : 123);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(terminal.show).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not refocus an obsolete request that finishes after the latest request", async () => {
+    const { registry } = setup();
+    const { terminal } = await registry.open(session("A"));
+    const older = registry.preparePresentation();
+    registry.preparePresentation();
+    older(terminal);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(terminal.show).toHaveBeenCalledOnce();
+  });
   it("opens with a request signal when static AbortSignal helpers are unavailable", async () => {
     const { registry } = setup();
     const controller = new AbortController();
@@ -809,6 +865,19 @@ describe("TerminalRegistry", () => {
 });
 
 describe("editorTerminals", () => {
+  it.each(["ready", "another window", "another terminal", "another editor"])(
+    "allows delayed focus only on its active editor Terminal (%s)",
+    (destination) => {
+      const terminal = displayTerminal();
+      windowMock.state.focused = destination !== "another window";
+      windowMock.activeTerminal = destination === "another terminal" ? displayTerminal() : terminal;
+      windowMock.tabGroups.activeTabGroup.activeTab = {
+        input: destination === "another editor" ? {} : new TabInputTerminal(),
+      };
+      expect(editorTerminals().canFocus(terminal)).toBe(destination === "ready");
+      windowMock.state.focused = false;
+    },
+  );
   it("identifies ownership by a fixed environment marker instead of a Terminal named Pi", () => {
     const unrelated = { name: "Pi", creationOptions: { name: "Pi" } } as vscode.Terminal;
     const owned = {

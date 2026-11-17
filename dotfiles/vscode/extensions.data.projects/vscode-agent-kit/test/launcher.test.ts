@@ -9,7 +9,11 @@ import { editorTerminals } from "../src/terminals";
 import { fakeRuntimes } from "./runtimeFixtures";
 import { cleanup, tempDir } from "./fixtures";
 
-const api = vi.hoisted(() => ({ terminals: [], createTerminal: vi.fn() }));
+const api = vi.hoisted(() => ({
+  terminals: [],
+  state: { focused: false },
+  createTerminal: vi.fn(),
+}));
 vi.mock("vscode", () => ({
   Uri: { file: (fsPath: string) => ({ fsPath }) },
   TerminalLocation: { Editor: 1 },

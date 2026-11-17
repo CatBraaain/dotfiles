@@ -17,13 +17,14 @@ export class SessionLauncher implements vscode.Disposable {
   async start(cwd: string, onPresented?: () => void): Promise<string | undefined> {
     const workDir = await requireWorkDirectory(cwd);
     if (this.disposed) return;
-    this.deps.registry.presentExisting();
+    const present = this.deps.registry.preparePresentation();
+    this.deps.registry.presentExisting(present);
     return this.deps.registry.run(async () => {
       if (this.disposed) return;
       const sessionId = await this.deps.registry.mux.newSession(workDir);
       const previousSessionId = this.deps.registry.displayedSessionId;
       const { terminal } = await this.deps.registry.open({ sessionId, cwd: workDir });
-      terminal.show();
+      present(terminal);
       onPresented?.();
       if (this.disposed) return;
       this.deps.emptySessions?.observeOpened(workDir, sessionId);

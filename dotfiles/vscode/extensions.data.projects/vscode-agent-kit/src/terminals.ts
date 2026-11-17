@@ -8,10 +8,18 @@ const OWNER_VALUE = "1";
 export interface DisplayTerminals {
   find(): vscode.Terminal | undefined;
   create(session: PiSession): vscode.Terminal;
+  canFocus(terminal: vscode.Terminal): boolean;
 }
 
 export function editorTerminals(): DisplayTerminals {
   return {
+    canFocus(terminal) {
+      return (
+        vscode.window.state.focused &&
+        vscode.window.activeTerminal === terminal &&
+        vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof vscode.TabInputTerminal
+      );
+    },
     find() {
       return vscode.window.terminals.find((terminal) => {
         const options = terminal.creationOptions;

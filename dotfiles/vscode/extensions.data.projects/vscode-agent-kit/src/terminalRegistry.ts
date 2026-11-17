@@ -20,6 +20,7 @@ export class TerminalRegistry implements vscode.Disposable {
   private displayedSessionCwd: string | undefined;
   private pending = Promise.resolve();
   private displayChanges = Promise.resolve();
+  private presentationVersion = 0;
   private readonly closeWaiters = new Map<
     vscode.Terminal,
     { promise: Promise<void>; resolve: () => void }
@@ -45,9 +46,32 @@ export class TerminalRegistry implements vscode.Disposable {
     return next;
   }
 
-  presentExisting(): void {
+  preparePresentation(): (terminal: vscode.Terminal) => void {
+    const version = ++this.presentationVersion;
+    return (terminal) => {
+      if (this.disposed || this.closed.has(terminal)) return;
+      terminal.show();
+      void terminal.processId.then(
+        (pid) => {
+          if (
+            pid !== undefined &&
+            !this.disposed &&
+            version === this.presentationVersion &&
+            !this.closed.has(terminal) &&
+            terminal.exitStatus === undefined &&
+            this.currentDisplay() === terminal &&
+            this.terminals.canFocus(terminal)
+          )
+            terminal.show();
+        },
+        () => {},
+      );
+    };
+  }
+
+  presentExisting(present = this.preparePresentation()): void {
     const display = this.currentDisplay();
-    if (display !== undefined && !this.closeWaiters.has(display)) display.show();
+    if (display !== undefined && !this.closeWaiters.has(display)) present(display);
   }
 
   async open(
