@@ -1501,9 +1501,6 @@ test(
       await expect.poll(() => host.piProcesses().length).toBe(3);
       for (const { cwd } of host.listWorkspaces()) host.piMux(["workspace", "unregister", cwd]);
       const sessionDirectory = dirname(host.sessions.A.session);
-      // The list sorts saved rows by history btime (the header timestamp), so
-      // the four headers carry distinct timestamps that match the phases
-      // order.
       for (const [reverseIndex, { key }] of [...phases].reverse().entries()) {
         const index = phases.length - 1 - reverseIndex;
         const fixture = host.sessions[key];
@@ -1512,7 +1509,19 @@ test(
           .split("\n")
           .map((line) => JSON.parse(line));
         entries[0].cwd = workspaceCwd;
-        entries[0].timestamp = new Date(Date.UTC(2026, 9, 22, 4 - index)).toISOString();
+        const timestamp = new Date(Date.UTC(2026, 9, 22, 4 - index));
+        entries[0].timestamp = timestamp.toISOString();
+        entries.push({
+          type: "message",
+          id: randomUUID().slice(0, 8),
+          parentId: entries.at(-1).id,
+          timestamp: timestamp.toISOString(),
+          message: {
+            role: "user",
+            content: [{ type: "text", text: `Fixture ${key}` }],
+            timestamp: timestamp.getTime(),
+          },
+        });
         const original = entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n";
         const session = join(sessionDirectory, basename(fixture.session));
         if (existsSync(session)) unlinkSync(session);
