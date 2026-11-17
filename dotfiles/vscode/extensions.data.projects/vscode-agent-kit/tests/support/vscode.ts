@@ -180,19 +180,23 @@ export class VSCodeFixture {
       .getByRole("tab", { name: "Pi Sessions", exact: true })
       .describe("Sessions sidebar");
     if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
+    let readyFrame: Frame | undefined;
     await expect
       .poll(async () => {
         for (const frame of this.page.frames()) {
-          if (await frame.locator(".group-header").count()) return true;
+          try {
+            if (await frame.locator(".group-header").count()) {
+              readyFrame = frame;
+              return true;
+            }
+          } catch (error) {
+            if (!frame.isDetached()) throw error;
+          }
         }
         return false;
       })
       .toBe(true);
-    const frames = this.page.frames();
-    for (const frame of frames) {
-      if (await frame.locator(".group-header").count()) return frame;
-    }
-    throw new Error("Sessions webview did not become ready");
+    return readyFrame!;
   }
 
   async refreshSessions(): Promise<void> {
