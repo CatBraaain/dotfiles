@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { parse as parseShell } from "shell-quote";
+import { parseCommandSegments, type CommandSegment, type TokenRange } from "./command-parser.ts";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 
@@ -273,127 +273,6 @@ export function resolvePattern(pattern: string, cwd: string): string {
     ? cwd.replace(/[*?[\]{}]/g, (character) => `\0${character.charCodeAt(0).toString(16)};`)
     : cwd;
   return isAbsolute(homeExpanded) ? resolve(homeExpanded) : resolve(literalCwd, homeExpanded);
-}
-
-type ShellToken = string | { op?: string; pattern?: string; comment?: string };
-type TokenRange = { index: number; length: number };
-type CommandSegment = { tokens: string[]; ranges: TokenRange[] };
-
-const SEGMENT_OPS = new Set([";", "&&", "||", "|", "|&", ";;", "&", "(", ")", "<("]);
-const SEGMENT_HEAD_SKIPS = new Set(["{", "}", "env"]);
-const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
-const SHELL_OPERATOR = /^(?:\|\||&&|;;|\|&|<\(|<<<|>>|>&|<&|[&;()|<>])/;
-
-type ShellChunk = { source: string; index: number; hasQuotedPart?: boolean };
-
-function shellChunks(command: string): ShellChunk[] {
-  const chunks: ShellChunk[] = [];
-  let index = 0;
-  while (index < command.length) {
-    const character = command[index]!;
-    if (character === "\n") {
-      chunks.push({ source: ";", index: index++ });
-      continue;
-    }
-    if (/\s/.test(character)) {
-      index++;
-      continue;
-    }
-    if (character === "#") {
-      const end = command.indexOf("\n", index);
-      index = end === -1 ? command.length : end;
-      continue;
-    }
-    const operator = command.slice(index).match(SHELL_OPERATOR)?.[0];
-    if (operator !== undefined) {
-      chunks.push({ source: operator, index });
-      index += operator.length;
-      continue;
-    }
-    const start = index;
-    let quote: string | undefined;
-    let hasQuotedPart = false;
-    while (index < command.length) {
-      const next = command[index]!;
-      if (next === "\\" && quote !== "'") {
-        index += Math.min(2, command.length - index);
-        continue;
-      }
-      if (quote !== undefined) {
-        if (next === quote) quote = undefined;
-      } else if (next === "'" || next === '"') {
-        quote = next;
-        hasQuotedPart = true;
-      } else if (/\s/.test(next) || SHELL_OPERATOR.test(command.slice(index))) {
-        break;
-      }
-      index++;
-    }
-    chunks.push({ source: command.slice(start, index), index: start, hasQuotedPart });
-  }
-  return chunks;
-}
-
-function parseCommandSegments(command: string): CommandSegment[] {
-  const segments: CommandSegment[] = [];
-  let words: string[] = [];
-  let ranges: TokenRange[] = [];
-  let consecutiveHeredocOps = 0;
-  let expectHeredocDelimiter = false;
-  let heredocEnd: string | null = null;
-
-  function flush(): void {
-    while (
-      words.length > 0 &&
-      (SEGMENT_HEAD_SKIPS.has(words[0]!) || ENV_ASSIGNMENT.test(words[0]!))
-    ) {
-      words.shift();
-      ranges.shift();
-    }
-    if (words.length > 0) segments.push({ tokens: words, ranges });
-    words = [];
-    ranges = [];
-  }
-
-  let commented = false;
-  for (const chunk of shellChunks(command)) {
-    if (command[chunk.index] === "\n") commented = false;
-    if (commented) continue;
-    for (const token of parseShell(chunk.source) as ShellToken[]) {
-      if (heredocEnd !== null) {
-        if (typeof token === "string" && token === heredocEnd) heredocEnd = null;
-        continue;
-      }
-      if (typeof token === "string" || token.pattern !== undefined) {
-        const word = typeof token === "string" ? token : token.pattern;
-        if (word === undefined || (word === "" && !chunk.hasQuotedPart)) continue;
-        if (expectHeredocDelimiter) {
-          heredocEnd = word.replace(/^-+/, "");
-          expectHeredocDelimiter = false;
-          continue;
-        }
-        consecutiveHeredocOps = 0;
-        words.push(word);
-        ranges.push({ index: chunk.index, length: chunk.source.length });
-        continue;
-      }
-      if (token.comment !== undefined) {
-        commented = true;
-        continue;
-      }
-      const op = token.op;
-      expectHeredocDelimiter = false;
-      if (op === "<") {
-        consecutiveHeredocOps++;
-        if (consecutiveHeredocOps === 2) expectHeredocDelimiter = true;
-        continue;
-      }
-      consecutiveHeredocOps = 0;
-      if (op !== undefined && SEGMENT_OPS.has(op)) flush();
-    }
-  }
-  flush();
-  return segments;
 }
 
 export function splitCommandSegments(command: string): string[][] {
