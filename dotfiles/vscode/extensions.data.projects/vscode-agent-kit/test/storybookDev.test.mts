@@ -83,6 +83,8 @@ it("serves and renders the sample catalog through bun run storybook", async ({
         stdio: ["ignore", "pipe", "pipe"],
         env: {
           ...process.env,
+          CHOKIDAR_USEPOLLING: "1",
+          WATCHPACK_POLLING: "true",
           HOME: home,
           XDG_CONFIG_HOME: join(home, "config"),
           XDG_CACHE_HOME: join(home, "cache"),
