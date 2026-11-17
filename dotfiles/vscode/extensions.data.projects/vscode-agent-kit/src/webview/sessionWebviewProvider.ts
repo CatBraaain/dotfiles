@@ -18,7 +18,6 @@ import { webviewHtml } from "./webviewHtml";
 
 export const VIEW_ID = "piSessions.sessions";
 export const LIST_REFRESH_INTERVAL_MS = 250;
-export const HISTORY_CHANGE_DELAY_MS = 100;
 const INITIAL_HISTORY_RETRY_MS = 1_000;
 const MAX_HISTORY_RETRY_MS = 30_000;
 
@@ -52,7 +51,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private manualLoadingRequested = false;
   private disposed = false;
   private listRefreshTimer: ReturnType<typeof setTimeout> | undefined;
-  private historyChangeTimer: ReturnType<typeof setTimeout> | undefined;
   private pendingList: Promise<PiMuxWorkspace[]> | undefined;
   private pendingHistoryRefresh: Promise<void> | undefined;
   private latestWorkspaces: PiMuxWorkspace[] = [];
@@ -104,7 +102,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   dispose(): void {
     this.disposed = true;
     this.stopListPolling();
-    clearTimeout(this.historyChangeTimer);
     clearTimeout(this.historyRetryTimer);
     this.view = undefined;
     this.runningSessionIds.clear();
@@ -124,8 +121,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   }
 
   private invalidateAllHistory(): void {
-    clearTimeout(this.historyChangeTimer);
-    this.historyChangeTimer = undefined;
     clearTimeout(this.historyRetryTimer);
     this.historyRetryTimer = undefined;
     this.historyGeneration += 1;
@@ -135,12 +130,17 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   async onSessionFileChanged(): Promise<void> {
     if (this.disposed) return;
     this.historyRequested = true;
-    clearTimeout(this.historyChangeTimer);
-    this.historyChangeTimer = setTimeout(() => {
-      this.historyChangeTimer = undefined;
-      if (this.view?.visible) void this.refresh(false);
-    }, HISTORY_CHANGE_DELAY_MS);
-    this.historyChangeTimer.unref();
+    if (!this.view?.visible) return;
+    if (this.listFailed || this.historySnapshot === undefined) {
+      void this.refresh(false);
+      return;
+    }
+    this.post({
+      type: "loading",
+      manual: false,
+      displayedSessionId: this.deps.registry.displayedSessionId ?? null,
+    });
+    void this.refreshHistory();
   }
 
   async onSessionRootChanged(): Promise<void> {
@@ -270,11 +270,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
 
   private async refreshHistory(): Promise<void> {
     if (this.pendingHistoryRefresh !== undefined) return this.pendingHistoryRefresh;
-    if (
-      !this.historyRequested ||
-      this.historyChangeTimer !== undefined ||
-      this.historyRetryTimer !== undefined
-    ) {
+    if (!this.historyRequested || this.historyRetryTimer !== undefined) {
       if (this.historyFailed) this.post({ type: "sessionsError" });
       else await this.publishSessions();
       return;
@@ -296,7 +292,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       !this.disposed &&
       this.view?.visible &&
       this.registeredCwds.size > 0 &&
-      this.historyChangeTimer === undefined &&
       this.historyRetryTimer === undefined
     ) {
       const generation = this.historyGeneration;

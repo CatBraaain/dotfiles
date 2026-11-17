@@ -14,7 +14,6 @@ import { editorTerminals } from "../src/terminals";
 import { fakeRuntimes } from "./runtimeFixtures";
 import {
   LIST_REFRESH_INTERVAL_MS,
-  HISTORY_CHANGE_DELAY_MS,
   SessionWebviewProvider,
 } from "../src/webview/sessionWebviewProvider";
 import * as sessionStore from "../src/sessionStore";
@@ -131,6 +130,10 @@ function deferred<T>() {
 
 async function finishRefresh(provider: SessionWebviewProvider) {
   await (provider as unknown as { pendingRefresh?: Promise<void> }).pendingRefresh;
+}
+
+async function finishHistoryRefresh(provider: SessionWebviewProvider) {
+  await (provider as unknown as { pendingHistoryRefresh?: Promise<void> }).pendingHistoryRefresh;
 }
 
 function loadingMessages(webview: { postMessage: Mock }) {
@@ -495,7 +498,7 @@ describe("SessionWebviewProvider", () => {
         runtimes: { ...sharedRuntimes, history },
       });
       await provider.onSessionFileChanged();
-      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      await finishHistoryRefresh(provider);
       expect(row(unknownSessionId).sessionId).toBe(unknownSessionId);
       const renamed = join(root, "sessions", "renamed.jsonl");
       await writeFile(renamed, await readFile(file));
@@ -503,7 +506,7 @@ describe("SessionWebviewProvider", () => {
       history.get(unknownSessionId)!.file = renamed;
       await provider.onSessionFileChanged();
       await provider.onSessionFileChanged();
-      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      await finishHistoryRefresh(provider);
       expect(
         sentState()
           .groups.flatMap(({ sessions }) => sessions)
@@ -513,7 +516,7 @@ describe("SessionWebviewProvider", () => {
       await rm(renamed);
       history.delete(unknownSessionId);
       await provider.onSessionFileChanged();
-      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      await finishHistoryRefresh(provider);
       expect(mocks.history).toHaveBeenCalledExactlyOnceWith();
       expect(
         sentState()
@@ -544,17 +547,103 @@ describe("SessionWebviewProvider", () => {
       expect(mocks.history).toHaveBeenCalledOnce();
     });
 
-    it("coalesces file changes into one full history query", async () => {
+    it("refreshes notified history without querying the list again", async () => {
+      const { provider, mocks, history, row } = await unreadFixture();
+      mocks.list.mockClear();
+      mocks.history.mockClear();
+      history.get(activeSessionId)!.title = "Changed history";
+      await provider.onSessionFileChanged();
+      await finishHistoryRefresh(provider);
+      expect(mocks.list).not.toHaveBeenCalled();
+      expect(mocks.history).toHaveBeenCalledExactlyOnceWith();
+      expect(row().displayName).toBe("Changed history");
+    });
+
+    it("starts notified history without waiting for an in-flight list", async () => {
+      const { provider, mocks, row, history } = await unreadFixture();
+      const held = deferred<PiMuxWorkspace[]>();
+      const workspaces = await mocks.list();
+      mocks.list.mockClear();
+      mocks.history.mockClear();
+      mocks.list.mockReturnValueOnce(held.promise);
+      await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS);
+      history.get(activeSessionId)!.title = "Changed during list";
+      await provider.onSessionFileChanged();
+      expect(mocks.list).toHaveBeenCalledOnce();
+      expect(mocks.history).toHaveBeenCalledExactlyOnceWith();
+      await finishHistoryRefresh(provider);
+      expect(row().displayName).toBe("Changed during list");
+      held.resolve(workspaces);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mocks.list).toHaveBeenCalledOnce();
+    });
+
+    it("starts a notified initial refresh without advancing the clock", async () => {
+      const runtime = providerRuntimes();
+      const held = deferred<PiMuxWorkspace[]>();
+      runtime.mocks.list.mockReturnValueOnce(held.promise);
+      const { provider } = createProvider({
+        registry: new TerminalRegistry(editorTerminals(), runtime.mux),
+      });
+      const webview = createView();
+      provider.resolveWebviewView(webview.view as never);
+      void provider.onSessionFileChanged();
+      held.resolve([{ cwd: root, sessions: [], empty: [] }]);
+      await finishRefresh(provider);
+      expect(runtime.mocks.list).toHaveBeenCalledTimes(2);
+      expect(runtime.mocks.history).toHaveBeenCalledExactlyOnceWith();
+      expect(webview.postMessage.mock.lastCall?.[0].type).toBe("sessions");
+    });
+
+    it("recovers a failed list before refreshing notified history", async () => {
+      const { provider, mocks, history, row } = await unreadFixture();
+      mocks.list.mockRejectedValueOnce(new Error("list unavailable"));
+      await tick(provider);
+      mocks.list.mockClear();
+      mocks.history.mockClear();
+      history.get(activeSessionId)!.title = "Recovered history";
+      void provider.onSessionFileChanged();
+      expect(mocks.list).toHaveBeenCalledOnce();
+      await finishRefresh(provider);
+      await finishHistoryRefresh(provider);
+      expect(mocks.history).toHaveBeenCalledExactlyOnceWith();
+      expect(row().displayName).toBe("Recovered history");
+    });
+
+    it("discards notified history that completes after workspace removal", async () => {
+      const { provider, mocks, history, workspaces, live, sentState } = await unreadFixture();
+      const held = deferred<PiMuxHistoryEntry[]>();
+      mocks.history.mockClear();
+      mocks.history.mockReturnValueOnce(held.promise);
+      await provider.onSessionFileChanged();
+      expect(mocks.history).toHaveBeenCalledOnce();
+      workspaces.clear();
+      live.clear();
+      await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS);
+      expect(sentState().groups).toEqual([]);
+      held.resolve([...history.values()]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sentState().groups).toEqual([]);
+    });
+
+    it("starts history immediately and batches in-flight notifications into one follow-up", async () => {
       const { provider, mocks, history, row, workspaces } = await unreadFixture();
       workspaces.add("/other");
       await tick(provider);
+      const held = deferred<PiMuxHistoryEntry[]>();
+      const stale = [...history.values()].map((entry) => ({ ...entry }));
       mocks.history.mockClear();
+      mocks.list.mockClear();
+      mocks.history.mockReturnValueOnce(held.promise);
+      void provider.onSessionFileChanged();
+      expect(mocks.history).toHaveBeenCalledExactlyOnceWith();
       history.get(activeSessionId)!.title = "Saved rename";
       for (let index = 0; index < 5; index++) await provider.onSessionFileChanged();
-      await tick(provider, HISTORY_CHANGE_DELAY_MS - 1);
-      expect(mocks.history).not.toHaveBeenCalled();
-      await tick(provider, 1);
-      expect(mocks.history).toHaveBeenCalledExactlyOnceWith();
+      expect(mocks.history).toHaveBeenCalledOnce();
+      held.resolve(stale);
+      await finishHistoryRefresh(provider);
+      expect(mocks.history.mock.calls).toEqual([[], []]);
+      expect(mocks.list).not.toHaveBeenCalled();
       expect(row().displayName).toBe("Saved rename");
     });
 
@@ -594,7 +683,7 @@ describe("SessionWebviewProvider", () => {
       history.delete(unknownSessionId);
       history.get(activeSessionId)!.title = "Current CLI title";
       await provider.onSessionFileChanged();
-      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      await finishHistoryRefresh(provider);
       expect(row().displayName).toBe("Current CLI title");
       expect(sentState().groups.find(({ cwd }) => cwd === "/other")!.sessions).toEqual([]);
     });
@@ -646,7 +735,7 @@ describe("SessionWebviewProvider", () => {
       webview.postMessage.mockClear();
       history.get(activeSessionId)!.title = "Changed while hidden";
       await provider.onSessionFileChanged();
-      await tick(provider, HISTORY_CHANGE_DELAY_MS + LIST_REFRESH_INTERVAL_MS);
+      await tick(provider, LIST_REFRESH_INTERVAL_MS);
       expect(mocks.history).not.toHaveBeenCalled();
       expect(webview.postMessage).not.toHaveBeenCalled();
       webview.setVisible(true);
@@ -672,7 +761,6 @@ describe("SessionWebviewProvider", () => {
       webview.postMessage.mockClear();
       history.get(activeSessionId)!.title = "Changed while hidden";
       await provider.onSessionFileChanged();
-      await vi.advanceTimersByTimeAsync(HISTORY_CHANGE_DELAY_MS);
       held.resolve(previous);
       await refresh;
       expect(mocks.history).toHaveBeenCalledOnce();
@@ -683,15 +771,16 @@ describe("SessionWebviewProvider", () => {
       expect(row().displayName).toBe("Changed while hidden");
     });
 
-    it("runs manual Refresh immediately even while file notifications are being coalesced", async () => {
+    it("refreshes history manually after a file notification", async () => {
       const { provider, mocks, history, row } = await unreadFixture();
       history.get(activeSessionId)!.title = "Manual refresh title";
       await provider.onSessionFileChanged();
+      await finishHistoryRefresh(provider);
       mocks.history.mockClear();
       await provider.refresh();
       expect(mocks.history).toHaveBeenCalledExactlyOnceWith();
       expect(row().displayName).toBe("Manual refresh title");
-      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      await finishHistoryRefresh(provider);
       expect(mocks.history).toHaveBeenCalledOnce();
     });
 
@@ -743,7 +832,7 @@ describe("SessionWebviewProvider", () => {
       mocks.history.mockRejectedValue(new Error("history unavailable"));
       mocks.history.mockClear();
       await provider.onSessionFileChanged();
-      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      await finishHistoryRefresh(provider);
       expect(mocks.history).toHaveBeenCalledOnce();
       expect(sentState()).toEqual(original);
       await tick(provider, 999);
@@ -901,7 +990,7 @@ describe("SessionWebviewProvider", () => {
       firstUser.btime = 200;
       firstUser.mtime = 200;
       await provider.onSessionFileChanged();
-      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      await finishHistoryRefresh(provider);
       expect(sentState().groups[0].sessions.map(({ sessionId }) => sessionId)).toEqual([
         "empty-a",
         "known",
@@ -911,7 +1000,7 @@ describe("SessionWebviewProvider", () => {
 
       entries[0].mtime = 400;
       await provider.onSessionFileChanged();
-      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      await finishHistoryRefresh(provider);
       expect(sentState().groups[0].sessions.map(({ sessionId }) => sessionId)).toEqual([
         "empty-a",
         "known",
@@ -1110,7 +1199,7 @@ describe("SessionWebviewProvider", () => {
       runtime.history.clear();
       runtime.mocks.history.mockRejectedValueOnce(new Error("unavailable"));
       await provider.onSessionFileChanged();
-      await tick(provider, HISTORY_CHANGE_DELAY_MS);
+      await finishHistoryRefresh(provider);
       expect(observe.mock.lastCall?.[0]).toEqual(expectedFiles);
       await provider.refresh();
       expect(observe.mock.lastCall?.[0]).toEqual([planned]);
@@ -2122,7 +2211,7 @@ describe("SessionWebviewProvider", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 
     await provider.onSessionFileChanged();
-    await vi.advanceTimersByTimeAsync(HISTORY_CHANGE_DELAY_MS);
+    await finishHistoryRefresh(provider);
     await finishRefresh(provider);
 
     expect(loadingMessages(webview)).toEqual([
