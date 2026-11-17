@@ -172,6 +172,7 @@ interface CaptureOptions {
   models?: Array<{ provider: string; id: string }>;
   setModelSucceeds?: boolean | boolean[];
   beforeSetModel?: () => Promise<void>;
+  beforeAppendEntry?: (customType: string, data: Record<string, unknown>) => void;
   executeUsage?: typeof runUsage;
   hasConfiguredAuth?: (model: { provider: string; id: string }) => boolean;
   resolveAuth?: (model: {
@@ -257,6 +258,7 @@ function captureAgentsExtension(
           return [{ name: "read" }, { name: "bash" }, { name: "subagent" }];
         },
         appendEntry(customType: string, data: Record<string, unknown>) {
+          options.beforeAppendEntry?.(customType, data);
           appendedEntries.push({ customType, data });
           titleManager.appendCustomEntry(customType, data);
         },
@@ -373,7 +375,7 @@ function captureAgentsExtension(
       },
     },
     async retitle() {
-      if (titleManager.getBranch().length === 0)
+      if (!titleManager.getBranch().some((entry) => entry.type === "message"))
         titleManager.appendMessage({
           role: "user",
           content: "Title this conversation",
@@ -512,6 +514,504 @@ function captureAgentsExtension(
     },
   };
 }
+describe("best-effort rate-limit observations", () => {
+  const scenarios = [
+    { kind: "http_success", records: 5 },
+    { kind: "text_success", records: 4 },
+    { kind: "missing_model", records: 1 },
+    { kind: "defer_zai", records: 1 },
+    { kind: "zai_concurrency", records: 1 },
+    { kind: "already_switched", records: 1 },
+    { kind: "awaiting_http_message", records: 1 },
+    { kind: "http_no_fallback", records: 1 },
+    { kind: "misattributed_http_429", records: 2 },
+    { kind: "unavailable", records: 3 },
+    { kind: "switch_throws", records: 3 },
+    { kind: "http_switch_throws", records: 3 },
+    { kind: "aborted", records: 3 },
+  ] as const;
+  const switchFailure = new Error("original switch failure");
+
+  async function runScenario(kind: (typeof scenarios)[number]["kind"], throwAt = -1) {
+    const attempts: Record<string, unknown>[] = [];
+    let recordingEnabled = false;
+    let failSwitch = false;
+    const controller = new AbortController();
+    const injected =
+      kind === "misattributed_http_429"
+        ? {
+            ...config,
+            modes: {
+              standard: {
+                middle: [
+                  { provider: "amazon-bedrock", model: "original" },
+                  { provider: "commandcode", model: "next" },
+                ],
+              },
+            },
+          }
+        : config;
+    const extension = captureAgentsExtension(
+      { config: injected },
+      {
+        signal: controller.signal,
+        findModel: (provider, id) => {
+          if (kind === "unavailable" && provider === "commandcode") return undefined;
+          if (kind === "http_no_fallback" && provider !== "commandcode") return undefined;
+          return { provider, id };
+        },
+        beforeSetModel: async () => {
+          if (failSwitch) throw switchFailure;
+        },
+        beforeAppendEntry: (customType, data) => {
+          if (!recordingEnabled || customType !== "agents-rate-limit") return;
+          attempts.push(data);
+          if (attempts.length - 1 === throwAt) throw new Error("private storage failure");
+        },
+      },
+    );
+    try {
+      if (kind !== "missing_model") await extension.sessionStart("startup");
+      if (["already_switched", "awaiting_http_message", "http_no_fallback"].includes(kind)) {
+        extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
+        await extension.providerResponse(429);
+      }
+      if (kind === "misattributed_http_429") {
+        await extension.providerResponse(429);
+        await extension.providerResponse(200);
+      }
+      extension.appendedEntries.length = 0;
+      const initialNotifications = extension.notifications.length;
+      const initialSelections = extension.selectedModels.length;
+      recordingEnabled = true;
+      let result: unknown;
+      const message = {
+        role: "assistant",
+        stopReason: "error",
+        provider: "zai",
+        model: "glm-5.2",
+        errorMessage: '{"code":"1310","message":"Weekly/Monthly Limit Exhausted"}',
+      };
+      switch (kind) {
+        case "http_success":
+          extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
+          await extension.providerResponse(429);
+          result = await extension.messageEnd(message);
+          break;
+        case "missing_model":
+        case "defer_zai":
+          result = await extension.providerResponse(429);
+          break;
+        case "already_switched":
+          extension.context.model = { provider: "openai", id: "next" };
+          result = await extension.providerResponse(429);
+          break;
+        case "zai_concurrency":
+          result = await extension.messageEnd({ ...message, errorMessage: '{"code":"1302"}' });
+          break;
+        case "awaiting_http_message":
+          result = await extension.messageEnd({ ...message, errorMessage: "context overflow" });
+          break;
+        case "http_no_fallback":
+          result = await extension.messageEnd({
+            ...message,
+            provider: "commandcode",
+            model: "gpt-5.6-luna",
+            errorMessage: "original failure",
+          });
+          break;
+        case "misattributed_http_429":
+          result = await extension.messageEnd({
+            ...message,
+            provider: "commandcode",
+            model: "next",
+            errorMessage: "ThrottlingException",
+          });
+          break;
+        case "switch_throws":
+          failSwitch = true;
+          await assert.rejects(extension.messageEnd(message), (error) => error === switchFailure);
+          break;
+        case "http_switch_throws":
+          failSwitch = true;
+          extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
+          await assert.rejects(extension.providerResponse(429), (error) => error === switchFailure);
+          break;
+        case "aborted":
+          controller.abort();
+          result = await extension.messageEnd(message);
+          break;
+        default:
+          result = await extension.messageEnd(message);
+      }
+      return {
+        attempts,
+        entries: [...extension.appendedEntries],
+        behavior: {
+          result,
+          model: extension.context.model,
+          selectedModels: extension.selectedModels.slice(initialSelections),
+          notifications: extension.notifications.slice(initialNotifications),
+          sentMessages: extension.sentMessages,
+        },
+      };
+    } finally {
+      extension.restore();
+    }
+  }
+
+  for (const { kind, records } of scenarios) {
+    for (let throwAt = 0; throwAt < records; throwAt++) {
+      it(`preserves ${kind} behavior when recording site ${throwAt + 1} throws`, async () => {
+        const baseline = await runScenario(kind);
+        const failedRecording = await runScenario(kind, throwAt);
+        assert.equal(baseline.attempts.length, records);
+        assert.equal(failedRecording.attempts.length, records);
+        assert.equal(failedRecording.entries.length, records - 1);
+        assert.deepEqual(failedRecording.behavior, baseline.behavior);
+        assert.equal(
+          JSON.stringify(failedRecording.entries).includes("private storage failure"),
+          false,
+        );
+      });
+    }
+  }
+});
+
+describe("rate-limit session observations", () => {
+  const rateLimitMessage = {
+    role: "assistant",
+    stopReason: "error",
+    provider: "zai",
+    model: "glm-5.2",
+    errorMessage: 'secret-token {"code":"1310","message":"Weekly/Monthly Limit Exhausted"}',
+  };
+
+  it("records HTTP status, source model, cooldown and selected fallback without copying headers", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart("startup");
+      extension.context.hasUI = false;
+      extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
+      const before = Date.now();
+      await extension.providerResponse(429, {
+        "retry-after": "120",
+        authorization: "secret-token",
+      });
+      const after = Date.now();
+      const entries = extension.appendedEntries.filter(
+        (entry) => entry.customType === "agents-rate-limit",
+      );
+      assert.deepEqual(
+        entries.map((entry) => entry.data.event),
+        ["http_429", "fallback_started", "fallback_finished"],
+      );
+      assert.deepEqual(entries[0]?.data, {
+        event: "http_429",
+        status: 429,
+        modelKey: "commandcode/gpt-5.6-luna",
+        decision: "fallback",
+      });
+      const started = entries[1]!.data;
+      assert.equal(started.source, "http_response");
+      assert.equal(started.rateLimitedModelKey, "commandcode/gpt-5.6-luna");
+      assert.equal(started.cooldownMs, 120_000);
+      assert.ok(Number(started.cooldownUntil) >= before + 120_000);
+      assert.ok(Number(started.cooldownUntil) <= after + 120_000);
+      assert.deepEqual(entries[2]?.data, {
+        event: "fallback_finished",
+        source: "http_response",
+        rateLimitedModelKey: "commandcode/gpt-5.6-luna",
+        switchedTo: "zai/glm-5.2",
+        outcome: "switched",
+      });
+      assert.equal(JSON.stringify(entries).includes("secret-token"), false);
+      assert.equal(extension.sentMessages.length, 0);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("records string classification before a successful generic rewrite without inventing an HTTP status", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart("startup");
+      const replacement = await extension.messageEnd(rateLimitMessage);
+      const entries = extension.appendedEntries.filter(
+        (entry) => entry.customType === "agents-rate-limit",
+      );
+      assert.deepEqual(
+        entries.map((entry) => entry.data.event),
+        ["assistant_error", "fallback_started", "fallback_finished", "retryable_rewrite"],
+      );
+      assert.deepEqual(entries[0]?.data, {
+        event: "assistant_error",
+        messageModelKey: "zai/glm-5.2",
+        classification: "rate_limit_pattern",
+        decision: "fallback",
+      });
+      assert.equal(entries[1]?.data.source, "assistant_error");
+      assert.equal(entries[1]?.data.cooldownMs, 30 * 60_000);
+      assert.deepEqual(entries[3]?.data, {
+        event: "retryable_rewrite",
+        source: "assistant_error",
+        messageModelKey: "zai/glm-5.2",
+        rateLimitedModelKey: "zai/glm-5.2",
+      });
+      for (const { data } of entries) assert.equal("status" in data, false);
+      assert.equal(JSON.stringify(entries).includes("secret-token"), false);
+      assert.equal(JSON.stringify(entries).includes("Weekly/Monthly"), false);
+      assert.equal(replacement.message.errorMessage.includes("secret-token"), false);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("records deferred Z.AI HTTP 429 and its fixed concurrency classification without switching", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart("startup");
+      await extension.providerResponse(429);
+      await extension.messageEnd({
+        ...rateLimitMessage,
+        errorMessage: '{"error":{"code":"1302","message":"secret-token"}}',
+      });
+      const entries = extension.appendedEntries.filter(
+        (entry) => entry.customType === "agents-rate-limit",
+      );
+      assert.deepEqual(
+        entries.map((entry) => entry.data),
+        [
+          { event: "http_429", status: 429, modelKey: "zai/glm-5.2", decision: "defer_zai" },
+          {
+            event: "assistant_error",
+            messageModelKey: "zai/glm-5.2",
+            classification: "zai_concurrency",
+            decision: "concurrency_retry",
+          },
+        ],
+      );
+      assert.equal(extension.selectedModels.length, 1);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("distinguishes the HTTP source model from a relabelled final error", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart("startup");
+      extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
+      await extension.providerResponse(429);
+      await extension.messageEnd({
+        ...rateLimitMessage,
+        errorMessage: "429 too many requests secret-token",
+      });
+      const entries = extension.appendedEntries.filter(
+        (entry) => entry.customType === "agents-rate-limit",
+      );
+      assert.deepEqual(entries.at(-2)?.data, {
+        event: "assistant_error",
+        classification: "rate_limit_pattern",
+        decision: "http_fallback_applied",
+        messageModelKey: "zai/glm-5.2",
+        rateLimitedModelKey: "commandcode/gpt-5.6-luna",
+      });
+      assert.deepEqual(entries.at(-1)?.data, {
+        event: "retryable_rewrite",
+        source: "http_response",
+        messageModelKey: "zai/glm-5.2",
+        rateLimitedModelKey: "commandcode/gpt-5.6-luna",
+      });
+      assert.equal(entries.filter((entry) => entry.data.event === "fallback_started").length, 1);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("records an unrelated error only while waiting for the HTTP failure message", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.sessionStart("startup");
+      const otherError = { ...rateLimitMessage, errorMessage: "private context overflow" };
+      await extension.messageEnd(otherError);
+      assert.equal(extension.appendedEntries.length, 0);
+      extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
+      await extension.providerResponse(429);
+      const replacement = await extension.messageEnd(otherError);
+      assert.equal(replacement, undefined);
+      assert.deepEqual(extension.appendedEntries.at(-1)?.data, {
+        event: "assistant_error",
+        messageModelKey: "zai/glm-5.2",
+        classification: "other",
+        rateLimitedModelKey: "commandcode/gpt-5.6-luna",
+        decision: "awaiting_http_message",
+      });
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("records later HTTP suppression and a missing model without applying a cooldown", async () => {
+    const extension = captureAgentsExtension();
+    try {
+      await extension.providerResponse(429);
+      assert.deepEqual(extension.appendedEntries.at(-1)?.data, {
+        event: "http_429",
+        status: 429,
+        modelKey: null,
+        decision: "missing_model",
+      });
+      await extension.sessionStart("startup");
+      extension.context.model = { provider: "commandcode", id: "gpt-5.6-luna" };
+      await extension.providerResponse(429);
+      extension.context.model = { provider: "openai", id: "other" };
+      await extension.providerResponse(429);
+      assert.deepEqual(extension.appendedEntries.at(-1)?.data, {
+        event: "http_429",
+        status: 429,
+        modelKey: "openai/other",
+        decision: "already_switched",
+      });
+      assert.equal(
+        extension.appendedEntries.filter((entry) => entry.data.event === "fallback_started").length,
+        1,
+      );
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("records the uniquely inferred HTTP origin after the pending HTTP message has cleared", async () => {
+    const injected = {
+      ...config,
+      modes: {
+        standard: {
+          middle: [
+            { provider: "amazon-bedrock", model: "original" },
+            { provider: "commandcode", model: "next" },
+          ],
+        },
+      },
+    };
+    const extension = captureAgentsExtension({ config: injected });
+    try {
+      await extension.sessionStart("startup");
+      await extension.providerResponse(429);
+      await extension.providerResponse(200);
+      await extension.messageEnd({
+        ...rateLimitMessage,
+        provider: "commandcode",
+        model: "next",
+        errorMessage: "ThrottlingException secret-token",
+      });
+      assert.deepEqual(extension.appendedEntries.at(-2)?.data, {
+        event: "assistant_error",
+        messageModelKey: "commandcode/next",
+        classification: "rate_limit_pattern",
+        decision: "misattributed_http_429",
+        rateLimitedModelKey: "amazon-bedrock/original",
+      });
+      assert.deepEqual(extension.appendedEntries.at(-1)?.data, {
+        event: "retryable_rewrite",
+        source: "http_response",
+        messageModelKey: "commandcode/next",
+        rateLimitedModelKey: "amazon-bedrock/original",
+      });
+      assert.equal(
+        extension.appendedEntries.filter((entry) => entry.data.event === "fallback_started").length,
+        1,
+      );
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("records the original-model HTTP failure even without a rate-limit error string", async () => {
+    const extension = captureAgentsExtension(
+      { config },
+      {
+        findModel: (provider, id) => (provider === "commandcode" ? { provider, id } : undefined),
+      },
+    );
+    try {
+      await extension.sessionStart("startup");
+      await extension.providerResponse(429);
+      const replacement = await extension.messageEnd({
+        ...rateLimitMessage,
+        provider: "commandcode",
+        model: "gpt-5.6-luna",
+        errorMessage: "secret-token failure",
+      });
+      assert.equal(replacement, undefined);
+      assert.deepEqual(extension.appendedEntries.at(-1)?.data, {
+        event: "assistant_error",
+        messageModelKey: "commandcode/gpt-5.6-luna",
+        classification: "other",
+        rateLimitedModelKey: "commandcode/gpt-5.6-luna",
+        decision: "http_no_fallback",
+      });
+      assert.equal(
+        extension.appendedEntries.some((entry) => entry.data.event === "retryable_rewrite"),
+        false,
+      );
+      assert.equal(JSON.stringify(extension.appendedEntries).includes("secret-token"), false);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("records fallback unavailability without a rewrite or a resend", async () => {
+    const extension = captureAgentsExtension(
+      { config },
+      { findModel: (provider, id) => (provider === "commandcode" ? undefined : { provider, id }) },
+    );
+    try {
+      await extension.sessionStart("startup");
+      const result = await extension.messageEnd(rateLimitMessage);
+      assert.equal(result, undefined);
+      assert.deepEqual(extension.appendedEntries.at(-1)?.data, {
+        event: "fallback_finished",
+        source: "assistant_error",
+        rateLimitedModelKey: "zai/glm-5.2",
+        switchedTo: null,
+        outcome: "unavailable",
+      });
+      assert.deepEqual(extension.sentMessages, []);
+    } finally {
+      extension.restore();
+    }
+  });
+
+  it("records a failed switch without saving its exception text and preserves the exception", async () => {
+    let failSwitch = false;
+    const failure = new Error("secret-token failed switch");
+    const extension = captureAgentsExtension(
+      { config },
+      {
+        beforeSetModel: async () => {
+          if (failSwitch) throw failure;
+        },
+      },
+    );
+    try {
+      await extension.sessionStart("startup");
+      failSwitch = true;
+      await assert.rejects(extension.messageEnd(rateLimitMessage), (error) => error === failure);
+      assert.deepEqual(extension.appendedEntries.at(-1)?.data, {
+        event: "fallback_finished",
+        source: "assistant_error",
+        rateLimitedModelKey: "zai/glm-5.2",
+        switchedTo: null,
+        outcome: "failed",
+      });
+      assert.equal(JSON.stringify(extension.appendedEntries).includes("secret-token"), false);
+    } finally {
+      extension.restore();
+    }
+  });
+});
+
 describe("設定", () => {
   it("agent retry configuration retries five times without a delay", () => {
     const settingsPath = new URL("../../settings.merge.json", import.meta.url);

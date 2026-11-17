@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "bun:test";
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import providerErrorRetryExtension, {
   __random,
   __resetRetryState,
@@ -17,18 +17,25 @@ import providerErrorRetryExtension, {
   nextRetryDelayMs,
 } from "./index.ts";
 
-function createHarness() {
+function createHarness(beforeAppendEntry?: (data: Record<string, unknown>) => void) {
   const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
   const sentMessages: Array<{ message: unknown; options: unknown }> = [];
   const statuses: Array<{ key: string; text: string | undefined }> = [];
   const notifications: string[] = [];
   const waitedMs: number[] = [];
+  const entries: Array<{ customType: string; data: Record<string, unknown> }> = [];
+  const session = SessionManager.inMemory("/test");
 
   const pi = {
     on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
       const list = handlers.get(event) ?? [];
       list.push(handler);
       handlers.set(event, list);
+    },
+    appendEntry(customType: string, data: Record<string, unknown>) {
+      beforeAppendEntry?.(data);
+      entries.push({ customType, data });
+      session.appendCustomEntry(customType, data);
     },
     sendMessage(message: unknown, options: unknown) {
       sentMessages.push({ message, options });
@@ -71,6 +78,8 @@ function createHarness() {
 
   return {
     call,
+    entries,
+    session,
     sentMessages,
     statuses,
     notifications,
@@ -107,6 +116,251 @@ async function messageEnd(harness: ReturnType<typeof createHarness>, message: un
   const result = await harness.call("message_end", { type: "message_end", message });
   return result as { message: { errorMessage: string } } | undefined;
 }
+
+describe("best-effort session observations", () => {
+  const scenarios = [
+    { kind: "turn_error", records: 1 },
+    { kind: "turn_aborted", records: 1 },
+    { kind: "unknown_finish", records: 1 },
+    { kind: "concurrency", records: 3 },
+    { kind: "aborted_wait", records: 2 },
+    { kind: "settled", records: 3 },
+    { kind: "pending", records: 1 },
+    { kind: "busy", records: 3 },
+  ] as const;
+
+  async function runScenario(kind: (typeof scenarios)[number]["kind"], throwAt = -1) {
+    __resetRetryState();
+    const attempts: Record<string, unknown>[] = [];
+    const harness = createHarness((data) => {
+      attempts.push(data);
+      if (attempts.length - 1 === throwAt) throw new Error("private storage failure");
+    });
+    let result: unknown;
+    if (kind === "turn_error" || kind === "turn_aborted") {
+      result = await harness.call("turn_end", {
+        message: concurrencyError({ stopReason: kind === "turn_error" ? "error" : "aborted" }),
+        messageEntryId: "saved-entry",
+      });
+    } else if (kind === "unknown_finish") {
+      result = await messageEnd(harness, finishErrorMessage("unknown"));
+    } else if (kind === "concurrency" || kind === "aborted_wait") {
+      if (kind === "aborted_wait") harness.abort();
+      result = await messageEnd(harness, concurrencyError());
+    } else {
+      harness.setHasPendingMessages(kind === "pending");
+      harness.setIsIdle(kind !== "busy");
+      await harness.call("agent_end", { messages: [concurrencyError()] });
+      result = await harness.call("agent_settled", {});
+    }
+    return {
+      attempts,
+      entries: harness.entries,
+      behavior: {
+        result,
+        sentMessages: harness.sentMessages,
+        waitedMs: harness.waitedMs,
+        statuses: harness.statuses,
+        notifications: harness.notifications,
+      },
+    };
+  }
+
+  for (const { kind, records } of scenarios) {
+    for (let throwAt = 0; throwAt < records; throwAt++) {
+      it(`preserves ${kind} behavior when recording site ${throwAt + 1} throws`, async () => {
+        const baseline = await runScenario(kind);
+        const failedRecording = await runScenario(kind, throwAt);
+        assert.equal(baseline.attempts.length, records);
+        assert.equal(failedRecording.attempts.length, records);
+        assert.equal(failedRecording.entries.length, records - 1);
+        assert.deepEqual(failedRecording.behavior, baseline.behavior);
+        assert.equal(
+          JSON.stringify(failedRecording.entries).includes("private storage failure"),
+          false,
+        );
+      });
+    }
+  }
+
+  it("preserves the original wait exception when recording also throws", async () => {
+    __resetRetryState();
+    const harness = createHarness(() => {
+      throw new Error("private storage failure");
+    });
+    const failure = new Error("original wait failure");
+    __sleep.current = async () => {
+      throw failure;
+    };
+    await assert.rejects(messageEnd(harness, concurrencyError()), (error) => error === failure);
+    assert.deepEqual(harness.entries, []);
+  });
+});
+
+describe("session observations", () => {
+  beforeEach(() => __resetRetryState());
+
+  for (const stopReason of ["error", "aborted"] as const) {
+    it(`references the saved assistant ${stopReason} entry without copying its contents`, async () => {
+      const harness = createHarness();
+      const message = concurrencyError({
+        stopReason,
+        errorMessage: "secret-api-key in https://private.example/error",
+        responseId: "not-a-session-entry",
+        content: [{ type: "text", text: "private conversation" }],
+        timestamp: 1,
+      });
+      await messageEnd(harness, message);
+      assert.deepEqual(harness.entries, []);
+      const messageEntryId = harness.session.appendMessage(message as never);
+      const contextBefore = harness.session.buildSessionContext();
+      await harness.call("turn_end", { message, messageEntryId });
+
+      assert.deepEqual(harness.entries, [
+        {
+          customType: "provider-error-retry-event",
+          data: { event: "assistant_failure", phase: "turn_end", messageEntryId, stopReason },
+        },
+      ]);
+      assert.equal(harness.session.getEntry(messageEntryId)?.type, "message");
+      assert.deepEqual(harness.session.buildSessionContext(), contextBefore);
+      assert.equal(harness.sentMessages.length, 0);
+    });
+  }
+
+  it("ignores successful assistant and non-assistant turn endings", async () => {
+    const harness = createHarness();
+    for (const message of [concurrencyError({ stopReason: "stop" }), { role: "user" }]) {
+      await harness.call("turn_end", { message, messageEntryId: "entry" });
+    }
+    assert.deepEqual(harness.entries, []);
+  });
+
+  it("records only the unknown finish classification and does not request a resend", async () => {
+    const harness = createHarness();
+    const message = finishErrorMessage("private-reason-token");
+    await messageEnd(harness, message);
+    await harness.call("agent_end", { messages: [message] });
+    await harness.call("agent_settled", {});
+    assert.deepEqual(harness.entries, [
+      {
+        customType: "provider-error-retry-event",
+        data: {
+          event: "retryable_rewrite",
+          phase: "message_end",
+          classification: "unknown_finish_reason",
+          provider: "test-provider",
+          model: "test-model",
+        },
+      },
+    ]);
+    assert.deepEqual(harness.sentMessages, []);
+    assert.deepEqual(harness.waitedMs, []);
+  });
+
+  it("records the selected delay and wait completion before the concurrency rewrite", async () => {
+    const harness = createHarness();
+    await harness.call("after_provider_response", {
+      status: 429,
+      headers: { "retry-after": "12", authorization: "secret" },
+    });
+    __sleep.current = async (ms) => {
+      assert.equal(ms, 12_000);
+      assert.equal(harness.entries.at(-1)?.data.event, "concurrency_wait_start");
+      return true;
+    };
+    await messageEnd(harness, concurrencyError());
+    const wait = {
+      phase: "message_end",
+      provider: "zai",
+      model: "glm-5.2",
+      concurrencyCount: 1,
+      delayMs: 12_000,
+      delaySource: "retry_after",
+    };
+    assert.deepEqual(
+      harness.entries.map((entry) => entry.data),
+      [
+        { ...wait, event: "concurrency_wait_start" },
+        { ...wait, event: "concurrency_wait_end", outcome: "completed" },
+        {
+          event: "retryable_rewrite",
+          phase: "message_end",
+          classification: "concurrency",
+          provider: "zai",
+          model: "glm-5.2",
+          concurrencyCount: 1,
+        },
+      ],
+    );
+  });
+
+  it("records an interrupted wait without recording a rewrite", async () => {
+    const harness = createHarness();
+    harness.abort();
+    const replacement = await messageEnd(harness, concurrencyError());
+    assert.equal(replacement, undefined);
+    assert.deepEqual(
+      harness.entries.map((entry) => entry.data.event),
+      ["concurrency_wait_start", "concurrency_wait_end"],
+    );
+    assert.equal(harness.entries.at(-1)?.data.outcome, "interrupted");
+  });
+
+  it("records settled waits and resend requests without claiming a core retry", async () => {
+    const harness = createHarness();
+    await messageEnd(harness, concurrencyError());
+    harness.entries.length = 0;
+    await harness.call("agent_end", { messages: [concurrencyError()] });
+    await harness.call("agent_settled", {});
+    const wait = {
+      phase: "agent_settled",
+      provider: "zai",
+      model: "glm-5.2",
+      concurrencyCount: 2,
+      delayMs: 10_000,
+      delaySource: "backoff",
+    };
+    assert.deepEqual(
+      harness.entries.map((entry) => entry.data),
+      [
+        { ...wait, event: "concurrency_wait_start" },
+        { ...wait, event: "concurrency_wait_end", outcome: "completed" },
+        {
+          provider: "zai",
+          model: "glm-5.2",
+          phase: "agent_settled",
+          event: "resend_requested",
+          concurrencyCount: 2,
+        },
+      ],
+    );
+    assert.equal(harness.sentMessages.length, 1);
+  });
+
+  for (const reason of ["pending_messages", "busy"] as const) {
+    it(`records the ${reason} resend skip`, async () => {
+      const harness = createHarness();
+      harness.setHasPendingMessages(reason === "pending_messages");
+      harness.setIsIdle(reason !== "busy");
+      await harness.call("agent_end", { messages: [concurrencyError()] });
+      await harness.call("agent_settled", {});
+      assert.deepEqual(harness.entries.at(-1)?.data, {
+        provider: "zai",
+        model: "glm-5.2",
+        phase: "agent_settled",
+        event: "resend_skipped",
+        reason,
+      });
+      assert.deepEqual(harness.sentMessages, []);
+      assert.equal(
+        harness.entries.some((entry) => entry.data.event === "resend_requested"),
+        false,
+      );
+      if (reason === "pending_messages") assert.deepEqual(harness.waitedMs, []);
+    });
+  }
+});
 
 describe("isUnknownFinishErrorMessage", () => {
   it("matches unknown finish reasons", () => {

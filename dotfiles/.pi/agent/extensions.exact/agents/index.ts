@@ -1583,16 +1583,49 @@ export default function agentsExtension(
 
   // ── 429 detection + fallback ────────────────────────────────────────
 
+  function recordRateLimitEvent(data: Record<string, unknown>): void {
+    try {
+      pi.appendEntry("agents-rate-limit", data);
+    } catch {
+      return;
+    }
+  }
+
   async function fallbackAfterRateLimit(
     rateLimitedModelKey: string,
     cooldownMs: number,
     ctx: ExtensionContext,
+    source: "http_response" | "assistant_error",
   ): Promise<boolean> {
     recordCooldown(cooldowns, rateLimitedModelKey, cooldownMs, Date.now());
+    const observation = { source, rateLimitedModelKey };
+    recordRateLimitEvent({
+      ...observation,
+      event: "fallback_started",
+      cooldownMs,
+      cooldownUntil: cooldowns.get(rateLimitedModelKey),
+    });
 
-    const switchedTo = await applyClassModel(currentAgent, ctx, {
-      signal: ctx.signal,
-      notifySwitch: false,
+    let switchedTo: string | null;
+    try {
+      switchedTo = await applyClassModel(currentAgent, ctx, {
+        signal: ctx.signal,
+        notifySwitch: false,
+      });
+    } catch (error) {
+      recordRateLimitEvent({
+        ...observation,
+        event: "fallback_finished",
+        switchedTo: null,
+        outcome: "failed",
+      });
+      throw error;
+    }
+    recordRateLimitEvent({
+      ...observation,
+      event: "fallback_finished",
+      switchedTo,
+      outcome: switchedTo ? "switched" : "unavailable",
     });
     if (switchedTo) {
       if (ctx.hasUI)
@@ -1622,7 +1655,17 @@ export default function agentsExtension(
     );
   }
 
-  function makeFallbackAppliedMessage(message: AssistantMessage): AssistantMessage {
+  function makeFallbackAppliedMessage(
+    message: AssistantMessage,
+    rateLimitedModelKey: string,
+    source: "http_response" | "assistant_error",
+  ): AssistantMessage {
+    recordRateLimitEvent({
+      event: "retryable_rewrite",
+      source,
+      messageModelKey: modelKey({ provider: message.provider, id: message.model }),
+      rateLimitedModelKey,
+    });
     return { ...message, errorMessage: RATE_LIMIT_FALLBACK_APPLIED_MESSAGE };
   }
 
@@ -1631,19 +1674,39 @@ export default function agentsExtension(
       httpRateLimitAwaitingMessage = undefined;
       return;
     }
-    if (!ctx.model) return;
+    const observation = {
+      event: "http_429",
+      status: event.status,
+      modelKey: ctx.model ? modelKey(ctx.model) : null,
+    };
+    if (!ctx.model) {
+      recordRateLimitEvent({ ...observation, decision: "missing_model" });
+      return;
+    }
 
     // Z.AI は 429 の body に同時実行系（1302/1305）と quota 系（1113, 1308-1321）の
     // 両方を返し、HTTP レスポンスだけでは区別できない。z-ai モデルはここで fallback
     // せず、最終 assistant エラーの文言判定（message_end）に任せる。同時実行系は
     // provider-error-retry 拡張が待機リトライする。
-    if (isZaiProvider(ctx.model.provider)) return;
-    if (http429TurnFallbackDone) return;
+    if (isZaiProvider(ctx.model.provider)) {
+      recordRateLimitEvent({ ...observation, decision: "defer_zai" });
+      return;
+    }
+    if (http429TurnFallbackDone) {
+      recordRateLimitEvent({ ...observation, decision: "already_switched" });
+      return;
+    }
+    recordRateLimitEvent({ ...observation, decision: "fallback" });
 
     const rateLimitedModelKey = modelKey(ctx.model);
     http429ModelKeys.add(rateLimitedModelKey);
     const cooldownMs = parseRetryAfter(event.headers["retry-after"]) ?? DEFAULT_COOLDOWN_MS;
-    const fallbackSucceeded = await fallbackAfterRateLimit(rateLimitedModelKey, cooldownMs, ctx);
+    const fallbackSucceeded = await fallbackAfterRateLimit(
+      rateLimitedModelKey,
+      cooldownMs,
+      ctx,
+      "http_response",
+    );
     if (fallbackSucceeded) http429TurnFallbackDone = true;
     httpRateLimitAwaitingMessage = { modelKey: rateLimitedModelKey, fallbackSucceeded };
   });
@@ -1654,7 +1717,21 @@ export default function agentsExtension(
 
     // z-ai の同時実行系エラー（1302/1305）は別モデルに切り替えても解決しないため
     // fallback 対象外。provider-error-retry 拡張が待機リトライする。
-    if (isZaiProvider(message.provider) && isZaiConcurrencyLimited(message.errorMessage)) return;
+    const messageModelKey = modelKey({ provider: message.provider, id: message.model });
+    const rateLimitPattern = isRateLimitedError(message.errorMessage);
+    const observation = {
+      event: "assistant_error",
+      messageModelKey,
+      classification: rateLimitPattern ? "rate_limit_pattern" : "other",
+    };
+    if (isZaiProvider(message.provider) && isZaiConcurrencyLimited(message.errorMessage)) {
+      recordRateLimitEvent({
+        ...observation,
+        classification: "zai_concurrency",
+        decision: "concurrency_retry",
+      });
+      return;
+    }
 
     // SPEC「フォールバック済みターンのエラー判定」: HTTP 429 でフォールバック済みの
     // ターンでは、pi 本体（handleRunFailure）が失敗メッセージの provider/model を
@@ -1664,34 +1741,59 @@ export default function agentsExtension(
     // 429 を受けたモデル（httpRateLimitAwaitingMessage.modelKey）を正として扱う。
     if (httpRateLimitAwaitingMessage) {
       const { modelKey: rateLimitedModelKey, fallbackSucceeded } = httpRateLimitAwaitingMessage;
-      const messageModelKey = modelKey({ provider: message.provider, id: message.model });
-      if (messageModelKey === rateLimitedModelKey || isRateLimitedError(message.errorMessage)) {
+      if (messageModelKey === rateLimitedModelKey || rateLimitPattern) {
+        recordRateLimitEvent({
+          ...observation,
+          rateLimitedModelKey,
+          decision: fallbackSucceeded ? "http_fallback_applied" : "http_no_fallback",
+        });
         httpRateLimitAwaitingMessage = undefined;
         if (!fallbackSucceeded) {
           notifyNoFallback(rateLimitedModelKey, message.errorMessage, ctx);
           return;
         }
-        return { message: makeFallbackAppliedMessage(message) };
+        return {
+          message: makeFallbackAppliedMessage(message, rateLimitedModelKey, "http_response"),
+        };
       }
       // レート制限と無関係なエラー（context overflow 等）: 抑止は次の HTTPレスポンスまで維持する。
+      recordRateLimitEvent({
+        ...observation,
+        rateLimitedModelKey,
+        decision: "awaiting_http_message",
+      });
       return;
     }
 
     const rateLimitedModelKey = modelKey({ provider: message.provider, id: message.model });
-    if (!isRateLimitedError(message.errorMessage)) return;
+    if (!rateLimitPattern) return;
     const misattributedModelKey = misattributedHttp429ModelKey(
       message.errorMessage,
       rateLimitedModelKey,
       http429ModelKeys,
     );
-    if (misattributedModelKey) return { message: makeFallbackAppliedMessage(message) };
+    if (misattributedModelKey) {
+      recordRateLimitEvent({
+        ...observation,
+        rateLimitedModelKey: misattributedModelKey,
+        decision: "misattributed_http_429",
+      });
+      return {
+        message: makeFallbackAppliedMessage(message, misattributedModelKey, "http_response"),
+      };
+    }
 
+    recordRateLimitEvent({ ...observation, decision: "fallback" });
     const fallbackSucceeded = await fallbackAfterRateLimit(
       rateLimitedModelKey,
       DEFAULT_COOLDOWN_MS,
       ctx,
+      "assistant_error",
     );
-    if (fallbackSucceeded) return { message: makeFallbackAppliedMessage(message) };
+    if (fallbackSucceeded)
+      return {
+        message: makeFallbackAppliedMessage(message, rateLimitedModelKey, "assistant_error"),
+      };
     notifyNoFallback(rateLimitedModelKey, message.errorMessage, ctx);
   });
 

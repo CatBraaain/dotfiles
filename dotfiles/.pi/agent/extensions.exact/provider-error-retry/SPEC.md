@@ -66,6 +66,28 @@ pi本体のリトライ回数上限（`settings.json` の `retry.maxRetries`）�
 | ターンが同時実行エラー以外（abort、他エラー）で確定した | — | 再実行しない |
 | 保留メッセージがある | — | 再実行しない |
 
+## セッション記録
+
+`pi.appendEntry` の非コンテキストcustom entry `provider-error-retry-event` に、次の事実をbest-effortで保存する。保存例外は記録処理内で吸収し、既存の戻り値・例外・待機・abort・ステータス解除・再送を維持する。記録失敗の追加通知や例外本文の保存は行わず、記録の完全性は保証しない。記録の `event` は下表、`phase` は実行した公開イベント名である。
+
+| 観測点 | `event` | 保存する事実 |
+| --- | --- | --- |
+| `turn_end` のassistantが `error` または `aborted` | `assistant_failure` | `messageEntryId`、`stopReason`。保存済みメッセージをIDで参照する |
+| unknown finish_reason の書き換え直前 | `retryable_rewrite` | `classification: unknown_finish_reason`、provider、model |
+| concurrency の待機開始 | `concurrency_wait_start` | provider、model、独自の連続回数 `concurrencyCount`、選択した `delayMs`、`delaySource`（`retry_after` / `backoff`） |
+| concurrency の待機終了 | `concurrency_wait_end` | 開始時と同じ事実、`outcome`（`completed` / `interrupted`） |
+| concurrency の書き換え直前 | `retryable_rewrite` | `classification: concurrency`、provider、model、`concurrencyCount` |
+| `agent_settled` で保留メッセージがある、または待機後にbusy | `resend_skipped` | provider、model、`reason`（`pending_messages` / `busy`） |
+| `agent_settled` から再送を要求する | `resend_requested` | provider、model、`concurrencyCount` |
+
+`concurrencyCount` は既存の独自待機に使う回数であり、ターン確定後の待機も数える。本体のretry番号ではない。`retryable_rewrite` は分類変換、`resend_requested` は非表示メッセージの送信API呼出しの記録であり、本体の再送開始・成功を示さない。unknown finish_reason の分岐からは再送を要求しない。
+
+一般エラーは `turn_end` の保存済みentryだけを参照する。`message_end` は保存前であり、そこでの実行記録にはentry IDを付けない。response IDをsession entry IDとして使わない。
+
+custom entryへ生のerrorMessage、会話、payload、headers、URL、metadata、認証情報、自由文の失敗理由を複製しない。変換前の情報は固定分類と上表の構造化事実だけを保存する。
+
+公開extension APIで配送された観測だけを記録する。本体のauto-retry回数・待機・開始・終了・取消、後続成功との因果、provider内部で吸収された一時失敗は観測できない。API key等の失敗はassistantエラーになって配送されたものに限り、開始前検証・強制終了・配送不能の記録は保証しない。
+
 ## 表示
 
 | 状況 | 表示 |

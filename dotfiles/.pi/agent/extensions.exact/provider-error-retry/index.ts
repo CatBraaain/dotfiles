@@ -125,7 +125,7 @@ export function parseRetryAfterMs(
 
 let consecutiveConcurrencyErrors = 0;
 let lastRetryAfterMs: number | null = null;
-let settledRetryProvider: string | null = null;
+let settledRetryModel: { provider: string; model: string } | null = null;
 
 /** Replace the error text with a form pi's built-in retry treats as retryable. */
 export function makeRetryableMessage(message: AssistantMessage): AssistantMessage {
@@ -165,6 +165,28 @@ export const __sleep: {
 export const __random: { current: () => number } = { current: Math.random };
 
 export default function providerErrorRetryExtension(pi: ExtensionAPI): void {
+  function recordRetryEvent(data: Record<string, unknown>): void {
+    try {
+      pi.appendEntry("provider-error-retry-event", data);
+    } catch {
+      return;
+    }
+  }
+  pi.on("turn_end", (event) => {
+    const message = event.message;
+    if (
+      message.role !== "assistant" ||
+      (message.stopReason !== "error" && message.stopReason !== "aborted")
+    )
+      return;
+    recordRetryEvent({
+      event: "assistant_failure",
+      phase: "turn_end",
+      messageEntryId: event.messageEntryId,
+      stopReason: message.stopReason,
+    });
+  });
+
   // Remember the provider's Retry-After so the message_end wait can honor it.
   // pi's agent retry is errorMessage-based and drops headers, so this hook is
   // the only place they are observable. Any provider's 429 counts; the value
@@ -185,16 +207,29 @@ export default function providerErrorRetryExtension(pi: ExtensionAPI): void {
     // paces them, so only the classification rewrite is needed. The rewrite
     // happens at most once per assistant error because each branch returns.
     if (isUnknownFinishErrorMessage(message.errorMessage ?? "")) {
+      recordRetryEvent({
+        event: "retryable_rewrite",
+        phase: "message_end",
+        classification: "unknown_finish_reason",
+        provider: message.provider,
+        model: message.model,
+      });
       return { message: makeRetryableMessage(message) };
     }
     if (!isConcurrencyError(message.provider, message.errorMessage)) return;
 
     consecutiveConcurrencyErrors += 1;
-    const delayMs = nextRetryDelayMs(
-      consecutiveConcurrencyErrors,
-      takeRetryAfter(),
-      __random.current,
-    );
+    const retryAfterMs = takeRetryAfter();
+    const delayMs = nextRetryDelayMs(consecutiveConcurrencyErrors, retryAfterMs, __random.current);
+    const wait = {
+      phase: "message_end",
+      provider: message.provider,
+      model: message.model,
+      concurrencyCount: consecutiveConcurrencyErrors,
+      delayMs,
+      delaySource: retryAfterMs === null ? "backoff" : "retry_after",
+    };
+    recordRetryEvent({ ...wait, event: "concurrency_wait_start" });
 
     if (ctx.hasUI) {
       ctx.ui.setStatus(
@@ -205,32 +240,62 @@ export default function providerErrorRetryExtension(pi: ExtensionAPI): void {
     // Pi's built-in retry starts with a shorter delay; wait here before
     // making this error retryable to pace concurrent requests.
     const waitCompleted = await __sleep.current(delayMs, ctx.signal);
+    recordRetryEvent({
+      ...wait,
+      event: "concurrency_wait_end",
+      outcome: waitCompleted ? "completed" : "interrupted",
+    });
     if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
     // Aborted mid-wait: let the turn end with the original error, the user
     // asked to stop.
     if (!waitCompleted) return;
+    recordRetryEvent({
+      event: "retryable_rewrite",
+      phase: "message_end",
+      classification: "concurrency",
+      provider: message.provider,
+      model: message.model,
+      concurrencyCount: wait.concurrencyCount,
+    });
     return { message: makeRetryableMessage(message) };
   });
 
   pi.on("agent_end", (event) => {
     const last = event.messages.at(-1) as AgentMessage | undefined;
     const message = last as Message | undefined;
-    settledRetryProvider =
+    settledRetryModel =
       message?.role === "assistant" &&
       message.stopReason === "error" &&
       isConcurrencyError(message.provider, message.errorMessage)
-        ? message.provider
+        ? { provider: message.provider, model: message.model }
         : null;
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
-    if (settledRetryProvider === null) return;
-    const provider = settledRetryProvider;
-    settledRetryProvider = null;
-    if (ctx.hasPendingMessages()) return;
+    if (settledRetryModel === null) return;
+    const model = settledRetryModel;
+    const { provider } = model;
+    settledRetryModel = null;
+    if (ctx.hasPendingMessages()) {
+      recordRetryEvent({
+        ...model,
+        event: "resend_skipped",
+        phase: "agent_settled",
+        reason: "pending_messages",
+      });
+      return;
+    }
 
     consecutiveConcurrencyErrors += 1;
     const delayMs = nextRetryDelayMs(consecutiveConcurrencyErrors, null, __random.current);
+    const wait = {
+      ...model,
+      phase: "agent_settled",
+      concurrencyCount: consecutiveConcurrencyErrors,
+      delayMs,
+      delaySource: "backoff",
+    };
+    recordRetryEvent({ ...wait, event: "concurrency_wait_start" });
     if (ctx.hasUI) {
       ctx.ui.notify(
         `${provider} concurrency limit; retrying in ${Math.ceil(delayMs / 1000)}s (attempt ${consecutiveConcurrencyErrors})`,
@@ -239,9 +304,28 @@ export default function providerErrorRetryExtension(pi: ExtensionAPI): void {
     }
     // No abort signal while idle; the isIdle() check below covers a user who
     // types during the wait.
-    await __sleep.current(delayMs, undefined);
-    if (!ctx.isIdle()) return;
+    const waitCompleted = await __sleep.current(delayMs, undefined);
+    recordRetryEvent({
+      ...wait,
+      event: "concurrency_wait_end",
+      outcome: waitCompleted ? "completed" : "interrupted",
+    });
+    if (!ctx.isIdle()) {
+      recordRetryEvent({
+        ...model,
+        event: "resend_skipped",
+        phase: "agent_settled",
+        reason: "busy",
+      });
+      return;
+    }
     // A fresh turn resets Pi's bounded agent retry budget after it runs out.
+    recordRetryEvent({
+      ...model,
+      event: "resend_requested",
+      phase: "agent_settled",
+      concurrencyCount: wait.concurrencyCount,
+    });
     pi.sendMessage(
       { customType: STATUS_KEY, content: RETRY_TRIGGER_CONTENT, display: false },
       { triggerTurn: true },
@@ -253,5 +337,5 @@ export default function providerErrorRetryExtension(pi: ExtensionAPI): void {
 export function __resetRetryState(): void {
   consecutiveConcurrencyErrors = 0;
   lastRetryAfterMs = null;
-  settledRetryProvider = null;
+  settledRetryModel = null;
 }

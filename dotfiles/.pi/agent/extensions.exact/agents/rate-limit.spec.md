@@ -76,6 +76,22 @@ HTTP 429 を受けてフォールバックした直後から、次のいずれ�
 
 汎用的な usage limit文言だけではこの例外を適用しない。HTTP 429 の受信モデルの記録は z-aiモデルを除き、セッション開始と拡張由来でない入力で初期化する。拡張由来の入力と 429以外の HTTPレスポンスでは保持する。
 
+### セッション記録
+
+既存の判定・切替箇所から、非コンテキストcustom entry `agents-rate-limit` をbest-effortで保存する。保存例外は記録処理内で吸収し、既存の戻り値・元の例外・モデル選択・abort・通知を維持する。記録失敗の追加通知や例外本文の保存は行わず、記録の完全性は保証しない。`event` と保存内容は次のとおり。
+
+| 観測点 | `event` | 保存する事実 |
+| --- | --- | --- |
+| HTTP 429 を観測 | `http_429` | 実HTTP値 `status: 429`、観測時の `modelKey`（モデル不明時はnull）、`decision`（`fallback` / `defer_zai` / `already_switched` / `missing_model`） |
+| cooldownを設定してfallbackを開始 | `fallback_started` | `source`（`http_response` / `assistant_error`）、`rateLimitedModelKey`、`cooldownMs`、`cooldownUntil` |
+| fallback処理を終了 | `fallback_finished` | 同じ `source`・元モデル、`switchedTo`（切替先またはnull）、`outcome`（`switched` / `unavailable` / `failed`） |
+| 最終assistantエラーを判定 | `assistant_error` | メッセージの `messageModelKey`、`classification`（`zai_concurrency` / `rate_limit_pattern` / `other`）、`decision`（`concurrency_retry` / `http_fallback_applied` / `http_no_fallback` / `awaiting_http_message` / `misattributed_http_429` / `fallback`）。`other` はHTTP 429後の最終エラー待ち中に、rate-limit文言に一致しない場合だけ記録する。元モデルと一致する場合は抑止を消費し、不一致の場合は抑止を維持する。HTTP待ちでない通常の対象外エラーは記録しない |
+| fallback済みの置換文言へ変換 | `retryable_rewrite` | `messageModelKey`、元の429モデルとして判定した `rateLimitedModelKey`、`source`（`http_response` / `assistant_error`） |
+
+HTTP応答経路だけが実HTTP statusを持つ。最終assistantエラーの `classification` は既存の文字列判定による推定であり、実HTTP statusとは扱わない。HTTP由来の最終エラー処理では `rateLimitedModelKey` も保存し、メッセージのモデルと区別する。既存の誤帰属防止判定を維持する。
+
+置換前は固定分類・構造化事実だけを記録し、生のerrorMessage、会話、payload、headers、URL、metadata、認証情報、自由文の失敗理由は複製しない。`fallback_finished` はモデル選択APIの結果、`retryable_rewrite` は変換の事実であり、本体の再試行の実行・成功を示さない。
+
 ### pi の再試行設定
 
 429フォールバックでは Pi の agent-level retry を使い、provider-level retry は使わない。`~/.pi/agent/settings.json` には次を設定する。
