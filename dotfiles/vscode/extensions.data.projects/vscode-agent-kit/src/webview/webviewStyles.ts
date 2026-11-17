@@ -64,7 +64,7 @@ export const webviewStyles = `
     @keyframes session-spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .session-status[data-state="running"] svg, .group-new-session[aria-busy="true"] svg { animation: none; } .session-status[data-fading="true"] svg { display: none; } }
     .session-name { display: block; flex: 1; overflow: hidden; min-width: 0; font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
-    .session-timestamp { pointer-events: none; position: absolute; top: 50%; right: 36px; overflow: hidden; width: 5ch; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 20px; text-align: right; white-space: nowrap; }
+    .session-timestamp { pointer-events: none; position: absolute; top: 50%; right: 36px; overflow: hidden; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 20px; text-align: right; white-space: nowrap; }
     .archive, .unarchive { position: absolute; top: 50%; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
     .archive svg, .unarchive svg, .group-chevron svg, .group-new-session svg { width: 12px; height: 12px; }
     .archive, .unarchive { right: 4px; }

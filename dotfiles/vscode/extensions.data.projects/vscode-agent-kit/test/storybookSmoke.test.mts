@@ -127,6 +127,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         __removeWorkspace?: (cwd: string) => void;
         __reverseWorkspaces?: () => void;
         __refreshSessions?: () => void;
+        __renameSessions?: (displayName: string) => void;
       };
 
       const sessionsRoot = document.querySelector("#sessions");
@@ -155,6 +156,16 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
               const store = props.store as {
                 getSnapshot(): { state: ClientState };
                 setSessions(state: ClientState): void;
+              };
+              (window as TestWindow).__renameSessions = (displayName) => {
+                const { state } = store.getSnapshot();
+                store.setSessions({
+                  ...state,
+                  groups: state.groups.map((group) => ({
+                    ...group,
+                    sessions: group.sessions.map((session) => ({ ...session, displayName })),
+                  })),
+                });
               };
               (window as TestWindow).__reverseWorkspaces = () => {
                 const { state } = store.getSnapshot();
@@ -958,6 +969,140 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     ).toContain("Running");
     await page.close();
   });
+
+  it.each(
+    [320, 720].flatMap((width) =>
+      ["dark", "light"].flatMap((theme) =>
+        [false, true].flatMap((textSpacing) =>
+          ["default", "serif"].map((font) => ({ width, theme, textSpacing, font })),
+        ),
+      ),
+    ),
+  )(
+    "keeps timestamps readable and operable at $width px in $theme with textSpacing=$textSpacing and $font fonts",
+    async ({ width, theme, textSpacing, font }) => {
+      const page = await browser!.newPage({ viewport: { width, height: 640 }, timezoneId: "UTC" });
+      try {
+        await page.clock.setFixedTime(new Date("2026-09-19T12:00:00Z"));
+        await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--all-mode`, {
+          waitUntil: "networkidle",
+        });
+        await page.waitForSelector(".session-row.archived");
+        await installBridgeMessageRecorder(page);
+        const longName = "LongSessionName".repeat(8);
+        await page.evaluate((displayName) => {
+          const rename = (window as Window & { __renameSessions?: (name: string) => void })
+            .__renameSessions;
+          if (rename === undefined) throw new Error("Session rename hook is missing.");
+          rename(displayName);
+        }, longName);
+        await expect.poll(() => page.locator(".session-name").first().textContent()).toBe(longName);
+        if (theme === "light") {
+          await page.addStyleTag({
+            content: `:root {
+              --vscode-foreground: #333333;
+              --vscode-sideBar-background: #f8f8f8;
+              --vscode-descriptionForeground: #616161;
+              --vscode-list-inactiveSelectionBackground: #e4e6f1;
+              --vscode-list-inactiveSelectionForeground: #333333;
+            }`,
+          });
+        }
+        if (font === "serif") {
+          await page.addStyleTag({
+            content:
+              ':root { --vscode-font-family: serif; --vscode-editor-font-family: "DejaVu Sans Mono", monospace; }',
+          });
+        }
+        if (textSpacing) {
+          await page.addStyleTag({
+            content: `* { line-height: 1.5 !important; letter-spacing: 0.12em !important; word-spacing: 0.16em !important; }
+              p { margin-bottom: 2em !important; }`,
+          });
+        }
+        await page.evaluate(() => document.fonts.ready);
+        const rows = await page.locator(".session-row").evaluateAll((elements) =>
+          elements.map((row) => {
+            const button = row.querySelector<HTMLButtonElement>(".session-button")!;
+            const name = row.querySelector<HTMLElement>(".session-name")!;
+            const timestamp = row.querySelector<HTMLElement>(".session-timestamp")!;
+            const control = row.querySelector<HTMLElement>(".archive, .unarchive")!;
+            const rowBox = row.getBoundingClientRect();
+            const timestampBox = timestamp.getBoundingClientRect();
+            const controlBox = control.getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(timestamp);
+            const textBox = range.getBoundingClientRect();
+            return {
+              sessionId: button.dataset.session,
+              text: timestamp.textContent,
+              rowHeight: rowBox.height,
+              nameTruncated: name.scrollWidth > name.clientWidth,
+              nameGap: timestampBox.left - name.getBoundingClientRect().right,
+              textLeft: textBox.left,
+              textRight: textBox.right,
+              timestampLeft: timestampBox.left,
+              timestampRight: timestampBox.right,
+              timestampTop: timestampBox.top,
+              timestampBottom: timestampBox.bottom,
+              rowTop: rowBox.top,
+              rowBottom: rowBox.bottom,
+              timestampInset: rowBox.right - timestampBox.right,
+              controlGap: controlBox.left - timestampBox.right,
+              controlWidth: controlBox.width,
+              controlHeight: controlBox.height,
+              controlInset: rowBox.right - controlBox.right,
+            };
+          }),
+        );
+        expect(rows).toHaveLength(5);
+        expect(rows.map((row) => row.text)).toEqual(
+          expect.arrayContaining(["09:42", "08:16", "09/18", "09/17", "09/16"]),
+        );
+        for (const row of rows) {
+          expect(row.rowHeight).toBe(32);
+          expect(row.nameTruncated).toBe(true);
+          expect(row.nameGap).toBeGreaterThan(0);
+          expect(row.textLeft).toBeGreaterThanOrEqual(row.timestampLeft - 0.5);
+          expect(row.textRight).toBeLessThanOrEqual(row.timestampRight + 0.5);
+          expect(row.timestampTop).toBeGreaterThanOrEqual(row.rowTop);
+          expect(row.timestampBottom).toBeLessThanOrEqual(row.rowBottom);
+          expect(row.timestampInset).toBeCloseTo(36, 1);
+          expect(row.controlGap).toBeGreaterThanOrEqual(8);
+          expect(row.controlWidth).toBe(24);
+          expect(row.controlHeight).toBe(24);
+          expect(row.controlInset).toBe(4);
+        }
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+        await clearBridgeMessages(page);
+        await clickTimestamp(page, atlasCurrentId);
+        expect(await openSessionMessages(page)).toEqual([
+          { type: "openSession", sessionId: atlasCurrentId },
+        ]);
+        await clearBridgeMessages(page);
+        await page.locator(`[data-archive="${piToolsOtherId}"]`).click();
+        await expect.poll(() => page.locator(`[data-session="${piToolsOtherId}"]`).count()).toBe(0);
+        expect(await openSessionMessages(page)).toEqual([]);
+        await page.locator(`[data-unarchive="${atlasArchivedId}"]`).click();
+        await expect
+          .poll(() => page.locator(`[data-archive="${atlasArchivedId}"]`).count())
+          .toBe(1);
+        expect(await openSessionMessages(page)).toEqual([]);
+        console.log(
+          JSON.stringify({
+            check: "timestamp-text-spacing",
+            width,
+            theme,
+            textSpacing,
+            font,
+            rows,
+          }),
+        );
+      } finally {
+        await page.close();
+      }
+    },
+  );
 
   it("renders 32px full-width rows with mono dates, status slots, and 24px ghost overlays", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 640 });
