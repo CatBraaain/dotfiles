@@ -1,6 +1,3 @@
-// Local build hooks (spec: SPEC.md §build: ローカルフック): collect
-// .build.<ext> / .build-machine.<ext> files from dist once, then run each
-// as an independent bun process from a snapshot in its dist folder.
 import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -11,7 +8,7 @@ import {
   removeHookSnapshot,
   writeHookSnapshot,
 } from "./hook-runner.ts";
-import { isBuildHookName } from "./path-mapping.ts";
+import { isBuildHookName, isPostHookName } from "./path-mapping.ts";
 
 type Hook = { absolutePath: string; relativeParent: string; name: string; contents: string };
 
@@ -28,21 +25,25 @@ export async function collectHooks(distDir: string): Promise<Hook[]> {
     const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) =>
       compareCodeUnits(left.name, right.name),
     );
+    const postHooks: Hook[] = [];
     for (const entry of entries) {
       if (!entry.isFile() || !isBuildHookName(entry.name)) continue;
       const entryPath = join(directory, entry.name);
-      hooks.push({
+      const hook = {
         absolutePath: entryPath,
         relativeParent,
         name: entry.name,
         contents: await readFile(entryPath, "utf8"),
-      });
+      };
+      if (isPostHookName(entry.name)) postHooks.push(hook);
+      else hooks.push(hook);
     }
     for (const entry of entries) {
       if (!entry.isDirectory() || entry.name === "node_modules") continue;
       const childParent = relativeParent === "" ? entry.name : `${relativeParent}/${entry.name}`;
       await walk(join(directory, entry.name), childParent);
     }
+    hooks.push(...postHooks);
   }
   await walk(distDir, "");
   return hooks;

@@ -17,7 +17,7 @@ import {
   removeHookSnapshot,
   writeHookSnapshot,
 } from "./hook-runner.ts";
-import { isApplyScriptName, mapSegment } from "./path-mapping.ts";
+import { isApplyScriptName, isPostHookName, mapSegment } from "./path-mapping.ts";
 
 export type ApplyResult = { added: string[]; changed: string[]; removed: string[] };
 export type ApplyScript = {
@@ -86,13 +86,11 @@ export async function applyDifferences(
   return applied;
 }
 
-// Finds apply scripts in a built dist tree (spec §apply スクリプト).
-// Folders excluded from diffing are skipped; ordering is the full
-// dist-relative path in UTF-16 code-unit order.
 export async function collectDeclarations(distRoot: string): Promise<Declarations> {
   const declarations: Declarations = { applyScripts: [] };
-  await walkDeclarations(distRoot, "", declarations);
+  const postScripts = await walkDeclarations(distRoot, "", declarations);
   declarations.applyScripts.sort((left, right) => compareCodeUnits(left.distPath, right.distPath));
+  declarations.applyScripts.push(...postScripts);
   return declarations;
 }
 
@@ -113,10 +111,14 @@ export async function runApplyScripts(
     }
     const cwd = join(homeRoot, script.homeFolderRel);
     const scriptDirectory = dirname(join(distRoot, script.distPath));
-    const createdDirectories = await ensureHookDirectory(scriptDirectory, distRoot);
-    await mkdir(cwd, { recursive: true });
-    const snapshotPath = await writeHookSnapshot(scriptDirectory, script.fileName, script.contents);
+    const label = `apply script failed: ${script.distPath}`;
+    const errors: string[] = [];
+    let createdDirectories: string[] = [];
+    let snapshotPath: string | undefined;
     try {
+      createdDirectories = await ensureHookDirectory(scriptDirectory, distRoot);
+      await mkdir(cwd, { recursive: true });
+      snapshotPath = await writeHookSnapshot(scriptDirectory, script.fileName, script.contents);
       await spawnChild(
         [process.execPath, resolve(snapshotPath)],
         cwd,
@@ -126,13 +128,25 @@ export async function runApplyScripts(
           DOTFILES_HOME_ROOT: resolve(homeRoot),
           DOTFILES_MANAGER_SRC: import.meta.dir,
         },
-        `apply script failed: ${script.distPath}`,
+        label,
       );
     } catch (error) {
-      failures.push(messageOf(error));
+      errors.push(messageOf(error));
     } finally {
-      await removeHookSnapshot(snapshotPath, distRoot);
-      await removeEmptyHookDirectories(createdDirectories);
+      try {
+        if (snapshotPath) await removeHookSnapshot(snapshotPath, distRoot);
+      } catch (error) {
+        errors.push(`snapshot cleanup failed: ${messageOf(error)}`);
+      }
+      try {
+        await removeEmptyHookDirectories(createdDirectories);
+      } catch (error) {
+        errors.push(`directory cleanup failed: ${messageOf(error)}`);
+      }
+    }
+    if (errors.length > 0) {
+      const diagnostic = errors.join("; ");
+      failures.push(diagnostic.startsWith(label) ? diagnostic : `${label}: ${diagnostic}`);
     }
   }
   return failures;
@@ -188,6 +202,7 @@ export async function main(
     return 0;
   }
 
+  const declarations = await collectDeclarations(distRoot);
   const applyStarted = performance.now();
   const applied = await applyDifferences(distRoot, homeRoot, result);
   writeLine(
@@ -196,7 +211,6 @@ export async function main(
   );
 
   const scriptsStarted = performance.now();
-  const declarations = await collectDeclarations(distRoot);
   const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
   writeLine(
     `apply scripts: ${declarations.applyScripts.length} scripts (${elapsedSeconds(scriptsStarted)}s)`,
@@ -305,24 +319,33 @@ async function applyTree(ctx: ApplyContext, distRel: string, homeRel: string): P
 
 // ------------------------------------------------------- declarations lookup
 
-async function walkDeclarations(dirAbs: string, dirRel: string, out: Declarations): Promise<void> {
-  for (const entry of await readdir(dirAbs, { withFileTypes: true })) {
+async function walkDeclarations(
+  dirAbs: string,
+  dirRel: string,
+  out: Declarations,
+): Promise<ApplyScript[]> {
+  const entries = (await readdir(dirAbs, { withFileTypes: true })).sort((left, right) =>
+    compareCodeUnits(left.name, right.name),
+  );
+  const postScripts: ApplyScript[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || mapSegment(entry.name, true).isExcluded) continue;
     const childRel = dirRel === "" ? entry.name : `${dirRel}/${entry.name}`;
-    if (entry.isDirectory()) {
-      if (mapSegment(entry.name, true).isExcluded) continue;
-      await walkDeclarations(join(dirAbs, entry.name), childRel, out);
-      continue;
-    }
-    if (!entry.isFile()) continue;
-    if (isApplyScriptName(entry.name))
-      out.applyScripts.push({
-        distPath: childRel,
-        fileName: entry.name,
-        folderRel: dirRel,
-        homeFolderRel: homeFolderOf(dirRel),
-        contents: await readFile(join(dirAbs, entry.name), "utf8"),
-      });
+    postScripts.push(...(await walkDeclarations(join(dirAbs, entry.name), childRel, out)));
   }
+  for (const entry of entries) {
+    if (!entry.isFile() || !isApplyScriptName(entry.name)) continue;
+    const script = {
+      distPath: dirRel === "" ? entry.name : `${dirRel}/${entry.name}`,
+      fileName: entry.name,
+      folderRel: dirRel,
+      homeFolderRel: homeFolderOf(dirRel),
+      contents: await readFile(join(dirAbs, entry.name), "utf8"),
+    };
+    if (isPostHookName(entry.name)) postScripts.push(script);
+    else out.applyScripts.push(script);
+  }
+  return postScripts;
 }
 
 // Map each dist directory segment to its home name, including .exact suffixes.

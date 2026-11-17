@@ -8,9 +8,30 @@
     "strict": true,
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
-    "typeRoots": ["./node_modules/@types", "./dotfiles-manager/node_modules/@types", "./undotfiles/winconfig/node_modules/@types"],
+    "typeRoots": [
+      "./node_modules/@types",
+      "./dotfiles-manager/node_modules/@types",
+      "./undotfiles/winconfig/node_modules/@types"
+    ],
     "types": ["bun", "node"]
   },
-  "include": ["dotfiles-manager/**/*.ts", "dotfiles/**/*.build.ts", "dotfiles/**/*.edit.ts", "undotfiles/winconfig/engine.ts"],
-  "exclude": ["dotfiles-manager/**/*.test.ts", "dotfiles/windows-menu/create.build.ts", "undotfiles/winconfig/engine.test.ts"]
+  "include": [
+    "dotfiles-manager/**/*.ts",
+    "dotfiles/**/*.build.ts",
+    "dotfiles/**/*.postbuild.ts",
+    "dotfiles/**/*.postbuild-machine.ts",
+    "dotfiles/**/*.postapply.ts",
+    "dotfiles/**/*.postapply-machine.ts",
+    "dotfiles/.agents/**/*.postbuild.ts",
+    "dotfiles/.agents/**/*.postbuild-machine.ts",
+    "dotfiles/.agents/**/*.postapply.ts",
+    "dotfiles/.agents/**/*.postapply-machine.ts",
+    "dotfiles/**/*.edit.ts",
+    "undotfiles/winconfig/engine.ts"
+  ],
+  "exclude": [
+    "dotfiles-manager/**/*.test.ts",
+    "dotfiles/windows-menu/create.build.ts",
+    "undotfiles/winconfig/engine.test.ts"
+  ]
 }

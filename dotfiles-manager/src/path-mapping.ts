@@ -6,8 +6,9 @@ export type EntryKind = "file" | "directory" | "symlink";
 const excludedEntryPrefixes = [".build"];
 
 // Build and apply hooks stay in dist and are not copied to home.
-const buildHookNamePattern = /\.build(?:-machine)?\.[^.]+$/;
-const applyScriptNamePattern = /\.apply(?:-machine)?\.[^.]+$/;
+const buildHookNamePattern = /\.(?:post)?build(?:-machine)?\.[^.]+$/;
+const applyScriptNamePattern = /\.(?:post)?apply(?:-machine)?\.[^.]+$/;
+const postHookNamePattern = /\.post(?:build|apply)(?:-machine)?\.[^.]+$/;
 
 export function isApplyScriptName(name: string): boolean {
   return applyScriptNamePattern.test(name);
@@ -15,6 +16,10 @@ export function isApplyScriptName(name: string): boolean {
 
 export function isBuildHookName(name: string): boolean {
   return buildHookNamePattern.test(name);
+}
+
+export function isPostHookName(name: string): boolean {
+  return postHookNamePattern.test(name);
 }
 
 export type SegmentMapping = {
