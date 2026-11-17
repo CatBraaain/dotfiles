@@ -200,14 +200,35 @@ function verifyManagedKeys(): void {
 }
 
 function verifyDictionaryDeclarations(): void {
-  // keeps all 89 approved spellings in their original order
   {
     const { dictionary } = loadManagedConfig(import.meta.dir);
-    assert.equal(dictionary.length, 89);
+    assert.ok(dictionary);
+    assert.equal(dictionary.length, 49);
+    assert.equal(dictionary.join(", ").length, 519);
     assert.equal(
       sha256Hex(JSON.stringify(dictionary)),
-      "0fd58a18f63bf17732cbf0dd1fa068e7f27fffe09c8d434d6b88552a68931c5f",
+      "d45b094e59b3a50539931afbdbdc50e2848c9ff65e7afe242b8aa4c464e59708",
     );
+  }
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "openwhispr-dictionary-input-"));
+  try {
+    const declaration = join(fixtureRoot, MANAGED_KEYS_FILE);
+    const keysYaml = 'keys: [{ key: a, value: "b" }]\n';
+    writeFileSync(declaration, keysYaml);
+    assert.equal(loadManagedConfig(fixtureRoot).dictionary, undefined);
+    writeFileSync(declaration, keysYaml + "dictionary: []\n");
+    assert.deepEqual(loadManagedConfig(fixtureRoot).dictionary, []);
+    writeFileSync(declaration, keysYaml + 'dictionary: [" Old ", "old", "", "日本語句"]\n');
+    assert.deepEqual(loadManagedConfig(fixtureRoot).dictionary, ["Old", "日本語句"]);
+    for (const invalid of [null, "word", [123], [null], ["bad\0word"]]) {
+      writeFileSync(declaration, keysYaml + "dictionary: " + JSON.stringify(invalid));
+      assert.throws(
+        () => loadManagedConfig(fixtureRoot),
+        (error: unknown) => error instanceof HookError && error.code === "INVALID_INPUT",
+      );
+    }
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
   }
   // preserves storage-only declarations and removes empty words
   assert.deepEqual(validateDictionary(undefined), []);
@@ -228,7 +249,7 @@ function verifyDictionaryDeclarations(): void {
   // includes dictionary words in the declaration hash
   {
     const keys = [{ key: "a", value: "b" }];
-    assert.equal(managedKeysSha256(keys), managedKeysSha256(keys, []));
+    assert.notEqual(managedKeysSha256(keys), managedKeysSha256(keys, []));
     assert.notEqual(managedKeysSha256(keys), managedKeysSha256(keys, ["Bun"]));
     assert.notEqual(managedKeysSha256(keys, ["Bun"]), managedKeysSha256(keys, ["Godot"]));
     assert.equal(managedKeysSha256(keys, ["Bun"]), managedKeysSha256(keys, ["Bun"]));
@@ -292,6 +313,14 @@ function verifyHarnessGuards(): void {
 
 async function verifyStorageRecovery(): Promise<void> {
   for (const failure of [
+    "add-and-remove",
+    "remove-only",
+    "already-exact",
+    "empty-clear",
+    "no-dictionary",
+    "dictionary-registration",
+    "dictionary-removal",
+    "dictionary-verification",
     "registration",
     "verification",
     "first-flush",
@@ -308,20 +337,45 @@ async function verifyStorageRecovery(): Promise<void> {
     const storage = new Map(before);
     const reads = new Map<string, number>();
     let injected = false;
-    let payload: { status: string; restoreFailed: string[]; detail?: string } | undefined;
+    let payload:
+      | { status: string; restoreFailed: string[]; detail?: string; dictionaryRemoved?: number }
+      | undefined;
+    const dictionaryOnly = [
+      "add-and-remove",
+      "remove-only",
+      "already-exact",
+      "empty-clear",
+      "no-dictionary",
+    ].includes(failure);
+    const declaredWords =
+      failure === "no-dictionary"
+        ? undefined
+        : failure === "empty-clear"
+          ? []
+          : failure === "already-exact"
+            ? ["existing", "UNMANAGED"]
+            : failure === "remove-only"
+              ? ["Unmanaged"]
+              : ["Unmanaged", "Added"];
+    let databaseOpens = 0;
     let flushCount = 0;
     const db = new FixtureDatabase(":memory:");
     const databaseClose = db.close.bind(db);
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      db.exec(
-        "CREATE TABLE custom_dictionary (word TEXT); INSERT INTO custom_dictionary VALUES ('Existing')",
-      );
+      db.exec("CREATE TABLE custom_dictionary (word TEXT, attributes TEXT DEFAULT 'new')");
+      const initialRows = [
+        { word: "Existing", attributes: "preserve-existing" },
+        { word: "Unmanaged", attributes: "preserve-unmanaged" },
+        { word: " Existing ", attributes: "preserve-padded" },
+        { word: "EXISTING", attributes: "preserve-uppercase" },
+      ];
+      for (const row of initialRows)
+        db.query("INSERT INTO custom_dictionary VALUES (?, ?)").run(row.word, row.attributes);
 
       let closedWords: unknown[] = [];
       db.close = function () {
-        closedWords = db.query("SELECT word FROM custom_dictionary ORDER BY rowid").all();
-        databaseClose();
+        closedWords = db.query("SELECT * FROM custom_dictionary ORDER BY rowid").all();
         if (failure === "database-close") throw new Error("fixture database close failure");
       };
       class DictionaryFixture {
@@ -334,13 +388,36 @@ async function verifyStorageRecovery(): Promise<void> {
             }[]
           ).map((row) => row.word);
         }
-        applyDictionaryChanges({ add }: { add: string[] }) {
+        _dictionaryRows() {
+          const rows = this.db
+            .query("SELECT rowid AS id, word FROM custom_dictionary ORDER BY rowid")
+            .all() as Array<{ id: number; word: string }>;
+          return { rows, byLower: new Map(rows.map((row) => [row.word.toLowerCase(), row])) };
+        }
+        _deleteDictionaryRow(_statements: unknown, existing?: { id: number }) {
+          if (!existing) return false;
+          if (failure !== "dictionary-verification")
+            this.db.query("DELETE FROM custom_dictionary WHERE rowid = ?").run(existing.id);
+          if (failure === "dictionary-removal")
+            throw new Error("fixture dictionary removal failure");
+          return true;
+        }
+        applyDictionaryChanges({ add = [], remove = [] }: { add?: string[]; remove?: string[] }) {
+          const { byLower } = this._dictionaryRows();
+          const additions = new Set(add.map((word) => word.trim().toLowerCase()));
+          const removals = new Set(remove.map((word) => word.trim().toLowerCase()));
+          for (const lower of additions) removals.delete(lower);
+          for (const lower of removals)
+            this._deleteDictionaryRow(this._dictionaryWriteStatements(), byLower.get(lower));
           for (const word of add)
-            this.db.query("INSERT INTO custom_dictionary VALUES (?)").run(word);
+            this.db.query("INSERT INTO custom_dictionary (word) VALUES (?)").run(word.trim());
+          if (failure === "dictionary-registration")
+            throw new Error("fixture dictionary registration failure");
           return { success: true };
         }
       }
       function OpenFixtureDatabase() {
+        databaseOpens += 1;
         return db;
       }
       const localStorage = {
@@ -362,93 +439,135 @@ async function verifyStorageRecovery(): Promise<void> {
         },
       };
       const nodeRequire = createRequire(import.meta.url);
-      await new Promise<void>((resolve, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error(`storage recovery fixture timed out: ${failure}`)),
-          fixtureTimeoutMs,
-        );
-        const electron = {
-          app: {
-            setPath() {},
-            requestSingleInstanceLock() {
-              return true;
-            },
-            on() {},
-            whenReady() {
-              return Promise.resolve();
-            },
-            quit() {
-              if (failure === "app-quit") throw new Error("fixture app quit failure");
-              resolve();
-            },
-            exit(code: number) {
-              if (code === 0) resolve();
-              else reject(new Error(`harness exited with ${code}`));
-            },
-          },
-          BrowserWindow: class {
-            webContents = {
-              async executeJavaScript(source: string) {
-                return runInNewContext(source, { localStorage });
+      async function runFixture() {
+        await new Promise<void>((resolve, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error(`storage recovery fixture timed out: ${failure}`)),
+            fixtureTimeoutMs,
+          );
+          const electron = {
+            app: {
+              setPath() {},
+              requestSingleInstanceLock() {
+                return true;
               },
-            };
-            async loadURL() {}
-            destroy() {
-              if (failure === "window-destroy") throw new Error("fixture window destroy failure");
-            }
-          },
-          session: {
-            defaultSession: {
-              webRequest: { onBeforeRequest() {} },
-              protocol: { handle() {} },
-              setPermissionRequestHandler() {},
-              flushStorageData() {
-                flushCount += 1;
-                if (
-                  (failure === "first-flush" && flushCount === 1) ||
-                  (failure === "second-flush" && flushCount === 2)
-                )
-                  throw new Error("fixture storage flush failure");
+              on() {},
+              whenReady() {
+                return Promise.resolve();
+              },
+              quit() {
+                if (failure === "app-quit") throw new Error("fixture app quit failure");
+                resolve();
+              },
+              exit(code: number) {
+                if (code === 0) resolve();
+                else reject(new Error(`harness exited with ${code}`));
               },
             },
-          },
-        };
-        runInNewContext(buildHarnessSource(), {
-          require(name: string) {
-            if (name === "electron") return electron;
-            if (name.endsWith(join("helpers", "database.js"))) return DictionaryFixture;
-            if (name.endsWith(join("node_modules", "better-sqlite3"))) return OpenFixtureDatabase;
-            return nodeRequire(name);
-          },
-          process: {
-            env: {
-              OW_HARNESS_PROFILE: join(tmpdir(), "in-memory-harness-profile"),
-              OW_HARNESS_MODE: "apply",
-              OW_HARNESS_APP_ASAR: join(tmpdir(), "in-memory-app", "app.asar"),
-              OW_HARNESS_DICTIONARY_JSON: JSON.stringify(["Added"]),
-              OW_HARNESS_TARGETS_JSON: JSON.stringify([
-                { key: "first", value: "new-first" },
-                { key: "second", value: "new-second" },
-                { key: "new-key", value: "new-value" },
-              ]),
+            BrowserWindow: class {
+              webContents = {
+                async executeJavaScript(source: string) {
+                  return runInNewContext(source, { localStorage });
+                },
+              };
+              async loadURL() {}
+              destroy() {
+                if (failure === "window-destroy") throw new Error("fixture window destroy failure");
+              }
             },
-            exit(code: number) {
-              reject(new Error(`harness exited with ${code}`));
+            session: {
+              defaultSession: {
+                webRequest: { onBeforeRequest() {} },
+                protocol: { handle() {} },
+                setPermissionRequestHandler() {},
+                flushStorageData() {
+                  flushCount += 1;
+                  if (
+                    (failure === "first-flush" && flushCount === 1) ||
+                    (failure === "second-flush" && flushCount === 2)
+                  )
+                    throw new Error("fixture storage flush failure");
+                },
+              },
             },
-          },
-          console: {
-            log(line: string) {
-              payload = JSON.parse(line);
+          };
+          runInNewContext(buildHarnessSource(), {
+            require(name: string) {
+              if (name === "electron") return electron;
+              if (name.endsWith(join("helpers", "database.js"))) return DictionaryFixture;
+              if (name.endsWith(join("node_modules", "better-sqlite3"))) return OpenFixtureDatabase;
+              return nodeRequire(name);
             },
-            error: reject,
-          },
+            process: {
+              env: {
+                OW_HARNESS_PROFILE: join(tmpdir(), "in-memory-harness-profile"),
+                OW_HARNESS_MODE: "apply",
+                OW_HARNESS_APP_ASAR: join(tmpdir(), "in-memory-app", "app.asar"),
+                ...(declaredWords === undefined
+                  ? {}
+                  : { OW_HARNESS_DICTIONARY_JSON: JSON.stringify(declaredWords) }),
+                OW_HARNESS_TARGETS_JSON: JSON.stringify(
+                  dictionaryOnly
+                    ? [...before].map(([key, value]) => ({ key, value }))
+                    : [
+                        { key: "first", value: "new-first" },
+                        { key: "second", value: "new-second" },
+                        { key: "new-key", value: "new-value" },
+                      ],
+                ),
+              },
+              exit(code: number) {
+                reject(new Error(`harness exited with ${code}`));
+              },
+            },
+            console: {
+              log(line: string) {
+                payload = JSON.parse(line);
+              },
+              error: reject,
+            },
+          });
         });
-      });
-      if (failure === "registration" || failure === "verification" || failure === "first-flush") {
-        assert.equal(payload?.status, "error");
+        clearTimeout(timeout);
+      }
+      await runFixture();
+      if (
+        [
+          "registration",
+          "verification",
+          "first-flush",
+          "dictionary-registration",
+          "dictionary-removal",
+          "dictionary-verification",
+        ].includes(failure)
+      ) {
+        assert.equal(payload?.status, "error", failure);
         assert.deepEqual(payload?.restoreFailed, []);
         assert.deepEqual(storage, before);
-        assert.deepEqual(closedWords, [{ word: "Existing" }]);
+        assert.deepEqual(closedWords, initialRows);
+      } else if (dictionaryOnly) {
+        const expectedStatus =
+          failure === "already-exact" || failure === "no-dictionary" ? "unchanged" : "applied";
+        assert.equal(payload?.status, expectedStatus, failure);
+        assert.deepEqual(storage, before);
+        const rows = db.query("SELECT * FROM custom_dictionary ORDER BY rowid").all();
+        if (["add-and-remove", "remove-only", "empty-clear"].includes(failure)) {
+          assert.equal(payload?.dictionaryRemoved, failure === "empty-clear" ? 4 : 3);
+          const expectedRows =
+            failure === "empty-clear"
+              ? []
+              : [
+                  { word: "Unmanaged", attributes: "preserve-unmanaged" },
+                  ...(failure === "add-and-remove" ? [{ word: "Added", attributes: "new" }] : []),
+                ];
+          assert.deepEqual(rows, expectedRows);
+          await runFixture();
+          assert.equal(payload?.status, "unchanged");
+          assert.deepEqual(db.query("SELECT * FROM custom_dictionary ORDER BY rowid").all(), rows);
+        } else {
+          assert.deepEqual(rows, initialRows);
+          assert.equal(databaseOpens, failure === "no-dictionary" ? 0 : 1);
+        }
       } else {
         assert.equal(payload?.status, "applied");
         assert.deepEqual(
@@ -459,7 +578,10 @@ async function verifyStorageRecovery(): Promise<void> {
             ["new-key", "new-value"],
           ],
         );
-        assert.deepEqual(closedWords, [{ word: "Existing" }, { word: "Added" }]);
+        assert.deepEqual(closedWords, [
+          { word: "Unmanaged", attributes: "preserve-unmanaged" },
+          { word: "Added", attributes: "new" },
+        ]);
         assert.equal(flushCount, 1);
         if (failure === "database-close")
           assert.match(payload.detail ?? "", /fixture database close failure/);
@@ -611,6 +733,7 @@ async function verifyUninitializedProfiles(): Promise<void> {
     writeFileSync(join(keysDir, MANAGED_KEYS_FILE), fixtureYaml, "utf8");
     const env = {
       PATH: process.env.PATH,
+      NODE_PATH: process.env.NODE_PATH,
       HOME: root,
       APPDATA: root,
       LOCALAPPDATA: root,
@@ -791,7 +914,7 @@ async function verifyUninitializedProfiles(): Promise<void> {
         new Response(child.stdout).text(),
         new Response(child.stderr).text(),
       ]);
-      assert.equal(exitCode, 0);
+      assert.equal(exitCode, 0, stderr);
       assert.deepEqual(parseStatusLine(stdout), {
         status: "skipped",
         code: "OK",
@@ -873,6 +996,7 @@ async function verifyInstalledRuntime(): Promise<void> {
   function hookEnv(overrides: Record<string, string>): Record<string, string> {
     return {
       PATH: process.env.PATH ?? "",
+      NODE_PATH: process.env.NODE_PATH ?? "",
       HOME: "/tmp",
       OPENWHISPR_E2E: "1",
       ...(e2ePlatform === "win32"
@@ -1152,11 +1276,11 @@ async function verifyInstalledRuntime(): Promise<void> {
         }),
       );
     }
-    // adds all approved dictionary words without changing existing attributes or other tables
+    // Dictionary reconciliation
     {
       await seedProfile();
       createDictionaryFixture();
-      const words = loadManagedConfig(import.meta.dir).dictionary;
+      const words = loadManagedConfig(import.meta.dir).dictionary!;
       declareDictionary(words);
       const before = dictionarySnapshot();
       const result = await runDeclaredHook();
@@ -1164,11 +1288,12 @@ async function verifyInstalledRuntime(): Promise<void> {
       assert.equal(parseStatusLine(result.stdout).status, "applied");
       const after = dictionarySnapshot();
       const active = after.rows.filter((row) => row.deleted_at === null);
-      assert.equal(active.length, 90);
+      assert.equal(active.length, words.length);
       const keys = active.map((row) => row.word.trim().toLowerCase());
       assert.equal(new Set(keys).size, active.length);
       assert.ok(words.every((word) => keys.includes(word.toLowerCase())));
-      assert.deepEqual(after.rows.slice(0, 2), before.rows.slice(0, 2));
+      assert.deepEqual(after.rows[0], before.rows[0]);
+      assert.ok(after.rows.find((row) => row.word === "owner-only")?.deleted_at);
       assert.deepEqual(after.schema, before.schema);
       assert.deepEqual(after.snippets, before.snippets);
       const restored = after.rows.find((row) => row.word === "Godot");
@@ -1203,7 +1328,7 @@ async function verifyInstalledRuntime(): Promise<void> {
       assert.equal(parseStatusLine(second.stdout).status, "unchanged");
       assert.deepEqual(dictionarySnapshot(), after);
     }
-    // reports applied when only dictionary additions are needed
+    // Dictionary-only updates
     {
       createDictionaryFixture();
       declareDictionary(["pi", "日本語句", " 日本語句 "]);
@@ -1213,9 +1338,89 @@ async function verifyInstalledRuntime(): Promise<void> {
       assert.equal(parseStatusLine(result.stdout).status, "applied");
       assert.deepEqual(await dumpStorage(), storageBefore);
       assert.deepEqual(
-        dictionarySnapshot().rows.map((row) => row.word),
-        ["PI", "owner-only", "Godot", "日本語句"],
+        dictionarySnapshot()
+          .rows.filter((row) => row.deleted_at === null)
+          .map((row) => row.word),
+        ["PI", "日本語句"],
       );
+    }
+    for (const legacy of [false, true]) {
+      if (legacy) createLegacyDictionaryFixture();
+      else createDictionaryFixture();
+      const db = new FixtureDatabase(join(profileDir, "transcriptions.db"));
+      try {
+        db.exec(
+          "INSERT INTO custom_dictionary (word, source, client_dict_id) VALUES ('local-only', 'manual', 'local-only-id'), (' PI ', 'learned', 'padded-pi-id'), ('pi', 'manual', 'lowercase-pi-id'), ('OWNER-ONLY', 'learned', 'uppercase-owner-id'), (' owner-only ', 'manual', 'padded-owner-id')",
+        );
+      } finally {
+        db.close();
+      }
+      declareDictionary(["owner-only"]);
+      const before = dictionarySnapshot();
+      const storageBefore = await dumpStorage();
+      const result = await runDeclaredHook();
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(parseStatusLine(result.stdout).status, "applied");
+      const after = dictionarySnapshot();
+      assert.deepEqual(
+        after.rows.filter((row) => row.deleted_at === null).map((row) => row.word),
+        ["owner-only", "OWNER-ONLY", " owner-only "],
+      );
+      assert.equal(
+        after.rows.some((row) => ["local-only", " PI ", "pi"].includes(row.word)),
+        false,
+      );
+      const removed = after.rows.find((row) => row.word === "PI");
+      assert.ok(removed?.deleted_at);
+      assert.equal(removed.sync_status, "pending");
+      for (const field of ["word", "source", "client_dict_id", "cloud_id"] as const)
+        assert.equal(removed[field], before.rows[0]![field]);
+      for (const row of before.rows.filter((row) =>
+        ["owner-only", "OWNER-ONLY", " owner-only ", "Godot"].includes(row.word),
+      )) {
+        const preserved = after.rows.find((entry) => entry.word === row.word)!;
+        for (const [key, value] of Object.entries(row))
+          assert.equal(preserved[key as keyof typeof row], value, key);
+      }
+      assert.deepEqual(after.snippets, before.snippets);
+      assert.deepEqual(await dumpStorage(), storageBefore);
+      const second = await runDeclaredHook();
+      assert.equal(second.exitCode, 0, second.stderr);
+      assert.equal(parseStatusLine(second.stdout).status, "unchanged");
+      assert.deepEqual(dictionarySnapshot(), after);
+    }
+    {
+      createDictionaryFixture();
+      declareDictionary(["pi", "owner-only"]);
+      const before = dictionarySnapshot();
+      const result = await runDeclaredHook();
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(parseStatusLine(result.stdout).status, "unchanged");
+      assert.deepEqual(dictionarySnapshot(), before);
+    }
+    {
+      const before = dictionarySnapshot();
+      const storageBefore = await dumpStorage();
+      writeFileSync(join(keysDir, MANAGED_KEYS_FILE), e2eYaml);
+      const omitted = await runDeclaredHook();
+      assert.equal(omitted.exitCode, 0, omitted.stderr);
+      assert.equal(parseStatusLine(omitted.stdout).status, "unchanged");
+      assert.deepEqual(dictionarySnapshot(), before);
+      declareDictionary([]);
+      const cleared = await runDeclaredHook();
+      assert.equal(cleared.exitCode, 0, cleared.stderr);
+      assert.equal(parseStatusLine(cleared.stdout).status, "applied");
+      const after = dictionarySnapshot();
+      assert.deepEqual(
+        after.rows.filter((row) => row.deleted_at === null),
+        [],
+      );
+      assert.deepEqual(after.snippets, before.snippets);
+      assert.deepEqual(await dumpStorage(), storageBefore);
+      const second = await runDeclaredHook();
+      assert.equal(second.exitCode, 0, second.stderr);
+      assert.equal(parseStatusLine(second.stdout).status, "unchanged");
+      assert.deepEqual(dictionarySnapshot(), after);
     }
     // keeps the legacy dictionary and storage unchanged while the app singleton is locked
     {
@@ -1245,6 +1450,9 @@ async function verifyInstalledRuntime(): Promise<void> {
       declareDictionary(["first-added-word", "failed-word"]);
       const db = new FixtureDatabase(join(profileDir, "transcriptions.db"));
       try {
+        db.exec(
+          "INSERT INTO custom_dictionary (word, source) VALUES (' PI ', 'learned'), ('pi', 'manual')",
+        );
         db.exec(
           failure === "registration"
             ? "CREATE TRIGGER fail_registration BEFORE INSERT ON custom_dictionary WHEN NEW.word = 'failed-word' BEGIN SELECT RAISE(ABORT, 'fixture registration failure'); END"
@@ -1286,7 +1494,7 @@ async function verifyInstalledRuntime(): Promise<void> {
     {
       await seedProfile();
       createLegacyDictionaryFixture();
-      declareDictionary(["pi", "new-migrated-word"]);
+      declareDictionary(["pi", "owner-only", "new-migrated-word"]);
       const before = dictionarySnapshot();
       const result = await runDeclaredHook();
       assert.equal(result.exitCode, 0, result.stderr);
@@ -1411,7 +1619,7 @@ async function verifyInstalledRuntime(): Promise<void> {
       );
       assert.equal(writer.signal, "SIGKILL", writer.stderr);
       assert.ok(statSync(dbPath + "-wal").size > 32);
-      declareDictionary(["after-wal-migration"]);
+      declareDictionary(["wal-only-word", "after-wal-migration"]);
       const result = await runDeclaredHook();
       assert.equal(result.exitCode, 0, result.stderr);
       const words = dictionarySnapshot().rows.map((row) => row.word);
@@ -1462,7 +1670,7 @@ async function verifyInstalledRuntime(): Promise<void> {
       writeFileSync(join(keysDir, MANAGED_KEYS_FILE), e2eYaml);
       assert.equal((await runDeclaredHook()).exitCode, 0);
       createLegacyDictionaryFixture();
-      declareDictionary(["pi"]);
+      declareDictionary(["pi", "owner-only"]);
       const storageBefore = await dumpStorage();
       const result = await runDeclaredHook();
       assert.equal(result.exitCode, 0, result.stderr);
@@ -1527,15 +1735,19 @@ async function verifyInstalledRuntime(): Promise<void> {
       assert.deepEqual(await dumpStorage(), storageBefore);
     }
     for (const declaration of [undefined, [], ["", " ", "\t"]]) {
-      // keeps storage-only registration independent of the DB for ${JSON.stringify(declaration)}
       await seedProfile();
       for (const suffix of ["", "-wal", "-shm"])
         rmSync(join(profileDir, "transcriptions.db" + suffix), { force: true });
       if (declaration === undefined) writeFileSync(join(keysDir, MANAGED_KEYS_FILE), e2eYaml);
       else declareDictionary(declaration);
+      const storageBefore = await dumpStorage();
       const result = await runDeclaredHook();
-      assert.equal(result.exitCode, 0, result.stderr);
-      assert.equal(parseStatusLine(result.stdout).status, "applied");
+      assert.equal(result.exitCode, declaration === undefined ? 0 : 5, result.stderr);
+      assert.equal(
+        parseStatusLine(result.stdout).status,
+        declaration === undefined ? "applied" : "error",
+      );
+      if (declaration !== undefined) assert.deepEqual(await dumpStorage(), storageBefore);
       assert.equal(existsSync(join(profileDir, "transcriptions.db")), false);
     }
     // rejects an invalid declaration without touching the profile

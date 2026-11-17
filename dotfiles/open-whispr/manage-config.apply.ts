@@ -207,7 +207,10 @@ export function validateDictionary(raw: unknown): string[] {
   return [...words.values()];
 }
 
-export type ManagedConfig = { keys: ManagedStorageTarget[]; dictionary: string[] };
+export type ManagedConfig = {
+  keys: ManagedStorageTarget[];
+  dictionary?: string[];
+};
 
 export function loadManagedConfig(baseDir: string): ManagedConfig {
   const declarationPath = join(baseDir, MANAGED_KEYS_FILE);
@@ -225,7 +228,9 @@ export function loadManagedConfig(baseDir: string): ManagedConfig {
     throw new HookError("INVALID_INPUT", `managed keys file is not valid YAML: ${declarationPath}`);
   }
   const keys = validateManagedKeys(raw);
-  const dictionary = validateDictionary((raw as { dictionary?: unknown }).dictionary);
+  const declaration = raw as { dictionary?: unknown };
+  const dictionary =
+    declaration.dictionary === undefined ? undefined : validateDictionary(declaration.dictionary);
   return { keys, dictionary };
 }
 
@@ -233,12 +238,9 @@ export function loadManagedKeys(baseDir: string): ManagedStorageTarget[] {
   return loadManagedConfig(baseDir).keys;
 }
 
-export function managedKeysSha256(
-  targets: ManagedStorageTarget[],
-  dictionary: string[] = [],
-): string {
+export function managedKeysSha256(targets: ManagedStorageTarget[], dictionary?: string[]): string {
   const storage = targets.map((target) => `${target.key}\0${target.value}`).join("\0");
-  return sha256Hex(dictionary.length === 0 ? storage : JSON.stringify({ storage, dictionary }));
+  return sha256Hex(dictionary === undefined ? storage : JSON.stringify({ storage, dictionary }));
 }
 
 export type RegistrationOutcome = {
@@ -381,7 +383,7 @@ export function buildHarnessSource(): string {
       "const profile = process.env.OW_HARNESS_PROFILE;",
       "const mode = process.env.OW_HARNESS_MODE;",
       'const targets = JSON.parse(process.env.OW_HARNESS_TARGETS_JSON || "[]");',
-      'const words = JSON.parse(process.env.OW_HARNESS_DICTIONARY_JSON || "[]");',
+      'const words = JSON.parse(process.env.OW_HARNESS_DICTIONARY_JSON || "null");',
       `if (!profile || !nodePath.isAbsolute(profile)) process.exit(${harnessExitInvalidArguments});`,
       'if ((mode === "read" || mode === "apply") && targets.length === 0) process.exit(90);',
       "",
@@ -452,6 +454,7 @@ export function buildHarnessSource(): string {
     let database = null;
     let dictionary = null;
     let missing = [];
+    let removals = [];
     let migrationDir = null;
     let migrated = false;
     const databasePath = nodePath.join(profile, "transcriptions.db");
@@ -463,7 +466,7 @@ export function buildHarnessSource(): string {
     }
     try {
       for (const target of targets) before[target.key] = await readKey(target.key);
-      if (words.length > 0) {
+      if (words !== null) {
         const asar = process.env.OW_HARNESS_APP_ASAR;
         if (!asar || !nodePath.isAbsolute(asar)) throw new Error("installed app.asar path is missing");
         const DatabaseManager = require(nodePath.join(asar, "src", "helpers", "database.js"));
@@ -471,6 +474,9 @@ export function buildHarnessSource(): string {
         if (typeof DatabaseManager.prototype.getDictionary !== "function" ||
             typeof DatabaseManager.prototype.applyDictionaryChanges !== "function")
           throw new Error("installed app does not support dictionary delta registration");
+        if (typeof DatabaseManager.prototype._dictionaryRows !== "function" ||
+            typeof DatabaseManager.prototype._deleteDictionaryRow !== "function")
+          throw new Error("installed app does not support dictionary row removal");
         database = new SQLite(databasePath, { fileMustExist: true });
         dictionary = Object.create(DatabaseManager.prototype);
         dictionary.db = database;
@@ -499,15 +505,26 @@ export function buildHarnessSource(): string {
         }
         const existing = new Set(dictionary.getDictionary().map(wordKey));
         missing = words.filter((word) => !existing.has(wordKey(word)));
+        const declared = new Set(words.map(wordKey));
+        removals = dictionary._dictionaryRows().rows.filter((row) =>
+          !row.deleted_at && !declared.has(wordKey(row.word)));
       }
       const changedTargets = targets.filter((target) => before[target.key] !== target.value);
-      if (changedTargets.length === 0 && missing.length === 0 && !migrated) {
+      const dictionaryChanged = missing.length > 0 || removals.length > 0;
+      if (changedTargets.length === 0 && !dictionaryChanged && !migrated) {
         result = { status: "unchanged" };
       } else {
-        if (missing.length > 0) database.exec("BEGIN IMMEDIATE");
+        if (dictionaryChanged) database.exec("BEGIN IMMEDIATE");
         for (const target of changedTargets) {
           applied.push(target.key);
           await setKey(target.key, target.value);
+        }
+        if (removals.length > 0) {
+          const statements = dictionary._dictionaryWriteStatements();
+          for (const row of removals) {
+            if (dictionary._deleteDictionaryRow(statements, row) !== true)
+              throw new Error("dictionary row removal failed");
+          }
         }
         if (missing.length > 0) {
           const delta = dictionary.applyDictionaryChanges({ add: missing });
@@ -520,7 +537,9 @@ export function buildHarnessSource(): string {
         }
         if (dictionary) {
           const registered = new Set(dictionary.getDictionary().map(wordKey));
-          if (!words.every((word) => registered.has(wordKey(word))))
+          const declared = new Set(words.map(wordKey));
+          if (registered.size !== declared.size ||
+              !words.every((word) => registered.has(wordKey(word))))
             throw new Error("dictionary verification failed");
         }
         if (database && database.inTransaction) database.exec("COMMIT");
@@ -530,7 +549,7 @@ export function buildHarnessSource(): string {
           if (!nodeFs.statSync(databasePath).isFile()) throw new Error("existing database file is missing");
           await backupDatabase(database, databasePath);
         }
-        result = { status: "applied", applied: applied, dictionaryAdded: missing.length };
+        result = { status: "applied", applied: applied, dictionaryAdded: missing.length, dictionaryRemoved: removals.length };
       }
     } catch (error) {
       if (database && database.inTransaction) {
@@ -660,6 +679,7 @@ export type HarnessPayload = {
   status: string;
   detail?: string;
   dictionaryAdded?: number;
+  dictionaryRemoved?: number;
   current?: Record<string, { value: string | null; sha256: string | null; equals: boolean }>;
   applied?: string[];
   restoreFailed?: string[];
