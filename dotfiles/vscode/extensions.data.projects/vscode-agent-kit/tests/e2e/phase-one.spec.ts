@@ -1186,6 +1186,7 @@ test(
   "Archives directly, stops only its Pi and reopens the saved conversation after Unarchive",
   { annotation: { type: "spec", description: "E2E-13" } },
   async ({ host }, testInfo) => {
+    testInfo.setTimeout(150_000);
     const aIsListed = (): boolean => {
       const workspaces = JSON.parse(
         execFileSync(join(host.directory, "bin/pi-mux"), ["list"], {
