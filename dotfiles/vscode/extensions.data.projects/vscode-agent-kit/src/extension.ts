@@ -1,16 +1,15 @@
 import * as vscode from "vscode";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, relative } from "node:path";
 import { SessionLauncher } from "./launcher";
 import { EmptySessionPool } from "./emptySessionPool";
-import { resolveAgentDir, resolveConfiguredSessionRoot } from "./paths";
+import { resolveConfiguredSessionRoot } from "./paths";
 import { TerminalRegistry } from "./terminalRegistry";
 import { editorTerminals } from "./terminals";
 import { SessionWebviewProvider, VIEW_ID } from "./webview/sessionWebviewProvider";
 
 export function activate(context: vscode.ExtensionContext): void {
   const homeDir = homedir();
-  const agentDir = resolveAgentDir(process.env, homeDir);
   const registry = new TerminalRegistry(editorTerminals());
   const log = vscode.window.createOutputChannel("Pi Sessions", { log: true });
 
@@ -32,7 +31,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   let sessionRoot: string | undefined;
   let rootWatcher: vscode.FileSystemWatcher | undefined;
-  let applyingRoot: Promise<void> | undefined;
+  let disposed = false;
   const historyWatchers = new Map<string, vscode.FileSystemWatcher>();
   const provider = new SessionWebviewProvider({
     extensionUri: context.extensionUri.fsPath,
@@ -77,44 +76,24 @@ export function activate(context: vscode.ExtensionContext): void {
     return fromParent === "" || (!fromParent.startsWith("..") && !isAbsolute(fromParent));
   }
 
-  function applySessionRoot(): Promise<void> {
-    const applied = (applyingRoot ?? Promise.resolve()).then(async () => {
-      let root: string;
-      try {
-        root = await resolveConfiguredSessionRoot(process.env, homeDir, process.cwd());
-      } catch {
-        return;
-      }
-      if (root === sessionRoot) return;
-      const switched = sessionRoot !== undefined;
-      sessionRoot = root;
-      rootWatcher?.dispose();
-      for (const watcher of historyWatchers.values()) watcher.dispose();
-      historyWatchers.clear();
-      rootWatcher = watchDirectory(root);
-      if (switched) void provider.onSessionRootChanged();
-    });
-    applyingRoot = applied;
-    return applied;
-  }
-
-  const settingsWatchers: vscode.FileSystemWatcher[] = [];
-  if (!process.env.PI_CODING_AGENT_SESSION_DIR) {
-    for (const settingsPath of new Set([
-      join(agentDir, "settings.json"),
-      join(process.cwd(), ".pi", "settings.json"),
-    ])) {
-      const watcher = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(vscode.Uri.file(dirname(settingsPath)), basename(settingsPath)),
-      );
-      const reapply = () => void applySessionRoot();
-      watcher.onDidCreate(reapply);
-      watcher.onDidChange(reapply);
-      watcher.onDidDelete(reapply);
-      settingsWatchers.push(watcher);
+  async function initializeSessionRoot(): Promise<void> {
+    let root: string;
+    try {
+      root = await resolveConfiguredSessionRoot(process.env, homeDir, process.cwd());
+    } catch {
+      return;
+    }
+    if (disposed) return;
+    sessionRoot = root;
+    rootWatcher = watchDirectory(root);
+    for (const [directory, watcher] of historyWatchers) {
+      if (!isInsideDirectory(root, directory)) continue;
+      watcher.dispose();
+      historyWatchers.delete(directory);
     }
   }
-  void applySessionRoot();
+
+  void initializeSessionRoot();
   void provider.refresh();
 
   context.subscriptions.push(
@@ -124,9 +103,9 @@ export function activate(context: vscode.ExtensionContext): void {
     provider,
     {
       dispose: () => {
+        disposed = true;
         rootWatcher?.dispose();
         for (const watcher of historyWatchers.values()) watcher.dispose();
-        for (const watcher of settingsWatchers) watcher.dispose();
       },
     },
     vscode.commands.registerCommand("piSessions.refreshSessions", () => provider.refreshManually()),

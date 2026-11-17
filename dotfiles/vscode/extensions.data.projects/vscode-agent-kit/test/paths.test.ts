@@ -17,6 +17,25 @@ describe("directory resolution", () => {
     expect(resolveSessionDir(env, "/home/user")).toBe("/custom/agent/sessions");
   });
 
+  it.each([
+    ["~", "/home/user"],
+    ["~/", "/home/user"],
+    ["~/custom-agent", "/home/user/custom-agent"],
+    ["custom-agent", "/extension-host/custom-agent"],
+    ["../custom-agent", "/custom-agent"],
+  ])("normalizes agent directory %s for settings and default sessions", (input, expected) => {
+    const env = { PI_CODING_AGENT_DIR: input };
+    expect(resolveAgentDir(env, "/home/user", "/extension-host")).toBe(expected);
+    expect(resolveSessionDir(env, "/home/user", "/extension-host")).toBe(
+      join(expected, "sessions"),
+    );
+  });
+
+  it("resolves relative agent directories from the host cwd by default", () => {
+    const env = { PI_CODING_AGENT_DIR: "custom-agent" };
+    expect(resolveAgentDir(env, "/home/user")).toBe(join(process.cwd(), "custom-agent"));
+  });
+
   it("honors PI_CODING_AGENT_SESSION_DIR independently", () => {
     const env = { PI_CODING_AGENT_SESSION_DIR: "/custom/sessions" };
     expect(resolveSessionDir(env, "/home/user")).toBe("/custom/sessions");
@@ -51,6 +70,51 @@ describe("resolveConfiguredSessionRoot", () => {
     await mkdir(path.slice(0, path.lastIndexOf("/")), { recursive: true });
     await writeFile(path, text, "utf8");
   }
+
+  describe.each([
+    [undefined, ".pi/agent"],
+    ["", ".pi/agent"],
+    ["~", "."],
+    ["~/", "."],
+    ["~/custom-agent", "custom-agent"],
+    ["custom-agent", "project/custom-agent"],
+    ["../custom-agent", "custom-agent"],
+  ])("with agent directory %s", (input, directory) => {
+    it("uses the normalized agent directory for default sessions", async () => {
+      const expected = join(home, directory, "sessions");
+      const actual = await resolveConfiguredSessionRoot(
+        { PI_CODING_AGENT_DIR: input },
+        home,
+        project,
+      );
+      expect(actual).toBe(expected);
+    });
+
+    it("reads sessionDir from normalized agent settings and preserves precedence", async () => {
+      const env = { PI_CODING_AGENT_DIR: input };
+      await writeSettings(
+        join(home, directory, "settings.json"),
+        JSON.stringify({ sessionDir: "~/agent-history" }),
+      );
+      expect(await resolveConfiguredSessionRoot(env, home, project)).toBe(
+        join(home, "agent-history"),
+      );
+      await writeSettings(
+        join(project, ".pi", "settings.json"),
+        JSON.stringify({ sessionDir: "project-history" }),
+      );
+      expect(await resolveConfiguredSessionRoot(env, home, project)).toBe(
+        join(project, "project-history"),
+      );
+      expect(
+        await resolveConfiguredSessionRoot(
+          { ...env, PI_CODING_AGENT_SESSION_DIR: "env-history" },
+          home,
+          project,
+        ),
+      ).toBe(join(project, "env-history"));
+    });
+  });
 
   it("prefers PI_CODING_AGENT_SESSION_DIR over settings and expands ~", async () => {
     await writeSettings(

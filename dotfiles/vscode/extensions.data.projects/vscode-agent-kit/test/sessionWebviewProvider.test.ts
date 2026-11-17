@@ -796,35 +796,6 @@ describe("SessionWebviewProvider", () => {
       expect(mocks.history).not.toHaveBeenCalled();
     });
 
-    it("reloads every workspace and drops saved metadata when the session root changes", async () => {
-      const { provider, mocks, workspaces, history, row } = await unreadFixture();
-      workspaces.add("/other");
-      await tick(provider);
-      mocks.history.mockClear();
-      history.clear();
-      await provider.onSessionRootChanged();
-      expect(mocks.history.mock.calls).toEqual([[]]);
-      expect(row(activeSessionId).displayName).toBe("Untitled");
-    });
-
-    it("rejects a history reply from the previous session root", async () => {
-      const { provider, mocks, history, row, webview } = await unreadFixture();
-      const previous = [...history.values()].map((entry) => ({ ...entry, title: "Old root" }));
-      const held = deferred<PiMuxHistoryEntry[]>();
-      mocks.history.mockClear();
-      mocks.history.mockReturnValueOnce(held.promise);
-      const refresh = provider.refresh();
-      await vi.waitFor(() => expect(mocks.history).toHaveBeenCalledOnce());
-      history.get(activeSessionId)!.title = "New root";
-      const switched = provider.onSessionRootChanged();
-      webview.postMessage.mockClear();
-      held.resolve(previous);
-      await Promise.all([refresh, switched]);
-      expect(row().displayName).toBe("New root");
-      expect(mocks.history.mock.calls).toEqual([[], []]);
-      expect(JSON.stringify(webview.postMessage.mock.calls)).not.toContain("Old root");
-    });
-
     it("preserves the list on history errors and backs off retries independently of list polling", async () => {
       const { provider, mocks, sentState } = await unreadFixture();
       const original = sentState();
@@ -2195,11 +2166,9 @@ describe("SessionWebviewProvider", () => {
     webview.postMessage.mockClear();
 
     await provider.refresh();
-    await provider.onSessionRootChanged();
     await provider.refresh(false);
 
     expect(loadingMessages(webview)).toEqual([
-      { type: "loading", manual: false, displayedSessionId: null },
       { type: "loading", manual: false, displayedSessionId: null },
       { type: "loading", manual: false, displayedSessionId: null },
     ]);

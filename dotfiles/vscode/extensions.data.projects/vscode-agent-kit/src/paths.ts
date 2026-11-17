@@ -8,13 +8,12 @@ export interface PiPathEnv {
   PI_CODING_AGENT_SESSION_DIR?: string | undefined;
 }
 
-/** Falls back for an empty string too, matching pi's own truthiness check. */
-export function resolveAgentDir(env: PiPathEnv, homeDir: string): string {
-  return env.PI_CODING_AGENT_DIR || join(homeDir, ".pi", "agent");
+export function resolveAgentDir(env: PiPathEnv, homeDir: string, cwd = process.cwd()): string {
+  return expandPath(env.PI_CODING_AGENT_DIR || join(homeDir, ".pi", "agent"), homeDir, cwd);
 }
 
-export function resolveSessionDir(env: PiPathEnv, homeDir: string): string {
-  return env.PI_CODING_AGENT_SESSION_DIR || join(resolveAgentDir(env, homeDir), "sessions");
+export function resolveSessionDir(env: PiPathEnv, homeDir: string, cwd = process.cwd()): string {
+  return env.PI_CODING_AGENT_SESSION_DIR || join(resolveAgentDir(env, homeDir, cwd), "sessions");
 }
 
 export async function resolveConfiguredSessionRoot(
@@ -23,10 +22,10 @@ export async function resolveConfiguredSessionRoot(
   cwd: string,
 ): Promise<string> {
   if (env.PI_CODING_AGENT_SESSION_DIR) {
-    return expandSessionPath(env.PI_CODING_AGENT_SESSION_DIR, homeDir, cwd);
+    return expandPath(env.PI_CODING_AGENT_SESSION_DIR, homeDir, cwd);
   }
   const agentSettings = await readSessionDirSetting(
-    join(resolveAgentDir(env, homeDir), "settings.json"),
+    join(resolveAgentDir(env, homeDir, cwd), "settings.json"),
     homeDir,
     cwd,
   );
@@ -35,7 +34,7 @@ export async function resolveConfiguredSessionRoot(
     homeDir,
     cwd,
   );
-  return projectSettings ?? agentSettings ?? resolveSessionDir(env, homeDir);
+  return projectSettings ?? agentSettings ?? resolveSessionDir(env, homeDir, cwd);
 }
 
 async function readSessionDirSetting(
@@ -60,10 +59,10 @@ async function readSessionDirSetting(
   if (!("sessionDir" in parsed)) return undefined;
   const { sessionDir } = parsed;
   if (typeof sessionDir !== "string") throw new Error(`Invalid sessionDir in ${settingsPath}`);
-  return expandSessionPath(sessionDir, homeDir, cwd);
+  return expandPath(sessionDir, homeDir, cwd);
 }
 
-function expandSessionPath(path: string, homeDir: string, cwd: string): string {
+function expandPath(path: string, homeDir: string, cwd: string): string {
   if (path.startsWith("file://")) return fileURLToPath(path);
   const expanded =
     path === "~" ? homeDir : path.startsWith("~/") ? join(homeDir, path.slice(2)) : path;

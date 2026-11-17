@@ -143,14 +143,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     void this.refreshHistory();
   }
 
-  async onSessionRootChanged(): Promise<void> {
-    this.historySnapshot = undefined;
-    this.historyFailed = false;
-    this.historyRetryMs = INITIAL_HISTORY_RETRY_MS;
-    this.publishSessionFiles();
-    await this.refresh();
-  }
-
   private async requestRefresh(manual: boolean): Promise<void> {
     if (this.disposed) return;
     this.refreshVersion += 1;

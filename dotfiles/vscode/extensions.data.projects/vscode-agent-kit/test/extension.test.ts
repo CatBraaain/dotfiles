@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import * as os from "node:os";
 import type * as vscode from "vscode";
 import manifest from "../package.json";
 import { activate } from "../src/extension";
@@ -27,6 +28,8 @@ const api = vi.hoisted(() => ({
   createOutputChannel: vi.fn(),
   watchers: [] as WatcherStub[],
 }));
+
+vi.mock("node:os", { spy: true });
 
 vi.mock("vscode", () => ({
   commands: { registerCommand: api.registerCommand },
@@ -64,6 +67,7 @@ describe("extension commands", () => {
     vi.stubEnv("PI_CODING_AGENT_DIR", "/fixture/agent");
     vi.stubEnv("PI_CODING_AGENT_SESSION_DIR", "/fixture/sessions");
     root = await tempDir("pi-extension-test-");
+    vi.mocked(os.homedir).mockReturnValue(root);
   });
 
   afterEach(async () => {
@@ -180,28 +184,57 @@ describe("extension commands", () => {
     expect(watcherFor("/custom/history")?.dispose).toHaveBeenCalledOnce();
   });
 
-  it("watches a settings-configured session root and routes its files to history", async () => {
-    vi.stubEnv("PI_CODING_AGENT_SESSION_DIR", "");
-    const agent = join(root, "agent");
-    const custom = join(root, "custom-history");
-    await mkdir(agent, { recursive: true });
-    await writeFile(join(agent, "settings.json"), JSON.stringify({ sessionDir: custom }), "utf8");
-    vi.stubEnv("PI_CODING_AGENT_DIR", agent);
-    const historyChanged = vi
-      .spyOn(SessionWebviewProvider.prototype, "onSessionFileChanged")
-      .mockResolvedValue();
-    vi.spyOn(EmptySessionPool.prototype, "onSessionFileChanged").mockImplementation(() => {});
-    register();
-    await vi.waitFor(() => expect(watcherFor(custom)).toBeDefined());
-    expect(watcherFor(join(agent, "sessions"))).toBeUndefined();
-    const created = watcherFor(custom)!.onDidCreate.mock.calls[0][0] as (uri: {
-      fsPath: string;
-    }) => void;
-    created({ fsPath: join(custom, "new.jsonl") });
-    expect(historyChanged).toHaveBeenCalledExactlyOnceWith();
-  });
+  it.each([
+    [undefined, ".pi/agent"],
+    ["", ".pi/agent"],
+    ["~", "."],
+    ["~/", "."],
+    ["~/custom-agent", "custom-agent"],
+    ["custom-agent", "host/custom-agent"],
+    ["../custom-agent", "custom-agent"],
+  ] as const)(
+    "watches the default session root at startup for agent directory %s",
+    async (input, directory) => {
+      vi.spyOn(process, "cwd").mockReturnValue(join(root, "host"));
+      vi.stubEnv("PI_CODING_AGENT_DIR", input);
+      vi.stubEnv("PI_CODING_AGENT_SESSION_DIR", "");
+      const agent = join(root, directory);
+      const defaultSessions = join(agent, "sessions");
+      const settingsPath = join(agent, "settings.json");
+      await mkdir(agent, { recursive: true });
+      await writeFile(settingsPath, "{}", "utf8");
+      register();
+      await vi.waitFor(() => expect(watcherFor(defaultSessions)).toBeDefined());
+      expect(watcherFor(defaultSessions)?.pattern).toBe("**/*.jsonl");
+      expect(api.watchers).toHaveLength(1);
+    },
+  );
 
-  it("re-watches and drops held history when settings move the session root", async () => {
+  it.each(["absolute", "home-relative"])(
+    "reads %s agent settings at startup and routes its conversation files to history",
+    async (pathKind) => {
+      vi.stubEnv("PI_CODING_AGENT_SESSION_DIR", "");
+      const agent = join(root, "agent");
+      const custom = join(root, "custom-history");
+      await mkdir(agent, { recursive: true });
+      await writeFile(join(agent, "settings.json"), JSON.stringify({ sessionDir: custom }), "utf8");
+      vi.stubEnv("PI_CODING_AGENT_DIR", pathKind === "absolute" ? agent : "~/agent");
+      const historyChanged = vi
+        .spyOn(SessionWebviewProvider.prototype, "onSessionFileChanged")
+        .mockResolvedValue();
+      vi.spyOn(EmptySessionPool.prototype, "onSessionFileChanged").mockImplementation(() => {});
+      register();
+      await vi.waitFor(() => expect(watcherFor(custom)).toBeDefined());
+      expect(watcherFor(join(agent, "sessions"))).toBeUndefined();
+      const created = watcherFor(custom)!.onDidCreate.mock.calls[0][0] as (uri: {
+        fsPath: string;
+      }) => void;
+      created({ fsPath: join(custom, "new.jsonl") });
+      expect(historyChanged).toHaveBeenCalledExactlyOnceWith();
+    },
+  );
+
+  it("keeps the startup root until disposal and reads changed settings on reactivation", async () => {
     vi.stubEnv("PI_CODING_AGENT_SESSION_DIR", "");
     const agent = join(root, "agent");
     const first = join(root, "first");
@@ -210,19 +243,32 @@ describe("extension commands", () => {
     const settingsPath = join(agent, "settings.json");
     await writeFile(settingsPath, JSON.stringify({ sessionDir: first }), "utf8");
     vi.stubEnv("PI_CODING_AGENT_DIR", agent);
-    const rootChanged = vi
-      .spyOn(SessionWebviewProvider.prototype, "onSessionRootChanged")
-      .mockResolvedValue();
-    register();
+    const context = {
+      subscriptions: [],
+      extensionUri: { fsPath: "/extension" },
+    } as unknown as vscode.ExtensionContext;
+    api.registerCommand.mockReturnValue({ dispose: vi.fn() });
+    api.onDidCloseTerminal.mockReturnValue({ dispose: vi.fn() });
+    api.registerWebviewViewProvider.mockReturnValue({ dispose: vi.fn() });
+    vi.spyOn(SessionWebviewProvider.prototype, "refreshManually").mockResolvedValue();
+    activate(context);
     await vi.waitFor(() => expect(watcherFor(first)).toBeDefined());
+    expect(api.watchers.map(({ pattern }) => pattern)).toEqual(["**/*.jsonl"]);
+
     await writeFile(settingsPath, JSON.stringify({ sessionDir: second }), "utf8");
-    const settingsChanged = watcherFor(agent)!.onDidChange.mock.calls[0][0] as (uri: {
-      fsPath: string;
-    }) => void;
-    settingsChanged({ fsPath: settingsPath });
-    await vi.waitFor(() => expect(watcherFor(second)).toBeDefined());
+    const refresh = api.registerCommand.mock.calls[0][1] as () => Promise<void>;
+    await refresh();
+    expect(watcherFor(second)).toBeUndefined();
+    expect(watcherFor(first)?.dispose).not.toHaveBeenCalled();
+    expect(api.watchers).toHaveLength(1);
+
+    for (const subscription of context.subscriptions.splice(0)) subscription.dispose();
     expect(watcherFor(first)?.dispose).toHaveBeenCalledOnce();
-    expect(rootChanged).toHaveBeenCalledOnce();
+    activate(context);
+    await vi.waitFor(() => expect(watcherFor(second)).toBeDefined());
+    expect(watcherFor(second)?.pattern).toBe("**/*.jsonl");
+    expect(api.watchers).toHaveLength(2);
+    for (const subscription of context.subscriptions) subscription.dispose();
   });
 
   it("contributes a named refresh icon only to the Sessions view title", () => {
