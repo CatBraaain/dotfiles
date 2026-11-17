@@ -68,7 +68,7 @@ frontmatter、重複field、status、missing after、after cycle を検証する
 
 ### `ticket dispatch`
 
-dispatcher は ticket store から起動可能な ticket を探してプロンプトを生成し、tmux 上の piセッションを上限数まで並列起動する。ticket の status とセッションの有無を監視し、空いた稼働枠へ次の起動可能ticket を補充する。稼働とは、同じproject の dispatcher が起動し、今回の監視でまだ解放していない piセッションを指す。
+dispatcher は ticket store から起動可能な ticket を探してプロンプトを生成し、tmux 上に ticketごとの piセッションを起動する。ticket の status とセッションの有無を監視し、空いた稼働枠へ次の起動可能ticket を補充する。稼働枠とは、同じproject の dispatcher が監視し、今回の実行でまだ解放していない piセッションごとの枠を指す。
 
 | コマンド | 動作 |
 | --- | --- |
@@ -84,7 +84,7 @@ project は「共通の振る舞い」の project未指定時と同じ cwdベー
 
 | オプション | 既定値 | 内容 |
 | --- | --- | --- |
-| `--max N` | `5` | 同時稼働数の上限。1以上の整数 |
+| `--max N` | `5` | 未解放の監視枠数（稼働数）の上限。1以上の整数 |
 | `--interval SEC` | `30` | tick間隔の秒数。0より大きい有限の数値、小数可 |
 | `--prefix NAME` | `fix_` | piセッション名の接頭辞 |
 
@@ -100,7 +100,7 @@ project は「共通の振る舞い」の project未指定時と同じ cwdベー
 
 #### 固定プロンプトと user への説明
 
-生成するプロンプトは、起動したpi に `ticket {{ TICKET_ID }}` の1件対処を依頼し、作業とticket更新は skill `tickets` に従わせる。pi は user がticketを読んでいない前提で、最初・判断を求めるとき・終了時にチャットで説明する。`closed` にするとdispatcher がセッションを終了するため、必要な承認・記録・説明を済ませて最後に更新する。
+生成するプロンプトは、起動したpi に `ticket {{ TICKET_ID }}` の1件対処を依頼し、作業とticket更新は skill `tickets` に従わせる。pi は user がticketを読んでいない前提で、最初・判断を求めるとき・終了時にチャットで説明する。
 
 #### start と stop
 
@@ -123,7 +123,7 @@ start の成功は dispatcher用tmuxセッションの作成成功を表し、�
 
 ID `X` のセッション名は、`--prefix` に `X` の `.` を `_` へ全置換した文字列を連結した名前である。起動対象ごとに prompt を書き、その内容全体を単一引数として `pi` へ渡す。promptパス内の空白・単一引用符を保持する。
 
-存在確認と kill は、それぞれ `has-session -t =<セッション名>` と `kill-session -t =<セッション名>` の完全一致で行う。他project または dispatcher管理外の既存セッションと名前が衝突する場合は、そのセッションを変更せず、その ticket の起動失敗を記録する。衝突したセッションを稼働中として扱わず、今回の実行中はその ticket を再起動しない。
+存在確認は `has-session -t =<セッション名>` の完全一致で行う。他project または dispatcher管理外の既存セッションと名前が衝突する場合は、そのセッションを変更せず、その ticket の起動失敗を記録する。衝突したセッションを稼働中として扱わず、今回の実行中はその ticket を再起動しない。
 
 起動コマンドが失敗した場合は `tmux new-session failed for <セッション名>: <エラー内容>` を dispatcher の stderr と log へ出す。名前の衝突以外の失敗は稼働として登録し、以降の tick の解放条件で判定する。
 
@@ -133,7 +133,7 @@ ID `X` のセッション名は、`--prefix` に `X` の `.` を `_` へ全置�
 
 | 順 | 条件 | 結果 |
 | --- | --- | --- |
-| 1 | 稼働中ticket の status が `closed` または `cancelled` | `done <ID> status=<status>` を記録し、セッションを kill して稼働枠を解放する |
+| 1 | 稼働中ticket の status が `closed` または `cancelled` | `done <ID> status=<status>` を記録し、稼働枠を解放する |
 | 2 | 1で解放していない稼働中セッションが tmux 上に存在しない | `incomplete <ID> status=<status\|none> session exited without close` を記録し、稼働枠を解放する。その ticket は再起動しない |
 | 3 | 稼働数が `--max` 未満で、起動可能ticket がある | 起動可能ticket を ID の古い順に空き枠の数だけ選び、起動する。起動ごとに `launched <ID> as <セッション名>` を記録する |
 | 4 | 稼働数が0で、起動可能ticket がない | `dispatcher finished` を記録し、dispatcher用セッションを終了する。終了後の ticket の追加・変化は、次回の start で扱う |
@@ -156,7 +156,7 @@ ID `X` のセッション名は、`--prefix` に `X` の `.` を `_` へ全置�
 
 #### ライフサイクル
 
-dispatcher を終了させると監視と補充が止まり、稼働中piセッションは tmux 上に残る。tmux server の終了または OS再起動で dispatcher と piセッションが消え、自動では再開しない。
+dispatcher を終了させると監視と補充が止まる。tmux server の終了または OS再起動で dispatcher と piセッションが消え、自動では再開しない。
 
 ## toolラッパー
 

@@ -259,10 +259,6 @@ function inheritedSessions(socket: string, project: string): Map<string, string>
   return running;
 }
 
-export function killSession(socket: string, name: string): void {
-  tmux(socket, ["kill-session", "-t", `=${name}`]);
-}
-
 export function hasSession(socket: string, name: string): boolean {
   return tmux(socket, ["has-session", "-t", `=${name}`]).ok;
 }
@@ -274,7 +270,6 @@ export interface RunDeps {
   hasSession(name: string): boolean;
   initialRunning?: ReadonlyMap<string, string>;
   launch(id: string, name: string, promptFile: string): boolean | void;
-  killSession(name: string): void;
   sleepMs(ms: number): Promise<void>;
 }
 
@@ -296,7 +291,6 @@ export async function run(deps: RunDeps): Promise<void> {
     });
     for (const entry of plan.done) {
       deps.log(`done ${entry.id} status=${entry.status}`);
-      deps.killSession(entry.name);
       running.delete(entry.id);
     }
     for (const entry of plan.incomplete) {
@@ -361,9 +355,6 @@ export async function dispatch(
       initialRunning: inheritedSessions(socket, project),
       hasSession: (name) => hasSession(socket, name) && ownsSession(socket, name, project, "pi"),
       launch,
-      killSession: (name) => {
-        if (ownsSession(socket, name, project, "pi")) killSession(socket, name);
-      },
       sleepMs: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     });
   } catch (error) {

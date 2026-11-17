@@ -50,6 +50,7 @@ const args = process.argv.slice(2);
 if (!args[0].startsWith("ticket ")) throw new Error("ticket ID is missing");
 const id = args[0].split(" に")[0].slice("ticket ".length);
 appendFileSync(join(${JSON.stringify(records)}, "launches"), id + "\\n");
+writeFileSync(join(${JSON.stringify(records)}, id + ".pid"), String(process.pid));
 writeFileSync(join(${JSON.stringify(records)}, id + ".json"), JSON.stringify({ args, cwd: process.cwd() }));
 if (process.env.STUB_WAIT === "1" || process.env.STUB_HOLD_ID === id) await Bun.sleep(60000);
 if (id !== "b") {
@@ -228,7 +229,7 @@ describe("ticket dispatch real tmux", () => {
     TIMEOUT_MS + 5000,
   );
   it(
-    "uses the cwd store, refills slots, and kills completed stubs without touching exact-name neighbors",
+    "uses the cwd store and refills slots while completed stubs and exact-name neighbors keep running",
     async () => {
       const fixture = setup();
       const { root, cwd, work, store, socket, records } = fixture;
@@ -280,10 +281,23 @@ describe("ticket dispatch real tmux", () => {
             args: [expected],
             cwd,
           });
-          assert.notEqual(
-            isolatedTmux(socket, ["has-session", "-t", `=e2e_${id.replaceAll(".", "_")}`]).status,
-            0,
-          );
+          const name = `=e2e_${id.replaceAll(".", "_")}`;
+          const session = isolatedTmux(socket, ["has-session", "-t", name]);
+          if (id === "b") {
+            assert.notEqual(session.status, 0);
+          } else {
+            assert.equal(session.status, 0, session.stderr);
+            assert.equal(
+              isolatedTmux(socket, [
+                "display-message",
+                "-p",
+                "-t",
+                `${name}:0.0`,
+                "#{pane_pid}",
+              ]).stdout.trim(),
+              readFileSync(join(records, `${id}.pid`), "utf8"),
+            );
+          }
         }
         assert.equal(isolatedTmux(socket, ["has-session", "-t", "=e2e_a_v1_extra"]).status, 0);
       } finally {
@@ -333,10 +347,23 @@ describe("ticket dispatch real tmux", () => {
             args: [expectedPrompt(id)],
             cwd,
           });
-          assert.notEqual(
-            isolatedTmux(socket, ["has-session", "-t", `=e2e_${id.replaceAll(".", "_")}`]).status,
-            0,
-          );
+          const name = `=e2e_${id.replaceAll(".", "_")}`;
+          const session = isolatedTmux(socket, ["has-session", "-t", name]);
+          if (id === "b") {
+            assert.notEqual(session.status, 0);
+          } else {
+            assert.equal(session.status, 0, session.stderr);
+            assert.equal(
+              isolatedTmux(socket, [
+                "display-message",
+                "-p",
+                "-t",
+                `${name}:0.0`,
+                "#{pane_pid}",
+              ]).stdout.trim(),
+              readFileSync(join(records, `${id}.pid`), "utf8"),
+            );
+          }
         }
       } finally {
         isolatedTmux(socket, ["kill-server"]);
@@ -346,9 +373,9 @@ describe("ticket dispatch real tmux", () => {
     TIMEOUT_MS + 5000,
   );
 
-  it(
-    "returns immediately, stops from another worktree, and adopts surviving pi with changed start options",
-    async () => {
+  it.each(["closed", "cancelled"])(
+    "releases inherited %s tickets after stopping and restarting with changed options",
+    async (completedStatus) => {
       const fixture = setup();
       const { root, cwd, work, store, socket, records } = fixture;
       const env = { ...fixture.env, STUB_WAIT: "1" };
@@ -380,9 +407,10 @@ describe("ticket dispatch real tmux", () => {
           "display-message",
           "-p",
           "-t",
-          "=e2e_a_v1",
+          "=e2e_a_v1:0.0",
           "#{pane_pid}",
         ]).stdout;
+        assert.match(piPid, /^\d+\n$/);
         const duplicate = cli(fixture, ["dispatch", work], otherCwd, env);
         assert.equal(duplicate.status, 0, duplicate.stderr);
         assert.match(duplicate.stdout, /already running/);
@@ -421,10 +449,14 @@ describe("ticket dispatch real tmux", () => {
         );
         assert.equal(readFileSync(join(records, "launches"), "utf8"), "a.v1\n");
         assert.equal(
-          isolatedTmux(socket, ["display-message", "-p", "-t", "=e2e_a_v1", "#{pane_pid}"]).stdout,
+          isolatedTmux(socket, ["display-message", "-p", "-t", "=e2e_a_v1:0.0", "#{pane_pid}"])
+            .stdout,
           piPid,
         );
-        assert.equal(cli(fixture, ["set", "a.v1", '{"status":"closed"}']).status, 0);
+        assert.equal(
+          cli(fixture, ["set", "a.v1", JSON.stringify({ status: completedStatus })]).status,
+          0,
+        );
         await waitFor(
           () => existsSync(join(records, "c.json")),
           "new prefix ticket did not start after adoption release",
@@ -440,7 +472,24 @@ describe("ticket dispatch real tmux", () => {
         });
         assert.equal(cli(fixture, ["set", "c", '{"status":"closed"}']).status, 0);
         const log = await waitFinished(fixture, secondWork);
-        assert.match(log, /done a.v1 status=closed/);
+        assert.ok(log.includes(`done a.v1 status=${completedStatus}`));
+        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=e2e_a_v1"]).status, 0);
+        assert.equal(
+          isolatedTmux(socket, ["display-message", "-p", "-t", "=e2e_a_v1:0.0", "#{pane_pid}"])
+            .stdout,
+          piPid,
+        );
+        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=changed_c"]).status, 0);
+        assert.equal(
+          isolatedTmux(socket, [
+            "display-message",
+            "-p",
+            "-t",
+            "=changed_c:0.0",
+            "#{pane_pid}",
+          ]).stdout.trim(),
+          readFileSync(join(records, "c.pid"), "utf8"),
+        );
         assert.equal(readFileSync(join(records, "launches"), "utf8"), "a.v1\nc\n");
       } finally {
         isolatedTmux(socket, ["kill-server"]);

@@ -57,7 +57,6 @@ const deps = {
   loadSnapshot: async () => [{ id: "a", status: "open", actionable: true }],
   log() {},
   hasSession() { return false; },
-  killSession() {},
   launch() {},
   async sleepMs() {},
 };
@@ -360,12 +359,12 @@ describe("dispatch execution", () => {
       },
       log: (line) => events.push(line),
       hasSession: (name) => name !== "fix_b",
-      killSession: (name) => events.push(`kill ${name}`),
       launch: (id, name, promptFile) => {
         assert.equal(promptFile, join(home, "fix", `prompt-${id}.txt`));
         const prompt = readFileSync(promptFile, "utf8");
         assert.ok(prompt.startsWith(`ticket ${id} に対応する。`));
         assert.match(prompt, /user はticketを読んでいない前提で/);
+        assert.doesNotMatch(prompt, /`closed` にするとセッションが終了する/);
         events.push(`start ${name}`);
       },
       sleepMs: async (ms) => {
@@ -393,19 +392,17 @@ describe("dispatch execution", () => {
       "start fix_a",
       "launched a as fix_a",
       "done a status=closed",
-      "kill fix_a",
       "start fix_b",
       "launched b as fix_b",
       "start fix_c",
       "launched c as fix_c",
       "done c status=cancelled",
-      "kill fix_c",
       "incomplete b status=open session exited without close",
       "dispatcher finished",
     ]);
   });
 
-  it("does not retry or kill a launch rejected as a session-name collision", async () => {
+  it("does not retry a launch rejected as a session-name collision", async () => {
     const { options } = fixture();
     const logs: string[] = [];
     let launches = 0;
@@ -414,7 +411,6 @@ describe("dispatch execution", () => {
       loadSnapshot: async () => [{ id: "a", status: "open", actionable: true }],
       log: (line) => logs.push(line),
       hasSession: () => true,
-      killSession: () => assert.fail("a rejected launch must not be killed"),
       launch: () => {
         launches++;
         return false;
@@ -438,14 +434,12 @@ describe("dispatch execution", () => {
       launch: () => {
         launches++;
       },
-      killSession: (name) => events.push(`kill ${name}`),
       sleepMs: async () => {},
     });
     assert.equal(launches, 0);
     assert.deepEqual(events, [
       "dispatcher start max=2",
       "done a status=closed",
-      "kill existing_a",
       "dispatcher finished",
     ]);
   });
