@@ -551,6 +551,200 @@ describe("TerminalRegistry", () => {
     expect(displays.create).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    { intent: "unarchive" as const, previousTemporary: false },
+    { intent: "unarchive" as const, previousTemporary: true },
+    { intent: "select" as const, previousTemporary: false },
+    { intent: "select" as const, previousTemporary: true },
+  ])(
+    "restores the previous live display after creation fails: %j",
+    async ({ intent, previousTemporary }) => {
+      const { registry, displays, live, temporary, mocks } = setup();
+      if (previousTemporary) temporary.add("A");
+      const first = await registry.open({
+        ...session("A"),
+        ...(previousTemporary ? { temporary: true as const } : {}),
+      });
+      const original = live.get("A");
+      live.delete("B");
+      displays.create.mockImplementationOnce(() => {
+        throw new Error("creation failed");
+      });
+      await expect(
+        registry.open(
+          { ...session("B"), ...(intent === "select" ? { temporary: true as const } : {}) },
+          intent,
+        ),
+      ).rejects.toThrow("creation failed; showing previous Pi session A");
+      const restored = await registry.displayForSession("A");
+      expect(restored).toBeDefined();
+      expect(restored).not.toBe(first.terminal);
+      expect(restored?.show).toHaveBeenCalledOnce();
+      expect(first.terminal.dispose).toHaveBeenCalledOnce();
+      expect(displays.create).toHaveBeenCalledTimes(3);
+      expect(displays.create).toHaveBeenLastCalledWith({
+        ...session("A"),
+        ...(previousTemporary ? { temporary: true } : {}),
+      });
+      expect(live.get("A")).toBe(original);
+      expect(temporary.has("A")).toBe(previousTemporary);
+      expect(registry.displayedSessionId).toBe("A");
+      expect(mocks.current).not.toHaveBeenCalled();
+      expect(mocks.newSession).not.toHaveBeenCalled();
+      expect(mocks.closeTemporarySession).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not restart a previous Pi that exited before restoration", async () => {
+    const { registry, displays, live } = setup();
+    await registry.open(session("A"));
+    displays.create.mockImplementationOnce(() => {
+      live.delete("A");
+      throw new Error("creation failed");
+    });
+    await expect(registry.open(session("B"), "unarchive")).rejects.toThrow("creation failed");
+    expect(displays.create).toHaveBeenCalledTimes(2);
+    expect(await registry.displayForSession("A")).toBeUndefined();
+    expect(live.has("A")).toBe(false);
+  });
+
+  it.each(["list", "create"] as const)(
+    "reports the original and restoration errors when %s fails",
+    async (failure) => {
+      const { registry, displays, mocks } = setup();
+      await registry.open(session("A"));
+      displays.create.mockImplementationOnce(() => {
+        if (failure === "list") mocks.list.mockRejectedValueOnce(new Error("recovery denied"));
+        throw new Error("creation failed");
+      });
+      if (failure === "create")
+        displays.create.mockImplementationOnce(() => {
+          throw new Error("recovery denied");
+        });
+      await expect(registry.open(session("B"), "unarchive")).rejects.toThrow(
+        "creation failed; failed to restore display: recovery denied",
+      );
+      expect(displays.create).toHaveBeenCalledTimes(failure === "list" ? 2 : 3);
+      expect(await registry.displayForSession("A")).toBeUndefined();
+      expect(registry.displayedSessionId).toBe("A");
+    },
+  );
+
+  it("uses the current temporary attribute when restoring an existing Pi", async () => {
+    const { registry, displays, temporary } = setup();
+    await registry.open(session("A"));
+    displays.create.mockImplementationOnce(() => {
+      temporary.add("A");
+      throw new Error("creation failed");
+    });
+    await expect(registry.open(session("B"), "unarchive")).rejects.toThrow(
+      "showing previous Pi session A",
+    );
+    expect(displays.create).toHaveBeenLastCalledWith({ ...session("A"), temporary: true });
+    expect(temporary.has("A")).toBe(true);
+  });
+
+  it("restores an unsaved empty Pi without waiting for the new process ID", async () => {
+    const { registry, displays, emptyIds, live } = setup();
+    await registry.open(session("A"));
+    emptyIds.add("A");
+    const terminal = displayTerminal();
+    const processId = vi.fn(() => new Promise<number>(() => {}));
+    Object.defineProperty(terminal, "processId", { get: processId });
+    displays.create.mockImplementationOnce(() => {
+      throw new Error("creation failed");
+    });
+    displays.create.mockReturnValueOnce(terminal);
+    await expect(registry.open(session("B"), "unarchive")).rejects.toThrow(
+      "showing previous Pi session A",
+    );
+    expect(terminal.show).toHaveBeenCalledOnce();
+    expect(live.has("A")).toBe(true);
+    expect(await registry.displayForSession("A")).toBe(terminal);
+  });
+
+  it.each(["request", "dispose", "old workspace", "new workspace"] as const)(
+    "does not restore after %s cancellation while checking Pi",
+    async (cancellation) => {
+      const { registry, displays, mocks } = setup();
+      await registry.open(session("A"));
+      const controller = new AbortController();
+      const snapshot = await mocks.list.getMockImplementation()!();
+      let release!: () => void;
+      const pending = new Promise<typeof snapshot>((resolve) => {
+        release = () => resolve(snapshot);
+      });
+      displays.create.mockImplementationOnce(() => {
+        mocks.list.mockReturnValueOnce(pending);
+        throw new Error("creation failed");
+      });
+      const opening = registry
+        .open(session("B", "/other"), "unarchive", controller.signal)
+        .catch((error: unknown) => error);
+      await vi.waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(3));
+      if (cancellation === "request") controller.abort(new Error("request cancelled"));
+      if (cancellation === "dispose") registry.dispose();
+      if (cancellation === "old workspace") registry.cancelDisplayRecovery("/project");
+      if (cancellation === "new workspace") registry.cancelDisplayRecovery("/other");
+      release();
+      expect(await opening).toBeInstanceOf(Error);
+      expect(displays.create).toHaveBeenCalledTimes(2);
+      expect(await registry.displayForSession("A")).toBeUndefined();
+    },
+  );
+
+  it("remembers workspace cancellation received before a replacement fails", async () => {
+    const { registry, displays, mocks } = setup();
+    await registry.open(session("A"));
+    const snapshot = await mocks.list.getMockImplementation()!();
+    let release!: () => void;
+    mocks.list.mockReturnValueOnce(
+      new Promise<typeof snapshot>((resolve) => {
+        release = () => resolve(snapshot);
+      }),
+    );
+    displays.create.mockImplementationOnce(() => {
+      throw new Error("creation failed");
+    });
+    const opening = registry
+      .open(session("B", "/other"), "unarchive")
+      .catch((error: unknown) => error);
+    registry.cancelDisplayRecovery("/project");
+    release();
+    expect(await opening).toBeInstanceOf(Error);
+    expect(displays.create).toHaveBeenCalledTimes(2);
+    expect(await registry.displayForSession("A")).toBeUndefined();
+  });
+
+  it.each(["request", "dispose", "workspace"] as const)(
+    "closes an unpresented recovery display after %s cancellation",
+    async (cancellation) => {
+      const { registry, displays } = setup();
+      const create = displays.create.getMockImplementation()!;
+      await registry.open(session("A"));
+      const controller = new AbortController();
+      let recovered!: vscode.Terminal;
+      displays.create.mockImplementationOnce(() => {
+        throw new Error("creation failed");
+      });
+      displays.create.mockImplementationOnce((request) => {
+        recovered = create(request);
+        queueMicrotask(() => {
+          if (cancellation === "request") controller.abort(new Error("request cancelled"));
+          if (cancellation === "dispose") registry.dispose();
+          if (cancellation === "workspace") registry.cancelDisplayRecovery("/project");
+        });
+        return recovered;
+      });
+      await expect(
+        registry.open(session("B"), "unarchive", controller.signal),
+      ).rejects.toBeInstanceOf(Error);
+      expect(recovered.show).not.toHaveBeenCalled();
+      expect(recovered.dispose).toHaveBeenCalledOnce();
+      expect(await registry.displayForSession("A")).toBeUndefined();
+    },
+  );
+
   it("does not wait for a second close event if the display closed during attachment", async () => {
     const existing = displayTerminal();
     const { registry, mocks } = setup(existing);

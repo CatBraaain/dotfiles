@@ -2649,6 +2649,125 @@ describe("SessionWebviewProvider", () => {
     );
   });
 
+  it.each([
+    { type: "unarchiveSession", previousTemporary: false },
+    { type: "unarchiveSession", previousTemporary: true },
+    { type: "openSession", previousTemporary: false },
+    { type: "openSession", previousTemporary: true },
+  ])(
+    "restores the previous conversation and reports a failed reconnect: %j",
+    async ({ type, previousTemporary }) => {
+      const fixture = await unreadFixture();
+      const { webview, registry, mocks, live, temporary, provider, setPhase, row, sentState } =
+        fixture;
+      if (previousTemporary) temporary.add(activeSessionId);
+      live.delete(inactiveSessionId);
+      await provider.refresh();
+      await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      if (!previousTemporary) {
+        await setPhase("running");
+        await setPhase("waiting-user");
+      }
+      const original = live.get(activeSessionId);
+      const createsBefore = vscodeMocks.createTerminal.mock.calls.length;
+      vscodeMocks.createTerminal.mockImplementationOnce(() => {
+        throw new Error("creation denied");
+      });
+      await webview.receive({ type, sessionId: inactiveSessionId });
+      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.stringMatching(
+          new RegExp("creation denied; showing previous Pi session " + activeSessionId),
+        ),
+      );
+      expect(webview.postMessage).toHaveBeenCalledWith({
+        type: "error",
+        message: expect.stringContaining("creation denied; showing previous Pi session"),
+      });
+      expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(createsBefore + 2);
+      const restored = await registry.displayForSession(activeSessionId);
+      expect(restored).toBeDefined();
+      expect(restored?.show).toHaveBeenCalled();
+      expect(live.get(activeSessionId)).toBe(original);
+      expect(temporary.has(activeSessionId)).toBe(previousTemporary);
+      expect(mocks.closeTemporarySession).not.toHaveBeenCalled();
+      expect(live.has(inactiveSessionId)).toBe(false);
+      const args = vscodeMocks.createTerminal.mock.lastCall?.[0].shellArgs;
+      expect(args).toEqual(
+        previousTemporary ? ["open", "--temporary", activeSessionId] : ["open", activeSessionId],
+      );
+      await provider.refresh();
+      expect(sentState().displayedSessionId).toBe(activeSessionId);
+      expect(row().hasUnread).toBe(!previousTemporary);
+      expect(row(inactiveSessionId).isArchived).toBe(true);
+    },
+  );
+
+  it("reports both reconnect and restoration failures through the existing error paths", async () => {
+    const { webview, registry } = await archiveFixture();
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    vscodeMocks.createTerminal.mockImplementationOnce(() => {
+      throw new Error("creation denied");
+    });
+    vscodeMocks.createTerminal.mockImplementationOnce(() => {
+      throw new Error("restoration denied");
+    });
+    await webview.receive({ type: "unarchiveSession", sessionId: inactiveSessionId });
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("creation denied; failed to restore display: restoration denied"),
+    );
+    expect(webview.postMessage).toHaveBeenCalledWith({
+      type: "error",
+      message: expect.stringContaining(
+        "creation denied; failed to restore display: restoration denied",
+      ),
+    });
+    expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(3);
+    expect(registry.displayedSessionId).toBe(activeSessionId);
+    expect(await registry.displayForSession(activeSessionId)).toBeUndefined();
+  });
+
+  it.each(["previous", "requested"] as const)(
+    "cancels restoration quietly when the %s workspace is unregistered",
+    async (workspace) => {
+      const fixture = await archiveFixture();
+      const { webview, registry, mocks, live, workspaces, provider } = fixture;
+      const other = join(root, "other");
+      await mkdir(other);
+      workspaces.add(other);
+      live.set(inactiveSessionId, { sessionId: inactiveSessionId, cwd: other, target: "pi-other" });
+      await seedSavedSession(inactiveSessionId, other, { runtimes: fixture });
+      await provider.refresh();
+      await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      const snapshot = await mocks.list.getMockImplementation()!();
+      const held = deferred<typeof snapshot>();
+      const started = vi.fn();
+      vscodeMocks.createTerminal.mockImplementationOnce(() => {
+        mocks.list.mockImplementationOnce(() => {
+          started();
+          return held.promise;
+        });
+        throw new Error("creation denied");
+      });
+      const opening = webview.receive({ type: "unarchiveSession", sessionId: inactiveSessionId });
+      await vi.waitFor(() => expect(started).toHaveBeenCalledOnce());
+      const removing = webview.receive({
+        type: "unregisterWorkspace",
+        cwd: workspace === "previous" ? root : other,
+      });
+      held.resolve(snapshot);
+      await Promise.all([opening, removing]);
+      expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(2);
+      expect(await registry.displayForSession(activeSessionId)).toBeUndefined();
+      expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+      expect(webview.postMessage.mock.calls.some(([message]) => message.type === "error")).toBe(
+        false,
+      );
+      expect(mocks.unregisterWorkspace).toHaveBeenCalledExactlyOnceWith(
+        workspace === "previous" ? root : other,
+      );
+    },
+  );
+
   it("unarchives a requested archived session, opens it, and refreshes the list", async () => {
     const runtimes = providerRuntimes();
     await seedSavedSession(activeSessionId, root, { runtimes });

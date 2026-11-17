@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { listSessionSnapshot, sessionFileExists, type SessionSummary } from "../sessionStore";
 import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
-import type { TerminalRegistry } from "../terminalRegistry";
+import { DisplayRecoveryCancelledError, type TerminalRegistry } from "../terminalRegistry";
 import type { EmptySessionPool } from "../emptySessionPool";
 import { errorMessage } from "../guards";
 import { archiveReplacement, cwdGroupKey } from "../grouping";
@@ -465,6 +465,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         await requireWorkDirectory(request.cwd);
         previousSessionId = await this.deps.startNewSession(request.cwd, finish);
       } catch (error) {
+        if (this.disposed || error instanceof DisplayRecoveryCancelledError) return;
         this.postError(`Failed to start Pi session in ${request.cwd}: ${errorMessage(error)}`);
         return;
       } finally {
@@ -479,6 +480,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "unregisterWorkspace") {
+      this.deps.registry.cancelDisplayRecovery(request.cwd);
       for (const [controller, cwd] of this.pendingOpens) {
         if (cwdGroupKey(cwd) === cwdGroupKey(request.cwd)) controller.abort();
       }
@@ -668,7 +670,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         signal,
       ));
     } catch (error) {
-      if (signal.aborted) return;
+      if (this.disposed || signal.aborted || error instanceof DisplayRecoveryCancelledError) return;
       this.postError(
         `Failed to open session ${sessionId} in ${session.cwd}: ${errorMessage(error)}`,
       );
