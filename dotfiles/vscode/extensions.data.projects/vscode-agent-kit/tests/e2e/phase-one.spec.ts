@@ -146,184 +146,6 @@ test(
   },
 );
 
-for (const theme of ["Dark Modern", "Light Modern"]) {
-  test(
-    `Keeps compact workspace headers and balanced session backgrounds across selection states in ${theme}`,
-    { annotation: { type: "design", description: "DESIGN.md: session row hierarchy" } },
-    async ({ host }, testInfo) => {
-      await test.step(`Check session background geometry in ${theme}`, async () => {
-        await host.page.keyboard.press("Control+Shift+P");
-        const picker = host.page.locator(".quick-input-widget input").describe("Theme picker");
-        await picker.fill(">Preferences: Color Theme");
-        await host.page.getByRole("option", { name: /Preferences: Color Theme/ }).click();
-        await picker.fill(theme);
-        await host.page.getByRole("option", { name: theme, exact: true }).click();
-        await host.activateSession("A");
-        await host.activateSession("Deleted");
-        const frame = await host.sessionFrame();
-        await expect(frame.locator("body")).toHaveClass(
-          theme.includes("Light") ? /vscode-light/ : /vscode-dark/,
-        );
-        const mode = frame.locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`);
-        if ((await mode.getAttribute("data-mode")) === "unarchived") await mode.click();
-        await expect(
-          frame.locator(".session-row").describe("Saved A and Deleted conversation rows"),
-        ).toHaveCount(2);
-        const button = frame
-          .locator(`[data-session="${host.sessions.A.id}"]`)
-          .describe("Session background and focus target");
-        await host.expectPiVisible(host.sessions.A.cwd);
-
-        async function appearance() {
-          return button.evaluate((element) => {
-            function rect(target: Element) {
-              const { left, right, top, bottom, width, height } = target.getBoundingClientRect();
-              return { left, right, top, bottom, width, height };
-            }
-            function tokenColor(name: string) {
-              const sample = document.createElement("span");
-              sample.style.color = `var(${name})`;
-              document.body.append(sample);
-              const color = getComputedStyle(sample).color;
-              sample.remove();
-              return color;
-            }
-            const row = element.closest(".session-row")!;
-            const style = getComputedStyle(element);
-            const paint = getComputedStyle(element, "::before");
-            const box = element.getBoundingClientRect();
-            const paintLeft = box.left + parseFloat(style.borderLeftWidth) + parseFloat(paint.left);
-            return {
-              button: rect(element),
-              paint: {
-                left: paintLeft,
-                right: paintLeft + parseFloat(paint.width),
-                height: parseFloat(paint.height),
-              },
-              workspaceName: rect(row.closest(".group")!.querySelector(".group-title")!),
-              chevron: rect(row.closest(".group")!.querySelector(".group-chevron")!),
-              chevronIcon: rect(row.closest(".group")!.querySelector(".group-chevron svg")!),
-              name: rect(row.querySelector(".session-name")!),
-              status: rect(row.querySelector(".session-status")!),
-              timestamp: rect(row.querySelector(".session-timestamp")!),
-              archive: rect(row.querySelector(".archive, .unarchive")!),
-              buttonBackground: style.backgroundColor,
-              buttonOutline: style.outlineStyle,
-              background: paint.backgroundColor,
-              outlineStyle: paint.outlineStyle,
-              outlineWidth: paint.outlineWidth,
-              outlineOffset: paint.outlineOffset,
-              pointerEvents: paint.pointerEvents,
-              content: paint.content,
-              isolation: style.isolation,
-              zIndex: paint.zIndex,
-              hoverColor: tokenColor("--vscode-list-hoverBackground"),
-              activeColor: tokenColor("--vscode-list-activeSelectionBackground"),
-              inactiveColor: tokenColor("--vscode-list-inactiveSelectionBackground"),
-              viewportWidth: innerWidth,
-            };
-          });
-        }
-
-        await host.page.locator(".part.sidebar .title-label").hover();
-        const idle = await appearance();
-        expect(idle.button.left).toBe(4);
-        expect(idle.name.left).toBe(29);
-        expect(idle.status.left).toBe(9);
-        expect(idle.paint.left).toBe(idle.button.left);
-        expect(idle.name.left).toBe(idle.workspaceName.left + 1);
-        expect(idle.workspaceName.left).toBe(28);
-        expect(idle.chevron.left).toBe(4);
-        expect(idle.chevron.width).toBe(24);
-        expect(idle.chevron.height).toBe(24);
-        expect(idle.chevronIcon.left).toBe(10);
-        expect(idle.workspaceName.left - idle.chevron.right).toBe(0);
-        expect(idle.paint.right).toBe(idle.button.right);
-        expect(idle.paint.height).toBe(32);
-        expect(idle.pointerEvents).toBe("none");
-        expect(idle.content).toBe('""');
-        expect(idle.isolation).toBe("isolate");
-        expect(idle.zIndex).toBe("-1");
-        expect(idle.button.right).toBe(idle.viewportWidth - 12);
-        expect(idle.timestamp.right).toBe(idle.button.right - 36);
-        expect(idle.archive.right).toBe(idle.button.right - 4);
-        await button.hover();
-        await expect.poll(async () => (await appearance()).background).toBe(idle.hoverColor);
-        const hover = await appearance();
-        await button.focus();
-        await host.page.keyboard.press("Tab");
-        await host.page.keyboard.press("Shift+Tab");
-        await expect(button).toBeFocused();
-        const focus = await appearance();
-        expect(focus.buttonOutline).toBe("none");
-        expect(focus.outlineStyle).toBe("solid");
-        expect(focus.outlineWidth).toBe("2px");
-        expect(focus.outlineOffset).toBe("-2px");
-        await button.press("Enter");
-        await expect(button.locator("..")).toHaveClass(/selected/);
-        await host.page.locator(".part.sidebar .title-label").hover();
-        await button.blur();
-        await expect.poll(async () => (await appearance()).background).toBe(idle.inactiveColor);
-        const selected = await appearance();
-        await button.focus();
-        await expect.poll(async () => (await appearance()).background).toBe(idle.activeColor);
-        const selectedFocus = await appearance();
-        for (const state of [hover, focus, selected, selectedFocus]) {
-          expect(state.buttonBackground).toBe("rgba(0, 0, 0, 0)");
-          expect(state.button).toEqual(idle.button);
-          expect(state.paint).toEqual(idle.paint);
-          expect(state.name).toEqual(idle.name);
-          expect(state.status).toEqual(idle.status);
-          expect(state.timestamp).toEqual(idle.timestamp);
-          expect(state.archive).toEqual(idle.archive);
-        }
-        await testInfo.attach(`${theme} session states`, {
-          body: JSON.stringify({ idle, hover, focus, selected, selectedFocus }, null, 2),
-          contentType: "application/json",
-        });
-        await button.blur();
-        await expect.poll(async () => (await appearance()).background).toBe(idle.inactiveColor);
-        await testInfo.attach(`${theme} selected`, {
-          body: await host.page.screenshot({ path: testInfo.outputPath("selected.png") }),
-          contentType: "image/png",
-        });
-        await host.selectSession("A");
-        await host.expectPiVisible(host.sessions.A.cwd);
-        await host.closePiDisplay();
-        host.setSessionPhase("A", "waiting-approval");
-        const status = button
-          .locator(".session-status")
-          .describe("Approval icon to the left of the session name");
-        await expect(status).toHaveAttribute("data-state", "waiting-approval");
-        await expect(status.locator("svg")).toBeVisible();
-        await button.blur();
-        await expect.poll(async () => (await appearance()).background).toBe(idle.inactiveColor);
-        const approval = await appearance();
-        expect(approval.status).toEqual(idle.status);
-        expect(approval.name).toEqual(idle.name);
-        expect(approval.paint).toEqual(idle.paint);
-        expect(approval.status.left).toBeGreaterThan(approval.paint.left);
-        expect(
-          await status.evaluate((element) => {
-            const box = element.getBoundingClientRect();
-            return (
-              document
-                .elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
-                ?.closest(".session-button") === element.closest(".session-button")
-            );
-          }),
-        ).toBe(true);
-        await testInfo.attach(`${theme} approval icon and selected`, {
-          body: await host.page.screenshot({
-            path: testInfo.outputPath("approval-selected.png"),
-          }),
-          contentType: "image/png",
-        });
-      });
-    },
-  );
-}
-
 test(
   "Switches between A/B conversations with Pi-notified titles",
   { annotation: { type: "spec", description: "E2E-2" } },
@@ -725,370 +547,6 @@ test(
 );
 
 test(
-  "New Workspace のキャンセルと無効なパスを安全に扱える",
-  { annotation: { type: "spec", description: "E2E-12" } },
-  async ({ host }, testInfo) => {
-    await expect.poll(() => host.piProcesses().length).toBe(3);
-    const baseline = host
-      .piProcesses()
-      .map(({ pid }) => pid)
-      .sort((a, b) => a - b);
-    await test.step("Discard the workspace draft when focus moves to the editor", async () => {
-      await host.page.keyboard.press("Control+N");
-      const editor = host.page
-        .locator(".editor-instance .monaco-editor")
-        .first()
-        .describe("Untitled editor focus target");
-      await expect(editor).toBeVisible();
-      const frame = await host.sessionFrame();
-      const groupsBefore = await frame.locator("section.group").count();
-      const button = frame.locator(".new-workspace").describe("New workspace footer button");
-      const input = frame.locator("#workspace-path").describe("Workspace path input");
-      await button.click({ steps: 15 });
-      await input.fill(host.sessions.Missing.cwd);
-      await editor.click({ position: { x: 80, y: 40 } });
-      await expect(frame.locator("#workspace-form")).toBeHidden();
-      await expect(button).toBeVisible();
-      await expect(input).toHaveValue("");
-      await expect(editor).toHaveClass(/focused/);
-      expect(await frame.locator("section.group").count()).toBe(groupsBefore);
-      expect(host.snapshot().terminals).toHaveLength(0);
-      await testInfo.attach("Workspace draft discarded after editor focus", {
-        body: await host.page.screenshot(),
-        contentType: "image/png",
-      });
-      await button.click({ steps: 15 });
-      await expect(input).toHaveValue("");
-      await expect(input).toBeFocused();
-      await input.press("Escape");
-    });
-    await test.step("Reject a missing workspace path with a safe error", async () => {
-      const frame = await host.sessionFrame();
-      const groupsBefore = await frame.locator("section.group").count();
-      await frame
-        .locator('[data-action="toggleWorkspaceForm"]')
-        .describe("New workspace footer button")
-        .click({ steps: 15 });
-      const pathInput = frame.locator("#workspace-path").describe("Workspace path input");
-      await pathInput.fill(host.sessions.Missing.cwd);
-      // The registration error in #status is transient: the periodic list
-      // refresh delivers a new list and clears it within about a second.
-      // Record the status element before submitting so the assertions do
-      // not race the next refresh.
-      await frame.evaluate(() => {
-        const status = document.querySelector("#status")!;
-        const observed: RegistrationStatusObservation[] = [];
-        Object.defineProperty(window, "__registrationStatus", {
-          value: observed,
-          configurable: true,
-        });
-        new MutationObserver(() => {
-          const entry: RegistrationStatusObservation = {
-            className: status.className,
-            text: status.textContent ?? "",
-          };
-          if (status.className === "error") {
-            const box = status.getBoundingClientRect();
-            const input = document.querySelector("#workspace-path")!.getBoundingClientRect();
-            entry.status = { top: box.top, bottom: box.bottom };
-            entry.input = { top: input.top, bottom: input.bottom };
-            entry.viewportHeight = innerHeight;
-          }
-          observed.push(entry);
-        }).observe(status, {
-          attributes: true,
-          childList: true,
-          characterData: true,
-          subtree: true,
-        });
-      });
-      await pathInput.press("Enter");
-      await expect(
-        host.page
-          .locator(".notification-list-item-message")
-          .filter({ hasText: host.sessions.Missing.cwd })
-          .first(),
-      ).toBeVisible();
-      await expect(frame.locator("#workspace-form")).toBeVisible();
-      await expect(frame.locator("#workspace-path")).toHaveValue(host.sessions.Missing.cwd);
-      await expect(frame.locator(".new-workspace")).toBeHidden();
-      await expect(frame.locator(".workspace-folder-icon")).toBeVisible();
-      await expect
-        .poll(() =>
-          frame.evaluate((path) => {
-            const observed =
-              (
-                window as unknown as {
-                  __registrationStatus?: { className: string; text: string }[];
-                }
-              ).__registrationStatus ?? [];
-            return observed.some(
-              ({ className, text }) => className === "error" && text.includes(path!),
-            );
-          }, host.sessions.Missing.cwd),
-        )
-        .toBe(true);
-      const errored = await frame.evaluate((path) => {
-        const observed =
-          (
-            window as unknown as {
-              __registrationStatus?: RegistrationStatusObservation[];
-            }
-          ).__registrationStatus ?? [];
-        return observed.find(
-          ({ className, text }) => className === "error" && text.includes(path!),
-        );
-      }, host.sessions.Missing.cwd);
-      expect(errored).toBeDefined();
-      expect(errored!.status!.top).toBeGreaterThanOrEqual(0);
-      expect(errored!.status!.bottom).toBeLessThanOrEqual(errored!.input!.top);
-      expect(errored!.viewportHeight! - errored!.input!.bottom).toBe(12);
-      await testInfo.attach("無効なパスと入力保持", {
-        body: await host.page.screenshot(),
-        contentType: "image/png",
-      });
-      expect(await frame.locator("section.group").count()).toBe(groupsBefore);
-      expect(host.snapshot().terminals).toHaveLength(0);
-      expect(
-        host
-          .piProcesses()
-          .map(({ pid }) => pid)
-          .sort((a, b) => a - b),
-      ).toEqual(baseline);
-    });
-    await test.step("Cancel the New workspace form with Escape without changing the list", async () => {
-      const frame = await host.sessionFrame();
-      const groupsBefore = await frame.locator("section.group").count();
-      await frame.locator("#workspace-path").describe("Workspace path input").press("Escape");
-      await expect(frame.locator("#workspace-form")).not.toBeVisible();
-      await expect(frame.locator(".new-workspace")).toBeVisible();
-      await expect(frame.locator(".workspace-folder-icon")).toBeVisible();
-      await expect(frame.locator("#workspace-path")).toHaveValue("");
-      await testInfo.attach("Escape後のボタン", {
-        body: await host.page.screenshot(),
-        contentType: "image/png",
-      });
-      expect(await frame.locator("section.group").count()).toBe(groupsBefore);
-      expect(host.snapshot().terminals).toHaveLength(0);
-      expect(
-        host
-          .piProcesses()
-          .map(({ pid }) => pid)
-          .sort((a, b) => a - b),
-      ).toEqual(baseline);
-    });
-  },
-);
-
-test(
-  "登録済みワークスペースの New session で、その cwd で新しい Pi を起動できる",
-  { annotation: { type: "spec", description: "E2E-10" } },
-  async ({ host }, testInfo) => {
-    const folder = join(host.directory, "registered");
-    await registerWorkFolder(host, folder);
-
-    await test.step("Display a saved session before launching a new one", async () => {
-      await host.selectSession("A");
-      await host.expectPiVisible(host.sessions.A.cwd);
-      const frame = await host.sessionFrame();
-      await expect(
-        frame
-          .locator(".session-row.selected")
-          .filter({ has: frame.locator(`[data-session="${host.sessions.A.id}"]`) })
-          .describe("Displayed saved session selection"),
-      ).toHaveCount(1);
-    });
-
-    await test.step("Launch Pi from the registered group plus button", async () => {
-      const frame = await host.sessionFrame();
-      const group = frame
-        .locator("section.group")
-        .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
-        .describe("Registered work folder group");
-      const newSession = group
-        .locator(".group-new-session")
-        .describe("Registered group New session button");
-      await newSession.evaluate((button) => {
-        button.setAttribute("data-observed-busy", "false");
-        new MutationObserver((changes) => {
-          if (
-            button.getAttribute("aria-busy") === "true" ||
-            changes.some((change) => change.oldValue === "true")
-          )
-            button.setAttribute("data-observed-busy", "true");
-        }).observe(button, {
-          attributes: true,
-          attributeFilter: ["aria-busy"],
-          attributeOldValue: true,
-        });
-      });
-      await newSession.click({ steps: 15 });
-      await expect
-        .poll(() => host.piProcesses().some((process) => process.cwd === folder))
-        .toBe(true);
-      await host.expectPiVisible(folder);
-      await expect(newSession).toHaveAttribute("data-observed-busy", "true");
-      await expect(newSession).toHaveAttribute("aria-busy", "false");
-      await expect(
-        frame
-          .locator(".session-row.selected")
-          .describe("No selected rows while the new session is unsaved"),
-      ).toHaveCount(0);
-      const runtime = host.piProcesses().find((entry) => entry.cwd === folder)!;
-      const encoded = host
-        .tmux(["display-message", "-p", "-t", runtime.target, "#{@pi-tmux-session}"])
-        .trim();
-      const metadata = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
-      await expect
-        .poll(() =>
-          host
-            .listWorkspaces()
-            .find(({ cwd }) => cwd === folder)
-            ?.empty.map(({ id }) => id),
-        )
-        .toEqual([metadata.id]);
-      expect(existsSync(metadata.file)).toBe(false);
-      await expect(
-        group.locator(".session-row").describe("Unsaved new session rows stay hidden"),
-      ).toHaveCount(0);
-      const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
-      await group.locator(".group-new-session").click();
-      await host.expectPiVisible(folder);
-      await expect
-        .poll(() => host.snapshot().terminals.find((terminal) => terminal.owned)?.pid)
-        .toBe(displayPid);
-      expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
-      expect(existsSync(metadata.file)).toBe(false);
-      const otherCwd = host.sessions.B.cwd;
-      await frame
-        .locator(`.group-header[title="${otherCwd}"] .group-new-session`)
-        .describe("Other cwd New session")
-        .click();
-      await host.expectPiVisible(otherCwd);
-      const other = host.piProcesses().find((entry) => entry.cwd === otherCwd)!;
-      expect(other.pid).not.toBe(runtime.pid);
-      expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
-      await group.locator(".group-new-session").click();
-      await host.expectPiVisible(folder);
-      expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
-      expect(existsSync(metadata.file)).toBe(false);
-      await testInfo.attach("Unsaved same-cwd session reuse", {
-        body: JSON.stringify({
-          metadata,
-          runtime,
-          snapshot: host.snapshot(),
-          workspaces: host.listWorkspaces(),
-        }),
-        contentType: "application/json",
-      });
-      await testInfo.attach("登録 cwd で起動", {
-        body: await host.page.screenshot(),
-        contentType: "image/png",
-      });
-    });
-  },
-);
-
-test(
-  "Unregisters a workspace from the list",
-  { annotation: { type: "spec", description: "E2E-11" } },
-  async ({ host }, testInfo) => {
-    const folder = join(host.directory, "registered");
-    await registerWorkFolder(host, folder);
-
-    await test.step("Toggle workspace actions and dismiss the context menu with the pointer", async () => {
-      const frame = await host.sessionFrame();
-      const group = frame
-        .locator("section.group")
-        .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
-        .describe("Registered work folder group");
-      const header = group.locator(".group-header").describe("Workspace context menu trigger");
-      const trigger = group.locator(".group-workspace-menu").describe("Workspace menu toggle");
-      const menu = frame.getByRole("menu").describe("Workspace context menu");
-      for (const expanded of [true, false, true]) {
-        await trigger.click();
-        await expect(menu).toHaveCount(expanded ? 1 : 0);
-        await expect(trigger).toHaveAttribute("aria-expanded", String(expanded));
-      }
-      await trigger.click();
-      await header.click({ button: "right" });
-      await expect(menu).toBeVisible();
-      await frame.locator("#app").click({ position: { x: 0, y: 0 } });
-      await expect(menu).toBeHidden();
-      await expect(group).toHaveCount(1);
-    });
-
-    await test.step("Unregister a workspace from the list", async () => {
-      const frame = await host.sessionFrame();
-      const group = frame
-        .locator("section.group")
-        .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
-        .describe("Registered work folder group");
-      await expect(
-        group.locator("[data-mode-toggle]").describe("Registered workspace mode toggle"),
-      ).toBeVisible();
-      await expect(
-        group.locator(".group-new-session").describe("Registered group New session button"),
-      ).toBeVisible();
-      await expect(group.locator(".group-unregister")).toHaveCount(0);
-      await group
-        .getByRole("button", { name: "Workspace actions", exact: true })
-        .describe("Registered group ellipsis menu trigger")
-        .click();
-      const menu = frame.getByRole("menu").describe("Workspace actions menu");
-      const unregister = menu
-        .getByRole("menuitem", { name: "Unregister workspace", exact: true })
-        .describe("Workspace Unregister menu item");
-      await expect(menu).toBeVisible();
-      await expect(unregister).toBeVisible();
-      await expect.poll(() => host.snapshot().tabs).toHaveLength(0);
-      await testInfo.attach("Unregister menu", {
-        body: await host.page.screenshot({ path: testInfo.outputPath("unregister-menu.png") }),
-        contentType: "image/png",
-      });
-      await expect(menu).toBeVisible();
-      await expect(unregister).toBeVisible();
-      await expect
-        .poll(() => host.piProcesses().filter(({ cwd }) => cwd === folder))
-        .toHaveLength(1);
-      await expect
-        .poll(() => host.piProcesses().filter(({ cwd }) => cwd !== folder))
-        .toHaveLength(3);
-      const otherPids = host
-        .piProcesses()
-        .filter(({ cwd }) => cwd !== folder)
-        .map(({ pid }) => pid)
-        .sort((a, b) => a - b);
-      await unregister.click({ steps: 15 });
-      await expect(frame.getByRole("dialog").describe("No Unregister confirmation")).toBeHidden();
-      await expect(group).toHaveCount(0);
-      await expect
-        .poll(() => host.piProcesses().filter(({ cwd }) => cwd === folder))
-        .toHaveLength(0);
-      host.piMux(["restore"]);
-      expect(host.listWorkspaces().some(({ cwd }) => cwd === folder)).toBe(false);
-      expect(
-        host
-          .piProcesses()
-          .map(({ pid }) => pid)
-          .sort((a, b) => a - b),
-      ).toEqual(otherPids);
-      await expect(menu).toBeHidden();
-      for (const session of Object.values(host.sessions)) {
-        expect(readFileSync(session.session, "utf8")).toBe(session.original);
-      }
-      await expect.poll(() => host.snapshot().tabs).toHaveLength(0);
-      await testInfo.attach("Workspace unregistered", {
-        body: await host.page.screenshot({
-          path: testInfo.outputPath("workspace-unregistered.png"),
-        }),
-        contentType: "image/png",
-      });
-    });
-  },
-);
-
-test(
   "Excludes unregistered cwd history and automatically removes a deleted saved conversation",
   { annotation: { type: "spec", description: "E2E-7" } },
   async ({ host }) => {
@@ -1331,6 +789,370 @@ test.describe("First assistant response through a loopback fixture provider", ()
     },
   );
 });
+
+test(
+  "登録済みワークスペースの New session で、その cwd で新しい Pi を起動できる",
+  { annotation: { type: "spec", description: "E2E-10" } },
+  async ({ host }, testInfo) => {
+    const folder = join(host.directory, "registered");
+    await registerWorkFolder(host, folder);
+
+    await test.step("Display a saved session before launching a new one", async () => {
+      await host.selectSession("A");
+      await host.expectPiVisible(host.sessions.A.cwd);
+      const frame = await host.sessionFrame();
+      await expect(
+        frame
+          .locator(".session-row.selected")
+          .filter({ has: frame.locator(`[data-session="${host.sessions.A.id}"]`) })
+          .describe("Displayed saved session selection"),
+      ).toHaveCount(1);
+    });
+
+    await test.step("Launch Pi from the registered group plus button", async () => {
+      const frame = await host.sessionFrame();
+      const group = frame
+        .locator("section.group")
+        .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
+        .describe("Registered work folder group");
+      const newSession = group
+        .locator(".group-new-session")
+        .describe("Registered group New session button");
+      await newSession.evaluate((button) => {
+        button.setAttribute("data-observed-busy", "false");
+        new MutationObserver((changes) => {
+          if (
+            button.getAttribute("aria-busy") === "true" ||
+            changes.some((change) => change.oldValue === "true")
+          )
+            button.setAttribute("data-observed-busy", "true");
+        }).observe(button, {
+          attributes: true,
+          attributeFilter: ["aria-busy"],
+          attributeOldValue: true,
+        });
+      });
+      await newSession.click({ steps: 15 });
+      await expect
+        .poll(() => host.piProcesses().some((process) => process.cwd === folder))
+        .toBe(true);
+      await host.expectPiVisible(folder);
+      await expect(newSession).toHaveAttribute("data-observed-busy", "true");
+      await expect(newSession).toHaveAttribute("aria-busy", "false");
+      await expect(
+        frame
+          .locator(".session-row.selected")
+          .describe("No selected rows while the new session is unsaved"),
+      ).toHaveCount(0);
+      const runtime = host.piProcesses().find((entry) => entry.cwd === folder)!;
+      const encoded = host
+        .tmux(["display-message", "-p", "-t", runtime.target, "#{@pi-tmux-session}"])
+        .trim();
+      const metadata = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+      await expect
+        .poll(() =>
+          host
+            .listWorkspaces()
+            .find(({ cwd }) => cwd === folder)
+            ?.empty.map(({ id }) => id),
+        )
+        .toEqual([metadata.id]);
+      expect(existsSync(metadata.file)).toBe(false);
+      await expect(
+        group.locator(".session-row").describe("Unsaved new session rows stay hidden"),
+      ).toHaveCount(0);
+      const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
+      await group.locator(".group-new-session").click();
+      await host.expectPiVisible(folder);
+      await expect
+        .poll(() => host.snapshot().terminals.find((terminal) => terminal.owned)?.pid)
+        .toBe(displayPid);
+      expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
+      expect(existsSync(metadata.file)).toBe(false);
+      const otherCwd = host.sessions.B.cwd;
+      await frame
+        .locator(`.group-header[title="${otherCwd}"] .group-new-session`)
+        .describe("Other cwd New session")
+        .click();
+      await host.expectPiVisible(otherCwd);
+      const other = host.piProcesses().find((entry) => entry.cwd === otherCwd)!;
+      expect(other.pid).not.toBe(runtime.pid);
+      expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
+      await group.locator(".group-new-session").click();
+      await host.expectPiVisible(folder);
+      expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
+      expect(existsSync(metadata.file)).toBe(false);
+      await testInfo.attach("Unsaved same-cwd session reuse", {
+        body: JSON.stringify({
+          metadata,
+          runtime,
+          snapshot: host.snapshot(),
+          workspaces: host.listWorkspaces(),
+        }),
+        contentType: "application/json",
+      });
+      await testInfo.attach("登録 cwd で起動", {
+        body: await host.page.screenshot(),
+        contentType: "image/png",
+      });
+    });
+  },
+);
+
+test(
+  "Unregisters a workspace from the list",
+  { annotation: { type: "spec", description: "E2E-11" } },
+  async ({ host }, testInfo) => {
+    const folder = join(host.directory, "registered");
+    await registerWorkFolder(host, folder);
+
+    await test.step("Toggle workspace actions and dismiss the context menu with the pointer", async () => {
+      const frame = await host.sessionFrame();
+      const group = frame
+        .locator("section.group")
+        .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
+        .describe("Registered work folder group");
+      const header = group.locator(".group-header").describe("Workspace context menu trigger");
+      const trigger = group.locator(".group-workspace-menu").describe("Workspace menu toggle");
+      const menu = frame.getByRole("menu").describe("Workspace context menu");
+      for (const expanded of [true, false, true]) {
+        await trigger.click();
+        await expect(menu).toHaveCount(expanded ? 1 : 0);
+        await expect(trigger).toHaveAttribute("aria-expanded", String(expanded));
+      }
+      await trigger.click();
+      await header.click({ button: "right" });
+      await expect(menu).toBeVisible();
+      await frame.locator("#app").click({ position: { x: 0, y: 0 } });
+      await expect(menu).toBeHidden();
+      await expect(group).toHaveCount(1);
+    });
+
+    await test.step("Unregister a workspace from the list", async () => {
+      const frame = await host.sessionFrame();
+      const group = frame
+        .locator("section.group")
+        .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
+        .describe("Registered work folder group");
+      await expect(
+        group.locator("[data-mode-toggle]").describe("Registered workspace mode toggle"),
+      ).toBeVisible();
+      await expect(
+        group.locator(".group-new-session").describe("Registered group New session button"),
+      ).toBeVisible();
+      await expect(group.locator(".group-unregister")).toHaveCount(0);
+      await group
+        .getByRole("button", { name: "Workspace actions", exact: true })
+        .describe("Registered group ellipsis menu trigger")
+        .click();
+      const menu = frame.getByRole("menu").describe("Workspace actions menu");
+      const unregister = menu
+        .getByRole("menuitem", { name: "Unregister workspace", exact: true })
+        .describe("Workspace Unregister menu item");
+      await expect(menu).toBeVisible();
+      await expect(unregister).toBeVisible();
+      await expect.poll(() => host.snapshot().tabs).toHaveLength(0);
+      await testInfo.attach("Unregister menu", {
+        body: await host.page.screenshot({ path: testInfo.outputPath("unregister-menu.png") }),
+        contentType: "image/png",
+      });
+      await expect(menu).toBeVisible();
+      await expect(unregister).toBeVisible();
+      await expect
+        .poll(() => host.piProcesses().filter(({ cwd }) => cwd === folder))
+        .toHaveLength(1);
+      await expect
+        .poll(() => host.piProcesses().filter(({ cwd }) => cwd !== folder))
+        .toHaveLength(3);
+      const otherPids = host
+        .piProcesses()
+        .filter(({ cwd }) => cwd !== folder)
+        .map(({ pid }) => pid)
+        .sort((a, b) => a - b);
+      await unregister.click({ steps: 15 });
+      await expect(frame.getByRole("dialog").describe("No Unregister confirmation")).toBeHidden();
+      await expect(group).toHaveCount(0);
+      await expect
+        .poll(() => host.piProcesses().filter(({ cwd }) => cwd === folder))
+        .toHaveLength(0);
+      host.piMux(["restore"]);
+      expect(host.listWorkspaces().some(({ cwd }) => cwd === folder)).toBe(false);
+      expect(
+        host
+          .piProcesses()
+          .map(({ pid }) => pid)
+          .sort((a, b) => a - b),
+      ).toEqual(otherPids);
+      await expect(menu).toBeHidden();
+      for (const session of Object.values(host.sessions)) {
+        expect(readFileSync(session.session, "utf8")).toBe(session.original);
+      }
+      await expect.poll(() => host.snapshot().tabs).toHaveLength(0);
+      await testInfo.attach("Workspace unregistered", {
+        body: await host.page.screenshot({
+          path: testInfo.outputPath("workspace-unregistered.png"),
+        }),
+        contentType: "image/png",
+      });
+    });
+  },
+);
+
+test(
+  "New Workspace のキャンセルと無効なパスを安全に扱える",
+  { annotation: { type: "spec", description: "E2E-12" } },
+  async ({ host }, testInfo) => {
+    await expect.poll(() => host.piProcesses().length).toBe(3);
+    const baseline = host
+      .piProcesses()
+      .map(({ pid }) => pid)
+      .sort((a, b) => a - b);
+    await test.step("Discard the workspace draft when focus moves to the editor", async () => {
+      await host.page.keyboard.press("Control+N");
+      const editor = host.page
+        .locator(".editor-instance .monaco-editor")
+        .first()
+        .describe("Untitled editor focus target");
+      await expect(editor).toBeVisible();
+      const frame = await host.sessionFrame();
+      const groupsBefore = await frame.locator("section.group").count();
+      const button = frame.locator(".new-workspace").describe("New workspace footer button");
+      const input = frame.locator("#workspace-path").describe("Workspace path input");
+      await button.click({ steps: 15 });
+      await input.fill(host.sessions.Missing.cwd);
+      await editor.click({ position: { x: 80, y: 40 } });
+      await expect(frame.locator("#workspace-form")).toBeHidden();
+      await expect(button).toBeVisible();
+      await expect(input).toHaveValue("");
+      await expect(editor).toHaveClass(/focused/);
+      expect(await frame.locator("section.group").count()).toBe(groupsBefore);
+      expect(host.snapshot().terminals).toHaveLength(0);
+      await testInfo.attach("Workspace draft discarded after editor focus", {
+        body: await host.page.screenshot(),
+        contentType: "image/png",
+      });
+      await button.click({ steps: 15 });
+      await expect(input).toHaveValue("");
+      await expect(input).toBeFocused();
+      await input.press("Escape");
+    });
+    await test.step("Reject a missing workspace path with a safe error", async () => {
+      const frame = await host.sessionFrame();
+      const groupsBefore = await frame.locator("section.group").count();
+      await frame
+        .locator('[data-action="toggleWorkspaceForm"]')
+        .describe("New workspace footer button")
+        .click({ steps: 15 });
+      const pathInput = frame.locator("#workspace-path").describe("Workspace path input");
+      await pathInput.fill(host.sessions.Missing.cwd);
+      // The registration error in #status is transient: the periodic list
+      // refresh delivers a new list and clears it within about a second.
+      // Record the status element before submitting so the assertions do
+      // not race the next refresh.
+      await frame.evaluate(() => {
+        const status = document.querySelector("#status")!;
+        const observed: RegistrationStatusObservation[] = [];
+        Object.defineProperty(window, "__registrationStatus", {
+          value: observed,
+          configurable: true,
+        });
+        new MutationObserver(() => {
+          const entry: RegistrationStatusObservation = {
+            className: status.className,
+            text: status.textContent ?? "",
+          };
+          if (status.className === "error") {
+            const box = status.getBoundingClientRect();
+            const input = document.querySelector("#workspace-path")!.getBoundingClientRect();
+            entry.status = { top: box.top, bottom: box.bottom };
+            entry.input = { top: input.top, bottom: input.bottom };
+            entry.viewportHeight = innerHeight;
+          }
+          observed.push(entry);
+        }).observe(status, {
+          attributes: true,
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+      });
+      await pathInput.press("Enter");
+      await expect(
+        host.page
+          .locator(".notification-list-item-message")
+          .filter({ hasText: host.sessions.Missing.cwd })
+          .first(),
+      ).toBeVisible();
+      await expect(frame.locator("#workspace-form")).toBeVisible();
+      await expect(frame.locator("#workspace-path")).toHaveValue(host.sessions.Missing.cwd);
+      await expect(frame.locator(".new-workspace")).toBeHidden();
+      await expect(frame.locator(".workspace-folder-icon")).toBeVisible();
+      await expect
+        .poll(() =>
+          frame.evaluate((path) => {
+            const observed =
+              (
+                window as unknown as {
+                  __registrationStatus?: { className: string; text: string }[];
+                }
+              ).__registrationStatus ?? [];
+            return observed.some(
+              ({ className, text }) => className === "error" && text.includes(path!),
+            );
+          }, host.sessions.Missing.cwd),
+        )
+        .toBe(true);
+      const errored = await frame.evaluate((path) => {
+        const observed =
+          (
+            window as unknown as {
+              __registrationStatus?: RegistrationStatusObservation[];
+            }
+          ).__registrationStatus ?? [];
+        return observed.find(
+          ({ className, text }) => className === "error" && text.includes(path!),
+        );
+      }, host.sessions.Missing.cwd);
+      expect(errored).toBeDefined();
+      expect(errored!.status!.top).toBeGreaterThanOrEqual(0);
+      expect(errored!.status!.bottom).toBeLessThanOrEqual(errored!.input!.top);
+      expect(errored!.viewportHeight! - errored!.input!.bottom).toBe(12);
+      await testInfo.attach("無効なパスと入力保持", {
+        body: await host.page.screenshot(),
+        contentType: "image/png",
+      });
+      expect(await frame.locator("section.group").count()).toBe(groupsBefore);
+      expect(host.snapshot().terminals).toHaveLength(0);
+      expect(
+        host
+          .piProcesses()
+          .map(({ pid }) => pid)
+          .sort((a, b) => a - b),
+      ).toEqual(baseline);
+    });
+    await test.step("Cancel the New workspace form with Escape without changing the list", async () => {
+      const frame = await host.sessionFrame();
+      const groupsBefore = await frame.locator("section.group").count();
+      await frame.locator("#workspace-path").describe("Workspace path input").press("Escape");
+      await expect(frame.locator("#workspace-form")).not.toBeVisible();
+      await expect(frame.locator(".new-workspace")).toBeVisible();
+      await expect(frame.locator(".workspace-folder-icon")).toBeVisible();
+      await expect(frame.locator("#workspace-path")).toHaveValue("");
+      await testInfo.attach("Escape後のボタン", {
+        body: await host.page.screenshot(),
+        contentType: "image/png",
+      });
+      expect(await frame.locator("section.group").count()).toBe(groupsBefore);
+      expect(host.snapshot().terminals).toHaveLength(0);
+      expect(
+        host
+          .piProcesses()
+          .map(({ pid }) => pid)
+          .sort((a, b) => a - b),
+      ).toEqual(baseline);
+    });
+  },
+);
 
 test(
   "Archives directly, stops only its Pi and reopens the saved conversation after Unarchive",
@@ -1836,6 +1658,184 @@ test(
     });
   },
 );
+
+for (const theme of ["Dark Modern", "Light Modern"]) {
+  test(
+    `Keeps compact workspace headers and balanced session backgrounds across selection states in ${theme}`,
+    { annotation: { type: "design", description: "DESIGN.md: session row hierarchy" } },
+    async ({ host }, testInfo) => {
+      await test.step(`Check session background geometry in ${theme}`, async () => {
+        await host.page.keyboard.press("Control+Shift+P");
+        const picker = host.page.locator(".quick-input-widget input").describe("Theme picker");
+        await picker.fill(">Preferences: Color Theme");
+        await host.page.getByRole("option", { name: /Preferences: Color Theme/ }).click();
+        await picker.fill(theme);
+        await host.page.getByRole("option", { name: theme, exact: true }).click();
+        await host.activateSession("A");
+        await host.activateSession("Deleted");
+        const frame = await host.sessionFrame();
+        await expect(frame.locator("body")).toHaveClass(
+          theme.includes("Light") ? /vscode-light/ : /vscode-dark/,
+        );
+        const mode = frame.locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`);
+        if ((await mode.getAttribute("data-mode")) === "unarchived") await mode.click();
+        await expect(
+          frame.locator(".session-row").describe("Saved A and Deleted conversation rows"),
+        ).toHaveCount(2);
+        const button = frame
+          .locator(`[data-session="${host.sessions.A.id}"]`)
+          .describe("Session background and focus target");
+        await host.expectPiVisible(host.sessions.A.cwd);
+
+        async function appearance() {
+          return button.evaluate((element) => {
+            function rect(target: Element) {
+              const { left, right, top, bottom, width, height } = target.getBoundingClientRect();
+              return { left, right, top, bottom, width, height };
+            }
+            function tokenColor(name: string) {
+              const sample = document.createElement("span");
+              sample.style.color = `var(${name})`;
+              document.body.append(sample);
+              const color = getComputedStyle(sample).color;
+              sample.remove();
+              return color;
+            }
+            const row = element.closest(".session-row")!;
+            const style = getComputedStyle(element);
+            const paint = getComputedStyle(element, "::before");
+            const box = element.getBoundingClientRect();
+            const paintLeft = box.left + parseFloat(style.borderLeftWidth) + parseFloat(paint.left);
+            return {
+              button: rect(element),
+              paint: {
+                left: paintLeft,
+                right: paintLeft + parseFloat(paint.width),
+                height: parseFloat(paint.height),
+              },
+              workspaceName: rect(row.closest(".group")!.querySelector(".group-title")!),
+              chevron: rect(row.closest(".group")!.querySelector(".group-chevron")!),
+              chevronIcon: rect(row.closest(".group")!.querySelector(".group-chevron svg")!),
+              name: rect(row.querySelector(".session-name")!),
+              status: rect(row.querySelector(".session-status")!),
+              timestamp: rect(row.querySelector(".session-timestamp")!),
+              archive: rect(row.querySelector(".archive, .unarchive")!),
+              buttonBackground: style.backgroundColor,
+              buttonOutline: style.outlineStyle,
+              background: paint.backgroundColor,
+              outlineStyle: paint.outlineStyle,
+              outlineWidth: paint.outlineWidth,
+              outlineOffset: paint.outlineOffset,
+              pointerEvents: paint.pointerEvents,
+              content: paint.content,
+              isolation: style.isolation,
+              zIndex: paint.zIndex,
+              hoverColor: tokenColor("--vscode-list-hoverBackground"),
+              activeColor: tokenColor("--vscode-list-activeSelectionBackground"),
+              inactiveColor: tokenColor("--vscode-list-inactiveSelectionBackground"),
+              viewportWidth: innerWidth,
+            };
+          });
+        }
+
+        await host.page.locator(".part.sidebar .title-label").hover();
+        const idle = await appearance();
+        expect(idle.button.left).toBe(4);
+        expect(idle.name.left).toBe(29);
+        expect(idle.status.left).toBe(9);
+        expect(idle.paint.left).toBe(idle.button.left);
+        expect(idle.name.left).toBe(idle.workspaceName.left + 1);
+        expect(idle.workspaceName.left).toBe(28);
+        expect(idle.chevron.left).toBe(4);
+        expect(idle.chevron.width).toBe(24);
+        expect(idle.chevron.height).toBe(24);
+        expect(idle.chevronIcon.left).toBe(10);
+        expect(idle.workspaceName.left - idle.chevron.right).toBe(0);
+        expect(idle.paint.right).toBe(idle.button.right);
+        expect(idle.paint.height).toBe(32);
+        expect(idle.pointerEvents).toBe("none");
+        expect(idle.content).toBe('""');
+        expect(idle.isolation).toBe("isolate");
+        expect(idle.zIndex).toBe("-1");
+        expect(idle.button.right).toBe(idle.viewportWidth - 12);
+        expect(idle.timestamp.right).toBe(idle.button.right - 36);
+        expect(idle.archive.right).toBe(idle.button.right - 4);
+        await button.hover();
+        await expect.poll(async () => (await appearance()).background).toBe(idle.hoverColor);
+        const hover = await appearance();
+        await button.focus();
+        await host.page.keyboard.press("Tab");
+        await host.page.keyboard.press("Shift+Tab");
+        await expect(button).toBeFocused();
+        const focus = await appearance();
+        expect(focus.buttonOutline).toBe("none");
+        expect(focus.outlineStyle).toBe("solid");
+        expect(focus.outlineWidth).toBe("2px");
+        expect(focus.outlineOffset).toBe("-2px");
+        await button.press("Enter");
+        await expect(button.locator("..")).toHaveClass(/selected/);
+        await host.page.locator(".part.sidebar .title-label").hover();
+        await button.blur();
+        await expect.poll(async () => (await appearance()).background).toBe(idle.inactiveColor);
+        const selected = await appearance();
+        await button.focus();
+        await expect.poll(async () => (await appearance()).background).toBe(idle.activeColor);
+        const selectedFocus = await appearance();
+        for (const state of [hover, focus, selected, selectedFocus]) {
+          expect(state.buttonBackground).toBe("rgba(0, 0, 0, 0)");
+          expect(state.button).toEqual(idle.button);
+          expect(state.paint).toEqual(idle.paint);
+          expect(state.name).toEqual(idle.name);
+          expect(state.status).toEqual(idle.status);
+          expect(state.timestamp).toEqual(idle.timestamp);
+          expect(state.archive).toEqual(idle.archive);
+        }
+        await testInfo.attach(`${theme} session states`, {
+          body: JSON.stringify({ idle, hover, focus, selected, selectedFocus }, null, 2),
+          contentType: "application/json",
+        });
+        await button.blur();
+        await expect.poll(async () => (await appearance()).background).toBe(idle.inactiveColor);
+        await testInfo.attach(`${theme} selected`, {
+          body: await host.page.screenshot({ path: testInfo.outputPath("selected.png") }),
+          contentType: "image/png",
+        });
+        await host.selectSession("A");
+        await host.expectPiVisible(host.sessions.A.cwd);
+        await host.closePiDisplay();
+        host.setSessionPhase("A", "waiting-approval");
+        const status = button
+          .locator(".session-status")
+          .describe("Approval icon to the left of the session name");
+        await expect(status).toHaveAttribute("data-state", "waiting-approval");
+        await expect(status.locator("svg")).toBeVisible();
+        await button.blur();
+        await expect.poll(async () => (await appearance()).background).toBe(idle.inactiveColor);
+        const approval = await appearance();
+        expect(approval.status).toEqual(idle.status);
+        expect(approval.name).toEqual(idle.name);
+        expect(approval.paint).toEqual(idle.paint);
+        expect(approval.status.left).toBeGreaterThan(approval.paint.left);
+        expect(
+          await status.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            return (
+              document
+                .elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+                ?.closest(".session-button") === element.closest(".session-button")
+            );
+          }),
+        ).toBe(true);
+        await testInfo.attach(`${theme} approval icon and selected`, {
+          body: await host.page.screenshot({
+            path: testInfo.outputPath("approval-selected.png"),
+          }),
+          contentType: "image/png",
+        });
+      });
+    },
+  );
+}
 
 /** Register a real folder through the New workspace form and wait for its group. */
 async function registerWorkFolder(host: VSCodeFixture, folder: string): Promise<void> {
