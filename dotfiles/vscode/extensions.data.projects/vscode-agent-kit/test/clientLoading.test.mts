@@ -39,7 +39,7 @@ describe("session list loading in the mounted client", () => {
 
   beforeEach(async ({ task }) => {
     page = await browser.newPage();
-    if (task.name.includes("connection")) {
+    if (task.name.includes("connection") || task.name.includes("two-second")) {
       await page.clock.install({ time: 0 });
       await page.clock.pauseAt(1000);
     }
@@ -82,9 +82,9 @@ describe("session list loading in the mounted client", () => {
     expect(await page.locator("#sessions").textContent()).not.toContain("No sessions yet");
   }
 
-  async function expectLoaded(): Promise<void> {
+  async function expectLoaded(errorMessage = ""): Promise<void> {
     await expect.poll(() => page.locator(".session-row").count()).toBe(1);
-    await expect.poll(() => page.locator("#status").textContent()).toBe("");
+    await expect.poll(() => page.locator("#status").textContent()).toBe(errorMessage);
     await expect.poll(() => page.locator("#connection-status").textContent()).toBe("");
   }
 
@@ -122,8 +122,8 @@ describe("session list loading in the mounted client", () => {
     await receive({ type: "sessions", state });
     await expectLoaded();
     await receive({ type: "loading", manual: true });
-    await receive({ type: "error", message: "Operation failed" });
     await page.clock.runFor(15000);
+    await receive({ type: "error", message: "Operation failed" });
     const connection = page.locator("#connection-status");
     expect(await connection.count()).toBe(1);
     await expect.poll(() => connection.textContent()).toBe("Connection lost. Retrying…");
@@ -209,7 +209,7 @@ describe("session list loading in the mounted client", () => {
     await expectLoaded();
   });
 
-  it("keeps long acquisitions healthy through connection replies and preserves operation errors", async () => {
+  it("keeps long acquisitions healthy through connection replies after operation errors expire", async () => {
     await receive({ type: "sessions", state });
     await expectLoaded();
     await receive({ type: "loading", manual: true });
@@ -218,28 +218,118 @@ describe("session list loading in the mounted client", () => {
       await page.clock.runFor(5000);
       await receive({ type: "loading", manual: true, requestId: await connectionRequest() });
     }
-    await expect
-      .poll(() => page.locator("#status").textContent())
-      .toBe("Refreshing sessions…\nOperation failed");
+    await expect.poll(() => page.locator("#status").textContent()).toBe("Refreshing sessions…");
     await page.clock.runFor(15000);
     await expect
       .poll(() => page.locator("#connection-status").textContent())
       .toContain("Connection lost");
+    await receive({ type: "error", message: "Operation failed" });
     await receive({ type: "sessionsError", requestId: await connectionRequest() });
     await expect.poll(() => page.locator("#status").textContent()).toBe("Operation failed");
     expect(await page.locator(".session-row").count()).toBe(1);
   });
 
-  it("preserves operation errors on successful connection replay only", async () => {
+  it("preserves the two-second operation error deadline through connection replay and normal pushes", async () => {
     await receive({ type: "sessions", state });
     await expectLoaded();
-    await receive({ type: "error", message: "Operation failed" });
     await page.clock.runFor(5000);
+    await receive({ type: "error", message: "Operation failed" });
+    await page.clock.runFor(1000);
     await receive({ type: "sessions", state, requestId: await connectionRequest() });
-    await expect.poll(() => page.locator("#status").textContent()).toBe("Operation failed");
+    await expectLoaded("Operation failed");
+    await page.clock.runFor(999);
     await receive({ type: "sessions", state });
+    await expectLoaded("Operation failed");
+    await page.clock.runFor(1);
     await expectLoaded();
   });
+
+  it.each([
+    { message: { type: "loading", manual: false }, remainingStatus: "" },
+    { message: { type: "loading", manual: true }, remainingStatus: "Refreshing sessions…" },
+    { message: { type: "sessions", state }, remainingStatus: "" },
+    { message: { type: "sessionsError" }, remainingStatus: "" },
+  ] satisfies { message: ExtensionMessage; remainingStatus: string }[])(
+    "keeps the two-second deadline through a list update: $message",
+    async ({ message, remainingStatus }) => {
+      await receive({ type: "sessions", state });
+      await expectLoaded();
+      await failWorkspaceAddition();
+      await page.clock.runFor(1000);
+      await receive(message);
+      const status = page.locator("#status");
+      const duringError = [remainingStatus, "Invalid workspace path"].filter(Boolean).join("\n");
+      await expect.poll(() => status.textContent()).toBe(duringError);
+      await page.clock.runFor(999);
+      expect(await status.textContent()).toBe(duringError);
+      expect(await status.getAttribute("class")).toBe("error");
+      await page.clock.runFor(1);
+      await expect.poll(() => status.textContent()).toBe(remainingStatus);
+      expect(await status.getAttribute("class")).toBe("");
+      expect(await page.locator(".selected .session-name").textContent()).toBe("Atlas current");
+      expect(await page.locator("#workspace-form").isVisible()).toBe(true);
+      expect(await page.locator("#workspace-path").inputValue()).toBe("/missing/workspace");
+    },
+  );
+
+  it.each(["Operation failed", "Another operation failed"])(
+    "restarts the two-second deadline when a new error arrives: %s",
+    async (nextMessage) => {
+      await receive({ type: "sessions", state });
+      await expectLoaded();
+      await receive({ type: "error", message: "Operation failed" });
+      await page.clock.runFor(1000);
+      await receive({ type: "error", message: nextMessage });
+      await expectLoaded(nextMessage);
+      await page.clock.runFor(1000);
+      await expectLoaded(nextMessage);
+      await page.clock.runFor(999);
+      await expectLoaded(nextMessage);
+      await page.clock.runFor(1);
+      await expectLoaded();
+      expect(await page.locator("#status").getAttribute("class")).toBe("");
+    },
+  );
+
+  it.each([
+    { message: { type: "loading", manual: false }, guidance: "Loading sessions…" },
+    { message: { type: "sessions", state: { groups: [] } }, guidance: "No sessions yet" },
+    { message: { type: "sessionsError" }, guidance: "Failed to load sessions. Retrying…" },
+  ] satisfies { message: ExtensionMessage; guidance: string }[])(
+    "expires only the two-second operation error while preserving empty-list guidance: $guidance",
+    async ({ message, guidance }) => {
+      await receive(message);
+      await failWorkspaceAddition();
+      await page.clock.runFor(1999);
+      expect(await page.locator("#status").textContent()).toBe("Invalid workspace path");
+      expect(await page.locator("#sessions").textContent()).toBe(guidance);
+      await page.clock.runFor(1);
+      await expect.poll(() => page.locator("#status").textContent()).toBe("");
+      expect(await page.locator("#sessions").textContent()).toBe(guidance);
+      expect(await page.locator("#workspace-form").isVisible()).toBe(true);
+      expect(await page.locator("#workspace-path").inputValue()).toBe("/missing/workspace");
+    },
+  );
+
+  it.each([
+    { type: "loading", manual: false },
+    { type: "sessions", state: { groups: [] } },
+    { type: "sessionsError" },
+  ] satisfies ExtensionMessage[])(
+    "keeps the two-second deadline through a connection response: $type",
+    async (message) => {
+      const requestId = await connectionRequest();
+      await receive({ type: "error", message: "Operation failed" });
+      await page.clock.runFor(1000);
+      await receive({ ...message, requestId });
+      await expect.poll(() => page.locator("#status").textContent()).toBe("Operation failed");
+      await page.clock.runFor(999);
+      expect(await page.locator("#status").textContent()).toBe("Operation failed");
+      await page.clock.runFor(1);
+      await expect.poll(() => page.locator("#status").textContent()).toBe("");
+      expect(await page.locator("#connection-status").textContent()).toBe("");
+    },
+  );
 
   it("ignores stale connection replies after a normal push", async () => {
     const requestId = await connectionRequest();
@@ -378,8 +468,8 @@ describe("session list loading in the mounted client", () => {
     await expectLoading();
     await receive({ type: "sessions", state: { groups: [] } });
     await expect.poll(() => page.locator("#sessions").textContent()).toBe("No sessions yet");
-    await expect.poll(() => page.locator("#status").textContent()).toBe("");
-    expect(await page.locator("#status").getAttribute("class")).toBe("");
+    await expect.poll(() => page.locator("#status").textContent()).toBe("Invalid workspace path");
+    expect(await page.locator("#status").getAttribute("class")).toBe("error");
   });
 
   it("shows the refreshing status only for a manual refresh", async () => {
@@ -405,7 +495,7 @@ describe("session list loading in the mounted client", () => {
     expect(await page.locator("#status").textContent()).toBe("Invalid workspace path");
     expect(await page.locator(".selected .session-name").textContent()).toBe("Atlas current");
     await receive({ type: "sessions", state });
-    await expectLoaded();
+    await expectLoaded("Invalid workspace path");
   });
 
   it("keeps refreshing and the existing list visible alongside an operation error", async () => {
@@ -418,8 +508,8 @@ describe("session list loading in the mounted client", () => {
     expect(await page.locator(".selected .session-name").textContent()).toBe("Atlas current");
     expect(await page.locator(".session-row").count()).toBe(1);
     await receive({ type: "sessions", state });
-    await expectLoaded();
-    expect(await page.locator("#status").getAttribute("class")).toBe("");
+    await expectLoaded("Invalid workspace path");
+    expect(await page.locator("#status").getAttribute("class")).toBe("error");
   });
 
   it("keeps a successful empty list visible after an unrelated operation error", async () => {
@@ -430,8 +520,8 @@ describe("session list loading in the mounted client", () => {
     await receive({ type: "loading", manual: false });
     await expectLoading();
     await receive({ type: "sessions", state });
-    await expectLoaded();
-    expect(await page.locator("#status").getAttribute("class")).toBe("");
+    await expectLoaded("Invalid workspace path");
+    expect(await page.locator("#status").getAttribute("class")).toBe("error");
   });
 
   it("shows loading until the first successful empty response", async () => {

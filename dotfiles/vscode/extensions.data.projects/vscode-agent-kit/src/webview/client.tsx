@@ -663,12 +663,8 @@ interface ClientSnapshot {
 function createClientStore(): {
   subscribe(listener: () => void): () => void;
   getSnapshot(): ClientSnapshot;
-  setLoading(
-    manualRefresh: boolean,
-    displayedSessionId?: string | null,
-    errorMessage?: string,
-  ): void;
-  setSessions(state: ClientState, errorMessage?: string): void;
+  setLoading(manualRefresh: boolean, displayedSessionId?: string | null): void;
+  setSessions(state: ClientState): void;
   setConnectionError(connectionError: boolean): void;
   setError(message: string): void;
   setSessionsError(): void;
@@ -694,7 +690,7 @@ function createClientStore(): {
       return () => listeners.delete(listener);
     },
     getSnapshot: () => snapshot,
-    setLoading: (manualRefresh, displayedSessionId, errorMessage = "") =>
+    setLoading: (manualRefresh, displayedSessionId) =>
       publish({
         ...snapshot,
         state:
@@ -703,10 +699,9 @@ function createClientStore(): {
             : { ...snapshot.state, displayedSessionId: displayedSessionId ?? undefined },
         loadStatus: "loading",
         manualRefresh,
-        errorMessage,
       }),
-    setSessions: (state, errorMessage = "") =>
-      publish({ ...snapshot, state, loadStatus: "loaded", manualRefresh: false, errorMessage }),
+    setSessions: (state) =>
+      publish({ ...snapshot, state, loadStatus: "loaded", manualRefresh: false }),
     setConnectionError: (connectionError) => publish({ ...snapshot, connectionError }),
     setError: (message) => publish({ ...snapshot, errorMessage: message }),
     setSessionsError: () => publish({ ...snapshot, loadStatus: "error", manualRefresh: false }),
@@ -839,6 +834,8 @@ export function initClient(bridge: ClientBridge): () => void {
     throw new Error("Sessions webview markup is incomplete.");
   }
   const store = createClientStore();
+  const OPERATION_ERROR_DISPLAY_MS = 2_000;
+  let operationErrorTimer: ReturnType<typeof setTimeout> | undefined;
   const CONNECTION_IDLE_MS = 5_000;
   const CONNECTION_TIMEOUT_MS = 10_000;
   let connectionTimer: ReturnType<typeof setTimeout> | undefined;
@@ -897,7 +894,6 @@ export function initClient(bridge: ClientBridge): () => void {
       (pendingConnectionId === undefined || message.requestId !== pendingConnectionId)
     )
       return;
-    const errorMessage = isReplay ? store.getSnapshot().errorMessage : "";
     if (isListMessage) acceptConnection();
     if (message.type === "loading") {
       const displayedSessionId = message.displayedSessionId;
@@ -906,11 +902,10 @@ export function initClient(bridge: ClientBridge): () => void {
         typeof displayedSessionId === "string" || displayedSessionId === null
           ? displayedSessionId
           : undefined,
-        errorMessage,
       );
     }
     if (message.type === "sessions" && isClientState(message.state)) {
-      store.setSessions(message.state, errorMessage);
+      store.setSessions(message.state);
     }
     if (message.type === "newSessionFinished" && typeof message.requestId === "string") {
       store.finishNewSession(message.requestId);
@@ -919,7 +914,12 @@ export function initClient(bridge: ClientBridge): () => void {
       closeWorkspaceForm();
     }
     if (message.type === "error" && typeof message.message === "string") {
+      clearTimeout(operationErrorTimer);
       store.setError(message.message);
+      operationErrorTimer = setTimeout(() => {
+        operationErrorTimer = undefined;
+        store.setError("");
+      }, OPERATION_ERROR_DISPLAY_MS);
     }
     if (message.type === "sessionsError") {
       store.setSessionsError();
@@ -975,6 +975,7 @@ export function initClient(bridge: ClientBridge): () => void {
 
   return () => {
     disposed = true;
+    clearTimeout(operationErrorTimer);
     stopConnectionCheck();
     document.removeEventListener("visibilitychange", onVisibilityChange);
     disposeScrollbar();

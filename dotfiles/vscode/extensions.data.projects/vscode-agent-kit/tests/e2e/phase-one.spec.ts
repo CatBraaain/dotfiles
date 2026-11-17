@@ -20,8 +20,8 @@ import {
   FIXTURE_REPLY,
 } from "../support/fixedResponseProvider";
 
-/** One recorded #status mutation while a workspace registration error arrives. */
 interface RegistrationStatusObservation {
+  atMs: number;
   className: string;
   text: string;
   status?: { top: number; bottom: number };
@@ -1045,10 +1045,6 @@ test(
         .click({ steps: 15 });
       const pathInput = frame.locator("#workspace-path").describe("Workspace path input");
       await pathInput.fill(host.sessions.Missing.cwd);
-      // The registration error in #status is transient: the periodic list
-      // refresh delivers a new list and clears it within about a second.
-      // Record the status element before submitting so the assertions do
-      // not race the next refresh.
       await frame.evaluate(() => {
         const status = document.querySelector("#status")!;
         const observed: RegistrationStatusObservation[] = [];
@@ -1058,6 +1054,7 @@ test(
         });
         new MutationObserver(() => {
           const entry: RegistrationStatusObservation = {
+            atMs: performance.now(),
             className: status.className,
             text: status.textContent ?? "",
           };
@@ -1118,6 +1115,37 @@ test(
       expect(errored!.status!.bottom).toBeLessThanOrEqual(errored!.input!.top);
       expect(errored!.viewportHeight! - errored!.input!.bottom).toBe(12);
       await testInfo.attach("無効なパスと入力保持", {
+        body: await host.page.screenshot(),
+        contentType: "image/png",
+      });
+      const status = frame
+        .locator("#status")
+        .describe("Operation error with a two-second lifetime");
+      await expect(status).toHaveText("");
+      await expect(status).not.toHaveClass("error");
+      const cleared = await frame.evaluate(() => {
+        const observed = Reflect.get(
+          window,
+          "__registrationStatus",
+        ) as RegistrationStatusObservation[];
+        const firstError = observed.findIndex(({ className }) => className === "error");
+        return observed
+          .slice(firstError + 1)
+          .find(({ className, text }) => className === "" && text === "");
+      });
+      expect(cleared).toBeDefined();
+      const displayedMs = cleared!.atMs - errored!.atMs;
+      expect(displayedMs).toBeGreaterThanOrEqual(1900);
+      expect(displayedMs).toBeLessThan(4000);
+      await expect(pathInput).toHaveValue(host.sessions.Missing.cwd);
+      await expect(frame.locator("#workspace-form")).toBeVisible();
+      await expect(
+        host.page
+          .locator(".notification-list-item-message")
+          .filter({ hasText: host.sessions.Missing.cwd })
+          .first(),
+      ).toBeVisible();
+      await testInfo.attach("Operation error expired with workspace input retained", {
         body: await host.page.screenshot(),
         contentType: "image/png",
       });
