@@ -66,7 +66,7 @@ export function planTick(input: PlanInput): Plan {
 
   for (const [id, name] of input.running) {
     const status = byId.get(id)?.status ?? null;
-    if (status === "closed" || status === "cancelled") {
+    if (status === "closed" || status === "cancelled" || status === "blocked") {
       done.push({ id, name, status });
     } else if (!input.hasSession(name)) {
       incomplete.push({ id, name, status });

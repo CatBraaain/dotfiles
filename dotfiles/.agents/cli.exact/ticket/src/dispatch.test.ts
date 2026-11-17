@@ -202,20 +202,23 @@ describe("planTick", () => {
     assert.equal(plan.finished, false);
   });
 
-  it("releases finished tickets and refills the free slot in the same tick", () => {
-    const plan = planTick({
-      ...base,
-      tickets: [{ id: "a", status: "cancelled", actionable: false }, ...base.tickets.slice(1)],
-      started: new Set(["a", "b"]),
-      running: new Map([
-        ["a", "fix_a"],
-        ["b", "fix_b"],
-      ]),
-    });
-    assert.deepEqual(plan.done, [{ id: "a", name: "fix_a", status: "cancelled" }]);
-    assert.deepEqual(plan.launches, ["c"]);
-    assert.equal(plan.finished, false);
-  });
+  it.each(["closed", "cancelled", "blocked"])(
+    "releases %s tickets and refills the free slot in the same tick",
+    (status) => {
+      const plan = planTick({
+        ...base,
+        tickets: [{ id: "a", status, actionable: false }, ...base.tickets.slice(1)],
+        started: new Set(["a", "b"]),
+        running: new Map([
+          ["a", "fix_a"],
+          ["b", "fix_b"],
+        ]),
+      });
+      assert.deepEqual(plan.done, [{ id: "a", name: "fix_a", status }]);
+      assert.deepEqual(plan.launches, ["c"]);
+      assert.equal(plan.finished, false);
+    },
+  );
 
   it("does not restart incomplete or previously released tickets", () => {
     const plan = planTick({
@@ -262,18 +265,21 @@ describe("planTick", () => {
     assert.equal(planTick({ ...base, tickets: [] }).finished, true);
   });
 
-  it("prioritizes done over a missing session", () => {
-    const plan = planTick({
-      ...base,
-      tickets: [{ id: "a", status: "closed", actionable: false }],
-      started: new Set(["a"]),
-      running: new Map([["a", "fix_a"]]),
-      hasSession: () => false,
-    });
-    assert.deepEqual(plan.done, [{ id: "a", name: "fix_a", status: "closed" }]);
-    assert.deepEqual(plan.incomplete, []);
-    assert.equal(plan.finished, true);
-  });
+  it.each(["closed", "cancelled", "blocked"])(
+    "prioritizes done for %s over a missing session",
+    (status) => {
+      const plan = planTick({
+        ...base,
+        tickets: [{ id: "a", status, actionable: false }],
+        started: new Set(["a"]),
+        running: new Map([["a", "fix_a"]]),
+        hasSession: () => false,
+      });
+      assert.deepEqual(plan.done, [{ id: "a", name: "fix_a", status }]);
+      assert.deepEqual(plan.incomplete, []);
+      assert.equal(plan.finished, true);
+    },
+  );
 
   it("reports none when a running ticket disappeared from the snapshot", () => {
     const plan = planTick({
@@ -342,65 +348,68 @@ afterEach(() => {
 });
 
 describe("dispatch execution", () => {
-  it("rescans for additions and dependency release after waiting with no new targets", async () => {
-    const { home, options } = fixture();
-    let tickets: TicketSnapshot[] = [
-      { id: "a", status: "open", actionable: true },
-      { id: "b", status: "blocked", actionable: false },
-    ];
-    const events: string[] = [];
-    let sleeps = 0;
-    let scans = 0;
-    await run({
-      options,
-      loadSnapshot: async () => {
-        scans++;
-        return tickets;
-      },
-      log: (line) => events.push(line),
-      hasSession: (name) => name !== "fix_b",
-      launch: (id, name, promptFile) => {
-        assert.equal(promptFile, join(home, "fix", `prompt-${id}.txt`));
-        const prompt = readFileSync(promptFile, "utf8");
-        assert.ok(prompt.startsWith(`ticket ${id} に対応する。`));
-        assert.match(prompt, /user はticketを読んでいない前提で/);
-        assert.doesNotMatch(prompt, /`closed` にするとセッションが終了する/);
-        events.push(`start ${name}`);
-      },
-      sleepMs: async (ms) => {
-        assert.equal(ms, 250);
-        sleeps++;
-        assert.ok(sleeps <= 3, "dispatcher did not finish");
-        if (sleeps === 2) {
-          tickets = [
-            { id: "a", status: "closed", actionable: false },
-            { id: "b", status: "open", actionable: true },
-            { id: "c", status: "open", actionable: true },
-          ];
-        } else if (sleeps === 3) {
-          tickets = [
-            { id: "a", status: "open", actionable: true },
-            { id: "b", status: "open", actionable: true },
-            { id: "c", status: "cancelled", actionable: false },
-          ];
-        }
-      },
-    });
-    assert.equal(scans, 4);
-    assert.deepEqual(events, [
-      "dispatcher start max=2",
-      "start fix_a",
-      "launched a as fix_a",
-      "done a status=closed",
-      "start fix_b",
-      "launched b as fix_b",
-      "start fix_c",
-      "launched c as fix_c",
-      "done c status=cancelled",
-      "incomplete b status=open session exited without close",
-      "dispatcher finished",
-    ]);
-  });
+  it.each(["closed", "blocked"])(
+    "rescans and refills slots released by %s without restarting reopened tickets",
+    async (releasedStatus) => {
+      const { home, options } = fixture();
+      let tickets: TicketSnapshot[] = [
+        { id: "a", status: "open", actionable: true },
+        { id: "b", status: "blocked", actionable: false },
+      ];
+      const events: string[] = [];
+      let sleeps = 0;
+      let scans = 0;
+      await run({
+        options,
+        loadSnapshot: async () => {
+          scans++;
+          return tickets;
+        },
+        log: (line) => events.push(line),
+        hasSession: (name) => name !== "fix_b",
+        launch: (id, name, promptFile) => {
+          assert.equal(promptFile, join(home, "fix", `prompt-${id}.txt`));
+          const prompt = readFileSync(promptFile, "utf8");
+          assert.ok(prompt.startsWith(`ticket ${id} に対応する。`));
+          assert.match(prompt, /user はticketを読んでいない前提で/);
+          assert.doesNotMatch(prompt, /`closed` にするとセッションが終了する/);
+          events.push(`start ${name}`);
+        },
+        sleepMs: async (ms) => {
+          assert.equal(ms, 250);
+          sleeps++;
+          assert.ok(sleeps <= 3, "dispatcher did not finish");
+          if (sleeps === 2) {
+            tickets = [
+              { id: "a", status: releasedStatus, actionable: false },
+              { id: "b", status: "open", actionable: true },
+              { id: "c", status: "open", actionable: true },
+            ];
+          } else if (sleeps === 3) {
+            tickets = [
+              { id: "a", status: "open", actionable: true },
+              { id: "b", status: "open", actionable: true },
+              { id: "c", status: "cancelled", actionable: false },
+            ];
+          }
+        },
+      });
+      assert.equal(scans, 4);
+      assert.deepEqual(events, [
+        "dispatcher start max=2",
+        "start fix_a",
+        "launched a as fix_a",
+        `done a status=${releasedStatus}`,
+        "start fix_b",
+        "launched b as fix_b",
+        "start fix_c",
+        "launched c as fix_c",
+        "done c status=cancelled",
+        "incomplete b status=open session exited without close",
+        "dispatcher finished",
+      ]);
+    },
+  );
 
   it("does not retry a launch rejected as a session-name collision", async () => {
     const { options } = fixture();

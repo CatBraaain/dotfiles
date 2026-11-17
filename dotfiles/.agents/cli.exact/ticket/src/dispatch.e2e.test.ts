@@ -373,9 +373,9 @@ describe("ticket dispatch real tmux", () => {
     TIMEOUT_MS + 5000,
   );
 
-  it.each(["closed", "cancelled"])(
+  it.each(["closed", "cancelled", "blocked"])(
     "releases inherited %s tickets after stopping and restarting with changed options",
-    async (completedStatus) => {
+    async (releasedStatus) => {
       const fixture = setup();
       const { root, cwd, work, store, socket, records } = fixture;
       const env = { ...fixture.env, STUB_WAIT: "1" };
@@ -454,7 +454,7 @@ describe("ticket dispatch real tmux", () => {
           piPid,
         );
         assert.equal(
-          cli(fixture, ["set", "a.v1", JSON.stringify({ status: completedStatus })]).status,
+          cli(fixture, ["set", "a.v1", JSON.stringify({ status: releasedStatus })]).status,
           0,
         );
         await waitFor(
@@ -470,9 +470,10 @@ describe("ticket dispatch real tmux", () => {
           args: [expectedPrompt("a.v1")],
           cwd,
         });
+        assert.equal(cli(fixture, ["set", "a.v1", '{"status":"open"}']).status, 0);
         assert.equal(cli(fixture, ["set", "c", '{"status":"closed"}']).status, 0);
         const log = await waitFinished(fixture, secondWork);
-        assert.ok(log.includes(`done a.v1 status=${completedStatus}`));
+        assert.ok(log.includes(`done a.v1 status=${releasedStatus}`));
         assert.equal(isolatedTmux(socket, ["has-session", "-t", "=e2e_a_v1"]).status, 0);
         assert.equal(
           isolatedTmux(socket, ["display-message", "-p", "-t", "=e2e_a_v1:0.0", "#{pane_pid}"])
