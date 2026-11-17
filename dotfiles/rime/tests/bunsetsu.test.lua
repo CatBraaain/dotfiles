@@ -50,7 +50,11 @@ local function new_engine(dictionary, matrix, readings, expand_emoji, boundary, 
     local context = { options = {}, properties = {} }
     function context:get_property(name) return self.properties[name] or "" end
     function context:set_property(name, value) self.properties[name] = value end
-    context.option_update_notifier = { connect = function() return { disconnect = function() end } end }
+    local option_listener
+    context.option_update_notifier = { connect = function(_, listener)
+        option_listener = listener
+        return { disconnect = function() option_listener = nil end }
+    end }
     context.composition = { back = function() return segment end }
     function segment:get_candidate_at(index)
         local state = bunsetsu.state(context)
@@ -65,7 +69,11 @@ local function new_engine(dictionary, matrix, readings, expand_emoji, boundary, 
             and segment:get_candidate_at(0) ~= nil
     end
     function context:get_option(name) return self.options[name] or false end
-    function context:set_option(name, value) self.options[name] = value end
+    function context:set_option(name, value)
+        local previous = self:get_option(name)
+        self.options[name] = value
+        if previous ~= value and option_listener then option_listener(self, name) end
+    end
     function context:highlight(index)
         if segment:get_candidate_at(index) then segment.selected_index = index end
     end
@@ -1034,6 +1042,116 @@ do
             and middle.candidates[middle.selected].left_id == 694,
             operation .. ": returning to the original neighbor restores both best representatives")
     end
+end
+
+print("== 23a. candidate traversal keeps its order through mutual route reevaluation")
+do
+    local dictionary = {
+        { surface = "あ", candidate = "switch", left_id = 2, right_id = 2, cost = 20 },
+        { surface = "あ", candidate = "switch", left_id = 6, right_id = 6, cost = 21 },
+        { surface = "う", candidate = "neighbor", left_id = 3, right_id = 3, cost = 1 },
+        { surface = "う", candidate = "neighbor", left_id = 4, right_id = 4, cost = 1 },
+    }
+    for index = 1, 30 do
+        dictionary[#dictionary + 1] = { surface = "あ", candidate = "left" .. index,
+            left_id = 1, right_id = 1, cost = index }
+    end
+    for index = 1, 34 do
+        dictionary[#dictionary + 1] = { surface = "あ", candidate = "deep" .. index,
+            left_id = 5, right_id = 5, cost = 5000 + index }
+    end
+    local matrix = pos_matrix({ 1, 2, 3, 4, 5, 6 }, {
+        ["1 4"] = 1000, ["2 3"] = 1000, ["6 3"] = 2000, ["6 4"] = -2,
+    })
+    local operations = {
+        { name = "expanded Down", direction = 1, arrows = true, expanded = true },
+        { name = "expanded Up", direction = -1, arrows = true, expanded = true },
+        { name = "Space", direction = 1, expanded = true },
+        { name = "menu sync", direction = 1, sync = true, expanded = true },
+        { name = "expanded PageDown", direction = 1, page = true, expanded = true },
+        { name = "expanded PageUp", direction = -1, page = true, expanded = true },
+        { name = "collapsed PageDown", direction = 1, page = true },
+        { name = "collapsed PageUp", direction = -1, page = true },
+    }
+    for _, operation in ipairs(operations) do
+        local bunsetsu, context = pos_engine(dictionary, matrix, {}, function() return true end)
+        bunsetsu.start(context, "あう")
+        context:set_option("_kagiroi_hide_candidates", false)
+        context:set_option("_kagiroi_expand_candidates", operation.expanded or false)
+        bunsetsu.render(context)
+        local state = bunsetsu.state(context)
+        local clause, neighbor = state.clauses[1], state.clauses[2]
+        local order = {}
+        for index, choice in ipairs(clause.candidates) do order[index] = choice.text end
+        check(#order == 65 and clause.selected == 1, operation.name .. ": the fixture starts with sixty-five unique texts")
+        local expected_order = table.concat(order, "|")
+        local width = operation.expanded and 30 or 10
+        local pages = math.ceil(#order / width)
+        local steps = operation.page and pages or #order
+        local expected_index, seen, neighbor_ids, updated_route = 1, {}, {}, false
+        for step = 1, steps do
+            local first = operation.page and math.floor((clause.selected - 1) / width) * width + 1 or clause.selected
+            local last = operation.page and math.min(first + width - 1, #clause.candidates) or first
+            for index = first, last do seen[clause.candidates[index].text] = true end
+            if operation.page then
+                expected_index = ((math.floor((expected_index - 1) / width) + operation.direction) % pages) * width + 1
+                bunsetsu.page(context, operation.direction)
+            else
+                expected_index = (expected_index - 1 + operation.direction) % #order + 1
+                if operation.sync then
+                    context:highlight(expected_index - 1)
+                    bunsetsu.sync(context)
+                else
+                    bunsetsu.select(context, operation.direction, operation.arrows)
+                end
+            end
+            local actual_order = {}
+            for index, choice in ipairs(clause.candidates) do actual_order[index] = choice.text end
+            local chosen, adjacent = clause.candidates[clause.selected], neighbor.candidates[neighbor.selected]
+            check(table.concat(actual_order, "|") == expected_order,
+                operation.name .. ": mutual reevaluation preserves the displayed order at step " .. step)
+            check(clause.selected == expected_index and chosen.text == order[expected_index],
+                operation.name .. ": selection follows the retained order and page heads at step " .. step)
+            check(adjacent.text == "neighbor", operation.name .. ": adjacent reevaluation retains its selected text")
+            neighbor_ids[adjacent.left_id] = true
+            if chosen.text == "switch" then
+                updated_route = chosen.left_id == 6 and adjacent.left_id == 4
+                check(updated_route, operation.name .. ": feedback selects the best same-text route in the active clause")
+            end
+        end
+        local reached = 0
+        for _ in pairs(seen) do reached = reached + 1 end
+        check(reached == #order and clause.selected == 1,
+            operation.name .. ": traversal reaches every candidate and wraps to the first")
+        check(neighbor_ids[3] and neighbor_ids[4] and updated_route,
+            operation.name .. ": traversal exercises mutual route changes rather than a fixed neighbor")
+    end
+    local bunsetsu, context = pos_engine(dictionary, matrix, {}, function() return true end)
+    bunsetsu.start(context, "あう")
+    context:set_option("_kagiroi_hide_candidates", false)
+    context:set_option("_kagiroi_expand_candidates", true)
+    bunsetsu.render(context)
+    bunsetsu.page(context, 1)
+    local state = bunsetsu.state(context)
+    local clause, neighbor = state.clauses[1], state.clauses[2]
+    check(clause.candidates[1].text == "left1" and clause.selected == 31
+        and clause.candidates[clause.selected].text == "switch",
+        "paging retains the old display order while selecting switch")
+    check(clause.candidates[clause.selected].left_id == 6
+        and neighbor.candidates[neighbor.selected].left_id == 4,
+        "reopening starts after real mutual reevaluation changed both selected routes")
+    context:set_option("_kagiroi_expand_candidates", false)
+    context:set_option("_kagiroi_hide_candidates", true)
+    bunsetsu.render(context)
+    check(bunsetsu.display(context) == "switchneighbor", "closing keeps both selected displays")
+    context:set_option("_kagiroi_hide_candidates", false)
+    bunsetsu.render(context)
+    check(clause.candidates[1].text == "switch" and clause.selected == 1,
+        "reopening ranks the retained selection in the current context")
+    bunsetsu.select(context, 1)
+    check(clause.candidates[1].text == "switch" and clause.selected == 2
+        and clause.candidates[clause.selected].text == "left1",
+        "Space advances through the refreshed order without moving it during feedback")
 end
 
 print("== 24. reranking preserves filtered choices unscored order and the target reading")

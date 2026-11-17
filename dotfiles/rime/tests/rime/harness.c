@@ -4417,6 +4417,141 @@ static void test_bunsetsu_candidates_include_alternative_routes(void) {
     }
 }
 
+static int read_candidate_texts(char texts[][256], int capacity) {
+    RimeCandidateListIterator iterator = {0};
+    if (!rime->candidate_list_begin(session, &iterator)) return -1;
+    int total = 0;
+    while (rime->candidate_list_next(&iterator)) {
+        if (total >= capacity || strlen(iterator.candidate.text) >= sizeof(texts[0])) {
+            rime->candidate_list_end(&iterator);
+            return -1;
+        }
+        snprintf(texts[total++], sizeof(texts[0]), "%s", iterator.candidate.text);
+    }
+    rime->candidate_list_end(&iterator);
+    return total;
+}
+
+static void test_bunsetsu_mutual_candidate_traversal(void) {
+    enum { capacity = 512, page_width = 30 };
+    static const struct { int key; int direction; int page; } operations[] = {
+        {kDown, 1, 0}, {kUp, -1, 0}, {kSpace, 1, 0},
+        {kPageDown, 1, 1}, {kPageUp, -1, 1},
+    };
+    for (size_t operation = 0; operation < sizeof(operations) / sizeof(operations[0]); ++operation) {
+        fresh_session();
+        type_text("naide");
+        press(kSpace);
+        press_shift(kLeft);
+        press(kSpace);
+        press(kTab);
+        press(kUp);
+        check(active_reading_equals("ない"), "the traversal fixture must split nai from de");
+        char expected[capacity][256], current[capacity][256];
+        int total = read_candidate_texts(expected, capacity);
+        check(total > 30, "the split nai fixture must span multiple expanded pages");
+        if (total <= 30) return;
+        int index = 0, completed = 0;
+        Bool reached[capacity] = {False};
+        for (int step = 0; step < capacity * 2; ++step) {
+            RIME_STRUCT(RimeContext, context);
+            if (!current_menu(&context)) {
+                check(False, "mutual traversal must keep the candidate menu available");
+                return;
+            }
+            int highlight = context.menu.highlighted_candidate_index;
+            check(highlight >= 0 && highlight < context.menu.num_candidates,
+                  "mutual traversal must keep a valid highlighted candidate");
+            if (highlight < 0 || highlight >= context.menu.num_candidates) {
+                rime->free_context(&context);
+                return;
+            }
+            check(context.menu.page_no == index / page_width && highlight == index % page_width &&
+                      strcmp(context.menu.candidates[highlight].text, expected[index]) == 0,
+                  "mutual reevaluation must retain the requested candidate and page position");
+            if (operations[operation].page && step > 0)
+                check(highlight == 0, "mutual paging must select the destination page head");
+            for (int choice = 0; choice < total; ++choice) {
+                if (operations[operation].page) {
+                    for (int visible = 0; visible < context.menu.num_candidates; ++visible)
+                        if (strcmp(context.menu.candidates[visible].text, expected[choice]) == 0)
+                            reached[choice] = True;
+                } else if (strcmp(context.menu.candidates[highlight].text, expected[choice]) == 0) {
+                    reached[choice] = True;
+                }
+            }
+            char preview[512];
+            snprintf(preview, sizeof(preview), "%sで", context.menu.candidates[highlight].text);
+            check(context.commit_text_preview && strcmp(context.commit_text_preview, preview) == 0,
+                  "mutual traversal must retain the adjacent de display");
+            rime->free_context(&context);
+            int reached_count = 0;
+            for (int choice = 0; choice < total; ++choice) reached_count += reached[choice] != False;
+            if (step > 0 && index == 0 && reached_count == total) {
+                completed = 1;
+                if (g_verbose)
+                    fprintf(stderr, "mutual %s reached=%d/%d\n",
+                            key_display_name(operations[operation].key), reached_count, total);
+                break;
+            }
+            if (operations[operation].page) {
+                int pages = (total + page_width - 1) / page_width;
+                index = ((index / page_width + operations[operation].direction + pages) % pages) * page_width;
+            } else {
+                index = (index + operations[operation].direction + total) % total;
+            }
+            press(operations[operation].key);
+            int current_total = read_candidate_texts(current, capacity);
+            check(current_total >= total, "mutual reevaluation must retain every offered candidate");
+            if (current_total < total) return;
+            int same_order = 1;
+            for (int choice = 0; choice < total; ++choice)
+                if (strcmp(current[choice], expected[choice]) != 0) same_order = 0;
+            check(same_order, "mutual reevaluation must retain the complete displayed order");
+            for (int choice = total; choice < current_total; ++choice)
+                snprintf(expected[choice], sizeof(expected[choice]), "%s", current[choice]);
+            total = current_total;
+        }
+        check(completed, "mutual traversal must reach every candidate and cycle back to the first");
+        char commit[512];
+        check(!take_commit(commit, sizeof(commit)), "mutual traversal must remain uncommitted");
+    }
+}
+
+static void test_bunsetsu_reopened_contextual_order(void) {
+    fresh_session();
+    type_text("naide");
+    press(kSpace);
+    press_shift(kLeft);
+    press(kSpace);
+    press(kTab);
+    press(kUp);
+    int target = full_list_index_of("ない");
+    check(target > 0, "the reopening fixture must initially rank nai behind the first candidate");
+    if (target <= 0) return;
+    for (int step = 0; step < target; ++step) press(kDown);
+    char selected[256];
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, "ない") == 0 && preview_equals("ないで"),
+          "the reopening fixture must retain nai while reevaluating de");
+    press(kEscape);
+    check(menu_hidden() && preview_equals("ないで"), "closing must retain both selected displays");
+    press(kSpace);
+    RIME_STRUCT(RimeContext, context);
+    if (!current_menu(&context)) {
+        check(False, "reopening must expose the active clause's candidates");
+        return;
+    }
+    check(context.menu.num_candidates > 0 && strcmp(context.menu.candidates[0].text, "ない") == 0,
+          "reopening must order the menu by its current adjacent context");
+    rime->free_context(&context);
+    selected_text(selected, sizeof(selected));
+    check(strcmp(selected, "無い") == 0 && preview_equals("無いで"),
+          "Space must advance from the retained choice in the refreshed order");
+    char commit[512];
+    check(!take_commit(commit, sizeof(commit)), "reopening must remain uncommitted");
+}
+
 static void test_bunsetsu_selection_and_preview(void) {
     fresh_session();
     type_text("kyouhashoukou");
@@ -5113,6 +5248,7 @@ int main(int argc, char* argv[]) {
         /* Runs first: later tests feed the user dictionary and can saturate
          * the learned order the baseline comparison depends on. */
         {"unlearned_part_of_speech_ranking", test_unlearned_part_of_speech_ranking},
+        {"bunsetsu_reopened_contextual_order", test_bunsetsu_reopened_contextual_order},
         {"learning_promotes_committed_candidate", test_learning_promotes_committed_candidate},
         {"learning_promotes_committed_sentences", test_learning_promotes_committed_sentences},
         {"part_of_speech_kana_learning", test_part_of_speech_kana_learning},
@@ -5123,6 +5259,7 @@ int main(int argc, char* argv[]) {
         {"bunsetsu_contexts_keep_separate_choices", test_bunsetsu_contexts_keep_separate_choices},
         {"bunsetsu_candidates_include_alternative_routes", test_bunsetsu_candidates_include_alternative_routes},
         {"bunsetsu_filtered_identity", test_bunsetsu_filtered_identity},
+        {"bunsetsu_mutual_candidate_traversal", test_bunsetsu_mutual_candidate_traversal},
         {"default_schema_is_kagiroi", test_default_schema_is_kagiroi},
         {"main_dictionary_imports_managed_custom_table", test_main_dictionary_imports_managed_custom_table},
         {"registered_phrases_are_selectable", test_registered_phrases_are_selectable},

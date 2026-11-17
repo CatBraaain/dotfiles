@@ -268,7 +268,9 @@ function Top.init(env)
     sessions[env.session_id] = env
     local context = env.engine.context
     env.option_connection = context.option_update_notifier:connect(function(_, option)
-        if option == "emoji" and env.conversion then
+        if option == "_kagiroi_hide_candidates" and not context:get_option(option) and env.conversion then
+            env.conversion.clauses[env.conversion.active].ranked_context = nil
+        elseif option == "emoji" and env.conversion then
             for _, clause in ipairs(env.conversion.clauses) do
                 clause.filtered = false
             end
@@ -1302,7 +1304,7 @@ local function selected_ids(clause)
     return entry_ids(clause.candidates[clause.selected].entry)
 end
 
-local function collect_filtered(context, state, index)
+local function collect_filtered(context, state, index, retained_order)
     local clause = state.clauses[index]
     state.active = index
     state.active_start, state.active_end = 0, #clause.reading
@@ -1313,9 +1315,21 @@ local function collect_filtered(context, state, index)
     local segment = context.composition:back()
     if segment then segment:get_candidate_at(0) end
     state.collecting = false
+    if retained_order then
+        local positions = {}
+        for position, choice in ipairs(retained_order) do positions[choice.text] = position end
+        for position, choice in ipairs(clause.candidates) do
+            positions[choice.text] = positions[choice.text] or #retained_order + position
+        end
+        local selected = clause.candidates[clause.selected]
+        table.sort(clause.candidates, function(a, b) return positions[a.text] < positions[b.text] end)
+        for position, choice in ipairs(clause.candidates) do
+            if choice == selected then clause.selected = position break end
+        end
+    end
 end
 
-local function settle_contextual(context, state, env)
+local function settle_contextual(context, state, env, retained_clause)
     local queue, queued = {}, {}
     local function enqueue(index)
         if state.clauses[index] and not queued[index] then
@@ -1337,8 +1351,9 @@ local function settle_contextual(context, state, env)
         local before_choice = clause.candidates[clause.selected]
         local before_route = history_suffix("c", before_choice.route_words)
         if not clause.filtered or clause.ranked_context ~= key then
+            local retained_order = clause == retained_clause and clause.candidates
             if state.contextual and clause.own_attached then reorder_contextual(clause, env, score_context) end
-            collect_filtered(context, state, index)
+            collect_filtered(context, state, index, retained_order)
             clause.ranked_context = key
         end
         if select_first then
@@ -1495,7 +1510,7 @@ function Top.sync(context)
         local selected = state.window_start + segment.selected_index + 1
         if selected ~= clause.selected then
             clause.selected = selected
-            Top.render(context)
+            Top.render(context, clause)
         end
     end
 end
@@ -1510,10 +1525,10 @@ function Top.display(context)
     return table.concat(parts)
 end
 
-function Top.render(context)
+function Top.render(context, retained_clause)
     local state = Top.state(context)
     local active_index = state.active
-    settle_contextual(context, state, session(context))
+    settle_contextual(context, state, session(context), retained_clause)
     state.active = active_index
     local hidden = context:get_option("_kagiroi_hide_candidates")
     local prefix, suffix = {}, {}
@@ -1626,7 +1641,7 @@ function Top.select(context, direction, arrows)
     end
     clause.selected = first + (clause.selected - first + direction) % count
     clause.override = nil
-    Top.render(context)
+    Top.render(context, clause)
 end
 
 function Top.page(context, direction)
@@ -1644,7 +1659,7 @@ function Top.page(context, direction)
     if page < 0 then page = last_page elseif page > last_page then page = 0 end
     clause.selected = page * width + 1
     clause.override = nil
-    Top.render(context)
+    Top.render(context, clause)
 end
 
 local function selected_choice(clause)
