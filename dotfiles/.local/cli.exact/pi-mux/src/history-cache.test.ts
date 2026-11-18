@@ -160,6 +160,22 @@ const runningFile = ${JSON.stringify(runningFile)};
 let pane = ${JSON.stringify(pane)};
 if (existsSync(runningFile)) pane = JSON.parse(readFileSync(runningFile, "utf8"));
 switch (args[0]) {
+  case "-C":
+    for (let index = 1, sequence = 1; index < args.length; index += 5) {
+      console.log("%begin 1 " + sequence + " 0\\n%end 1 " + sequence++ + " 0");
+      const command = args[index + 3];
+      const tokens = (command.match(/"(?:\\\\.|[^"\\\\])*"/g) ?? []).map((token) => JSON.parse(token.replaceAll("\\\\$", "$")));
+      console.log("%begin 1 " + sequence + " 0");
+      const missing = tokens.at(-1) === "PI_TMUX_TEMPORARY";
+      if (tokens[0] === "display-message") console.log(pane.cwd);
+      else if (missing) console.log("unknown variable: PI_TMUX_TEMPORARY");
+      else if (tokens.at(-1) === "PI_TMUX_SESSION_ID") console.log("PI_TMUX_SESSION_ID=" + pane.id);
+      else if (tokens[0] !== "show-options") throw new Error("Unexpected mock batch command: " + command);
+      console.log((missing ? "%error" : "%end") + " 1 " + sequence++ + " 0");
+      if (missing) process.exitCode = 1;
+    }
+    console.log("%exit");
+    break;
   case "list-panes":
     if (existsSync(runningFile)) console.log(["%1", "$1", "pi-test", Buffer.from(JSON.stringify(pane)).toString("base64"), pane.pid, "0"].join("\\t"));
     break;

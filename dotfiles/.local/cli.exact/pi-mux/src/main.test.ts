@@ -1514,6 +1514,210 @@ spyOn(fs, "renameSync").mockImplementation((...args) => {
     }
   });
 
+  it("collects every managed session and restore marker with a bounded number of tmux calls", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const ids = Array.from({ length: 48 }, () => randomUUID());
+      const generation = "batch-generation";
+      for (const [index, id] of ids.entries()) {
+        fixture.piSession(`managed-${index}`, { id, file: join(fixture.directory, `${id}.jsonl`) });
+        fixture.tmux(["set-option", "-g", `@pi-mux-restoring-${id}`, "1"]);
+      }
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", generation]);
+      writeFileSync(
+        restoreFile(fixture),
+        JSON.stringify({
+          version: 1,
+          generation,
+          workspaces: [{ cwd: fixture.cwd, sessions: ids }],
+        }),
+      );
+      const wrapper = join(fixture.directory, "bin/tmux");
+      const log = join(fixture.directory, "commands.log");
+      const before = readFileSync(wrapper, "utf8");
+      writeFileSync(
+        wrapper,
+        before.replace("exec ", `printf '%s\\n' "$5" >> ${JSON.stringify(log)}\nexec `),
+      );
+      const result = fixture.run(["snapshot", generation]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(restoreDocument(fixture).workspaces, [{ cwd: fixture.cwd, sessions: ids }]);
+      const commands = readFileSync(log, "utf8").trim().split("\n");
+      assert.equal(commands.filter((command) => command === "list-sessions").length, 1);
+      assert.equal(commands.filter((command) => command === "-C").length, 2);
+      assert.equal(commands.filter((command) => command === "show-environment").length, 0);
+      assert.equal(commands.filter((command) => command === "display-message").length, 0);
+      assert.equal(commands.filter((command) => command === "show-options").length, 2);
+      assert.equal(commands.length, 5);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("preserves the snapshot when the batched tmux response is incomplete", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      fixture.piSession("managed", { id, file: join(fixture.directory, "managed.jsonl") });
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "batch-generation"]);
+      const wrapper = join(fixture.directory, "bin/tmux");
+      const beforeWrapper = readFileSync(wrapper, "utf8");
+      writeFileSync(
+        wrapper,
+        beforeWrapper.replace(
+          "exec ",
+          'if [ "$5" = -C ]; then printf "%s\\n" "%begin 1 1 0"; exit 1; fi\nexec ',
+        ),
+      );
+      const before = readFileSync(restoreFile(fixture), "utf8");
+      const result = fixture.run(["snapshot"]);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /invalid tmux control response/);
+      assert.equal(readFileSync(restoreFile(fixture), "utf8"), before);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  for (const state of ["trailing-whitespace", "mismatched", "hidden"] as const) {
+    it(`keeps the existing temporary-environment comparison (${state})`, async () => {
+      const fixture = new SessionFixture();
+      try {
+        const id = randomUUID();
+        fixture.piSession("managed", { id, file: join(fixture.directory, "managed.jsonl") });
+        fixture.tmux([
+          "set-environment",
+          ...(state === "hidden" ? ["-h"] : []),
+          "-t",
+          "managed",
+          "PI_TMUX_TEMPORARY",
+          state === "trailing-whitespace" ? `${id}\n ` : state === "hidden" ? id : randomUUID(),
+        ]);
+        fixture.tmux(["set-option", "-g", "@pi-mux-generation", "batch-generation"]);
+        const result = fixture.run(["snapshot"]);
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(restoreDocument(fixture).workspaces, [
+          {
+            cwd: fixture.cwd,
+            sessions: state === "trailing-whitespace" ? [] : [id],
+          },
+        ]);
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  }
+
+  it("does not treat global environment values as session-local management or temporary state", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      fixture.piSession("managed", { id, file: join(fixture.directory, "managed.jsonl") });
+      fixture.plainSession("unmanaged");
+      fixture.tmux(["set-environment", "-gh", "PI_TMUX_SESSION_ID", randomUUID()]);
+      fixture.tmux(["set-environment", "-g", "PI_TMUX_TEMPORARY", id]);
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "batch-generation"]);
+      const result = fixture.run(["snapshot"]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(restoreDocument(fixture).workspaces, [{ cwd: fixture.cwd, sessions: [id] }]);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  for (const cwdSuffix of ['space 日本😀\\quote"\tline\nend', "dollar$path\u0001"]) {
+    it(`preserves the session cwd when tmux quotes or escapes it (${JSON.stringify(cwdSuffix)})`, async () => {
+      const fixture = new SessionFixture();
+      let pid = "";
+      try {
+        const id = randomUUID();
+        const cwd = join(fixture.directory, cwdSuffix);
+        mkdirSync(cwd);
+        pid = fixture.tmux([
+          "new-session",
+          "-d",
+          "-s",
+          "escaped",
+          "-c",
+          cwd,
+          "-P",
+          "-F",
+          "#{pane_pid}",
+          "/bin/sleep",
+          "300",
+        ]);
+        fixture.tmux(["set-environment", "-t", "escaped", "PI_TMUX_SESSION_ID", id]);
+        fixture.tmux(["set-option", "-g", "@pi-mux-generation", "batch-generation"]);
+        const result = fixture.run(["snapshot"]);
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(restoreDocument(fixture).workspaces, [
+          { cwd: fixture.cwd, sessions: [] },
+          { cwd, sessions: [id] },
+        ]);
+      } finally {
+        await fixture.cleanup();
+        if (pid) await waitUntil(() => !existsSync(`/proc/${pid}`));
+      }
+    });
+  }
+
+  for (const invalidId of ["", "invalid\nid", "invalid\u0001id", "hidden-id"]) {
+    it(`rejects invalid or hidden session-local IDs without changing the snapshot (${JSON.stringify(invalidId)})`, async () => {
+      const fixture = new SessionFixture();
+      try {
+        fixture.plainSession("invalid");
+        fixture.tmux([
+          "set-environment",
+          ...(invalidId === "hidden-id" ? ["-h"] : []),
+          "-t",
+          "invalid",
+          "PI_TMUX_SESSION_ID",
+          invalidId,
+        ]);
+        fixture.tmux(["set-option", "-g", "@pi-mux-generation", "batch-generation"]);
+        const before = readFileSync(restoreFile(fixture), "utf8");
+        const result = fixture.run(["snapshot"]);
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /Invalid conversation ID/);
+        assert.equal(readFileSync(restoreFile(fixture), "utf8"), before);
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  }
+
+  for (const marker of [" 1 ", "", "invalid"]) {
+    it(`preserves restore-marker validation when option values need decoding (${JSON.stringify(marker)})`, async () => {
+      const fixture = new SessionFixture();
+      try {
+        const id = randomUUID();
+        const generation = "batch-generation";
+        fixture.plainSession("server");
+        fixture.tmux(["set-option", "-g", "@pi-mux-generation", generation]);
+        fixture.tmux(["set-option", "-g", `@pi-mux-restoring-${id}`, marker]);
+        const before = JSON.stringify({
+          version: 1,
+          generation,
+          workspaces: [{ cwd: fixture.cwd, sessions: [id] }],
+        });
+        writeFileSync(restoreFile(fixture), before);
+        const result = fixture.run(["snapshot"]);
+        if (marker === "invalid") {
+          assert.equal(result.status, 1);
+          assert.match(result.stderr, /Invalid in-memory restore state/);
+          assert.equal(readFileSync(restoreFile(fixture), "utf8"), before);
+        } else {
+          assert.equal(result.status, 0, result.stderr);
+          assert.deepEqual(restoreDocument(fixture).workspaces, [
+            { cwd: fixture.cwd, sessions: marker.trim() ? [id] : [] },
+          ]);
+        }
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  }
+
   it("adopts a registration-only generation while rejecting stale snapshot hooks", async () => {
     const fixture = new SessionFixture();
     try {

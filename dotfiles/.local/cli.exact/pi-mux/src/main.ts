@@ -776,17 +776,22 @@ async function snapshotSessions(
   if (!previous && mode === "existing") return;
   const managed = await managedSessions(config);
   const temporaryIds = new Set(managed.filter((entry) => entry.temporary).map((entry) => entry.id));
-  const restoring = await Promise.all(
-    (previous?.sessions ?? [])
-      .filter((candidate) => !temporaryIds.has(candidate.id))
-      .map(async (candidate) => {
-        const marker = await serverOption(config, `@pi-mux-restoring-${candidate.id}`);
-        if (marker && marker !== "1") throw new Error("Invalid in-memory restore state");
-        return marker ? [candidate] : [];
-      }),
+  const candidates = (previous?.sessions ?? []).filter(
+    (candidate) => !temporaryIds.has(candidate.id),
   );
+  const markers = await tmuxBatch(
+    config,
+    candidates.map(({ id }) => ["show-options", "-gqv", `@pi-mux-restoring-${id}`]),
+  );
+  const restoring = candidates.filter((_, index) => {
+    const result = markers[index]!;
+    if (result.exitCode !== 0) throw new Error(`tmux show-options failed: ${result.stdout.trim()}`);
+    const marker = result.stdout.trim();
+    if (marker && marker !== "1") throw new Error("Invalid in-memory restore state");
+    return marker === "1";
+  });
   const sessions = uniqueCandidates([
-    ...restoring.flat(),
+    ...restoring,
     ...managed.filter((entry) => !entry.temporary).map(({ id, cwd }) => ({ id, cwd })),
   ]);
   if ((await serverOption(config, "@pi-mux-generation")) !== generation)
@@ -811,26 +816,68 @@ async function managedSessions(config: TmuxConfig): Promise<ManagedSession[]> {
     if (serverIsAbsent(config, listed.stderr) || listed.stderr.includes("no sessions")) return [];
     throw new Error(`Cannot inspect managed sessions: ${listed.stderr.trim()}`);
   }
-  const sessions: ManagedSession[] = [];
-  for (const session of listed.stdout.trim().split("\n").filter(Boolean)) {
-    const environment = await tmux(
-      config,
+  const targets = listed.stdout.trim().split("\n").filter(Boolean);
+  const attributes = await tmuxBatch(
+    config,
+    targets.flatMap((session) => [
       ["show-environment", "-t", session, "PI_TMUX_SESSION_ID"],
-      true,
-    );
+      ["display-message", "-p", "-t", session, "#{session_path}"],
+      ["show-environment", "-t", session, "PI_TMUX_TEMPORARY"],
+    ]),
+  );
+  const sessions: ManagedSession[] = [];
+  for (const [index, session] of targets.entries()) {
+    const environment = attributes[index * 3]!;
     if (environment.exitCode !== 0) {
-      if (environment.stderr.includes("unknown variable: PI_TMUX_SESSION_ID")) continue;
-      throw new Error(`Cannot inspect tmux session ${session}: ${environment.stderr.trim()}`);
+      if (environment.stdout.includes("unknown variable: PI_TMUX_SESSION_ID")) continue;
+      throw new Error(`Cannot inspect tmux session ${session}: ${environment.stdout.trim()}`);
     }
     const id = environment.stdout.replace(/\n$/, "").slice("PI_TMUX_SESSION_ID=".length);
     if (!SESSION_ID_PATTERN.test(id))
       throw new Error(`Invalid conversation ID in tmux session ${session}`);
-    const path = await tmux(config, ["display-message", "-p", "-t", session, "#{session_path}"]);
+    const path = attributes[index * 3 + 1]!;
+    if (path.exitCode !== 0) throw new Error(`tmux display-message failed: ${path.stdout.trim()}`);
     const cwd = path.stdout.replace(/\n$/, "");
     if (!isAbsolute(cwd)) throw new Error(`Invalid working directory in tmux session ${session}`);
-    sessions.push({ id, cwd, session, temporary: await isTemporarySession(config, session, id) });
+    const temporary = attributes[index * 3 + 2]!;
+    if (
+      temporary.exitCode !== 0 &&
+      !temporary.stdout.includes("unknown variable: PI_TMUX_TEMPORARY")
+    )
+      throw new Error(`Cannot inspect temporary session ${session}: ${temporary.stdout.trim()}`);
+    sessions.push({
+      id,
+      cwd,
+      session,
+      temporary: temporary.exitCode === 0 && temporary.stdout.trim() === `PI_TMUX_TEMPORARY=${id}`,
+    });
   }
   return sessions;
+}
+
+async function tmuxBatch(config: TmuxConfig, commands: string[][]) {
+  if (commands.length === 0) return [];
+  const args = commands.flatMap((command, index) => [
+    ...(index === 0 ? [] : [";"]),
+    "if-shell",
+    "-F",
+    "1",
+    tmuxArguments(command),
+  ]);
+  const result = await tmux(config, ["-C", ...args], true);
+  const frames = [
+    ...result.stdout.matchAll(/^%begin (\d+ \d+ \d+)\n([\s\S]*?)^%(end|error) \1\n/gm),
+  ];
+  if (frames.length !== commands.length * 2)
+    throw new Error(
+      `Cannot inspect managed sessions: invalid tmux control response ${result.stderr.trim()}`,
+    );
+  return commands.map((_, index) => {
+    const wrapper = frames[index * 2]!;
+    const frame = frames[index * 2 + 1]!;
+    if (wrapper[3] !== "end") throw new Error("Cannot inspect managed sessions: tmux batch failed");
+    return { stdout: frame[2]!, exitCode: frame[3] === "end" ? 0 : 1 };
+  });
 }
 
 async function serverOption(config: TmuxConfig, option: string): Promise<string> {
