@@ -58,15 +58,13 @@ export async function entryDiffers(
 }
 
 export async function compareFiles(firstPath: string, secondPath: string): Promise<boolean> {
-  const [first, second]: [Uint8Array, Uint8Array] = await Promise.all([
-    readFile(firstPath),
-    readFile(secondPath),
-  ]);
+  const [first, second] = await Promise.all([readFile(firstPath), readFile(secondPath)]);
+  if (first.equals(second)) return false;
   const firstText = decodeText(first);
   const secondText = decodeText(second);
   if (firstText !== null && secondText !== null)
     return normalizeText(firstText) !== normalizeText(secondText);
-  return first.length !== second.length || first.some((byte, index) => byte !== second[index]);
+  return true;
 }
 
 function decodeText(bytes: Uint8Array): string | null {
