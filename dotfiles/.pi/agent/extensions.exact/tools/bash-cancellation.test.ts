@@ -9,7 +9,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { realBwrapTest } from "../guardrails/bwrap-test-support.ts";
 import toolsExtension from "./index.ts";
-import { requestBackgroundBash } from "./background-bash.ts";
 
 const TEMP_ROOT = "/tmp/work/dotfiles/bash-cancellation-tests";
 
@@ -50,6 +49,27 @@ async function withBashRuntime(
     hasUI: false,
     thinkingLevel: "off",
   } as unknown as ExtensionToolContext;
+  context.executeTool = async (name, args, options) => {
+    assert.equal(name, "bash");
+    const params = args as { command: string; timeout?: number };
+    const toolCall = { type: "toolCall" as const, id: "nested-bash", name, arguments: params };
+    try {
+      const result = await definitions
+        .get(name)!
+        .execute(toolCall.id, params, options?.signal, undefined, context);
+      return { toolCall, result, isError: result.isError === true };
+    } catch (error) {
+      return {
+        toolCall,
+        result: {
+          content: [{ type: "text" as const, text: String(error) }],
+          details: {},
+          isError: true,
+        },
+        isError: true,
+      };
+    }
+  };
   toolsExtension(
     {
       registerTool(definition: ToolDefinition) {
@@ -79,7 +99,7 @@ async function withBashRuntime(
   }
 }
 
-for (const route of ["registered", "background"] as const) {
+for (const route of ["registered", "context"] as const) {
   realBwrapTest(
     `${route} Bash waits for the cancelled shell and prevents a late overwrite`,
     async () => {
@@ -100,15 +120,12 @@ for (const route of ["registered", "background"] as const) {
                   assert.match(String(error), /aborted/);
                 },
               )
-            : requestBackgroundBash({
-                id: "old",
-                params: { command },
-                context,
-                signal: controller.signal,
-              }).then(async (outcome) => {
-                assert.equal(outcome.status, "aborted");
-                await outcome.executionSettled;
-              });
+            : context
+                .executeTool("bash", { command }, { signal: controller.signal })
+                .then((outcome) => {
+                  assert.equal(outcome.isError, true);
+                  assert.match(JSON.stringify(outcome.result.content), /aborted/);
+                });
         try {
           await waitUntil(() => existsSync(pidPath));
           const pid = Number(readFileSync(pidPath, "utf8"));
@@ -159,11 +176,12 @@ for (const route of ["registered", "background"] as const) {
             /Command timed out after 0.2 seconds/,
           );
         } else {
-          const outcome = await requestBackgroundBash({ id: "timeout", params, context });
-          assert.equal(outcome.status, "failed");
-          if (outcome.status === "failed")
-            assert.match(String(outcome.error), /Command timed out after 0.2 seconds/);
-          await outcome.executionSettled;
+          const outcome = await context.executeTool("bash", params);
+          assert.equal(outcome.isError, true);
+          assert.match(
+            JSON.stringify(outcome.result.content),
+            /Command timed out after 0.2 seconds/,
+          );
         }
         const pid = Number(readFileSync(pidPath, "utf8"));
         assert.equal(isRunning(pid), false);
@@ -189,15 +207,12 @@ for (const route of ["registered", "background"] as const) {
                 .catch((error: unknown) => {
                   assert.match(String(error), /aborted/);
                 })
-            : requestBackgroundBash({
-                id: "detached",
-                params: { command },
-                context,
-                signal: controller.signal,
-              }).then(async (outcome) => {
-                assert.equal(outcome.status, "aborted");
-                await outcome.executionSettled;
-              });
+            : context
+                .executeTool("bash", { command }, { signal: controller.signal })
+                .then((outcome) => {
+                  assert.equal(outcome.isError, true);
+                  assert.match(JSON.stringify(outcome.result.content), /aborted/);
+                });
         try {
           await waitUntil(() => existsSync(pidPath));
           const pid = Number(readFileSync(pidPath, "utf8"));

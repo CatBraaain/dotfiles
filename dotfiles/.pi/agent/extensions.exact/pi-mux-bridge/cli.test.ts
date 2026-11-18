@@ -3504,7 +3504,7 @@ export default function (pi) {
     }
   }
 
-  for (const failure of ["factory", "unavailable", "denied"] as const) {
+  for (const failure of ["factory", "helper-exit", "helper-timeout"] as const) {
     it(
       `retains a candidate without replay after ${failure} startup failure`,
       async () => {
@@ -3513,31 +3513,46 @@ export default function (pi) {
           f.saved(candidate.id);
           f.seed([candidate]);
           const extension = join(f.agent, "extensions/z-broken.ts");
-          const tools = join(f.agent, "extensions/fixture-tools.ts");
-          const toolsSource = readFileSync(tools, "utf8");
-          const guardrails = join(f.root, "guardrails.yaml");
-          const policy = readFileSync(guardrails, "utf8");
+          const wrapper = join(f.bin, "tmux");
+          const original = readFileSync(wrapper, "utf8");
+          const attempted = join(f.root, "startup-failure-attempted");
           if (failure === "factory")
             writeFileSync(
               extension,
               'export default function () { throw new Error("startup factory failure"); }',
             );
-          else if (failure === "unavailable") rmSync(tools);
           else
             writeFileSync(
-              join(f.root, "guardrails.yaml"),
-              'commands:\n  - ".*":\n      - deny: []\n',
+              wrapper,
+              original.replace(
+                'case "$*" in',
+                `
+case "$*" in
+  *"display-message"*"#{pane_tty}"*)
+    touch ${quote([attempted])}
+    echo "injected ${failure}" >&2
+    ${failure === "helper-timeout" ? "exec sleep 6" : "exit 42"} ;;
+esac
+case "$*" in`,
+              ),
             );
           const failed = await f.run(["restore"]);
           assert.equal(failed.code, 2, failed.err);
           assert.match(failed.err, /pi exited before startup/);
+          if (failure !== "factory") {
+            assert.equal(existsSync(attempted), true);
+            assert.match(
+              readFileSync(join(f.root, "pi-stderr.log"), "utf8"),
+              new RegExp("pi-mux startup failed: injected " + failure),
+            );
+          }
           assert.deepEqual(f.events(), []);
+          assert.equal(existsSync(join(f.cwdA, "should-not-run")), false);
           assert.deepEqual(f.snapshotCandidates(), [candidate]);
           assert.equal((await f.run(["snapshot"])).code, 0);
           assert.deepEqual(f.snapshotCandidates(), [candidate]);
           rmSync(extension, { force: true });
-          writeFileSync(tools, toolsSource);
-          writeFileSync(guardrails, policy);
+          writeFileSync(wrapper, original);
           await f.tmux(["kill-server"]);
           const retried = await f.run(["restore"]);
           assert.equal(retried.code, 0, retried.err);

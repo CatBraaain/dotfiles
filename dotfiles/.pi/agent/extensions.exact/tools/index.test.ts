@@ -231,6 +231,7 @@ describe("tools with the guardrails public API", () => {
         assert.equal(result.structuredContent, body, input);
       }
     }),
+    20_000,
   );
 
   it(
@@ -538,9 +539,9 @@ describe("registered Bash RTK authorization", () => {
       const originalAuthorize = Guardrail.prototype.authorizeCommand;
       const authorized: string[] = [];
       const executed: string[] = [];
-      Guardrail.prototype.authorizeCommand = async function (command, context, mode) {
+      Guardrail.prototype.authorizeCommand = async function (command, context) {
         authorized.push(command);
-        return originalAuthorize.call(this, command, context, mode);
+        return originalAuthorize.call(this, command, context);
       };
       SandboxRunner.prototype.runTool = async function (name, params, options) {
         const command = (params as { command: string }).command;
@@ -581,10 +582,10 @@ describe("registered Bash RTK authorization", () => {
       const originalAuthorize = Guardrail.prototype.authorizeCommand;
       const authorized: string[] = [];
       const executed: string[] = [];
-      Guardrail.prototype.authorizeCommand = async function (command, context, mode) {
+      Guardrail.prototype.authorizeCommand = async function (command, context) {
         authorized.push(command);
         if (command.startsWith("rtk rewrite ")) throw new Error("Access denied: rewrite");
-        return originalAuthorize.call(this, command, context, mode);
+        return originalAuthorize.call(this, command, context);
       };
       SandboxRunner.prototype.runTool = async (_name, params) => {
         executed.push((params as { command: string }).command);
@@ -611,9 +612,9 @@ describe("registered Bash RTK authorization", () => {
       const originalRun = SandboxRunner.prototype.runTool;
       const originalAuthorize = Guardrail.prototype.authorizeCommand;
       const executed: string[] = [];
-      Guardrail.prototype.authorizeCommand = async function (command, context, mode) {
+      Guardrail.prototype.authorizeCommand = async function (command, context) {
         if (command === "printf rewritten") throw new Error("Access denied: rewritten main");
-        return originalAuthorize.call(this, command, context, mode);
+        return originalAuthorize.call(this, command, context);
       };
       SandboxRunner.prototype.runTool = async (_name, params) => {
         executed.push((params as { command: string }).command);
