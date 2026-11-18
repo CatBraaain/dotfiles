@@ -63,6 +63,8 @@ const defaultBranch = "main";
 
 type Label = "linux" | "windows";
 
+let linuxExtensionLines: string[] | undefined;
+
 async function main() {
   if (await hasCommand("code")) {
     for (const extension of localVscodeExtensions) {
@@ -103,6 +105,7 @@ async function installLocalExtension(extension: string) {
   const vsixPath = await buildLocalExtensionVsix(extension);
   console.log(`[linux] install ${vsixPath}`);
   await $`code --install-extension ${vsixPath} --force`;
+  linuxExtensionLines = undefined;
 }
 
 async function syncExtensions(label: Label) {
@@ -185,26 +188,30 @@ async function buildLocalExtensionVsix(extension: string) {
   return vsixPath;
 }
 
-async function listExtensions(label: Label): Promise<string[]> {
+async function readExtensionLines(label: Label): Promise<string[]> {
+  if (label === "linux" && linuxExtensionLines !== undefined) return linuxExtensionLines;
   const codeCommand = codeExecutable(label);
   const { stdout, exitCode } = await $`${codeCommand} --list-extensions`.quiet().nothrow();
   if (exitCode !== 0) return [];
-  return stdout
-    .toString()
-    .replace(/\r/g, "")
-    .split("\n")
-    .filter((extension) => /^[a-z0-9-]+\.[a-z0-9-]+$/.test(extension));
+  const extensions = stdout.toString().replace(/\r/g, "").split("\n");
+  if (label === "linux") linuxExtensionLines = extensions;
+  return extensions;
+}
+
+async function listExtensions(label: Label): Promise<string[]> {
+  const extensions = await readExtensionLines(label);
+  return extensions.filter((extension) => /^[a-z0-9-]+\.[a-z0-9-]+$/.test(extension));
 }
 
 async function isExtensionInstalled(label: Label, extension: string): Promise<boolean> {
-  const codeCommand = codeExecutable(label);
-  const { stdout, exitCode } = await $`${codeCommand} --list-extensions`.quiet().nothrow();
-  return exitCode === 0 && stdout.toString().replace(/\r/g, "").split("\n").includes(extension);
+  const extensions = await readExtensionLines(label);
+  return extensions.includes(extension);
 }
 
 async function runCode(label: Label, args: string[]) {
   const codeCommand = codeExecutable(label);
   await $`${codeCommand} ${args}`;
+  if (label === "linux") linuxExtensionLines = undefined;
 }
 
 async function hasCommand(command: string) {
