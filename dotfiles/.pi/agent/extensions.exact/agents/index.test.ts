@@ -37,7 +37,6 @@ import { renderersOf } from "../chat-renderer/index.ts";
 import { CLASS_CHANGE_EVENT, requestClassChange } from "./class-change.ts";
 import { parseCronExpression } from "./cron.ts";
 import { runUsage, scoreCandidates } from "./usage.ts";
-import { registerBackgroundBash } from "../tools/background-bash.ts";
 import { parseUsageJson } from "../provider-usage/index.ts";
 import type { ModelCandidate } from "./routing.ts";
 
@@ -181,6 +180,7 @@ interface CaptureOptions {
   }) => Promise<{ ok: true } | { ok: false; error: string }>;
   branch?: ReturnType<SessionManager["getBranch"]>;
   signal?: AbortSignal;
+  usageExec?: ExtensionAPI["exec"];
 }
 
 function captureAgentsExtension(
@@ -254,6 +254,15 @@ function captureAgentsExtension(
         getFlag(name: string) {
           return options.flags?.[name];
         },
+        exec:
+          options.usageExec ??
+          (async () => ({
+            code: 127,
+            stdout: "",
+            stderr: "",
+            killed: false,
+            truncated: false,
+          })),
         getAllTools() {
           return [{ name: "read" }, { name: "bash" }, { name: "subagent" }];
         },
@@ -8251,6 +8260,8 @@ describe("shipped agents.yaml through the shared usage entry", () => {
       ],
       nowMs,
     );
+    const usageCalls: Array<[string, string[], unknown]> = [];
+    const usageResponses: string[] = [];
     const extension = captureAgentsExtension(
       { config: parsed.config },
       {
@@ -8265,20 +8276,12 @@ describe("shipped agents.yaml through the shared usage entry", () => {
           { provider: "commandcode", id: "z-ai/glm-5.3-flash" },
         ],
         executeUsage: runUsage,
+        usageExec: async (command, args, options) => {
+          usageCalls.push([command, args, options]);
+          usageResponses.push(usageJson);
+          return { code: 0, stdout: usageJson, stderr: "", killed: false, truncated: false };
+        },
       },
-    );
-    const requests: string[] = [];
-    const dispose = registerBackgroundBash(
-      extension.context,
-      async (request) => {
-        requests.push(request.params.command);
-        return {
-          content: [],
-          details: {},
-          structuredContent: { output: usageJson, exit_code: 0, truncated: false },
-        };
-      },
-      () => {},
     );
     function appliedModelKeys() {
       return extension.selectedModels.map((model) => {
@@ -8289,22 +8292,31 @@ describe("shipped agents.yaml through the shared usage entry", () => {
     const clock = spyOn(Date, "now").mockReturnValue(nowMs);
     try {
       await extension.sessionStart();
+      assert.equal(usageCalls.length, 1);
+      assert.deepEqual(usageCalls, [
+        ["bash", ["-c", "exec usage --json"], { signal: undefined, timeout: 25_000 }],
+      ]);
+      assert.deepEqual(usageResponses, [usageJson]);
       assert.deepEqual(appliedModelKeys(), [
         "openai-codex/gpt-6.1-sol",
         "commandcode/z-ai/glm-5.3-flash",
         "zai/glm-5.3-flash",
       ]);
-      assert.deepEqual(requests, ["usage --json 2>/dev/null"]);
 
       extension.context.model = { provider: "external", id: "x" };
       await extension.runClassCommand("high");
+      assert.equal(usageCalls.length, 2);
+      assert.deepEqual(usageCalls, [
+        ["bash", ["-c", "exec usage --json"], { signal: undefined, timeout: 25_000 }],
+        ["bash", ["-c", "exec usage --json"], { signal: undefined, timeout: 25_000 }],
+      ]);
+      assert.deepEqual(usageResponses, [usageJson, usageJson]);
       const highApplied = appliedModelKeys().slice(3);
       assert.equal(highApplied[0], "openai-codex/gpt-6.1-sol");
       assert.equal(highApplied[1], "commandcode/z-ai/glm-5.3-flash");
       assert.deepEqual(highApplied.slice(2).sort(), ["zai/glm-5.3", "zai/glm-5.3-flash"]);
     } finally {
       clock.mockRestore();
-      dispose();
       extension.restore();
     }
   });
@@ -8379,37 +8391,41 @@ describe("titles through the agents owner resolver", () => {
         hasConfiguredAuth: (model) => model.id !== "unconfigured",
         resolveAuth: async (model) =>
           model.id === "invalid" ? { ok: false, error: "expired" } : { ok: true },
+        usageExec: async () => ({
+          code: 0,
+          stdout: "[]",
+          stderr: "",
+          killed: false,
+          truncated: false,
+        }),
       },
-    );
-    const requests: string[] = [];
-    const dispose = registerBackgroundBash(
-      extension.context,
-      async (request) => {
-        requests.push(request.params.command);
-        return {
-          content: [{ type: "text", text: "[]" }],
-          details: {},
-          structuredContent: { output: "[]", exit_code: 0, truncated: false },
-        };
-      },
-      () => {},
     );
     try {
       const resolved = await extension.retitle();
       assert.equal(resolved?.id, "valid");
-      assert.deepEqual(requests, ["usage --json 2>/dev/null"]);
     } finally {
-      dispose();
       extension.restore();
     }
   });
 
-  it("uses the ordinary unknown-urgency scoring when the background entry is unavailable", async () => {
+  it("uses the ordinary unknown-urgency scoring when usage returns a nonzero exit code", async () => {
     const injected = {
       ...config,
       modes: { standard: { ...config.modes.standard!, low: config.modes.standard!.middle! } },
     };
-    const extension = captureAgentsExtension({ config: injected }, { executeUsage: runUsage });
+    const extension = captureAgentsExtension(
+      { config: injected },
+      {
+        executeUsage: runUsage,
+        usageExec: async () => ({
+          code: 127,
+          stdout: "",
+          stderr: "not found",
+          killed: false,
+          truncated: false,
+        }),
+      },
+    );
     try {
       const resolved = await extension.retitle();
       assert.equal(resolved?.provider, injected.modes.standard.low![0]!.provider);
@@ -8427,15 +8443,18 @@ describe("titles through the agents owner resolver", () => {
       ...config,
       modes: { standard: { ...config.modes.standard!, low: candidates } },
     };
-    const extension = captureAgentsExtension({ config: injected });
-    const dispose = registerBackgroundBash(
-      extension.context,
-      async () => ({
-        content: [],
-        details: {},
-        structuredContent: { output: "[]", exit_code: 0, truncated: false },
-      }),
-      () => {},
+    const extension = captureAgentsExtension(
+      { config: injected },
+      {
+        executeUsage: runUsage,
+        usageExec: async () => ({
+          code: 0,
+          stdout: "[]",
+          stderr: "",
+          killed: false,
+          truncated: false,
+        }),
+      },
     );
     try {
       extension.context.model = { provider: "test", id: "parent" };
@@ -8444,7 +8463,6 @@ describe("titles through the agents owner resolver", () => {
       assert.deepEqual(extension.context.model, { provider: "test", id: "parent" });
       assert.equal(extension.selectedModels.length, 0);
     } finally {
-      dispose();
       extension.restore();
     }
   });
@@ -8463,31 +8481,24 @@ describe("shared owner candidate selection for titles", () => {
           modes: { standard: { ...config.modes.standard!, middle: candidates, low: candidates } },
         },
       },
-      { executeUsage: runUsage },
-    );
-    const commands: string[] = [];
-    const dispose = registerBackgroundBash(
-      extension.context,
-      async (request) => {
-        commands.push(request.params.command);
-        if (commands.length === 1) throw new Error("Command requires a reason");
-        return {
-          content: [],
-          details: {},
-          structuredContent: { output: "[]", exit_code: 0, truncated: false },
-        };
+      {
+        executeUsage: runUsage,
+        usageExec: async () => ({
+          code: 1,
+          stdout: "[]",
+          stderr: "provider unavailable",
+          killed: false,
+          truncated: false,
+        }),
       },
-      () => {},
     );
     try {
       await extension.sessionStart();
       assert.equal(extension.context.model?.id, "preferred");
       const before = [...extension.selectedModels];
       assert.equal((await extension.retitle())?.id, "preferred");
-      assert.deepEqual(commands, ["usage --json 2>/dev/null", "usage --json 2>/dev/null"]);
       assert.deepEqual(extension.selectedModels, before);
     } finally {
-      dispose();
       extension.restore();
     }
   });

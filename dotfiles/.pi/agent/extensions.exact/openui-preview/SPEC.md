@@ -91,7 +91,7 @@ OpenUI Langの入力はデータとして渡し、JavaScriptやHTMLとして実�
 | 項目 | 値 |
 | --- | --- |
 | 撮影 | Playwright Coreでheadless Chromiumを制御し、描画済みページを直接PNG化する |
-| 実行入口 | 登録Bashと共用の背景Bash API（[Tools仕様](../tools/SPEC.md#背景bash入口)）から専用撮影処理を起動する |
+| 実行入口 | 拡張が決めた固定補助処理として、通常のプロセス起動で専用撮影CLIを実行する。OpenUI Langは入力JSONのデータとして渡す |
 | 描画依存 | `@openuidev/react-lang`・`@openuidev/react-ui`・`react`・`react-dom` と既存のBunによるブラウザ用bundle生成 |
 | 出力先 | `~/.cache/pi/openui-preview/<id>.png`。HTMLやソースを埋め込まない通常のPNG |
 | 撮影領域 | 幅960 px・高さ1280 px、device scale factor 1のviewport。領域外は切り取る |
@@ -105,11 +105,10 @@ Chromiumは標準のブラウザキャッシュ（`PLAYWRIGHT_BROWSERS_PATH` の
 
 | 失敗条件 | 結果 |
 | --- | --- |
-| 背景Bash APIが不在・無効、既存の承認状態では実行不可 | 理由をエラーカードで表示する。直接プロセス起動や別のBash生成による迂回はしない |
 | 描画依存・ブラウザが不足、bundle生成・起動・描画・撮影が失敗、中断、PNGが生成されない | 対象と失敗理由をエラーカードで表示する。正常な画像として通知しない |
 | 処理期限を超過する | 撮影処理を中断し、対象と期限超過をエラーカードで表示する |
 
-外部処理は登録Bashと同じGuardrailsの認可状態・sandboxに従う。撮影失敗時に権限やブラウザのsandboxを緩めて再実行しない。
+撮影CLIの実行上限は20秒とする。呼び出し元の中断はcancelファイルでCLIへ伝え、CLI自身によるブラウザの終了と完了通知を待つ。プロセスの終了だけをブラウザcleanupの証拠にしない。撮影失敗時にブラウザのsandboxを緩めて再実行しない。
 
 ## キューイング
 

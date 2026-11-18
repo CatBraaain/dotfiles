@@ -4,6 +4,8 @@ import type { ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-codi
 import { Type } from "typebox";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CliFailure, runCliViaBash } from "../tools/cli.ts";
+import type { CliResult, CliResponse } from "../tools/cli.ts";
 export type WebToolDetails = {
   engine?: string;
   backend?: string;
@@ -33,16 +35,11 @@ export function browseScript(env: Record<string, string | undefined> = process.e
 
 // --- registered bash execution ---
 
-export type WebCliResult = { stdout: string; stderr: string; code: number };
+export type WebCliResult = CliResult & { bash: CliResponse };
 
 export const WEB_CLI_TIMEOUT_MS = 300_000;
 
 type WebCliContext = Pick<ExtensionToolContext, "executeTool">;
-
-function quoteShell(argument: string): string {
-  if (argument.includes("\0")) throw new Error("CLI argument contains a NUL byte");
-  return "'" + argument.replaceAll("'", "'\\''") + "'";
-}
 
 export async function runWebCli(
   ctx: WebCliContext,
@@ -50,107 +47,29 @@ export async function runWebCli(
   args: readonly string[],
   signal?: AbortSignal,
 ): Promise<WebCliResult> {
-  if (signal?.aborted) throw new Error(`${executable} aborted`);
-  const invocation = [executable, ...args].map(quoteShell).join(" ");
-  const command = [
-    "set -o pipefail",
-    "web_cli_tmp=$(mktemp -d /tmp/pi-web-cli.XXXXXXXXXX) || exit",
-    "trap 'rm -rf -- \"$web_cli_tmp\"' EXIT",
-    "web_cli_code=0",
-    `${invocation} >"$web_cli_tmp/stdout" 2>"$web_cli_tmp/stderr" || web_cli_code=$?`,
-    "printf 'PI_WEB_CLI_V1:%s\\n' \"$web_cli_code\"",
-    "base64 <\"$web_cli_tmp/stdout\" | tr -d '\\n' || exit",
-    "printf '\\n'",
-    "base64 <\"$web_cli_tmp/stderr\" | tr -d '\\n' || exit",
-    "printf '\\nPI_WEB_CLI_END\\n'",
-  ].join("\n");
-  const bash = await executeRegisteredBash(ctx, command, signal);
-  const output = bash.truncated
-    ? await recoverBashOutput(ctx, bash.full_output_path, signal)
-    : bash.output;
-  const frame =
-    /^PI_WEB_CLI_V1:(\d+)\n([A-Za-z0-9+/=]*)\n([A-Za-z0-9+/=]*)\nPI_WEB_CLI_END\n$/.exec(output);
-  if (!frame) throw new Error("Registered bash returned an invalid CLI output frame");
-  const code = Number(frame[1]);
-  if (!Number.isInteger(code) || code < 0 || code > 255) {
-    throw new Error("Registered bash returned an invalid CLI exit code");
+  const outcome = await runCliViaBash({
+    context: ctx,
+    params: { executable, args, timeout: WEB_CLI_TIMEOUT_MS / 1000 },
+    signal,
+  });
+  if (outcome.status !== "completed") {
+    const error =
+      outcome.status === "aborted"
+        ? new Error(`Registered bash aborted: ${String(outcome.reason)}`, { cause: outcome.reason })
+        : outcome.error;
+    if (outcome.result && outcome.isError !== undefined)
+      throw new CliFailure(
+        error instanceof Error ? error.message : String(error),
+        { result: outcome.result, isError: outcome.isError },
+        outcome.status === "aborted" ? { reason: outcome.reason } : { error: outcome.error },
+      );
+    if (outcome.status === "aborted")
+      throw new CliFailure(`Registered bash aborted: ${String(outcome.reason)}`, undefined, {
+        reason: outcome.reason,
+      });
+    throw error;
   }
-  return { code, stdout: decodeStream(frame[2]!), stderr: decodeStream(frame[3]!) };
-}
-
-type BashOutput = { output: string; truncated: boolean; full_output_path?: unknown };
-
-async function executeRegisteredBash(
-  ctx: WebCliContext,
-  command: string,
-  signal?: AbortSignal,
-): Promise<BashOutput> {
-  if (signal?.aborted) throw new Error("Registered bash aborted");
-  const outcome = await ctx.executeTool(
-    "bash",
-    { command, timeout: WEB_CLI_TIMEOUT_MS / 1000 },
-    { signal },
-  );
-  if (signal?.aborted) throw new Error("Registered bash aborted");
-  if (outcome.isError) {
-    throw new Error(resultText(outcome.result) ?? "Registered bash failed");
-  }
-  const bash = outcome.result.structuredContent as
-    | { output?: unknown; truncated?: unknown; exit_code?: unknown; full_output_path?: unknown }
-    | undefined;
-  if (!bash || typeof bash.output !== "string" || typeof bash.truncated !== "boolean") {
-    throw new Error("Registered bash returned invalid structured output");
-  }
-  if (bash.exit_code !== 0) throw new Error(`Registered bash exited with code ${bash.exit_code}`);
-  return {
-    output: bash.output,
-    truncated: bash.truncated,
-    full_output_path: bash.full_output_path,
-  };
-}
-
-async function recoverBashOutput(
-  ctx: WebCliContext,
-  path: unknown,
-  signal?: AbortSignal,
-): Promise<string> {
-  if (typeof path !== "string" || !path.startsWith("/") || path.includes("\0")) {
-    throw new Error("Truncated registered bash output has no valid full_output_path");
-  }
-  const quotedPath = quoteShell(path);
-  const sizeResult = await executeRegisteredBash(ctx, `wc -c < ${quotedPath}`, signal);
-  const sizeText = sizeResult.output.trim();
-  const sizeBytes = Number(sizeText);
-  if (
-    sizeResult.truncated ||
-    !/^\d+$/.test(sizeText) ||
-    !Number.isSafeInteger(sizeBytes) ||
-    sizeBytes <= 0
-  ) {
-    throw new Error("Registered bash returned an invalid full output size");
-  }
-
-  const chunkBytes = 524_288;
-  const chunks: string[] = [];
-  for (let offsetBytes = 0; offsetBytes < sizeBytes; offsetBytes += chunkBytes) {
-    const chunk = await executeRegisteredBash(
-      ctx,
-      `dd if=${quotedPath} bs=${chunkBytes} skip=${offsetBytes / chunkBytes} count=1 status=none`,
-      signal,
-    );
-    const expectedBytes = Math.min(chunkBytes, sizeBytes - offsetBytes);
-    if (chunk.truncated || Buffer.byteLength(chunk.output, "utf8") !== expectedBytes) {
-      throw new Error("Registered bash full output recovery was truncated or incomplete");
-    }
-    chunks.push(chunk.output);
-  }
-  return chunks.join("");
-}
-
-function decodeStream(encoded: string): string {
-  const bytes = Buffer.from(encoded, "base64");
-  if (bytes.toString("base64") !== encoded) throw new Error("Invalid CLI stream encoding");
-  return bytes.toString("utf8");
+  return { ...outcome.cli, bash: { result: outcome.result, isError: outcome.isError } };
 }
 
 export type WebCliDeps = {
@@ -198,7 +117,8 @@ async function runCliJson<T>(
   try {
     result = await runWebCli(ctx, executable, [subcommand, ...args], signal);
   } catch (error) {
-    throw new Error(`${kind}: ${error instanceof Error ? error.message : String(error)}`);
+    if (error instanceof CliFailure) error.message = `${kind}: ${error.message}`;
+    throw error;
   }
   if (result.code !== 0) {
     // The CLI reports failures as a single stderr line (plus an optional
@@ -208,12 +128,12 @@ async function runCliJson<T>(
       (result.code === null
         ? `${kind} terminated by signal`
         : `${kind} exited with code ${result.code}`);
-    throw new Error(message);
+    throw new CliFailure(message, result.bash);
   }
   try {
     return JSON.parse(result.stdout) as T;
   } catch {
-    throw new Error(`${kind}: CLI stdout is not JSON`);
+    throw new CliFailure(`${kind}: CLI stdout is not JSON`, result.bash);
   }
 }
 
@@ -240,12 +160,6 @@ export function formatSearchText(json: SearchCliJson): string {
       .join("\n\n");
   });
   return [metaLine, ...blocks].join("\n\n");
-}
-
-function resultText(result: {
-  content?: ReadonlyArray<{ type: string; text?: string }>;
-}): string | undefined {
-  return result.content?.find((block) => block.type === "text")?.text?.trim() || undefined;
 }
 
 function errorMessage(error: unknown): string {
@@ -278,6 +192,14 @@ export default function (pi: ExtensionAPI, deps: WebCliDeps = {}) {
           details: { engine: json.engine, tookMs: json.tookMs } satisfies WebToolDetails,
         };
       } catch (error) {
+        if (error instanceof CliFailure) {
+          const failure = error.toolResult;
+          onUpdate?.({
+            ...failure,
+            details: { ...(failure.details as object), error: errorMessage(error) },
+          });
+          return failure;
+        }
         onUpdate?.({ content: [], details: { error: errorMessage(error) } });
         throw error;
       }
@@ -307,6 +229,14 @@ export default function (pi: ExtensionAPI, deps: WebCliDeps = {}) {
         }
         return { content: [{ type: "text", text: json.body }], details };
       } catch (error) {
+        if (error instanceof CliFailure) {
+          const failure = error.toolResult;
+          onUpdate?.({
+            ...failure,
+            details: { ...(failure.details as object), error: errorMessage(error) },
+          });
+          return failure;
+        }
         onUpdate?.({ content: [], details: { error: errorMessage(error) } });
         throw error;
       }

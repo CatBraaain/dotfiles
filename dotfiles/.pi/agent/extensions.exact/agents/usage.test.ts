@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { registerBackgroundBash } from "../tools/background-bash.ts";
+import { spawnSync } from "node:child_process";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, it } from "bun:test";
 import { runUsage, scoreCandidates, parseUsageFacts, type ProviderUsageFacts } from "./usage.ts";
 import { parseCronExpression } from "./cron.ts";
@@ -109,116 +109,82 @@ describe("usage facts parsing", () => {
   });
 });
 
-describe("usage execution through registered Bash", () => {
-  const context = { modelRegistry: {} } as ExtensionContext;
+describe("usage execution through pi.exec", () => {
+  function createPi(exec: (...args: unknown[]) => Promise<unknown>) {
+    return { exec } as unknown as Pick<ExtensionAPI, "exec">;
+  }
 
-  it.each([0, 1, 2, 127])("preserves stdout and exit %s on every query", async (exitCode) => {
-    let calls = 0;
-    const dispose = registerBackgroundBash(
-      context,
-      async (request) => {
-        calls++;
-        assert.deepEqual(request.params, { command: "usage --json 2>/dev/null", timeout: 25 });
-        assert.equal(request.context, context);
-        return {
-          content: [],
-          details: {},
-          structuredContent: { output: "[]", exit_code: exitCode, truncated: false },
-          isError: exitCode !== 0,
-        };
-      },
-      () => {},
-    );
-    try {
-      for (let attempt = 0; attempt < 2; attempt++)
-        assert.deepEqual(await runUsage(context), { exitCode, stdout: "[]" });
-      assert.equal(calls, 2);
-    } finally {
-      dispose();
-    }
+  it.each([0, 1, 2, 127])("preserves stdout and exit %s", async (exitCode) => {
+    let received: unknown[] = [];
+    const pi = createPi(async (...args) => {
+      received = args;
+      return {
+        code: exitCode,
+        stdout: "[]",
+        stderr: "diagnostic",
+        killed: false,
+        truncated: false,
+      };
+    });
+    const controller = new AbortController();
+    assert.deepEqual(await runUsage(pi, controller.signal), { exitCode, stdout: "[]" });
+    assert.deepEqual(received, [
+      "bash",
+      ["-c", "exec usage --json"],
+      { signal: controller.signal, timeout: 25_000 },
+    ]);
   });
 
-  it("fails without an active background receiver", async () => {
-    await assert.rejects(runUsage(context), /No active background Bash API/);
+  it("keeps command-not-found exit 127 for a missing usage CLI", async () => {
+    const pi = createPi(async (command, args) => {
+      assert.equal(command, "bash");
+      const result = spawnSync("/bin/bash", args as string[], {
+        encoding: "utf8",
+        env: { ...process.env, PATH: "/missing-usage-fixture" },
+      });
+      assert.ifError(result.error);
+      return { code: result.status, stdout: result.stdout, stderr: result.stderr, killed: false };
+    });
+    assert.deepEqual(await runUsage(pi), { exitCode: 127, stdout: "" });
   });
 
-  it("preserves authorization rejection without another execution path", async () => {
-    const dispose = registerBackgroundBash(
-      context,
-      async () => {
-        throw new Error("Command requires a reason");
-      },
-      () => {},
-    );
-    try {
-      await assert.rejects(runUsage(context), /Command requires a reason/);
-    } finally {
-      dispose();
-    }
-  });
-
-  const invalidOutputs: Record<string, string | number | boolean>[] = [
-    { output: "[]", exit_code: 0, truncated: true },
-    { output: "[]" },
-  ];
-  it.each(invalidOutputs)("rejects truncated or malformed output %j", async (output) => {
-    const dispose = registerBackgroundBash(
-      context,
-      async () => ({
-        content: [],
-        details: {},
-        structuredContent: output,
-      }),
-      () => {},
-    );
-    try {
-      await assert.rejects(runUsage(context), /invalid or truncated/);
-    } finally {
-      dispose();
-    }
-  });
-
-  it("does not run Bash for an already aborted query", async () => {
+  it("does not start a pre-aborted query", async () => {
     const controller = new AbortController();
     controller.abort("cancelled");
     let calls = 0;
-    const dispose = registerBackgroundBash(
-      context,
-      async () => {
-        calls++;
-        return { content: [], details: {} };
-      },
-      () => {},
-    );
-    try {
-      await assert.rejects(runUsage(context, controller.signal), /cancelled/);
-      assert.equal(calls, 0);
-    } finally {
-      dispose();
-    }
+    const pi = createPi(async () => {
+      calls++;
+      throw new Error("must not start");
+    });
+    await assert.rejects(runUsage(pi, controller.signal), /cancelled/);
+    assert.equal(calls, 0);
   });
 
-  it("aborts an in-flight query and discards a late completion", async () => {
+  it("preserves abort reason when the process completes after cancellation", async () => {
     const controller = new AbortController();
-    const started = Promise.withResolvers<AbortSignal>();
-    const delayed = Promise.withResolvers<never>();
-    const dispose = registerBackgroundBash(
-      context,
-      async (request) => {
-        started.resolve(request.signal!);
-        return delayed.promise;
-      },
-      () => {},
-    );
-    try {
-      const pending = runUsage(context, controller.signal);
-      const signal = await started.promise;
-      controller.abort("cancelled");
-      await assert.rejects(pending, /cancelled/);
-      assert.equal(signal.aborted, true);
-    } finally {
-      dispose();
-      delayed.reject(new Error("late result"));
-    }
+    let complete!: (value: unknown) => void;
+    const pi = createPi(() => new Promise((resolve) => (complete = resolve)));
+    const pending = runUsage(pi, controller.signal);
+    controller.abort("cancelled");
+    complete({ code: 0, stdout: "[]", stderr: "", killed: false, truncated: false });
+    await assert.rejects(pending, /cancelled/);
+  });
+
+  it.each(["killed", "truncated"] as const)("rejects %s output", async (failure) => {
+    const pi = createPi(async () => ({
+      code: 0,
+      stdout: "[]",
+      stderr: "",
+      killed: failure === "killed",
+      truncated: failure === "truncated",
+    }));
+    await assert.rejects(runUsage(pi), /killed or truncated/);
+  });
+
+  it("propagates process execution errors", async () => {
+    const pi = createPi(async () => {
+      throw new Error("spawn failed");
+    });
+    await assert.rejects(runUsage(pi), /spawn failed/);
   });
 });

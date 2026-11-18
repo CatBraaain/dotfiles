@@ -133,7 +133,7 @@ export default function systemPromptExtension(
         );
         return;
       }
-      await openPromptSnapshot(ctx, current?.prompt);
+      await openPromptSnapshot(pi, ctx, current?.prompt);
     },
   });
   pi.on("before_provider_request", (event, ctx) => {

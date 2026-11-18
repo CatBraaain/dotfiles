@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "bun:test";
-import { execFile } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@earendil-works/pi-coding-agent";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import {
+  createBashTool,
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_LINES,
+  type ExtensionToolContext,
+} from "@earendil-works/pi-coding-agent";
 import ticketsExtension, {
   appendJsonFlag,
   buildCreateArgs,
@@ -21,6 +25,7 @@ import ticketsExtension, {
 const SESSION_CWD = "/tmp/ticket-session";
 
 interface ToolResult {
+  isError?: boolean;
   content: Array<{ type: string; text: string }>;
   details: unknown;
 }
@@ -30,12 +35,13 @@ interface CapturedTool {
   description: string;
   promptSnippet?: string;
   parameters?: unknown;
+  executionMode?: string;
   execute?: (
     toolCallId: string,
     params: Record<string, unknown>,
     signal: AbortSignal | undefined,
     onUpdate: undefined,
-    ctx: { cwd: string },
+    ctx: Pick<ExtensionToolContext, "cwd" | "executeTool">,
   ) => Promise<ToolResult>;
 }
 
@@ -612,19 +618,241 @@ describe("tool execute (SPEC: content is the CLI text output; truncation refetch
   });
 });
 
-// The wrapper tools above mock the runner; these cases run the extension's
-// real spawnTicketCli against a stub CLI executable (injected via deps.cliPath)
-// so the spawn path (cwd, exit-code classification, stderr trimming, spawn
-// failure) is covered without depending on the caller's HOME.
-describe("ticket CLI real spawn (SPEC: common behavior)", () => {
-  const stubDirs: string[] = [];
+function cliFrame(stdout = "", stderr = "", code = 0): string {
+  return [
+    "PI_CLI_V1:" + code,
+    Buffer.from(stdout).toString("base64"),
+    Buffer.from(stderr).toString("base64"),
+    "PI_CLI_END",
+    "",
+  ].join("\n");
+}
 
-  // Writes a stub CLI executable (a bun script with the exec bit) to a temp
-  // dir and returns its path; the spawn runs it directly.
+function bashOutcome(output: string, overrides: Record<string, unknown> = {}) {
+  return {
+    toolCall: { type: "toolCall" as const, id: "nested", name: "bash", arguments: {} },
+    isError: false,
+    result: {
+      content: [{ type: "text" as const, text: output }],
+      details: {},
+      structuredContent: { output, truncated: false, exit_code: 0, ...overrides },
+    },
+  };
+}
+
+const toolCases: Array<[string, Record<string, unknown>, string[]]> = [
+  [
+    "ticket_list",
+    { project: "p ' \"\n$HOME", status: ["open", "closed"], all: true },
+    ["list", "--all", "--status", "open,closed", "--project", "p ' \"\n$HOME"],
+  ],
+  ["ticket_show", { selector: "a'\n$(id)" }, ["show", "a'\n$(id)"]],
+  [
+    "ticket_create",
+    { title: "t'\n`id`", body: "", after: "a" },
+    ["create", JSON.stringify({ title: "t'\n`id`", after: "a", body: "" })],
+  ],
+  ["ticket_set", { selector: "a", after: null }, ["set", "a", '{"after":null}']],
+  ["ticket_edit", { old: "-- '\n$(id);", new: "" }, ["edit", "--", "-- '\n$(id);", ""]],
+];
+
+describe("registered Bash ticket routing", () => {
+  for (const [name, params] of toolCases) {
+    it("routes " + name + " through the current registered Bash without a timeout", async () => {
+      const signal = new AbortController().signal;
+      const calls: string[] = [];
+      const ctx = {
+        cwd: "/tmp/session '\n$(id)",
+        async executeTool(toolName: string, args: unknown, options?: { signal?: AbortSignal }) {
+          assert.equal(toolName, "bash");
+          assert.equal(options?.signal, signal);
+          assert.equal(Object.hasOwn(args as object, "timeout"), false);
+          const command = (args as { command: string }).command;
+          assert.match(command, /cd -- /);
+          assert.match(command, /\.agents\/cli\/ticket/);
+          calls.push(command);
+          return bashOutcome(cliFrame(" \noutput\n\n"));
+        },
+      };
+      const result = await findTool(captureTools(), name).execute!(
+        "call",
+        params,
+        signal,
+        undefined,
+        ctx,
+      );
+      assert.deepEqual(result.content, [{ type: "text", text: " \noutput\n\n" }]);
+      assert.equal(calls.length, 1);
+    });
+
+    for (const reason of [
+      "Unknown tool: bash",
+      "Command denied by user",
+      "Session context is no longer active",
+    ]) {
+      it("fails " + name + " without fallback: " + reason, async () => {
+        let calls = 0;
+        const original = { ...bashOutcome(reason), isError: true };
+        const ctx = {
+          cwd: SESSION_CWD,
+          async executeTool() {
+            calls++;
+            return original;
+          },
+        };
+        const result = await findTool(captureTools(), name).execute!(
+          "call",
+          params,
+          undefined,
+          undefined,
+          ctx,
+        );
+        assert.equal(result.isError, true);
+        assert.equal(result.content[0]!.text, reason);
+        assert.strictEqual(
+          (result.details as { bash: { result: unknown } }).bash.result,
+          original.result,
+        );
+        assert.equal((result.details as { bash: { isError: boolean } }).bash.isError, true);
+        assert.equal(calls, 1);
+      });
+    }
+  }
+
+  it("keeps ticket writes sequential and reads parallel", () => {
+    const tools = captureTools();
+    for (const name of ["ticket_create", "ticket_set", "ticket_edit"]) {
+      assert.equal(findTool(tools, name).executionMode, "sequential");
+    }
+    for (const name of ["ticket_list", "ticket_show"]) {
+      assert.equal(findTool(tools, name).executionMode, undefined);
+    }
+  });
+
+  for (const name of ["ticket_list", "ticket_show"]) {
+    it("preserves complete multi-MiB JSON details for " + name, async () => {
+      const body = "日本語\n".repeat(150_000);
+      const json = name === "ticket_list" ? [{ title: body }] : { body };
+      const output = cliFrame(JSON.stringify(json));
+      const signal = new AbortController().signal;
+      const calls: string[] = [];
+      const ctx = {
+        cwd: SESSION_CWD,
+        async executeTool(toolName: string, args: unknown, options?: { signal?: AbortSignal }) {
+          assert.equal(toolName, "bash");
+          assert.equal(options?.signal, signal);
+          assert.equal(Object.hasOwn(args as object, "timeout"), false);
+          const command = (args as { command: string }).command;
+          calls.push(command);
+          if (calls.length === 1) return bashOutcome(cliFrame(body));
+          if (calls.length === 2) {
+            assert.match(command, /'--json'/);
+            return bashOutcome("partial", { truncated: true, full_output_path: "/tmp/output" });
+          }
+          if (calls.length === 3) return bashOutcome(String(output.length));
+          const chunk = calls.length - 4;
+          return bashOutcome(output.slice(chunk * 524_288, (chunk + 1) * 524_288));
+        },
+      };
+      const result = await findTool(captureTools(), name).execute!(
+        "call",
+        {},
+        signal,
+        undefined,
+        ctx,
+      );
+      assert.deepEqual(result.details, json);
+      assert.match(result.content[0]!.text, /Output truncated/);
+      assert.ok(Buffer.byteLength(result.content[0]!.text) <= DEFAULT_MAX_BYTES);
+      assert.ok(result.content[0]!.text.split("\n").length <= DEFAULT_MAX_LINES);
+      assert.equal(calls.length, 3 + Math.ceil(output.length / 524_288));
+    });
+
+    it("fails " + name + " if the JSON refetch is denied or malformed", async () => {
+      for (const response of [
+        { ...bashOutcome("denied"), isError: true },
+        bashOutcome(cliFrame("{bad")),
+      ]) {
+        let calls = 0;
+        const ctx = {
+          cwd: SESSION_CWD,
+          async executeTool() {
+            if (++calls === 1) return bashOutcome(cliFrame("line\n".repeat(2_100)));
+            return response;
+          },
+        };
+        const pending = findTool(captureTools(), name).execute!(
+          "call",
+          {},
+          undefined,
+          undefined,
+          ctx,
+        );
+        if (response.isError) {
+          const result = await pending;
+          assert.equal(result.isError, true);
+          assert.strictEqual(
+            (result.details as { bash: { result: unknown } }).bash.result,
+            response.result,
+          );
+        } else await assert.rejects(pending);
+        assert.equal(calls, 2);
+      }
+    });
+
+    it("stops " + name + " when cancellation arrives before the JSON refetch", async () => {
+      const controller = new AbortController();
+      let calls = 0;
+      const output = bashOutcome(cliFrame("line\n".repeat(2_100)));
+      Object.defineProperty(output.result, "structuredContent", {
+        get() {
+          controller.abort();
+          return { output: cliFrame("line\n".repeat(2_100)), truncated: false, exit_code: 0 };
+        },
+      });
+      const ctx = {
+        cwd: SESSION_CWD,
+        async executeTool() {
+          calls++;
+          return output;
+        },
+      };
+      const result = await findTool(captureTools(), name).execute!(
+        "call",
+        {},
+        controller.signal,
+        undefined,
+        ctx,
+      );
+      assert.equal(result.isError, true);
+      assert.match(result.content[0]!.text, /aborted/);
+      assert.strictEqual(
+        (result.details as { bash: { result: unknown } }).bash.result,
+        output.result,
+      );
+      assert.strictEqual((result.details as { reason: unknown }).reason, controller.signal.reason);
+      assert.equal(calls, 1);
+    });
+  }
+});
+
+describe("ticket CLI through an actual Bash implementation", () => {
+  const stubDirs: string[] = [];
+  const bashTool = createBashTool("/tmp");
+  const ctx = {
+    cwd: "/tmp",
+    async executeTool(name: string, args: unknown, options?: { signal?: AbortSignal }) {
+      assert.equal(name, "bash");
+      const result = await bashTool.execute("nested", args as never, options?.signal);
+      return { ...bashOutcome(""), result, isError: result.isError ?? false };
+    },
+  };
+
   async function installStub(script: string): Promise<string> {
-    const dir = await mkdtemp("/tmp/ticket-cli-stub-");
+    await mkdir("/tmp/work/dotfiles", { recursive: true });
+    const dir = await mkdtemp("/tmp/work/dotfiles/ticket cli'-");
     stubDirs.push(dir);
-    const path = join(dir, "ticket-stub");
+    const path = join(dir, "ticket stub'");
     await writeFile(path, `#!/usr/bin/env bun\n${script}`);
     await chmod(path, 0o755);
     return path;
@@ -634,53 +862,145 @@ describe("ticket CLI real spawn (SPEC: common behavior)", () => {
     for (const dir of stubDirs.splice(0)) await rm(dir, { recursive: true, force: true });
   });
 
-  it("resolves the CLI stdout for the given args and cwd", async () => {
-    const cliPath = await installStub(
-      "console.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));\n",
-    );
-    const stdout = await spawnTicketCli(["list"], "/tmp", undefined, { cliPath });
-    const result = JSON.parse(stdout) as { argv: string[]; cwd: string };
-    assert.deepEqual(result.argv, ["list"]);
-    assert.equal(result.cwd, "/tmp");
+  for (const [name, params, expectedArgs] of toolCases) {
+    it("preserves arguments and cwd for " + name, async () => {
+      const cliPath = await installStub(
+        "console.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));\n",
+      );
+      const cwd = dirname(cliPath);
+      const deps: TicketsExtensionDeps = {
+        runCli(args, sessionCwd, signal, toolCtx) {
+          return spawnTicketCli(args, sessionCwd, signal, toolCtx, { cliPath });
+        },
+      };
+      const result = await findTool(captureTools(deps), name).execute!(
+        "call",
+        params,
+        undefined,
+        undefined,
+        { ...ctx, cwd },
+      );
+      const received = JSON.parse(result.content[0]!.text);
+      assert.deepEqual(received.argv, expectedArgs);
+      assert.equal(received.cwd, cwd);
+    });
+  }
+
+  it("preserves stdout whitespace and trailing newlines", async () => {
+    const cliPath = await installStub('process.stdout.write(" \\nbody  \\n\\n");');
+    const stdout = await spawnTicketCli(["show"], "/tmp", undefined, ctx, { cliPath });
+    assert.equal(stdout, " \nbody  \n\n");
   });
 
-  it("rejects with the CLI stderr when it exits non-zero", async () => {
+  it("removes only one trailing newline from CLI error text", async () => {
     const cliPath = await installStub(
-      'if (process.argv.includes("--fail")) { console.error("stub error: boom"); process.exit(1); }\nconsole.log("{}");\n',
+      'process.stderr.write("error: body  \\n\\n"); process.exit(1);',
     );
     await assert.rejects(
-      () => spawnTicketCli(["show", "--fail"], "/tmp", undefined, { cliPath }),
-      /stub error: boom/,
+      spawnTicketCli(["edit"], "/tmp", undefined, ctx, { cliPath }),
+      new Error("error: body  \n"),
     );
   });
 
-  it("trims one trailing newline from the CLI stderr", async () => {
-    const cliPath = await installStub(
-      'process.stderr.write("error: body  \\n\\n"); process.exit(1);\n',
-    );
+  it("reports an exit code when stderr is empty", async () => {
+    const cliPath = await installStub("process.exit(2);");
     await assert.rejects(
-      () => spawnTicketCli(["edit"], "/tmp", undefined, { cliPath }),
-      (error: unknown) => {
-        assert.equal((error as Error).message, "error: body  \n");
-        return true;
+      spawnTicketCli(["list"], "/tmp", undefined, ctx, { cliPath }),
+      /ticket exited with code 2/,
+    );
+  });
+
+  it("fails when the executable is absent", async () => {
+    await assert.rejects(
+      spawnTicketCli(["list"], "/tmp", undefined, ctx, { cliPath: "/nonexistent/ticket" }),
+      /No such file/,
+    );
+  });
+
+  it("fails without launching the CLI when cwd does not exist", async () => {
+    const cliPath = await installStub('console.log("must not succeed");');
+    await assert.rejects(
+      spawnTicketCli(["list"], "/nonexistent/session", undefined, ctx, { cliPath }),
+      /cd:.*No such file/,
+    );
+  });
+
+  it("cancels an active CLI through Bash", async () => {
+    const cliPath = await installStub("setTimeout(() => {}, 60000);");
+    await assert.rejects(
+      spawnTicketCli(["list"], "/tmp", AbortSignal.timeout(100), ctx, { cliPath }),
+      /aborted/,
+    );
+  });
+
+  it("retains complete large JSON details through actual Bash output recovery", async () => {
+    const cliPath = await installStub(
+      'const body = "日本語\\n".repeat(150000); process.stdout.write(process.argv.includes("--json") ? JSON.stringify({ body }) : body);',
+    );
+    const deps: TicketsExtensionDeps = {
+      runCli(args, cwd, signal, toolCtx) {
+        return spawnTicketCli(args, cwd, signal, toolCtx, { cliPath });
       },
+    };
+    const result = await findTool(captureTools(deps), "ticket_show").execute!(
+      "call",
+      {},
+      undefined,
+      undefined,
+      ctx,
     );
+    assert.deepEqual(result.details, { body: "日本語\n".repeat(150_000) });
+    assert.match(result.content[0]!.text, /Output truncated/);
   });
+});
 
-  it("reports the CLI as unavailable when the spawn itself fails", async () => {
-    // Simulates the CLI executable missing: execFile fails with a string code
-    // (ENOENT), which the spawn path classifies as "not available".
-    const spawnFails = ((
-      _file: string,
-      _args: string[],
-      _options: never,
-      callback: (error: Error) => void,
-    ) => {
-      callback(Object.assign(new Error("spawn ticket ENOENT"), { code: "ENOENT" }));
-    }) as unknown as typeof execFile;
+describe("public ticket failure diagnostics", () => {
+  for (const [name, params] of toolCases)
+    for (const outer of [false, true]) {
+      it(`retains ${name} Bash details and inner/outer errors ${outer}`, async () => {
+        const response = {
+          ...bashOutcome("denied"),
+          isError: outer,
+          result: {
+            content: [{ type: "text" as const, text: "denied" }],
+            isError: !outer,
+            details: { evidence: "original" },
+            structuredContent: {
+              output: "denied",
+              exit_code: 2,
+              truncated: false,
+              full_output_path: "/tmp/original",
+            },
+          },
+        };
+        const result = await findTool(captureTools(), name).execute!(
+          "failure",
+          params,
+          undefined,
+          undefined,
+          {
+            cwd: SESSION_CWD,
+            async executeTool() {
+              return response;
+            },
+          },
+        );
+        assert.equal(result.isError, true);
+        const details = result.details as { bash: { result: unknown; isError: boolean } };
+        assert.strictEqual(details.bash.result, response.result);
+        assert.equal(details.bash.isError, outer);
+      });
+    }
+  it("keeps SDK exception identity at the registered tool", async () => {
+    const failure = new Error("Expired SDK context");
     await assert.rejects(
-      () => spawnTicketCli(["list"], "/tmp", undefined, { exec: spawnFails }),
-      /not available/,
+      findTool(captureTools(), "ticket_list").execute!("throw", {}, undefined, undefined, {
+        cwd: SESSION_CWD,
+        async executeTool() {
+          throw failure;
+        },
+      }),
+      (error) => error === failure,
     );
   });
 });

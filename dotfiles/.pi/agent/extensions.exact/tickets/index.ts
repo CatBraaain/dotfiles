@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,9 +6,10 @@ import {
   formatSize,
   truncateHead,
   type ExtensionAPI,
-  type ExtensionContext,
+  type ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { CliFailure, runCliViaBash } from "../tools/cli.ts";
 
 // --- tool parameter schemas (argument names match ticket/SPEC.md) ---
 
@@ -270,7 +270,8 @@ export const ticketToolPromptSnippets = {
 export type TicketCliRunner = (
   args: string[],
   cwd: string,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  ctx: Pick<ExtensionToolContext, "executeTool">,
 ) => Promise<string>;
 
 // The deployed single-file executable (compiled by cli.build.ts); apply
@@ -280,13 +281,8 @@ function ticketCliPath(): string {
   return join(homedir(), ".agents", "cli", "ticket");
 }
 
-// Injectable overrides so the real-spawn tests run a stub project dir without
-// depending on the caller's HOME.
 export interface SpawnTicketCliDeps {
-  /** Overrides the CLI executable path; defaults to ticketCliPath(). */
   cliPath?: string;
-  /** Replaces node:child_process.execFile; defaults to the real one. */
-  exec?: typeof execFile;
 }
 
 // Adds --json before the option terminator so the terminator's positional
@@ -297,35 +293,43 @@ export function appendJsonFlag(args: string[]): string[] {
   return [...args.slice(0, terminator), "--json", ...args.slice(terminator)];
 }
 
-// Spawns the ticket CLI and resolves its stdout text. Non-zero exits and
-// spawn failures reject with the CLI's stderr text (or a spawn-failure
-// message when stderr is empty).
-export function spawnTicketCli(
+export async function spawnTicketCli(
   args: string[],
   cwd: string,
   signal: AbortSignal | undefined,
+  ctx: Pick<ExtensionToolContext, "executeTool">,
   deps: SpawnTicketCliDeps = {},
 ): Promise<string> {
-  const spawn = deps.exec ?? execFile;
-  return new Promise((resolve, reject) => {
-    spawn(
-      deps.cliPath ?? ticketCliPath(),
-      args,
-      { cwd, signal, maxBuffer: 16 * 1024 * 1024 },
-      (error, stdout, stderr) => {
-        if (error) {
-          const stderrText = typeof stderr === "string" ? stderr.replace(/\n$/, "") : "";
-          if (typeof error.code === "number") {
-            reject(new Error(stderrText || `ticket exited with code ${error.code}`));
-          } else {
-            reject(new Error(`ticket CLI is not available: ${error.message}`));
-          }
-          return;
-        }
-        resolve(stdout);
-      },
-    );
+  const outcome = await runCliViaBash({
+    context: ctx,
+    params: { executable: deps.cliPath ?? ticketCliPath(), args, cwd },
+    signal,
   });
+  if (outcome.status !== "completed") {
+    const error =
+      outcome.status === "aborted"
+        ? new Error(`Registered bash aborted: ${String(outcome.reason)}`, { cause: outcome.reason })
+        : outcome.error;
+    if (outcome.result && outcome.isError !== undefined)
+      throw new CliFailure(
+        error instanceof Error ? error.message : String(error),
+        { result: outcome.result, isError: outcome.isError },
+        outcome.status === "aborted" ? { reason: outcome.reason } : { error: outcome.error },
+      );
+    if (outcome.status === "aborted")
+      throw new CliFailure(`Registered bash aborted: ${String(outcome.reason)}`, undefined, {
+        reason: outcome.reason,
+      });
+    throw error;
+  }
+  const result = outcome.cli!;
+  if (result.code !== 0) {
+    throw new CliFailure(
+      result.stderr.replace(/\n$/, "") || `ticket exited with code ${result.code}`,
+      outcome,
+    );
+  }
+  return result.stdout;
 }
 
 // --- extension ---
@@ -336,26 +340,25 @@ export interface TicketsExtensionDeps {
 }
 
 export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensionDeps = {}): void {
-  const runCli: TicketCliRunner =
-    deps.runCli ?? ((args, cwd, signal) => spawnTicketCli(args, cwd, signal));
+  const runCli: TicketCliRunner = deps.runCli ?? spawnTicketCli;
 
   // Runs the CLI for the tool args; the resolved stdout is the tool text.
   async function runTicket(
     args: string[],
-    ctx: ExtensionContext,
+    ctx: ExtensionToolContext,
     signal: AbortSignal | undefined,
   ): Promise<string> {
-    return runCli(args, ctx.cwd, signal);
+    return runCli(args, ctx.cwd, signal, ctx);
   }
 
   // Re-runs a read-only tool's CLI with --json for the result details
   // (SPEC: pi keeps the complete JSON in details when truncating).
   async function runTicketJson(
     args: string[],
-    ctx: ExtensionContext,
+    ctx: ExtensionToolContext,
     signal: AbortSignal | undefined,
   ): Promise<unknown> {
-    return JSON.parse(await runCli(appendJsonFlag(args), ctx.cwd, signal)) as unknown;
+    return JSON.parse(await runCli(appendJsonFlag(args), ctx.cwd, signal, ctx)) as unknown;
   }
 
   pi.registerTool({
@@ -365,15 +368,20 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     promptSnippet: ticketToolPromptSnippets.ticket_list,
     parameters: ticketListParameters,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const args = buildListArgs(params);
-      const result = truncateTicketOutput(
-        await runTicket(args, ctx, signal),
-        "Use ticket list with the same filters to read the complete list.",
-      );
-      return {
-        content: [{ type: "text", text: result.text }],
-        details: result.truncated ? await runTicketJson(args, ctx, signal) : undefined,
-      };
+      try {
+        const args = buildListArgs(params);
+        const result = truncateTicketOutput(
+          await runTicket(args, ctx, signal),
+          "Use ticket list with the same filters to read the complete list.",
+        );
+        return {
+          content: [{ type: "text", text: result.text }],
+          details: result.truncated ? await runTicketJson(args, ctx, signal) : undefined,
+        };
+      } catch (error) {
+        if (error instanceof CliFailure) return error.toolResult;
+        throw error;
+      }
     },
   });
 
@@ -384,15 +392,20 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     promptSnippet: ticketToolPromptSnippets.ticket_show,
     parameters: ticketShowParameters,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const args = buildShowArgs(params);
-      const result = truncateTicketOutput(
-        await runTicket(args, ctx, signal),
-        "Use ticket show with this selector to read the complete body.",
-      );
-      return {
-        content: [{ type: "text", text: result.text }],
-        details: result.truncated ? await runTicketJson(args, ctx, signal) : undefined,
-      };
+      try {
+        const args = buildShowArgs(params);
+        const result = truncateTicketOutput(
+          await runTicket(args, ctx, signal),
+          "Use ticket show with this selector to read the complete body.",
+        );
+        return {
+          content: [{ type: "text", text: result.text }],
+          details: result.truncated ? await runTicketJson(args, ctx, signal) : undefined,
+        };
+      } catch (error) {
+        if (error instanceof CliFailure) return error.toolResult;
+        throw error;
+      }
     },
   });
 
@@ -404,10 +417,15 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     parameters: ticketCreateParameters,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      return {
-        content: [{ type: "text", text: await runTicket(buildCreateArgs(params), ctx, signal) }],
-        details: undefined,
-      };
+      try {
+        return {
+          content: [{ type: "text", text: await runTicket(buildCreateArgs(params), ctx, signal) }],
+          details: undefined,
+        };
+      } catch (error) {
+        if (error instanceof CliFailure) return error.toolResult;
+        throw error;
+      }
     },
   });
 
@@ -419,10 +437,15 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     parameters: ticketSetParameters,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      return {
-        content: [{ type: "text", text: await runTicket(buildSetArgs(params), ctx, signal) }],
-        details: undefined,
-      };
+      try {
+        return {
+          content: [{ type: "text", text: await runTicket(buildSetArgs(params), ctx, signal) }],
+          details: undefined,
+        };
+      } catch (error) {
+        if (error instanceof CliFailure) return error.toolResult;
+        throw error;
+      }
     },
   });
 
@@ -434,10 +457,15 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     parameters: ticketEditParameters,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      return {
-        content: [{ type: "text", text: await runTicket(buildEditArgs(params), ctx, signal) }],
-        details: undefined,
-      };
+      try {
+        return {
+          content: [{ type: "text", text: await runTicket(buildEditArgs(params), ctx, signal) }],
+          details: undefined,
+        };
+      } catch (error) {
+        if (error instanceof CliFailure) return error.toolResult;
+        throw error;
+      }
     },
   });
 }

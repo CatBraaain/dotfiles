@@ -3,7 +3,6 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ThemeBg, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { Box, Image, Text, type Component } from "@earendil-works/pi-tui";
-import { requestBackgroundBash, type BackgroundBashContext } from "../tools/background-bash.ts";
 import { extractOpenuiLangBlocks, stripOpenuiLangBlocks, type OpenuiLangBlock } from "./fence";
 import { validateOpenuiLang } from "./render";
 import { shotOpenui, type ShotOptions } from "./snapshot";
@@ -20,7 +19,7 @@ export interface PreviewDetails {
 }
 
 type EnqueueFn = <T>(task: () => Promise<T>) => Promise<T>;
-interface ExtensionDeps extends Omit<ShotOptions, "context"> {
+interface ExtensionDeps extends ShotOptions {
   enqueue: EnqueueFn;
 }
 
@@ -39,7 +38,7 @@ export function createQueue(): EnqueueFn {
 async function previewBlock(
   pi: Pick<ExtensionAPI, "appendEntry">,
   deps: ExtensionDeps,
-  context: BackgroundBashContext & { signal?: AbortSignal },
+  context: { signal?: AbortSignal },
   block: OpenuiLangBlock,
   index: number,
 ): Promise<void> {
@@ -52,7 +51,7 @@ async function previewBlock(
     context.signal && deps.signal
       ? AbortSignal.any([context.signal, deps.signal])
       : (context.signal ?? deps.signal);
-  const result = await shotOpenui(block.source, id, { ...deps, context, signal });
+  const result = await shotOpenui(block.source, id, { ...deps, signal });
   pi.appendEntry<PreviewDetails>(
     OPENUI_CUSTOM_TYPE,
     result.ok
@@ -108,7 +107,7 @@ export default function openuiPreviewExtension(
   const pending = new Set<Promise<void>>();
   const deps: ExtensionDeps = {
     outDir: join(process.env.HOME ?? "", ".cache", "pi", "openui-preview"),
-    requestBash: requestBackgroundBash,
+    exec: pi.exec.bind(pi),
     enqueue: createQueue(),
     signal: controller.signal,
     ...overrides,

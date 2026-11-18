@@ -7,7 +7,6 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { parse } from "shell-quote";
-import { registerBackgroundBash } from "../tools/background-bash.ts";
 import extension, { rejectSessionChange } from "./index.ts";
 
 type Handler = (event: any, ctx: any) => unknown;
@@ -17,23 +16,6 @@ function captureHandlers(execute?: ExtensionAPI["exec"]) {
   const handlers = new Map<string, Handler>();
   const events = createEventBus();
   modelRegistry = {} as ExtensionContext["modelRegistry"];
-  const backgroundContext = { modelRegistry };
-  if (execute)
-    registerBackgroundBash(
-      backgroundContext,
-      async (request) => {
-        const [command, ...args] = parse(request.params.command) as string[];
-        const result = await execute(command!, args, {
-          timeout: request.params.timeout! * 1_000,
-        });
-        return {
-          content: [{ type: "text", text: result.stdout || result.stderr }],
-          details: {},
-          isError: result.code !== 0 || result.killed,
-        };
-      },
-      () => {},
-    );
   extension({
     events,
     on(event: string, handler: Handler) {
@@ -43,9 +25,11 @@ function captureHandlers(execute?: ExtensionAPI["exec"]) {
       assert.equal(name, process.env.PI_TMUX_STARTUP_COMMAND);
       handlers.set("startup", definition.handler);
     },
-    exec() {
-      assert.fail("Startup must not bypass background Bash");
-    },
+    exec:
+      execute ??
+      (async () => {
+        throw new Error("No process fixture");
+      }),
   } as unknown as ExtensionAPI);
   return handlers;
 }
@@ -364,7 +348,7 @@ describe("fixed conversation identity", () => {
   });
 
   for (const failure of ["unavailable", "denied"] as const) {
-    it(`shuts down without bypassing ${failure} background Bash`, async () => {
+    it(`shuts down after a ${failure} process failure`, async () => {
       await withManagedEnvironment(async () => {
         const handlers = captureHandlers(
           failure === "unavailable"
@@ -385,7 +369,7 @@ describe("fixed conversation identity", () => {
           assert.equal(process.exitCode, 1);
           assert.match(
             notifications[0]!.text,
-            failure === "unavailable" ? /unavailable/ : /denied/,
+            failure === "unavailable" ? /No process fixture/ : /denied/,
           );
         } finally {
           process.exitCode = previousExitCode ?? 0;

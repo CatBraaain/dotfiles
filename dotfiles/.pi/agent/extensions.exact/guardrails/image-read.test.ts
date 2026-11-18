@@ -98,8 +98,10 @@ describe("sandboxed image read", () => {
     realBwrapTest(
       `blocks image detection through ${alias}`,
       withFixture(async (fixture) => {
-        await assert.rejects(
-          fixture.read(join(fixture.allowed, alias, "fixture.png")),
+        const result = await fixture.read(join(fixture.allowed, alias, "fixture.png"));
+        assert.equal(result.isError, true);
+        assert.match(
+          result.content[0]?.type === "text" ? result.content[0].text : "",
           /Image detection failed|ERROR|cannot open/,
         );
       }),
@@ -240,8 +242,10 @@ describe("sandboxed image read", () => {
         result: { content: [{ type: "text", text: "blocked" }], details: {} },
         isError: true,
       });
-      await assert.rejects(
-        fixture.read(join(fixture.allowed, "fixture.png")),
+      const result = await fixture.read(join(fixture.allowed, "fixture.png"));
+      assert.equal(result.isError, true);
+      assert.match(
+        result.content[0]?.type === "text" ? result.content[0].text : "",
         /Image detection failed.*blocked/,
       );
     }),
@@ -262,10 +266,11 @@ describe("sandboxed image read", () => {
       fixture.runner.runTool = async () => {
         throw new Error("worker must not run");
       };
-      await assert.rejects(
-        fixture.read(join(fixture.allowed, "fixture.png"), { signal: controller.signal }),
-        /cancelled after detection/,
-      );
+      const result = await fixture.read(join(fixture.allowed, "fixture.png"), {
+        signal: controller.signal,
+      });
+      assert.equal(result.isError, true);
+      assert.strictEqual((result.details as { reason: unknown }).reason, controller.signal.reason);
     }),
   );
 
@@ -278,6 +283,55 @@ describe("sandboxed image read", () => {
         /cancelled/,
       );
       assert.equal(fixture.bashCommands.length, 0);
+    }),
+  );
+});
+
+describe("final image read Bash diagnostics", () => {
+  for (const mode of ["outer", "inner", "cancel"] as const)
+    it(
+      `retains the ${mode} MIME response without reading image bytes`,
+      withFixture(async (fixture) => {
+        const controller = new AbortController();
+        const reason = new Error("MIME cancelled");
+        const response = {
+          toolCall: { type: "toolCall" as const, id: "mime", name: "bash", arguments: {} },
+          isError: mode === "outer",
+          result: {
+            content: [{ type: "text" as const, text: "image/png" }],
+            isError: mode === "inner",
+            details: { source: "original" },
+            structuredContent: { output: "image/png", exit_code: 2, truncated: false },
+          },
+        };
+        fixture.context.executeTool = async () => {
+          if (mode === "cancel") controller.abort(reason);
+          return response;
+        };
+        fixture.runner.runTool = async () => {
+          throw new Error("image worker must not run");
+        };
+        const result = await fixture.read(join(fixture.allowed, "fixture.png"), {
+          signal: controller.signal,
+        });
+        assert.equal(result.isError, true);
+        const details = result.details as { bash: typeof response; reason: unknown };
+        assert.strictEqual(details.bash.result, response.result);
+        assert.equal(details.bash.isError, response.isError);
+        if (mode === "cancel") assert.strictEqual(details.reason, reason);
+      }),
+    );
+  it(
+    "propagates the SDK exception identity through image read",
+    withFixture(async (fixture) => {
+      const failure = new Error("Expired SDK context");
+      fixture.context.executeTool = async () => {
+        throw failure;
+      };
+      await assert.rejects(
+        fixture.read(join(fixture.allowed, "fixture.png")),
+        (error) => error === failure,
+      );
     }),
   );
 });

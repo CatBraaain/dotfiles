@@ -1,10 +1,9 @@
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { quote } from "shell-quote";
-import { requestBackgroundBash } from "../tools/background-bash.ts";
 import { getTmuxPaths, inspectManagedPane, tmuxArgs, type Execute } from "./shared.ts";
 
-const TMUX_TIMEOUT_S = 1;
+const TMUX_TIMEOUT_MS = 1_000;
 
 export function rejectSessionChange(ctx: ExtensionContext): { cancel: true } | undefined {
   if (ctx.mode !== "tui") return;
@@ -32,7 +31,7 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
 
   async function confirmReady(ctx: ExtensionContext): Promise<void> {
     if (ctx.mode !== "tui") return;
-    const execute = backgroundExecutor(ctx);
+    const execute = backgroundExecutor(pi, ctx);
     const paths = getTmuxPaths();
     if (!ready) {
       const identity = await inspectManagedPane(execute, paths);
@@ -68,7 +67,7 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
     startupPending = false;
     let publishingReady = false;
     try {
-      const execute = backgroundExecutor(ctx);
+      const execute = backgroundExecutor(pi, ctx);
       const paths = getTmuxPaths();
       const identity = await inspectManagedPane(execute, paths);
       const expectedId = process.env.PI_TMUX_SESSION_ID;
@@ -126,25 +125,14 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
   }
 }
 
-function backgroundExecutor(ctx: ExtensionContext): Execute {
+function backgroundExecutor(pi: Pick<ExtensionAPI, "exec">, ctx: ExtensionContext): Execute {
   return async function execute(command, args, options) {
-    const outcome = await requestBackgroundBash({
-      id: "pi-mux-bridge-startup",
-      params: {
-        command: quote([command, ...args]),
-        timeout: options?.timeout === undefined ? TMUX_TIMEOUT_S : options.timeout / 1_000,
-      },
-      context: ctx,
+    const result = await pi.exec(command, args, {
+      cwd: ctx.cwd,
+      timeout: options?.timeout ?? TMUX_TIMEOUT_MS,
     });
-    if (outcome.status !== "completed") {
-      const reason = outcome.status === "aborted" ? outcome.reason : outcome.error;
-      throw new Error(`Cannot execute pi-mux startup Bash (${outcome.status}): ${String(reason)}`);
-    }
-    const stdout = outcome.result.content
-      .filter((item) => item.type === "text")
-      .map((item) => item.text)
-      .join("\n");
-    if (outcome.result.isError) throw new Error(`pi-mux startup Bash failed: ${stdout}`);
-    return { stdout, stderr: "", code: 0, killed: false };
+    if (result.killed || ("truncated" in result && result.truncated === true) || result.code !== 0)
+      throw new Error(`pi-mux startup failed: ${result.stderr || result.stdout || result.code}`);
+    return result;
   };
 }

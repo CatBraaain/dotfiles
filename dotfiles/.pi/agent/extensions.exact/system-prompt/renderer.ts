@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { closeSync, openSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { SettingsManager, type ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import {
+  SettingsManager,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+} from "@earendil-works/pi-coding-agent";
 import { parse, quote } from "shell-quote";
-import { requestBackgroundBash } from "../tools/background-bash.ts";
 
 const EDITOR_TIMEOUT_SECONDS = 24 * 60 * 60;
 
@@ -30,6 +33,7 @@ export function editorCommand(command: string, path: string): string {
 }
 
 export async function openPromptSnapshot(
+  pi: Pick<ExtensionAPI, "exec">,
   ctx: ExtensionCommandContext,
   prompt: string | undefined,
 ): Promise<void> {
@@ -42,26 +46,16 @@ export async function openPromptSnapshot(
       projectTrusted: ctx.isProjectTrusted(),
     }).getExternalEditorCommand();
     const path = writePromptSnapshot(ctx.sessionManager.getSessionId(), prompt);
-    const outcome = await requestBackgroundBash({
-      id: `view-system-prompt-${randomUUID()}`,
-      context: ctx,
-      params: { command: editorCommand(command, path), timeout: EDITOR_TIMEOUT_SECONDS },
+    const result = await pi.exec("bash", ["-c", editorCommand(command, path)], {
+      cwd: ctx.cwd,
+      timeout: EDITOR_TIMEOUT_SECONDS * 1000,
     });
-    if (outcome.status !== "completed") {
-      throw outcome.status === "aborted" ? outcome.reason : outcome.error;
-    }
-    const output = outcome.result.structuredContent;
-    const succeeded =
-      typeof output === "object" &&
-      output !== null &&
-      "exit_code" in output &&
-      output.exit_code === 0;
-    if (outcome.result.isError || !succeeded) {
-      const detail = outcome.result.content
-        .filter((block) => block.type === "text")
-        .map((block) => block.text)
-        .join("\n");
-      throw new Error(detail || "External editor failed");
+    if (
+      result.killed ||
+      ("truncated" in result && result.truncated === true) ||
+      result.code !== 0
+    ) {
+      throw new Error(result.stderr || result.stdout || "External editor failed");
     }
   } catch (error) {
     ctx.ui.notify(

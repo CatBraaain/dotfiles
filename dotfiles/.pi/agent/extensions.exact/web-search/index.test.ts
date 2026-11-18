@@ -24,7 +24,7 @@ type Tool = {
 };
 
 type TestDeps = WebCliDeps & {
-  runCli?: (command: string, args: readonly string[]) => Promise<WebCliResult>;
+  runCli?: (command: string, args: readonly string[]) => Promise<Omit<WebCliResult, "bash">>;
 };
 
 function captureTools(deps?: TestDeps): Map<string, Tool> {
@@ -66,7 +66,10 @@ type RecordedCall = { command: string; args: string[] };
 
 function fakeCli(output: { code?: number; stdout?: string; stderr?: string }) {
   const calls: RecordedCall[] = [];
-  async function runCli(command: string, args: readonly string[]): Promise<WebCliResult> {
+  async function runCli(
+    command: string,
+    args: readonly string[],
+  ): Promise<Omit<WebCliResult, "bash">> {
     calls.push({ command, args: [...args] });
     return { stdout: output.stdout ?? "", stderr: output.stderr ?? "", code: output.code ?? 0 };
   }
@@ -108,10 +111,10 @@ const fetchFallbackJsonOutput = JSON.stringify({
 
 function frameOutput(stdout = "", stderr = "", code = 0): string {
   return [
-    "PI_WEB_CLI_V1:" + code,
+    "PI_CLI_V1:" + code,
     Buffer.from(stdout).toString("base64"),
     Buffer.from(stderr).toString("base64"),
-    "PI_WEB_CLI_END",
+    "PI_CLI_END",
     "",
   ].join("\n");
 }
@@ -166,7 +169,12 @@ describe("registered bash adapter", () => {
       "-e",
       'process.stdout.write("out\\n"); process.stderr.write("err\\n"); process.exit(3);',
     ]);
-    assert.deepEqual(result, { stdout: "out\n", stderr: "err\n", code: 3 });
+    assert.deepEqual(
+      { stdout: result.stdout, stderr: result.stderr, code: result.code },
+      { stdout: "out\n", stderr: "err\n", code: 3 },
+    );
+    assert.ok(result.bash.result);
+    assert.equal(result.bash.isError, false);
   });
 
   it("quotes executable paths and arguments without shell expansion", async () => {
@@ -395,19 +403,37 @@ describe("registered bash adapter", () => {
     });
   }
 
-  it("stops recovery when cancellation arrives after the size read", async () => {
+  it("preserves the received bash response and cancellation reason during recovery", async () => {
     const controller = new AbortController();
+    const reason = new Error("cancelled during size read");
+    const sizeResponse = bashOutcome("123");
     let calls = 0;
     const ctx = {
       async executeTool() {
         if (++calls === 1)
           return bashOutcome("partial", { truncated: true, full_output_path: "/tmp/output" });
-        controller.abort();
-        return bashOutcome("123");
+        controller.abort(reason);
+        return sizeResponse;
       },
     };
-    await assert.rejects(runWebCli(ctx, "/browse", [], controller.signal), /aborted/);
+    const error = await runWebCli(ctx, "/browse", [], controller.signal).catch((error) => error);
+
+    assert.match(error.message, /aborted/);
+    assert.strictEqual(error.response.result, sizeResponse.result);
+    assert.equal(error.response.isError, false);
+    assert.strictEqual(error.diagnostic.reason, reason);
     assert.equal(calls, 2);
+  });
+
+  it("propagates SDK exceptions by identity", async () => {
+    const sdkError = new Error("executeTool failed");
+    const ctx = {
+      async executeTool() {
+        throw sdkError;
+      },
+    };
+
+    await assert.rejects(runWebCli(ctx, "/browse", []), (error) => error === sdkError);
   });
 
   it("propagates cancellation during registered bash execution", async () => {
@@ -448,7 +474,7 @@ describe("registered bash adapter", () => {
     },
     {
       name: "invalid base64",
-      outcome: bashOutcome("PI_WEB_CLI_V1:0\na\n\nPI_WEB_CLI_END\n"),
+      outcome: bashOutcome("PI_CLI_V1:0\na\n\nPI_CLI_END\n"),
       error: /encoding/,
     },
     {
@@ -495,10 +521,14 @@ describe("registered bash adapter", () => {
         },
       };
       const tool = captureTools({ env: { BROWSE_CLI_DIR: dir } }).get("web_fetch")!;
-      await assert.rejects(
-        tool.execute("call", { url: "https://example.com" }, undefined, undefined, ctx),
-        /Command denied by user/,
-      );
+      const result = (await tool.execute(
+        "call",
+        { url: "https://example.com" },
+        undefined,
+        undefined,
+        ctx,
+      )) as { isError: boolean };
+      assert.equal(result.isError, true);
       assert.throws(() => readFileSync(marker), /ENOENT/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -666,57 +696,91 @@ describe("stdout to tool result", () => {
 });
 
 describe("CLI error propagation", () => {
-  it("throws the CLI's stderr as the tool error and reports it via onUpdate", async () => {
+  it("returns the CLI's stderr as an error result and reports it via onUpdate", async () => {
     const stderr = "All web search backends failed: camoufox+openserp(google): boom";
     const cli = fakeCli({ code: 1, stderr });
     const search = captureTools(cli.deps).get("web_search")!;
     const updates: unknown[] = [];
 
-    await assert.rejects(
-      search.execute(
-        "call",
-        { query: "q" },
-        AbortSignal.timeout(5_000),
-        (update: unknown) => updates.push(update),
-        executionContext,
-      ),
-      new Error(stderr),
-    );
-    assert.deepEqual(updates, [{ content: [], details: { error: stderr } }]);
+    const result = (await search.execute(
+      "call",
+      { query: "q" },
+      AbortSignal.timeout(5_000),
+      (update: unknown) => updates.push(update),
+      executionContext,
+    )) as {
+      content: Array<{ type: string; text: string }>;
+      isError: boolean;
+      details: Record<string, unknown>;
+    };
+
+    assert.equal(result.isError, true);
+    assert.equal(textOf(result), stderr);
+    assert.ok(result.details.bash);
+    assert.equal((updates[0] as { details: { error: string } }).details.error, stderr);
+  });
+
+  it("preserves the registered bash response identity in the public failure result", async () => {
+    const originalResult = {
+      content: [{ type: "text" as const, text: "Command denied" }],
+      isError: true,
+      details: { source: "policy" },
+      structuredContent: { output: "denied", truncated: false, exit_code: 1 },
+    };
+    const outcome = { toolCall: nestedToolCall, isError: true, result: originalResult };
+    const ctx = {
+      async executeTool(name: string) {
+        assert.equal(name, "bash");
+        return outcome;
+      },
+    };
+    const search = captureTools().get("web_search")!;
+
+    const result = (await search.execute(
+      "call",
+      { query: "q" },
+      AbortSignal.timeout(5_000),
+      undefined,
+      ctx,
+    )) as { isError: boolean; details: { bash: { result: unknown; isError: boolean } } };
+
+    assert.equal(result.isError, true);
+    assert.strictEqual(result.details.bash.result, originalResult);
+    assert.equal(result.details.bash.isError, true);
   });
 
   it("falls back to an exit-code message when stderr is empty", async () => {
     const cli = fakeCli({ code: 1 });
     const fetchTool = captureTools(cli.deps).get("web_fetch")!;
 
-    await assert.rejects(
-      callFetch(fetchTool, "https://example.com/"),
-      new Error("web-fetch exited with code 1"),
-    );
+    const result = (await callFetch(fetchTool, "https://example.com/")) as {
+      isError: boolean;
+      content: Array<{ type: string; text: string }>;
+    };
+    assert.equal(result.isError, true);
+    assert.equal(textOf(result), "web-fetch exited with code 1");
   });
 
-  it("rejects non-JSON stdout on success exit", async () => {
+  it("returns the existing error message for non-JSON stdout on success exit", async () => {
     const cli = fakeCli({ stdout: "not json" });
     const search = captureTools(cli.deps).get("web_search")!;
 
-    await assert.rejects(
-      callSearch(search, { query: "q" }),
-      new Error("web-search: CLI stdout is not JSON"),
-    );
+    const result = (await callSearch(search, { query: "q" })) as { isError: boolean };
+
+    assert.equal(result.isError, true);
+    assert.equal(textOf(result), "web-search: CLI stdout is not JSON");
   });
 
-  it("wraps spawn failures with the CLI name", async () => {
+  it("propagates SDK spawn failures by identity", async () => {
+    const sdkError = new Error("spawn bun ENOENT");
     const runCli = async (): Promise<WebCliResult> => {
-      throw new Error("spawn bun ENOENT");
+      throw sdkError;
     };
     const search = captureTools({ runCli, env: { BROWSE_CLI_DIR: "/nonexistent-test-cli" } }).get(
       "web_search",
     )!;
 
-    await assert.rejects(
-      callSearch(search, { query: "q" }),
-      new Error("web-search: spawn bun ENOENT"),
-    );
+    await assert.rejects(callSearch(search, { query: "q" }), (error) => error === sdkError);
   });
 });
 

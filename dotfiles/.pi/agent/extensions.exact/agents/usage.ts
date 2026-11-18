@@ -1,12 +1,10 @@
-import { randomUUID } from "node:crypto";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { requestBackgroundBash } from "../tools/background-bash.ts";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import { cronMatches } from "./cron.ts";
 import type { ModelCandidate, SettingsRule } from "./routing.ts";
 
-const USAGE_TIMEOUT_SECONDS = 25;
+const USAGE_TIMEOUT_MS = 25_000;
 
 const usageRowSchema = Type.Object({
   provider: Type.String({ minLength: 1 }),
@@ -63,28 +61,17 @@ export function scoreCandidates(
     .map(({ candidate }) => candidate);
 }
 
-const bashOutputSchema = Type.Object({
-  output: Type.String(),
-  exit_code: Type.Number(),
-  truncated: Type.Boolean(),
-});
-
 export async function runUsage(
-  context: ExtensionContext,
+  pi: Pick<ExtensionAPI, "exec">,
   signal?: AbortSignal,
 ): Promise<{ exitCode: number; stdout: string }> {
-  const outcome = await requestBackgroundBash({
-    id: `agents-usage-${randomUUID()}`,
-    params: { command: "usage --json 2>/dev/null", timeout: USAGE_TIMEOUT_SECONDS },
-    context,
+  signal?.throwIfAborted();
+  const result = await pi.exec("bash", ["-c", "exec usage --json"], {
     signal,
+    timeout: USAGE_TIMEOUT_MS,
   });
-  if (outcome.status !== "completed") {
-    const reason = outcome.status === "aborted" ? outcome.reason : outcome.error;
-    throw new Error(`Usage query failed: ${String(reason)}`);
-  }
-  const output = outcome.result.structuredContent;
-  if (!Value.Check(bashOutputSchema, output) || output.truncated)
-    throw new Error("Usage query returned invalid or truncated Bash output");
-  return { exitCode: output.exit_code, stdout: output.output };
+  signal?.throwIfAborted();
+  if (result.killed || ("truncated" in result && result.truncated === true))
+    throw new Error("Usage query returned killed or truncated output");
+  return { exitCode: result.code, stdout: result.stdout };
 }

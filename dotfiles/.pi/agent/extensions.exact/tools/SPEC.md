@@ -1,6 +1,6 @@
 # Tools — 仕様書
 
-pi の標準7ツールを登録する Tools拡張の振る舞いを定める。読者はツールの利用者と保守担当である。read のテキスト返却契約と実行入口を本書で定め、認可・画像判定・隔離実行は [Guardrails仕様](../guardrails/SPEC.md) に依存する。
+pi の標準7ツールを登録する Tools拡張の振る舞いを定める。読者はツールの利用者と保守担当である。read のテキスト返却契約と、外部コマンド実行の境界を本書で定め、認可・画像判定・隔離実行は [Guardrails仕様](../guardrails/SPEC.md) に依存する。
 
 ## テキストread
 
@@ -24,7 +24,7 @@ Tools は SKILL判定、UTF-8全文IO、成功結果の組立てを所有する�
 
 Tools は pi の標準tool factory からツール定義（schema・説明文）を取り込み、既存ツールの execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `read` には画像ファイルを Vision入力として読める旨と、画像入力非対応モデルでは `vision` への委譲を促すエラーを返す旨を、`bash` には書き込み失敗（read-only file system）時、対象の最終アクションが `ask` または未設定の場合だけ `ask_permission` で許可要求できること、明示 `deny` と credentials は要求不可であること、承認により Guardrails の共通書込許可が更新され、その許可を利用するすべてのツールに適用されることを、理由必須ゲート（`ask_with_reason`）で差し戻されたときは元のコマンドと理由で `ask_permission` に要求することを追記する。`write` / `edit` には、最終アクションが `ask` または未設定のパスは許可確認の対象になり、承認により Guardrails の共通書込許可が選択したスコープに対してセッション内で有効になること、明示 `deny` と credentials は許可ダイアログを出さず拒否すること（承認スコープ内でも拒否は維持する。[Guardrails仕様](../guardrails/SPEC.md) のbind契約に従う）を追記する。
 
-read / write / edit / grep / find / ls / bash の実行を Guardrails公開APIへ直接依頼する。通常のSDK経路の引数検証・tool hooks・実行イベント・履歴はSDKのまま維持する。codemodeを登録し、結果は呼び出し元へ返す。Guardrails初期化が失敗した場合は原因を通知し、7ツールと背景Bash入口のすべてを同じ初期化エラーで実行不可にする。
+read / write / edit / grep / find / ls / bash の実行を Guardrails公開APIへ直接依頼する。通常のSDK経路の引数検証・tool hooks・実行イベント・履歴はSDKのまま維持する。codemodeを登録し、結果は呼び出し元へ返す。Guardrails初期化が失敗した場合は原因を通知し、7ツールを同じ初期化エラーで実行不可にする。
 
 ## BashのRTK書換え
 
@@ -38,31 +38,38 @@ read / write / edit / grep / find / ls / bash の実行を Guardrails公開API�
 
 書換えCLIは、元コマンド全体を単一の引数として登録Bash経由で実行し、同じsandboxとコマンド承認を適用する。標準エラーは書換え結果に含めない。内部の `rtk ` コマンドには再度書換えを適用しない。呼び出し元の中断信号を引き継ぎ、中断済みの結果を採用しない。本処理には元または書換え後のコマンドを渡し、どちらも通常のGuardrails認可・実行を通す。
 
-## 背景Bash入口
+## 拡張からの外部コマンド実行
 
-lifecycle/background処理は、Tools配下のBash専用helperをimportし、型付きの直接APIへ要求できる。要求は `id`、`params`、呼び出し元のruntimeを識別するcontext、モデル・thinking level・会話IDと会話ファイルの必要情報、任意の `signal` を持つ。`params` は登録Bashのschemaを再利用し、文字列の `command` と任意の数値 `timeout` だけを入口で検証する。APIは要求の終端結果をPromiseで返す。すべての結果は、登録Bash経路の実行待機を表す `executionSettled: Promise<void>` を持つ。
+実行経路は、コマンドを選ぶ主体と入力の用途で決まる。
 
-初回要求は、`session_start` の全handlerによる初期化が完了した後の `resources_discover` 以降に開始する。この時点で、そのruntimeの背景APIを利用できる。未登録のAPIへの要求は、初期化を待たずに直ちに `unavailable` で決着する。
-
-同一runtime内では、登録Bashと背景APIが同じ承認状態を共有する。同じ会話ID・会話ファイルを使う場合でも、別runtimeの承認状態は共有しない。再読み込み後は新しいruntimeの背景APIを使い、旧API・失効したcontextによる新規要求は拒否する。
-
-この入口は登録Bashと同じ実行関数・同じGuardrailsの認可状態を使う。要求から実行tool・executor・認可policyを選ばせず、GuardrailsへはBash実行と既存承認限定のpolicyを渡す。新しい認可UIが必要なら実行せず失敗する。通常の登録toolは従来どおり確認UIを使う。既存設定・承認とsandboxの適用は [Guardrails仕様](../guardrails/SPEC.md) に従う。
-
-背景入口はSDKの通常dispatchではない。SDKのtool hooks、実行イベント、履歴は自動付与されない。
-
-| 要求・状態 | 要求元への結果 |
+| 入力元・用途 | 実行経路 |
 | --- | --- |
-| 実行完了 | `completed` と元のtool result。`isError`・details・structuredContentを保持する |
-| 引数の検証失敗、実行がthrow、不正な結果、要求期限の超過 | `failed` と失敗理由 |
-| 開始前・実行中のabort | `aborted` と中断理由 |
-| APIが未登録・停止済み、または要求元のruntimeが失効している | 直ちに `unavailable` と不在・失効理由 |
-| Guardrailsの初期化が失敗したruntimeの有効なAPIへの要求 | `failed` と通常ツールと同じ初期化エラー |
-| `session_shutdown` による背景APIの停止 | 保留要求を `unavailable` と停止理由で決着する |
+| AIが呼ぶツールの外部CLI・コマンド | 実行時contextの `ctx.executeTool("bash", params, { signal })` で、その時点の登録Bashを呼ぶ |
+| 拡張が決めた固定の補助処理 | SDKの `pi.exec` など通常のプロセス起動を使う |
+| ユーザーが明示的に実行した閲覧コマンドによるエディタ起動 | ユーザー設定のエディタを通常のプロセスとして起動する |
 
-`params.timeout` はBash実行の期限を秒単位で指定する。要求全体の期限は、指定がある場合はその秒数に2秒を加え、指定がない場合は2秒とする。追加の2秒はsandboxの準備・プロセス起動・結果回収の余裕とし、Bash実行の指定時間は維持する。
+固定補助処理では、実行ファイルと操作を信頼済みコードで決める。AIや外部データ由来の値は検証した引数・payloadとして扱い、任意のコマンド本文として実行しない。backgroundで動くことや、contextに `executeTool` がないことだけでは固定補助処理に分類しない。
 
-要求結果と実行終端は独立する。`executionSettled` は、登録Bashと共有する実行関数のPromiseが正常または例外で終端した時に解決し、rejectしない。実行がthrowした場合も `failed` の返却前に解決済みとする。開始前の中断・入口不在などで実行しない場合は、解決済みPromiseを返す。要求期限の超過やAPI停止で先に結果を返した場合は、開始済み実行の終端までこのPromiseを未解決のまま保持する。API停止やruntimeの失効後も、返却済みの実行待機は有効とする。
+### 登録Bashの呼び出しと結果
 
-1要求につき実行は最大1回とし、要求結果は一度だけ確定する。要求期限の超過・API停止では未開始の実行を取り消す。開始済み実行に `params.timeout` の指定がある場合は、それだけを理由に実行信号をabortせず、Bash自身のtimeoutによる終端を待つ。指定がない場合は実行信号をabortする。後着の成功・失敗で要求結果を変更せず、`executionSettled` の解決だけを通知する。
+通常のコマンド実行は呼び出し元から直接 `ctx.executeTool` に依頼する。引数検証・tool hooks・実行イベント・nested call記録・確認UIはSDKに従い、認可・sandboxは [Guardrails仕様](../guardrails/SPEC.md) に従う。入口不在・context失効・拒否・失敗時は呼び出しを失敗として扱い、直接processや標準Bashの再生成へ切り替えない。
 
-呼び出し元の明示的な `signal` 中断は、未決の要求を `aborted` で決着させ、開始済み実行の信号もabortする。開始済み要求のsignal監視と実行待機は、要求結果が先に確定した場合も実行終端まで維持する。`session_shutdown` で背景APIを停止し、そのruntimeへの新規要求を拒否する。入口の不在・無効・失敗時に別の実行経路へfallbackしない。
+SDK応答の外側 `isError` と、元の `result` にある `content`・内側 `isError`・`details`・`structuredContent` を保持する。tool failureを単なるError文字列へ落とさず、呼び出し元の失敗判定・details・診断へ元情報を渡す。SDKがthrowした例外とsignalの中断理由も保持する。
+
+呼び出し元のsignalを登録Bashへ渡す。開始前の中断では起動せず、開始した呼び出しの終端を待つ。timeoutは秒単位で指定値を維持し、省略時は追加しない。
+
+### CLIの引数と結果回収
+
+CLIのliteral引数変換と結果回収に必要な内部処理は共用できる。その処理自身も同じ実行時contextの `ctx.executeTool("bash", ...)` を使う。
+
+実行ファイル・各引数・cwdのNULは起動前に拒否する。それぞれをshell用にquoteし、cwdを指定した場合はそのディレクトリで実行する。CLIの実行は1要求につき最大1回とする。stdout・stderr・終了コードを分離し、両streamの空白・改行をそのまま回収する。末尾改行の除去・JSON解釈・表示切詰めは利用者側の契約に従う。
+
+Bashの `structuredContent` にある `output`・`truncated`・`exit_code` を検証し、出力フレームから両streamと0〜255の整数終了コードを検証・復元する。CLIの非0終了も分離した終了コードとして返す。Bashの外側・内側 `isError`、非0のBash終了コード、フレームや符号化の不正は回収失敗とし、不完全な出力を成功として返さない。
+
+Bashが出力を切り詰めた場合は、元の `full_output_path` から全量を回収する。回収先はNULを含まない絶対パスとして検証し、各取得結果の非切詰めとbyte数を確認する。回収にも同じcontext・signal・timeoutを使い、CLI自体を再実行しない。回収不能・不完全なら失敗とする。中断後の後続Bash呼び出しは開始しない。
+
+CLI完了時は分離した `stdout`・`stderr`・`code` と最初のBash応答を保持する。回収失敗・中断でも、受領したBash応答と外側 `isError` を保持する。回収中の失敗では失敗した呼び出しの応答を、応答がなければ最初の応答を診断に使う。応答未受領なら元の例外・中断理由を伝える。
+
+### 通常プロセスの終了
+
+固定補助処理とユーザー明示操作は、登録Bashの認可状態やToolsの初期化・停止に依存せず起動する。引数の扱い、timeout・signal・終了待機・cleanupは各機能の契約に従う。起動不能、非0終了、中断、出力切詰めを成功とせず、それぞれの機能へ結果を渡す。子プロセスの終端と、ブラウザなど子孫のcleanup完了は区別する。

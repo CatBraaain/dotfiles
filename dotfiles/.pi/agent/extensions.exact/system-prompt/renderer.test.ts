@@ -12,16 +12,13 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, it } from "bun:test";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { registerBackgroundBash } from "../tools/background-bash.ts";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { editorCommand, openPromptSnapshot, writePromptSnapshot } from "./renderer.ts";
 
 const directories: string[] = [];
 const paths: string[] = [];
-const disposers: (() => void)[] = [];
 
 afterEach(() => {
-  disposers.splice(0).forEach((dispose) => dispose());
   paths.splice(0).forEach((path) => rmSync(path, { force: true }));
   directories.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true }));
 });
@@ -34,7 +31,15 @@ function temporaryDirectory(): string {
   return directory;
 }
 
-function context() {
+function context(
+  exec: ExtensionAPI["exec"] = async () => ({
+    stdout: "",
+    stderr: "",
+    code: 0,
+    killed: false,
+    truncated: false,
+  }),
+) {
   const sessionId = randomUUID();
   paths.push(`/tmp/${sessionId}_system_prompt.md`);
   const notifications: { message: string; type: string }[] = [];
@@ -51,7 +56,7 @@ function context() {
     isProjectTrusted: () => true,
     ui: { notify: (message: string, type: string) => notifications.push({ message, type }) },
   } as unknown as ExtensionCommandContext;
-  return { ctx, sessionId, notifications };
+  return { pi: { exec }, ctx, sessionId, notifications };
 }
 
 describe("writePromptSnapshot", () => {
@@ -100,85 +105,75 @@ describe("editorCommand", () => {
 });
 
 describe("openPromptSnapshot", () => {
-  it("explains the initial state without writing or calling Bash", async () => {
-    const { ctx, sessionId, notifications } = context();
+  it("explains the initial state without writing or starting a process", async () => {
+    const { pi, ctx, sessionId, notifications } = context();
     let calls = 0;
-    disposers.push(
-      registerBackgroundBash(
-        ctx,
-        async () => {
-          calls += 1;
-          throw new Error("unexpected execution");
-        },
-        () => {},
-      ),
-    );
-    await openPromptSnapshot(ctx, undefined);
+    pi.exec = async () => {
+      calls += 1;
+      throw new Error("unexpected execution");
+    };
+    await openPromptSnapshot(pi, ctx, undefined);
     assert.equal(calls, 0);
     assert.throws(() => statSync(`/tmp/${sessionId}_system_prompt.md`), /ENOENT/);
     assert.match(notifications[0]!.message, /No system prompt has been sent/);
   });
 
-  it("uses the configured editor through registered Bash and keeps edited files local", async () => {
-    const { ctx, sessionId, notifications } = context();
-    const commands: string[] = [];
+  it("opens the configured editor through a process and keeps edits local", async () => {
+    const { ctx, pi, sessionId, notifications } = context();
+    const calls: {
+      command: string;
+      args: string[];
+      options?: { cwd?: string; timeout?: number };
+    }[] = [];
     const path = `/tmp/${sessionId}_system_prompt.md`;
-    disposers.push(
-      registerBackgroundBash(
-        ctx,
-        async (request) => {
-          commands.push(request.params.command);
-          assert.equal(readFileSync(path, "utf8"), "sent prompt");
-          writeFileSync(path, "user edit");
-          return { content: [], details: undefined, structuredContent: { exit_code: 0 } };
-        },
-        () => {},
-      ),
+    pi.exec = async (command, args, options) => {
+      calls.push({ command, args, options });
+      assert.equal(readFileSync(path, "utf8"), "sent prompt");
+      writeFileSync(path, "user edit");
+      return { stdout: "", stderr: "", code: 0, killed: false, truncated: false };
+    };
+    await openPromptSnapshot(pi, ctx, "sent prompt");
+    await openPromptSnapshot(pi, ctx, "sent prompt");
+    assert.deepEqual(
+      calls,
+      [1, 2].map(() => ({
+        command: "bash",
+        args: ["-c", `test-editor --wait ${path}`],
+        options: { cwd: ctx.cwd, timeout: 24 * 60 * 60 * 1000 },
+      })),
     );
-    await openPromptSnapshot(ctx, "sent prompt");
-    await openPromptSnapshot(ctx, "sent prompt");
-    assert.deepEqual(commands, [`test-editor --wait ${path}`, `test-editor --wait ${path}`]);
     assert.equal(readFileSync(path, "utf8"), "user edit");
     assert.deepEqual(notifications, []);
   });
 
-  it("reports an unavailable or invalidated Bash runtime without a fallback", async () => {
-    for (const invalidated of [false, true]) {
-      const { ctx, notifications } = context();
-      if (invalidated) {
-        disposers.push(
-          registerBackgroundBash(
-            ctx,
-            async () => {
-              throw new Error("must not execute");
-            },
-            () => {
-              throw new Error("runtime inactive");
-            },
-          ),
-        );
-      }
-      await openPromptSnapshot(ctx, "private");
+  it("reports killed, truncated, and failed editor processes", async () => {
+    const cases = [
+      {
+        result: { code: 1, killed: true, truncated: false, stderr: "Timed out" },
+        message: "Timed out",
+      },
+      {
+        result: { code: 1, killed: false, truncated: true, stdout: "Partial output" },
+        message: "Partial output",
+      },
+      {
+        result: { code: 2, killed: false, truncated: false, stderr: "Editor error" },
+        message: "Editor error",
+      },
+      { result: { code: 1, killed: false, truncated: false }, message: "External editor failed" },
+    ];
+    for (const { result, message } of cases) {
+      const { pi, ctx, notifications } = context();
+      pi.exec = async () => ({
+        stdout: "stdout" in result ? (result.stdout ?? "") : "",
+        stderr: "stderr" in result ? (result.stderr ?? "") : "",
+        code: result.code,
+        killed: result.killed,
+        truncated: result.truncated,
+      });
+      await openPromptSnapshot(pi, ctx, "private");
       assert.equal(notifications[0]!.type, "error");
-      assert.match(notifications[0]!.message, /Bash/);
+      assert.match(notifications[0]!.message, new RegExp(message));
     }
-  });
-
-  it("reports guarded command errors", async () => {
-    const { ctx, notifications } = context();
-    disposers.push(
-      registerBackgroundBash(
-        ctx,
-        async () => ({
-          content: [{ type: "text", text: "Command denied" }],
-          details: undefined,
-          isError: true,
-        }),
-        () => {},
-      ),
-    );
-    await openPromptSnapshot(ctx, "private");
-    assert.match(notifications[0]!.message, /Command denied/);
-    assert.equal(notifications[0]!.type, "error");
   });
 });

@@ -1227,7 +1227,7 @@ export default function agentsExtension(
     let usageStdout: string | undefined;
     if (!routingUsageDisabled && candidates.length > 1) {
       try {
-        const { exitCode, stdout } = await executeUsage(ctx, signal);
+        const { exitCode, stdout } = await executeUsage(pi, signal);
         if (exitCode === 127) routingUsageDisabled = true;
         if (exitCode === 0) usageStdout = stdout;
       } catch {

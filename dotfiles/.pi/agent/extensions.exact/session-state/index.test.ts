@@ -15,15 +15,12 @@ import {
   type ExtensionEvent,
 } from "@earendil-works/pi-coding-agent";
 import { childInvocationArgs, subagentSessionDir } from "../agents/index.ts";
-import {
-  registerBackgroundBash,
-  type BackgroundBashOutcome as ToolExecutionOutcome,
-} from "../tools/background-bash.ts";
+import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import sessionStateExtension from "./index.ts";
 import { stateOptionValue } from "./tmux.ts";
 
 type EventHandler = (event: ExtensionEvent, ctx: ExtensionContext) => unknown;
-type KeywordResponse = (command: string) => ToolExecutionOutcome | Promise<ToolExecutionOutcome>;
+type KeywordResponse = (command: string) => ExecResult | Promise<ExecResult>;
 
 const WAIT_TIMEOUT_MS = 5_000;
 
@@ -48,7 +45,7 @@ class FakeTmuxServer {
     return this.pendingCount > 0;
   }
 
-  async run(command: string): Promise<ToolExecutionOutcome> {
+  async run(command: string): Promise<ExecResult> {
     this.pendingCount++;
     try {
       this.commands.push(command);
@@ -71,7 +68,7 @@ class FakeTmuxServer {
           );
         return completedResult("");
       }
-      return completedResult(`unexpected tmux keyword: ${keyword}`, true);
+      return completedResult("", 1, `unexpected tmux keyword: ${keyword}`);
     } finally {
       this.pendingCount--;
     }
@@ -89,19 +86,12 @@ class FakeTmuxServer {
   }
 }
 
-function completedResult(text: string, isError = false): ToolExecutionOutcome {
-  return {
-    status: "completed",
-    result: {
-      content: [{ type: "text", text }],
-      details: {},
-      ...(isError ? { isError: true } : {}),
-    },
-  };
+function completedResult(stdout: string, code = 0, stderr = ""): ExecResult {
+  return { stdout, stderr, code, killed: false };
 }
 
-function failedOutcome(error: unknown): ToolExecutionOutcome {
-  return { status: "failed", error };
+function interruptedResult(): ExecResult {
+  return { ...completedResult("", 1), killed: true };
 }
 
 async function finishEventLoopTurn(): Promise<void> {
@@ -125,8 +115,6 @@ interface ExtensionHarness {
   sessionId: string;
   sessionName: string | undefined;
   emit(type: string, fields?: Record<string, unknown>): Promise<void>;
-  disposeBashReceiver(): void;
-  restoreBashReceiver(): void;
   restartRuntime(): void;
   abortRun(): void;
   close(): Promise<void>;
@@ -222,24 +210,14 @@ async function createExtensionHarness(
     registerCommand(name: string, command: Parameters<ExtensionAPI["registerCommand"]>[1]) {
       commands.set(name, command);
     },
+    exec(_command: string, args: string[], options: { timeout?: number; signal?: AbortSignal }) {
+      assert.deepEqual(args.slice(0, 1), ["-c"]);
+      assert.deepEqual(options, { timeout: 1_000 });
+      return server.run(args[1]!);
+    },
   } as unknown as ExtensionAPI;
 
   sessionStateExtension(pi);
-  function connectBashReceiver() {
-    return registerBackgroundBash(
-      context,
-      async (request) => {
-        const params = request.params as { command: string; timeout?: number };
-        const outcome = await server.run(params.command);
-        if (outcome.status === "completed") return outcome.result;
-        if (outcome.status === "failed" || outcome.status === "unavailable") throw outcome.error;
-        throw outcome.reason;
-      },
-      () => {},
-    );
-  }
-  let disposeBashReceiver = connectBashReceiver();
-
   const restorePath = join(agentDir, "pi-tmux", "pi-mux-restore.json");
   await mkdir(dirname(restorePath), { recursive: true });
   const harness: ExtensionHarness = {
@@ -274,13 +252,6 @@ async function createExtensionHarness(
         }
       }
     },
-    disposeBashReceiver() {
-      disposeBashReceiver();
-    },
-    restoreBashReceiver() {
-      disposeBashReceiver();
-      disposeBashReceiver = connectBashReceiver();
-    },
     restartRuntime() {
       handlers.clear();
       commands.clear();
@@ -291,7 +262,6 @@ async function createExtensionHarness(
     },
     async close() {
       await harness.emit("session_shutdown");
-      disposeBashReceiver();
       await new Promise<void>((resolve) => socket.close(() => resolve()));
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -377,9 +347,8 @@ describe("sessionStateExtension in child sessions", () => {
 });
 
 describe("sessionStateExtension in top-level sessions", () => {
-  it("waits for all session_start handlers before checking and publishing through later Tools", async () => {
+  it("waits for resources_discover before checking and publishing", async () => {
     const h = await createExtensionHarness({ deferDiscovery: true });
-    h.disposeBashReceiver();
     try {
       await h.emit("session_start");
       await h.emit("ui_prompt_start");
@@ -387,7 +356,6 @@ describe("sessionStateExtension in top-level sessions", () => {
       await finishEventLoopTurn();
       assert.equal(h.server.commands.length, 0);
       assert.equal(h.notifications.length, 0);
-      h.restoreBashReceiver();
       await h.emit("resources_discover");
       await waitFor(
         "initial state after Tools initialization",
@@ -473,7 +441,7 @@ describe("sessionStateExtension in top-level sessions", () => {
   it("notifies a detection failure once and stops publishing states", async () => {
     const harness = await createExtensionHarness();
     try {
-      harness.server.responses["display-message"] = () => completedResult("no such server", true);
+      harness.server.responses["display-message"] = () => completedResult("", 1, "no such server");
       await harness.emit("session_start");
       await waitFor("detection failure notification", () =>
         harness.notifications.some((notification) =>
@@ -635,8 +603,8 @@ describe("session-state title publication", () => {
 
   it("captures each queued title and state before a replacement invalidates old work", async () => {
     const h = await createExtensionHarness();
-    const pending = Promise.withResolvers<ToolExecutionOutcome>();
-    const oldSet = Promise.withResolvers<ToolExecutionOutcome>();
+    const pending = Promise.withResolvers<ExecResult>();
+    const oldSet = Promise.withResolvers<ExecResult>();
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
@@ -813,7 +781,7 @@ describe("session-state MVP state boundaries", () => {
 
   it("preserves the latest state after a delayed set response", async () => {
     const h = await createExtensionHarness();
-    const pending = Promise.withResolvers<ToolExecutionOutcome>();
+    const pending = Promise.withResolvers<ExecResult>();
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
@@ -841,7 +809,7 @@ describe("session-state MVP state boundaries", () => {
 
   it("invalidates delayed old inspection on session replacement", async () => {
     const h = await createExtensionHarness();
-    const pending = Promise.withResolvers<ToolExecutionOutcome>();
+    const pending = Promise.withResolvers<ExecResult>();
     try {
       h.server.responses["display-message"] = () => pending.promise;
       await h.emit("session_start");
@@ -870,7 +838,7 @@ describe("session-state MVP state boundaries", () => {
 
   it("keeps the replacement session after an old set response arrives late", async () => {
     const h = await createExtensionHarness();
-    const pending = Promise.withResolvers<ToolExecutionOutcome>();
+    const pending = Promise.withResolvers<ExecResult>();
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
@@ -901,7 +869,7 @@ describe("session-state MVP state boundaries", () => {
 
   it("invalidates delayed results and unsets the option on shutdown", async () => {
     const h = await createExtensionHarness();
-    const pending = Promise.withResolvers<ToolExecutionOutcome>();
+    const pending = Promise.withResolvers<ExecResult>();
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
@@ -931,27 +899,12 @@ describe("session-state MVP state boundaries", () => {
     }
   });
 
-  it("notifies briefly and skips cleanup when Tools stopped first", async () => {
-    const h = await createExtensionHarness();
-    try {
-      await h.emit("session_start");
-      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-      h.disposeBashReceiver();
-      await h.emit("session_shutdown");
-      assert.equal(h.server.paneOptionOf("%0"), stateOptionValue(h.sessionId, "waiting-user"));
-      assert.match(h.notifications.at(-1)!.message, /cannot clear session state option/);
-      assert.ok(h.notifications.at(-1)!.message.length <= 220);
-    } finally {
-      await h.close();
-    }
-  });
-
   it("retries an equal failed state on the next state request, but not on progress", async () => {
     const h = await createExtensionHarness();
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-      h.server.responses["state"] = () => completedResult("failure", true);
+      h.server.responses["state"] = () => completedResult("", 1, "failure");
       await h.emit("agent_start");
       await waitFor("warning", () =>
         h.notifications.some((n) => n.message.includes("cannot publish")),
@@ -985,7 +938,7 @@ describe("session-state partial publication recovery", () => {
         await finishEventLoopTurn();
         h.server.responses.state = () => {
           h.server.setPaneOption("%0", runningValue);
-          return completedResult("snapshot update failed after publishing running", true);
+          return completedResult("", 1, "snapshot update failed after publishing running");
         };
         await h.emit("agent_start");
         await waitFor("publication failure", () =>
@@ -1028,17 +981,7 @@ describe("session-state lock retry", () => {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
       h.server.responses.state = () =>
-        busy
-          ? {
-              status: "completed",
-              result: {
-                content: [{ type: "text", text: "lock busy" }],
-                details: {},
-                isError: true,
-                structuredContent: { exit_code: 75 },
-              },
-            }
-          : completedResult("");
+        busy ? completedResult("", 75, "lock busy") : completedResult("");
       await h.emit("agent_start");
       await waitFor(
         "first attempt",
@@ -1080,14 +1023,7 @@ describe("session-state lock retry", () => {
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-      h.server.responses.state = () => ({
-        status: "completed",
-        result: {
-          content: [{ type: "text", text: "busy" }],
-          details: {},
-          structuredContent: { exit_code: 75 },
-        },
-      });
+      h.server.responses.state = () => completedResult("", 75, "busy");
       await h.emit("agent_start");
       await waitFor("contended running", () => h.server.commands.length >= 3);
       await h.emit("session_shutdown");
@@ -1103,16 +1039,8 @@ describe("session-state lock retry", () => {
   });
 });
 
-function busyResult(): ToolExecutionOutcome {
-  return {
-    status: "completed",
-    result: {
-      content: [{ type: "text", text: "pi-mux lock is busy" }],
-      details: {},
-      isError: true,
-      structuredContent: { exit_code: 75 },
-    },
-  };
+function busyResult(): ExecResult {
+  return completedResult("", 75, "pi-mux lock is busy");
 }
 
 function stateArguments(commands: string[]): string[][] {
@@ -1337,22 +1265,17 @@ describe("session-state CLI execution ordering", () => {
     }
   });
 
-  it("recovers an uncertain publication automatically without new events and warns once", async () => {
+  it("recovers an interrupted publication automatically without new events and warns once", async () => {
     const h = await createExtensionHarness();
-    const release = Promise.withResolvers<ToolExecutionOutcome>();
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-      h.server.responses.state = () => release.promise;
+      h.server.responses.state = () => interruptedResult();
       await h.emit("agent_start");
-      await waitFor("state CLI started", () => h.server.hasPending());
-      h.disposeBashReceiver();
       await waitFor("recovery warning", () =>
         h.notifications.some((n) => /session state publication interrupted/.test(n.message)),
       );
-      h.restoreBashReceiver();
       delete h.server.responses.state;
-      release.resolve(completedResult(""));
       await waitFor(
         "recovered running",
         () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "running"),
@@ -1367,22 +1290,23 @@ describe("session-state CLI execution ordering", () => {
         [],
       );
     } finally {
-      release.resolve(completedResult(""));
       await h.close();
     }
   }, 10_000);
 
-  it("retries a failed running publication before waiting and title changes accepted during recovery", async () => {
+  it("retries a thrown process failure before waiting and title changes accepted during recovery", async () => {
     const h = await createExtensionHarness();
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-      h.server.responses.state = () => failedOutcome(new Error("publication transport failed"));
+      h.server.responses.state = () => {
+        throw new Error("publication transport failed");
+      };
       await h.emit("agent_start");
       await waitFor("failed publication recovery", () => h.notifications.length > 0);
       assert.match(
         h.notifications[0]!.message,
-        /publication interrupted \(failed\): publication transport failed/,
+        /session state publication interrupted: publication transport failed/,
       );
       await h.emit("agent_settled");
       await h.emit("session_info_changed", { name: "Queued recovery title" });
@@ -1420,7 +1344,9 @@ describe("session-state CLI execution ordering", () => {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
       const attemptsBefore = stateArguments(h.server.commands).length;
-      h.server.responses.state = () => failedOutcome(new Error("transport failed"));
+      h.server.responses.state = () => {
+        throw new Error("transport failed");
+      };
       await h.emit("agent_start");
       await waitFor("recovery warning", () =>
         h.notifications.some((n) => /session state publication interrupted/.test(n.message)),
@@ -1448,33 +1374,18 @@ describe("session-state CLI execution ordering", () => {
     }
   }, 15_000);
 
-  it("recovers pane detection and publishes the states accepted meanwhile", async () => {
+  it("recovers interrupted pane detection and publishes states accepted meanwhile", async () => {
     const h = await createExtensionHarness();
-    const pending = Promise.withResolvers<ToolExecutionOutcome>();
     try {
-      h.server.responses["display-message"] = () => pending.promise;
+      h.server.responses["display-message"] = () => interruptedResult();
       await h.emit("session_start");
-      await waitFor("detection started", () => h.server.hasPending());
-      h.disposeBashReceiver();
       await waitFor("detection recovery warning", () =>
         h.notifications.some((n) => /managed tmux pane detection interrupted/.test(n.message)),
       );
-      h.restoreBashReceiver();
       await h.emit("agent_start");
       await h.emit("session_info_changed", { name: "Recovery title" });
       await h.emit("agent_settled");
       delete h.server.responses["display-message"];
-      pending.resolve(
-        completedResult(
-          [
-            h.server.socketPath,
-            String(process.pid),
-            "%0",
-            readlinkSync("/proc/self/fd/0"),
-            String(process.pid),
-          ].join("\t"),
-        ),
-      );
       await waitFor(
         "recovered detection and pending publication",
         () =>
@@ -1494,26 +1405,20 @@ describe("session-state CLI execution ordering", () => {
       assert.equal(h.notifications.length, 1);
       assert.match(h.notifications[0]!.message, /pane detection interrupted/);
     } finally {
-      pending.resolve(completedResult(""));
       await h.close();
     }
   }, 10_000);
 
   it("defers a replacement generation's CLI until an uncertain old execution settles", async () => {
     const h = await createExtensionHarness();
-    const release = Promise.withResolvers<ToolExecutionOutcome>();
+    const release = Promise.withResolvers<ExecResult>();
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
       h.server.responses.state = () => release.promise;
       await h.emit("agent_start");
       await waitFor("old state CLI started", () => h.server.hasPending());
-      h.disposeBashReceiver();
-      await waitFor("recovery warning", () =>
-        h.notifications.some((n) => /session state publication interrupted/.test(n.message)),
-      );
       h.sessionId = "replacement";
-      h.restoreBashReceiver();
       h.restartRuntime();
       await h.emit("session_start", { reason: "reload" });
       await finishEventLoopTurn();
@@ -1526,54 +1431,43 @@ describe("session-state CLI execution ordering", () => {
         "replacement after old execution settles",
         () => h.server.paneOptionOf("%0") === stateOptionValue("replacement", "waiting-user"),
       );
-      assert.equal(
-        h.notifications.filter((n) => /publication interrupted/.test(n.message)).length,
-        1,
-      );
     } finally {
       release.resolve(completedResult(""));
       await h.close();
     }
   }, 10_000);
 
-  it("skips shutdown cleanup while the terminal is unconfirmed and notifies after Tools stopped", async () => {
+  it("skips shutdown cleanup until the started process reaches a terminal state", async () => {
     const h = await createExtensionHarness();
-    const release = Promise.withResolvers<ToolExecutionOutcome>();
+    const release = Promise.withResolvers<ExecResult>();
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
       h.server.responses.state = () => release.promise;
       await h.emit("agent_start");
       await waitFor("state CLI started", () => h.server.hasPending());
-      h.disposeBashReceiver();
-      await waitFor("recovery warning", () =>
-        h.notifications.some((n) => /session state publication interrupted/.test(n.message)),
-      );
       let ended = false;
       const shutdown = h.emit("session_shutdown").then(() => {
         ended = true;
       });
       await finishEventLoopTurn();
       await new Promise((resolve) => setTimeout(resolve, 120));
-      assert.equal(ended, true);
-      await shutdown;
-      assert.equal(h.server.hasPending(), true);
+      assert.equal(ended, false);
       assert.equal(
         stateArguments(h.server.commands).some((args) => args.includes("--clear")),
         false,
       );
-      assert.match(h.notifications.at(-1)!.message, /previous Bash execution is still running/);
-      h.restoreBashReceiver();
+      delete h.server.responses.state;
+      release.resolve(completedResult(""));
+      await shutdown;
+      assert.equal(ended, true);
+      assert.equal(h.server.paneOptionOf("%0"), undefined);
+      await waitFor("process settled", () => !h.server.hasPending());
       h.restartRuntime();
       h.sessionId = "after-shutdown";
       await h.emit("session_start", { reason: "reload" });
-      const count = h.server.commands.length;
-      await finishEventLoopTurn();
-      assert.equal(h.server.commands.length, count);
-      delete h.server.responses.state;
-      release.resolve(completedResult(""));
       await waitFor(
-        "new factory after shutdown boundary",
+        "new generation after shutdown boundary",
         () => h.server.paneOptionOf("%0") === stateOptionValue("after-shutdown", "waiting-user"),
       );
     } finally {

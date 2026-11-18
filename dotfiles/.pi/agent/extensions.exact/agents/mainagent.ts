@@ -6,6 +6,9 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { quote } from "shell-quote";
+type BashResponse = Awaited<
+  ReturnType<import("@earendil-works/pi-coding-agent").ExtensionToolContext["executeTool"]>
+>;
 import { Type, type Static } from "typebox";
 import { resultText } from "../shared/tool-text.ts";
 import { showMainagentApproval } from "./mainagent-approval.ts";
@@ -32,7 +35,6 @@ const parameters = Type.Object({
 });
 
 export type MainagentInput = Static<typeof parameters>;
-type BashOutcome = Awaited<ReturnType<ExtensionToolContext["executeTool"]>>;
 
 const outputSchema = Type.Object({
   status: Type.Union([Type.Literal("created"), Type.Literal("denied"), Type.Literal("error")]),
@@ -68,7 +70,7 @@ function deniedResult(message: string) {
   };
 }
 
-function sessionResult(outcome: BashOutcome): AgentToolResult<{ bash: BashOutcome["result"] }> {
+function sessionResult(outcome: BashResponse): AgentToolResult<{ bash: BashResponse["result"] }> {
   const bash = outcome.result;
   const envelope = bash.structuredContent as
     | { output?: unknown; exit_code?: number; truncated?: boolean }
@@ -197,7 +199,7 @@ export function registerMainagentTool(pi: ExtensionAPI): void {
       const paths = getTmuxPaths();
       const command = buildTmuxCommand({ prompt: input.prompt, cwd: sessionCwd }, paths);
       const bash = await ctx.executeTool("bash", { command }, { signal });
-      return sessionResult(bash);
+      return sessionResult(signal?.aborted ? { ...bash, isError: true } : bash);
     },
   };
   pi.registerTool(tool);

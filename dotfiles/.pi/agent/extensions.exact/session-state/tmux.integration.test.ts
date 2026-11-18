@@ -22,11 +22,8 @@ import { join } from "node:path";
 const directory = process.env.PI_TEST_DIRECTORY;
 const moduleDir = process.env.PI_TEST_MODULE_DIR;
 const { createEventBus } = await import(process.env.PI_TEST_SDK_URL);
-const { default: toolsExtension } = await import(pathToFileURL(join(moduleDir, "../tools/index.ts")));
 const { default: sessionStateExtension } = await import(pathToFileURL(join(moduleDir, "index.ts")));
-const { SandboxRunner } = await import(pathToFileURL(join(moduleDir, "../guardrails/sandbox-runner.ts")));
 const { detectManagedPane, stateOptionValue, PANE_OPTION_NAME } = await import(pathToFileURL(join(moduleDir, "tmux.ts")));
-const { requestBackgroundBash } = await import(pathToFileURL(join(moduleDir, "../tools/background-bash.ts")));
 
 const socket = join(process.env.XDG_RUNTIME_DIR, "pi-tmux", "server.sock");
 const pane = process.env.TMUX_PANE;
@@ -34,6 +31,7 @@ const race = process.env.PI_TEST_RACE === "1";
 const recovery = process.env.PI_TEST_RECOVERY === "1";
 let sessionId = race ? "race-old" : "session-external";
 const notifications = [];
+const initializationErrors = [];
 const trace = [];
 const sandboxCommands = [];
 const executions = [];
@@ -41,28 +39,21 @@ const bus = createEventBus();
 const handlers = new Map();
 const tools = new Map();
 const commandNames = [];
-const originalRunTool = SandboxRunner.prototype.runTool;
-SandboxRunner.prototype.runTool = async function(name, params, options) {
-  assert.equal(name, "bash");
-  assert.equal(options.mode, "bash");
-  assert.equal(options.executor, undefined);
-  assert.ok(this.buildArgs("bash").includes(directory));
-  sandboxCommands.push(params.command);
-  const execution = { command: params.command, timeout: params.timeout, started: Date.now() };
+const { execCommand } = await import(new URL("./core/exec.js", process.env.PI_TEST_SDK_URL));
+async function execProcess(command, args, options = {}) {
+  const shellCommand = args[1];
+  sandboxCommands.push(shellCommand);
+  const execution = { command: shellCommand, timeout: options.timeout, started: Date.now() };
   executions.push(execution);
   try {
-    const result = await originalRunTool.call(this, name, params, options);
-    execution.status = "completed";
+    const result = await execCommand(command, args, directory, options);
+    execution.status = result.killed ? "failed" : "completed";
     execution.result = result;
     return result;
-  } catch (error) {
-    execution.status = "failed";
-    execution.error = String(error);
-    throw error;
   } finally {
     execution.finished = Date.now();
   }
-};
+}
 const events = {
   on: bus.on.bind(bus),
   emit(name, data) {
@@ -74,8 +65,9 @@ const modelRegistry = {};
 const pi = {
   getThinkingLevel() { return "off"; },
   events,
-  on(name, handler) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
+  exec: execProcess,
   registerTool(tool) { tools.set(tool.name, tool); },
+  on(name, handler) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
   registerCommand(name) { commandNames.push(name); },
 };
 let currentContext;
@@ -93,7 +85,10 @@ function context() {
     getSessionDir() { return current(join(directory, "sessions")); },
   };
   const ui = {
-    notify(message) { notifications.push(message); },
+    notify(message) {
+      if (message.includes("schema violation")) initializationErrors.push(message);
+      else notifications.push(message);
+    },
     confirm() { throw new Error("unexpected approval UI"); },
     select() { throw new Error("unexpected approval UI"); },
     input() { throw new Error("unexpected approval UI"); },
@@ -137,13 +132,14 @@ async function waitFor(label, predicate) {
     await delay(10);
   }
 }
-const config = join(directory, "guardrails.yaml");
-const denied = process.env.PI_TEST_DENIED === "1";
-writeFileSync(config, "read:\n  - allow: \"*\"\nwrite:\n  - allow: " + directory + "\ncommands:\n  - .*:\n      - allow: []\n" + (denied ? "  - tmux:\n      - ask: []\n" : ""));
 const sessionFirst = process.env.PI_TEST_ORDER === "session-first";
-if (sessionFirst) sessionStateExtension(pi);
-toolsExtension(pi, config);
-if (!sessionFirst) sessionStateExtension(pi);
+if (!sessionFirst) {
+  const { default: toolsExtension } = await import(pathToFileURL(join(moduleDir, "../tools/index.ts")));
+  const invalidConfig = join(directory, "invalid-guardrails.yaml");
+  writeFileSync(invalidConfig, "read: invalid\n");
+  toolsExtension(pi, invalidConfig);
+}
+sessionStateExtension(pi);
 assert.deepEqual(commandNames, []);
 const restorePath = join(directory, "pi-tmux", "pi-mux-restore.json");
 const before = existsSync(restorePath) ? statSync(restorePath, { bigint: true }) : undefined;
@@ -151,6 +147,9 @@ const bytes = before ? readFileSync(restorePath, "utf8") : undefined;
 
 try {
   await dispatch("session_start", { reason: "startup" });
+  assert.equal(initializationErrors.length, sessionFirst ? 0 : 1);
+  if (!sessionFirst)
+    await assert.rejects(tools.get("bash").execute("invalid", {command: "true"}, undefined, undefined, {}), /schema violation/);
   if (race) {
     await waitFor("startup", () => readOption() === stateOptionValue(sessionId, "waiting-user"));
     await dispatch("agent_start");
@@ -180,9 +179,8 @@ try {
     );
     const failed = executions.find((execution) => execution.command.includes(" running "));
     assert.equal(failed.status, "failed");
-    assert.equal(failed.timeout, 1);
-    assert.match(failed.error, /Command timed out after 1 seconds/);
-    assert.equal(failed.result, undefined);
+    assert.equal(failed.timeout, 1_000);
+    assert.equal(failed.result.killed, true);
     assert.ok(failed.finished - failed.started >= 1_000);
     await dispatch("agent_settled");
     assert.equal(executions.filter((execution) => execution.command.includes(" running ")).length, 1);
@@ -199,9 +197,9 @@ try {
     assert.equal(retried.command, failed.command);
     for (const execution of [retried, publications[3]]) {
       assert.equal(execution.status, "completed", JSON.stringify(execution));
-      assert.equal(execution.result.isError, undefined);
-      assert.equal(execution.result.structuredContent.exit_code, 0);
-      assert.equal(execution.result.structuredContent.truncated, false);
+      assert.equal(execution.result.code, 0);
+      assert.equal(execution.result.killed, false);
+      assert.notEqual(execution.result.truncated, true);
     }
     assert.ok(publications[3].started >= retried.finished);
     assert.match(cli("show-messages", "-J"), /old-write-release/);
@@ -214,16 +212,10 @@ try {
     assert.equal(existsSync(join(directory, "old-write-finished")), false);
     assert.equal(readOption(), stateOptionValue(sessionId, "waiting-user"));
     assert.equal(notifications.length, 1);
-    assert.match(notifications[0], /publication interrupted \(failed\):.*Command timed out after 1 seconds.*retrying automatically/);
+    assert.match(notifications[0], /publication interrupted:.*Process interrupted or timed out.*retrying automatically/);
     await dispatch("session_shutdown", { reason: "quit" });
     assert.equal(readOption(), "");
     assert.equal(notifications.length, 1);
-  } else if (denied) {
-    await waitFor("denied notification", () => notifications.some((text) => text.includes("requires confirmation")));
-    assert.equal(sandboxCommands.length, 0);
-    assert.equal(readOption(), "");
-    await dispatch("input");
-    await dispatch("session_shutdown", { reason: "quit" });
   } else {
     await waitFor("startup", () => readOption() === stateOptionValue(sessionId, "waiting-user"));
     await dispatch("input");
@@ -238,6 +230,8 @@ try {
     }
     await dispatch("agent_start");
     await waitFor("running", () => readOption() === stateOptionValue(sessionId, "running"));
+    await waitFor("running process terminal", () => executions.at(-1).finished !== undefined);
+    await new Promise(setImmediate);
     const commandsBefore = sandboxCommands.length;
     await dispatch("provider_stream_event");
     await dispatch("tool_execution_update");
@@ -256,7 +250,7 @@ try {
       sessionManager: { getSessionId: () => sessionId, getSessionFile: () => undefined },
     };
     async function run(command) {
-      return requestBackgroundBash({ id: "test-detect", params: { command, timeout: 1 }, context: captured });
+      return execProcess("bash", ["-c", command], { timeout: 1000 });
     }
     const [actualSocket, actualServer] = process.env.TMUX.split(",");
     const forged = await detectManagedPane(run, { ...process.env, TMUX: actualSocket + ",99999999" });
@@ -270,12 +264,8 @@ try {
 
     assert.equal(notifications.length, 0);
     await dispatch("session_shutdown", { reason: "quit" });
-    if (sessionFirst) {
-      assert.equal(readOption(), "");
-      assert.equal(notifications.length, 0);
-    } else {
-      assert.ok(notifications.some((text) => text.includes("cannot clear session state option")));
-    }
+    assert.equal(readOption(), "");
+    assert.equal(notifications.length, 0);
   }
   assert.deepEqual(commandNames, []);
   if (before) {
@@ -286,13 +276,12 @@ try {
     assert.equal(existsSync(restorePath), false);
   }
   assert.equal(trace.length, 0);
-  if (!denied) assert.ok(sandboxCommands.length > 0);
+  assert.ok(sandboxCommands.length > 0);
   writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: true, trace, sandboxCommands, notifications, pane, executions }));
 } catch (error) {
   writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: false, error: String(error.stack ?? error), notifications, trace, sandboxCommands }));
   process.exitCode = 1;
 } finally {
-  SandboxRunner.prototype.runTool = originalRunTool;
   bus.clear();
 }
 `;
@@ -311,18 +300,12 @@ const { createAgentSession, SessionManager, SettingsManager, DefaultResourceLoad
 const { fakeProvider, fakeModel, memoryRuntime } = await import(pathToFileURL(join(moduleDir, "../recontext/test-fixture.ts")));
 const { registerSessionTitle } = await import(pathToFileURL(join(moduleDir, "../session-title/extension.ts")));
 const { default: sessionStateExtension } = await import(pathToFileURL(join(moduleDir, "index.ts")));
-const { default: toolsExtension } = await import(pathToFileURL(join(moduleDir, "../tools/index.ts")));
-const { SandboxRunner } = await import(pathToFileURL(join(moduleDir, "../guardrails/sandbox-runner.ts")));
 const socket = join(process.env.XDG_RUNTIME_DIR, "pi-tmux/server.sock");
 const pane = process.env.TMUX_PANE;
 const title = "Delayed SDK title";
 const errors = [];
 const sandboxCommands = [];
-const originalRunTool = SandboxRunner.prototype.runTool;
-SandboxRunner.prototype.runTool = function(name, params, options) {
-  sandboxCommands.push(params.command);
-  return originalRunTool.call(this, name, params, options);
-};
+const executions = [];
 function cli(...args) {
   return execFileSync("tmux", ["-S", socket, ...args], { encoding: "utf8" }).trimEnd();
 }
@@ -356,15 +339,31 @@ const settings = SettingsManager.inMemory({
   compaction: { enabled: false }, retry: { enabled: false }, cacheWarming: "off",
   defaultTools: [], enableInstallTelemetry: false,
 });
-const guardrails = join(directory, "guardrails.yaml");
-writeFileSync(guardrails, "read:\n  - allow: \"*\"\nwrite:\n  - allow: " + directory + "\ncommands:\n  - .*:\n      - allow: []\n");
 const loader = new DefaultResourceLoader({
   cwd: directory, agentDir: directory, settingsManager: settings,
   noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
   extensionFactories: [
     (pi) => {
+      const originalExec = pi.exec.bind(pi);
+      pi.exec = async (command, args, options) => {
+        const shellCommand = args[1];
+        sandboxCommands.push(shellCommand);
+        const execution = { command: shellCommand, timeout: options?.timeout, started: Date.now() };
+        executions.push(execution);
+        try {
+          const result = await originalExec(command, args, options);
+          execution.status = "completed";
+          execution.result = result;
+          return result;
+        } catch (error) {
+          execution.status = "failed";
+          execution.error = String(error);
+          throw error;
+        } finally {
+          execution.finished = Date.now();
+        }
+      };
       sessionStateExtension(pi);
-      toolsExtension(pi, guardrails);
       registerSessionTitle(pi, async () => [runtime.getModel("title-share", "title")]);
       pi.on("agent_settled", () => { settled.resolve(); });
     },
@@ -404,32 +403,32 @@ try {
   await session.prompt("Continue the same conversation");
   await waitFor("later state retains title", () => readOption()?.state === "waiting-user" && readOption()?.title === title);
   assert.deepEqual(errors, []);
-  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: true, sandboxCommands }));
+  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: true, sandboxCommands, executions }));
 } catch (error) {
-  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: false, error: String(error.stack ?? error), sandboxCommands }));
+  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: false, error: String(error.stack ?? error), sandboxCommands, executions }));
   process.exitCode = 1;
 } finally {
   releaseTitle.resolve();
   await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
   session.dispose();
-  SandboxRunner.prototype.runTool = originalRunTool;
 }
 `;
 
-describe("session-state with a dedicated headless tmux and real registered Bash", () => {
+describe("session-state with a dedicated headless tmux and pi.exec", () => {
   it(
     "shares a title generated after real SDK settlement without activation or identity changes",
     async () => {
-      const result = await runScenario("session-first", false, false, SDK_TITLE_SCENARIO);
+      const result = await runScenario("session-first", false, SDK_TITLE_SCENARIO);
       assert.equal(result.ok, true, result.error ?? "scenario failed");
       assert.ok(result.sandboxCommands.length > 0);
+      assert.ok(result.executions.every((execution) => execution.timeout === 1_000));
     },
     TEST_TIMEOUT_MS,
   );
   it(
-    "serializes a delayed real tmux set before replacement publication through the sandbox",
+    "serializes a delayed real tmux set before replacement publication through pi.exec",
     async () => {
-      const result = await runScenario("session-first", false, true);
+      const result = await runScenario("session-first", true);
       assert.equal(result.ok, true, result.error ?? "scenario failed");
     },
     TEST_TIMEOUT_MS,
@@ -437,11 +436,12 @@ describe("session-state with a dedicated headless tmux and real registered Bash"
   for (const order of ["session-first", "tools-first"] as const) {
     for (const initialRestoreRecord of ["absent", "valid", "invalid"] as const) {
       it(
-        `uses registered Bash with ${order} shutdown and ${initialRestoreRecord} restore record`,
+        `uses pi.exec with ${order} shutdown and ${initialRestoreRecord} restore record`,
         async () => {
-          const result = await runScenario(order, false, false, SCENARIO, initialRestoreRecord);
+          const result = await runScenario(order, false, SCENARIO, initialRestoreRecord);
           assert.equal(result.ok, true, result.error ?? "scenario failed");
           assert.ok(result.sandboxCommands.length >= 8);
+          assert.ok(result.executions.every((execution) => execution.timeout === 1_000));
         },
         TEST_TIMEOUT_MS,
       );
@@ -449,21 +449,12 @@ describe("session-state with a dedicated headless tmux and real registered Bash"
   }
 
   it(
-    "recovers automatically after a real registered Bash timeout and keeps the latest state",
+    "recovers automatically after a pi.exec timeout and keeps the latest state",
     async () => {
-      const result = await runScenario("session-first", false, false, SCENARIO, "absent", true);
+      const result = await runScenario("session-first", false, SCENARIO, "absent", true);
       assert.equal(result.ok, true, result.error ?? "scenario failed");
       assert.ok(result.sandboxCommands.some((command) => command.includes("pi-mux state")));
       console.info("recovery evidence: " + JSON.stringify(result));
-    },
-    TEST_TIMEOUT_MS,
-  );
-  it(
-    "fails closed at shared authorization without opening UI",
-    async () => {
-      const result = await runScenario("tools-first", true);
-      assert.equal(result.ok, true, result.error ?? "scenario failed");
-      assert.equal(result.sandboxCommands.length, 0);
     },
     TEST_TIMEOUT_MS,
   );
@@ -474,11 +465,11 @@ type ScenarioResult = {
   error?: string;
   pane?: string;
   sandboxCommands: string[];
+  executions: { command: string; timeout?: number; status?: string; finished?: number }[];
 };
 
 async function runScenario(
   order: string,
-  denied: boolean,
   race = false,
   scenario = SCENARIO,
   initialRestoreRecord: "absent" | "valid" | "invalid" = "absent",
@@ -517,7 +508,6 @@ async function runScenario(
     PI_TEST_MODULE_DIR: MODULE_DIR,
     PI_TEST_SDK_URL: SDK_URL,
     PI_TEST_ORDER: order,
-    PI_TEST_DENIED: denied ? "1" : "0",
     PI_TEST_RACE: race ? "1" : "0",
   };
   const bin = join(directory, "bin");

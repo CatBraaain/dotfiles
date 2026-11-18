@@ -1,8 +1,7 @@
 import { readFileSync, readlinkSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { quote } from "shell-quote";
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import type { BackgroundBashOutcome } from "../tools/background-bash.ts";
+import type { ExecResult } from "@earendil-works/pi-coding-agent";
 
 export type SessionState = "running" | "waiting-approval" | "waiting-user";
 
@@ -18,18 +17,16 @@ export interface ManagedPaneBinding {
   started: string;
 }
 
-export type BashRunner = (command: string) => Promise<BackgroundBashOutcome>;
+export type BashRunner = (command: string) => Promise<ExecResult>;
 
 export type ManagedPaneDetection =
   | { status: "managed"; binding: ManagedPaneBinding }
   | { status: "unmanaged" }
-  | { status: "aborted" }
   | { status: "failed"; message: string };
 
 export type PublicationOutcome =
   | { status: "published" }
   | { status: "busy" }
-  | { status: "aborted" }
   | { status: "failed"; message: string };
 
 export function dedicatedSocketPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -95,12 +92,9 @@ export async function detectManagedPane(
     const outcome = await run(
       tmuxCommandLine(socketPath, ["display-message", "-p", "-t", paneId, inspectFormat]),
     );
-    if (outcome.status === "aborted") return { status: "aborted" };
-    if (outcome.status === "failed" || outcome.status === "unavailable")
-      return { status: "failed", message: errorMessage(outcome.error) };
-    const failure = bashResultFailure(outcome.result);
+    const failure = processFailure(outcome);
     if (failure !== undefined) return { status: "failed", message: failure };
-    const fields = resultText(outcome.result).trimEnd().split("\t");
+    const fields = outcome.stdout.trimEnd().split("\t");
     const [actualSocket, actualServerPid, actualPaneId, actualTty, actualPanePid] = fields;
     const isVerified =
       fields.length === 5 &&
@@ -133,10 +127,14 @@ export async function publishState(
   state: SessionState,
   title: string | null = null,
 ): Promise<PublicationOutcome> {
-  const set = await run(
-    stateCommand(binding, sessionId, [state, "--title", JSON.stringify(title)]),
-  );
-  return executionFailure(set) ?? { status: "published" };
+  try {
+    const result = await run(
+      stateCommand(binding, sessionId, [state, "--title", JSON.stringify(title)]),
+    );
+    return executionFailure(result) ?? { status: "published" };
+  } catch (error) {
+    return { status: "failed", message: errorMessage(error) };
+  }
 }
 
 export async function unsetStateOption(
@@ -144,34 +142,27 @@ export async function unsetStateOption(
   binding: ManagedPaneBinding,
   sessionId: string,
 ): Promise<PublicationOutcome> {
-  const outcome = await run(stateCommand(binding, sessionId, ["--clear"]));
-  return executionFailure(outcome) ?? { status: "published" };
+  try {
+    const result = await run(stateCommand(binding, sessionId, ["--clear"]));
+    return executionFailure(result) ?? { status: "published" };
+  } catch (error) {
+    return { status: "failed", message: errorMessage(error) };
+  }
 }
 
-function executionFailure(outcome: BackgroundBashOutcome): PublicationOutcome | undefined {
-  if (outcome.status === "aborted") return { status: "aborted" };
-  if (outcome.status === "failed" || outcome.status === "unavailable")
-    return { status: "failed", message: errorMessage(outcome.error) };
-  if ((outcome.result.structuredContent as { exit_code?: unknown } | undefined)?.exit_code === 75)
+function executionFailure(result: ExecResult): PublicationOutcome | undefined {
+  if (!result.killed && !("truncated" in result && result.truncated === true) && result.code === 75)
     return { status: "busy" };
-  const failure = bashResultFailure(outcome.result);
+  const failure = processFailure(result);
   return failure === undefined ? undefined : { status: "failed", message: failure };
 }
 
-function bashResultFailure(result: AgentToolResult<unknown>): string | undefined {
-  const structured = result.structuredContent as
-    | { exit_code?: unknown; truncated?: unknown }
-    | undefined;
-  if (result.isError || (typeof structured?.exit_code === "number" && structured.exit_code !== 0))
-    return resultText(result) || "Bash reported an error";
-  if (structured?.truncated || (result.details as { truncation?: unknown } | undefined)?.truncation)
-    return "Bash output was truncated";
+function processFailure(result: ExecResult): string | undefined {
+  if (result.killed) return "Process was interrupted or timed out";
+  if ("truncated" in result && result.truncated === true) return "Process output was truncated";
+  if (result.code !== 0)
+    return result.stderr || result.stdout || `Process exited with code ${result.code}`;
   return undefined;
-}
-
-function resultText(result: AgentToolResult<unknown>): string {
-  const first = result.content[0];
-  return first?.type === "text" ? first.text : "";
 }
 
 function errorMessage(error: unknown): string {

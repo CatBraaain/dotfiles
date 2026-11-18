@@ -21,7 +21,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { quote } from "shell-quote";
-import { requestBackgroundBash } from "./background-bash.ts";
 import toolsExtension from "./index.ts";
 import { Guardrail } from "../guardrails/guardrail.ts";
 import { SandboxRunner } from "../guardrails/sandbox-runner.ts";
@@ -475,14 +474,6 @@ describe("tools with the guardrails public API", () => {
         },
       } as unknown as ExtensionToolContext;
       for (const handler of handlers.get("session_start") ?? []) await handler({}, context);
-      const background = await requestBackgroundBash({
-        id: "invalid-background",
-        params: { command: "echo unsafe" },
-        context,
-      });
-      assert.equal(background.status, "failed");
-      if (background.status === "failed")
-        assert.match(String(background.error), /guardrails.yaml.*schema violation/);
       assert.equal(notifications.length, 1);
       for (const handler of handlers.get("session_shutdown") ?? []) await handler({}, context);
     } finally {
@@ -526,12 +517,11 @@ describe("tools with the guardrails public API", () => {
     }
   });
 
-  it("uses the direct Guardrails API and only a Bash-specific background boundary", () => {
+  it("uses the direct Guardrails API without a background boundary", () => {
     const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
     assert.match(source, /from "\.\.\/guardrails\/api\.ts"/);
     assert.doesNotMatch(source, /guardrails\/(?:guardrail|execute|sandbox|config)\./);
-    assert.match(source, /from "\.\/background-bash\.ts"/);
-    assert.match(source, /registerBackgroundBash/);
+    assert.doesNotMatch(source, /background-bash|registerBackgroundBash/);
     assert.doesNotMatch(source, /guardrails:execute|shared\/execution-events/);
   });
 });

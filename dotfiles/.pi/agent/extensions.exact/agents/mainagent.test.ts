@@ -755,6 +755,42 @@ describe("呼び出し元の制限", () => {
 });
 
 describe("実行", () => {
+  it("keeps a received Bash result when cancelled during execution", async () => {
+    const tool = captureTool();
+    const controller = new AbortController();
+    const { ui } = approvalUi({ dialog: "once" });
+    const original = bashOutcome();
+    const result = await tool.execute(
+      "t",
+      request,
+      controller.signal,
+      undefined,
+      mockContext(ui, async () => {
+        controller.abort(new Error("cancelled"));
+        return original;
+      }),
+    );
+    assert.equal(result.isError, true);
+    assert.strictEqual(result.details.bash, original.result);
+  });
+
+  it("propagates the SDK exception without a process fallback", async () => {
+    const tool = captureTool();
+    const { ui } = approvalUi({ dialog: "once" });
+    const failure = new Error("Expired context");
+    await assert.rejects(
+      tool.execute(
+        "t",
+        request,
+        undefined,
+        undefined,
+        mockContext(ui, async () => {
+          throw failure;
+        }),
+      ),
+      (error) => error === failure,
+    );
+  });
   it("calls the registered bash once and keeps the CLI identity and connection guidance", async () => {
     const tool = captureTool();
     const { ui } = approvalUi({ dialog: "once" });

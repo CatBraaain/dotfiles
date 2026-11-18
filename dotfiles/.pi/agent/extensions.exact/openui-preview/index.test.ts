@@ -11,12 +11,6 @@ import {
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, it } from "bun:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { parse } from "shell-quote";
-import {
-  requestBackgroundBash,
-  type BackgroundBashRequest,
-  type BackgroundBashOutcome,
-} from "../tools/background-bash";
 import { extractOpenuiLangBlocks, stripOpenuiLangBlocks } from "./fence";
 import openuiPreviewExtension, {
   createQueue,
@@ -173,9 +167,10 @@ describe("renderPreview", () => {
 });
 
 type Handler = (event: unknown, context?: unknown) => unknown;
-function capture(
-  requestBash: (request: BackgroundBashRequest) => Promise<BackgroundBashOutcome> = successfulShot,
-) {
+type ExecResult = Awaited<ReturnType<ExtensionAPI["exec"]>>;
+type SnapshotExec = ExtensionAPI["exec"];
+
+function capture(exec: SnapshotExec = successfulShot) {
   const entries: Array<{ customType: string; data: PreviewDetails }> = [];
   const entryRenderers: string[] = [];
   const legacyRenderers: string[] = [];
@@ -186,6 +181,7 @@ function capture(
   const queue = createQueue();
   openuiPreviewExtension(
     {
+      exec,
       appendEntry(customType: string, data: PreviewDetails) {
         entries.push({ customType, data });
       },
@@ -208,7 +204,7 @@ function capture(
     {
       outDir: workDir,
       generatedDir: workDir,
-      requestBash,
+      exec,
       enqueue<T>(task: () => Promise<T>): Promise<T> {
         const result = queue(task);
         pending.push(result);
@@ -239,14 +235,14 @@ function capture(
   };
 }
 
-async function successfulShot(request: BackgroundBashRequest): Promise<BackgroundBashOutcome> {
-  const inputPath = parse(request.params.command).at(-1) as string;
+async function successfulShot(_command: string, args: string[]): Promise<ExecResult> {
+  const inputPath = args.at(-1)!;
   const input: SnapshotInput = JSON.parse(readFileSync(inputPath, "utf8"));
   writeFileSync(input.pngPath, Buffer.from(ONE_BY_ONE_PNG, "base64"));
   const directory = dirname(inputPath);
   renameSync(join(directory, "pending"), join(directory, "running"));
   writeFileSync(join(directory, "finished.json"), JSON.stringify({ ok: true }));
-  return { status: "completed", result: { content: [], details: {} } };
+  return { stdout: "", stderr: "", code: 0, killed: false };
 }
 
 function fenced(source = SUPPORTED_DSL): string {
@@ -264,6 +260,7 @@ describe("extension wiring", () => {
     try {
       openuiPreviewExtension(
         {
+          exec: successfulShot,
           on(name: string, handler: Handler) {
             handlers.set(name, handler);
           },
@@ -276,7 +273,7 @@ describe("extension wiring", () => {
         } as unknown as ExtensionAPI,
         {
           generatedDir: workDir,
-          requestBash: successfulShot,
+          exec: successfulShot,
           enqueue<T>(task: () => Promise<T>): Promise<T> {
             const result = task();
             pending = result;
@@ -346,9 +343,9 @@ describe("extension wiring", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const captured = capture(async (request) => {
+    const captured = capture(async (command, args) => {
       await gate;
-      return successfulShot(request);
+      return successfulShot(command, args);
     });
     assert.equal(captured.message(fenced()).result, undefined);
     assert.equal(captured.entries.length, 0);
@@ -364,15 +361,15 @@ describe("extension wiring", () => {
     assert.deepEqual(captured.entries, []);
   });
   it("reports an unclosed fence without invoking Bash", async () => {
-    const requests: BackgroundBashRequest[] = [];
-    const captured = capture(async (request) => {
-      requests.push(request);
-      return successfulShot(request);
+    let calls = 0;
+    const captured = capture(async () => {
+      calls += 1;
+      return successfulShot("env", []);
     });
     captured.message("```openui-lang\nroot = Stack([");
     await captured.drain();
     assert.match(captured.entries[0]?.data.message ?? "", /closing fence/);
-    assert.equal(requests.length, 0);
+    assert.equal(calls, 0);
   });
   it("reports parser and missing-spec failures as entries", async () => {
     const captured = capture();
@@ -380,24 +377,26 @@ describe("extension wiring", () => {
     await captured.drain();
     assert.match(captured.entries[0]?.data.message ?? "", /display-only library/);
   });
-  it("reports an unavailable background API without a process fallback", async () => {
-    const captured = capture(requestBackgroundBash);
+  it("reports a process launch failure from pi.exec", async () => {
+    const captured = capture(async () => {
+      throw new Error("process launch failed");
+    });
     captured.message(fenced());
     await captured.drain();
     assert.equal(captured.entries[0]?.data.kind, "error");
-    assert.match(captured.entries[0]?.data.message ?? "", /No active background Bash API/);
+    assert.match(captured.entries[0]?.data.message ?? "", /process launch failed/);
   });
   it("runs one block at a time and continues after an execution failure", async () => {
     let active = 0;
     let maxActive = 0;
     let calls = 0;
-    const captured = capture(async (request) => {
+    const captured = capture(async (command, args) => {
       active += 1;
       maxActive = Math.max(maxActive, active);
       calls += 1;
       try {
-        if (calls === 1) return { status: "failed", error: new Error("denied") };
-        return await successfulShot(request);
+        if (calls === 1) return { stdout: "", stderr: "denied", code: 1, killed: false };
+        return await successfulShot(command, args);
       } finally {
         active -= 1;
       }
@@ -413,8 +412,8 @@ describe("extension wiring", () => {
   });
   it("honors the agent context interruption before publishing", async () => {
     const controller = new AbortController();
-    const captured = capture(async (request) => {
-      const result = await successfulShot(request);
+    const captured = capture(async (command, args) => {
+      const result = await successfulShot(command, args);
       controller.abort(new Error("agent interrupted"));
       return result;
     });
@@ -435,13 +434,12 @@ describe("extension wiring", () => {
     });
     let directory = "";
     let calls = 0;
-    const captured = capture(async (request) => {
+    const captured = capture(async (command, args) => {
       calls += 1;
-      directory = dirname(parse(request.params.command).at(-1) as string);
-      assert.equal(request.signal, undefined);
+      directory = dirname(args.at(-1)!);
       entered();
       await gate;
-      return successfulShot(request);
+      return successfulShot(command, args);
     });
     captured.message(`${fenced()}\n${fenced()}`);
     await started;
@@ -464,9 +462,9 @@ describe("extension wiring", () => {
 
   it("does not start a queued shot after immediate shutdown", async () => {
     let calls = 0;
-    const captured = capture(async (request) => {
+    const captured = capture(async (command, args) => {
       calls += 1;
-      return successfulShot(request);
+      return successfulShot(command, args);
     });
     captured.message(fenced());
     await captured.handlers.get("session_shutdown")?.({});

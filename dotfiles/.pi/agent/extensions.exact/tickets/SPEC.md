@@ -2,9 +2,9 @@
 
 ## 対象と目的
 
-tickets は、pi の LLM に ticket CLI（`dotfiles/.agents/cli.exact/ticket/` の展開先 `~/.agents/cli/ticket`。単一実行ファイルとして直接起動する）の操作手段を tool として提供するpi extension である。5つの tool を `pi.registerTool` で登録する。
+tickets は、pi の LLM に ticket CLI（`dotfiles/.agents/cli.exact/ticket/` の展開先 `~/.agents/cli/ticket`。単一実行ファイル）の操作手段を tool として提供するpi extension である。5つの tool を `pi.registerTool` で登録する。
 
-tool群と CLI・ストアの振る舞いの正本は `dotfiles/.agents/cli.exact/ticket/SPEC.md` である。この仕様は本extension の構成・登録tool・依存のみを定め、振る舞いを再定義しない。
+ストアとCLIの契約は [ticket CLI仕様](../../../../.agents/cli.exact/ticket/SPEC.md) に従う。本書は、このCLIを呼び出すpi拡張の構成、tool引数の変換、実行、結果とエラー、依存を定める。ストア操作はCLIに委ねる。
 
 ## 構成
 
@@ -15,12 +15,12 @@ extensions.exact/tickets/
 └── SPEC.md         # 本ファイル
 ```
 
-- `index.ts` は、tool登録、tool引数から CLI引数へのマッピング（`buildListArgs` / `buildShowArgs` / `buildCreateArgs` / `buildSetArgs` / `buildEditArgs`）、CLI spawn（`spawnTicketCli`、`appendJsonFlag`、runner型 `TicketCliRunner`）、description と promptSnippet の組み立て（`ticketToolDescriptions` / `ticketToolPromptSnippets`）を exportする
-- `index.test.ts` は上記export の検証に限定する。CLI spawn は stub CLI projectディレクトリ（`deps.cliDir` 注入）でのみ検証し、実際の ticket CLI は呼ばない
+- `index.ts` は、tool登録、tool引数から CLI引数へのマッピング（`buildListArgs` / `buildShowArgs` / `buildCreateArgs` / `buildSetArgs` / `buildEditArgs`）、CLI実行、JSON引数追加（`appendJsonFlag`）、runner型 `TicketCliRunner`、description と promptSnippet の組み立て（`ticketToolDescriptions` / `ticketToolPromptSnippets`）を exportする
+- `index.test.ts` は上記export と登録tool の実行経路を検証する。CLI実行は stub CLI と登録Bashのテスト用context で検証し、実際の ticket CLI は呼ばない
 
 ## 登録tool
 
-対応CLIサブコマンドと引数の意味、ID が接頭辞で一意に特定できることは各tool の description に含める。
+各toolのdescriptionは、対応CLIサブコマンド、引数、selectorの完全ID・一意prefix・`next` と省略時の既定、project選択とcwd既定を説明する。
 
 | tool | 対応CLIサブコマンド | 引数 |
 | --- | --- | --- |
@@ -30,7 +30,36 @@ extensions.exact/tickets/
 | `ticket_set` | `set` | `selector`（string、任意。省略時は `next`）/ `status`（string、任意）/ `after`（string または null、任意）/ `project`（string、任意） |
 | `ticket_edit` | `edit` | `selector`（string、任意。省略時は `next`）/ `old`（string、必須・空でない）/ `new`（string、必須）/ `project`（string、任意） |
 
-CLI の実行は `spawnTicketCli(args, ctx.cwd, signal)`（extension内の runner。tests は `deps.runCli` で置換）に委ね、セッションcwd を CLI の cwd として渡す。成功時の tool結果は `content` に CLI の stdoutテキスト（`ticket/SPEC.md` の非 `--json` 出力）をそのまま格納する。`ticket_list` と `ticket_show` は pi の上限（50 KiB / 2,000行）を超えたとき先頭を返し、同じ引数に `--json` を付けてCLI を再実行し、`details` に完全JSON を格納する。CLI失敗時（終了コード非ゼロ・spawn失敗）は CLI の stderrテキストを `Error` としてthrowし、pi が tool呼び出しを失敗として報告する。
+## CLIへの引数変換
+
+| tool・入力 | CLIへの変換・起動前の検証 |
+| --- | --- |
+| 共通 | セッションcwdをCLIのcwdに渡す。`project` 指定時は `--project` に渡す |
+| `ticket_list` | `status` をCLIのstatus指定に、`all` を全project指定に変換する。空のstatus配列は未指定として渡す |
+| `ticket_show` | `selector` を位置引数に渡し、省略時はCLIの既定に従う |
+| `ticket_create` | `title`・`body`・`status`・`after` のうち渡されたkeyだけをCLIのJSON引数に含める |
+| `ticket_set` | `status`・`after` のうち渡されたkeyだけをCLIのJSON引数に含める。両方未指定ならCLIを起動せず失敗する |
+| `ticket_edit` | schemaで空の `old` を起動前に拒否する。`old` と `new` は `--` の後にliteralな位置引数として渡す |
+
+`ticket_set` と `ticket_edit` のselectorも位置引数に渡し、省略時はCLIの既定に従う。
+
+## 実行と中断
+
+5つのtoolのCLI実行は、実行時contextの `ctx.executeTool("bash", ...)` を使い、その時点の登録Bashによるコマンド承認とサンドボックスの対象とする。引数・cwdのliteral変換、分離出力と長文の完全回収は [Tools仕様](../tools/SPEC.md#cliの引数と結果回収) に従う。
+
+Bashツールが未登録、実行時contextが失効、実行が拒否またはキャンセルされた場合はtool failureとして返す。登録Bashを経由しない直接起動には切り替えない。toolの中断を登録Bashへ伝え、CLI実行と完全JSONの再取得を中断する。
+
+## 結果とエラー
+
+CLIは `--json` なしで実行し、成功時はstdoutのテキストを空白・改行も含めてtoolの `content` にそのまま格納する。各コマンドのテキスト形式はCLI仕様に従う。
+
+CLIの非0終了と実行不能はtool failureとして返す。CLIのstderrから末尾の改行を1個だけ除いたテキストを `Error` としてthrowし、piがtool呼び出しを失敗として報告する。stderrが空ならエラーメッセージを使う。
+
+toolのcontentは最大50 KiBまたは2,000行とする。上限を超えるときは先頭を返し、上限・全体量・完全本文をCLIで得る旨をmarkerに含める。`ticket_list` と `ticket_show` の切詰め時だけ、同じ引数に `--json` を付けてCLIを再実行し、`details` に完全JSONを格納する。書込toolは表示の切詰めを理由に再実行しない。
+
+## 書込順序
+
+`ticket_create`・`ticket_set`・`ticket_edit` はsequentialにdispatchし、同じassistant response内の書込callをmodel orderで実行する。
 
 ## 依存
 

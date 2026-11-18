@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { createServer } from "node:net";
 import { parse } from "shell-quote";
 import { describe, it } from "bun:test";
-import type { BackgroundBashOutcome as ToolExecutionOutcome } from "../tools/background-bash.ts";
+import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import {
   dedicatedSocketPath,
   detectManagedPane,
@@ -27,26 +27,11 @@ const verifiedBinding: ManagedPaneBinding = {
   pid: process.pid,
   started: processStartTime(process.pid),
 };
-function completedResult(text: string, isError = false): ToolExecutionOutcome {
-  return {
-    status: "completed",
-    result: {
-      content: [{ type: "text", text }],
-      details: {},
-      ...(isError ? { isError: true } : {}),
-    },
-  };
+function completedResult(stdout: string, code = 0, stderr = ""): ExecResult {
+  return { stdout, stderr, code, killed: false };
 }
 
-function failedOutcome(error: unknown): ToolExecutionOutcome {
-  return { status: "failed", error };
-}
-
-function abortedOutcome(): ToolExecutionOutcome {
-  return { status: "aborted", reason: new Error("cancelled") };
-}
-
-type TmuxKeywordResponse = () => ToolExecutionOutcome | Promise<ToolExecutionOutcome>;
+type TmuxKeywordResponse = () => ExecResult | Promise<ExecResult>;
 
 class FakeTmuxServer {
   readonly commands: string[] = [];
@@ -87,7 +72,7 @@ class FakeTmuxServer {
         );
       return completedResult("");
     }
-    return completedResult(`unexpected tmux keyword: ${keyword}`, true);
+    return completedResult(`unexpected tmux keyword: ${keyword}`, 1);
   };
 
   private verifiedFieldsLine(): string {
@@ -301,26 +286,13 @@ describe("detectManagedPane", () => {
     const candidate = await createDedicatedCandidate();
     try {
       const failed = new FakeTmuxServer(
-        { "display-message": () => failedOutcome(new Error("worker rejected")) },
+        { "display-message": () => Promise.reject(new Error("worker rejected")) },
         candidate.socketPath,
       );
       assert.deepEqual(await detectManagedPane(failed.run, candidate.env), {
         status: "failed",
         message: "worker rejected",
       });
-
-      const absent = new FakeTmuxServer(
-        {
-          "display-message": () => failedOutcome(new Error("No active background Bash API")),
-        },
-        candidate.socketPath,
-      );
-      const absentDetection = await detectManagedPane(absent.run, candidate.env);
-      assert.equal(absentDetection.status, "failed");
-      assert.match(
-        absentDetection.status === "failed" ? absentDetection.message : "",
-        /No active background Bash API/,
-      );
     } finally {
       await candidate.cleanup();
     }
@@ -330,7 +302,7 @@ describe("detectManagedPane", () => {
     const candidate = await createDedicatedCandidate();
     try {
       const server = new FakeTmuxServer(
-        { "display-message": () => completedResult("no such server", true) },
+        { "display-message": () => completedResult("", 1, "no such server") },
         candidate.socketPath,
       );
       assert.deepEqual(await detectManagedPane(server.run, candidate.env), {
@@ -342,14 +314,17 @@ describe("detectManagedPane", () => {
     }
   });
 
-  it("returns an aborted result when the verification command is aborted", async () => {
+  it("treats a killed verification command as a failure", async () => {
     const candidate = await createDedicatedCandidate();
     try {
       const server = new FakeTmuxServer(
-        { "display-message": () => abortedOutcome() },
+        { "display-message": () => ({ ...completedResult("", 1, "interrupted"), killed: true }) },
         candidate.socketPath,
       );
-      assert.deepEqual(await detectManagedPane(server.run, candidate.env), { status: "aborted" });
+      assert.deepEqual(await detectManagedPane(server.run, candidate.env), {
+        status: "failed",
+        message: "Process was interrupted or timed out",
+      });
     } finally {
       await candidate.cleanup();
     }
@@ -369,15 +344,13 @@ describe("publishState", () => {
     });
   }
   for (const [outcome, expected] of [
-    [completedResult("cannot set", true), { status: "failed", message: "cannot set" }],
-    [failedOutcome(new Error("rejected")), { status: "failed", message: "rejected" }],
+    [completedResult("", 1, "cannot set"), { status: "failed", message: "cannot set" }],
     [
-      { status: "unavailable", error: new Error("receiver stopped") },
-      { status: "failed", message: "receiver stopped" },
+      { ...completedResult("", 1, "interrupted"), killed: true },
+      { status: "failed", message: "Process was interrupted or timed out" },
     ],
-    [abortedOutcome(), { status: "aborted" }],
   ] as const) {
-    it(`propagates ${outcome.status} without another command`, async () => {
+    it("propagates process failure without another command", async () => {
       const server = new FakeTmuxServer({ state: () => outcome });
       assert.deepEqual(await publishState(server.run, verifiedBinding, "s1", "running"), expected);
       assert.equal(server.commands.length, 1);
@@ -396,9 +369,9 @@ describe("unsetStateOption", () => {
     assert.equal(server.paneOptionOf("%0"), undefined);
   });
 
-  it("returns distinct results for non-zero exits, execution failures, and aborts", async () => {
+  it("returns a failure for a non-zero process exit", async () => {
     const failed = new FakeTmuxServer({
-      state: () => completedResult("cannot unset option", true),
+      state: () => completedResult("", 1, "cannot unset option"),
     });
     assert.deepEqual(await unsetStateOption(failed.run, verifiedBinding, "s1"), {
       status: "failed",
@@ -406,18 +379,11 @@ describe("unsetStateOption", () => {
     });
 
     const thrown = new FakeTmuxServer({
-      state: () => failedOutcome(new Error("no receiver")),
+      state: () => Promise.reject(new Error("process spawn failed")),
     });
     assert.deepEqual(await unsetStateOption(thrown.run, verifiedBinding, "s1"), {
       status: "failed",
-      message: "no receiver",
-    });
-
-    const aborted = new FakeTmuxServer({
-      state: () => abortedOutcome(),
-    });
-    assert.deepEqual(await unsetStateOption(aborted.run, verifiedBinding, "s1"), {
-      status: "aborted",
+      message: "process spawn failed",
     });
   });
 });
@@ -446,16 +412,9 @@ describe("pane publication failure boundaries", () => {
     }
   });
 
-  it("treats a nonzero structured exit code as failure even without isError", async () => {
+  it("treats a nonzero process exit code as failure", async () => {
     const server = new FakeTmuxServer({
-      state: () => ({
-        status: "completed",
-        result: {
-          content: [{ type: "text", text: "nonzero" }],
-          details: {},
-          structuredContent: { exit_code: 1 },
-        },
-      }),
+      state: () => completedResult("", 1, "nonzero"),
     });
     assert.deepEqual(await publishState(server.run, verifiedBinding, "s1", "running"), {
       status: "failed",
@@ -468,12 +427,11 @@ describe("pane publication failure boundaries", () => {
     const server = new FakeTmuxServer(
       {
         "display-message": () => ({
-          status: "completed",
-          result: {
-            content: [{ type: "text", text: "partial output" }],
-            details: {},
-            structuredContent: { truncated: true },
-          },
+          stdout: "partial output",
+          stderr: "",
+          code: 1,
+          killed: false,
+          truncated: true,
         }),
       },
       candidate.socketPath,
@@ -481,7 +439,7 @@ describe("pane publication failure boundaries", () => {
     try {
       assert.deepEqual(await detectManagedPane(server.run, candidate.env), {
         status: "failed",
-        message: "Bash output was truncated",
+        message: "Process output was truncated",
       });
     } finally {
       await candidate.cleanup();

@@ -3,10 +3,12 @@ import { join } from "node:path";
 import type {
   AgentToolResult,
   ExtensionAPI,
-  ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { quote } from "shell-quote";
+type BashResponse = Awaited<
+  ReturnType<import("@earendil-works/pi-coding-agent").ExtensionToolContext["executeTool"]>
+>;
 import { Type, type Static } from "typebox";
 
 const parameters = Type.Object({
@@ -28,7 +30,6 @@ const parameters = Type.Object({
 });
 
 type Input = Static<typeof parameters>;
-type BashOutcome = Awaited<ReturnType<ExtensionToolContext["executeTool"]>>;
 const outputSchema = Type.Object({
   status: Type.Union([Type.Literal("complete"), Type.Literal("incomplete"), Type.Literal("error")]),
   action: parameters.properties.action,
@@ -85,9 +86,9 @@ function cliArguments(input: Input): string[] {
 
 function cliResult(
   action: Input["action"],
-  outcome: BashOutcome,
+  outcome: BashResponse,
   signal?: AbortSignal,
-): AgentToolResult<{ bash: BashOutcome["result"] }> {
+): AgentToolResult<{ bash: BashResponse["result"] }> {
   const bash = outcome.result;
   const envelope = bash.structuredContent as
     | { output?: unknown; truncated?: boolean; exit_code?: number }

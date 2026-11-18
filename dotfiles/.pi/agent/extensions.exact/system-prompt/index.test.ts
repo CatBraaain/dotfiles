@@ -20,11 +20,11 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SystemMessage, Tool } from "@earendil-works/pi-ai";
 import {
   ExtensionRunner,
+  type ExtensionAPI,
   type BuildSystemPromptOptions,
   type Extension,
   type NormalizedBuildSystemPromptOptions,
 } from "@earendil-works/pi-coding-agent";
-import { registerBackgroundBash } from "../tools/background-bash.ts";
 import YAML from "yaml";
 import systemPromptExtension, {
   assembleHeadContent,
@@ -79,6 +79,13 @@ interface CapturedRegistration {
 /** Capture the handlers, shortcuts, and commands the factory registers. */
 function captureRegistration(
   templatePath = () => "/system-prompt-tests/no-template/SYSTEM_PROMPT.yaml",
+  exec: ExtensionAPI["exec"] = async () => ({
+    stdout: "",
+    stderr: "",
+    code: 0,
+    killed: false,
+    truncated: false,
+  }),
 ): CapturedRegistration {
   // Run-level tests pin the baseline (template-free) prompt behavior. The
   // deployed ~/.agents/SYSTEM_PROMPT.yaml owns every required section and
@@ -102,6 +109,7 @@ function captureRegistration(
       registerCommand(name: string, options: CommandRegistration["options"]) {
         commands.push({ name, options });
       },
+      exec,
     } as never,
     { templatePath },
   );
@@ -611,7 +619,6 @@ describe("canonical template sections in assembleHeadContent", () => {
 describe("sent prompt snapshots", () => {
   function fixture() {
     mkdirSync("/tmp/work/dotfiles", { recursive: true });
-    const registration = captureRegistration();
     const sessionId = randomUUID();
     const notifications: string[] = [];
     const ctx = {
@@ -623,14 +630,10 @@ describe("sent prompt snapshots", () => {
     };
     const opened: string[] = [];
     const path = `/tmp/${sessionId}_system_prompt.md`;
-    const dispose = registerBackgroundBash(
-      ctx,
-      async () => {
-        opened.push(readFileSync(path, "utf8"));
-        return { content: [], details: undefined, structuredContent: { exit_code: 0 } };
-      },
-      () => {},
-    );
+    const registration = captureRegistration(undefined, async () => {
+      opened.push(readFileSync(path, "utf8"));
+      return { stdout: "", stderr: "", code: 0, killed: false, truncated: false };
+    });
     async function dispatch(name: string, event = {}, context: unknown = ctx) {
       let result: any;
       for (const handler of registration.handlers.get(name) ?? [])
@@ -644,7 +647,6 @@ describe("sent prompt snapshots", () => {
       await registration.commands[0]!.options.handler("", context);
     }
     function close() {
-      dispose();
       rmSync(path, { force: true });
     }
     return { ...registration, ctx, notifications, opened, path, dispatch, send, open, close };

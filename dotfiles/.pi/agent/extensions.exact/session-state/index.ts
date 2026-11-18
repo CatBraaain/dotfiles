@@ -3,13 +3,8 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExecResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { subagentSessionDir } from "../agents/index.ts";
-import {
-  requestBackgroundBash,
-  type BackgroundBashContext,
-  type TrackedBackgroundBashOutcome,
-} from "../tools/background-bash.ts";
 import {
   detectManagedPane,
   publishState,
@@ -20,7 +15,7 @@ import {
   type SessionState,
 } from "./tmux.ts";
 
-const TMUX_COMMAND_TIMEOUT_S = 1;
+const TMUX_COMMAND_TIMEOUT_MS = 1_000;
 const LOCK_RETRY_INTERVAL_MS = 50;
 const RECOVERY_RETRY_INTERVAL_MS = 1_000;
 const MAX_NOTIFICATION_LENGTH = 200;
@@ -45,7 +40,13 @@ const publicationProcess = (shared[PUBLICATION_PROCESS_KEY] ??= { queue: Promise
 const PROBE_TAG = "DEBUG-pistateprobe-20261115";
 
 function probe(kind: string, fields: Record<string, unknown> = {}): void {
-  const record = { tag: PROBE_TAG, ts: new Date().toISOString(), pid: process.pid, kind, ...fields };
+  const record = {
+    tag: PROBE_TAG,
+    ts: new Date().toISOString(),
+    pid: process.pid,
+    kind,
+    ...fields,
+  };
   try {
     appendFileSync(
       process.env.PI_STATE_PROBE_LOG ?? "/tmp/work/dotfiles/state-probe/events.jsonl",
@@ -89,7 +90,7 @@ interface PublicationGeneration {
   title: string | null;
   sessionId: string;
   run: BashRunner;
-  lastOutcome: () => TrackedBackgroundBashOutcome | undefined;
+  lastFailure: () => unknown;
   environment: Pick<NodeJS.ProcessEnv, "XDG_RUNTIME_DIR" | "TMUX" | "TMUX_PANE">;
   notify: (message: string) => void;
 }
@@ -169,7 +170,7 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
     isAgentRunActive = false;
     isWaitingForApproval = false;
     if (isSubagentSession(ctx)) return;
-    const context = captureBashContext(ctx);
+    const sessionId = ctx.sessionManager.getSessionId();
     const controller = new AbortController();
     publicationProcess.controller = controller;
     const environment = {
@@ -177,7 +178,7 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
       TMUX: process.env.TMUX,
       TMUX_PANE: process.env.TMUX_PANE,
     };
-    const runner = makeBashRunner(context);
+    const runner = makeProcessRunner(pi, sessionId);
     generation = {
       controller,
       initializationStarted: false,
@@ -186,7 +187,7 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
       sessionId: ctx.sessionManager.getSessionId(),
       title: ctx.sessionManager.getSessionName() ?? null,
       run: runner.run,
-      lastOutcome: runner.lastOutcome,
+      lastFailure: runner.lastFailure,
       environment,
       notify: makeNotifier(ctx),
     };
@@ -209,7 +210,6 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
         probe("pane-detection", { ...identityFields(), status: detection.status });
         if (detection.status === "failed")
           gen.notify(`cannot confirm managed tmux pane: ${detection.message}`);
-        if (detection.status === "aborted") gen.notify("managed tmux pane check was interrupted");
         return;
       }
     });
@@ -296,16 +296,13 @@ async function recoveryRetry(
   gen: PublicationGeneration,
   operation: string,
 ): Promise<"proceed" | "retry" | "aborted"> {
-  const raw = gen.lastOutcome();
-  if (!raw || raw.status === "completed") return "proceed";
+  const failure = gen.lastFailure();
+  if (failure === undefined) return "proceed";
   if (!gen.recoveryNotified) {
     gen.recoveryNotified = true;
-    const reason = raw.status === "aborted" ? raw.reason : raw.error;
-    gen.notify(
-      `${operation} interrupted (${raw.status}): ${errorMessage(reason)}; retrying automatically`,
-    );
+    gen.notify(`${operation} interrupted: ${errorMessage(failure)}; retrying automatically`);
   }
-  if (!(await executionSettledOrAborted(gen, raw.executionSettled))) return "aborted";
+  if (!(await waitForPriorExecution(gen))) return "aborted";
   return (await waitToRetry(gen, RECOVERY_RETRY_INTERVAL_MS)) ? "retry" : "aborted";
 }
 
@@ -346,70 +343,51 @@ function executionSettledOrAborted(
   });
 }
 
-function makeBashRunner(context: BackgroundBashContext): {
+function makeProcessRunner(
+  pi: Pick<ExtensionAPI, "exec">,
+  sessionId: string,
+): {
   run: BashRunner;
-  lastOutcome: () => TrackedBackgroundBashOutcome | undefined;
+  lastFailure: () => unknown;
 } {
-  const sessionId = context.sessionManager?.getSessionId();
-  let executionSequence = 0;
-  let lastOutcome: TrackedBackgroundBashOutcome | undefined;
-  async function run(command: string): Promise<TrackedBackgroundBashOutcome> {
-    const execId = ++executionSequence;
-    const requestedAt = Date.now();
-    probe("bg-request", { sessionId, execId, command });
+  let failure: unknown;
+  let sequence = 0;
+  async function run(command: string): Promise<ExecResult> {
+    const execId = ++sequence;
+    probe("process-request", { sessionId, execId, command });
     const completion = Promise.withResolvers<void>();
     const execution: ExecutionBoundary = { settled: false, promise: completion.promise };
     publicationProcess.execution = execution;
-    const outcome = await requestBackgroundBash({
-      id: "session-state-tmux",
-      params: { command, timeout: TMUX_COMMAND_TIMEOUT_S },
-      context,
-    });
-    const outcomeAt = Date.now();
-    probe("bg-outcome", {
-      sessionId,
-      execId,
-      status: outcome.status,
-      elapsedMs: outcomeAt - requestedAt,
-    });
-    outcome.executionSettled.then(() => {
+    failure = undefined;
+    try {
+      const result = await pi.exec("bash", ["-c", command], { timeout: TMUX_COMMAND_TIMEOUT_MS });
+      if (result.killed || ("truncated" in result && result.truncated === true))
+        failure = new Error(
+          result.killed ? "Process interrupted or timed out" : "Process output truncated",
+        );
+      return result;
+    } catch (error) {
+      failure = error;
+      throw error;
+    } finally {
       execution.settled = true;
       completion.resolve();
-      probe("bg-settled", {
-        sessionId,
-        execId,
-        settledAfterOutcomeMs: Date.now() - outcomeAt,
-      });
-    });
-    lastOutcome = outcome;
-    return outcome;
+      probe("process-settled", { sessionId, execId });
+    }
   }
-  function getLastOutcome(): TrackedBackgroundBashOutcome | undefined {
-    return lastOutcome;
+  function lastFailure(): unknown {
+    return failure;
   }
-  return { run, lastOutcome: getLastOutcome };
-}
-
-function captureBashContext(ctx: ExtensionContext): BackgroundBashContext {
-  const sessionId = ctx.sessionManager.getSessionId();
-  const sessionFile = ctx.sessionManager.getSessionFile();
-  return {
-    modelRegistry: ctx.modelRegistry,
-    model: ctx.model,
-    thinkingLevel: ctx.thinkingLevel,
-    sessionManager: { getSessionId: () => sessionId, getSessionFile: () => sessionFile },
-  };
+  return { run, lastFailure };
 }
 
 function reportPublicationOutcome(gen: PublicationGeneration, outcome: PublicationOutcome): void {
   if (outcome.status === "failed") gen.notify(`cannot publish session state: ${outcome.message}`);
-  if (outcome.status === "aborted") gen.notify("session state publication was interrupted");
 }
 
 function reportCleanupOutcome(gen: PublicationGeneration, outcome: PublicationOutcome): void {
   if (outcome.status === "failed")
     gen.notify(`cannot clear session state option: ${outcome.message}`);
-  if (outcome.status === "aborted") gen.notify("session state cleanup was interrupted");
   if (outcome.status === "busy")
     gen.notify("cannot clear session state option: pi-mux lock is busy");
 }

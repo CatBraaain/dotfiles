@@ -29,11 +29,7 @@ export async function executeGuardedTool(
   let approval: PathApproval | undefined;
   let commandApproved = false;
   if (toolName === "bash") {
-    commandApproved = await guardrail.authorizeCommand(
-      params.command as string,
-      context,
-      request.approvalMode,
-    );
+    commandApproved = await guardrail.authorizeCommand(params.command as string, context);
   } else {
     const path = params.path as string;
     if (toolName !== "write") await guardrail.authorizePath("read", path, context);
@@ -46,6 +42,7 @@ export async function executeGuardedTool(
     toolName === "read"
       ? await imageMimeType(params.path as string, guardrail, runner, request)
       : null;
+  if (typeof detectedMimeType === "object" && detectedMimeType !== null) return detectedMimeType;
   const result =
     toolName === "read" && isVisionImageFile(params.path as string, detectedMimeType)
       ? await readImage(params.path as string, detectedMimeType, runner, request)
@@ -105,7 +102,6 @@ export type GuardedToolContext = Pick<ExtensionContext, "hasUI" | "model" | "thi
 export type GuardedToolRequest = {
   id: string;
   toolName: string;
-  approvalMode?: "prompt" | "existing-only";
   params: Record<string, unknown>;
   executor?: { entrypoint: string };
   signal?: AbortSignal;
@@ -144,28 +140,45 @@ async function imageMimeType(
   guardrail: Guardrail,
   runner: SandboxRunner,
   request: GuardedToolRequest,
-): Promise<string | null> {
+): Promise<string | null | AgentToolResult<unknown>> {
   if (typeof request.context?.executeTool !== "function")
     throw new Error("Image detection requires the registered bash tool via context.executeTool");
   const fileArgs = ["file", "-E", "--dereference", "--brief", "--mime-type", "--", path];
-  await guardrail.authorizeCommand(quote(fileArgs), request.context, request.approvalMode);
+  await guardrail.authorizeCommand(quote(fileArgs), request.context);
   request.signal?.throwIfAborted();
   const outcome = await request.context.executeTool(
     "bash",
-    { command: quote(["bwrap", ...runner.buildArgs("fs"), ...fileArgs]) },
+    {
+      command: quote(["bwrap", ...runner.buildArgs("fs"), ...fileArgs]),
+    },
     { signal: request.signal },
   );
-  request.signal?.throwIfAborted();
   const output = outcome.result.content
     .filter((part) => part.type === "text")
     .map((part) => part.text)
     .join("\n")
     .trim();
-  if (outcome.isError || outcome.result.isError)
-    throw new Error(`Image detection failed for ${path}: ${output}`);
+  if (request.signal?.aborted || outcome.isError || outcome.result.isError)
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Image detection failed for ${path}: ${request.signal?.aborted ? String(request.signal.reason) : output}`,
+        },
+      ],
+      isError: true,
+      details: {
+        bash: outcome,
+        ...(request.signal?.aborted ? { reason: request.signal.reason } : {}),
+      },
+    };
   const mimeType = output.split(/\r?\n/, 1)[0]?.trim() || null;
   if (mimeType !== null && !/^[\w.+-]+\/[\w.+-]+$/.test(mimeType))
-    throw new Error(`Invalid image detection response for ${path}: ${output}`);
+    return {
+      content: [{ type: "text", text: `Invalid image detection response for ${path}: ${output}` }],
+      isError: true,
+      details: { bash: outcome },
+    };
   return mimeType;
 }
 

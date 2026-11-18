@@ -13,7 +13,6 @@ import {
   type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { registerBackgroundBash } from "../tools/background-bash.ts";
 import { getWorkspaces, WORKSPACES_ENTRY_TYPE } from "./metadata.ts";
 import sessionMetadataExtension from "./index.ts";
 
@@ -139,19 +138,28 @@ async function createHarness(persist = true) {
     };
   }
 
-  const disposeReceiver = registerBackgroundBash(
-    context(),
-    async (request) => {
-      queries.push(request.params.command);
-      await beforeQuery?.();
-      const outcome = shell(request.params.command);
-      if (outcome.isError) throw new Error(outcome.result.content[0]!.text);
-      return outcome.result;
-    },
-    () => {},
-  );
-  cleanup.push(disposeReceiver);
+  let execError: Error | undefined;
   const pi = {
+    async exec(command: string, args: string[], options: { cwd: string }) {
+      if (execError) throw execError;
+      if (command !== "bash" || args[0] !== "-c")
+        throw new Error(`Unexpected process command: ${command} ${args.join(" ")}`);
+      queries.push(args[1]!);
+      await beforeQuery?.();
+      const output = spawnSync(command, args, {
+        cwd: options.cwd,
+        env: gitEnvironment,
+        encoding: "utf8",
+      });
+      if (output.error) throw output.error;
+      return {
+        stdout: output.stdout,
+        stderr: output.stderr,
+        code: output.status ?? 1,
+        killed: output.signal !== null,
+        truncated: false,
+      };
+    },
     events,
     on(name: string, handler: Handler) {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
@@ -256,9 +264,11 @@ async function createHarness(persist = true) {
     bash,
     shell,
     explicit,
-    disposeReceiver,
     setBeforeQuery(callback: (() => Promise<void>) | undefined) {
       beforeQuery = callback;
+    },
+    setExecError(error: Error) {
+      execError = error;
     },
     setAppendError(error: Error) {
       appendError = error;
@@ -708,12 +718,11 @@ describe("session metadata extension", () => {
   it("rejects an explicit Git query failure with the requested target and reason", async () => {
     const h = await createHarness();
     const before = readFileSync(h.manager.getSessionFile()!);
-    await assert.rejects(h.explicit("register", h.directory), (error: unknown) => {
-      assert.ok(error instanceof Error);
-      assert.ok(error.message.includes(h.directory));
-      assert.match(error.message, /Git worktree query failed.*not a git repository/s);
-      return true;
-    });
+    const result = await h.explicit("register", h.directory);
+    assert.equal(result.isError, true);
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    assert.ok(text.includes(h.directory));
+    assert.match(text, /Git worktree query failed.*not a git repository/s);
     assert.deepEqual(getWorkspaces(h.manager), []);
     assert.deepEqual(readFileSync(h.manager.getSessionFile()!), before);
     assert.equal(h.messages.length, 0);
@@ -787,14 +796,14 @@ describe("session metadata extension", () => {
     assert.doesNotMatch(String(h.messages[0]![0].content), /metadata updated/);
   });
 
-  it("fails automatic tracking visibly when the authorized Bash receiver is absent", async () => {
+  it("automatically tracks worktrees through pi.exec without a background Bash registration", async () => {
     const h = await createHarness();
-    h.disposeReceiver();
-    const path = join(h.directory, "unobserved");
-    const result = await h.bash(quote(["git", "worktree", "add", "-b", "unobserved", path]));
+    const path = join(h.directory, "unregistered");
+    const result = await h.bash(quote(["git", "worktree", "add", "-b", "unregistered", path]));
     assert.equal(result.outcome.isError, false);
-    assert.deepEqual(getWorkspaces(h.manager), []);
-    assert.match(String(h.messages[0]![0].content), /No active background Bash API/);
+    assert.deepEqual(getWorkspaces(h.manager), [path]);
+    assert.ok(h.queries.length > 0);
+    assert.equal(h.messages.length, 1);
   });
 
   it("stays silent when the worktree observer cannot parse the command", async () => {
@@ -904,9 +913,9 @@ describe("session metadata extension", () => {
     assert.equal(component.render(10000).join("\n").trim(), String(message.content));
   });
 
-  it("renders a short failure notification without the full error body", async () => {
+  it("reports automatic process failures and renders a short failure notification", async () => {
     const h = await createHarness();
-    h.disposeReceiver();
+    h.setExecError(new Error("Fixture process failed"));
     await h.bash(
       quote(["git", "worktree", "add", "--detach", join(h.directory, "failure"), "HEAD"]),
     );
@@ -917,8 +926,8 @@ describe("session metadata extension", () => {
     const component = renderer({ ...message, role: "custom", timestamp: 1 }, options, theme)!;
     const rendered = component.render(100).join("\n").trim();
     assert.equal(rendered, "Worktree metadata update failed");
-    assert.doesNotMatch(rendered, /No active background Bash API/);
-    assert.match(String(message.content), /No active background Bash API/);
+    assert.doesNotMatch(rendered, /Fixture process failed/);
+    assert.match(String(message.content), /Fixture process failed/);
   });
 
   it("renders a compact TUI notice while keeping the full model-facing update", async () => {
@@ -936,5 +945,64 @@ describe("session metadata extension", () => {
     const component = renderer({ ...message, role: "custom", timestamp: 1 }, options, theme)!;
     assert.equal(component.render(100).join("\n").trim(), "Worktree metadata updated (1 change)");
     assert.match(String(message.content), new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+});
+
+describe("public metadata Bash diagnostics", () => {
+  for (const mode of ["outer", "inner", "cancel"] as const)
+    it(`retains received ${mode} response at the registered tool`, async () => {
+      const h = await createHarness();
+      const controller = new AbortController();
+      const reason = new Error("metadata cancelled");
+      const response = {
+        toolCall: { type: "toolCall" as const, id: "nested", name: "bash", arguments: {} },
+        isError: mode === "outer",
+        result: {
+          content: [{ type: "text" as const, text: "Git refused" }],
+          isError: mode === "inner",
+          details: { source: "original" },
+          structuredContent: { output: "Git refused", exit_code: 2, truncated: false },
+        },
+      };
+      const ctx = {
+        cwd: h.root,
+        sessionManager: h.manager,
+        async executeTool() {
+          if (mode === "cancel") controller.abort(reason);
+          return response;
+        },
+      } as unknown as ExtensionToolContext;
+      const result = await h.tools
+        .get("session_worktree")!
+        .execute(
+          "failure",
+          { action: "register", path: h.root },
+          controller.signal,
+          undefined,
+          ctx,
+        );
+      assert.equal(result.isError, true);
+      const details = result.details as { bash: typeof response; reason: unknown };
+      assert.strictEqual(details.bash.result, response.result);
+      assert.equal(details.bash.isError, response.isError);
+      if (mode === "cancel") assert.strictEqual(details.reason, reason);
+      assert.deepEqual(getWorkspaces(h.manager), []);
+    });
+  it("propagates SDK exception identity from the registered tool", async () => {
+    const h = await createHarness();
+    const failure = new Error("Expired SDK context");
+    const ctx = {
+      cwd: h.root,
+      sessionManager: h.manager,
+      async executeTool() {
+        throw failure;
+      },
+    } as unknown as ExtensionToolContext;
+    await assert.rejects(
+      h.tools
+        .get("session_worktree")!
+        .execute("throw", { action: "register", path: h.root }, undefined, undefined, ctx),
+      (error) => error === failure,
+    );
   });
 });

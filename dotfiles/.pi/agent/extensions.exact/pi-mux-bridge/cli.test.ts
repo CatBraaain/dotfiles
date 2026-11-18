@@ -80,11 +80,6 @@ async function createFixture() {
     join(home, ".config/tmux/pi.conf"),
   );
   symlinkSync(resolve(EXTENSION_DIR, "../../node_modules"), join(agent, "node_modules"));
-  mkdirSync(join(agent, "extensions/tools"));
-  symlinkSync(
-    resolve(EXTENSION_DIR, "../tools/background-bash.ts"),
-    join(agent, "extensions/tools/background-bash.ts"),
-  );
   const guardrails = join(root, "guardrails.yaml");
   writeFileSync(
     guardrails,

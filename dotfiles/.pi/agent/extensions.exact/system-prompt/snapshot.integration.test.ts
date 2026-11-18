@@ -9,7 +9,6 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { fakeProvider, memoryRuntime } from "../recontext/test-fixture.ts";
-import { registerBackgroundBash } from "../tools/background-bash.ts";
 import systemPromptExtension from "./index.ts";
 
 type ForceMode = "normal" | "matching" | "opaque" | "later";
@@ -34,6 +33,8 @@ async function fixture(force: ForceMode) {
   const payloads: unknown[] = [];
   const errors: unknown[] = [];
   const notices: string[] = [];
+  const path = `/tmp/${manager.getSessionId()}_system_prompt.md`;
+  const opened: string[] = [];
   const loader = new DefaultResourceLoader({
     cwd: directory,
     agentDir: directory,
@@ -62,8 +63,17 @@ async function fixture(force: ForceMode) {
           }));
         }
       },
-      (pi) =>
-        systemPromptExtension(pi, { templatePath: () => `${directory}/missing-template.yaml` }),
+      (pi) => {
+        const extensionApi = Object.assign(Object.create(pi), {
+          exec: async () => {
+            opened.push(readFileSync(path, "utf8"));
+            return { stdout: "", stderr: "", code: 0, killed: false, truncated: false };
+          },
+        });
+        systemPromptExtension(extensionApi, {
+          templatePath: () => `${directory}/missing-template.yaml`,
+        });
+      },
       (pi) => {
         pi.on("context_with_system", (event) => ({
           messages: event.messages.map((message, index) =>
@@ -98,22 +108,11 @@ async function fixture(force: ForceMode) {
     onError: (error) => errors.push(error),
   });
   const context = session.extensionRunner.createCommandContext();
-  const path = `/tmp/${manager.getSessionId()}_system_prompt.md`;
-  const opened: string[] = [];
-  const unregister = registerBackgroundBash(
-    context,
-    async () => {
-      opened.push(readFileSync(path, "utf8"));
-      return { content: [], details: undefined, structuredContent: { exit_code: 0 } };
-    },
-    () => {},
-  );
   async function open() {
     const command = session.extensionRunner.getCommand("view-system-prompt")!;
     await command.handler("", context);
   }
   function close() {
-    unregister();
     session.dispose();
     rmSync(path, { force: true });
     rmSync(directory, { recursive: true, force: true });

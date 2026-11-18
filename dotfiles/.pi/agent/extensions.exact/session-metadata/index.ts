@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   type ExtensionAPI,
   type ExtensionContext,
@@ -8,7 +7,6 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { requestBackgroundBash } from "../tools/background-bash.ts";
 import { getWorkspaces, saveWorkspaces, type WorkspaceUpdate } from "./metadata.ts";
 import {
   applyWorkspaceChanges,
@@ -60,26 +58,35 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
 
   function backgroundRunner(ctx: ExtensionContext): BashQuery {
     return async function run(command) {
-      const outcome = await requestBackgroundBash({
-        id: `session-metadata:${randomUUID()}`,
-        params: { command },
-        context: ctx,
-        signal: ctx.signal,
-      });
-      if (outcome.status !== "completed") {
-        const reason = outcome.status === "aborted" ? outcome.reason : outcome.error;
-        throw new Error(`Git worktree query failed: ${errorMessage(reason)}`);
-      }
-      return queryText(outcome.result);
+      ctx.signal?.throwIfAborted();
+      const result = await pi.exec("bash", ["-c", command], { cwd: ctx.cwd, signal: ctx.signal });
+      ctx.signal?.throwIfAborted();
+      if (
+        result.code !== 0 ||
+        result.killed ||
+        ("truncated" in result && result.truncated === true)
+      )
+        throw new Error(`Git worktree query failed: ${result.stderr || result.stdout}`);
+      return result.stdout;
     };
   }
 
   function toolRunner(ctx: ExtensionToolContext, signal: AbortSignal | undefined): BashQuery {
     return async function run(command) {
-      const outcome = await ctx.executeTool("bash", { command }, { signal });
-      if (outcome.isError)
-        throw new Error(`Git worktree query failed: ${queryText(outcome.result)}`);
-      return queryText(outcome.result);
+      signal?.throwIfAborted();
+      const outcome = await ctx
+        .executeTool("bash", { command }, { signal })
+        .catch((error: unknown) => {
+          throw new QueryFailure(error);
+        });
+      try {
+        signal?.throwIfAborted();
+        const text = queryText(outcome.result);
+        if (outcome.isError) throw new Error(`Git worktree query failed: ${text}`);
+        return text;
+      } catch (error) {
+        throw new QueryFailure(error, outcome);
+      }
     };
   }
 
@@ -229,6 +236,19 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
           details: update,
         };
       }).catch((error: unknown) => {
+        if (error instanceof QueryFailure && error.response)
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: `Session worktree ${params.action} failed for ${params.path}: ${errorMessage(error.reason)}`,
+              },
+            ],
+            isError: true,
+            details: { bash: error.response, reason: error.reason },
+          };
+        if (error instanceof QueryFailure) throw error.reason;
+        if (signal?.aborted) throw signal.reason;
         throw new Error(
           `Session worktree ${params.action} failed for ${params.path}: ${errorMessage(error)}`,
           { cause: error },
@@ -276,6 +296,15 @@ function notifyUpdated(
     },
     { deliverAs: "steer" },
   );
+}
+
+class QueryFailure extends Error {
+  constructor(
+    readonly reason: unknown,
+    readonly response?: Awaited<ReturnType<ExtensionToolContext["executeTool"]>>,
+  ) {
+    super(errorMessage(reason));
+  }
 }
 
 function queryText(result: {
