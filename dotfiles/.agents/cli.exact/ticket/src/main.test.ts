@@ -507,7 +507,7 @@ describe("ticket CLI", () => {
       const home = await ticketHome();
       const id = create(home, "before needle after");
       const result = run(home, ["edit", "--project", "demo", "--", id, "needle", replacement]);
-      const expectedContent = `---\nstatus: open\n---\n# before ${replacement} after\n`;
+      const expectedContent = `---\nstatus: open\n---\n\n# before ${replacement} after\n`;
       assert.equal(result.code, 0, result.stderr);
       assert.equal(await readFile(ticketPath(home, "demo", id), "utf8"), expectedContent);
     },
@@ -517,7 +517,7 @@ describe("ticket CLI", () => {
     const home = await ticketHome();
     const id = create(home, "before replace after");
     const result = run(home, ["edit", id, "replace", "", "--project", "demo"]);
-    const expectedContent = "---\nstatus: open\n---\n# before  after\n";
+    const expectedContent = "---\nstatus: open\n---\n\n# before  after\n";
     assert.equal(result.code, 0, result.stderr);
     assert.equal(await readFile(ticketPath(home, "demo", id), "utf8"), expectedContent);
   });
