@@ -27,6 +27,7 @@
  */
 #define _POSIX_C_SOURCE 200809L
 #include <ctype.h>
+#include <errno.h>
 #include <rime_api.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -67,13 +68,7 @@ static int g_checks = 0;
 static int g_failures = 0;
 static int g_verbose = 0;
 
-/* ---- snapshot recording ----
- *
- * Records are appended while scenarios run, then per scenario either written
- * to <snapshot-dir>/<scenario>.txt (--update) or compared against it. Only
- * non-destructive reads (get_context, get_status, get_option) are added on
- * top of the existing test flow; get_commit output is recorded at the points
- * where tests already consume it. */
+/* ---- snapshot recording ---- */
 static const char* g_snapshot_dir = NULL;
 static int g_snapshot_update = 0;
 static const char* g_snapshot_update_target = ""; /* "", "all", or a scenario name */
@@ -112,10 +107,17 @@ static void free_lines(void) {
 }
 
 /* Render text as a YAML scalar: plain when safe, double-quoted otherwise. */
-static const char* yaml_scalar(char* out, size_t size, const char* text) {
+static const char* yaml_scalar(char* out, size_t size, const char* text, Bool flow) {
     size_t length = strlen(text);
     int plain = length > 0 && text[length - 1] != ' ' && text[length - 1] != ':';
     if (plain && strchr("-?:,[]{}#&*!|>'\"%@`", text[0])) plain = 0;
+    if (plain && flow && strpbrk(text, ",[]{}\"'")) plain = 0;
+    if (plain && (isspace((unsigned char)text[0]) || strchr("+.~0123456789", text[0]))) plain = 0;
+    static const char* typed_values[] = {
+        "null", "Null", "NULL", "true", "True", "TRUE", "false", "False", "FALSE",
+    };
+    for (size_t i = 0; plain && i < sizeof(typed_values) / sizeof(typed_values[0]); ++i)
+        if (strcmp(text, typed_values[i]) == 0) plain = 0;
     for (size_t i = 0; plain && i < length; ++i) {
         unsigned char c = (unsigned char)text[i];
         if (c < 0x20) plain = 0;
@@ -177,23 +179,11 @@ static const char* key_display_name(int keycode) {
     return fallback;
 }
 
-/* ---- row-table snapshot layout ----
- *
- * A scenario is recorded as a table: one row per (input, key prefix),
- * holding the state right after that key. Reads like the SPEC operation
- * table. Row fields:
- *   入力  typed romaji followed by pressed keys in {BRACES}, e.g.
- *         kanji{SPACE}{SPACE}. Modifier variants: {SHIFT+L}, {L:UP},
- *         {CTRL+ZENKAKU_HANKAKU}.
- *   表示  text as it appears on screen: the highlighted candidate while the
- *         menu is open, the composition otherwise. (librime's own buffer
- *         keeps the reading while the menu is open; fcitx5 draws the
- *         preview, so the row records what a user sees.)
- *   候補  candidate window contents (omitted when the window is hidden)
- *   確定  committed text, attached to the row of the state it appeared in */
+/* ---- row-table snapshot layout ---- */
 static char g_input[1024];
 static char g_keys[2048];
 static int g_row_open = 0;
+static int g_snapshot_selected_clause = 0;
 
 static void append_input(const char* ascii) {
     size_t used = strlen(g_input);
@@ -239,6 +229,7 @@ static void begin_scenario(const char* name) {
     g_input[0] = '\0';
     g_keys[0] = '\0';
     g_row_open = 0;
+    g_snapshot_selected_clause = strcmp(name, "bunsetsu_selection_and_preview") == 0;
     add_line("scenario: %s", name);
     add_line("cases:");
 }
@@ -249,36 +240,80 @@ static void close_case(void) {
     g_row_open = 0;
 }
 
-/* Emit one table row: input + key prefix -> observed state. */
-static void emit_row(void) {
-    char scalar[16384];
-    char label[4096];
-    if (!g_row_open) {
-        if (g_line_count > 0 && g_lines[g_line_count - 1][0] != '\0' &&
-            strcmp(g_lines[g_line_count - 1], "cases:") != 0)
-            add_line("");
-        g_row_open = 1;
+static Bool snapshot_display(const char* encoded_clauses, char* out, size_t size,
+                             unsigned long* selected) {
+    if (!isdigit((unsigned char)*encoded_clauses) || size < 3) return False;
+    char* end;
+    errno = 0;
+    *selected = strtoul(encoded_clauses, &end, 10);
+    if (errno || *selected == 0 || *end != ';') return False;
+    const char* cursor = end + 1;
+    const char* limit = cursor + strlen(cursor);
+    size_t used = 1, count = 0;
+    out[0] = '[';
+    do {
+        if (!isdigit((unsigned char)*cursor)) return False;
+        char* end;
+        errno = 0;
+        unsigned long length = strtoul(cursor, &end, 10);
+        if (errno || *end != ':' || length == 0 || length > (size_t)(limit - end - 1))
+            return False;
+        const char* text = end + 1;
+        if (((unsigned char)*text & 0xc0) == 0x80) return False;
+        char clause[4096], scalar[16384];
+        if (length >= sizeof(clause)) return False;
+        memcpy(clause, text, length);
+        clause[length] = '\0';
+        yaml_scalar(scalar, sizeof(scalar), clause, count > 0 || text + length < limit);
+        size_t scalar_length = strlen(scalar);
+        size_t separator_length = count > 0 ? 2 : 0;
+        if (scalar_length + separator_length + 2 > size - used) return False;
+        if (count > 0) {
+            memcpy(out + used, ", ", 2);
+            used += 2;
+        }
+        memcpy(out + used, scalar, scalar_length);
+        used += scalar_length;
+        ++count;
+        cursor = text + length;
+    } while (cursor < limit);
+    if (*selected > count) return False;
+    if (count == 1) {
+        memmove(out, out + 1, used - 1);
+        out[used - 1] = '\0';
+    } else {
+        out[used++] = ']';
+        out[used] = '\0';
     }
-    snprintf(label, sizeof(label), "%s%s", g_input, g_keys);
-    add_line("  - 入力: %s", yaml_scalar(scalar, sizeof(scalar), label));
+    return True;
+}
 
-    if (!session) return;
-    RIME_STRUCT(RimeContext, context);
-    if (!rime->get_context(session, &context)) return;
-    const char* preedit = context.composition.preedit;
-    const char* preview = context.commit_text_preview;
+static void record_context(const RimeContext* context, const char* encoded_clauses) {
+    char scalar[16384], display[16384];
+    const char* preedit = context->composition.preedit;
+    const char* preview = context->commit_text_preview;
     const char* shown = (preview && *preview) ? preview : preedit;
-    if (shown && *shown)
-        add_line("    表示: %s", yaml_scalar(scalar, sizeof(scalar), shown));
-    if (context.menu.num_candidates > 0) {
+    if (*encoded_clauses) {
+        unsigned long selected;
+        if (!snapshot_display(encoded_clauses, display, sizeof(display), &selected)) {
+            ++g_failures;
+            fprintf(stderr, "FAIL: invalid snapshot clause data\n");
+            return;
+        }
+        add_line("    display: %s", display);
+        if (g_snapshot_selected_clause) add_line("    selected_clause: %lu", selected);
+    } else if (shown && *shown) {
+        add_line("    display: %s", yaml_scalar(scalar, sizeof(scalar), shown, False));
+    }
+    if (context->menu.num_candidates > 0) {
         size_t used = 0;
         scalar[used++] = '[';
-        for (int i = 0; i < context.menu.num_candidates; ++i) {
+        for (int i = 0; i < context->menu.num_candidates; ++i) {
             char item[512];
             yaml_scalar(item, sizeof(item),
-                        context.menu.candidates[i].text
-                            ? context.menu.candidates[i].text
-                            : "");
+                        context->menu.candidates[i].text
+                            ? context->menu.candidates[i].text
+                            : "", True);
             size_t length = strlen(item);
             if (used + length + 4 >= sizeof(scalar)) break;
             if (i > 0) {
@@ -290,14 +325,42 @@ static void emit_row(void) {
         }
         scalar[used++] = ']';
         scalar[used] = '\0';
-        add_line("    候補: %s", scalar);
+        add_line("    candidates: %s", scalar);
+    }
+}
+
+static void emit_row(const char* name) {
+    char scalar[16384];
+    char label[4096];
+    if (!g_row_open) {
+        if (g_line_count > 0 && g_lines[g_line_count - 1][0] != '\0' &&
+            strcmp(g_lines[g_line_count - 1], "cases:") != 0)
+            add_line("");
+        g_row_open = 1;
+    }
+    snprintf(label, sizeof(label), "%s%s", g_input, g_keys);
+    if (name) add_line("  - name: %s", yaml_scalar(scalar, sizeof(scalar), name, False));
+    add_line("%sinput: %s", name ? "    " : "  - ", yaml_scalar(scalar, sizeof(scalar), label, False));
+
+    if (!session) return;
+    RIME_STRUCT(RimeContext, context);
+    if (!rime->get_context(session, &context)) return;
+    char layout[4096] = "";
+    rime->set_property(session, "_rime_snapshot_observe", "");
+    if (!rime->get_property(session, "_rime_snapshot_clauses", layout, sizeof(layout)) ||
+        layout[sizeof(layout) - 1] != '\0') {
+        ++g_failures;
+        fprintf(stderr, "FAIL: snapshot observer property is unavailable or too long\n");
+    } else {
+        if (strcmp(layout, "none") == 0) layout[0] = '\0';
+        record_context(&context, layout);
     }
     rime->free_context(&context);
 }
 
-static void record_key(int keycode, int modifier) {
+static void record_key(int keycode, int modifier, const char* name) {
     append_key(key_display_name(keycode), modifier);
-    emit_row();
+    emit_row(name);
 }
 
 static void check(Bool condition, const char* description) {
@@ -312,19 +375,23 @@ static void process_key_silent(int keycode, int modifier) {
     rime->process_key(session, keycode, modifier);
 }
 
-static void press(int keycode) {
+static void press_named(int keycode, const char* name) {
     process_key_silent(keycode, 0);
-    record_key(keycode, 0);
+    record_key(keycode, 0, name);
+}
+
+static void press(int keycode) {
+    press_named(keycode, NULL);
 }
 
 static void press_shift(int keycode) {
     process_key_silent(keycode, 1);
-    record_key(keycode, 1);
+    record_key(keycode, 1, NULL);
 }
 
 static void press_modifier(int keycode, int modifier) {
     process_key_silent(keycode, modifier);
-    record_key(keycode, modifier);
+    record_key(keycode, modifier, NULL);
 }
 
 static void type_text(const char* ascii) {
@@ -334,7 +401,7 @@ static void type_text(const char* ascii) {
     }
     RIME_STRUCT(RimeContext, context);
     if (rime->get_context(session, &context)) {
-        if (context.menu.num_candidates > 0) emit_row();
+        if (context.menu.num_candidates > 0) emit_row(NULL);
         rime->free_context(&context);
     }
 }
@@ -364,9 +431,9 @@ static Bool take_commit(char* buffer, size_t size) {
         result = True;
         char scalar[4096];
         if (g_row_open) {
-            add_line("    確定: %s", yaml_scalar(scalar, sizeof(scalar), buffer));
+            add_line("    commit: %s", yaml_scalar(scalar, sizeof(scalar), buffer, False));
         } else {
-            add_line("  - 確定: %s", yaml_scalar(scalar, sizeof(scalar), buffer));
+            add_line("  - commit: %s", yaml_scalar(scalar, sizeof(scalar), buffer, False));
             g_row_open = 1;
         }
     }
@@ -547,8 +614,8 @@ static void test_n_run_correction(void) {
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         fresh_session();
         type_text(cases[i].input);
-        press(kSpace);
-        press(kSpace);
+        press_named(kSpace, "第一候補への変換");
+        press_named(kSpace, "次候補での一覧表示");
         RIME_STRUCT(RimeContext, context);
         Bool found = False;
         if (rime->get_context(session, &context)) {
@@ -1413,8 +1480,8 @@ static void test_nonkana_remainder_solo_conversion(void) {
     /* The kanji-only remainder of a selected candidate converts solo. */
     fresh_session();
     type_text("kanji");
-    press(kSpace);
-    press(kSpace);
+    press_named(kSpace, "第一候補への変換");
+    press_named(kSpace, "削除する候補の選択");
     char selected[256] = "";
     if (current_menu(&context)) {
         int highlighted = context.menu.highlighted_candidate_index;
@@ -1431,11 +1498,11 @@ static void test_nonkana_remainder_solo_conversion(void) {
     check(selected[0] != '\0' &&
               without_last_utf8_character(selected, remainder, sizeof(remainder)),
           "the selected candidate must contain a character to delete");
-    press(kBackSpace);
+    press_named(kBackSpace, "漢字候補の末尾削除");
     check(composing(), "Backspace must keep the composition open");
     check(preedit_equals(remainder),
           "Backspace must delete the selected candidate's last character");
-    press(kSpace);
+    press_named(kSpace, "漢字残部の単独変換");
     check(composing(), "Space must convert the remainder");
     check(preedit_equals(remainder),
           "the solo conversion must keep the remainder as its preedit");
@@ -1446,7 +1513,7 @@ static void test_nonkana_remainder_solo_conversion(void) {
     } else {
         check(False, "the solo conversion must keep a queryable context");
     }
-    press(kSpace);
+    press_named(kSpace, "漢字残部の単一候補");
     if (current_menu(&context)) {
         check(context.menu.num_candidates == 1 &&
                   context.menu.candidates[0].text &&
@@ -1458,7 +1525,7 @@ static void test_nonkana_remainder_solo_conversion(void) {
     }
     check(!take_commit(commit, sizeof(commit)),
           "opening the solo list must not commit");
-    press(kReturn);
+    press_named(kReturn, "漢字残部の確定");
     check(take_commit(commit, sizeof(commit)) &&
               strcmp(commit, remainder) == 0,
           "Enter must commit the remainder");
@@ -1466,7 +1533,7 @@ static void test_nonkana_remainder_solo_conversion(void) {
     /* The katakana remainder of the Henkan candidate follows the same path. */
     fresh_session();
     type_text("kana");
-    press(kHenkan);
+    press_named(kHenkan, "カタカナへの変換");
     char henkan_candidate[256] = "";
     if (current_menu(&context)) {
         if (context.composition.preedit) {
@@ -1482,11 +1549,11 @@ static void test_nonkana_remainder_solo_conversion(void) {
               without_last_utf8_character(henkan_candidate, kana_remainder,
                                           sizeof(kana_remainder)),
           "the Henkan candidate must contain a character to delete");
-    press(kBackSpace);
+    press_named(kBackSpace, "カタカナの末尾削除");
     check(composing(), "Backspace must keep the Henkan composition open");
     check(preedit_equals(kana_remainder),
           "Backspace must delete the Henkan candidate's last character");
-    press(kSpace);
+    press_named(kSpace, "カタカナ残部の単独変換");
     check(composing(), "Space must convert the katakana remainder");
     check(preedit_equals(kana_remainder),
           "the katakana solo conversion must keep the remainder as its preedit");
@@ -1497,7 +1564,7 @@ static void test_nonkana_remainder_solo_conversion(void) {
     } else {
         check(False, "the katakana solo conversion must keep a queryable context");
     }
-    press(kSpace);
+    press_named(kSpace, "カタカナ残部の単一候補");
     if (current_menu(&context)) {
         check(context.menu.num_candidates == 1 &&
                   context.menu.candidates[0].text &&
@@ -1509,7 +1576,7 @@ static void test_nonkana_remainder_solo_conversion(void) {
     }
     check(!take_commit(commit, sizeof(commit)),
           "opening the katakana solo list must not commit");
-    press(kReturn);
+    press_named(kReturn, "カタカナ残部の確定");
     check(take_commit(commit, sizeof(commit)) &&
               strcmp(commit, kana_remainder) == 0,
           "Enter must commit the katakana remainder");
@@ -3155,7 +3222,7 @@ static void test_first_space_converts_to_first_candidate(void) {
         printf("  after typing:\n");
         print_context();
     }
-    press(kSpace);
+    press_named(kSpace, "第一候補への変換");
     check(composing(), "first Space must keep the composition open");
     RIME_STRUCT(RimeContext, context);
     check(current_menu(&context) && context.menu.num_candidates == 0,
@@ -3164,7 +3231,7 @@ static void test_first_space_converts_to_first_candidate(void) {
     char commit[256];
     check(!take_commit(commit, sizeof(commit)), "first Space must not commit");
 
-    press(kSpace);
+    press_named(kSpace, "次候補での一覧表示");
     char first[256] = "";
     if (!rime->get_context(session, &context)) {
         check(False, "second Space must keep a queryable context");
@@ -3186,16 +3253,16 @@ static void test_first_space_converts_to_first_candidate(void) {
     check(first[0] != '\0', "the menu must hold a first candidate");
     check(selected[0] != '\0', "the menu must hold the selected candidate");
 
-    press(kEscape);
+    press_named(kEscape, "選択を保った一覧終了");
     check(preedit_equals(selected),
           "Esc after the reveal must keep the conversion to the selected candidate");
-    press(kEscape);
+    press_named(kEscape, "読みへの取消");
     check(preedit_equals("かんじ"),
           "the second Esc must return to the hiragana reading");
-    press(kSpace);
+    press_named(kSpace, "第一候補への再変換");
     check(preedit_equals(first),
           "the first Space must show the first candidate inline");
-    press(kReturn);
+    press_named(kReturn, "第一候補の確定");
     check(take_commit(commit, sizeof(commit)) && strcmp(commit, first) == 0,
           "Enter must commit the first candidate shown inline");
     check(!composing(), "the commit must end the composition");
@@ -4555,27 +4622,27 @@ static void test_bunsetsu_reopened_contextual_order(void) {
 static void test_bunsetsu_selection_and_preview(void) {
     fresh_session();
     type_text("kyouhashoukou");
-    press(kSpace);
+    press_named(kSpace, "全文節の第一候補への変換");
     check(preedit_equals("今日は商工") && preview_equals("今日は商工"),
           "first Space must display all clauses' first candidates");
     check(menu_hidden(), "automatic conversion must keep the list hidden");
-    press(kLeft);
+    press_named(kLeft, "左端での移動停止");
     RIME_STRUCT(RimeContext, context);
     if (current_menu(&context)) {
         check(context.composition.sel_start == 0 && context.composition.sel_end == 9,
               "Left at the first clause must retain the first display interval");
         rime->free_context(&context);
     }
-    press(kRight);
-    press(kRight);
+    press_named(kRight, "次の文節への移動");
+    press_named(kRight, "右端での移動停止");
     if (current_menu(&context)) {
         check(context.composition.sel_start == 9 && context.composition.sel_end == 15,
               "Right must select the last clause and stop at the end");
         rime->free_context(&context);
     }
     check(preview_equals("今日は商工"), "clause selection must preserve every candidate");
-    press(kLeft);
-    press(kSpace);
+    press_named(kLeft, "前の文節への移動");
+    press_named(kSpace, "選択文節の候補一覧");
     check(active_reading_equals("きょうは"), "the first clause must read きょうは");
     if (current_menu(&context)) {
         check(context.menu.num_candidates > 0 && !menu_has_candidate(&context, "商工"),
@@ -4591,34 +4658,34 @@ static void test_bunsetsu_selection_and_preview(void) {
      * and returns to the hidden conversion, keeping every clause's choice
      * (dotfiles/rime/SPEC.md, "文節移動"). The following Down is unspecified
      * and stays untested. */
-    press(kTab);
-    press(kRight);
+    press_named(kTab, "選択文節の一覧展開");
+    press_named(kRight, "文節移動による一覧終了");
     check(menu_hidden() && !option("_kagiroi_expand_candidates") && preview_equals(expected),
           "Right with an expanded list must close it, clear the expansion and keep every choice");
 
-    press(kSpace);
+    press_named(kSpace, "移動先の次候補表示");
     check(active_reading_equals("しょうこう"), "Space after the move must open the moved clause's list");
     selected_text(current, sizeof(current));
     check(strcmp(current, "商工") != 0,
           "Space must advance the moved clause from its kept first candidate");
     snprintf(expected, sizeof(expected), "%s%s", left, current);
     check(preview_equals(expected), "the moved clause's list must update only its own preview");
-    press(kDown);
+    press_named(kDown, "選択文節だけの候補変更");
     selected_text(right, sizeof(right));
     snprintf(expected, sizeof(expected), "%s%s", left, right);
     check(preview_equals(expected), "Down must leave the first clause's choice unchanged");
 
     /* Moves while hidden keep the conversion hidden and the choices fixed. */
-    press(kEscape);
+    press_named(kEscape, "選択を保った一覧終了");
     check(menu_hidden() && preview_equals(expected), "Esc must close the list without changing either choice");
-    press(kLeft);
-    press(kRight);
+    press_named(kLeft, "一覧非表示で前の文節へ");
+    press_named(kRight, "一覧非表示で次の文節へ");
     check(menu_hidden() && preview_equals(expected),
           "hidden moves must keep the list closed and every clause's choice");
 
     /* A move blocked at the last clause keeps the open list, page, selection
      * and state; Space after closing advances from the kept choice. */
-    press(kSpace);
+    press_named(kSpace, "保持した選択から次候補へ");
     char kept[256], kept_preview[1024];
     selected_text(kept, sizeof(kept));
     preview_text(kept_preview, sizeof(kept_preview));
@@ -4629,7 +4696,7 @@ static void test_bunsetsu_selection_and_preview(void) {
     int kept_page = context.menu.page_no;
     int kept_highlight = context.menu.highlighted_candidate_index;
     rime->free_context(&context);
-    press(kRight);
+    press_named(kRight, "一覧表示中の右端停止");
     if (!current_menu(&context)) {
         check(False, "a blocked move must keep the list open");
         return;
@@ -4638,14 +4705,14 @@ static void test_bunsetsu_selection_and_preview(void) {
           "Right blocked at the last clause must keep the open list and selection");
     rime->free_context(&context);
     check(preview_equals(kept_preview), "a blocked move must keep every clause's choice");
-    press(kEscape);
+    press_named(kEscape, "選択を保った一覧終了");
     check(menu_hidden() && preview_equals(kept_preview), "Esc must close the list keeping the choices");
-    press(kSpace);
+    press_named(kSpace, "一覧終了後の次候補選択");
     selected_text(selected, sizeof(selected));
     check(strcmp(selected, kept) != 0,
           "Space after closing the list must advance from the kept choice, not restart");
-    press(kEscape);
-    press(kEscape);
+    press_named(kEscape, "選択を保った一覧終了");
+    press_named(kEscape, "全文節の読みへの取消");
     check(preedit_equals("きょうはしょうこう") && menu_hidden(), "the next Esc must restore the entire reading");
     check(!take_commit(commit, sizeof(commit)), "selection and Esc must keep all clauses uncommitted");
 }
@@ -5012,9 +5079,9 @@ static void test_bunsetsu_contexts_keep_separate_choices(void) {
 static void test_reading_candidates_include_other_parts_of_speech(void) {
     fresh_session();
     type_text("ka");
-    press(kSpace);
-    press(kSpace);
-    press(kTab);
+    press_named(kSpace, "読み「か」の変換");
+    press_named(kSpace, "読み「か」の候補一覧");
+    press_named(kTab, "読み「か」の一覧展開");
     check(full_list_index_of("化") >= 0,
           "the original noun-suffix candidate must remain selectable");
     check(full_list_index_of("果") >= 0,
@@ -5025,10 +5092,10 @@ static void test_reading_candidates_include_other_parts_of_speech(void) {
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
         fresh_session();
         type_text(cases[i].input);
-        press(kHenkan);
-        press(kSpace);
-        press(kSpace);
-        press(kTab);
+        press_named(kHenkan, "読み全体のカタカナ変換");
+        press_named(kSpace, "通常候補への切替");
+        press_named(kSpace, "次候補での一覧表示");
+        press_named(kTab, "読み全体の一覧展開");
         check(full_list_index_of(cases[i].text) >= 0,
               "a whole-reading clause must expose alternative POS and multiword dictionary routes");
     }

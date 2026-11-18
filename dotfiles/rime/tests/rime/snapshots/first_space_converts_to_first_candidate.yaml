@@ -1,0 +1,21 @@
+scenario: first_space_converts_to_first_candidate
+cases:
+  - name: 第一候補への変換
+    input: kanji{SPACE}
+    display: 感じ
+  - name: 次候補での一覧表示
+    input: kanji{SPACE}{SPACE}
+    display: 漢字
+    candidates: [感じ, 漢字, 幹事, かんじ, 監事, カンジ, 寛治, 幹二, 莞爾, 完治]
+  - name: 選択を保った一覧終了
+    input: kanji{SPACE}{SPACE}{ESCAPE}
+    display: 漢字
+  - name: 読みへの取消
+    input: kanji{SPACE}{SPACE}{ESCAPE}{ESCAPE}
+    display: かんじ
+  - name: 第一候補への再変換
+    input: kanji{SPACE}{SPACE}{ESCAPE}{ESCAPE}{SPACE}
+    display: 感じ
+  - name: 第一候補の確定
+    input: kanji{SPACE}{SPACE}{ESCAPE}{ESCAPE}{SPACE}{RETURN}
+    commit: 感じ

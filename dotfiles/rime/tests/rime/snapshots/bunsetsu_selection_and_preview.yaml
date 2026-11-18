@@ -1,0 +1,84 @@
+scenario: bunsetsu_selection_and_preview
+cases:
+  - name: 全文節の第一候補への変換
+    input: kyouhashoukou{SPACE}
+    display: [今日は, 商工]
+    selected_clause: 1
+  - name: 左端での移動停止
+    input: kyouhashoukou{SPACE}{LEFT}
+    display: [今日は, 商工]
+    selected_clause: 1
+  - name: 次の文節への移動
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}
+    display: [今日は, 商工]
+    selected_clause: 2
+  - name: 右端での移動停止
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}
+    display: [今日は, 商工]
+    selected_clause: 2
+  - name: 前の文節への移動
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}
+    display: [今日は, 商工]
+    selected_clause: 1
+  - name: 選択文節の候補一覧
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}{SPACE}
+    display: [きょうは, 商工]
+    selected_clause: 1
+    candidates: [今日は, きょうは, 教は, 強は, 凶は, 鏡は, 経は, 教派, 卿は, 橋は]
+  - name: 選択文節の一覧展開
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}{SPACE}{TAB}
+    display: [きょうは, 商工]
+    selected_clause: 1
+    candidates: [今日は, きょうは, 教は, 強は, 凶は, 鏡は, 経は, 教派, 卿は, 橋は, 協は, 興は, 境は, 供は, 狂は, 京は, キョウは, 恭は, 杏は, 香は, 挟は, 喬は, 姜は, 匡は, 饗は, 共葉, 許は, 共は, 共歯, 今日葉]
+  - name: 文節移動による一覧終了
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}{SPACE}{TAB}{RIGHT}
+    display: [きょうは, 商工]
+    selected_clause: 2
+  - name: 移動先の次候補表示
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}{SPACE}{TAB}{RIGHT}{SPACE}
+    display: [きょうは, 昇降]
+    selected_clause: 2
+    candidates: [商工, 昇降, 消耗, 将校, 症候, 焼香, 紹興, 小康, しょうこう, 彰晃]
+  - name: 選択文節だけの候補変更
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}{SPACE}{TAB}{RIGHT}{SPACE}{DOWN}
+    display: [きょうは, 消耗]
+    selected_clause: 2
+    candidates: [商工, 昇降, 消耗, 将校, 症候, 焼香, 紹興, 小康, しょうこう, 彰晃]
+  - name: 選択を保った一覧終了
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}{SPACE}{TAB}{RIGHT}{SPACE}{DOWN}{ESCAPE}
+    display: [きょうは, 消耗]
+    selected_clause: 2
+  - name: 一覧非表示で前の文節へ
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}{SPACE}{TAB}{RIGHT}{SPACE}{DOWN}{ESCAPE}{LEFT}
+    display: [きょうは, 消耗]
+    selected_clause: 1
+  - name: 一覧非表示で次の文節へ
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}{SPACE}{TAB}{RIGHT}{SPACE}{DOWN}{ESCAPE}{LEFT}{RIGHT}
+    display: [きょうは, 消耗]
+    selected_clause: 2
+  - name: 保持した選択から次候補へ
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}{SPACE}{TAB}{RIGHT}{SPACE}{DOWN}{ESCAPE}{LEFT}{RIGHT}{SPACE}
+    display: [きょうは, 将校]
+    selected_clause: 2
+    candidates: [商工, 昇降, 消耗, 将校, 症候, 焼香, 紹興, 小康, しょうこう, 彰晃]
+  - name: 一覧表示中の右端停止
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}{SPACE}{TAB}{RIGHT}{SPACE}{DOWN}{ESCAPE}{LEFT}{RIGHT}{SPACE}{RIGHT}
+    display: [きょうは, 将校]
+    selected_clause: 2
+    candidates: [商工, 昇降, 消耗, 将校, 症候, 焼香, 紹興, 小康, しょうこう, 彰晃]
+  - name: 選択を保った一覧終了
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}{SPACE}{TAB}{RIGHT}{SPACE}{DOWN}{ESCAPE}{LEFT}{RIGHT}{SPACE}{RIGHT}{ESCAPE}
+    display: [きょうは, 将校]
+    selected_clause: 2
+  - name: 一覧終了後の次候補選択
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}{SPACE}{TAB}{RIGHT}{SPACE}{DOWN}{ESCAPE}{LEFT}{RIGHT}{SPACE}{RIGHT}{ESCAPE}{SPACE}
+    display: [きょうは, 症候]
+    selected_clause: 2
+    candidates: [商工, 昇降, 消耗, 将校, 症候, 焼香, 紹興, 小康, しょうこう, 彰晃]
+  - name: 選択を保った一覧終了
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}{SPACE}{TAB}{RIGHT}{SPACE}{DOWN}{ESCAPE}{LEFT}{RIGHT}{SPACE}{RIGHT}{ESCAPE}{SPACE}{ESCAPE}
+    display: [きょうは, 症候]
+    selected_clause: 2
+  - name: 全文節の読みへの取消
+    input: kyouhashoukou{SPACE}{LEFT}{RIGHT}{RIGHT}{LEFT}{SPACE}{TAB}{RIGHT}{SPACE}{DOWN}{ESCAPE}{LEFT}{RIGHT}{SPACE}{RIGHT}{ESCAPE}{SPACE}{ESCAPE}{ESCAPE}
+    display: きょうはしょうこう

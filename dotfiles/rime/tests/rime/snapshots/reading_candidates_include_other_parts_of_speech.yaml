@@ -1,0 +1,43 @@
+scenario: reading_candidates_include_other_parts_of_speech
+cases:
+  - name: 読み「か」の変換
+    input: ka{SPACE}
+    display: 化
+  - name: 読み「か」の候補一覧
+    input: ka{SPACE}{SPACE}
+    display: か
+    candidates: [化, か, 家, 科, 課, 可, 禍, 下, 過, 夏]
+  - name: 読み「か」の一覧展開
+    input: ka{SPACE}{SPACE}{TAB}
+    display: か
+    candidates: [化, か, 家, 科, 課, 可, 禍, 下, 過, 夏, 火, 香, 歌, 蚊, 加, 日, 架, 価, 佳, 華, 賈, 何, 賀, 戈, 嫁, 借, 駈, 駆, 穫, 狩]
+
+  - name: 読み全体のカタカナ変換
+    input: igai{HENKAN}
+    display: イガイ
+  - name: 通常候補への切替
+    input: igai{HENKAN}{SPACE}
+    display: 以外
+  - name: 次候補での一覧表示
+    input: igai{HENKAN}{SPACE}{SPACE}
+    display: 意外
+    candidates: [以外, 意外, 遺骸, イガイ, 猪狩, 猪飼, 位街, 為我井, 伊貝, 位外]
+  - name: 読み全体の一覧展開
+    input: igai{HENKAN}{SPACE}{SPACE}{TAB}
+    display: 意外
+    candidates: [以外, 意外, 遺骸, イガイ, 猪狩, 猪飼, 位街, 為我井, 伊貝, 位外, い街, い買, 井貝, い外, 異外, 貽貝, 胃外, 亥飼, 位がい, 遺がい, いがい, 胃街, 医がい, 意街, 胃がい, 衣外, 伊賀井, 猪貝, 医街, 意がい]
+
+  - name: 読み全体のカタカナ変換
+    input: igaito{HENKAN}
+    display: イガイト
+  - name: 通常候補への切替
+    input: igaito{HENKAN}{SPACE}
+    display: 意外と
+  - name: 次候補での一覧表示
+    input: igaito{HENKAN}{SPACE}{SPACE}
+    display: 以外と
+    candidates: [意外と, 以外と, 遺骸と, イガイと, 以外都, 位街と, 以外戸, 以外斗, 猪狩と, 位外と]
+  - name: 読み全体の一覧展開
+    input: igaito{HENKAN}{SPACE}{SPACE}{TAB}
+    display: 以外と
+    candidates: [意外と, 以外と, 遺骸と, イガイと, 以外都, 位街と, 以外戸, 以外斗, 猪狩と, 位外と, い街と, い外と, 胃外と, 猪飼と, 異外と, 貽貝と, いがいと, 位が意図, 意外都, 以外途, 胃街と, 遺がいと, いが意図, 医が意図, 以外賭, 意街と, 意外戸, 胃が意図, 位がいと, 意外斗]

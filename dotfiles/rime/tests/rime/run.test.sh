@@ -6,6 +6,10 @@
 set -u
 
 run_sh="$(cd "$(dirname "$0")" && pwd)/run.sh"
+export REAL_BUN
+REAL_BUN="$(command -v bun)"
+export MANAGED_RIME_ROOT
+MANAGED_RIME_ROOT="$(cd "$(dirname "$run_sh")/../.." && pwd)"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/dotfiles-rime-test-self.XXXXXXXX")"
 cleanup() { rm -rf "$scratch"; }
 trap cleanup EXIT
@@ -35,6 +39,11 @@ for argument in "$@"; do
     prev="$argument"
 done
 [ -n "$out" ] || { echo "stub cc: no -o target" >&2; exit 1; }
+if [[ "$out" == */harness-format-test ]]; then
+    printf '#!/usr/bin/env bash\nexit 0\n' > "$out"
+    chmod +x "$out"
+    exit 0
+fi
 cat > "$out" <<'STUB_HARNESS'
 #!/usr/bin/env bash
 set -u
@@ -47,6 +56,18 @@ if compgen -G "$user"/*.userdb >/dev/null; then
 fi
 [ -f "$user/default.custom.yaml" ] || { echo "managed files missing" >&2; exit 3; }
 [ -f "$user/kagiroi_dotfiles_zenkaku.dict.yaml" ] || { echo "generated dict missing" >&2; exit 3; }
+[ -f "$user/lua/rime_snapshot.lua" ] || { echo "snapshot observer missing" >&2; exit 3; }
+for file in "$MANAGED_RIME_ROOT"/lua/kagiroi/*.lua; do
+    cmp "$file" "$user/lua/kagiroi/$(basename "$file")" || exit 3
+done
+"$REAL_BUN" --eval '
+    import assert from "node:assert/strict";
+    import { readFileSync } from "node:fs";
+    const original = Bun.YAML.parse(readFileSync(process.env.MANAGED_RIME_ROOT + "/kagiroi.custom.yaml", "utf8"));
+    const observed = Bun.YAML.parse(readFileSync(process.argv.at(-1), "utf8"));
+    assert.equal(observed.patch["engine/processors"].shift(), "lua_processor@*rime_snapshot");
+    assert.deepEqual(observed, original);
+' "$user/kagiroi.custom.yaml" || exit 3
 if [ -n "${FAKE_HARNESS_RELEASE:-}" ]; then
     waited=0
     until [ -e "$FAKE_HARNESS_RELEASE" ] || [ "$waited" -ge 300 ]; do
@@ -63,6 +84,7 @@ chmod +x "$scratch/fake-bin/cc"
 cat >"$scratch/fake-bin/bun" <<'STUB_BUN'
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "${1:-}" = "--eval" ]; then exec "$REAL_BUN" "$@"; fi
 out=""
 prev=""
 for argument in "$@"; do

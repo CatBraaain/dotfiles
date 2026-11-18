@@ -82,7 +82,19 @@ install -m 644 "$root"/default.custom.yaml "$root"/kagiroi.custom.yaml \
     "$root"/kagiroi_romaji.custom.yaml "$workspace/"
 bun "$root/zenkaku.build.ts" --output "$workspace/kagiroi_dotfiles_zenkaku.dict.yaml"
 install -m 644 "$root"/lua/kagiroi/*.lua "$workspace/lua/kagiroi/"
+install -m 644 "$root/tests/rime/snapshot.lua" "$workspace/lua/rime_snapshot.lua"
+bun --eval '
+    import { readFileSync, writeFileSync } from "node:fs";
+    const path = process.argv.at(-1);
+    const schema = Bun.YAML.parse(readFileSync(path, "utf8"));
+    schema.patch["engine/processors"].unshift("lua_processor@*rime_snapshot");
+    writeFileSync(path, Bun.YAML.stringify(schema));
+' "$workspace/kagiroi.custom.yaml"
 
+cc -std=c11 -O2 -o "$run/harness-format-test" "$root/tests/rime/harness.test.c" \
+    "${rime_cflags[@]}" "${rime_libs[@]}"
+"$run/harness-format-test"
+lua5.4 "$root/tests/rime/snapshot.test.lua" "$root/tests/rime/snapshot.lua"
 cc -std=c11 -O2 -o "$run/harness" "$root/tests/rime/harness.c" \
     "${rime_cflags[@]}" "${rime_libs[@]}"
 # Learning tests write userdb entries that shift candidate order; start every
