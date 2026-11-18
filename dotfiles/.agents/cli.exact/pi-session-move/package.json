@@ -1,0 +1,8 @@
+{
+  "name": "pi-session-move-cli",
+  "private": true,
+  "main": "./src/main.ts",
+  "scripts": {
+    "test": "bun test"
+  }
+}
