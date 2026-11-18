@@ -1,5 +1,11 @@
 import { _electron as electron, expect, test as baseTest } from "playwright/test";
-import type { ElectronApplication, Frame, Page } from "playwright/test";
+import type {
+  ElectronApplication,
+  Frame,
+  Page,
+  PlaywrightWorkerArgs,
+  TestInfo,
+} from "playwright/test";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -9,6 +15,7 @@ import {
   mkdtempSync,
   readFileSync,
   readlinkSync,
+  rmSync,
   statSync,
   symlinkSync,
   utimesSync,
@@ -29,6 +36,7 @@ const root = resolve(__dirname, "../..");
 const dotfiles = process.env.PI_REVIEW_DOTFILES ?? join(homedir(), "projects/dotfiles/dotfiles");
 const realPi = execFileSync("which", ["pi"], { encoding: "utf8" }).trim();
 const realTmux = execFileSync("which", ["tmux"], { encoding: "utf8" }).trim();
+const realFlock = execFileSync("which", ["flock"], { encoding: "utf8" }).trim();
 let compiledPiMux: string | undefined;
 const executablePath =
   process.env.PI_REVIEW_VSCODE ??
@@ -67,6 +75,8 @@ export interface Snapshot {
 export class VSCodeFixture {
   readonly directory = fixtureDirectory();
   readonly tmuxSocket = join(this.directory, "runtime/pi-tmux/server.sock");
+  private readonly tmuxLock = join(this.directory, "runtime/tmux.lock");
+  private readonly closedFile = join(this.directory, "runtime/closed");
   readonly env: Record<string, string> = {
     PATH: `${join(this.directory, "bin")}:${process.env.PATH ?? ""}`,
     NODE_PATH: join(homedir(), ".pi/agent/node_modules"),
@@ -95,7 +105,7 @@ export class VSCodeFixture {
   private traceStarted = false;
   private readonly projectDirectories = { A: "project-a", B: "worktree/project-b" };
 
-  constructor() {
+  prepare(): void {
     this.prepareRepositories();
     this.prepareSessions();
     this.prepareHost();
@@ -149,14 +159,19 @@ export class VSCodeFixture {
     await expect.poll(() => this.snapshot().hostPid).toBeGreaterThan(0);
   }
 
-  async close(tracePath: string): Promise<void> {
+  async close(tracePath?: string): Promise<void> {
+    write(this.closedFile, "closed\n");
     try {
-      if (this.app && this.traceStarted) await this.app.context().tracing.stop({ path: tracePath });
+      if (this.app && this.traceStarted) {
+        this.traceStarted = false;
+        await this.app.context().tracing.stop({ path: tracePath });
+      }
     } finally {
       try {
         if (this.app) await this.app.close();
       } finally {
         this.tmux(["kill-server"]);
+        rmSync(this.tmuxSocket, { force: true });
       }
     }
   }
@@ -488,9 +503,12 @@ export class VSCodeFixture {
   }
 
   tmux(args: string[]): string {
+    const stopping = args[0] === "kill-server";
+    const command = stopping ? realFlock : join(this.directory, "bin/tmux");
+    const prefix = stopping ? ["--exclusive", "--close", this.tmuxLock, realTmux, "-N"] : [];
     const result = spawnSync(
-      join(this.directory, "bin/tmux"),
-      ["-S", this.tmuxSocket, "-f", "/dev/null", ...args],
+      command,
+      [...prefix, "-S", this.tmuxSocket, "-f", "/dev/null", ...args],
       {
         encoding: "utf8",
         env: this.env,
@@ -621,7 +639,27 @@ export class VSCodeFixture {
     symlinkSync(realPi, join(this.directory, "bin/pi"));
     write(
       join(this.directory, "bin/tmux"),
-      `#!/bin/sh\nif [ "$1" != -S ] || [ "$2" != '${this.tmuxSocket}' ]; then\n  echo 'Fixture rejected non-isolated tmux command' >&2\n  exit 64\nfi\nexec '${realTmux}' "$@"\n`,
+      `#!/bin/sh
+if [ "$1" != -S ] || [ "$2" != '${this.tmuxSocket}' ]; then
+  echo 'Fixture rejected non-isolated tmux command' >&2
+  exit 64
+fi
+for arg do
+  case "$arg" in
+    start-server|start|new-session|new)
+      exec '${realFlock}' --exclusive --close '${this.tmuxLock}' /bin/sh -c '
+        if [ -e "$1" ]; then
+          echo "Fixture tmux environment is closed" >&2
+          exit 64
+        fi
+        shift
+        exec "$@"
+      ' sh '${this.closedFile}' '${realTmux}' "$@"
+      ;;
+  esac
+done
+exec '${realTmux}' -N "$@"
+`,
     );
     chmodSync(join(this.directory, "bin/tmux"), 0o700);
     copyFileSync(join(dotfiles, "tmux/pi.conf"), join(this.directory, "home/.config/tmux/pi.conf"));
@@ -741,79 +779,102 @@ function write(path: string, content: string): void {
 
 export const test = baseTest.extend<{ host: VSCodeFixture; fixedResponse: boolean }>({
   fixedResponse: [false, { option: true }],
-  host: async ({ playwright, fixedResponse }, use, testInfo) => {
-    void playwright;
-    const host = new VSCodeFixture();
-    const tracePath = testInfo.outputPath("electron-trace.zip");
-    try {
-      if (fixedResponse) {
-        host.responseProvider = await startFixedResponseProvider();
-        const settingsPath = join(host.directory, "agent/settings.json");
-        write(
-          settingsPath,
-          JSON.stringify({
-            ...JSON.parse(readFileSync(settingsPath, "utf8")),
-            defaultProvider: FIXTURE_PROVIDER,
-            defaultModel: FIXTURE_MODEL,
-          }),
-        );
-        write(
-          join(host.directory, "agent/models.json"),
-          JSON.stringify({
-            providers: {
-              [FIXTURE_PROVIDER]: {
-                baseUrl: host.responseProvider.baseUrl,
-                api: "openai-completions",
-                apiKey: "fixture-not-a-secret",
-                models: [{ id: FIXTURE_MODEL, contextWindow: 128000, maxTokens: 1024 }],
-              },
+  host: provideVSCodeFixture,
+});
+
+export async function provideVSCodeFixture(
+  {
+    playwright,
+    fixedResponse,
+  }: Pick<PlaywrightWorkerArgs, "playwright"> & { fixedResponse: boolean },
+  use: (host: VSCodeFixture) => Promise<void>,
+  testInfo: TestInfo,
+): Promise<void> {
+  void playwright;
+  const host = new VSCodeFixture();
+  let tracePath: string | undefined;
+  let failed = false;
+  try {
+    host.prepare();
+    tracePath = testInfo.outputPath("electron-trace.zip");
+    if (fixedResponse) {
+      host.responseProvider = await startFixedResponseProvider();
+      const settingsPath = join(host.directory, "agent/settings.json");
+      write(
+        settingsPath,
+        JSON.stringify({
+          ...JSON.parse(readFileSync(settingsPath, "utf8")),
+          defaultProvider: FIXTURE_PROVIDER,
+          defaultModel: FIXTURE_MODEL,
+        }),
+      );
+      write(
+        join(host.directory, "agent/models.json"),
+        JSON.stringify({
+          providers: {
+            [FIXTURE_PROVIDER]: {
+              baseUrl: host.responseProvider.baseUrl,
+              api: "openai-completions",
+              apiKey: "fixture-not-a-secret",
+              models: [{ id: FIXTURE_MODEL, contextWindow: 128000, maxTokens: 1024 }],
             },
-          }),
-        );
-      }
-      await host.launch();
-      await test.step("Check the A/B work folder paths and names", async () => {
-        const frame = await host.sessionFrame();
-        for (const key of ["A", "B"]) {
-          const expectedName = key === "A" ? "project-a" : "project-b";
-          const relativeDirectory = key === "A" ? expectedName : join("worktree", expectedName);
-          expect(host.sessions[key].cwd).toBe(join(host.directory, relativeDirectory));
-          await expect(
-            frame
-              .getByTitle(host.sessions[key].cwd, { exact: true })
-              .locator(".group-title")
-              .describe(`${key} work folder name`),
-          ).toHaveText(expectedName);
-        }
-      });
-      expect(host.tmux(["-V"]).trim()).toBe("tmux 3.8");
-      await use(host);
-    } finally {
-      await testInfo.attach("fixture and public API observation", {
-        body: JSON.stringify(
-          {
-            directory: host.directory,
-            piMux: JSON.parse(readFileSync(join(host.directory, "pi-mux-fixture.json"), "utf8")),
-            sessions: host.sessions,
-            snapshot: host.snapshot(),
           },
-          null,
-          2,
-        ),
-        contentType: "application/json",
-      });
-      try {
-        await host.close(tracePath);
-      } finally {
-        await host.responseProvider?.close();
+        }),
+      );
+    }
+    await host.launch();
+    await test.step("Check the A/B work folder paths and names", async () => {
+      const frame = await host.sessionFrame();
+      for (const key of ["A", "B"]) {
+        const expectedName = key === "A" ? "project-a" : "project-b";
+        const relativeDirectory = key === "A" ? expectedName : join("worktree", expectedName);
+        expect(host.sessions[key].cwd).toBe(join(host.directory, relativeDirectory));
+        await expect(
+          frame
+            .getByTitle(host.sessions[key].cwd, { exact: true })
+            .locator(".group-title")
+            .describe(`${key} work folder name`),
+        ).toHaveText(expectedName);
       }
-      if (existsSync(tracePath))
+    });
+    expect(host.tmux(["-V"]).trim()).toBe("tmux 3.8");
+    await use(host);
+  } catch (error) {
+    failed = true;
+    throw error;
+  } finally {
+    try {
+      try {
+        await testInfo.attach("fixture and public API observation", {
+          body: JSON.stringify(
+            {
+              directory: host.directory,
+              piMux: JSON.parse(readFileSync(join(host.directory, "pi-mux-fixture.json"), "utf8")),
+              sessions: host.sessions,
+              snapshot: host.snapshot(),
+            },
+            null,
+            2,
+          ),
+          contentType: "application/json",
+        });
+      } finally {
+        try {
+          await host.close(tracePath);
+        } finally {
+          await host.responseProvider?.close();
+        }
+      }
+      if (tracePath !== undefined && existsSync(tracePath))
         await testInfo.attach("trace", {
           path: tracePath,
           contentType: "application/zip",
         });
+    } catch (error) {
+      if (!failed) throw error;
+      console.error("Fixture teardown also failed:", error);
     }
-  },
-});
+  }
+}
 
 export { expect };
