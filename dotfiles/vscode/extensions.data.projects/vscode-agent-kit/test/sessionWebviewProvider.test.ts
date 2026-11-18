@@ -478,6 +478,73 @@ describe("SessionWebviewProvider", () => {
       expect(webview.postMessage.mock.lastCall?.[0].state.groups).toEqual([]);
     });
 
+    it("skips unchanged display projections while continuing to poll with 1500 saved sessions", async () => {
+      const { provider, mocks, history, webview, sentState } = await unreadFixture();
+      const saved = history.get(activeSessionId)!;
+      for (let index = history.size; index < 1500; index++) {
+        const id = `saved-${index}`;
+        history.set(id, { ...saved, id, file: join(root, `${id}.jsonl`) });
+      }
+      await provider.refresh();
+      const state = sentState();
+      expect(state.groups.flatMap(({ sessions }) => sessions)).toHaveLength(1500);
+      const project = vi.spyOn(sessionStore, "listSessionSnapshot");
+      mocks.list.mockClear();
+      mocks.history.mockClear();
+      webview.postMessage.mockClear();
+
+      for (let index = 0; index < 3; index++) await tick(provider);
+
+      expect(mocks.list).toHaveBeenCalledTimes(3);
+      expect(mocks.history).not.toHaveBeenCalled();
+      expect(project).not.toHaveBeenCalled();
+      expect(webview.postMessage).not.toHaveBeenCalled();
+    });
+
+    it("reprojects phase and unread changes once and then skips unchanged polls", async () => {
+      const { provider, phases, row } = await unreadFixture();
+      const project = vi.spyOn(sessionStore, "listSessionSnapshot");
+      phases.set(activeSessionId, "running");
+      await tick(provider);
+      expect(row()).toMatchObject({ state: "running", hasUnread: false });
+      expect(project).toHaveBeenCalledOnce();
+      await tick(provider);
+      expect(project).toHaveBeenCalledOnce();
+
+      phases.set(activeSessionId, "waiting-user");
+      await tick(provider);
+      expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+      expect(project).toHaveBeenCalledTimes(2);
+      await tick(provider);
+      expect(project).toHaveBeenCalledTimes(2);
+    });
+
+    it("publishes a changed display selection even when list and history are unchanged", async () => {
+      const { provider, registry, sentState } = await unreadFixture();
+      vi.spyOn(registry, "displayedSessionId", "get").mockReturnValue(activeSessionId);
+      await tick(provider);
+      expect(sentState().displayedSessionId).toBe(activeSessionId);
+      const project = vi.spyOn(sessionStore, "listSessionSnapshot");
+      await tick(provider);
+      expect(project).not.toHaveBeenCalled();
+    });
+
+    it("keeps an acknowledged completion read across unchanged polls", async () => {
+      const { provider, webview, phases, row } = await unreadFixture();
+      phases.set(activeSessionId, "running");
+      await tick(provider);
+      phases.set(activeSessionId, "waiting-user");
+      await tick(provider);
+      expect(row().hasUnread).toBe(true);
+
+      await webview.receive({ type: "openSession", sessionId: activeSessionId });
+      expect(row().hasUnread).toBe(false);
+      const project = vi.spyOn(sessionStore, "listSessionSnapshot");
+      await tick(provider);
+      expect(row().hasUnread).toBe(false);
+      expect(project).not.toHaveBeenCalled();
+    });
+
     it("does not requery unchanged history across list polling intervals", async () => {
       const { provider, mocks, phases, row } = await unreadFixture();
       mocks.history.mockClear();

@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { listSessionSnapshot, sessionFileExists, type SessionSummary } from "../sessionStore";
 import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
 import { DisplayRecoveryCancelledError, type TerminalRegistry } from "../terminalRegistry";
@@ -40,6 +41,14 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private temporarySessionIds = new Set<string>();
   private state: WebviewState | undefined;
   private postedStateJson: string | undefined;
+  private publishedSessions:
+    | {
+        workspaces: PiMuxWorkspace[];
+        history: PiMuxHistoryEntry[];
+        unreadIds: ReadonlySet<string>;
+        state: WebviewState;
+      }
+    | undefined;
   private runningSessionIds = new Set<string>();
   private runningObservations = new Map<string, symbol>();
   private unreadSessionIds = new Set<string>();
@@ -336,6 +345,17 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     const workspaces = this.latestWorkspaces;
     const history = this.historySnapshot;
+    const published = this.publishedSessions;
+    if (
+      published !== undefined &&
+      this.postedStateJson !== undefined &&
+      this.state === published.state &&
+      history === published.history &&
+      this.deps.registry.displayedSessionId === published.state.displayedSessionId &&
+      isDeepStrictEqual(workspaces, published.workspaces) &&
+      isDeepStrictEqual(this.unreadSessionIds, published.unreadIds)
+    )
+      return;
     const version = this.refreshVersion;
     const { sessions, registeredCwds, archivedIds } = await listSessionSnapshot(
       history,
@@ -351,7 +371,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
     this.archivedSessionIds = archivedIds;
-    this.postState({
+    const state: WebviewState = {
       groups: sessionViewGroups(sessions, {
         registeredCwds,
         archivedIds,
@@ -359,7 +379,14 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         unreadIds: this.unreadSessionIds,
       }),
       displayedSessionId: this.deps.registry.displayedSessionId,
-    });
+    };
+    this.postState(state);
+    this.publishedSessions = {
+      workspaces,
+      history,
+      unreadIds: new Set(this.unreadSessionIds),
+      state,
+    };
   }
 
   private reportAcquisitionError(error: unknown): void {
