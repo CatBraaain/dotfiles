@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as os from "node:os";
 import type * as vscode from "vscode";
@@ -86,6 +86,7 @@ describe("extension commands", () => {
     const context = {
       subscriptions: [],
       extensionUri: { fsPath: "/extension" },
+      globalStorageUri: { fsPath: join(root, "profile-storage") },
     } as unknown as vscode.ExtensionContext;
     activate(context);
     expect(api.registerCommand).toHaveBeenCalledWith(commandId, expect.any(Function));
@@ -94,6 +95,24 @@ describe("extension commands", () => {
     if (registration === undefined) throw new Error(`Command not registered: ${commandId}`);
     return registration[1] as () => Promise<void>;
   }
+
+  it("uses profile-wide storage files for the Sessions provider", async () => {
+    const directory = join(root, "profile-storage");
+    activate({
+      subscriptions: [],
+      extensionUri: { fsPath: "/extension" },
+      globalStorageUri: { fsPath: directory },
+    } as unknown as vscode.ExtensionContext);
+    const provider = api.registerWebviewViewProvider.mock.calls[0][1] as {
+      deps: ConstructorParameters<typeof SessionWebviewProvider>[0];
+    };
+    await provider.deps.workspaceStore.add("/project");
+    const files = await readdir(join(directory, "session-list-workspaces"));
+    expect(files).toHaveLength(1);
+    expect(await readFile(join(directory, "session-list-workspaces", files[0]), "utf8")).toBe(
+      "/project",
+    );
+  });
 
   it("does not register or contribute the removed tmux settings command", () => {
     register();
@@ -246,6 +265,7 @@ describe("extension commands", () => {
     const context = {
       subscriptions: [],
       extensionUri: { fsPath: "/extension" },
+      globalStorageUri: { fsPath: join(root, "profile-storage") },
     } as unknown as vscode.ExtensionContext;
     api.registerCommand.mockReturnValue({ dispose: vi.fn() });
     api.onDidCloseTerminal.mockReturnValue({ dispose: vi.fn() });

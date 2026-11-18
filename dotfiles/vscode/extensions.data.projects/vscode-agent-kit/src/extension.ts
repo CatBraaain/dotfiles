@@ -1,11 +1,12 @@
 import * as vscode from "vscode";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, relative } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 import { SessionLauncher } from "./launcher";
 import { EmptySessionPool } from "./emptySessionPool";
 import { resolveConfiguredSessionRoot } from "./paths";
 import { TerminalRegistry } from "./terminalRegistry";
 import { editorTerminals } from "./terminals";
+import { WorkspaceStore } from "./workspaceStore";
 import { SessionWebviewProvider, VIEW_ID } from "./webview/sessionWebviewProvider";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -35,6 +36,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const historyWatchers = new Map<string, vscode.FileSystemWatcher>();
   const provider = new SessionWebviewProvider({
     extensionUri: context.extensionUri.fsPath,
+    workspaceStore: new WorkspaceStore(
+      join(context.globalStorageUri.fsPath, "session-list-workspaces"),
+    ),
     registry,
     emptySessions,
     startNewSession: (cwd, onPresented) => launcher.start(cwd, onPresented),

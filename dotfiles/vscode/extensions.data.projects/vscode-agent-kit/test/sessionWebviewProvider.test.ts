@@ -7,6 +7,7 @@ import { chromium } from "playwright";
 import { webviewAppMarkup } from "../src/webview/webviewHtml";
 import { SessionLauncher } from "../src/launcher";
 import { EmptySessionPool } from "../src/emptySessionPool";
+import { WorkspaceStore } from "../src/workspaceStore";
 import * as workDirectory from "../src/workDirectory";
 import { PiMux, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../src/piMux";
 import { TerminalRegistry } from "../src/terminalRegistry";
@@ -58,11 +59,26 @@ let root: string;
 const providers: SessionWebviewProvider[] = [];
 const emptyPools: EmptySessionPool[] = [];
 let sharedRuntimes: ReturnType<typeof providerRuntimes>;
+let workspaceStorage: ReturnType<typeof createWorkspaceStorage>;
+
+function createWorkspaceStorage() {
+  const cwds = new Set<string>();
+  return {
+    list: vi.fn(async () => new Set(cwds)),
+    add: vi.fn(async (cwd: string) => {
+      cwds.add(cwd);
+    }),
+    remove: vi.fn(async (cwd: string) => {
+      cwds.delete(cwd);
+    }),
+  };
+}
 
 beforeEach(async () => {
   root = await tempDir("pi-webview-provider-test-");
   vi.resetAllMocks();
   sharedRuntimes = providerRuntimes();
+  workspaceStorage = createWorkspaceStorage();
   historySeedCount = 0;
 });
 
@@ -224,6 +240,7 @@ function createProvider(
   if (!existsSync(statePath)) writeFileSync(statePath, "invalid legacy JSON sentinel");
   const provider = new SessionWebviewProvider({
     extensionUri: root,
+    workspaceStore: workspaceStorage,
     registry: createRegistry(),
     startNewSession: async () => undefined,
     ...deps,
@@ -687,10 +704,10 @@ describe("SessionWebviewProvider", () => {
       workspaces.clear();
       live.clear();
       await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS);
-      expect(sentState().groups).toEqual([]);
+      expect(sentState().groups).toEqual([{ cwd: root, label: expect.any(String), sessions: [] }]);
       held.resolve([...history.values()]);
       await vi.advanceTimersByTimeAsync(0);
-      expect(sentState().groups).toEqual([]);
+      expect(sentState().groups).toEqual([{ cwd: root, label: expect.any(String), sessions: [] }]);
     });
 
     it("starts history immediately and batches in-flight notifications into one follow-up", async () => {
@@ -764,10 +781,10 @@ describe("SessionWebviewProvider", () => {
       workspaces.delete(root);
       live.clear();
       await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS);
-      expect(sentState().groups).toEqual([]);
+      expect(sentState().groups).toEqual([{ cwd: root, label: expect.any(String), sessions: [] }]);
       held.resolve([...history.values()]);
       await refresh;
-      expect(sentState().groups).toEqual([]);
+      expect(sentState().groups).toEqual([{ cwd: root, label: expect.any(String), sessions: [] }]);
     });
 
     it("rejects a history reply after the same cwd is removed and registered again", async () => {
@@ -920,7 +937,7 @@ describe("SessionWebviewProvider", () => {
       workspaces.clear();
       live.clear();
       await tick(provider);
-      expect(sentState().groups).toEqual([]);
+      expect(sentState().groups).toEqual([{ cwd: root, label: expect.any(String), sessions: [] }]);
       await tick(provider, 30_000);
       expect(mocks.history).toHaveBeenCalledOnce();
     });
@@ -2200,7 +2217,12 @@ describe("SessionWebviewProvider", () => {
     await Promise.all([oldRefresh, newRefresh, ready]);
     expect(webview.postMessage).toHaveBeenLastCalledWith({
       type: "sessions",
-      state: expect.objectContaining({ groups: [expect.objectContaining({ cwd: "/latest" })] }),
+      state: expect.objectContaining({
+        groups: [
+          expect.objectContaining({ cwd: "/latest" }),
+          expect.objectContaining({ cwd: root }),
+        ],
+      }),
     });
   });
 
@@ -3077,6 +3099,158 @@ describe("SessionWebviewProvider", () => {
 
     await webview.receive({ type: "refresh" });
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions).toHaveLength(2);
+  });
+
+  describe("retained workspace groups", () => {
+    beforeEach(() => vi.useFakeTimers());
+
+    async function fixture(
+      runtimes = providerRuntimes(),
+      workspaceStore: Pick<WorkspaceStore, "list" | "add" | "remove"> = workspaceStorage,
+    ) {
+      const onWorkspaces = vi.fn();
+      const { provider } = createProvider({
+        registry: new TerminalRegistry(editorTerminals(), runtimes.mux),
+        workspaceStore,
+        onWorkspaces,
+      });
+      const webview = createView();
+      provider.resolveWebviewView(webview.view as never);
+      await provider.refresh();
+      function groups(): WebviewState["groups"] {
+        return webview.postMessage.mock.calls
+          .map(([message]) => message)
+          .reverse()
+          .find((message) => message.type === "sessions").state.groups;
+      }
+      return { ...runtimes, provider, webview, groups, onWorkspaces };
+    }
+
+    it("persists each discovered cwd once without changing VS Code workspace folders", async () => {
+      const { provider, workspaces, groups } = await fixture();
+      workspaces.add("/external");
+      await tick(provider);
+      await tick(provider);
+      expect(groups().map(({ cwd }) => cwd)).toEqual(["/external", root]);
+      expect(workspaceStorage.add.mock.calls).toEqual([[root], ["/external"]]);
+      expect(await workspaceStorage.list()).toEqual(new Set([root, "/external"]));
+      expect(vscodeMocks.updateWorkspaceFolders).not.toHaveBeenCalled();
+    });
+
+    it("retains headers but drops rows and prewarming targets after a successful empty list", async () => {
+      const runtime = providerRuntimes();
+      await seedSavedSession(activeSessionId, root, { runtimes: runtime });
+      const { provider, workspaces, groups, onWorkspaces, mocks } = await fixture(runtime);
+      expect(groups()[0].sessions).toHaveLength(1);
+      workspaces.clear();
+      await tick(provider);
+      expect(groups()).toEqual([{ cwd: root, label: expect.any(String), sessions: [] }]);
+      expect(onWorkspaces).toHaveBeenLastCalledWith([]);
+      mocks.history.mockClear();
+      await provider.refresh();
+      expect(mocks.history).not.toHaveBeenCalled();
+      expect(groups()[0].sessions).toEqual([]);
+    });
+
+    it("restores retained headers after provider recreation without restoring registration", async () => {
+      const original = await fixture();
+      original.provider.dispose();
+      const runtime = providerRuntimes();
+      runtime.workspaces.clear();
+      const restored = await fixture(runtime);
+      expect(restored.groups()).toEqual([{ cwd: root, label: expect.any(String), sessions: [] }]);
+      expect(restored.onWorkspaces).toHaveBeenLastCalledWith([]);
+      expect(restored.mocks.registerWorkspace).not.toHaveBeenCalled();
+      expect(restored.mocks.newSession).not.toHaveBeenCalled();
+    });
+
+    it("reads another independent provider's additions and removals from disk", async () => {
+      const directory = join(root, "workspace-storage");
+      const first = await fixture(providerRuntimes(), new WorkspaceStore(directory));
+      const runtime = providerRuntimes();
+      runtime.workspaces.clear();
+      runtime.workspaces.add("/second");
+      const second = await fixture(runtime, new WorkspaceStore(directory));
+      await first.provider.refresh(false);
+      expect(first.groups().map(({ cwd }) => cwd)).toEqual([root, "/second"]);
+      await second.webview.receive({ type: "unregisterWorkspace", cwd: "/second" });
+      await first.provider.refresh(false);
+      expect(first.groups().map(({ cwd }) => cwd)).toEqual([root]);
+      expect(second.groups().map(({ cwd }) => cwd)).toEqual([root]);
+      expect(await new WorkspaceStore(directory).list()).toEqual(new Set([root]));
+    });
+
+    it("removes a retained-only cwd through Unregister and adds it again on later registration", async () => {
+      const current = await fixture();
+      current.workspaces.clear();
+      await tick(current.provider);
+      await current.webview.receive({ type: "unregisterWorkspace", cwd: root });
+      expect(current.mocks.unregisterWorkspace).toHaveBeenCalledExactlyOnceWith(root);
+      expect(current.groups()).toEqual([]);
+      current.provider.dispose();
+      const runtime = providerRuntimes();
+      runtime.workspaces.clear();
+      const restored = await fixture(runtime);
+      expect(restored.groups()).toEqual([]);
+      runtime.workspaces.add(root);
+      await tick(restored.provider);
+      expect(restored.groups().map(({ cwd }) => cwd)).toEqual([root]);
+    });
+
+    it("preserves saved workspaces and the previous view when an addition cannot be saved", async () => {
+      const current = await fixture();
+      workspaceStorage.add.mockRejectedValueOnce(new Error("storage unavailable"));
+      current.workspaces.add("/external");
+      await tick(current.provider);
+      expect(current.groups().map(({ cwd }) => cwd)).toEqual([root]);
+      expect(await workspaceStorage.list()).toContain(root);
+      expect(current.webview.postMessage).toHaveBeenCalledWith({ type: "sessionsError" });
+      await tick(current.provider);
+      expect(current.groups().map(({ cwd }) => cwd)).toEqual(["/external", root]);
+    });
+
+    it("keeps a retained header when saving its removal fails", async () => {
+      const current = await fixture();
+      workspaceStorage.remove.mockRejectedValueOnce(new Error("storage unavailable"));
+      await current.webview.receive({ type: "unregisterWorkspace", cwd: root });
+      expect(current.groups().map(({ cwd }) => cwd)).toEqual([root]);
+      expect(await workspaceStorage.list()).toContain(root);
+      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining("storage unavailable"),
+      );
+      await current.webview.receive({ type: "unregisterWorkspace", cwd: root });
+      expect(current.groups()).toEqual([]);
+    });
+
+    it("finishes an in-flight save before manual removal without reviving a stale group", async () => {
+      const current = await fixture();
+      const held = deferred<void>();
+      const save = workspaceStorage.add.getMockImplementation()!;
+      workspaceStorage.add.mockImplementationOnce(async (cwd) => {
+        await held.promise;
+        await save(cwd);
+      });
+      current.workspaces.add("/external");
+      const refreshing = current.provider.refresh();
+      await vi.waitFor(() => expect(workspaceStorage.add).toHaveBeenCalledTimes(2));
+      const removing = current.webview.receive({ type: "unregisterWorkspace", cwd: "/external" });
+      await vi.waitFor(() => expect(current.mocks.unregisterWorkspace).toHaveBeenCalledOnce());
+      held.resolve();
+      await Promise.all([refreshing, removing]);
+      await tick(current.provider);
+      expect(current.groups().map(({ cwd }) => cwd)).toEqual([root]);
+      expect(await workspaceStorage.list()).not.toContain("/external");
+    });
+
+    it("keeps the last view when stored workspaces cannot be read", async () => {
+      const current = await fixture();
+      workspaceStorage.list.mockRejectedValueOnce(new Error("storage unavailable"));
+      await tick(current.provider);
+      expect(current.groups().map(({ cwd }) => cwd)).toEqual([root]);
+      expect(current.webview.postMessage).toHaveBeenCalledWith({ type: "sessionsError" });
+      await tick(current.provider);
+      expect(current.groups().map(({ cwd }) => cwd)).toEqual([root]);
+    });
   });
 
   describe("workspace CLI operations", () => {

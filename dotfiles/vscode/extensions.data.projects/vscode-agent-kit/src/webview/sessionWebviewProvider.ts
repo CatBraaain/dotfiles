@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import type { WorkspaceStore } from "../workspaceStore";
 import { listSessionSnapshot, sessionFileExists, type SessionSummary } from "../sessionStore";
 import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
 import { DisplayRecoveryCancelledError, type TerminalRegistry } from "../terminalRegistry";
@@ -25,6 +26,7 @@ const MAX_HISTORY_RETRY_MS = 30_000;
 export interface SessionWebviewDeps {
   extensionUri: string;
   registry: TerminalRegistry;
+  workspaceStore: Pick<WorkspaceStore, "list" | "add" | "remove">;
   startNewSession: (cwd: string, onPresented: () => void) => Promise<string | undefined>;
   onWorkspaces?: (cwds: readonly string[]) => void;
   onSessionFiles?: (files: readonly { file: string; cwd: string }[]) => void;
@@ -36,6 +38,8 @@ export interface SessionWebviewDeps {
 export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
   private registeredCwds = new Set<string>();
+  private addedCwds = new Set<string>();
+  private workspaceUpdates: Promise<void> = Promise.resolve();
   private sessionsById = new Map<string, SessionSummary>();
   private archivedSessionIds = new Set<string>();
   private temporarySessionIds = new Set<string>();
@@ -45,6 +49,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     | {
         workspaces: PiMuxWorkspace[];
         history: PiMuxHistoryEntry[];
+        addedCwds: ReadonlySet<string>;
         unreadIds: ReadonlySet<string>;
         state: WebviewState;
       }
@@ -204,7 +209,37 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
   }
 
-  private acceptWorkspaces(workspaces: PiMuxWorkspace[]): void {
+  private updateAddedWorkspaces(
+    cwds: readonly string[],
+    version: number,
+    removedCwd?: string,
+  ): Promise<void> {
+    const pending = this.workspaceUpdates.then(async () => {
+      const added = await this.deps.workspaceStore.list();
+      if (this.disposed || (removedCwd === undefined && version !== this.refreshVersion)) return;
+      for (const cwd of cwds) {
+        if (added.has(cwd)) continue;
+        await this.deps.workspaceStore.add(cwd);
+        added.add(cwd);
+      }
+      if (removedCwd !== undefined) {
+        await this.deps.workspaceStore.remove(removedCwd);
+        added.delete(removedCwd);
+      }
+      this.addedCwds = added;
+    });
+    this.workspaceUpdates = pending.catch(() => undefined);
+    return pending.catch((error) => {
+      throw new Error(`Failed to save Session List workspaces: ${errorMessage(error)}`);
+    });
+  }
+
+  private async acceptWorkspaces(workspaces: PiMuxWorkspace[], version: number): Promise<boolean> {
+    await this.updateAddedWorkspaces(
+      workspaces.map(({ cwd }) => cwd),
+      version,
+    );
+    if (this.disposed || version !== this.refreshVersion) return false;
     this.listFailed = false;
     const previousWorkspaces = this.latestWorkspaces;
     const registered = new Set(workspaces.map(({ cwd }) => cwd));
@@ -250,6 +285,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         },
       );
     }
+    return true;
   }
 
   private async pollList(): Promise<void> {
@@ -257,7 +293,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     try {
       const workspaces = await this.readWorkspaces();
       if (this.disposed || version !== this.refreshVersion) return;
-      this.acceptWorkspaces(workspaces);
+      if (!(await this.acceptWorkspaces(workspaces, version))) return;
       if (this.view?.visible) {
         if (this.pendingHistoryRefresh !== undefined) await this.publishSessions();
         else void this.refreshHistory();
@@ -353,27 +389,27 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       history === published.history &&
       this.deps.registry.displayedSessionId === published.state.displayedSessionId &&
       isDeepStrictEqual(workspaces, published.workspaces) &&
+      isDeepStrictEqual(this.addedCwds, published.addedCwds) &&
       isDeepStrictEqual(this.unreadSessionIds, published.unreadIds)
     )
       return;
     const version = this.refreshVersion;
-    const { sessions, registeredCwds, archivedIds } = await listSessionSnapshot(
-      history,
-      workspaces,
-    );
+    const addedCwds = this.addedCwds;
+    const { sessions, archivedIds } = await listSessionSnapshot(history, workspaces);
     if (
       this.disposed ||
       !this.view?.visible ||
       version !== this.refreshVersion ||
       workspaces !== this.latestWorkspaces ||
-      history !== this.historySnapshot
+      history !== this.historySnapshot ||
+      addedCwds !== this.addedCwds
     )
       return;
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
     this.archivedSessionIds = archivedIds;
     const state: WebviewState = {
       groups: sessionViewGroups(sessions, {
-        registeredCwds,
+        registeredCwds: [...addedCwds],
         archivedIds,
         phases: phasesFromWorkspaces(workspaces),
         unreadIds: this.unreadSessionIds,
@@ -384,6 +420,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     this.publishedSessions = {
       workspaces,
       history,
+      addedCwds,
       unreadIds: new Set(this.unreadSessionIds),
       state,
     };
@@ -407,7 +444,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     try {
       const workspaces = await this.readWorkspaces();
       if (this.disposed || version !== this.refreshVersion) return;
-      this.acceptWorkspaces(workspaces);
+      if (!(await this.acceptWorkspaces(workspaces, version))) return;
       if (this.view?.visible) await this.refreshHistory();
     } catch (error) {
       if (this.disposed) return;
@@ -625,6 +662,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       await this.deps.emptySessions?.suspendWorkspace(cwd);
       await this.deps.registry.mux.unregisterWorkspace(cwd);
       this.deps.emptySessions?.completeUnregister(cwd);
+      await this.updateAddedWorkspaces([], this.refreshVersion, cwd);
     } catch (error) {
       this.postError(`Failed to unregister workspace ${cwd}: ${errorMessage(error)}`);
       this.scheduleListRefresh();
