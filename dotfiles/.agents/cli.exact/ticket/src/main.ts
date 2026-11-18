@@ -305,7 +305,7 @@ function defaultProject(): string {
   return validateProject(basename(cwd));
 }
 
-function resolveProject(flags: Flags): string {
+function resolveProject(flags: Pick<Flags, "project">): string {
   return validateProject(flags.project ?? defaultProject());
 }
 
@@ -458,7 +458,8 @@ async function withProjectWrite<T>(
   }
 }
 
-async function listCommand(flags: Flags): Promise<void> {
+async function listCommand(positional: string[], flags: Flags): Promise<void> {
+  if (positional.length > 0) usageFail();
   for (const status of flags.statuses) validateStatus(status);
   const projects = flags.all ? await allProjects() : [resolveProject(flags)];
   const tickets = (await Promise.all(projects.map((project) => loadTickets(project)))).flat();
@@ -754,8 +755,10 @@ async function main(): Promise<void> {
     const parsed = parseDispatchArgs(dispatchArgs);
     if (parsed.error || !parsed.action)
       throw new TicketError(2, `${parsed.error}\nusage: ${DISPATCH_USAGE}`);
-    const project = isWorker ? validateProject(argv[0] ?? "") : defaultProject();
+    const project = isWorker ? validateProject(argv[0] ?? "") : resolveProject(parsed);
     if (parsed.action === "stop") return stopDispatcher(project);
+    if (!isWorker && parsed.project !== undefined)
+      process.chdir(join(homedir(), "projects", project));
     const options = parsed.options!;
     async function loadSnapshot() {
       const tickets = await loadTickets(project);
@@ -769,7 +772,6 @@ async function main(): Promise<void> {
     if (isWorker) return dispatch(options, loadSnapshot, project);
     return startDispatcher({
       project,
-      options,
       loadSnapshot,
       command: workerCommand(import.meta.path, dispatchArgs, project),
     });
@@ -777,7 +779,7 @@ async function main(): Promise<void> {
   const { flags, positional } = parseArgs(argv, command);
   switch (command) {
     case "list":
-      return listCommand(flags);
+      return listCommand(positional, flags);
     case "show":
       return showCommand(positional, flags);
     case "create":

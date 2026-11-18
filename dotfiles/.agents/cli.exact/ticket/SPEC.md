@@ -6,7 +6,7 @@
 
 - 1 ticket は `~/.agents/tickets/<project>/<YYYYMMDD-HHMMSS>.md`。ID は拡張子を除くファイル名、順序は ID の辞書順
 - frontmatter は `status`（必須）、`after`（任意、単一ID）を持つ。本文の最初の H1 を title とし、なければ ID を title とする
-- `project` は `/`、`\\`、`.`、`..` を含まない単一のパス要素である。`-p/--project` と cwd から解決したproject のいずれもこの制約に従い、違反時はストア外を読書きしない
+- `project` は空でなく、`/` と `\` を含まず、`.` と `..` ではない単一のパス要素である。`-p/--project`、cwd から解決したproject のいずれもこの制約に従い、違反時はストア外を読書きしない
 - `after` は同一project内の ID または一意な ID接頭辞で指定する。保存時は完全な ID に正規化する
 - `status` は `draft`、`open`、`blocked`、`locked`、`closed`、`cancelled` のいずれか
 - 同じfrontmatter内の `status`、`after` の重複は破損である。読み書きコマンドは失敗し、`check` は `invalid-frontmatter` として報告する
@@ -17,7 +17,7 @@
 | --- | --- |
 | `-p/--project <name>` | 指定project を使う |
 | project未指定 | Gitリポジトリ内では main worktree の basename、それ以外では cwd の basename を使う |
-| `-a/--all` | `list` / `check` で全project を横断する。`-p` は無視する |
+| `-a/--all` | `list` / `check` で全project を横断する。project指定は無視する |
 | 不存在project | `create` は作成し、その他は終了コード1 |
 | `--json` | 成功時stdout は単一JSON。失敗時stdout は `{ "error": "..." }`、stderr は同じ1行、終了コードは失敗種別に従う。省略時はテキスト出力になり、`check` は `ok` または `file: kind: detail` 行、`list` は 1 ticket = 1行の tab区切り、`show` はフィールド行と本文、`create` / `set` / `edit` は `created` / `updated` 行に共通フィールドを続ける |
 | `--` | 後続を位置引数として扱う |
@@ -43,6 +43,8 @@
 ## コマンド
 
 ### `ticket list [-s <s>[,<s>...]] [-p <project>] [-a] [--json]`
+
+位置引数を指定すると usageエラー（終了コード2）とする。
 
 既定では open ticket を出力する。`-s` は指定status だけを出力する。テキスト出力は `[project<TAB>]ID<TAB>status<TAB>title` 形式の 1 ticket 1行で、0件のときは `no tickets` を出す。`--all` 時だけ `project` を前置する。JSON共通フィールドは `id`、`status`、`after`（未設定は `null`）、`title`、`path`、`--all` 時だけ `project`。
 
@@ -72,15 +74,24 @@ dispatcher は ticket store から起動可能な ticket を探してプロン�
 
 | コマンド | 動作 |
 | --- | --- |
-| `ticket dispatch start [<work-dir>] [--max N] [--interval SEC] [--prefix NAME]` | dispatcher を detached tmuxセッションで起動する |
-| `ticket dispatch [<work-dir>] [--max N] [--interval SEC] [--prefix NAME]` | `start` と同じ動作 |
-| `ticket dispatch stop` | 現在のproject の dispatcher を停止する |
+| `ticket dispatch start [-p <project>] [--max N] [--interval SEC] [--prefix NAME]` | dispatcher を detached tmuxセッションで起動する |
+| `ticket dispatch [-p <project>] [--max N] [--interval SEC] [--prefix NAME]` | `start` と同じ動作 |
+| `ticket dispatch stop [-p <project>]` | 対象project の dispatcher を停止する |
 
-project は「共通の振る舞い」の project未指定時と同じ cwdベースの解決で選ぶ。同じproject に解決される別の cwd・worktree からも同じ dispatcher を操作する。
+同じproject に解決される別のディレクトリ・worktree からも同じ dispatcher を操作する。
 
 #### 入力と配置
 
-`<work-dir>` は省略できる。省略時は start を呼び出したプロセスの cwd が `WORK` になる。指定した `<work-dir>` の相対パスは同じ cwd を基準に解決する。stop は位置引数・オプションを受け付けず、ticket store の存在や内容に依存せず操作できる。start は次の3オプションを受け付ける。
+start と stop は共通の `-p/--project <name>` を受け付ける。start は、さらに次の3オプションを受け付ける。
+
+| start の入力 | ticket store のproject | dispatcher・新規pi の cwd |
+| --- | --- | --- |
+| `-p/--project` 指定 | 指定したproject名をそのまま使う | ホームディレクトリ配下の `projects/<project>` |
+| `-p/--project` 省略 | 共通の振る舞いに従い、呼出時の cwd から解決する | 呼出時の cwd |
+
+指定したproject名は、起動先のGitリポジトリや main worktree の basename に置き換えない。project名に含まれる空白・引用符を保持する。
+
+stop は共通の振る舞いに従ってproject を解決する。起動先ディレクトリへの移動を行わず、ticket store と起動先ディレクトリの存在や内容に依存せず操作できる。
 
 | オプション | 既定値 | 内容 |
 | --- | --- | --- |
@@ -91,12 +102,9 @@ project は「共通の振る舞い」の project未指定時と同じ cwdベー
 | 入出力 | パス・規則 |
 | --- | --- |
 | 固定本文 | CLI同梱の `dispatch-prompt.md` の冒頭 `ticket {{ TICKET_ID }}` に ticket ID を文字どおり埋め込む |
-| prompt | `WORK/fix/prompt-<ID>.txt` |
-| log | `WORK/dispatch.log` へ追記する |
-| dispatcher・pi の cwd | start を呼び出したプロセスの cwd |
 | tmux socket | `/run/user/1000/pi-tmux/server.sock`。`TICKET_TEST_TMUX_SOCKET` 指定時はその socket を使う |
 
-固定本文は dispatch の実行ごとに読み込む。作業ディレクトリにテンプレートを用意する必要はなく、ソースからの実行とコンパイル済みCLI のどちらでも同梱本文を使う。dispatch は ticket を変更しない。dispatch の引数、ticket読取り、ログ、終了条件は本節に従う。
+固定本文は dispatch の実行ごとに読み込む。作業ディレクトリにテンプレートを用意する必要はなく、ソースからの実行とコンパイル済みCLI のどちらでも同梱本文を使う。dispatch は ticket と作業ディレクトリの既存ファイルを変更しない。dispatch の引数、ticket読取り、ログ、終了条件は本節に従う。
 
 #### 固定プロンプトと user への説明
 
@@ -115,28 +123,28 @@ project は「共通の振る舞い」の project未指定時と同じ cwdベー
 
 #### start と stop
 
-同じproject の dispatcher は同時に1つだけ動作する。dispatcher の識別は `WORK`・`--prefix` に依存せず、他project の dispatcher・piセッションを停止・引継ぎの対象にしない。
+同じproject の dispatcher は同時に1つだけ動作する。dispatcher の識別は `--prefix` に依存せず、他project の dispatcher・piセッションを停止・引継ぎの対象にしない。
 
 | 条件・操作 | 結果 |
 | --- | --- |
-| dispatcher が未起動で start | 固定本文・ticket store を読み、fixディレクトリ作成と log書込みが可能なことを確認して、project を識別する名前の detached tmuxセッションを作る |
-| dispatcher用tmuxセッションの作成成功 | セッション名と logパスを stdout へ出し、呼出元CLI は終了コード0で戻る。全ticket の完了を待たない |
+| dispatcher が未起動で start | 固定本文・ticket store を読み、project を識別する名前の detached tmuxセッションを作る |
+| dispatcher用tmuxセッションの作成成功 | セッション名を stdout へ出し、呼出元CLI は終了コード0で戻る。全ticket の完了を待たない |
 | 同じproject の dispatcher が起動済みで start | 既存セッション名と起動済みである旨を stdout へ出して終了コード0。既存の起動条件・監視を保持する |
 | dispatcher が起動中で stop | dispatcher用セッションだけを終了し、停止した旨を stdout へ出して終了コード0。起動済みpi は作業を続ける |
 | dispatcher が未起動で stop | 停止済みである旨を stdout へ出して終了コード0 |
 | stop 後に start | 同じproject の残存piセッションを起動済み・稼働中として引き継ぎ、同じticket の pi を二重起動しない |
 
-引き継いだpi のセッション名と cwd は保持する。新しい `WORK`・`--prefix` で start しても残存pi を引き継ぎ、新規起動には今回の start の条件を使う。残存pi の数が今回の `--max` 以上なら、その数が上限未満になるまで新規起動を待つ。
+引き継いだpi のセッション名と cwd は保持する。新しい `--prefix` で start しても残存pi を引き継ぎ、新規起動には今回の start の条件を使う。残存pi の数が今回の `--max` 以上なら、その数が上限未満になるまで新規起動を待つ。
 
 start の成功は dispatcher用tmuxセッションの作成成功を表し、その後の監視継続や pi起動成功を保証しない。ソースからのCLI起動とコンパイル済みCLI のどちらでも同じ動作を提供する。
 
 #### piセッションの起動
 
-ID `X` のセッション名は、`--prefix` に `X` の `.` を `_` へ全置換した文字列を連結した名前である。起動対象ごとに prompt を書き、その内容全体を単一引数として `pi` へ渡す。promptパス内の空白・単一引用符を保持する。
+ID `X` のセッション名は、`--prefix` に `X` の `.` を `_` へ全置換した文字列を連結した名前である。起動対象ごとに生成した prompt の内容全体を単一引数として `pi` へ直接渡す。本文の空白・引用符・末尾改行を保持する。
 
 存在確認は `has-session -t =<セッション名>` の完全一致で行う。他project または dispatcher管理外の既存セッションと名前が衝突する場合は、そのセッションを変更せず、その ticket の起動失敗を記録する。衝突したセッションを稼働中として扱わず、今回の実行中はその ticket を再起動しない。
 
-起動コマンドが失敗した場合は `tmux new-session failed for <セッション名>: <エラー内容>` を dispatcher の stderr と log へ出す。名前の衝突以外の失敗は稼働として登録し、以降の tick の解放条件で判定する。
+起動コマンドが失敗した場合は `tmux new-session failed for <セッション名>: <エラー内容>` を dispatcher の stderr と stdout へ出す。名前の衝突以外の失敗は稼働として登録し、以降の tick の解放条件で判定する。
 
 #### tick と終了
 
@@ -155,15 +163,17 @@ ID `X` のセッション名は、`--prefix` に `X` の `.` を `_` へ全置�
 
 #### ログとエラー
 
-ログはローカル時刻の `[YYYY-MM-DD HH:MM:SS] <メッセージ>` を1行として dispatcher の stdout へ出し、同じ行を log へ追記する。呼出元CLI の stdout は start・stop の操作結果を示す。
+ログはローカル時刻の `[YYYY-MM-DD HH:MM:SS] <メッセージ>` を1行として dispatcher の stdout へ出す。呼出元CLI の stdout は start・stop の操作結果を示す。
 
 | 条件 | 結果 |
 | --- | --- |
-| start の余分な位置引数、空の `<work-dir>`、未知のオプション、値の不足、`--max` / `--interval` の値の不正、stop への引数指定 | usage を呼出元CLI の stderr へ出し、終了コード2 |
+| 位置引数の指定、未知のオプション、値の不足、`--max` / `--interval` の値の不正、stop への `--max` / `--interval` / `--prefix` 指定 | usage を呼出元CLI の stderr へ出し、終了コード2 |
+| project名がストアと安全境界の制約に違反 | 既存CLI と同じ validationエラーを呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動・停止しない |
+| start の cwd が存在しない、ディレクトリでない、または移動できない | `I/O error: <エラー内容>` を呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動しない |
 | 新規start の事前確認で ticket の値・状態・環境が不正 | 既存CLI と同じ validationエラーを呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動しない |
-| 新規start の事前確認で固定本文読込み・fixディレクトリ作成・log書込みに失敗 | `I/O error: <エラー内容>` を呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動しない |
+| 新規start の事前確認で固定本文読込みに失敗 | `I/O error: <エラー内容>` を呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動しない |
 | dispatcher用tmuxセッションの作成、または稼働中dispatcher の停止に失敗 | 操作と理由を呼出元CLI の stderr へ出し、終了コード1 |
-| start成功後に ticket読取り、固定本文読込み、prompt・log書込みなどの継続不能なエラー | エラーを dispatcher の stderr へ出し、log が書込み可能なら同じエラーを追記して dispatcher用セッションを終了する。起動済みpi は作業を続け、呼出元CLI の終了コードは変化しない |
+| start成功後に ticket読取り、固定本文読込みなどの継続不能なエラー | エラーを dispatcher の stderr と stdout へ出し、dispatcher用セッションを終了する。起動済みpi は作業を続け、呼出元CLI の終了コードは変化しない |
 
 #### ライフサイクル
 

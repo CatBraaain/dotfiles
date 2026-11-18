@@ -15,7 +15,10 @@ async function ticketHome(): Promise<string> {
 }
 
 function runAt(home: string, cwd: string, args: string[], extraEnv: Record<string, string> = {}) {
-  const result = Bun.spawnSync([process.execPath, CLI_DIR, ...args], {
+  const command = process.env.TICKET_DISPATCH_BIN
+    ? [process.env.TICKET_DISPATCH_BIN]
+    : [process.execPath, CLI_DIR];
+  const result = Bun.spawnSync([...command, ...args], {
     cwd,
     env: { ...process.env, HOME: home, ...extraEnv },
     stdout: "pipe",
@@ -56,6 +59,111 @@ function createAfter(home: string, title: string, after: string, project = "demo
 
 afterEach(async () => {
   for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true });
+});
+
+describe("ticket list project selection", () => {
+  it.each(["demo", "other project", "quote's project", "dotted.project"])(
+    "uses either project flag for %j",
+    async (project) => {
+      const home = await ticketHome();
+      const id = create(home, "selected", project);
+      create(home, "wrong", basename(home));
+      for (const args of [
+        ["-p", project],
+        ["--project", project],
+      ]) {
+        const result = run(home, ["list", "--json", ...args]);
+        assert.equal(result.code, 0, result.stderr);
+        const tickets = JSON.parse(result.stdout) as Array<{ id: string; title: string }>;
+        assert.deepEqual(
+          tickets.map((ticket) => ({ id: ticket.id, title: ticket.title })),
+          [{ id, title: "selected" }],
+        );
+        assert.equal(result.stderr, "");
+      }
+    },
+  );
+
+  it("keeps cwd-based project selection when project is omitted", async () => {
+    const home = await ticketHome();
+    const id = create(home, "default", basename(home));
+    create(home, "wrong");
+    const result = run(home, ["list", "--json"]);
+    assert.equal(result.code, 0, result.stderr);
+    const tickets = JSON.parse(result.stdout) as Array<{ id: string }>;
+    assert.deepEqual(
+      tickets.map((ticket) => ticket.id),
+      [id],
+    );
+  });
+
+  it("keeps status filtering and text output with a project flag", async () => {
+    const home = await ticketHome();
+    const id = create(home, "locked");
+    create(home, "open");
+    const locked = run(home, ["set", id, '{"status":"locked"}', "-p", "demo"]);
+    assert.equal(locked.code, 0, locked.stderr);
+    const result = run(home, ["list", "-p", "demo", "-s", "locked"]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, `${id}\tlocked\tlocked\n`);
+  });
+
+  it("keeps all-project listing regardless of the ignored project flag", async () => {
+    const home = await ticketHome();
+    const first = create(home, "one", "demo");
+    const second = create(home, "two", "other");
+    for (const args of [[], ["-p", "missing"], ["--project", "missing"], ["-p", "../ignored"]]) {
+      const result = run(home, ["list", "-a", "--json", ...args]);
+      assert.equal(result.code, 0, result.stderr);
+      const checked = run(home, ["check", "-a", "--json", ...args]);
+      assert.equal(checked.code, 0, checked.stderr);
+      assert.deepEqual(JSON.parse(checked.stdout), []);
+      const tickets = JSON.parse(result.stdout) as Array<{ id: string; project: string }>;
+      assert.deepEqual(
+        tickets.map((ticket) => ({ id: ticket.id, project: ticket.project })),
+        [
+          { id: first, project: "demo" },
+          { id: second, project: "other" },
+        ],
+      );
+    }
+  });
+
+  it.each(["", ".", "..", "../outside", "/tmp/demo", "nested/demo", "nested\\demo"])(
+    "rejects invalid project flag value %j",
+    async (project) => {
+      const home = await ticketHome();
+      const result = run(home, ["list", "-p", project]);
+      assert.equal(result.code, 1);
+      assert.equal(result.stderr, `invalid project: ${project}\n`);
+      assert.equal(result.stdout, "");
+    },
+  );
+
+  it.each([
+    { args: ["demo"] },
+    { args: ["--", "demo"] },
+    { args: ["demo", "other"] },
+    { args: ["demo", "-p", "demo"] },
+    { args: ["demo", "--project", "other"] },
+    { args: ["-p", "demo", "demo"] },
+    { args: ["--project", "demo", "other"] },
+    { args: ["demo", "-p", "demo", "-a"] },
+  ])("rejects positional project arguments %j", async ({ args }) => {
+    const home = await ticketHome();
+    const result = run(home, ["list", ...args]);
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /^usage: ticket list \[-s/);
+    assert.equal(result.stdout, "");
+  });
+
+  it("returns code 1 for a missing named store", async () => {
+    const home = await ticketHome();
+    const result = run(home, ["list", "-p", "missing"]);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /^project not found:/);
+    assert.equal(result.stdout, "");
+  });
 });
 
 describe("ticket CLI", () => {
@@ -332,6 +440,13 @@ describe("ticket CLI", () => {
     assert.match(await readFile(ticketPath(home, project, id), "utf8"), /from subworktree/);
     const shown = runAt(home, subworktree, ["show", id, "--json"]);
     assert.equal((JSON.parse(shown.stdout) as { id: string }).id, id);
+    const listed = runAt(home, subworktree, ["list", "--json"]);
+    assert.equal(listed.code, 0, listed.stderr);
+    const tickets = JSON.parse(listed.stdout) as Array<{ id: string }>;
+    assert.deepEqual(
+      tickets.map((ticket) => ticket.id),
+      [id],
+    );
   });
 
   it("uses the cwd project and lists locked tickets", async () => {

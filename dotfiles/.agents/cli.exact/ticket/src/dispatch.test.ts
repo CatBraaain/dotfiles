@@ -1,9 +1,18 @@
 import { afterEach, describe, it } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, join } from "node:path";
 import assert from "node:assert/strict";
 import {
   buildPrompt,
+  dispatcherName,
   parseDispatchArgs,
   planTick,
   run,
@@ -48,27 +57,28 @@ describe("fixed prompt asset", () => {
     copyFileSync(join(import.meta.dir, "../dispatch-prompt.md"), join(home, "dispatch-prompt.md"));
     const script = `
 import assert from "node:assert/strict";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { run, startDispatcher } from ${JSON.stringify(join(sourceDir, "dispatch.ts"))};
 const options = ${JSON.stringify(options)};
 const asset = ${JSON.stringify(join(home, "dispatch-prompt.md"))};
+let receivedPrompt;
 const deps = {
   options,
   loadSnapshot: async () => [{ id: "a", status: "open", actionable: true }],
   log() {},
   hasSession() { return false; },
-  launch() {},
+  launch(id, name, prompt) { receivedPrompt = prompt; },
   async sleepMs() {},
 };
 for (const text of ["first {{ TICKET_ID }}", "second {{ TICKET_ID }}"]) {
   writeFileSync(asset, text);
   await run(deps);
-  assert.equal(readFileSync(options.fixDir + "/prompt-a.txt", "utf8"), text.replace("{{ TICKET_ID }}", "a"));
+  assert.equal(receivedPrompt, text.replace("{{ TICKET_ID }}", "a"));
 }
 rmSync(asset);
 await assert.rejects(run(deps), /ENOENT/);
 await assert.rejects(startDispatcher({
-  project: "sample", options, command: [],
+  project: "sample", command: [],
   loadSnapshot: async () => assert.fail("asset failure must precede ticket reads"),
 }), /ENOENT/);
 `;
@@ -93,60 +103,83 @@ await assert.rejects(startDispatcher({
 
 describe("parseDispatchArgs", () => {
   it("treats explicit start and the omitted action as equivalent", () => {
-    const implicitStart = parseDispatchArgs(["w"]);
-    const explicitStart = parseDispatchArgs(["start", "w"]);
+    const implicitStart = parseDispatchArgs([]);
+    const explicitStart = parseDispatchArgs(["start"]);
     assert.deepEqual(explicitStart, implicitStart);
     assert.equal(explicitStart.action, "start");
   });
 
-  it("defaults the work directory to the process cwd", () => {
+  it("uses the three option defaults without an explicit project", () => {
     assert.deepEqual(parseDispatchArgs([]).options, {
-      fixDir: join(process.cwd(), "fix"),
-      log: join(process.cwd(), "dispatch.log"),
-      max: 5,
-      prefix: "fix_",
-      interval: 30,
-    });
-    assert.deepEqual(parseDispatchArgs(["start"]), parseDispatchArgs([]));
-  });
-
-  it("uses the given work directory and three option defaults", () => {
-    assert.deepEqual(parseDispatchArgs(["w"]).options, {
-      fixDir: "w/fix",
-      log: "w/dispatch.log",
       max: 5,
       prefix: "fix_",
       interval: 30,
     });
   });
 
-  it("rejects arguments after stop", () => {
-    assert.equal(parseDispatchArgs(["stop", "w"]).error, "stop accepts no arguments");
-    assert.deepEqual(parseDispatchArgs(["stop"]), { action: "stop" });
+  it("accepts only project flags after stop", () => {
+    assert.deepEqual(parseDispatchArgs(["stop"]), { action: "stop", project: undefined });
+    for (const flag of ["-p", "--project"]) {
+      assert.deepEqual(parseDispatchArgs(["stop", flag, "w"]), { action: "stop", project: "w" });
+    }
+    for (const args of [
+      ["stop", "w"],
+      ["stop", "--max", "1"],
+      ["stop", "--interval", "1"],
+      ["stop", "--prefix", "x"],
+    ]) {
+      assert.ok(parseDispatchArgs(args).error, JSON.stringify(args));
+    }
   });
 
   it("accepts the three overrides and positional option termination", () => {
-    const parsed = parseDispatchArgs([
-      "--max",
-      "3",
-      "--interval",
-      "0.2",
-      "--prefix",
-      "t_",
-      "--",
-      "w",
-    ]);
+    const parsed = parseDispatchArgs(["--max", "3", "--interval", "0.2", "--prefix", "t_", "--"]);
     assert.deepEqual(parsed.options, {
-      fixDir: "w/fix",
-      log: "w/dispatch.log",
       max: 3,
       prefix: "t_",
       interval: 0.2,
     });
   });
 
-  it("rejects invalid work directory arguments and missing option values", () => {
-    for (const args of [[""], ["a", "b"], ["w", "--max"], ["w", "--interval", "--prefix", "x"]]) {
+  it.each(["w", "other project", "quote's project", "start", "stop"])(
+    "preserves the project %s for implicit and explicit start",
+    (project) => {
+      for (const args of [
+        ["-p", project],
+        ["--project", project],
+        ["start", "-p", project],
+        ["start", "--project", project],
+      ]) {
+        const parsed = parseDispatchArgs(args);
+        assert.equal(parsed.project, project);
+        assert.equal(parsed.action, "start");
+        assert.equal(parsed.error, undefined);
+      }
+    },
+  );
+
+  it("accepts a project between options", () => {
+    const parsed = parseDispatchArgs(["--max", "3", "-p", "other", "--prefix", "t_"]);
+    assert.equal(parsed.project, "other");
+    assert.equal(parsed.options?.max, 3);
+    assert.equal(parsed.options?.prefix, "t_");
+  });
+
+  it("rejects positionals and missing option values", () => {
+    for (const args of [
+      [""],
+      ["start", ""],
+      ["a"],
+      ["a", "b"],
+      ["--", "a"],
+      ["start", "a"],
+      ["-p"],
+      ["--project"],
+      ["--project", "--max", "1"],
+      ["-p", "-p", "x"],
+      ["--max"],
+      ["--interval", "--prefix", "x"],
+    ]) {
       assert.equal(parseDispatchArgs(args).options, undefined, JSON.stringify(args));
     }
   });
@@ -161,22 +194,21 @@ describe("parseDispatchArgs", () => {
       "--fix-dir",
       "--log",
       "--socket",
-      "--project",
       "--json",
       "--help",
       "--nope",
     ]) {
-      assert.equal(parseDispatchArgs(["w", flag, "x"]).error, `unknown option: ${flag}`);
+      assert.equal(parseDispatchArgs([flag, "x"]).error, `unknown option: ${flag}`);
     }
   });
 
   it("requires a positive integer max and a positive finite interval", () => {
     for (const max of ["0", "-1", "1.5", "Infinity", "NaN", ""]) {
-      assert.equal(parseDispatchArgs(["w", "--max", max]).error, "--max must be an integer >= 1");
+      assert.equal(parseDispatchArgs(["--max", max]).error, "--max must be an integer >= 1");
     }
     for (const interval of ["0", "-1", "Infinity", "NaN", ""]) {
       assert.equal(
-        parseDispatchArgs(["w", "--interval", interval]).error,
+        parseDispatchArgs(["--interval", interval]).error,
         "--interval must be a number > 0",
       );
     }
@@ -294,7 +326,7 @@ describe("planTick", () => {
 });
 
 const fixtures: Array<{ home: string; socket: string }> = [];
-const TEMP_ROOT = "/tmp/work/dotfiles";
+const TEMP_ROOT = "/tmp/work/dotfiles/remove-dispatch-artifacts";
 const CLI = join(import.meta.dir, "main.ts");
 
 function fixture() {
@@ -304,12 +336,15 @@ function fixture() {
   fixtures.push({ home, socket });
   const store = join(home, ".agents", "tickets", basename(home));
   mkdirSync(store, { recursive: true });
-  const options = parseDispatchArgs([home, "--interval", "0.25", "--max", "2"]).options!;
+  const options = parseDispatchArgs(["--interval", "0.25", "--max", "2"]).options!;
   return { home, store, options, socket };
 }
 
 function invoke(home: string, args: string[], socket = join(home, "isolated.sock")) {
-  const result = Bun.spawnSync([process.execPath, CLI, "dispatch", ...args], {
+  const command = process.env.TICKET_DISPATCH_BIN
+    ? [process.env.TICKET_DISPATCH_BIN]
+    : [process.execPath, CLI];
+  const result = Bun.spawnSync([...command, "dispatch", ...args], {
     cwd: home,
     env: { ...process.env, HOME: home, TICKET_TEST_TMUX_SOCKET: socket },
     stdout: "pipe",
@@ -323,18 +358,21 @@ function invoke(home: string, args: string[], socket = join(home, "isolated.sock
   };
 }
 
-async function waitForLog(path: string, expected: RegExp): Promise<string> {
+async function waitStopped(home: string, socket: string): Promise<void> {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
-    try {
-      const log = readFileSync(path, "utf8");
-      if (expected.test(log)) return log;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
+    const session = Bun.spawnSync([
+      "tmux",
+      "-S",
+      socket,
+      "has-session",
+      "-t",
+      `=${dispatcherName(basename(home))}`,
+    ]);
+    if (session.exitCode !== 0) return;
     await Bun.sleep(10);
   }
-  throw new Error(`log did not match ${expected}: ${path}`);
+  assert.fail("dispatcher did not finish");
 }
 
 afterEach(() => {
@@ -351,7 +389,7 @@ describe("dispatch execution", () => {
   it.each(["closed", "blocked"])(
     "rescans and refills slots released by %s without restarting reopened tickets",
     async (releasedStatus) => {
-      const { home, options } = fixture();
+      const { options } = fixture();
       let tickets: TicketSnapshot[] = [
         { id: "a", status: "open", actionable: true },
         { id: "b", status: "blocked", actionable: false },
@@ -367,9 +405,7 @@ describe("dispatch execution", () => {
         },
         log: (line) => events.push(line),
         hasSession: (name) => name !== "fix_b",
-        launch: (id, name, promptFile) => {
-          assert.equal(promptFile, join(home, "fix", `prompt-${id}.txt`));
-          const prompt = readFileSync(promptFile, "utf8");
+        launch: (id, name, prompt) => {
           assert.ok(prompt.startsWith(`ticket ${id} に対応する。`));
           assert.match(prompt, /user はticketを読んでいない前提で/);
           assert.doesNotMatch(prompt, /`closed` にするとセッションが終了する/);
@@ -453,11 +489,11 @@ describe("dispatch execution", () => {
     ]);
   });
 
-  it("quotes prompt paths containing single quotes without shell expansion", () => {
-    const path = "a 'b' $HOME `x`";
-    const result = Bun.spawnSync(["/bin/sh", "-c", `printf %s ${shQuote(path)}`]);
+  it("quotes prompt text without expansion and preserves trailing newlines", () => {
+    const prompt = "a 'b' \"double\" $HOME `x` \\ {{ TICKET_ID }}\n\n";
+    const result = Bun.spawnSync(["/bin/sh", "-c", `printf %s ${shQuote(prompt)}`]);
     assert.equal(result.exitCode, 0);
-    assert.equal(new TextDecoder().decode(result.stdout), path);
+    assert.equal(new TextDecoder().decode(result.stdout), prompt);
   });
 });
 
@@ -467,46 +503,93 @@ describe("dispatch CLI", () => {
     const invalid = [
       ["stop", "extra"],
       ["stop", "--max", "1"],
+      ["a"],
+      ["--", "a"],
+      ["start", "a"],
       ["a", "b"],
-      [home, "--max"],
-      [home, "--max", "0"],
-      [home, "--interval", "NaN"],
-      [home, "--interval", "0"],
-      [home, "--template"],
-      [home, "--socket", "x"],
-      [home, "--project", "x"],
-      [home, "--json"],
+      [""],
+      ["start", ""],
+      ["--max"],
+      ["--max", "0"],
+      ["--interval", "NaN"],
+      ["--interval", "0"],
+      ["--template"],
+      ["--socket", "x"],
+      ["-p"],
+      ["--project"],
+      ["--max", "-p", "x"],
+      ["stop", "--interval", "1"],
+      ["stop", "--prefix", "x"],
+      ["--json"],
     ];
     for (const args of invalid) {
       const result = invoke(home, args);
       assert.equal(result.code, 2, JSON.stringify(args));
-      assert.match(result.stderr, /usage: ticket dispatch \[<work-dir>\]/);
+      assert.match(result.stderr, /usage: ticket dispatch \[-p <project>\]/);
       assert.equal(result.stdout, "");
     }
   });
 
+  it.each(["missing", "file", "inaccessible"])(
+    "rejects a %s target directory before starting a dispatcher",
+    (kind) => {
+      const { home, socket } = fixture();
+      const directory = join(home, "projects", "target");
+      mkdirSync(join(home, "projects"), { recursive: true });
+      if (kind === "file") writeFileSync(directory, "not a directory");
+      if (kind === "inaccessible") {
+        mkdirSync(directory);
+        chmodSync(directory, 0o600);
+      }
+      try {
+        const result = invoke(home, ["-p", "target"]);
+        assert.equal(result.code, 1, result.stderr);
+        assert.match(result.stderr, /^I\/O error:/);
+        assert.equal(result.stdout, "");
+        assert.equal(existsSync(socket), false);
+      } finally {
+        if (kind === "inaccessible") chmodSync(directory, 0o700);
+      }
+    },
+  );
+
+  it.each(["", ".", "..", "../outside", "/tmp/target", "nested/target", "nested\\target"])(
+    "rejects invalid project %j before accessing directories or starting tmux",
+    (project) => {
+      const { home, socket } = fixture();
+      for (const args of [
+        ["-p", project],
+        ["start", "--project", project],
+        ["stop", "-p", project],
+      ]) {
+        const result = invoke(home, args);
+        assert.equal(result.code, 1, JSON.stringify(args));
+        assert.equal(result.stderr, `invalid project: ${project}\n`);
+        assert.equal(result.stdout, "");
+        assert.equal(existsSync(socket), false);
+      }
+      assert.equal(existsSync(join(home, "projects")), false);
+    },
+  );
+
   it("returns code 1 when tmux cannot create the detached dispatcher session", () => {
     const { home } = fixture();
     const unavailableSocket = join(home, "missing-parent", "tmux.sock");
-    const result = invoke(home, [home], unavailableSocket);
+    const result = invoke(home, [], unavailableSocket);
     assert.equal(result.code, 1);
     assert.match(result.stderr, /^I\/O error: dispatcher start failed for ticket_dispatch_/);
     assert.equal(result.stdout, "");
   });
 
-  it("returns after detached start and logs completion for an empty store", async () => {
-    const { home, options } = fixture();
-    writeFileSync(options.log, "previous log\n");
-    const result = invoke(home, ["start", home, "--interval", "0.01"]);
+  it("returns after detached start and finishes an empty store without artifacts", async () => {
+    const { home, socket } = fixture();
+    const result = invoke(home, ["start", "--interval", "0.01"]);
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.stderr, "");
-    assert.match(result.stdout, /^dispatcher started: ticket_dispatch_.* log=/);
-    const log = await waitForLog(options.log, /dispatcher finished/);
-    assert.match(
-      log,
-      /^previous log\n\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] dispatcher start max=5\n/,
-    );
-    assert.match(log, /\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] dispatcher finished\n$/);
+    assert.equal(result.stdout, `dispatcher started: ${dispatcherName(basename(home))}\n`);
+    await waitStopped(home, socket);
+    assert.equal(existsSync(join(home, "dispatch.log")), false);
+    assert.equal(existsSync(join(home, "fix")), false);
   });
 
   it("accepts stop when this project's dispatcher is not running", () => {
@@ -517,28 +600,84 @@ describe("dispatch CLI", () => {
     assert.equal(result.stderr, "");
   });
 
-  for (const failedPath of ["log", "fixDir"] as const) {
-    it(`returns I/O error 1 when ${failedPath} access fails`, () => {
-      const { home, options } = fixture();
-      if (failedPath === "log") mkdirSync(options.log);
-      else if (failedPath === "fixDir") writeFileSync(options.fixDir, "not a directory");
-      const result = invoke(home, [home]);
-      assert.equal(result.code, 1, result.stderr);
-      assert.match(result.stderr, /^I\/O error: /);
-      assert.ok(!result.stderr.includes("usage:"));
-    });
-  }
+  it.each(["-p", "--project"])(
+    "stops a missing named project without reading its store or changing cwd (%s)",
+    (flag) => {
+      const { home } = fixture();
+      const result = invoke(home, ["stop", flag, "missing"]);
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.stdout, `dispatcher already stopped: ${dispatcherName("missing")}\n`);
+      assert.equal(result.stderr, "");
+      assert.equal(existsSync(join(home, "projects")), false);
+    },
+  );
 
-  it("reports prompt write failures in the dispatcher log after start succeeds", async () => {
-    const { home, options, store } = fixture();
-    mkdirSync(join(options.fixDir, "prompt-a.txt"), { recursive: true });
-    writeFileSync(join(store, "a.md"), "---\nstatus: open\n---\n");
-    const result = invoke(home, [home, "--interval", "0.01"]);
+  it.each([false, true])(
+    "keeps worker lifecycle or error messages on stdout (invalid=%s)",
+    (invalid) => {
+      const { home, socket, store } = fixture();
+      if (invalid) writeFileSync(join(store, "broken.md"), "---\nstatus: unknown\n---\n");
+      const server = Bun.spawnSync([
+        "tmux",
+        "-S",
+        socket,
+        "-f",
+        "/dev/null",
+        "new-session",
+        "-d",
+        "-s",
+        "anchor",
+        "sleep 60",
+      ]);
+      assert.equal(server.exitCode, 0, new TextDecoder().decode(server.stderr));
+      const result = Bun.spawnSync(
+        [process.execPath, CLI, "__ticket_dispatch_worker", basename(home)],
+        {
+          cwd: home,
+          env: { ...process.env, HOME: home, TICKET_TEST_TMUX_SOCKET: socket },
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 5000,
+        },
+      );
+      const stdout = new TextDecoder().decode(result.stdout);
+      const stderr = new TextDecoder().decode(result.stderr);
+      assert.equal(result.exitCode, invalid ? 1 : 0, stderr);
+      assert.match(stdout, /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] dispatcher start max=5\n/);
+      if (invalid) {
+        assert.match(stdout, /\] invalid status "unknown"/);
+        assert.match(stderr, /^invalid status "unknown"/);
+      } else {
+        assert.match(stdout, /\] dispatcher finished\n$/);
+        assert.equal(stderr, "");
+      }
+      assert.equal(existsSync(join(home, "dispatch.log")), false);
+      assert.equal(existsSync(join(home, "fix")), false);
+    },
+  );
+
+  it("preserves existing log and prompt files", async () => {
+    const { home, socket } = fixture();
+    const log = join(home, "dispatch.log");
+    const prompt = join(home, "fix", "prompt-a.txt");
+    writeFileSync(log, "previous log\n");
+    mkdirSync(join(home, "fix"));
+    writeFileSync(prompt, "previous prompt\n");
+    const result = invoke(home, []);
     assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stderr, "");
-    assert.match(result.stdout, /^dispatcher started:/);
-    const log = await waitForLog(options.log, /EISDIR|illegal operation on a directory/);
-    assert.match(log, /prompt-a\.txt/);
+    await waitStopped(home, socket);
+    assert.equal(await Bun.file(log).text(), "previous log\n");
+    assert.equal(await Bun.file(prompt).text(), "previous prompt\n");
+  });
+
+  it("ignores existing paths that previously held artifacts", async () => {
+    const { home, socket } = fixture();
+    mkdirSync(join(home, "dispatch.log"));
+    writeFileSync(join(home, "fix"), "not a directory");
+    const result = invoke(home, []);
+    assert.equal(result.code, 0, result.stderr);
+    await waitStopped(home, socket);
+    assert.equal(await Bun.file(join(home, "fix")).text(), "not a directory");
   });
 });
 
@@ -546,7 +685,7 @@ describe("dispatch snapshot validation", () => {
   it("uses existing ticket validation rather than silently skipping broken tickets", () => {
     const { home, store } = fixture();
     writeFileSync(join(store, "broken.md"), "---\nstatus: unknown\n---\n");
-    const result = invoke(home, [home]);
+    const result = invoke(home, []);
     assert.equal(result.code, 1);
     assert.match(result.stderr, /^invalid status "unknown"/);
     assert.ok(!result.stderr.includes("I/O error"));
@@ -555,7 +694,7 @@ describe("dispatch snapshot validation", () => {
   it("uses the existing missing-project error", () => {
     const { home, store } = fixture();
     rmSync(store, { recursive: true });
-    const result = invoke(home, [home]);
+    const result = invoke(home, []);
     assert.equal(result.code, 1);
     assert.match(result.stderr, /^project not found:/);
     assert.ok(!result.stderr.includes("I/O error"));

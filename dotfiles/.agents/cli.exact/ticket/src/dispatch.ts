@@ -1,20 +1,16 @@
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import dispatchPromptPath from "../dispatch-prompt.md" with { type: "file" };
 
 const OPTION_KEYS = ["--max", "--interval", "--prefix"];
 
 export interface DispatchOptions {
-  fixDir: string;
-  log: string;
   max: number;
   prefix: string;
   interval: number;
 }
 
 export const DISPATCH_USAGE =
-  "ticket dispatch [<work-dir>] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch start [<work-dir>] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch stop";
+  "ticket dispatch [-p <project>] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch start [-p <project>] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch stop [-p <project>]";
 
 export function sessionName(prefix: string, id: string): string {
   return prefix + id.split(".").join("_");
@@ -92,31 +88,35 @@ export function planTick(input: PlanInput): Plan {
 
 export function parseDispatchArgs(argv: string[]): {
   action?: "start" | "stop";
+  project?: string;
   options?: DispatchOptions;
   error?: string;
 } {
-  if (argv[0] === "stop") {
-    return argv.length === 1 ? { action: "stop" } : { error: "stop accepts no arguments" };
-  }
-  if (argv[0] === "start") argv = argv.slice(1);
+  const action = argv[0] === "stop" ? "stop" : "start";
+  if (argv[0] === "start" || argv[0] === "stop") argv = argv.slice(1);
   const given = new Map<string, string>();
-  const positional: string[] = [];
+  let project: string | undefined;
   let optionsEnded = false;
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]!;
-    if (optionsEnded) positional.push(arg);
-    else if (arg === "--") optionsEnded = true;
-    else if (OPTION_KEYS.includes(arg)) {
+    const isProject = arg === "-p" || arg === "--project";
+    if (optionsEnded) return { error: "positional arguments are not supported" };
+    if (arg === "--") optionsEnded = true;
+    else if (isProject || (action === "start" && OPTION_KEYS.includes(arg))) {
       const value = argv[++index];
-      if (value === undefined || value.startsWith("--"))
+      if (
+        value === undefined ||
+        value.startsWith("--") ||
+        value === "-p" ||
+        (isProject && value.startsWith("-"))
+      )
         return { error: `missing value for ${arg}` };
-      given.set(arg, value);
+      if (isProject) project = value;
+      else given.set(arg, value);
     } else if (arg.startsWith("-")) return { error: `unknown option: ${arg}` };
-    else positional.push(arg);
+    else return { error: "positional arguments are not supported" };
   }
-  if (positional.length > 1) return { error: "accepts at most one work directory" };
-  const work = positional[0] ?? process.cwd();
-  if (!work) return { error: "work directory must not be empty" };
+  if (action === "stop") return { action, project };
   const max = given.has("--max") ? Number(given.get("--max")) : 5;
   if (!Number.isInteger(max) || max < 1) return { error: "--max must be an integer >= 1" };
   const interval = given.has("--interval") ? Number(given.get("--interval")) : 30;
@@ -124,9 +124,8 @@ export function parseDispatchArgs(argv: string[]): {
     return { error: "--interval must be a number > 0" };
   return {
     action: "start",
+    project,
     options: {
-      fixDir: join(work, "fix"),
-      log: join(work, "dispatch.log"),
       max,
       prefix: given.get("--prefix") ?? "fix_",
       interval,
@@ -199,11 +198,10 @@ export function workerCommand(entry: string, argv: string[], project: string): s
 
 export async function startDispatcher(input: {
   project: string;
-  options: DispatchOptions;
   loadSnapshot: LoadSnapshot;
   command: string[];
 }): Promise<void> {
-  const { project, options } = input;
+  const { project } = input;
   const socket = dispatchSocket();
   const name = dispatcherName(project);
   if (ownsSession(socket, name, project, "dispatcher")) {
@@ -212,8 +210,6 @@ export async function startDispatcher(input: {
   }
   await Bun.file(dispatchPromptPath).text();
   await input.loadSnapshot();
-  mkdirSync(options.fixDir, { recursive: true });
-  appendFileSync(options.log, "");
   const result = tmux(socket, [
     "new-session",
     "-d",
@@ -231,7 +227,7 @@ export async function startDispatcher(input: {
     }
     throw new Error(`dispatcher start failed for ${name}: ${result.stderr.trim()}`);
   }
-  console.log(`dispatcher started: ${name} log=${options.log}`);
+  console.log(`dispatcher started: ${name}`);
 }
 
 export function stopDispatcher(project: string): void {
@@ -269,14 +265,13 @@ export interface RunDeps {
   log(line: string): void;
   hasSession(name: string): boolean;
   initialRunning?: ReadonlyMap<string, string>;
-  launch(id: string, name: string, promptFile: string): boolean | void;
+  launch(id: string, name: string, prompt: string): boolean | void;
   sleepMs(ms: number): Promise<void>;
 }
 
 export async function run(deps: RunDeps): Promise<void> {
   const { options } = deps;
   const template = await Bun.file(dispatchPromptPath).text();
-  mkdirSync(options.fixDir, { recursive: true });
   const running = new Map(deps.initialRunning);
   const started = new Set(running.keys());
   deps.log(`dispatcher start max=${options.max}`);
@@ -301,10 +296,8 @@ export async function run(deps: RunDeps): Promise<void> {
     }
     for (const id of plan.launches) {
       const name = sessionName(options.prefix, id);
-      const promptFile = join(options.fixDir, `prompt-${id}.txt`);
-      writeFileSync(promptFile, buildPrompt(template, id));
       started.add(id);
-      if (deps.launch(id, name, promptFile) !== false) {
+      if (deps.launch(id, name, buildPrompt(template, id)) !== false) {
         running.set(id, name);
         deps.log(`launched ${id} as ${name}`);
       }
@@ -325,10 +318,9 @@ export async function dispatch(
   function log(line: string): void {
     const stamped = `[${timestamp()}] ${line}`;
     console.log(stamped);
-    appendFileSync(options.log, `${stamped}\n`);
   }
-  function launch(id: string, name: string, promptFile: string): boolean {
-    const command = `prompt="$(cat ${shQuote(promptFile)} && printf .)" && exec pi "\${prompt%.}"`;
+  function launch(id: string, name: string, prompt: string): boolean {
+    const command = `exec pi ${shQuote(prompt)}`;
     const result = tmux(socket, [
       "new-session",
       "-d",
@@ -359,11 +351,7 @@ export async function dispatch(
     });
   } catch (error) {
     const message = (error as Error).message;
-    try {
-      log(message);
-    } catch (logError) {
-      console.error(`dispatcher log failed: ${(logError as Error).message}`);
-    }
+    log(message);
     throw error;
   }
 }
