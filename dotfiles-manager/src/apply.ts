@@ -105,8 +105,10 @@ export async function runApplyScripts(
 ): Promise<string[]> {
   const failures: string[] = [];
   for (const script of scripts) {
+    const started = performance.now();
     if (!script.distPath.endsWith(".ts")) {
       failures.push(`apply hook has unsupported extension: ${script.distPath}`);
+      writeLine(`  ✗ ${script.distPath} (${elapsedSeconds(started)}s)`);
       continue;
     }
     const cwd = join(homeRoot, script.homeFolderRel);
@@ -148,6 +150,9 @@ export async function runApplyScripts(
       const diagnostic = errors.join("; ");
       failures.push(diagnostic.startsWith(label) ? diagnostic : `${label}: ${diagnostic}`);
     }
+    writeLine(
+      `  ${errors.length === 0 ? "✓" : "✗"} ${script.distPath} (${elapsedSeconds(started)}s)`,
+    );
   }
   return failures;
 }

@@ -729,7 +729,7 @@ describe("CLI", () => {
     assert.match(stdout, /^diff: 0 changed, 0 type mismatches, 1 added,/);
     assert.match(
       stdout,
-      /apply: 1 added, 0 changed, 0 removed \(\d+\.\d{2}s\)\napply scripts: 1 scripts \(\d+\.\d{2}s\)\n$/,
+      /apply: 1 added, 0 changed, 0 removed \(\d+\.\d{2}s\)\n  ✓ final\.apply\.ts \(\d+\.\d{2}s\)\napply scripts: 1 scripts \(\d+\.\d{2}s\)\n$/,
     );
     assert.equal(await readFile(join(homeRoot, "added.txt"), "utf8"), "added\n");
     assert.equal(existsSync(join(homeRoot, "apply-out.txt")), true);
@@ -751,7 +751,10 @@ describe("CLI", () => {
 
     assert.equal(exitCode, 1);
     assert.equal(stderr, "apply script failed: fail.apply.ts (exit code 3)\n");
-    assert.match(stdout, /apply scripts: 2 scripts \(\d+\.\d{2}s\)\n$/);
+    assert.match(
+      stdout,
+      /  ✗ fail\.apply\.ts \(\d+\.\d{2}s\)\n  ✓ late\.apply\.ts \(\d+\.\d{2}s\)\napply scripts: 2 scripts \(\d+\.\d{2}s\)\n$/,
+    );
     assert.equal(await readFile(join(homeRoot, "apply-out.txt"), "utf8"), homeRoot);
   });
 
