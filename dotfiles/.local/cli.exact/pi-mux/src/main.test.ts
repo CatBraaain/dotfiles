@@ -1966,6 +1966,41 @@ function addRestartSession(fixture: SessionFixture, name: string, state: string)
   return id;
 }
 
+describe("new initial request", () => {
+  it("treats help flags as a help request instead of an initial request", () => {
+    for (const args of [
+      ["new", "--help"],
+      ["new", "-h"],
+      ["new", "--detached", "--help"],
+      ["new", "--detached", "-h"],
+    ])
+      assert.deepEqual(parseOperation(args), { kind: "help" });
+  });
+
+  it("keeps plain and dash-prefixed initial requests", () => {
+    assert.deepEqual(parseOperation(["new", "fix the failing test"]), {
+      kind: "new",
+      detached: false,
+      request: "fix the failing test",
+    });
+    assert.deepEqual(parseOperation(["new", "--detached", "fix the failing test"]), {
+      kind: "new",
+      detached: true,
+      request: "fix the failing test",
+    });
+    assert.deepEqual(parseOperation(["new", "--detached", "--detached"]), {
+      kind: "new",
+      detached: true,
+      request: "--detached",
+    });
+    assert.deepEqual(parseOperation(["new", "--"]), {
+      kind: "new",
+      detached: false,
+      request: "--",
+    });
+  });
+});
+
 describe("restart", () => {
   it("accepts only the optional force argument", () => {
     assert.deepEqual(parseOperation(["restart"]), { kind: "restart", force: false });

@@ -294,8 +294,10 @@ export function parseOperation(argv: string[]): Operation {
     const requests = argv.slice(detached ? 2 : 1);
     const request = requests[0];
     if (requests.length === 0) return { kind: "new", detached };
-    if (requests.length === 1 && request?.trim() && !request.includes("\0"))
+    if (requests.length === 1 && request?.trim() && !request.includes("\0")) {
+      if (request === "-h" || request === "--help") return { kind: "help" };
       return { kind: "new", detached, request };
+    }
   }
   if (argv[0] === "state") return parseStateOperation(argv);
   if (argv[0] === "open") {
