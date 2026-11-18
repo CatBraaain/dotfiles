@@ -70,7 +70,7 @@ const toolNames = [
   "subagent",
   "recontext",
   "session_search",
-  "mainagent",
+  "newagent",
   "powershell",
   "mystery_tool",
   "constructor",
@@ -87,7 +87,7 @@ const args = {
   task: "child task",
   code: "text(1);",
   action: "search",
-  initialRequest: "initial request",
+  prompt: "initial request",
 };
 const tinyPng =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7l8AAAAASUVORK5CYII=";
@@ -956,8 +956,8 @@ describe("single tool rows", () => {
 describe("summary failure boundaries", () => {
   for (const phase of ["before validation", "after validation error"]) {
     it(`renders non-string session names ${phase}`, () => {
-      const row = createRow("mainagent");
-      row.updateArgs({ name: 42, initialRequest: "test" });
+      const row = createRow("newagent");
+      row.updateArgs({ name: 42, prompt: "test" });
       if (phase === "after validation error") {
         row.updateResult({
           content: [{ type: "text", text: "argument validation failed" }],
@@ -965,16 +965,16 @@ describe("summary failure boundaries", () => {
         });
       }
       const status = phase === "before validation" ? "Running..." : "argument validation failed";
-      assert.equal(renderedText(row), ` mainagent test — ${status}`);
+      assert.equal(renderedText(row), ` newagent test — ${status}`);
     });
   }
 
-  it("ignores a non-string initial request when formatting the session call", () => {
-    const row = createRow("mainagent");
-    row.updateArgs({ name: "  session label  ", initialRequest: 42 });
-    assert.equal(renderedText(row), " mainagent session label — Running...");
-    row.updateArgs({ name: 42, initialRequest: 42 });
-    assert.ok(renderedText(row).startsWith(" mainagent"));
+  it("ignores a non-string prompt when formatting the session call", () => {
+    const row = createRow("newagent");
+    row.updateArgs({ name: "  session label  ", prompt: 42 });
+    assert.equal(renderedText(row), " newagent session label — Running...");
+    row.updateArgs({ name: 42, prompt: 42 });
+    assert.ok(renderedText(row).startsWith(" newagent"));
     assert.equal(renderedText(row).includes("[render error]"), false);
   });
 

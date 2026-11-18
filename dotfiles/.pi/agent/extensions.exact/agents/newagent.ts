@@ -11,7 +11,7 @@ type BashResponse = Awaited<
 >;
 import { Type, type Static } from "typebox";
 import { resultText } from "../shared/tool-text.ts";
-import { showMainagentApproval } from "./mainagent-approval.ts";
+import { showNewagentApproval } from "./newagent-approval.ts";
 import { getTmuxPaths, PARENT_PI_ENV_KEYS, type TmuxPaths } from "../pi-mux-bridge/shared.ts";
 const MAIN_AGENT_NAME = "main";
 
@@ -34,18 +34,17 @@ const parameters = Type.Object({
   ),
 });
 
-export type MainagentInput = Static<typeof parameters>;
+export type NewagentInput = Static<typeof parameters>;
 
 const outputSchema = Type.Object({
   status: Type.Union([Type.Literal("created"), Type.Literal("denied"), Type.Literal("error")]),
   error: Type.Optional(Type.String()),
 });
 
-export function validateInput(input: MainagentInput): string | undefined {
-  if (input.prompt.trim() === "") return "mainagent prompt must not be empty";
-  if (input.prompt.includes("\0")) return "mainagent prompt cannot contain NUL";
-  if (input.cwd !== undefined && input.cwd.includes("\0"))
-    return "mainagent cwd cannot contain NUL";
+export function validateInput(input: NewagentInput): string | undefined {
+  if (input.prompt.trim() === "") return "newagent prompt must not be empty";
+  if (input.prompt.includes("\0")) return "newagent prompt cannot contain NUL";
+  if (input.cwd !== undefined && input.cwd.includes("\0")) return "newagent cwd cannot contain NUL";
   return undefined;
 }
 
@@ -82,7 +81,7 @@ function sessionResult(outcome: BashResponse): AgentToolResult<{ bash: BashRespo
     bash.isError ||
     (envelope?.exit_code !== undefined && envelope.exit_code !== 0)
   ) {
-    const error = `mainagent tmux command failed:\n${text}`;
+    const error = `newagent tmux command failed:\n${text}`;
     return {
       content: [{ type: "text", text: error }],
       details,
@@ -98,7 +97,7 @@ function sessionResult(outcome: BashResponse): AgentToolResult<{ bash: BashRespo
   };
 }
 
-export function registerMainagentTool(pi: ExtensionAPI): void {
+export function registerNewagentTool(pi: ExtensionAPI): void {
   let sessionApproved = false;
   let turnApproved = false;
   let turnGeneration = 0;
@@ -120,7 +119,7 @@ export function registerMainagentTool(pi: ExtensionAPI): void {
 
   async function requestApproval(
     context: ExtensionToolContext,
-    input: MainagentInput,
+    input: NewagentInput,
     sessionCwd: string,
     signal: AbortSignal | undefined,
   ): Promise<ApprovalDecision> {
@@ -137,7 +136,7 @@ export function registerMainagentTool(pi: ExtensionAPI): void {
     } else {
       const options = [...ALLOW_OPTIONS.map((option) => option.label), DENY_OPTION_LABEL];
       const selected = useCustomDialog
-        ? await showMainagentApproval(
+        ? await showNewagentApproval(
             context.ui,
             QUESTION,
             { prompt: input.prompt, cwd: input.cwd === undefined ? undefined : sessionCwd },
@@ -165,13 +164,13 @@ export function registerMainagentTool(pi: ExtensionAPI): void {
     )?.trim();
     signal?.throwIfAborted();
     return {
-      denied: reason ? `mainagent denied by user: ${reason}` : "mainagent denied by user",
+      denied: reason ? `newagent denied by user: ${reason}` : "newagent denied by user",
     };
   }
 
   const tool: ToolDefinition<typeof parameters> & { reachesTools(): string[] } = {
-    name: "mainagent",
-    label: "Main Agent",
+    name: "newagent",
+    label: "New Agent",
     description:
       "Create a detached, independent main-agent pi session in a tmux window and start it with the given prompt. Returns only the session information; the tool does not wait for, converse with, or collect results. The user takes over the session via tmux attach. Requires interactive approval.",
     parameters,
@@ -184,13 +183,13 @@ export function registerMainagentTool(pi: ExtensionAPI): void {
       if (validationError !== undefined) throw new Error(validationError);
       if (process.env.PI_AGENT_NAME !== MAIN_AGENT_NAME)
         throw new Error(
-          `mainagent is restricted to the main agent (current agent: ${process.env.PI_AGENT_NAME ?? "unknown"})`,
+          `newagent is restricted to the main agent (current agent: ${process.env.PI_AGENT_NAME ?? "unknown"})`,
         );
       signal?.throwIfAborted();
       const sessionCwd = input.cwd === undefined ? resolve(ctx.cwd) : resolve(ctx.cwd, input.cwd);
 
       if (!sessionApproved && !turnApproved) {
-        if (!ctx.hasUI || !ctx.ui) throw new Error("mainagent requires interactive approval");
+        if (!ctx.hasUI || !ctx.ui) throw new Error("newagent requires interactive approval");
         const decision = await requestApproval(ctx, input, sessionCwd, signal);
         if ("denied" in decision) return deniedResult(decision.denied);
       }

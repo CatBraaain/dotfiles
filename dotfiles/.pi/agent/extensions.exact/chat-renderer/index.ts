@@ -66,7 +66,7 @@ const WEB_DISPLAYS = {
 } as const;
 const SESSION_DISPLAYS = {
   session_search: { successStatus: "complete", text: allTextContent },
-  mainagent: { successStatus: "created", text: allTextContent },
+  newagent: { successStatus: "created", text: allTextContent },
 };
 
 const REGISTRY: Record<string, RendererEntry> = {
@@ -276,11 +276,11 @@ function formatWebCall(name: string, args: Record<string, any>, theme: ToolTheme
 
 function formatSessionCall(name: string, args: Record<string, unknown>, theme: ToolTheme): string {
   const sessionName = typeof args.name === "string" ? args.name.trim() : "";
-  const initialRequest = typeof args.initialRequest === "string" ? args.initialRequest : "";
+  const prompt = typeof args.prompt === "string" ? args.prompt : "";
   const preview =
     name === "session_search"
       ? (args.action ?? "")
-      : truncateText(sessionName || initialRequest, SESSION_PREVIEW_LIMIT);
+      : truncateText(sessionName || prompt, SESSION_PREVIEW_LIMIT);
   return titleLine(`${name} ${preview}`, theme);
 }
 

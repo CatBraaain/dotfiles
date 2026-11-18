@@ -8,7 +8,7 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 
-export async function showMainagentApproval(
+export async function showNewagentApproval(
   ui: ExtensionUIContext,
   question: string,
   details: { prompt: string; cwd?: string },
@@ -26,7 +26,7 @@ export async function showMainagentApproval(
         cancel = onAbort;
         signal?.addEventListener("abort", cancel, { once: true });
         if (signal?.aborted) cancel();
-        return new MainagentApprovalDialog(tui, theme, question, details, options, done);
+        return new NewagentApprovalDialog(tui, theme, question, details, options, done);
       },
       {
         overlay: true,
@@ -38,7 +38,7 @@ export async function showMainagentApproval(
   }
 }
 
-export class MainagentApprovalDialog implements Component {
+export class NewagentApprovalDialog implements Component {
   readonly capturesViewportInput = true;
   private scrollTop = 0;
   private selectedIndex = 0;

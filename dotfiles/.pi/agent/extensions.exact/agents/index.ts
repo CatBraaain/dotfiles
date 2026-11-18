@@ -40,7 +40,7 @@ import {
   type SettingsRule,
 } from "./routing.ts";
 import { parseCronExpression } from "./cron.ts";
-import { registerMainagentTool } from "./mainagent.ts";
+import { registerNewagentTool } from "./newagent.ts";
 import { registerSessionTitle } from "../session-title/extension.ts";
 import {
   CLASS_CHANGE_EVENT,
@@ -1064,7 +1064,7 @@ export default function agentsExtension(
   if (injectedConfig.config === undefined)
     throw new Error(`agents.yaml: ${injectedConfig.error ?? "configuration is invalid"}`);
   const config = injectedConfig.config;
-  registerMainagentTool(pi);
+  registerNewagentTool(pi);
   let currentAgent = config.default;
   let currentMode = config.defaultMode;
   const inheritedMode = process.env.PI_AGENT_MODE;

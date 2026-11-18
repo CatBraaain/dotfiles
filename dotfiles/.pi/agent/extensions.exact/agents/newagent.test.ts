@@ -4,11 +4,11 @@ import { afterAll, beforeAll, describe, it } from "bun:test";
 import { parse } from "shell-quote";
 import { getTmuxPaths, PARENT_PI_ENV_KEYS } from "../pi-mux-bridge/shared.ts";
 import {
-  registerMainagentTool,
+  registerNewagentTool,
   buildTmuxCommand,
   validateInput,
-  type MainagentInput,
-} from "./mainagent.ts";
+  type NewagentInput,
+} from "./newagent.ts";
 
 type DialogOptions = { signal?: AbortSignal };
 
@@ -38,7 +38,7 @@ type CapturedHandlers = Map<string, (event: any, context?: any) => unknown>;
 
 function captureTool(handlers?: CapturedHandlers): any {
   const tools: any[] = [];
-  registerMainagentTool({
+  registerNewagentTool({
     registerTool: (tool: any) => tools.push(tool),
     on: (event: string, handler: (event: any, context?: any) => unknown) =>
       handlers?.set(event, handler),
@@ -144,7 +144,7 @@ function withAgentName(
   };
 }
 
-const request: MainagentInput = { prompt: "fix the failing build" };
+const request: NewagentInput = { prompt: "fix the failing build" };
 
 const previousAgentName = process.env.PI_AGENT_NAME;
 beforeAll(() => {
@@ -231,9 +231,9 @@ describe("common independent startup command", () => {
 });
 
 describe("ツールの登録", () => {
-  it("mainagent として登録し、bash に到達する", () => {
+  it("newagent として登録し、bash に到達する", () => {
     const tool = captureTool();
-    assert.equal(tool.name, "mainagent");
+    assert.equal(tool.name, "newagent");
     assert.deepEqual(tool.reachesTools(), ["bash"]);
     assert.deepEqual(Object.keys(tool.parameters.properties).sort(), ["cwd", "prompt"]);
     assert.deepEqual(Object.keys(tool.outputSchema.properties).sort(), ["error", "status"]);
@@ -458,7 +458,7 @@ describe("承認", () => {
     );
     assert.deepEqual(result.structuredContent, {
       status: "denied",
-      error: "mainagent denied by user",
+      error: "newagent denied by user",
     });
     assert.deepEqual(calls.inputTitles, ["Denied. Optional reason for the agent:"]);
     assert.equal(executor.commands.length, 0);
@@ -491,7 +491,7 @@ describe("承認", () => {
         undefined,
         mockContext(ui, executor.executeTool),
       );
-      assert.equal(result.structuredContent.error, "mainagent denied by user");
+      assert.equal(result.structuredContent.error, "newagent denied by user");
       assert.equal(executor.commands.length, 0);
     });
   }

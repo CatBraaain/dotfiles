@@ -12,8 +12,8 @@ import {
   type Terminal,
   type TUI,
 } from "@earendil-works/pi-tui";
-import { MainagentApprovalDialog, showMainagentApproval } from "./mainagent-approval.ts";
-import { registerMainagentTool } from "./mainagent.ts";
+import { NewagentApprovalDialog, showNewagentApproval } from "./newagent-approval.ts";
+import { registerNewagentTool } from "./newagent.ts";
 
 const QUESTION = "Allow creating a new main-agent session?";
 const OPTIONS = [
@@ -60,7 +60,7 @@ function approvalHarness(mode: "regular" | "fullscreen", prompt: string, cwd?: s
   const tui = mode === "regular" ? new TuiMainScreen(terminal) : new TuiAltScreen(terminal);
   tui.addChild(new Text(Array.from({ length: 70 }, () => "BACKGROUND CHAT").join("\n")));
   const answers: (string | undefined)[] = [];
-  const component = new MainagentApprovalDialog(
+  const component = new NewagentApprovalDialog(
     tui,
     theme,
     QUESTION,
@@ -428,7 +428,7 @@ describe("approval lifecycle and tool routing", () => {
       const harness = customUi(tui);
       const handlers = new Map<string, (event: any) => unknown>();
       const tools: any[] = [];
-      registerMainagentTool({
+      registerNewagentTool({
         registerTool(tool: unknown) {
           tools.push(tool);
         },
@@ -518,7 +518,7 @@ describe("approval lifecycle and tool routing", () => {
       listeners--;
       return remove(...args);
     };
-    const pending = showMainagentApproval(
+    const pending = showNewagentApproval(
       harness.ui,
       QUESTION,
       { prompt: "test" },
@@ -539,7 +539,7 @@ describe("approval lifecycle and tool routing", () => {
     const controller = new AbortController();
     controller.abort();
     await assert.rejects(
-      showMainagentApproval(harness.ui, QUESTION, { prompt: "x" }, OPTIONS, controller.signal),
+      showNewagentApproval(harness.ui, QUESTION, { prompt: "x" }, OPTIONS, controller.signal),
       { name: "AbortError" },
     );
     assert.equal(harness.calls.custom, 0);
@@ -553,7 +553,7 @@ describe("approval lifecycle and tool routing", () => {
       const tui = new TuiMainScreen(terminal);
       const harness = customUi(tui);
       const tools: any[] = [];
-      registerMainagentTool({
+      registerNewagentTool({
         registerTool(tool: unknown) {
           tools.push(tool);
         },

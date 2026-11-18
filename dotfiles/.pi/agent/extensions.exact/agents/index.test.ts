@@ -1657,23 +1657,23 @@ describe("待機スピナー", () => {
 });
 
 describe("拡張の接続", () => {
-  it("registers mainagent and subagent exactly once as separate tools", () => {
+  it("registers newagent and subagent exactly once as separate tools", () => {
     const extension = captureAgentsExtension();
     try {
       assert.deepEqual(extension.registeredTools.map((tool) => tool.name).sort(), [
-        "mainagent",
+        "newagent",
         "subagent",
       ]);
       assert.equal(
-        extension.registeredTools.find((tool) => tool.name === "mainagent")?.label,
-        "Main Agent",
+        extension.registeredTools.find((tool) => tool.name === "newagent")?.label,
+        "New Agent",
       );
     } finally {
       extension.restore();
     }
   });
 
-  it("allows mainagent only for main in the shipped configuration", () => {
+  it("allows newagent only for main in the shipped configuration", () => {
     const shippedConfig = parseAgentConfig(
       readFileSync(
         new URL("../../../../.agents/config.exact/agents.yaml", import.meta.url),
@@ -1683,17 +1683,17 @@ describe("拡張の接続", () => {
     assert.ok(shippedConfig.config);
     for (const agent of Object.keys(shippedConfig.config.agents)) {
       assert.equal(
-        shouldBlockToolCall(agent, "mainagent", shippedConfig.config),
+        shouldBlockToolCall(agent, "newagent", shippedConfig.config),
         agent !== "main",
         agent,
       );
     }
   });
 
-  it("preserves mainagent approval expiry alongside agents lifecycle handlers", async () => {
+  it("preserves newagent approval expiry alongside agents lifecycle handlers", async () => {
     const previousAgentName = process.env.PI_AGENT_NAME;
     const extension = captureAgentsExtension({ config: modeConfig }, { flags: { agent: "main" } });
-    const mainagent = extension.registeredTools.find((tool) => tool.name === "mainagent")!;
+    const newagent = extension.registeredTools.find((tool) => tool.name === "newagent")!;
     let approvalCount = 0;
     const bashCalls: string[] = [];
     const context = {
@@ -1714,23 +1714,23 @@ describe("拡張の接続", () => {
         };
       },
     };
-    async function executeMainagent() {
-      return mainagent.execute("call", { prompt: "fix the build" }, undefined, undefined, context);
+    async function executeNewagent() {
+      return newagent.execute("call", { prompt: "fix the build" }, undefined, undefined, context);
     }
     try {
       await extension.sessionStart();
-      assert.deepEqual((await executeMainagent()).structuredContent, { status: "created" });
-      await executeMainagent();
+      assert.deepEqual((await executeNewagent()).structuredContent, { status: "created" });
+      await executeNewagent();
       assert.equal(approvalCount, 1);
       await extension.input("next request");
-      await executeMainagent();
+      await executeNewagent();
       assert.equal(approvalCount, 2);
       await extension.messageStart({ role: "user", content: "next request" });
-      await executeMainagent();
+      await executeNewagent();
       assert.equal(approvalCount, 3);
       assert.deepEqual(bashCalls, ["bash", "bash", "bash", "bash"]);
       await extension.runCommand("worker");
-      await assert.rejects(executeMainagent(), /restricted to the main agent/);
+      await assert.rejects(executeNewagent(), /restricted to the main agent/);
       assert.equal(bashCalls.length, 4);
     } finally {
       if (previousAgentName === undefined) delete process.env.PI_AGENT_NAME;
