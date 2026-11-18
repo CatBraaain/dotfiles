@@ -10,6 +10,7 @@ import {
   memo,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -721,6 +722,19 @@ function createClientStore(): {
   };
 }
 
+const SessionRow = memo(function SessionRow(
+  props: ClientSession & {
+    isDisplayed: boolean;
+    currentDay: string;
+    actions: DescriptorActions;
+  },
+): ReactElement {
+  return descriptorToElement(
+    sessionDescriptor(props, props.isDisplayed ? props.sessionId : undefined),
+    props.actions,
+  );
+});
+
 interface SessionsAppProps {
   bridge: ClientBridge;
   store: ReturnType<typeof createClientStore>;
@@ -758,46 +772,73 @@ function SessionsApp({
     statusElement.className = snapshot.errorMessage !== "" ? "error" : "";
   }, [snapshot, statusElement, connectionStatusElement]);
 
-  const actions: DescriptorActions = {
-    onModeToggle: (cwd) =>
-      setModes((previous) => {
-        const next = new Map(previous);
-        next.set(cwd, previous.get(cwd) === "all" ? "unarchived" : "all");
-        return next;
-      }),
-    onGroupToggle: (cwd) =>
-      setCollapsedCwds((previous) => {
-        const next = new Set(previous);
-        if (next.has(cwd)) next.delete(cwd);
-        else next.add(cwd);
-        return next;
-      }),
-    onNewSessionClick: (cwd) => {
-      const requestId = store.startNewSession(cwd);
-      bridge.postMessage({ type: "newSession", cwd, requestId });
-    },
-    onWorkspaceMenuOpen: setWorkspaceMenu,
-    onWorkspaceMenuToggle: (menu) =>
-      setWorkspaceMenu((previous) => (previous?.cwd === menu.cwd ? null : menu)),
-    onSessionClick: (sessionId) => bridge.postMessage({ type: "openSession", sessionId }),
-    onArchiveClick: (sessionId) => bridge.postMessage({ type: "archiveSession", sessionId }),
-    onUnarchiveClick: (sessionId) => bridge.postMessage({ type: "unarchiveSession", sessionId }),
-  };
-
-  const view = sessionListView(
-    snapshot.state,
-    modes,
-    snapshot.state.displayedSessionId,
-    collapsedCwds,
-    snapshot.loadStatus,
-    workspaceMenu?.cwd,
-    new Set(snapshot.pendingNewSessions.values()),
+  const actions = useMemo<DescriptorActions>(
+    () => ({
+      onModeToggle: (cwd) =>
+        setModes((previous) => {
+          const next = new Map(previous);
+          next.set(cwd, previous.get(cwd) === "all" ? "unarchived" : "all");
+          return next;
+        }),
+      onGroupToggle: (cwd) =>
+        setCollapsedCwds((previous) => {
+          const next = new Set(previous);
+          if (next.has(cwd)) next.delete(cwd);
+          else next.add(cwd);
+          return next;
+        }),
+      onNewSessionClick: (cwd) => {
+        const requestId = store.startNewSession(cwd);
+        bridge.postMessage({ type: "newSession", cwd, requestId });
+      },
+      onWorkspaceMenuOpen: setWorkspaceMenu,
+      onWorkspaceMenuToggle: (menu) =>
+        setWorkspaceMenu((previous) => (previous?.cwd === menu.cwd ? null : menu)),
+      onSessionClick: (sessionId) => bridge.postMessage({ type: "openSession", sessionId }),
+      onArchiveClick: (sessionId) => bridge.postMessage({ type: "archiveSession", sessionId }),
+      onUnarchiveClick: (sessionId) => bridge.postMessage({ type: "unarchiveSession", sessionId }),
+    }),
+    [bridge, store],
   );
+
+  const pendingNewSessionCwds = new Set(snapshot.pendingNewSessions.values());
+  const currentDay = new Date().toDateString();
   return (
     <>
-      {view.sessions.map((descriptor, index) => (
-        <StaticDescriptor key={descriptor.key ?? index} descriptor={descriptor} actions={actions} />
-      ))}
+      {snapshot.state.groups.length === 0 && (
+        <p className="empty">{EMPTY_LIST_MESSAGES[snapshot.loadStatus]}</p>
+      )}
+      {snapshot.state.groups.map((group) => {
+        const mode = modes.get(group.cwd) ?? "unarchived";
+        const header = groupDescriptor(
+          { ...group, sessions: [] },
+          mode,
+          snapshot.state.displayedSessionId,
+          collapsedCwds,
+          workspaceMenu?.cwd,
+          pendingNewSessionCwds.has(group.cwd),
+        );
+        return createElement(
+          header.tag,
+          { ...descriptorProps(header), key: group.cwd },
+          ...(header.children ?? []).map((child, index) =>
+            typeof child === "string" ? (
+              child
+            ) : (
+              <StaticDescriptor key={index} descriptor={child} actions={actions} />
+            ),
+          ),
+          ...visibleGroupSessions(group, mode, collapsedCwds).map((session) => (
+            <SessionRow
+              key={session.sessionId}
+              {...session}
+              isDisplayed={session.sessionId === snapshot.state.displayedSessionId}
+              currentDay={currentDay}
+              actions={actions}
+            />
+          )),
+        );
+      })}
       {workspaceMenu !== null && hasMenuWorkspace && (
         <WorkspaceMenu
           menu={workspaceMenu}

@@ -686,6 +686,60 @@ describe("session list loading in the mounted client", () => {
     },
   );
 
+  it("updates archived row fields after a cloned snapshot and retains current action targets", async () => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+    await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
+    const updated = structuredClone(state);
+    const session = updated.groups[0].sessions[0];
+    Object.assign(session, {
+      displayName: "Renamed current session",
+      updatedAtMs: Date.UTC(2026, 0, 1, 12),
+      state: undefined,
+      hasUnread: false,
+      isArchived: true,
+    });
+    updated.displayedSessionId = updated.groups[0].sessions[1].sessionId;
+    await receive({ type: "sessions", state: updated });
+    const row = page.locator(".session-row").first();
+    await expect.poll(() => row.locator(".session-name").textContent()).toBe(session.displayName);
+    expect(await row.getAttribute("class")).toBe("session-row archived");
+    expect(await row.locator(".session-timestamp").textContent()).not.toBe("");
+    expect(await row.locator(".session-status").getAttribute("data-state")).toBeNull();
+    expect(await row.locator(".session-status").getAttribute("data-unread")).toBe("false");
+    expect(await row.locator(".session-button").getAttribute("title")).toBe(
+      `${session.displayName}\n${session.sessionId}`,
+    );
+    expect(await page.locator(".selected .session-name").textContent()).toBe("Atlas archived");
+    await row.locator(".unarchive").click();
+    expect(
+      await page.evaluate(() => (Reflect.get(window, "__requests") as unknown[]).at(-1)),
+    ).toEqual({
+      type: "unarchiveSession",
+      sessionId: session.sessionId,
+    });
+    await row.locator(".session-button").click();
+    expect(
+      await page.evaluate(() => (Reflect.get(window, "__requests") as unknown[]).at(-1)),
+    ).toEqual({
+      type: "openSession",
+      sessionId: session.sessionId,
+    });
+  });
+
+  it("refreshes unchanged row timestamps when a snapshot arrives on a new day", async () => {
+    const beforeMidnightMs = await page.evaluate(() => new Date(2026, 0, 1, 23, 59).getTime());
+    await page.clock.install({ time: beforeMidnightMs });
+    const dated = structuredClone(state);
+    dated.groups[0].sessions[0].updatedAtMs = beforeMidnightMs;
+    await receive({ type: "sessions", state: dated });
+    await expect.poll(() => page.locator(".session-timestamp").textContent()).toBe("23:59");
+    await page.clock.setSystemTime(beforeMidnightMs + 2 * 60_000);
+    await receive({ type: "sessions", state: structuredClone(dated) });
+    await expect.poll(() => page.locator(".session-timestamp").textContent()).toBe("01/01");
+  });
+
   it("shows the retrieval guidance in the list area without a status error", async () => {
     await expectLoading();
     await receive({ type: "sessionsError" });
