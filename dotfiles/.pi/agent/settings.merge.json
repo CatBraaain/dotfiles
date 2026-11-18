@@ -37,5 +37,5 @@
     "openrouter/**/*:free"
   ],
   "extensions": ["extensions/pi-mux-bridge", "-builtin:codemode"],
-  "packages": ["npm:pi-commandcode-provider"]
+  "packages": ["npm:pi-commandcode-provider@0.7.12"]
 }
