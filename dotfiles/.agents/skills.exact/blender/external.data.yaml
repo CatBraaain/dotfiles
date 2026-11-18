@@ -37,4 +37,3 @@ repos:
         sections:
           When to load deeper references: |
             - **`references/assembly-order.md`** — the canonical scene-assembly sequence, time budgets, recovery patterns. Load when planning a multi-step pipeline or when the user asks "what's the right order?".
-            - **`references/code-execution-rules.md`** — detailed rules for `execute_blender_code` (namespace, timeouts, stdout capture). Load when tracking down execution errors.
