@@ -406,6 +406,10 @@ main worktree ではファイルを編集しない。編集を伴う作業は、
 
 main の未コミット変更はその場に残す。worktree への持ち運びは行わない。
 
+### 依存の準備
+
+依存が必要な場合は、各worktree内でプロジェクト既定のパッケージマネージャーと manifest・lockfile に従ってインストールする。main や別worktree の `node_modules` などの依存ディレクトリを、手動でsymlinkして共有しない。
+
 ### 統合
 
 ローカルの使い捨てworktreeブランチを統合先（main等）へマージするときは、履歴を線形に保つ。
