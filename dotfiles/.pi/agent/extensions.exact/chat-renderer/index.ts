@@ -6,10 +6,13 @@ import {
   Container,
   getKeybindings,
   Markdown,
+  Marked,
   Spacer,
   stripTerminalSequences,
   Text,
   type Component,
+  type Token,
+  type Tokens,
 } from "@earendil-works/pi-tui";
 import type { AgentToolDetails } from "../agents/index.ts";
 import type { WebToolDetails } from "../web-search/index.ts";
@@ -153,7 +156,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerEntryRenderer?.(LEGACY_STAMP_ENTRY_TYPE, () => EMPTY_ROW);
   pi.registerMarkdownTransformer?.((markdown, context) => {
     if (context.messageType !== "assistant") return markdown;
-    return convertAnsiEscapeLiterals(markdown);
+    return colorizeStrongText(convertAnsiEscapeLiterals(markdown));
   });
   let dispose: (() => void) | undefined;
   pi.on?.("session_start", (_event, ctx) => {
@@ -867,4 +870,82 @@ export function convertAnsiEscapeLiterals(markdown: string): string {
 function convertEscapeLiterals(line: string): string {
   const escape = "\x1b";
   return line.replace(/\\x1b/gi, escape).replace(/\\u001b/gi, escape);
+}
+
+const STRONG_COLOR_SGR = "\x1b[38;2;245;167;66m";
+const DEFAULT_FG_SGR = "\x1b[39m";
+const STRONG_DELIMITER_WIDTH = 2;
+
+const strongTextLexer = new Marked();
+
+type StrongSpan = { raw: string; coloredRaw: string };
+type SequenceInsertion = { at: number; sequence: string };
+
+export function colorizeStrongText(markdown: string): string {
+  const spans: StrongSpan[] = [];
+  strongTextLexer.walkTokens(strongTextLexer.lexer(markdown), (token) => {
+    if (!isStrongToken(token)) return;
+    const span = coloredStrongSpan(token);
+    if (span) spans.push(span);
+  });
+  let colored = "";
+  let copiedUpTo = 0;
+  let searchFrom = 0;
+  for (const span of spans) {
+    const at = markdown.indexOf(span.raw, searchFrom);
+    if (at < 0) continue;
+    colored += markdown.slice(copiedUpTo, at) + span.coloredRaw;
+    copiedUpTo = at + span.raw.length;
+    searchFrom = copiedUpTo;
+  }
+  return colored + markdown.slice(copiedUpTo);
+}
+
+function isStrongToken(token: Token): token is Tokens.Strong {
+  return token.type === "strong";
+}
+
+function coloredStrongSpan(strong: Tokens.Strong): StrongSpan | undefined {
+  const leafOffsets = textLeafOffsets(strong.tokens ?? [], STRONG_DELIMITER_WIDTH);
+  if (leafOffsets.length === 0) return undefined;
+  const insertions: SequenceInsertion[] = leafOffsets.map((at) => ({
+    at,
+    sequence: STRONG_COLOR_SGR,
+  }));
+  insertions.push({
+    at: strong.raw.length - STRONG_DELIMITER_WIDTH,
+    sequence: DEFAULT_FG_SGR,
+  });
+  return { raw: strong.raw, coloredRaw: insertSequences(strong.raw, insertions) };
+}
+
+function nestedTokensOf(token: Token): Token[] | undefined {
+  return "tokens" in token && Array.isArray(token.tokens) ? token.tokens : undefined;
+}
+
+function textLeafOffsets(tokens: Token[], startAt: number): number[] {
+  const offsets: number[] = [];
+  let at = startAt;
+  for (const token of tokens) {
+    const nested = nestedTokensOf(token) ?? [];
+    const hasNestedTokens = nested.length > 0;
+    const stylesOwnForeground = token.type === "link";
+    if (token.type === "text" && !hasNestedTokens) {
+      offsets.push(at);
+    } else if (hasNestedTokens && !stylesOwnForeground) {
+      offsets.push(...textLeafOffsets(nested, at));
+    }
+    at += token.raw.length;
+  }
+  return offsets;
+}
+
+function insertSequences(source: string, insertions: SequenceInsertion[]): string {
+  let withSequences = "";
+  let copiedUpTo = 0;
+  for (const { at, sequence } of insertions) {
+    withSequences += source.slice(copiedUpTo, at) + sequence;
+    copiedUpTo = at;
+  }
+  return withSequences + source.slice(copiedUpTo);
 }
