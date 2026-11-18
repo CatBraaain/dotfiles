@@ -362,9 +362,12 @@ function* reverseLines(fd: number, size: number): Generator<string> {
     let end = length;
     let newline = buffer.lastIndexOf(10, end - 1);
     while (newline >= 0) {
-      const suffix = buffer.subarray(newline + 1, end);
-      const line = parts.length > 0 ? Buffer.concat([suffix, ...parts.reverse()]) : suffix;
-      yield line.toString("utf8");
+      if (parts.length > 0) {
+        const suffix = buffer.subarray(newline + 1, end);
+        yield Buffer.concat([suffix, ...parts.reverse()]).toString("utf8");
+      } else {
+        yield buffer.toString("utf8", newline + 1, end);
+      }
       parts = [];
       end = newline;
       newline = end > 0 ? buffer.lastIndexOf(10, end - 1) : -1;

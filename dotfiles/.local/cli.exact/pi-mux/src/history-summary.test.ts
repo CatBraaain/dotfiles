@@ -316,6 +316,60 @@ describe("history header prefix reads", () => {
   });
 });
 
+describe("history reverse line boundaries", () => {
+  const chunkBytes = 256 * 1024;
+  const headerLine = JSON.stringify({
+    type: "session",
+    id: "boundary-session",
+    cwd: "/tmp/boundary-workspace",
+    timestamp: "2026-01-01T00:00:00.000Z",
+  });
+  const title = "Boundary 🙂";
+  const messageLine = JSON.stringify(userMessage("First message"));
+  const titleLine = JSON.stringify(sessionInfo(title));
+  const emptyPaddedTitle = JSON.stringify({ type: "session_info", name: title, padding: "" });
+  const characterOffset = Buffer.from(emptyPaddedTitle).indexOf(Buffer.from("🙂"));
+  const paddingBytes = chunkBytes + 1 - (Buffer.byteLength(emptyPaddedTitle) - characterOffset);
+  const splitTitleLine = JSON.stringify({
+    type: "session_info",
+    name: title,
+    padding: "x".repeat(paddingBytes),
+  });
+  const cases = [
+    { name: "CRLF lines", contents: [messageLine, titleLine, ""].join("\r\n") },
+    { name: "empty lines", contents: ["", messageLine, "", titleLine, "", ""].join("\n") },
+    {
+      name: "a newline at the reverse chunk boundary",
+      contents: [messageLine, titleLine, "x".repeat(chunkBytes)].join("\n"),
+    },
+    {
+      name: "a title character split across the reverse chunk boundary",
+      contents: [messageLine, JSON.stringify(sessionInfo("Older title")), splitTitleLine].join(
+        "\n",
+      ),
+    },
+  ];
+
+  for (const testCase of cases) {
+    it(`preserves the latest title and activity time with ${testCase.name}`, () => {
+      const { file, cacheHome } = writeSummaryFixture([]);
+      fs.writeFileSync(file, headerLine + "\n" + testCase.contents);
+      const previous = process.env.XDG_CACHE_HOME;
+      process.env.XDG_CACHE_HOME = cacheHome;
+      try {
+        const summaries = new HistorySummaryCache();
+        const expected = { title, mtime: Date.parse("2026-01-01T00:00:00.000Z") };
+        assert.deepEqual(summaries.resolve(file), expected);
+        assert.deepEqual(summaries.resolve(file), expected);
+      } finally {
+        if (previous === undefined) delete process.env.XDG_CACHE_HOME;
+        else process.env.XDG_CACHE_HOME = previous;
+        fs.rmSync(join(file, ".."), { recursive: true, force: true });
+      }
+    });
+  }
+});
+
 describe("history first user message fallback", () => {
   it("extracts a string user message as the title", () => {
     const { file, cacheHome } = writeSummaryFixture([userMessage("fix the build")]);
