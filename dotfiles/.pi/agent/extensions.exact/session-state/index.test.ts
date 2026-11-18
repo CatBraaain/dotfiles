@@ -111,7 +111,6 @@ interface ExtensionHarness {
   restorePath: string;
   commands: Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>;
   server: FakeTmuxServer;
-  notifications: { message: string; level: string | undefined }[];
   sessionId: string;
   sessionName: string | undefined;
   emit(type: string, fields?: Record<string, unknown>): Promise<void>;
@@ -178,13 +177,11 @@ async function createExtensionHarness(
   const handlers = new Map<string, EventHandler[]>();
   const bus = createEventBus();
   const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
-  const notifications: { message: string; level: string | undefined }[] = [];
   const server = new FakeTmuxServer(socketPath);
   const modelRegistry = {};
   const context = {
     signal: runController.signal,
     modelRegistry,
-    hasUI: true,
     sessionManager: {
       getCwd: () => workspacePath,
       getSessionId: () => harnessSessionId.value,
@@ -192,11 +189,6 @@ async function createExtensionHarness(
       getSessionFile: () => undefined,
       getSessionDir: () => sessionDir,
       getHeader: () => ({ parentSession: "/ordinary/top-level-parent.jsonl" }),
-    },
-    ui: {
-      notify(message: string, level?: string) {
-        notifications.push({ message, level });
-      },
     },
   } as unknown as ExtensionContext;
   const events: ExtensionAPI["events"] = bus;
@@ -225,7 +217,6 @@ async function createExtensionHarness(
     restorePath,
     commands,
     server,
-    notifications,
     get sessionId() {
       return harnessSessionId.value;
     },
@@ -355,13 +346,11 @@ describe("sessionStateExtension in top-level sessions", () => {
       await h.emit("ui_prompt_end");
       await finishEventLoopTurn();
       assert.equal(h.server.commands.length, 0);
-      assert.equal(h.notifications.length, 0);
       await h.emit("resources_discover");
       await waitFor(
         "initial state after Tools initialization",
         () => h.server.paneOptionOf("%0") === stateOptionValue(h.sessionId, "waiting-user"),
       );
-      assert.equal(h.notifications.length, 0);
     } finally {
       await h.close();
     }
@@ -432,32 +421,29 @@ describe("sessionStateExtension in top-level sessions", () => {
       assert.deepEqual(harness.server.commands, []);
       assert.equal(existsSync(harness.restorePath), false);
       assert.deepEqual([...harness.commands.keys()], []);
-      assert.deepEqual(harness.notifications, []);
     } finally {
       await harness.close();
     }
   });
 
-  it("notifies a detection failure once and stops publishing states", async () => {
+  it("does not publish states after a detection failure", async () => {
     const harness = await createExtensionHarness();
     try {
       harness.server.responses["display-message"] = () => completedResult("", 1, "no such server");
       await harness.emit("session_start");
-      await waitFor("detection failure notification", () =>
-        harness.notifications.some((notification) =>
-          /cannot confirm managed tmux pane/.test(notification.message),
-        ),
+      await waitFor("detection attempt", () =>
+        harness.server.commands.some((command) => command.includes("display-message")),
       );
 
       await harness.emit("agent_start");
       await finishEventLoopTurn();
       assert.equal(
+        harness.server.commands.filter((command) => command.includes("display-message")).length,
+        1,
+      );
+      assert.equal(
         harness.server.commands.filter((command) => command.startsWith("pi-mux state ")).length,
         0,
-      );
-      assert.deepEqual(
-        harness.notifications.filter((notification) => /session state/.test(notification.message)),
-        [],
       );
     } finally {
       await harness.close();
@@ -799,7 +785,6 @@ describe("session-state MVP state boundaries", () => {
       );
       await finishEventLoopTurn();
       assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("s1", "waiting-approval"));
-      assert.deepEqual(h.notifications, []);
     } finally {
       pending.resolve(completedResult(""));
       await h.close();
@@ -824,7 +809,6 @@ describe("session-state MVP state boundaries", () => {
         () => h.server.paneOptionOf("%0") === stateOptionValue("replacement", "waiting-user"),
       );
       await waitFor("old drained", () => !h.server.hasPending());
-      assert.deepEqual(h.notifications, []);
       assert.equal(
         h.server.commands.some((c) => c.includes(stateOptionValue("s1", "waiting-user"))),
         false,
@@ -859,7 +843,6 @@ describe("session-state MVP state boundaries", () => {
       );
       await waitFor("late response", () => !h.server.hasPending());
       assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("replacement", "waiting-user"));
-      assert.deepEqual(h.notifications, []);
     } finally {
       pending.resolve(completedResult(""));
       await h.close();
@@ -891,7 +874,6 @@ describe("session-state MVP state boundaries", () => {
       await h.emit("session_info_changed", { name: "After shutdown" });
       await finishEventLoopTurn();
       assert.equal(h.server.commands.length, count);
-      assert.deepEqual(h.notifications, []);
     } finally {
       pending.resolve(completedResult(""));
       await h.close();
@@ -905,9 +887,7 @@ describe("session-state MVP state boundaries", () => {
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
       h.server.responses["state"] = () => completedResult("", 1, "failure");
       await h.emit("agent_start");
-      await waitFor("warning", () =>
-        h.notifications.some((n) => n.message.includes("publication interrupted")),
-      );
+      await waitFor("equal state retry", () => stateArguments(h.server.commands).length >= 2);
       const count = h.server.commands.length;
       await h.emit("message_update");
       await finishEventLoopTurn();
@@ -971,10 +951,6 @@ describe("session-state latest publication recovery", () => {
           .every((args) => JSON.parse(args[args.indexOf("--title") + 1]!) === "Latest title"),
       );
       assert.equal(new Set(requests.map((args) => args[args.indexOf("--source") + 1])).size, 1);
-      assert.equal(
-        h.notifications.filter((notice) => /publication interrupted/.test(notice.message)).length,
-        1,
-      );
       delete h.server.responses.state;
       await h.emit("agent_settled");
       await finishEventLoopTurn();
@@ -998,7 +974,7 @@ describe("session-state latest publication recovery", () => {
       );
       h.server.responses.state = () => completedResult("", 1, "write failed");
       await h.emit("agent_settled");
-      await waitFor("recovery warning", () => h.notifications.length > 0);
+      await waitFor("recovery retry", () => stateArguments(h.server.commands).length >= 3);
       delete h.server.responses.state;
       await waitFor(
         "latest retry",
@@ -1013,33 +989,6 @@ describe("session-state latest publication recovery", () => {
       await h.close();
     }
   });
-
-  it("keeps one recovery warning across failure busy failure until success", async () => {
-    const h = await createExtensionHarness();
-    try {
-      await h.emit("session_start");
-      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-      const results = [interruptedResult(), busyResult(), interruptedResult()];
-      h.server.responses.state = () => {
-        const result = results.shift();
-        if (result) return result;
-        h.server.setPaneOption("%0", stateOptionValue("s1", "running"));
-        return completedResult("");
-      };
-      await h.emit("agent_start");
-      await waitFor(
-        "successful recovery",
-        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "running"),
-      );
-      assert.equal(h.notifications.length, 1);
-      h.server.responses.state = () => interruptedResult();
-      await h.emit("agent_settled");
-      await waitFor("new recovery warning after success", () => h.notifications.length === 2);
-    } finally {
-      delete h.server.responses.state;
-      await h.close();
-    }
-  }, 10_000);
 });
 
 describe("session-state persistent publication recovery", () => {
@@ -1080,7 +1029,6 @@ describe("session-state persistent publication recovery", () => {
           h.server.commands.some((command) => command.includes("Discarded title")),
           false,
         );
-        assert.equal(h.notifications.length, 1);
       } finally {
         delete h.server.responses.state;
         await h.close();
@@ -1105,8 +1053,9 @@ describe("session-state partial publication recovery", () => {
           return completedResult("", 1, "snapshot update failed after publishing running");
         };
         await h.emit("agent_start");
-        await waitFor("publication failure", () =>
-          h.notifications.some((notice) => notice.message.includes("publication interrupted")),
+        await waitFor(
+          "running attempt settled",
+          () => stateArguments(h.server.commands).length === 2 && !h.server.hasPending(),
         );
         await finishEventLoopTurn();
         assert.equal(h.server.paneOptionOf("%0"), runningValue);
@@ -1184,7 +1133,6 @@ describe("session-state lock retry", () => {
         .filter((command) => command.startsWith("pi-mux state"))
         .map((command) => (parse(command) as string[])[3]);
       assert.deepEqual(states.slice(-3), ["running", "waiting-user", "waiting-user"]);
-      assert.equal(h.notifications.length, 1);
     } finally {
       delete h.server.responses.state;
       await h.close();
@@ -1204,7 +1152,6 @@ describe("session-state lock retry", () => {
       assert.equal(h.server.commands.filter((command) => command.includes("--clear")).length, 1);
       await new Promise((resolve) => setTimeout(resolve, 100));
       assert.equal(h.server.commands.length, count);
-      assert.ok(h.notifications.some((notice) => notice.message.includes("lock is busy")));
     } finally {
       delete h.server.responses.state;
       await h.close();
@@ -1247,7 +1194,6 @@ describe("session-state lock retries", () => {
       );
       const sources = requests.map((args) => args[args.indexOf("--source") + 1]);
       assert.equal(new Set(sources).size, 1);
-      assert.equal(h.notifications.length, 1);
     } finally {
       delete h.server.responses.state;
       await h.close();
@@ -1265,7 +1211,6 @@ describe("session-state lock retries", () => {
         stateArguments(h.server.commands).filter((args) => args.includes("--clear")).length,
         1,
       );
-      assert.match(h.notifications.at(-1)!.message, /lock is busy/);
     } finally {
       delete h.server.responses.state;
       await h.close();
@@ -1290,7 +1235,6 @@ describe("session-state lock retries", () => {
         stateArguments(h.server.commands).some((args) => args[2] === "s1" && args[3] === "running"),
         false,
       );
-      assert.equal(h.notifications.length, 1);
     } finally {
       delete h.server.responses.state;
       await h.close();
@@ -1336,10 +1280,8 @@ describe("session-state CLI execution ordering", () => {
       delete h.server.responses["state"];
       finish.resolve();
       await waitFor(
-        "replacement or failure",
-        () =>
-          h.notifications.length > 0 ||
-          h.server.paneOptionOf("%0") === stateOptionValue("replacement", "waiting-user"),
+        "replacement",
+        () => h.server.paneOptionOf("%0") === stateOptionValue("replacement", "waiting-user"),
       );
       assert.equal(
         h.server.commands
@@ -1348,7 +1290,6 @@ describe("session-state CLI execution ordering", () => {
         false,
       );
       assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("replacement", "waiting-user"));
-      assert.deepEqual(h.notifications, []);
     } finally {
       process.env.TMUX_PANE = "%0";
       finish.resolve();
@@ -1391,7 +1332,6 @@ describe("session-state CLI execution ordering", () => {
         );
         await finishEventLoopTurn();
         assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("replacement", "waiting-user"));
-        assert.deepEqual(h.notifications, []);
       } finally {
         finish.resolve();
         await shutdown;
@@ -1427,22 +1367,22 @@ describe("session-state CLI execution ordering", () => {
           h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user"),
       );
       assert.equal(h.server.commands.length, count + 1);
-      assert.deepEqual(h.notifications, []);
     } finally {
       finish.resolve();
       await h.close();
     }
   });
 
-  it("recovers an interrupted publication automatically without new events and warns once", async () => {
+  it("recovers an interrupted publication automatically without new events", async () => {
     const h = await createExtensionHarness();
     try {
       await h.emit("session_start");
       await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
       h.server.responses.state = () => interruptedResult();
       await h.emit("agent_start");
-      await waitFor("recovery warning", () =>
-        h.notifications.some((n) => /session state publication interrupted/.test(n.message)),
+      await waitFor(
+        "interrupted attempt settled",
+        () => stateArguments(h.server.commands).length === 2 && !h.server.hasPending(),
       );
       delete h.server.responses.state;
       await waitFor(
@@ -1450,14 +1390,7 @@ describe("session-state CLI execution ordering", () => {
         () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "running"),
       );
       await finishEventLoopTurn();
-      assert.equal(
-        h.notifications.filter((n) => /publication interrupted/.test(n.message)).length,
-        1,
-      );
-      assert.deepEqual(
-        h.notifications.filter((n) => /cannot publish/.test(n.message)),
-        [],
-      );
+      assert.equal(stateArguments(h.server.commands).length, 3);
     } finally {
       await h.close();
     }
@@ -1472,10 +1405,9 @@ describe("session-state CLI execution ordering", () => {
         throw new Error("publication transport failed");
       };
       await h.emit("agent_start");
-      await waitFor("failed publication recovery", () => h.notifications.length > 0);
-      assert.match(
-        h.notifications[0]!.message,
-        /session state publication interrupted: publication transport failed/,
+      await waitFor(
+        "failed attempt settled",
+        () => stateArguments(h.server.commands).length === 2 && !h.server.hasPending(),
       );
       await h.emit("agent_settled");
       await h.emit("session_info_changed", { name: "Queued recovery title" });
@@ -1497,56 +1429,21 @@ describe("session-state CLI execution ordering", () => {
           ["waiting-user", "Queued recovery title"],
         ],
       );
-      assert.equal(h.notifications.length, 1);
     } finally {
       delete h.server.responses.state;
       await h.close();
     }
   }, 10_000);
 
-  it("suppresses the recovery warning across consecutive failed retries", async () => {
-    const h = await createExtensionHarness();
-    try {
-      await h.emit("session_start");
-      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-      const attemptsBefore = stateArguments(h.server.commands).length;
-      h.server.responses.state = () => {
-        throw new Error("transport failed");
-      };
-      await h.emit("agent_start");
-      await waitFor("recovery warning", () =>
-        h.notifications.some((n) => /session state publication interrupted/.test(n.message)),
-      );
-      await waitFor(
-        "repeated retries",
-        () => stateArguments(h.server.commands).length >= attemptsBefore + 3,
-      );
-      delete h.server.responses.state;
-      await waitFor(
-        "recovered running",
-        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "running"),
-      );
-      assert.equal(
-        h.notifications.filter((n) => /publication interrupted/.test(n.message)).length,
-        1,
-      );
-      assert.deepEqual(
-        h.notifications.filter((n) => /cannot publish/.test(n.message)),
-        [],
-      );
-    } finally {
-      delete h.server.responses.state;
-      await h.close();
-    }
-  }, 15_000);
-
   it("recovers interrupted pane detection and publishes only the latest state and title", async () => {
     const h = await createExtensionHarness();
     try {
       h.server.responses["display-message"] = () => interruptedResult();
       await h.emit("session_start");
-      await waitFor("detection recovery warning", () =>
-        h.notifications.some((n) => /managed tmux pane detection interrupted/.test(n.message)),
+      await waitFor(
+        "detection retry",
+        () =>
+          h.server.commands.filter((command) => command.includes("display-message")).length >= 2,
       );
       await h.emit("agent_start");
       await h.emit("session_info_changed", { name: "Recovery title" });
@@ -1563,8 +1460,6 @@ describe("session-state CLI execution ordering", () => {
         requests.map((args) => [args[3], JSON.parse(args[args.indexOf("--title") + 1]!)]),
         [["waiting-user", "Recovery title"]],
       );
-      assert.equal(h.notifications.length, 1);
-      assert.match(h.notifications[0]!.message, /pane detection interrupted/);
     } finally {
       await h.close();
     }
@@ -1696,7 +1591,6 @@ describe("session-state without restore-record access", () => {
               );
               assert.deepEqual(restoreRecordReads, [], event);
               assert.deepEqual([...h.commands.keys()], [], event);
-              assert.deepEqual(h.notifications, [], event);
             }
             assert.equal(
               h.server.commands.filter((command) => command.includes("display-message")).length,

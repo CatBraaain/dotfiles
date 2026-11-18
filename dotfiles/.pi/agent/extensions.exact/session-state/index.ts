@@ -11,13 +11,11 @@ import {
   unsetStateOption,
   type BashRunner,
   type ManagedPaneBinding,
-  type PublicationOutcome,
   type SessionState,
 } from "./tmux.ts";
 
 const TMUX_COMMAND_TIMEOUT_MS = 1_000;
 const RECOVERY_RETRY_INTERVAL_MS = 1_000;
-const MAX_NOTIFICATION_LENGTH = 200;
 const PUBLICATION_PROCESS_KEY = Symbol.for("pi.session-state.publication-process");
 
 interface ExecutionBoundary {
@@ -85,13 +83,11 @@ interface PublicationGeneration {
   state?: SessionState;
   lastPublished?: { state: SessionState; title: string | null };
   pending: number;
-  recoveryNotified: boolean;
   title: string | null;
   sessionId: string;
   run: BashRunner;
   lastFailure: () => unknown;
   environment: Pick<NodeJS.ProcessEnv, "XDG_RUNTIME_DIR" | "TMUX" | "TMUX_PANE">;
-  notify: (message: string) => void;
 }
 
 export default function sessionStateExtension(pi: ExtensionAPI): void {
@@ -105,7 +101,11 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
 
   function enqueuePublication(gen: PublicationGeneration, task: () => Promise<void>): void {
     publicationProcess.queue = publicationProcess.queue.then(task).catch((error) => {
-      if (!gen.controller.signal.aborted) gen.notify(errorMessage(error));
+      if (!gen.controller.signal.aborted)
+        probe("publication-queue-error", {
+          sessionId: gen.sessionId,
+          message: errorMessage(error),
+        });
     });
   }
 
@@ -151,19 +151,10 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
             ...(outcome.status === "failed" ? { message: outcome.message } : {}),
           });
           if (gen.controller.signal.aborted) return;
-          const recovery = await recoveryRetry(
-            gen,
-            "session state publication",
-            outcome.status === "failed"
-              ? outcome.message
-              : outcome.status === "busy"
-                ? "pi-mux lock is busy"
-                : undefined,
-          );
+          const recovery = await recoveryRetry(gen, outcome.status !== "published");
           if (recovery === "aborted") return;
           if (recovery === "retry") continue;
           gen.lastPublished = { state, title };
-          if (gen.state === state && gen.title === title) gen.recoveryNotified = false;
         }
       } finally {
         gen.pending--;
@@ -190,13 +181,11 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
       controller,
       initializationStarted: false,
       pending: 0,
-      recoveryNotified: false,
       sessionId: ctx.sessionManager.getSessionId(),
       title: ctx.sessionManager.getSessionName() ?? null,
       run: runner.run,
       lastFailure: runner.lastFailure,
       environment,
-      notify: makeNotifier(ctx),
     };
   });
 
@@ -209,13 +198,11 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
         if (!(await waitForPriorExecution(gen))) return;
         const detection = await detectManagedPane(gen.run, gen.environment);
         if (gen.controller.signal.aborted) return;
-        const recovery = await recoveryRetry(gen, "managed tmux pane detection");
+        const recovery = await recoveryRetry(gen, gen.lastFailure() !== undefined);
         if (recovery === "aborted") return;
         if (recovery === "retry") continue;
         if (detection.status === "managed") gen.binding = detection.binding;
         probe("pane-detection", { ...identityFields(), status: detection.status });
-        if (detection.status === "failed")
-          gen.notify(`cannot confirm managed tmux pane: ${detection.message}`);
         return;
       }
     });
@@ -272,7 +259,6 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
           pane: gen.binding?.paneId,
           reason: "prior-execution-unsettled",
         });
-        gen.notify("cannot clear session state option: previous Bash execution is still running");
         return;
       }
       try {
@@ -283,7 +269,6 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
           status: outcome.status,
           ...(outcome.status === "failed" ? { message: outcome.message } : {}),
         });
-        reportCleanupOutcome(gen, outcome);
       } catch (error) {
         probe("cleanup-outcome", {
           sessionId: gen.sessionId,
@@ -291,7 +276,6 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
           status: "thrown",
           message: errorMessage(error),
         });
-        gen.notify(`cannot clear session state option: ${errorMessage(error)}`);
       }
     });
     await publicationProcess.queue;
@@ -300,15 +284,9 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
 
 async function recoveryRetry(
   gen: PublicationGeneration,
-  operation: string,
-  publicationFailure?: string,
+  autoRecovery: boolean,
 ): Promise<"proceed" | "retry" | "aborted"> {
-  const failure = gen.lastFailure() ?? publicationFailure;
-  if (failure === undefined) return "proceed";
-  if (!gen.recoveryNotified) {
-    gen.recoveryNotified = true;
-    gen.notify(`${operation} interrupted: ${errorMessage(failure)}; retrying automatically`);
-  }
+  if (!autoRecovery) return "proceed";
   if (!(await waitForPriorExecution(gen))) return "aborted";
   return (await waitToRetry(gen, RECOVERY_RETRY_INTERVAL_MS)) ? "retry" : "aborted";
 }
@@ -386,23 +364,6 @@ function makeProcessRunner(
     return failure;
   }
   return { run, lastFailure };
-}
-
-function reportCleanupOutcome(gen: PublicationGeneration, outcome: PublicationOutcome): void {
-  if (outcome.status === "failed")
-    gen.notify(`cannot clear session state option: ${outcome.message}`);
-  if (outcome.status === "busy")
-    gen.notify("cannot clear session state option: pi-mux lock is busy");
-}
-
-function makeNotifier(ctx: ExtensionContext): (message: string) => void {
-  const ui = ctx.hasUI ? ctx.ui : undefined;
-  const notify = ui?.notify.bind(ui);
-  return function report(message) {
-    const summary = message.replace(/\s+/g, " ").slice(0, MAX_NOTIFICATION_LENGTH);
-    if (notify) notify(`session-state: ${summary}`, "warning");
-    else console.error(`[session-state] ${summary}`);
-  };
 }
 
 function isSubagentSession(ctx: ExtensionContext): boolean {

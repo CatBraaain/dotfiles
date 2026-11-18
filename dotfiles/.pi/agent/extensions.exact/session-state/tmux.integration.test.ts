@@ -30,7 +30,6 @@ const pane = process.env.TMUX_PANE;
 const race = process.env.PI_TEST_RACE === "1";
 const recovery = process.env.PI_TEST_RECOVERY === "1";
 let sessionId = race ? "race-old" : "session-external";
-const notifications = [];
 const initializationErrors = [];
 const trace = [];
 const sandboxCommands = [];
@@ -87,7 +86,6 @@ function context() {
   const ui = {
     notify(message) {
       if (message.includes("schema violation")) initializationErrors.push(message);
-      else notifications.push(message);
     },
     confirm() { throw new Error("unexpected approval UI"); },
     select() { throw new Error("unexpected approval UI"); },
@@ -128,7 +126,7 @@ function readOption() {
 async function waitFor(label, predicate) {
   const end = Date.now() + 15000;
   while (!predicate()) {
-    if (Date.now() >= end) throw new Error("timeout: " + label + "; notifications=" + notifications.join(" | "));
+    if (Date.now() >= end) throw new Error("timeout: " + label + "; executions=" + JSON.stringify(executions));
     await delay(10);
   }
 }
@@ -163,7 +161,6 @@ try {
     await waitFor("replacement after delayed set", () => readOption() === stateOptionValue(sessionId, "waiting-user"));
     assert.equal(existsSync(join(directory, "race-finished")), true);
     assert.equal(readOption(), stateOptionValue(sessionId, "waiting-user"));
-    assert.equal(notifications.length, 0);
     await dispatch("session_shutdown", { reason: "quit" });
     assert.equal(readOption(), "");
   } else if (recovery) {
@@ -173,10 +170,10 @@ try {
     await dispatch("agent_start");
     await waitFor("old if-shell accepted by the server", () => existsSync(join(directory, "old-write-started")));
     assert.match(cli("show-messages", "-J"), /old-write-release/);
-    await waitFor(
-      "inner Bash timeout and recovery warning",
-      () => notifications.some((text) => text.includes("publication interrupted")),
-    );
+    await waitFor("running publication timed out", () => {
+      const failed = executions.find((execution) => execution.command.includes(" running "));
+      return failed !== undefined && failed.finished !== undefined;
+    });
     const failed = executions.find((execution) => execution.command.includes(" running "));
     assert.equal(failed.status, "failed");
     assert.equal(failed.timeout, 1_000);
@@ -207,11 +204,8 @@ try {
     );
     assert.equal(existsSync(join(directory, "old-write-finished")), false);
     assert.equal(readOption(), stateOptionValue(sessionId, "waiting-user"));
-    assert.equal(notifications.length, 1);
-    assert.match(notifications[0], /publication interrupted:.*Process interrupted or timed out.*retrying automatically/);
     await dispatch("session_shutdown", { reason: "quit" });
     assert.equal(readOption(), "");
-    assert.equal(notifications.length, 1);
   } else {
     await waitFor("startup", () => readOption() === stateOptionValue(sessionId, "waiting-user"));
     await dispatch("input");
@@ -258,10 +252,8 @@ try {
     assert.equal(ordinary.status, "unmanaged");
     assert.equal(sandboxCommands.length, callsBefore);
 
-    assert.equal(notifications.length, 0);
     await dispatch("session_shutdown", { reason: "quit" });
     assert.equal(readOption(), "");
-    assert.equal(notifications.length, 0);
   }
   assert.deepEqual(commandNames, []);
   if (before) {
@@ -273,9 +265,9 @@ try {
   }
   assert.equal(trace.length, 0);
   assert.ok(sandboxCommands.length > 0);
-  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: true, trace, sandboxCommands, notifications, pane, executions }));
+  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: true, trace, sandboxCommands, pane, executions }));
 } catch (error) {
-  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: false, error: String(error.stack ?? error), notifications, trace, sandboxCommands }));
+  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: false, error: String(error.stack ?? error), trace, sandboxCommands }));
   process.exitCode = 1;
 } finally {
   bus.clear();
