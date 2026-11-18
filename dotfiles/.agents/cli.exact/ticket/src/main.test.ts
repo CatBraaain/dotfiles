@@ -682,3 +682,218 @@ describe("ticket CLI", () => {
     assert.deepEqual(all.stdout, `demo\t${id}\topen\tFirst\n`);
   });
 });
+
+describe("ticket stats", () => {
+  const statuses = ["draft", "open", "blocked", "locked", "closed", "cancelled"] as const;
+  const statusCounts = {
+    draft: 1,
+    open: 2,
+    blocked: 3,
+    locked: 4,
+    closed: 5,
+    cancelled: 6,
+  };
+
+  async function addStatsFixtures(home: string) {
+    const root = join(home, ".agents", "tickets");
+    for (const [project, multiplier] of [
+      ["zeta", 2],
+      ["alpha", 1],
+    ] as const) {
+      const projectDir = join(root, project);
+      await mkdir(projectDir, { recursive: true });
+      for (const [statusIndex, status] of statuses.entries()) {
+        for (let ticketIndex = 0; ticketIndex < statusCounts[status] * multiplier; ticketIndex++) {
+          const id = `20260101-${String(statusIndex * 10 + ticketIndex).padStart(6, "0")}`;
+          await writeFile(
+            join(projectDir, `${id}.md`),
+            `---\nstatus: ${status}\n---\n# ${project} ${status} ${ticketIndex}\n`,
+          );
+        }
+      }
+    }
+    await mkdir(join(root, "empty"), { recursive: true });
+  }
+
+  it("counts every status in sorted project and status order, including empty projects", async () => {
+    const home = await ticketHome();
+    await addStatsFixtures(home);
+    const result = run(home, ["stats"]);
+    const expectedRows = [
+      ["project", "draft", "open", "blocked", "locked", "closed", "cancelled"],
+      ["alpha  ", "    1", "   2", "      3", "     4", "     5", "        6"],
+      ["empty  ", "    0", "   0", "      0", "     0", "     0", "        0"],
+      ["zeta   ", "    2", "   4", "      6", "     8", "    10", "       12"],
+    ].map((cells) => cells.join("  "));
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, `${expectedRows.join("\n")}\n`);
+    assert.equal(result.stderr, "");
+  });
+
+  it.each([
+    { project: "日本語プロジェクト", displayWidth: 18, columnWidth: 19 },
+    { project: "日本語プロジェクト日本語", displayWidth: 24, columnWidth: 24 },
+  ])(
+    "aligns long ASCII and Japanese names by display width ($project)",
+    async ({ project, displayWidth, columnWidth }) => {
+      const home = await ticketHome();
+      for (const name of ["a-long-project-name", "dotfiles", project]) {
+        const dir = join(home, ".agents", "tickets", name);
+        await mkdir(dir, { recursive: true });
+        await writeFile(join(dir, "20260101-000000.md"), "---\nstatus: open\n---\n# ticket\n");
+      }
+      const result = run(home, ["stats"]);
+      const expectedRows = [
+        [
+          "project" + " ".repeat(columnWidth - 7),
+          "draft",
+          "open",
+          "blocked",
+          "locked",
+          "closed",
+          "cancelled",
+        ],
+        ...[
+          "a-long-project-name" + " ".repeat(columnWidth - 19),
+          "dotfiles" + " ".repeat(columnWidth - 8),
+          project + " ".repeat(columnWidth - displayWidth),
+        ].map((cell) => [cell, "    0", "   1", "      0", "     0", "     0", "        0"]),
+      ].map((cells) => cells.join("  "));
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.stdout, `${expectedRows.join("\n")}\n`);
+      assert.equal(result.stderr, "");
+      const json = run(home, ["stats", "--json"]);
+      assert.equal(json.code, 0, json.stderr);
+      assert.deepEqual(
+        JSON.parse(json.stdout),
+        ["a-long-project-name", "dotfiles", project].map((name) => ({
+          project: name,
+          draft: 0,
+          open: 1,
+          blocked: 0,
+          locked: 0,
+          closed: 0,
+          cancelled: 0,
+        })),
+      );
+    },
+  );
+
+  it("widens a count column when its decimal digits exceed the heading", async () => {
+    const home = await ticketHome();
+    const dir = join(home, ".agents", "tickets", "large");
+    await mkdir(dir, { recursive: true });
+    for (let index = 0; index < 10_000; index++) {
+      await writeFile(join(dir, `${index}.md`), "---\nstatus: open\n---\n# ticket\n");
+    }
+    const result = run(home, ["stats"]);
+    const expectedRows = [
+      ["project", "draft", " open", "blocked", "locked", "closed", "cancelled"],
+      ["large  ", "    0", "10000", "      0", "     0", "     0", "        0"],
+    ].map((cells) => cells.join("  "));
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, `${expectedRows.join("\n")}\n`);
+    assert.equal(result.stderr, "");
+  }, 30_000);
+
+  it("returns all project counts as a status-ordered JSON array", async () => {
+    const home = await ticketHome();
+    await addStatsFixtures(home);
+    const result = run(home, ["stats", "--json"]);
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), [
+      { project: "alpha", ...statusCounts },
+      {
+        project: "empty",
+        draft: 0,
+        open: 0,
+        blocked: 0,
+        locked: 0,
+        closed: 0,
+        cancelled: 0,
+      },
+      {
+        project: "zeta",
+        draft: 2,
+        open: 4,
+        blocked: 6,
+        locked: 8,
+        closed: 10,
+        cancelled: 12,
+      },
+    ]);
+    assert.equal(result.stderr, "");
+  });
+
+  it("returns the empty result when the store root exists without projects", async () => {
+    const home = await ticketHome();
+    await mkdir(join(home, ".agents", "tickets"), { recursive: true });
+    const text = run(home, ["stats"]);
+    const json = run(home, ["stats", "--json"]);
+    assert.equal(text.code, 0, text.stderr);
+    assert.equal(text.stdout, "no tickets\n");
+    assert.equal(json.code, 0, json.stderr);
+    assert.deepEqual(JSON.parse(json.stdout), []);
+  });
+
+  it("fails without partial output when the store root is missing", async () => {
+    const home = await ticketHome();
+    const text = run(home, ["stats"]);
+    const json = run(home, ["stats", "--json"]);
+    assert.equal(text.code, 1);
+    assert.equal(text.stdout, "");
+    assert.notEqual(text.stderr, "");
+    assert.equal(json.code, 1);
+    assert.equal(typeof (JSON.parse(json.stdout) as { error: string }).error, "string");
+    assert.equal(json.stderr.trimEnd(), (JSON.parse(json.stdout) as { error: string }).error);
+  });
+
+  it.each([
+    { name: "invalid frontmatter", contents: "---\nstatus: open\nstatus: locked\n---\n# bad\n" },
+    { name: "invalid status", contents: "---\nstatus: unknown\n---\n# bad\n" },
+  ])("fails without partial output or file changes for $name", async ({ contents }) => {
+    const home = await ticketHome();
+    const projectDir = join(home, ".agents", "tickets", "demo");
+    await mkdir(projectDir, { recursive: true });
+    const validPath = join(projectDir, "20260101-000000.md");
+    const invalidPath = join(projectDir, "20260101-000001.md");
+    await writeFile(validPath, "---\nstatus: open\n---\n# valid\n");
+    await writeFile(invalidPath, contents);
+    const before = await Promise.all([readFile(validPath, "utf8"), readFile(invalidPath, "utf8")]);
+
+    for (const args of [["stats"], ["stats", "--json"]]) {
+      const result = run(home, args);
+      assert.equal(result.code, 1);
+      if (args.includes("--json")) {
+        const error = (JSON.parse(result.stdout) as { error: string }).error;
+        assert.equal(typeof error, "string");
+        assert.equal(result.stderr.trimEnd(), error);
+      } else {
+        assert.equal(result.stdout, "");
+        assert.notEqual(result.stderr, "");
+      }
+    }
+    assert.deepEqual(
+      await Promise.all([readFile(validPath, "utf8"), readFile(invalidPath, "utf8")]),
+      before,
+    );
+  });
+
+  it.each([
+    { name: "position argument", args: ["stats", "demo"] },
+    { name: "position argument after --", args: ["stats", "--", "demo"] },
+    { name: "project flag", args: ["stats", "-p", "demo"] },
+    { name: "long project flag", args: ["stats", "--project", "demo"] },
+    { name: "all flag", args: ["stats", "-a"] },
+    { name: "long all flag", args: ["stats", "--all"] },
+    { name: "status flag", args: ["stats", "-s", "open"] },
+    { name: "long status flag", args: ["stats", "--status", "open"] },
+  ])("rejects the unsupported $name with usage status", async ({ args }) => {
+    const home = await ticketHome();
+    const result = run(home, [...args]);
+    assert.equal(result.code, 2);
+    assert.match(result.stderr, /^usage: ticket list/m);
+    assert.match(result.stderr, /^\s+ticket stats \[--json\]$/m);
+    assert.equal(result.stdout, "");
+  });
+});

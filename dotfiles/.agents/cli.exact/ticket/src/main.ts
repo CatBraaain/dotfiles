@@ -21,6 +21,7 @@ const STATUSES = ["draft", "open", "blocked", "locked", "closed", "cancelled"] a
 type Status = (typeof STATUSES)[number];
 
 const USAGE = `usage: ticket list [-s <s>[,<s>...]] [-p <project>] [-a] [--json]
+       ticket stats [--json]
        ticket show [<selector>] [-p <project>] [--json]
        ticket create <json> [-p <project>] [--json]
        ticket set [<selector>] <json> [-p <project>] [--json]
@@ -79,6 +80,7 @@ class TicketError extends Error {
 
 const ALLOWED_FLAGS: Record<string, { all?: boolean; statuses?: boolean; json?: boolean }> = {
   list: { all: true, statuses: true, json: true },
+  stats: { json: true },
   show: { json: true },
   create: { json: true },
   set: { json: true },
@@ -115,8 +117,10 @@ function parseArgs(argv: string[], command: string): { flags: Flags; positional:
     };
     if (optionsEnded) positional.push(arg);
     else if (arg === "--") optionsEnded = true;
-    else if (arg === "-p" || arg === "--project") flags.project = value();
-    else if (arg === "-a" || arg === "--all") {
+    else if (arg === "-p" || arg === "--project") {
+      if (command === "stats") usageFail();
+      flags.project = value();
+    } else if (arg === "-a" || arg === "--all") {
       if (!allowed.all) usageFail();
       flags.all = true;
     } else if (arg === "-s" || arg === "--status") {
@@ -475,6 +479,44 @@ async function listCommand(positional: string[], flags: Flags): Promise<void> {
     );
 }
 
+async function statsCommand(positional: string[], flags: Flags): Promise<void> {
+  if (positional.length > 0) usageFail();
+  const projects = await allProjects();
+  const rows = await Promise.all(
+    projects.map(async (project) => {
+      const counts: Record<Status, number> = {
+        draft: 0,
+        open: 0,
+        blocked: 0,
+        locked: 0,
+        closed: 0,
+        cancelled: 0,
+      };
+      for (const ticket of await loadTickets(project)) counts[ticket.status]++;
+      return { project, ...counts };
+    }),
+  );
+  if (flags.json) return output(rows);
+  if (rows.length === 0) return console.log("no tickets");
+  const headers = ["project", ...STATUSES];
+  const table = [
+    headers,
+    ...rows.map((row) => [row.project, ...STATUSES.map((status) => String(row[status]))]),
+  ];
+  const widths = headers.map((_, column) =>
+    table.reduce((width, cells) => Math.max(width, Bun.stringWidth(cells[column]!)), 0),
+  );
+  for (const cells of table) {
+    const line = cells
+      .map((cell, column) => {
+        const padding = " ".repeat(widths[column]! - Bun.stringWidth(cell));
+        return column === 0 ? cell + padding : padding + cell;
+      })
+      .join("  ");
+    console.log(line);
+  }
+}
+
 async function showCommand(positional: string[], flags: Flags): Promise<void> {
   if (positional.length > 1) usageFail();
   const ticket = resolveSelector(await loadTickets(resolveProject(flags)), positional[0]);
@@ -755,19 +797,37 @@ async function main(): Promise<void> {
     const parsed = parseDispatchArgs(dispatchArgs);
     if (parsed.error || !parsed.action)
       throw new TicketError(2, `${parsed.error}\nusage: ${DISPATCH_USAGE}`);
-    const project = isWorker ? validateProject(argv[0] ?? "") : resolveProject(parsed);
+    const project = parsed.all
+      ? null
+      : isWorker
+        ? validateProject(argv[0] ?? "")
+        : resolveProject(parsed);
     if (parsed.action === "stop") return stopDispatcher(project);
-    if (!isWorker && parsed.project !== undefined)
+    if (!isWorker && project !== null && parsed.project !== undefined)
       process.chdir(join(homedir(), "projects", project));
     const options = parsed.options!;
     async function loadSnapshot() {
-      const tickets = await loadTickets(project);
-      const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
-      return tickets.map((ticket) => ({
-        id: ticket.id,
-        status: ticket.status,
-        actionable: isActionable(ticket, byId),
-      }));
+      const projects = project === null ? await allProjects() : [project];
+      const snapshots = await Promise.all(
+        projects.map(async (name) => {
+          const tickets = await loadTickets(name);
+          const byId = new Map(tickets.map((ticket) => [ticket.id, ticket] as const));
+          return tickets.map((ticket) => ({
+            id: project === null ? `${name}/${ticket.id}` : ticket.id,
+            status: ticket.status,
+            actionable: isActionable(ticket, byId),
+          }));
+        }),
+      );
+      const tickets = snapshots.flat();
+      if (project === null)
+        tickets.sort((left, right) => {
+          const leftId = left.id.slice(left.id.indexOf("/") + 1);
+          const rightId = right.id.slice(right.id.indexOf("/") + 1);
+          if (leftId !== rightId) return leftId < rightId ? -1 : 1;
+          return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+        });
+      return tickets;
     }
     if (isWorker) return dispatch(options, loadSnapshot, project);
     return startDispatcher({
@@ -780,6 +840,8 @@ async function main(): Promise<void> {
   switch (command) {
     case "list":
       return listCommand(positional, flags);
+    case "stats":
+      return statsCommand(positional, flags);
     case "show":
       return showCommand(positional, flags);
     case "create":

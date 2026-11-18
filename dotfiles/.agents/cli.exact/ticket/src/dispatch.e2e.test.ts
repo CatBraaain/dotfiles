@@ -11,8 +11,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { describe, it } from "bun:test";
-import { dispatcherName, shQuote } from "./dispatch";
+import { afterEach, describe, it } from "bun:test";
+import { dispatcherName, sessionName, shQuote } from "./dispatch";
 
 const TEMP_ROOT = "/tmp/work/dotfiles/remove-dispatch-artifacts";
 const CLI = join(import.meta.dir, "main.ts");
@@ -31,7 +31,7 @@ function isolatedTmux(socket: string, args: string[], env = process.env) {
   });
 }
 
-function setup(project = "project") {
+function setup(project = "project", all = false) {
   mkdirSync(TEMP_ROOT, { recursive: true });
   const root = mkdtempSync(join(TEMP_ROOT, "ticket-dispatch-e2e-"));
   const home = join(root, "home");
@@ -44,17 +44,21 @@ function setup(project = "project") {
   const stub = join(root, "stub.ts");
   writeFileSync(
     stub,
-    `import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+    `import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const args = process.argv.slice(2);
 if (!args[0].startsWith("ticket ")) throw new Error("ticket ID is missing");
 const id = args[0].split(" に")[0].slice("ticket ".length);
-appendFileSync(join(${JSON.stringify(records)}, "launches"), id + "\\n");
-writeFileSync(join(${JSON.stringify(records)}, id + ".pid"), String(process.pid));
-writeFileSync(join(${JSON.stringify(records)}, id + ".json"), JSON.stringify({ args, cwd: process.cwd() }));
+const project = process.env.TICKET_DISPATCH_PROJECT;
+const recordDir = ${all} ? join(${JSON.stringify(records)}, project) : ${JSON.stringify(records)};
+mkdirSync(recordDir, { recursive: true });
+appendFileSync(join(${JSON.stringify(records)}, "launches"), (${all} ? project + "/" : "") + id + "\\n");
+writeFileSync(join(recordDir, id + ".pid"), String(process.pid));
+writeFileSync(join(recordDir, id + ".json"), JSON.stringify({ args, cwd: process.cwd() }));
 if (process.env.STUB_WAIT === "1" || process.env.STUB_HOLD_ID === id) await Bun.sleep(60000);
 if (id !== "b") {
-  const path = join(${JSON.stringify(store)}, id + ".md");
+  const store = ${all} ? join(${JSON.stringify(home)}, ".agents", "tickets", project) : ${JSON.stringify(store)};
+  const path = join(store, id + ".md");
   const status = id === "c" ? "cancelled" : "closed";
   writeFileSync(path, readFileSync(path, "utf8").replace("status: open", "status: " + status));
   await Bun.sleep(60000);
@@ -660,6 +664,368 @@ describe("ticket dispatch real tmux", () => {
         isolatedTmux(socket, ["kill-server"]);
         rmSync(root, { recursive: true, force: true });
       }
+    },
+    TIMEOUT_MS + 5000,
+  );
+});
+
+const globalFixtures: Fixture[] = [];
+
+function setupGlobal() {
+  const fixture = setup("alpha", true);
+  fixture.env = { ...fixture.env, STUB_WAIT: "1" } as typeof fixture.env;
+  for (const project of ["alpha", "beta"]) {
+    mkdirSync(join(fixture.home, "projects", project), { recursive: true });
+    mkdirSync(join(fixture.home, ".agents", "tickets", project), { recursive: true });
+  }
+  globalFixtures.push(fixture);
+  return fixture;
+}
+
+function globalStore(fixture: Fixture, project: string) {
+  return join(fixture.home, ".agents", "tickets", project);
+}
+
+function recordedLaunches(fixture: Fixture): string[] {
+  const path = join(fixture.records, "launches");
+  return existsSync(path) ? readFileSync(path, "utf8").trimEnd().split("\n") : [];
+}
+
+async function waitRecorded(fixture: Fixture, key: string) {
+  await waitFor(() => existsSync(join(fixture.records, `${key}.json`)), `pi did not start: ${key}`);
+}
+
+async function waitGlobalFinished(fixture: Fixture) {
+  await waitFor(
+    () =>
+      isolatedTmux(fixture.socket, ["has-session", "-t", `=${dispatcherName(null)}`]).status !== 0,
+    "global dispatcher did not finish",
+  );
+}
+
+afterEach(() => {
+  for (const fixture of globalFixtures.splice(0)) {
+    isolatedTmux(fixture.socket, ["kill-server"]);
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+describe("global ticket dispatch", () => {
+  it(
+    "orders all projects by ID, separates matching IDs, and resolves dependencies within each project",
+    async () => {
+      const fixture = setupGlobal();
+      const alpha = globalStore(fixture, "alpha");
+      const beta = globalStore(fixture, "beta");
+      for (const [store, id] of [
+        [alpha, "20260103-000000"],
+        [beta, "20260101-000000"],
+        [alpha, "20260102-000000"],
+        [beta, "20260102-000000"],
+      ])
+        writeTicket(store!, id!, "open");
+      writeTicket(alpha, "dependency", "locked");
+      writeTicket(beta, "dependency", "closed");
+      writeFileSync(
+        join(alpha, "20260100-000000.md"),
+        "---\nstatus: open\nafter: dependency\n---\n# waiting\n",
+      );
+      writeTicket(alpha, "resolved", "closed");
+      writeFileSync(
+        join(alpha, "20260104-000000.md"),
+        "---\nstatus: open\nafter: resolved\n---\n# ready\n",
+      );
+      for (const status of ["draft", "blocked", "locked", "closed", "cancelled"])
+        writeTicket(beta, status, status);
+      startServer(fixture);
+      const started = cli(fixture, [
+        "dispatch",
+        "--all",
+        "-p",
+        "../ignored",
+        "--max",
+        "1",
+        "--interval",
+        "0.02",
+      ]);
+      assert.equal(started.status, 0, started.stderr);
+      const expected = [
+        "beta/20260101-000000",
+        "alpha/20260102-000000",
+        "beta/20260102-000000",
+        "alpha/20260103-000000",
+        "alpha/20260104-000000",
+      ];
+      for (const [index, key] of expected.entries()) {
+        await waitRecorded(fixture, key);
+        assert.deepEqual(recordedLaunches(fixture), expected.slice(0, index + 1));
+        const [project, id] = key.split("/");
+        assert.deepEqual(JSON.parse(readFileSync(join(fixture.records, `${key}.json`), "utf8")), {
+          args: [expectedPrompt(id!)],
+          cwd: join(fixture.home, "projects", project!),
+        });
+        assert.equal(cli(fixture, ["set", id!, '{"status":"closed"}', "-p", project!]).status, 0);
+      }
+      await waitGlobalFinished(fixture);
+      assert.deepEqual(recordedLaunches(fixture), expected);
+      for (const project of ["alpha", "beta"]) {
+        const name = sessionName("fix_", `${project}/20260102-000000`, true);
+        assert.equal(isolatedTmux(fixture.socket, ["has-session", "-t", `=${name}`]).status, 0);
+      }
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it(
+    "adopts remaining pi sessions across both modes and counts them against the global max",
+    async () => {
+      const fixture = setupGlobal();
+      writeTicket(globalStore(fixture, "alpha"), "first", "open");
+      writeTicket(globalStore(fixture, "beta"), "second", "open");
+      startServer(fixture);
+      assert.equal(cli(fixture, ["dispatch", "--interval", "0.02"]).status, 0);
+      await waitRecorded(fixture, "alpha/first");
+      const inheritedName = "fix_first";
+      const pid = isolatedTmux(fixture.socket, [
+        "display-message",
+        "-p",
+        "-t",
+        `=${inheritedName}:0.0`,
+        "#{pane_pid}",
+      ]).stdout;
+      assert.equal(cli(fixture, ["dispatch", "stop"]).status, 0);
+      const global = cli(fixture, [
+        "dispatch",
+        "--all",
+        "--max",
+        "1",
+        "--prefix",
+        "new_",
+        "--interval",
+        "0.02",
+      ]);
+      assert.equal(global.status, 0, global.stderr);
+      await waitFor(
+        () =>
+          isolatedTmux(fixture.socket, [
+            "capture-pane",
+            "-p",
+            "-t",
+            `=${dispatcherName(null)}:0.0`,
+          ]).stdout.includes("dispatcher start max=1"),
+        "global worker did not begin",
+      );
+      assert.deepEqual(recordedLaunches(fixture), ["alpha/first"]);
+      assert.equal(
+        isolatedTmux(fixture.socket, [
+          "display-message",
+          "-p",
+          "-t",
+          `=${inheritedName}:0.0`,
+          "#{pane_pid}",
+        ]).stdout,
+        pid,
+      );
+      assert.equal(cli(fixture, ["set", "first", '{"status":"closed"}', "-p", "alpha"]).status, 0);
+      await waitRecorded(fixture, "beta/second");
+      assert.equal(cli(fixture, ["dispatch", "stop", "--all"]).status, 0);
+      writeTicket(globalStore(fixture, "beta"), "third", "open");
+      const local = cli(fixture, ["dispatch", "-p", "beta", "--max", "1", "--interval", "0.02"]);
+      assert.equal(local.status, 0, local.stderr);
+      await waitFor(
+        () =>
+          isolatedTmux(fixture.socket, [
+            "capture-pane",
+            "-p",
+            "-t",
+            `=${dispatcherName("beta")}:0.0`,
+          ]).stdout.includes("dispatcher start max=1"),
+        "local worker did not begin",
+      );
+      assert.deepEqual(recordedLaunches(fixture), ["alpha/first", "beta/second"]);
+      assert.equal(cli(fixture, ["set", "second", '{"status":"closed"}', "-p", "beta"]).status, 0);
+      await waitRecorded(fixture, "beta/third");
+      assert.deepEqual(recordedLaunches(fixture), ["alpha/first", "beta/second", "beta/third"]);
+      assert.deepEqual(
+        JSON.parse(readFileSync(join(fixture.records, "alpha/first.json"), "utf8")),
+        {
+          args: [expectedPrompt("first")],
+          cwd: fixture.cwd,
+        },
+      );
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it.each([false, true])(
+    "rejects overlapping dispatchers in both start orders (global first=%s)",
+    async (globalFirst) => {
+      const fixture = setupGlobal();
+      writeTicket(fixture.store, "held", "open");
+      startServer(fixture);
+      const firstArgs = globalFirst ? ["--all"] : [];
+      const secondArgs = globalFirst ? [] : ["--all"];
+      const first = cli(fixture, ["dispatch", ...firstArgs, "--interval", "0.02"]);
+      assert.equal(first.status, 0, first.stderr);
+      await waitRecorded(fixture, "alpha/held");
+      const duplicate = cli(fixture, ["dispatch", ...firstArgs]);
+      assert.equal(duplicate.status, 0, duplicate.stderr);
+      assert.match(duplicate.stdout, /already running/);
+      const overlap = cli(fixture, ["dispatch", ...secondArgs]);
+      assert.equal(overlap.status, 1);
+      assert.match(overlap.stderr, /overlapping dispatcher already running/);
+      assert.match(cli(fixture, ["dispatch", "stop", ...secondArgs]).stdout, /already stopped/);
+      assert.equal(
+        isolatedTmux(fixture.socket, [
+          "has-session",
+          "-t",
+          `=${dispatcherName(globalFirst ? null : "alpha")}`,
+        ]).status,
+        0,
+      );
+      assert.equal(cli(fixture, ["dispatch", "stop", ...firstArgs]).status, 0);
+      assert.deepEqual(recordedLaunches(fixture), ["alpha/held"]);
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it(
+    "serializes simultaneous global and project starts without double launching",
+    async () => {
+      const fixture = setupGlobal();
+      writeTicket(fixture.store, "held", "open");
+      startServer(fixture);
+      const command = process.env.TICKET_DISPATCH_BIN
+        ? [process.env.TICKET_DISPATCH_BIN]
+        : [process.execPath, CLI];
+      const children = [[], ["--all"]].map((flags) =>
+        Bun.spawn([...command, "dispatch", ...flags, "--interval", "0.02"], {
+          cwd: fixture.cwd,
+          env: fixture.env,
+          stdout: "pipe",
+          stderr: "pipe",
+        }),
+      );
+      const results = await Promise.all(
+        children.map(async (child) => ({
+          code: await child.exited,
+          stderr: await new Response(child.stderr).text(),
+        })),
+      );
+      assert.deepEqual(results.map((result) => result.code).sort(), [0, 1]);
+      assert.match(results.find((result) => result.code === 1)!.stderr, /overlapping dispatcher/);
+      await waitRecorded(fixture, "alpha/held");
+      assert.deepEqual(recordedLaunches(fixture), ["alpha/held"]);
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it.each(["missing", "file", "inaccessible"])(
+    "fails before any pi launch for a %s candidate cwd",
+    (kind) => {
+      const fixture = setupGlobal();
+      writeTicket(fixture.store, "first", "open");
+      writeTicket(globalStore(fixture, "beta"), "second", "open");
+      const target = join(fixture.home, "projects", "beta");
+      rmSync(target, { recursive: true });
+      if (kind === "file") writeFileSync(target, "not a directory");
+      if (kind === "inaccessible") {
+        mkdirSync(target);
+        chmodSync(target, 0o600);
+      }
+      try {
+        const result = cli(fixture, ["dispatch", "--all", "--max", "1"]);
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /^I\/O error:/);
+        assert.equal(existsSync(fixture.socket), false);
+        assert.deepEqual(recordedLaunches(fixture), []);
+      } finally {
+        if (kind === "inaccessible") chmodSync(target, 0o700);
+      }
+    },
+  );
+
+  it(
+    "fails fast on a new invalid project during a tick while preserving existing pi",
+    async () => {
+      const fixture = setupGlobal();
+      writeTicket(fixture.store, "held", "open");
+      startServer(fixture);
+      assert.equal(
+        cli(fixture, ["dispatch", "--all", "--max", "1", "--interval", "0.02"]).status,
+        0,
+      );
+      await waitRecorded(fixture, "alpha/held");
+      const added = globalStore(fixture, "gamma");
+      mkdirSync(added);
+      writeTicket(added, "new", "open");
+      await waitGlobalFinished(fixture);
+      assert.deepEqual(recordedLaunches(fixture), ["alpha/held"]);
+      assert.equal(
+        isolatedTmux(fixture.socket, [
+          "has-session",
+          "-t",
+          `=${sessionName("fix_", "alpha/held", true)}`,
+        ]).status,
+        0,
+      );
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it(
+    "stops the global dispatcher independently of removed stores and target directories",
+    async () => {
+      const fixture = setupGlobal();
+      writeTicket(fixture.store, "held", "open");
+      startServer(fixture);
+      assert.equal(cli(fixture, ["dispatch", "--all", "--interval", "60"]).status, 0);
+      await waitRecorded(fixture, "alpha/held");
+      rmSync(join(fixture.home, ".agents", "tickets"), { recursive: true });
+      rmSync(join(fixture.home, "projects"), { recursive: true });
+      const stopped = cli(fixture, ["dispatch", "stop", "--all", "-p", "../ignored"]);
+      assert.equal(stopped.status, 0, stopped.stderr);
+      assert.match(stopped.stdout, /dispatcher stopped: ticket_dispatch_all/);
+      assert.equal(
+        isolatedTmux(fixture.socket, [
+          "has-session",
+          "-t",
+          `=${sessionName("fix_", "alpha/held", true)}`,
+        ]).status,
+        0,
+      );
+    },
+    TIMEOUT_MS + 5000,
+  );
+});
+
+describe("global dispatch dynamic projects", () => {
+  it(
+    "discovers a new quoted project on a later tick",
+    async () => {
+      const fixture = setupGlobal();
+      writeTicket(fixture.store, "first", "open");
+      startServer(fixture);
+      const started = cli(fixture, ["dispatch", "--all", "--max", "1", "--interval", "0.02"]);
+      assert.equal(started.status, 0, started.stderr);
+      await waitRecorded(fixture, "alpha/first");
+      const project = "quoted 'project'";
+      const store = globalStore(fixture, project);
+      mkdirSync(join(fixture.home, "projects", project), { recursive: true });
+      mkdirSync(store);
+      writeTicket(store, "second", "open");
+      assert.equal(cli(fixture, ["set", "first", '{"status":"closed"}', "-p", "alpha"]).status, 0);
+      await waitRecorded(fixture, `${project}/second`);
+      assert.deepEqual(recordedLaunches(fixture), ["alpha/first", `${project}/second`]);
+      assert.deepEqual(
+        JSON.parse(readFileSync(join(fixture.records, project, "second.json"), "utf8")),
+        {
+          args: [expectedPrompt("second")],
+          cwd: join(fixture.home, "projects", project),
+        },
+      );
+      assert.equal(cli(fixture, ["set", "second", '{"status":"closed"}', "-p", project]).status, 0);
+      await waitGlobalFinished(fixture);
     },
     TIMEOUT_MS + 5000,
   );

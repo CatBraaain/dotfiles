@@ -1,4 +1,10 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
+import { access, stat } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { Database, SQLiteError } from "bun:sqlite";
 import dispatchPromptPath from "../dispatch-prompt.md" with { type: "file" };
 
 const OPTION_KEYS = ["--max", "--interval", "--prefix"];
@@ -10,10 +16,33 @@ export interface DispatchOptions {
 }
 
 export const DISPATCH_USAGE =
-  "ticket dispatch [-p <project>] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch start [-p <project>] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch stop [-p <project>]";
+  "ticket dispatch [-p <project>] [-a] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch start [-p <project>] [-a] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch stop [-p <project>] [-a]";
 
-export function sessionName(prefix: string, id: string): string {
-  return prefix + id.split(".").join("_");
+export function sessionName(prefix: string, id: string, all = false): string {
+  if (!all) return prefix + id.split(".").join("_");
+  const [project, ticketId] = splitTicketKey(id);
+  return `${prefix}${Buffer.from(project).toString("hex")}_${ticketId.split(".").join("_")}`;
+}
+
+function splitTicketKey(key: string): [string, string] {
+  const separator = key.indexOf("/");
+  return [key.slice(0, separator), key.slice(separator + 1)];
+}
+
+async function validateCwds(
+  tickets: TicketSnapshot[],
+  started: ReadonlySet<string>,
+): Promise<void> {
+  const projects = new Set(
+    tickets
+      .filter((ticket) => ticket.actionable && !started.has(ticket.id))
+      .map((ticket) => splitTicketKey(ticket.id)[0]),
+  );
+  for (const project of projects) {
+    const cwd = join(homedir(), "projects", project);
+    if (!(await stat(cwd)).isDirectory()) throw new Error(`not a directory: ${cwd}`);
+    await access(cwd, constants.X_OK);
+  }
 }
 
 export function buildPrompt(template: string, id: string): string {
@@ -89,6 +118,7 @@ export function planTick(input: PlanInput): Plan {
 export function parseDispatchArgs(argv: string[]): {
   action?: "start" | "stop";
   project?: string;
+  all?: boolean;
   options?: DispatchOptions;
   error?: string;
 } {
@@ -96,18 +126,21 @@ export function parseDispatchArgs(argv: string[]): {
   if (argv[0] === "start" || argv[0] === "stop") argv = argv.slice(1);
   const given = new Map<string, string>();
   let project: string | undefined;
+  let all = false;
   let optionsEnded = false;
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]!;
     const isProject = arg === "-p" || arg === "--project";
     if (optionsEnded) return { error: "positional arguments are not supported" };
     if (arg === "--") optionsEnded = true;
+    else if (arg === "-a" || arg === "--all") all = true;
     else if (isProject || (action === "start" && OPTION_KEYS.includes(arg))) {
       const value = argv[++index];
       if (
         value === undefined ||
         value.startsWith("--") ||
         value === "-p" ||
+        value === "-a" ||
         (isProject && value.startsWith("-"))
       )
         return { error: `missing value for ${arg}` };
@@ -116,7 +149,7 @@ export function parseDispatchArgs(argv: string[]): {
     } else if (arg.startsWith("-")) return { error: `unknown option: ${arg}` };
     else return { error: "positional arguments are not supported" };
   }
-  if (action === "stop") return { action, project };
+  if (action === "stop") return { action, project, all };
   const max = given.has("--max") ? Number(given.get("--max")) : 5;
   if (!Number.isInteger(max) || max < 1) return { error: "--max must be an integer >= 1" };
   const interval = given.has("--interval") ? Number(given.get("--interval")) : 30;
@@ -125,6 +158,7 @@ export function parseDispatchArgs(argv: string[]): {
   return {
     action: "start",
     project,
+    all,
     options: {
       max,
       prefix: given.get("--prefix") ?? "fix_",
@@ -162,8 +196,10 @@ export function dispatchSocket(): string {
   return process.env.TICKET_TEST_TMUX_SOCKET ?? "/run/user/1000/pi-tmux/server.sock";
 }
 
-export function dispatcherName(project: string): string {
-  return `ticket_dispatch_${Buffer.from(project).toString("hex")}`;
+export function dispatcherName(project: string | null): string {
+  return project === null
+    ? "ticket_dispatch_all"
+    : `ticket_dispatch_${Buffer.from(project).toString("hex")}`;
 }
 
 function sessionEnv(socket: string, name: string, key: string): string | undefined {
@@ -172,18 +208,19 @@ function sessionEnv(socket: string, name: string, key: string): string | undefin
   return result.stdout.slice(key.length + 1, -1);
 }
 
-function ownsSession(socket: string, name: string, project: string, role: string): boolean {
-  return (
-    sessionEnv(socket, name, PROJECT_ENV) === project && sessionEnv(socket, name, ROLE_ENV) === role
-  );
+function ownsSession(socket: string, name: string, project: string | null, role: string): boolean {
+  const owner = sessionEnv(socket, name, PROJECT_ENV);
+  const matchesProject =
+    project === null && role === "pi" ? Boolean(owner) : owner === (project ?? "");
+  return matchesProject && sessionEnv(socket, name, ROLE_ENV) === role;
 }
 
-function sessionEnvArgs(project: string, role: string): string[] {
+function sessionEnvArgs(project: string | null, role: string): string[] {
   const entries = {
     HOME: process.env.HOME,
     PATH: process.env.PATH,
     TICKET_TEST_TMUX_SOCKET: process.env.TICKET_TEST_TMUX_SOCKET,
-    [PROJECT_ENV]: project,
+    [PROJECT_ENV]: project ?? "",
     [ROLE_ENV]: role,
   };
   return Object.entries(entries).flatMap(([key, value]) =>
@@ -191,66 +228,109 @@ function sessionEnvArgs(project: string, role: string): string[] {
   );
 }
 
-export function workerCommand(entry: string, argv: string[], project: string): string[] {
+export function workerCommand(entry: string, argv: string[], project: string | null): string[] {
   const executable = entry.startsWith("/$bunfs/") ? [process.execPath] : [process.execPath, entry];
-  return [...executable, "__ticket_dispatch_worker", project, ...argv];
+  return [...executable, "__ticket_dispatch_worker", project ?? "", ...argv];
+}
+
+const DISPATCH_LOCK_TIMEOUT_MS = 4_000;
+const DISPATCH_LOCK_RETRY_MS = 10;
+
+async function withDispatcherLock<T>(socket: string, operation: () => Promise<T>): Promise<T> {
+  const key = createHash("sha256").update(socket).digest("hex");
+  const database = new Database(join(tmpdir(), `ticket-dispatch-${key}.sqlite`));
+  const deadline = Date.now() + DISPATCH_LOCK_TIMEOUT_MS;
+  try {
+    while (true) {
+      try {
+        database.exec("BEGIN IMMEDIATE");
+        break;
+      } catch (error) {
+        if (!(error instanceof SQLiteError) || error.code !== "SQLITE_BUSY") throw error;
+        if (Date.now() >= deadline)
+          throw new Error(`timed out waiting for dispatcher lock: ${socket}`);
+        await Bun.sleep(DISPATCH_LOCK_RETRY_MS);
+      }
+    }
+    return await operation();
+  } finally {
+    database.close();
+  }
+}
+
+function sessionNames(socket: string, allowMissing = false): string[] {
+  const result = tmux(socket, ["list-sessions", "-F", "#{session_name}"]);
+  if (!result.ok) {
+    if (allowMissing) return [];
+    throw new Error(`cannot list dispatch sessions: ${result.stderr.trim()}`);
+  }
+  return result.stdout.trimEnd().split("\n");
 }
 
 export async function startDispatcher(input: {
-  project: string;
+  project: string | null;
   loadSnapshot: LoadSnapshot;
   command: string[];
 }): Promise<void> {
   const { project } = input;
   const socket = dispatchSocket();
-  const name = dispatcherName(project);
-  if (ownsSession(socket, name, project, "dispatcher")) {
-    console.log(`dispatcher already running: ${name}`);
-    return;
-  }
-  await Bun.file(dispatchPromptPath).text();
-  await input.loadSnapshot();
-  const result = tmux(socket, [
-    "new-session",
-    "-d",
-    "-s",
-    name,
-    "-c",
-    process.cwd(),
-    ...sessionEnvArgs(project, "dispatcher"),
-    `exec ${input.command.map(shQuote).join(" ")}`,
-  ]);
-  if (!result.ok) {
+  await withDispatcherLock(socket, async () => {
+    const name = dispatcherName(project);
     if (ownsSession(socket, name, project, "dispatcher")) {
       console.log(`dispatcher already running: ${name}`);
       return;
     }
-    throw new Error(`dispatcher start failed for ${name}: ${result.stderr.trim()}`);
-  }
-  console.log(`dispatcher started: ${name}`);
+    for (const other of sessionNames(socket, true)) {
+      if (sessionEnv(socket, other, ROLE_ENV) !== "dispatcher") continue;
+      const owner = sessionEnv(socket, other, PROJECT_ENV);
+      if (owner !== undefined && (project === null || owner === ""))
+        throw new Error(`overlapping dispatcher already running: ${other}`);
+    }
+    await Bun.file(dispatchPromptPath).text();
+    const tickets = await input.loadSnapshot();
+    if (project === null)
+      await validateCwds(tickets, new Set(inheritedSessions(socket, project, true).keys()));
+    const result = tmux(socket, [
+      "new-session",
+      "-d",
+      "-s",
+      name,
+      "-c",
+      process.cwd(),
+      ...sessionEnvArgs(project, "dispatcher"),
+      `exec ${input.command.map(shQuote).join(" ")}`,
+    ]);
+    if (!result.ok) throw new Error(`dispatcher start failed for ${name}: ${result.stderr.trim()}`);
+    console.log(`dispatcher started: ${name}`);
+  });
 }
 
-export function stopDispatcher(project: string): void {
+export async function stopDispatcher(project: string | null): Promise<void> {
   const socket = dispatchSocket();
-  const name = dispatcherName(project);
-  if (!ownsSession(socket, name, project, "dispatcher")) {
-    console.log(`dispatcher already stopped: ${name}`);
-    return;
-  }
-  const result = tmux(socket, ["kill-session", "-t", `=${name}`]);
-  if (!result.ok && ownsSession(socket, name, project, "dispatcher"))
-    throw new Error(`dispatcher stop failed for ${name}: ${result.stderr.trim()}`);
-  console.log(`dispatcher stopped: ${name}`);
+  await withDispatcherLock(socket, async () => {
+    const name = dispatcherName(project);
+    if (!ownsSession(socket, name, project, "dispatcher")) {
+      console.log(`dispatcher already stopped: ${name}`);
+      return;
+    }
+    const result = tmux(socket, ["kill-session", "-t", `=${name}`]);
+    if (!result.ok && ownsSession(socket, name, project, "dispatcher"))
+      throw new Error(`dispatcher stop failed for ${name}: ${result.stderr.trim()}`);
+    console.log(`dispatcher stopped: ${name}`);
+  });
 }
 
-function inheritedSessions(socket: string, project: string): Map<string, string> {
-  const result = tmux(socket, ["list-sessions", "-F", "#{session_name}"]);
-  if (!result.ok) throw new Error(`cannot list dispatch sessions: ${result.stderr.trim()}`);
+function inheritedSessions(
+  socket: string,
+  project: string | null,
+  allowMissing = false,
+): Map<string, string> {
   const running = new Map<string, string>();
-  for (const name of result.stdout.trimEnd().split("\n")) {
+  for (const name of sessionNames(socket, allowMissing)) {
     if (!ownsSession(socket, name, project, "pi")) continue;
     const id = sessionEnv(socket, name, ID_ENV);
-    if (id) running.set(id, name);
+    const owner = sessionEnv(socket, name, PROJECT_ENV);
+    if (id) running.set(project === null ? `${owner}/${id}` : id, name);
   }
   return running;
 }
@@ -261,6 +341,7 @@ export function hasSession(socket: string, name: string): boolean {
 
 export interface RunDeps {
   options: DispatchOptions;
+  all?: boolean;
   loadSnapshot: LoadSnapshot;
   log(line: string): void;
   hasSession(name: string): boolean;
@@ -277,8 +358,10 @@ export async function run(deps: RunDeps): Promise<void> {
   deps.log(`dispatcher start max=${options.max}`);
 
   while (true) {
+    const tickets = await deps.loadSnapshot();
+    if (deps.all) await validateCwds(tickets, started);
     const plan = planTick({
-      tickets: await deps.loadSnapshot(),
+      tickets,
       started,
       running,
       max: options.max,
@@ -295,9 +378,10 @@ export async function run(deps: RunDeps): Promise<void> {
       running.delete(entry.id);
     }
     for (const id of plan.launches) {
-      const name = sessionName(options.prefix, id);
+      const name = sessionName(options.prefix, id, deps.all);
+      const promptId = deps.all ? splitTicketKey(id)[1] : id;
       started.add(id);
-      if (deps.launch(id, name, buildPrompt(template, id)) !== false) {
+      if (deps.launch(id, name, buildPrompt(template, promptId)) !== false) {
         running.set(id, name);
         deps.log(`launched ${id} as ${name}`);
       }
@@ -311,7 +395,7 @@ export async function run(deps: RunDeps): Promise<void> {
 export async function dispatch(
   options: DispatchOptions,
   loadSnapshot: LoadSnapshot,
-  project: string,
+  project: string | null,
 ): Promise<void> {
   const socket = dispatchSocket();
   const cwd = process.cwd();
@@ -319,7 +403,9 @@ export async function dispatch(
     const stamped = `[${timestamp()}] ${line}`;
     console.log(stamped);
   }
-  function launch(id: string, name: string, prompt: string): boolean {
+  function launch(key: string, name: string, prompt: string): boolean {
+    const [owner, id] = project === null ? splitTicketKey(key) : [project, key];
+    const targetCwd = project === null ? join(homedir(), "projects", owner) : cwd;
     const command = `exec pi ${shQuote(prompt)}`;
     const result = tmux(socket, [
       "new-session",
@@ -327,8 +413,8 @@ export async function dispatch(
       "-s",
       name,
       "-c",
-      cwd,
-      ...sessionEnvArgs(project, "pi"),
+      targetCwd,
+      ...sessionEnvArgs(owner, "pi"),
       "-e",
       `${ID_ENV}=${id}`,
       command,
@@ -342,6 +428,7 @@ export async function dispatch(
   try {
     await run({
       options,
+      all: project === null,
       loadSnapshot,
       log,
       initialRunning: inheritedSessions(socket, project),

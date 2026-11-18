@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import {
   buildPrompt,
   dispatcherName,
+  hasSession,
   parseDispatchArgs,
   planTick,
   run,
@@ -25,6 +26,12 @@ describe("sessionName", () => {
   it("prefixes the id and replaces dots with underscores", () => {
     assert.equal(sessionName("fix_", "20260920-120418"), "fix_20260920-120418");
     assert.equal(sessionName("fix_", "2026.09.20"), "fix_2026_09_20");
+    assert.equal(sessionName("fix_", "alpha/2026.09.20", true), "fix_616c706861_2026_09_20");
+    assert.notEqual(
+      sessionName("fix_", "alpha/same", true),
+      sessionName("fix_", "beta/same", true),
+    );
+    assert.notEqual(dispatcherName(null), dispatcherName("all"));
   });
 });
 
@@ -117,10 +124,27 @@ describe("parseDispatchArgs", () => {
     });
   });
 
-  it("accepts only project flags after stop", () => {
-    assert.deepEqual(parseDispatchArgs(["stop"]), { action: "stop", project: undefined });
+  it("accepts project and all flags after stop", () => {
+    assert.deepEqual(parseDispatchArgs(["stop"]), {
+      action: "stop",
+      project: undefined,
+      all: false,
+    });
     for (const flag of ["-p", "--project"]) {
-      assert.deepEqual(parseDispatchArgs(["stop", flag, "w"]), { action: "stop", project: "w" });
+      assert.deepEqual(parseDispatchArgs(["stop", flag, "w"]), {
+        action: "stop",
+        project: "w",
+        all: false,
+      });
+    }
+    for (const flag of ["-a", "--all"]) {
+      assert.deepEqual(parseDispatchArgs(["stop", flag]), {
+        action: "stop",
+        project: undefined,
+        all: true,
+      });
+      assert.equal(parseDispatchArgs([flag]).all, true);
+      assert.equal(parseDispatchArgs(["start", flag, "-p", "../ignored"]).all, true);
     }
     for (const args of [
       ["stop", "w"],
@@ -699,4 +723,90 @@ describe("dispatch snapshot validation", () => {
     assert.match(result.stderr, /^project not found:/);
     assert.ok(!result.stderr.includes("I/O error"));
   });
+});
+
+describe("global dispatch snapshot validation", () => {
+  it.each(["-a", "--all"])(
+    "finishes an empty global store without requiring project directories (%s)",
+    async (flag) => {
+      const { home, socket } = fixture();
+      const result = invoke(home, [flag, "--interval", "0.01"]);
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.stdout, `dispatcher started: ${dispatcherName(null)}\n`);
+      const deadline = Date.now() + 5000;
+      while (hasSession(socket, dispatcherName(null)) && Date.now() < deadline) await Bun.sleep(10);
+      assert.equal(hasSession(socket, dispatcherName(null)), false);
+      assert.equal(existsSync(join(home, "projects")), false);
+    },
+  );
+
+  it.each(["missing", "invalid"])("fails before dispatching for a %s global store", (kind) => {
+    const { home, store, socket } = fixture();
+    if (kind === "missing") rmSync(join(home, ".agents", "tickets"), { recursive: true });
+    else writeFileSync(join(store, "invalid.md"), "---\nstatus: unknown\n---\n");
+    const result = invoke(home, ["--all"]);
+    assert.equal(result.code, 1);
+    assert.match(
+      result.stderr,
+      kind === "missing" ? /^ticket store not found:/ : /^invalid status/,
+    );
+    assert.equal(existsSync(socket), false);
+  });
+});
+
+describe("dispatcher lock recovery", () => {
+  it.each([
+    { name: "global start", args: ["--all", "--interval", "0.01"], project: null },
+    { name: "global stop", args: ["stop", "--all"], project: null },
+    { name: "project start", args: ["--interval", "0.01"], project: "local" },
+    { name: "project stop", args: ["stop"], project: "local" },
+  ])(
+    "recovers $name after a lock holder is killed during its snapshot read",
+    async ({ args, project }) => {
+      const { home, socket } = fixture();
+      const holder = Bun.spawn(
+        [
+          process.execPath,
+          "-e",
+          `
+import { startDispatcher } from ${JSON.stringify(join(import.meta.dir, "dispatch.ts"))};
+await startDispatcher({
+  project: null,
+  command: [],
+  async loadSnapshot() {
+    console.log("snapshot holds lock");
+    await Bun.sleep(60000);
+    return [];
+  },
+});
+`,
+        ],
+        {
+          cwd: home,
+          env: { ...process.env, HOME: home, TICKET_TEST_TMUX_SOCKET: socket },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      try {
+        const ready = await holder.stdout.getReader().read();
+        assert.equal(ready.done, false, "holder exited before acquiring the lock");
+        assert.match(new TextDecoder().decode(ready.value), /snapshot holds lock/);
+        holder.kill("SIGKILL");
+        assert.notEqual(await holder.exited, 0);
+        const recovered = invoke(home, [...args], socket);
+        assert.equal(recovered.code, 0, recovered.stderr);
+        assert.equal(recovered.stderr, "");
+        assert.match(recovered.stdout, /dispatcher (started|already stopped):/);
+        const name = dispatcherName(project === null ? null : basename(home));
+        const deadline = Date.now() + 5000;
+        while (hasSession(socket, name) && Date.now() < deadline) await Bun.sleep(10);
+        assert.equal(hasSession(socket, name), false);
+      } finally {
+        holder.kill("SIGKILL");
+        await holder.exited;
+      }
+    },
+    15000,
+  );
 });
