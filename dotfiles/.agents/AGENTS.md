@@ -394,7 +394,7 @@ ASD-STE100 は方向性の参考とし、厳格な規格準拠や語彙・語数
 main worktree ではファイルを編集しない。編集を伴う作業は、1ファイルの軽微な修正も含め、常にサブワークツリーとブランチを作成して着手する。
 
 - 着手時: 「作成」の手順で worktree を作成する。セッションの cwd は main worktree に置いたまま、worktree を指定して作業する。
-- まとまった作業単位の完了時: 「finish・discard・close」の finish を、user の承認を得てから実行する。
+- まとまった作業単位の完了時: 「merge・close」に従い、user の承認を得てから mergeし、closeする。
 - 適用しない: 読み取りのみの調査・検索・検証、コミット・マージなど worktree を必要としない操作。
 
 ### 作成
@@ -419,36 +419,30 @@ main の未コミット変更はその場に残す。worktree への持ち運び
 
 検証: 統合後に `git log --graph --oneline -n <統合した commit 数 + 2>` を確認し、merge commit がなく線形であること。
 
-### finish・discard・close
+### merge・close
 
-worktree は自動掃除されないため、エージェントが作業完了時に自分で閉じる。原則としてfinish で閉じ、成果を捨てるときは discard で閉じる。閉じ方は次の3語で区別する。
+worktree は自動掃除されないため、エージェントが作業完了時に自分で閉じる。原則として成果を mergeしてから closeする。
 
-user は worktree を「wt」と略すことがある（例: finish wt）。略記も worktree への指示として解釈する。
+user は worktree を「wt」と略すことがある（例: merge wt、close wt）。略記も worktree への指示として解釈する。
 
 | 言葉 | 意味 |
 | --- | --- |
-| finish | 成果を統合先へ取り込んで閉じる。user の承認を得てから実行する |
-| discard | 変更と branch を捨てて閉じる。user の承認を得てから実行する |
-| close | worktree と branch を削除する。finish・discard の最終段として実行する |
+| merge | 成果を統合先へ取り込む。user の承認を得てから実行する |
+| close | worktree と branch を削除する。merge の有無にかかわらず、user の承認を得てから実行する |
 
-finish — 統合の判断が入るため、commit前の未コミットの状態で user のレビューを経た承認を得る。質問の前に、確認対象の場所、レビュー観点、レビュー方法を示す。検証まで済ませた段階で、「Asking Format」に従う `## 質問` として、worktree名（worktreeパスの末尾セグメント）を含んだ「worktree `<名前>` を finishしてよいですか？」と必ず尋ね、commit は承認後に行う。成果物は user が承認の回答をした時点の作業ツリーの内容であり、agent が質問した時点ではない。user は回答をもって手直しを終えているものとする。承認後:
+merge — 統合の判断が入るため、commit前の未コミットの状態で user のレビューを経た承認を得る。質問の前に、確認対象の場所、レビュー観点、レビュー方法を示す。検証まで済ませた段階で、「Asking Format」に従う `## 質問` として、worktree名（worktreeパスの末尾セグメント）を含んだ「worktree `<名前>` を mergeしてよいですか？」と必ず尋ね、commit は承認後に行う。続けて closeする場合は、close も質問に含める。成果物は user が承認の回答をした時点の作業ツリーの内容であり、agent が質問した時点ではない。user は回答をもって手直しを終えているものとする。承認後:
 
-1. 作業ツリーに未コミット変更（user の手直しを含む）があれば、質問せず成果に含めて1つのコミットで commitする（意味単位への分割はこのコミットには適用しない）。手直しを取り消してはならず、破棄は user の明示が必要。検証のやり直しはしない。手順3の backup branch は、close で worktreeごと削除するため作らない。
+1. 作業ツリーに未コミット変更（user の手直しを含む）があれば、質問せず成果に含めて1つのコミットで commitする（意味単位への分割はこのコミットには適用しない）。手直しを取り消してはならず、破棄は user の明示が必要。検証のやり直しはしない。backup branch は作らない。
 2. 「統合」に従って統合先へマージする。
-3. close を実行する。
-
-discard — 成果を捨てる判断が入るため、実行前に user の承認を得る。承認後:
-
-1. worktree の branch名と未コミット変更を確認し、捨てる対象を特定する。
-2. close を `--force` と `-D` で実行する。
 
 close — bash のカレントディレクトリが対象worktree内にあると削除に失敗するため、対象外のディレクトリから実行する。エディタのワークスペースから worktree を外す操作は本手順に含まず、user が手動で行う。
 
-1. `git worktree remove <worktree のパス>` で worktree を削除する。
-2. `git branch -d <branch>` で、worktree が checkoutしていたbranch を削除する。
-3. `git worktree list` に prunable な参照が残っていれば、`git worktree prune` を実行する。
+1. worktree の branch名、未コミット変更、統合状況を確認し、削除対象を特定する。成果を捨てる場合は、実行前にその明示承認を user から得る。close の依頼だけを成果の破棄承認と解釈しない。
+2. `git worktree remove <worktree のパス>` で worktree を削除する。承認済みの未コミット変更の破棄に必要な場合は `--force` を使う。
+3. `git branch -d <branch>` で、worktree が checkoutしていたbranch を削除する。承認済みの未マージbranch の破棄に必要な場合は `-D` を使う。
+4. `git worktree list` に prunable な参照が残っていれば、`git worktree prune` を実行する。
 
-手順1・2は、未コミット変更・未マージの branch があると失敗する。失敗したときは close単独で先へ進らず、成果を取り込むなら finish、捨てるときは user の承認を得てdiscard として扱う。
+未コミット変更・未マージの branch があるため通常削除に失敗し、成果の破棄が未承認なら停止する。成果を取り込むか、捨てるかを user に確認し、それぞれの承認を得てから進める。
 
 検証: `git worktree list` に対象worktree がなく、`git branch --list <branch>` が空であること。中途終了で残ったworktree は `git worktree list` で点検する。
 
@@ -489,7 +483,7 @@ close — bash のカレントディレクトリが対象worktree内にあると
 | `🚪 Closed` | セッション全体が完了し、アーカイブしてよい状態 |
 | `🧹 Discarded` | worktree・作業ファイルなど、作業成果や作業記録を破棄した |
 | `🟡 Partial` | 一部を完了したが、残課題がある |
-| `⏳ Ready` | 検証済みの worktree を finishするため、ユーザーの承認を待つ |
+| `⏳ Ready` | 検証済みの worktree を mergeするため、ユーザーの承認を待つ |
 | `⏳ Waiting` | `Ready` 以外で、ユーザーの回答・承認を待つ |
 | `⛔ Blocked` | 権限・環境など、回答以外の要因で安全に続行できない |
 | `❌ Failed` | 依頼された変更または検証に失敗した |

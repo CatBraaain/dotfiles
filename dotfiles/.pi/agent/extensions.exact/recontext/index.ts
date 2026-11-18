@@ -111,13 +111,13 @@ export default function recontextExtension(pi: ExtensionAPI): void {
     label: "Recontext",
     description:
       "Use this tool only when a context reset is needed before a substantial next work phase. " +
-      "Do not use it for ordinary completion reports, owner decisions, or finish/discard worktree approval; " +
+      "Do not use it for ordinary completion reports, owner decisions, or merge/close worktree approval; " +
       "when only approval remains, report Ready or Waiting and ask normally. " +
       "Keep raw history in this session and replace prior model context with handoff, without LLM summarization. " +
       "The first two context replacements after user input or approval are automatic; the third requires approval. " +
       "That approval prompt is shown by this tool at the turn boundary, so do not ask the user for it in advance.",
     promptGuidelines: [
-      "Use recontext only before a substantial next phase, such as a convergence loop or long work after implementation or review. Do not call it just because work finished. For finish/discard approval, owner decisions, or completion reports, report Ready or Waiting and ask normally. Include the goal, approved spec and work file paths, decisions, completed work and checks, open questions, and completion conditions in handoff. Continue as the main agent and delegate the next phase to another senior. If approval is denied, the current agent receives no(<reason>). The approval prompt for the third replacement is shown by this tool at the end of the turn; do not ask the user for it in advance.",
+      "Use recontext only before a substantial next phase, such as a convergence loop or long work after implementation or review. Do not call it just because work finished. For merge/close approval, owner decisions, or completion reports, report Ready or Waiting and ask normally. Include the goal, approved spec and work file paths, decisions, completed work and checks, open questions, and completion conditions in handoff. Continue as the main agent and delegate the next phase to another senior. If approval is denied, the current agent receives no(<reason>). The approval prompt for the third replacement is shown by this tool at the end of the turn; do not ask the user for it in advance.",
     ],
     parameters: Type.Object({
       reason: Type.String({ description: "Why the context reset is needed (non-empty)" }),

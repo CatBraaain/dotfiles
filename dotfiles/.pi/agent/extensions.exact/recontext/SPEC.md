@@ -16,7 +16,7 @@ recontext拡張は、モデルに渡すコンテキストを編集する拡張�
 
 `recontext` ツールはmain agentだけが使う。コンテキストをリセットして長い次の作業phaseへ移る場合に限り、収束ループ開始前、またはseniorによるレビュー・実装の完了後に次の長いphaseがある場合に呼び出す。レビュー・実装の完了だけでは呼び出さない。
 
-`finish wt`・`discard` の承認待ち、user の判断待ち、単なる作業完了報告では呼び出さず、main agent は `Ready` または `Waiting` として通常の質問で終了する。切替後のmain agentは次のphaseを別のseniorへ委譲する。
+`merge`・`close` の承認待ち、user の判断待ち、単なる作業完了報告では呼び出さず、main agent は `Ready` または `Waiting` として通常の質問で終了する。切替後のmain agentは次のphaseを別のseniorへ委譲する。
 
 収束条件を満たしたmain agentは、`recontext` を呼び出さずユーザーへ結果を報告する。
 
