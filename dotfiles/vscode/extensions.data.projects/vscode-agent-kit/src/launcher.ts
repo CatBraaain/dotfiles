@@ -1,6 +1,7 @@
 import type * as vscode from "vscode";
 import { requireWorkDirectory } from "./workDirectory";
 import type { TerminalRegistry } from "./terminalRegistry";
+import type { PiSession } from "./piMux";
 import type { EmptySessionPool } from "./emptySessionPool";
 
 export interface SessionLauncherDeps {
@@ -19,16 +20,25 @@ export class SessionLauncher implements vscode.Disposable {
     if (this.disposed) return;
     const present = this.deps.registry.preparePresentation();
     this.deps.registry.presentExisting(present);
+    const early = await this.deps.registry.prepareNew(workDir, present);
+    if (early !== undefined) onPresented?.();
     return this.deps.registry.run(async () => {
       if (this.disposed) return;
-      const sessionId = await this.deps.registry.mux.newSession(workDir);
       const previousSessionId = this.deps.registry.displayedSessionId;
-      const { terminal } = await this.deps.registry.open({ sessionId, cwd: workDir });
-      present(terminal);
-      onPresented?.();
+      const session: PiSession | undefined =
+        early === undefined
+          ? { sessionId: await this.deps.registry.mux.newSession(workDir), cwd: workDir }
+          : await early.session;
+      if (session === undefined || this.disposed) return;
+      const adopted = early !== undefined && this.deps.registry.keepsEarlyDisplay(early, session);
+      if (!adopted) {
+        const { terminal } = await this.deps.registry.open(session);
+        present(terminal);
+        if (early === undefined) onPresented?.();
+      }
       if (this.disposed) return;
-      this.deps.emptySessions?.observeOpened(workDir, sessionId);
-      await this.deps.onSessionStarted(sessionId);
+      this.deps.emptySessions?.observeOpened(session.cwd, session.sessionId);
+      await this.deps.onSessionStarted(session.sessionId);
       return previousSessionId;
     });
   }

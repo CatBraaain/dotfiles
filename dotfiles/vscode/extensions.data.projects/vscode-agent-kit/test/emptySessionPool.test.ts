@@ -510,7 +510,12 @@ describe("EmptySessionPool", () => {
     const registry = new TerminalRegistry(editorTerminals(), runtimes.mux);
     const pid = deferred<number>();
     const terminal = { processId: pid.promise, show: vi.fn(), dispose: vi.fn() };
-    api.createTerminal.mockReturnValue(terminal);
+    api.createTerminal.mockImplementation(() => {
+      void runtimes.mocks.newSession(root).then((sessionId) => {
+        runtimes.client.attachedId = sessionId;
+      });
+      return terminal;
+    });
     const launcher = new SessionLauncher({
       registry,
       emptySessions: pool,
@@ -518,18 +523,16 @@ describe("EmptySessionPool", () => {
     });
     const launching = launcher.start(root);
     await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
-    expect(api.createTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({ shellArgs: ["open", "new-1"] }),
-    );
-    expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(root);
-    await launching;
+    expect(api.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ shellPath: "sh" }));
     expect(terminal.show).toHaveBeenCalledOnce();
+    expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(root);
     expect(runtimes.mocks.current).not.toHaveBeenCalled();
-    registry.onTerminalClosed(terminal as never);
+    pid.resolve(123);
+    await launching;
+    expect(runtimes.mocks.current).toHaveBeenCalledExactlyOnceWith(123);
     expect(registry.displayedSessionId).toBe("new-1");
     launcher.dispose();
     pool.dispose();
     background.resolve("Pi session late\n");
-    pid.resolve(123);
   });
 });

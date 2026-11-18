@@ -3,8 +3,8 @@ import { homedir } from "node:os";
 import type * as vscode from "vscode";
 import { TabInputTerminal } from "vscode";
 import { TerminalRegistry } from "../src/terminalRegistry";
-import { editorTerminals } from "../src/terminals";
-import type { PiMuxCurrentSession, PiSession } from "../src/piMux";
+import { editorTerminals, NEW_SESSION_COMMAND } from "../src/terminals";
+import type { PiMuxCurrentSession, PiMuxWorkspace, PiSession } from "../src/piMux";
 import { fakeRuntimes } from "./runtimeFixtures";
 
 const windowMock = vi.hoisted(() => ({
@@ -44,6 +44,11 @@ function setup(restored?: vscode.Terminal) {
       closeAutomatically(terminal);
       return terminal;
     }),
+    createNew: vi.fn((cwd: string) => {
+      const terminal = displayTerminal(cwd);
+      closeAutomatically(terminal);
+      return terminal;
+    }),
     find: vi.fn(() => restored),
     canFocus: vi.fn(() => false),
   };
@@ -65,6 +70,71 @@ function setup(restored?: vscode.Terminal) {
 afterEach(() => vi.useRealTimers());
 
 describe("TerminalRegistry", () => {
+  it("prepares a new-session display and defers other display changes until its session is captured", async () => {
+    const { registry, displays, mocks, client } = setup();
+    client.attachedId = undefined;
+    let releaseCurrent!: (session: PiMuxCurrentSession | undefined) => void;
+    mocks.current.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseCurrent = resolve;
+        }),
+    );
+    const present = registry.preparePresentation();
+    const early = await registry.prepareNew("/project", present);
+    expect(early).toBeDefined();
+    expect(displays.createNew).toHaveBeenCalledExactlyOnceWith("/project");
+    expect(early!.terminal.show).toHaveBeenCalledOnce();
+
+    const switching = registry.open(session("A"));
+    await vi.waitFor(() => expect(mocks.current).toHaveBeenCalledOnce());
+    expect(mocks.switch).not.toHaveBeenCalled();
+    expect(displays.create).not.toHaveBeenCalled();
+
+    releaseCurrent({ id: "new-9", cwd: "/project", file: "/f", target: "pi-new-9" });
+    expect(await early!.session).toMatchObject({ sessionId: "new-9", cwd: "/project" });
+    expect((await switching).terminal).toBe(early!.terminal);
+    expect(mocks.switch).toHaveBeenCalledExactlyOnceWith("A", 123);
+    expect(registry.displayedSessionId).toBe("A");
+  });
+
+  it("captures the new session before a queued earlier selection connects and keeps arrival order", async () => {
+    const { registry, displays, mocks, client, live } = setup();
+    client.attachedId = undefined;
+    const listImplementation = mocks.list.getMockImplementation()!;
+    let releaseList!: (workspaces: PiMuxWorkspace[]) => void;
+    const listGate = new Promise<PiMuxWorkspace[]>((resolve) => {
+      releaseList = resolve;
+    });
+    mocks.list.mockReturnValueOnce(listGate);
+    const earlier = registry.run(() => registry.open(session("A")));
+    await vi.waitFor(() => expect(mocks.list).toHaveBeenCalledOnce());
+    releaseList(await listImplementation());
+    const early = await registry.prepareNew("/project", registry.preparePresentation());
+    expect(early).toBeDefined();
+    expect(early!.terminal.show).toHaveBeenCalledOnce();
+    live.set("new-9", { sessionId: "new-9", cwd: "/project", target: "pi-new-9" });
+    client.attachedId = "new-9";
+    expect(await early!.session).toMatchObject({ sessionId: "new-9", cwd: "/project" });
+    await earlier;
+    expect(mocks.switch).toHaveBeenCalledExactlyOnceWith("A", 123);
+    expect(registry.displayedSessionId).toBe("A");
+    await registry.run(() => registry.open({ sessionId: "new-9", cwd: "/project" }));
+    expect(mocks.switch).toHaveBeenLastCalledWith("new-9", 123);
+    expect(registry.displayedSessionId).toBe("new-9");
+    expect(displays.createNew).toHaveBeenCalledOnce();
+    expect(displays.create).not.toHaveBeenCalled();
+  });
+
+  it("returns no early display when a shared display already exists", async () => {
+    const existing = displayTerminal();
+    const { registry, displays } = setup(existing);
+    const present = registry.preparePresentation();
+    expect(await registry.prepareNew("/project", present)).toBeUndefined();
+    expect(displays.createNew).not.toHaveBeenCalled();
+    expect(existing.show).not.toHaveBeenCalled();
+  });
+
   it("shows immediately and focuses the same display once its process starts", async () => {
     const { registry, displays } = setup();
     const { terminal } = await registry.open(session("A"));
@@ -1106,5 +1176,18 @@ describe("editorTerminals", () => {
       isTransient: false,
     });
     expect(windowMock.createTerminal.mock.calls[0][0]).not.toHaveProperty("name");
+  });
+
+  it("creates a new-session Terminal that runs pi-mux new in the requested cwd from the home directory", () => {
+    windowMock.createTerminal.mockClear();
+    editorTerminals().createNew("/project with 'quotes'; && spaces");
+    expect(windowMock.createTerminal).toHaveBeenCalledExactlyOnceWith({
+      cwd: { fsPath: homedir() },
+      location: 1,
+      shellPath: "sh",
+      shellArgs: ["-c", NEW_SESSION_COMMAND, "pi-mux-new", "/project with 'quotes'; && spaces"],
+      env: { PI_SESSIONS_DISPLAY: "1", TMUX: null, TMUX_PANE: null },
+      isTransient: false,
+    });
   });
 });

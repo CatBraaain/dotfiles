@@ -4,7 +4,7 @@ import type { DisplayTerminals } from "./terminals";
 import type { PiMuxCurrentSession } from "./piMux";
 import { PiMux, hasLiveSession, type PiSession } from "./piMux";
 import { errorMessage } from "./guards";
-import { requireWorkDirectory } from "./workDirectory";
+import { requireWorkDirectory, sameWorkDirectory } from "./workDirectory";
 import { cwdGroupKey } from "./grouping";
 
 /** A display switched to a replacement session; used to roll back on close failure. */
@@ -20,6 +20,11 @@ interface DisplayRecovery {
 }
 
 export class DisplayRecoveryCancelledError extends Error {}
+
+export interface EarlyNewSession {
+  readonly terminal: vscode.Terminal;
+  readonly session: Promise<PiSession | undefined>;
+}
 
 export class TerminalRegistry implements vscode.Disposable {
   private disposed = false;
@@ -81,6 +86,43 @@ export class TerminalRegistry implements vscode.Disposable {
   presentExisting(present = this.preparePresentation()): void {
     const display = this.currentDisplay();
     if (display !== undefined && !this.closeWaiters.has(display)) present(display);
+  }
+
+  async prepareNew(
+    cwd: string,
+    present: (terminal: vscode.Terminal) => void,
+  ): Promise<EarlyNewSession | undefined> {
+    if (this.currentDisplay() !== undefined) return undefined;
+    let resolveCreation!: (early: EarlyNewSession | undefined) => void;
+    let rejectCreation!: (error: unknown) => void;
+    const creation = new Promise<EarlyNewSession | undefined>((resolve, reject) => {
+      resolveCreation = resolve;
+      rejectCreation = reject;
+    });
+    this.changeDisplay(async () => {
+      this.requireActive();
+      if (this.currentDisplay() !== undefined) {
+        resolveCreation(undefined);
+        return;
+      }
+      const terminal = this.terminals.createNew(cwd);
+      this.display = terminal;
+      present(terminal);
+      const session = this.captureNewSession(terminal, cwd);
+      resolveCreation({ terminal, session });
+      await session;
+    }).catch(rejectCreation);
+    return creation;
+  }
+
+  keepsEarlyDisplay(early: EarlyNewSession, session: PiSession): boolean {
+    return (
+      !this.disposed &&
+      !this.closed.has(early.terminal) &&
+      early.terminal.exitStatus === undefined &&
+      this.currentDisplay() === early.terminal &&
+      this.displayedSession === session.sessionId
+    );
   }
 
   async open(
@@ -392,11 +434,21 @@ export class TerminalRegistry implements vscode.Disposable {
     }
   }
 
-  private async waitForClient(
+  private waitForClient(
     terminal: vscode.Terminal,
     session: PiSession,
     requestSignal?: AbortSignal,
   ): Promise<void> {
+    return this.withAttachment(terminal, requestSignal, (signal) =>
+      this.pollClient(terminal, session, signal),
+    );
+  }
+
+  private async withAttachment<T>(
+    terminal: vscode.Terminal,
+    requestSignal: AbortSignal | undefined,
+    poll: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
     this.requireActive();
     requestSignal?.throwIfAborted();
     const controller = new AbortController();
@@ -414,12 +466,56 @@ export class TerminalRegistry implements vscode.Disposable {
     try {
       if (this.closed.has(terminal))
         controller.abort(new Error("Pi display closed during attachment"));
-      return await Promise.race([this.pollClient(terminal, session, signal), closed]);
+      return await Promise.race([poll(signal), closed]);
     } finally {
       requestSignal?.removeEventListener("abort", abortRequest);
       controller.abort();
       this.attachments.delete(terminal);
     }
+  }
+
+  private async captureNewSession(
+    terminal: vscode.Terminal,
+    cwd: string,
+  ): Promise<PiSession | undefined> {
+    try {
+      const session = await this.withAttachment(terminal, undefined, (signal) =>
+        this.pollFirstSession(terminal, cwd, signal),
+      );
+      if (this.disposed || this.closed.has(terminal)) return undefined;
+      this.displayedSession = session.sessionId;
+      this.displayedSessionCwd = session.cwd;
+      return session;
+    } catch (error) {
+      if (this.disposed || this.closed.has(terminal)) return undefined;
+      await this.closeDisplay(terminal);
+      throw new Error(`Pi new session in ${cwd}: ${errorMessage(error)}`);
+    }
+  }
+
+  private async pollFirstSession(
+    terminal: vscode.Terminal,
+    cwd: string,
+    signal: AbortSignal,
+  ): Promise<PiSession> {
+    const pid = await terminal.processId;
+    signal.throwIfAborted();
+    if (pid === undefined) throw new Error(`Pi display process did not start in ${cwd}`);
+    while (terminal.exitStatus === undefined) {
+      signal.throwIfAborted();
+      const current = await this.mux.current(pid);
+      signal.throwIfAborted();
+      if (terminal.exitStatus !== undefined) break;
+      if (current !== undefined) {
+        const inRequestedCwd =
+          current.cwd === cwd || (await sameWorkDirectory(current.cwd, cwd).catch(() => false));
+        if (!inRequestedCwd)
+          throw new Error(`Pi display attached to ${current.cwd} instead of ${cwd}`);
+        return { sessionId: current.id, cwd };
+      }
+      await sleep(50, undefined, { signal });
+    }
+    throw new Error(`Pi display exited before attaching pid=${pid} in ${cwd}`);
   }
 
   private async pollClient(

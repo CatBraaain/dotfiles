@@ -5,9 +5,12 @@ import type { PiSession } from "./piMux";
 const OWNER_KEY = "PI_SESSIONS_DISPLAY";
 const OWNER_VALUE = "1";
 
+export const NEW_SESSION_COMMAND = 'cd "$1" && exec pi-mux new';
+
 export interface DisplayTerminals {
   find(): vscode.Terminal | undefined;
   create(session: PiSession): vscode.Terminal;
+  createNew(cwd: string): vscode.Terminal;
   canFocus(terminal: vscode.Terminal): boolean;
 }
 
@@ -38,6 +41,16 @@ export function editorTerminals(): DisplayTerminals {
         shellArgs: session.temporary
           ? ["open", "--temporary", session.sessionId]
           : ["open", session.sessionId],
+        env: { [OWNER_KEY]: OWNER_VALUE, TMUX: null, TMUX_PANE: null },
+        isTransient: false,
+      });
+    },
+    createNew(cwd: string) {
+      return vscode.window.createTerminal({
+        cwd: vscode.Uri.file(homedir()),
+        location: vscode.TerminalLocation.Editor,
+        shellPath: "sh",
+        shellArgs: ["-c", NEW_SESSION_COMMAND, "pi-mux-new", cwd],
         env: { [OWNER_KEY]: OWNER_VALUE, TMUX: null, TMUX_PANE: null },
         isTransient: false,
       });

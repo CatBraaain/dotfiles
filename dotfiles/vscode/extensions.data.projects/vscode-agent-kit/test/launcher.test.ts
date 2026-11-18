@@ -5,7 +5,7 @@ import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SessionLauncher } from "../src/launcher";
 import { TerminalRegistry } from "../src/terminalRegistry";
-import { editorTerminals } from "../src/terminals";
+import { editorTerminals, NEW_SESSION_COMMAND } from "../src/terminals";
 import { fakeRuntimes } from "./runtimeFixtures";
 import { cleanup, tempDir } from "./fixtures";
 
@@ -41,6 +41,12 @@ beforeEach(async () => {
       dispose: vi.fn(() => registry.onTerminalClosed(terminal as unknown as vscode.Terminal)),
     };
     const args = creationOptions.shellArgs as string[];
+    if (creationOptions.shellPath === "sh") {
+      void runtimes.mocks.newSession(args[3]).then((sessionId) => {
+        runtimes.client.attachedId = sessionId;
+      });
+      return terminal;
+    }
     runtimes.mocks.open({
       sessionId: args[1],
       cwd: runtimes.live.get(args[1])?.cwd ?? root,
@@ -117,24 +123,27 @@ describe("SessionLauncher", () => {
     expect(api.createTerminal).not.toHaveBeenCalled();
   });
 
-  it("creates and shows the display Terminal without waiting for its process ID", async () => {
+  it("shows the new-session display before its process starts and adopts the captured session", async () => {
     const pid = deferred<number>();
     processId = pid.promise;
     const launching = launcher.start(root);
     await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
     const terminal = api.createTerminal.mock.results[0].value;
+    expect(terminal.show).toHaveBeenCalledOnce();
+    expect(runtimes.mocks.current).not.toHaveBeenCalled();
+    expect(runtimes.mocks.list).not.toHaveBeenCalled();
+    pid.resolve(123);
     await launching;
     expect(api.createTerminal).toHaveBeenCalledWith(
       expect.objectContaining({
         cwd: { fsPath: homedir() },
         location: 1,
-        shellPath: "pi-mux",
-        shellArgs: ["open", "new-1"],
+        shellPath: "sh",
+        shellArgs: ["-c", NEW_SESSION_COMMAND, "pi-mux-new", root],
       }),
     );
-    expect(runtimes.mocks.current).not.toHaveBeenCalled();
-    pid.resolve(123);
-    expect(terminal.show).toHaveBeenCalledOnce();
+    expect(runtimes.mocks.list).not.toHaveBeenCalled();
+    expect(runtimes.mocks.switch).not.toHaveBeenCalled();
     expect(startedIds()).toEqual(new Set(["new-1"]));
     expect(onSessionStarted).toHaveBeenCalledExactlyOnceWith("new-1");
     expect(registry.displayedSessionId).toBe("new-1");
@@ -219,8 +228,8 @@ describe("SessionLauncher", () => {
     processId = secondPid.promise;
     const second = launcher.start(root);
     await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledTimes(2));
-    await second;
     secondPid.resolve(123);
+    await second;
     expect(api.createTerminal.mock.results[1].value.show).toHaveBeenCalledOnce();
     expect(await first).toBeUndefined();
     expect(registry.displayedSessionId).toBe("new-2");
@@ -242,10 +251,16 @@ describe("SessionLauncher", () => {
     expect(onSessionStarted.mock.calls.map(([id]) => id)).toEqual(["new-1", "new-2"]);
   });
 
-  it("reserves the empty Pi through a detached new without opening it twice", async () => {
+  it("starts the empty Pi once from the display Terminal's new command", async () => {
     await launcher.start(root);
     expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(root);
-    expect(api.createTerminal.mock.calls[0][0].shellArgs).toEqual(["open", "new-1"]);
+    expect(api.createTerminal).toHaveBeenCalledOnce();
+    expect(api.createTerminal.mock.calls[0][0].shellArgs).toEqual([
+      "-c",
+      NEW_SESSION_COMMAND,
+      "pi-mux-new",
+      root,
+    ]);
     expect(startedIds()).toEqual(new Set(["new-1"]));
   });
 
@@ -271,7 +286,7 @@ describe("SessionLauncher", () => {
     expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
   });
 
-  it("reports Terminal creation failure without refreshing or killing Pi", async () => {
+  it("reports Terminal creation failure without starting a Pi", async () => {
     api.createTerminal.mockImplementationOnce(() => {
       throw new Error("Terminal creation failed");
     });
@@ -279,10 +294,10 @@ describe("SessionLauncher", () => {
     expect(startedIds()).toEqual(new Set());
     expect(onSessionStarted).not.toHaveBeenCalled();
     expect(runtimes.mocks.closeSession).not.toHaveBeenCalled();
-    expect(runtimes.live.size).toBe(1);
+    expect(runtimes.live.size).toBe(0);
   });
 
-  it("signals presentation after show without waiting for the process ID or session refresh", async () => {
+  it("signals presentation at the first show without waiting for the session ID", async () => {
     const pid = deferred<number>();
     const refreshed = deferred<void>();
     processId = pid.promise;
@@ -291,27 +306,28 @@ describe("SessionLauncher", () => {
     const launching = launcher.start(root, onPresented);
     await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
     const terminal = api.createTerminal.mock.results[0].value;
-    await vi.waitFor(() => expect(onSessionStarted).toHaveBeenCalledOnce());
-    expect(runtimes.mocks.current).not.toHaveBeenCalled();
-    pid.resolve(123);
-    expect(onPresented).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(onPresented).toHaveBeenCalledOnce());
     expect(terminal.show.mock.invocationCallOrder[0]).toBeLessThan(
       onPresented.mock.invocationCallOrder[0],
     );
-    expect(onPresented.mock.invocationCallOrder[0]).toBeLessThan(
-      onSessionStarted.mock.invocationCallOrder[0],
-    );
+    expect(onSessionStarted).not.toHaveBeenCalled();
+    expect(startedIds()).toEqual(new Set());
+    pid.resolve(123);
+    await vi.waitFor(() => expect(onSessionStarted).toHaveBeenCalledExactlyOnceWith("new-1"));
     refreshed.resolve();
     await launching;
+    expect(onPresented).toHaveBeenCalledOnce();
   });
 
   it.each(["newSession", "list"] as const)(
     "does not signal presentation when %s fails",
     async (method) => {
+      const terminal = await existingDisplay();
       runtimes.mocks[method].mockRejectedValueOnce(new Error("launch failed"));
       const onPresented = vi.fn();
       await expect(launcher.start(root, onPresented)).rejects.toThrow("launch failed");
       expect(onPresented).not.toHaveBeenCalled();
+      expect(terminal.dispose).not.toHaveBeenCalled();
     },
   );
 
@@ -328,5 +344,79 @@ describe("SessionLauncher", () => {
     launcher.dispose();
     await launcher.start(root);
     expect(api.createTerminal).not.toHaveBeenCalled();
+  });
+
+  it("shows the early display to a second request while its session is still captured", async () => {
+    const gate = deferred<Awaited<ReturnType<typeof runtimes.mux.current>>>();
+    runtimes.mocks.current.mockReturnValueOnce(gate.promise);
+    const first = launcher.start(root);
+    await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
+    const terminal = api.createTerminal.mock.results[0].value;
+    const second = launcher.start(root);
+    await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledTimes(2));
+    expect(api.createTerminal).toHaveBeenCalledOnce();
+    expect(startedIds()).toEqual(new Set());
+    gate.resolve(undefined);
+    await Promise.all([first, second]);
+    expect(onSessionStarted.mock.calls.map(([id]) => id)).toEqual(["new-1", "new-2"]);
+    expect(registry.displayedSessionId).toBe("new-2");
+    expect(api.createTerminal).toHaveBeenCalledOnce();
+  });
+
+  it("presents the early display while an earlier selection waits on list and converges in order", async () => {
+    runtimes.live.set("prior", { sessionId: "prior", cwd: root, target: "pi-prior" });
+    const listImplementation = runtimes.mocks.list.getMockImplementation()!;
+    const listGate = deferred<Awaited<ReturnType<typeof runtimes.mux.list>>>();
+    runtimes.mocks.list.mockReturnValueOnce(listGate.promise);
+    const selection = registry.run(() => registry.open({ sessionId: "prior", cwd: root }));
+    const launching = launcher.start(root);
+    await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
+    const terminal = api.createTerminal.mock.results[0].value;
+    expect(terminal.show).toHaveBeenCalledOnce();
+    listGate.resolve(await listImplementation());
+    await Promise.all([selection, launching]);
+    expect(runtimes.mocks.switch.mock.calls.map(([sessionId]) => sessionId)).toEqual([
+      "prior",
+      "new-1",
+    ]);
+    expect(api.createTerminal).toHaveBeenCalledOnce();
+    expect(registry.displayedSessionId).toBe("new-1");
+    expect(startedIds()).toEqual(new Set(["new-1"]));
+  });
+
+  it.each(["close", "dispose"] as const)(
+    "cancels the pending session capture on %s and ignores its late result",
+    async (cancel) => {
+      const pid = deferred<number>();
+      processId = pid.promise;
+      const gate = deferred<Awaited<ReturnType<typeof runtimes.mux.current>>>();
+      runtimes.mocks.current.mockReturnValueOnce(gate.promise);
+      const launching = launcher.start(root);
+      await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
+      const terminal = api.createTerminal.mock.results[0].value;
+      pid.resolve(123);
+      await vi.waitFor(() => expect(runtimes.mocks.current).toHaveBeenCalledOnce());
+      if (cancel === "close") registry.onTerminalClosed(terminal);
+      else registry.dispose();
+      gate.resolve({ id: "late", cwd: root, file: "/late.jsonl", target: "pi-late" });
+      expect(await launching).toBeUndefined();
+      expect(registry.displayedSessionId).toBeUndefined();
+      expect(onSessionStarted).not.toHaveBeenCalled();
+    },
+  );
+
+  it("captures a session in a different cwd as a failure and closes the display", async () => {
+    runtimes.mocks.current.mockResolvedValueOnce({
+      id: "elsewhere",
+      cwd: "/elsewhere",
+      file: "/elsewhere.jsonl",
+      target: "pi-elsewhere",
+    });
+    await expect(launcher.start(root)).rejects.toThrow(
+      `Pi new session in ${root}: Pi display attached to /elsewhere instead of ${root}`,
+    );
+    expect(api.createTerminal.mock.results[0].value.dispose).toHaveBeenCalledOnce();
+    expect(startedIds()).toEqual(new Set());
+    expect(registry.displayedSessionId).toBeUndefined();
   });
 });
