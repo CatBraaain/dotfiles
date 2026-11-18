@@ -57,6 +57,7 @@ trap 'exit 143' TERM
 
 workspace="$run/user"
 mkdir -p "$workspace/lua/kagiroi"
+touch "$workspace/.rime-test-workspace"
 
 # Stock Kagiroi files first, so the managed files always win.
 # kagiroi.yaml carries the alphabet/key_bindings/punct nodes the schema includes.

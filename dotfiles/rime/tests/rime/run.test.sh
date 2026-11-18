@@ -50,6 +50,7 @@ set -u
 user="$1"
 printf 'run:user=%s shared=%s\n' "$user" "${RIME_SHARED_DATA:-<unset>}" >> "$FAKE_LOG"
 : > "$user/.harness-started"
+[ -f "$user/.rime-test-workspace" ] || { echo "private workspace marker missing" >&2; exit 5; }
 if compgen -G "$user"/*.userdb >/dev/null; then
     echo "userdb leaked into the fresh workspace" >&2
     exit 4

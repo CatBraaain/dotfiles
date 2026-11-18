@@ -26,8 +26,11 @@
  * significantly longer than its recorded baseline.
  */
 #define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 700
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
+#include <ftw.h>
 #include <rime_api.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -67,6 +70,9 @@ static const char* g_user_data_dir = NULL;
 static int g_checks = 0;
 static int g_failures = 0;
 static int g_verbose = 0;
+
+static void restart_without_learning(void);
+static void test_contextual_learning_survives_engine_restart(void);
 
 /* ---- snapshot recording ---- */
 static const char* g_snapshot_dir = NULL;
@@ -3811,7 +3817,15 @@ static void check_contextual_first_conversions(void) {
     }
 }
 
+static void check_unlearned_kana_learning_input(void) {
+    fresh_session();
+    type_text("sika");
+    press(kSpace);
+    check(menu_hidden() && preview_equals("歯科"), "sika must use its unlearned dictionary first");
+}
+
 static void test_part_of_speech_kana_learning(void) {
+    check_unlearned_kana_learning_input();
     static const struct {
         const char* input;
         const char* text;
@@ -3855,6 +3869,9 @@ static void test_part_of_speech_kana_learning(void) {
         }
     }
     check_contextual_first_conversions();
+    test_contextual_learning_survives_engine_restart();
+    restart_without_learning();
+    check_unlearned_kana_learning_input();
 }
 
 static void test_contextual_learning_survives_engine_restart(void) {
@@ -5130,6 +5147,11 @@ static void test_boundary_learning_from_hidden_commits(void) {
         }
     }
     check_learned_raw_boundaries();
+    rime->destroy_session(session);
+    session = 0;
+    rime->finalize();
+    rime->initialize(NULL);
+    check_learned_raw_boundaries();
 }
 
 static void on_message(void* context_object, RimeSessionId session_id, const char* message_type, const char* message_value) {
@@ -5164,6 +5186,55 @@ static char* snapshot_path(const char* dir, const char* name, const char* suffix
     }
     snprintf(path, size, "%s/%s%s", dir, name, suffix);
     return path;
+}
+
+static int remove_learning_path(const char* path, const struct stat* status, int type, struct FTW* walk) {
+    (void)status;
+    (void)type;
+    (void)walk;
+    return remove(path);
+}
+
+static void restart_without_learning(void) {
+    if (session) rime->destroy_session(session);
+    session = 0;
+    rime->finalize();
+    DIR* directory = opendir(g_user_data_dir);
+    if (!directory) {
+        perror(g_user_data_dir);
+        exit(2);
+    }
+    const char* suffix = ".userdb";
+    const size_t suffix_length = strlen(suffix);
+    const int cleanup_open_fd_limit = 16;
+    for (;;) {
+        errno = 0;
+        struct dirent* entry = readdir(directory);
+        if (!entry) {
+            if (errno) {
+                perror(g_user_data_dir);
+                closedir(directory);
+                exit(2);
+            }
+            break;
+        }
+        size_t length = strlen(entry->d_name);
+        if (length < suffix_length || strcmp(entry->d_name + length - suffix_length, suffix) != 0)
+            continue;
+        char* path = snapshot_path(g_user_data_dir, entry->d_name, "");
+        if (nftw(path, remove_learning_path, cleanup_open_fd_limit, FTW_DEPTH | FTW_PHYS) != 0) {
+            perror(path);
+            free(path);
+            closedir(directory);
+            exit(2);
+        }
+        free(path);
+    }
+    if (closedir(directory) != 0) {
+        perror(g_user_data_dir);
+        exit(2);
+    }
+    rime->initialize(NULL);
 }
 
 static void write_lines(const char* path, char** lines, size_t count) {
@@ -5280,6 +5351,14 @@ int main(int argc, char* argv[]) {
         return 2;
     }
 
+    char* workspace_marker = snapshot_path(user_data_dir, ".rime-test-workspace", "");
+    int private_workspace = snapshot_file_exists(workspace_marker);
+    free(workspace_marker);
+    if (!private_workspace) {
+        fprintf(stderr, "FAIL: harness requires a private workspace created by run.sh\n");
+        return 2;
+    }
+
     rime = rime_get_api();
     if (!rime) {
         fprintf(stderr, "FAIL: librime is not available\n");
@@ -5312,16 +5391,11 @@ int main(int argc, char* argv[]) {
         const char* name;
         void (*fn)(void);
     } tests[] = {
-        /* Runs first: later tests feed the user dictionary and can saturate
-         * the learned order the baseline comparison depends on. */
         {"unlearned_part_of_speech_ranking", test_unlearned_part_of_speech_ranking},
         {"bunsetsu_reopened_contextual_order", test_bunsetsu_reopened_contextual_order},
         {"learning_promotes_committed_candidate", test_learning_promotes_committed_candidate},
         {"learning_promotes_committed_sentences", test_learning_promotes_committed_sentences},
         {"part_of_speech_kana_learning", test_part_of_speech_kana_learning},
-        /* These must also run before any test commits a kyouhakare- sentence:
-         * the committed reading's joined entry leads the same reading in a
-         * fresh conversion and would shift the baselines below. */
         {"bunsetsu_hidden_resize_and_hiragana", test_bunsetsu_hidden_resize_and_hiragana},
         {"bunsetsu_contexts_keep_separate_choices", test_bunsetsu_contexts_keep_separate_choices},
         {"bunsetsu_candidates_include_alternative_routes", test_bunsetsu_candidates_include_alternative_routes},
@@ -5398,8 +5472,6 @@ int main(int argc, char* argv[]) {
         {"retained_list_transitions", test_retained_list_transitions},
         {"reading_candidates_include_other_parts_of_speech", test_reading_candidates_include_other_parts_of_speech},
         {"boundary_learning_from_hidden_commits", test_boundary_learning_from_hidden_commits},
-        {"contextual_learning_survives_engine_restart", test_contextual_learning_survives_engine_restart},
-        {"learned_raw_boundaries", check_learned_raw_boundaries},
     };
     const size_t test_count = sizeof(tests) / sizeof(tests[0]);
     struct ScenarioTiming timings[test_count];
@@ -5407,12 +5479,7 @@ int main(int argc, char* argv[]) {
                        strcmp(g_snapshot_update_target, "all") == 0;
     int snapshot_files = 0;
     for (size_t i = 0; i < test_count; ++i) {
-        if (i > 0) {
-            if (session) rime->destroy_session(session);
-            session = 0;
-            rime->finalize();
-            rime->initialize(NULL);
-        }
+        restart_without_learning();
         if (g_verbose)
             fprintf(stderr, "scenario %zu/%zu %s\n", i + 1, test_count, tests[i].name);
         size_t start = g_line_count;

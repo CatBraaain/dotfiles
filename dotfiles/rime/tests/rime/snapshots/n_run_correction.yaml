@@ -2,19 +2,19 @@ scenario: n_run_correction
 cases:
   - name: 第一候補への変換
     input: kanji{SPACE}
-    display: 漢字
+    display: 感じ
   - name: 次候補での一覧表示
     input: kanji{SPACE}{SPACE}
-    display: 感じ
-    candidates: [漢字, 感じ, 幹事, かんじ, 監事, カンジ, 寛治, 幹二, 莞爾, 完治]
+    display: 漢字
+    candidates: [感じ, 漢字, 幹事, かんじ, 監事, カンジ, 寛治, 幹二, 莞爾, 完治]
 
   - name: 第一候補への変換
     input: kannji{SPACE}
-    display: 漢字
+    display: 感じ
   - name: 次候補での一覧表示
     input: kannji{SPACE}{SPACE}
-    display: 感じ
-    candidates: [漢字, 感じ, 幹事, かんじ, 監事, カンジ, 寛治, 幹二, 莞爾, 完治]
+    display: 漢字
+    candidates: [感じ, 漢字, 幹事, かんじ, 監事, カンジ, 寛治, 幹二, 莞爾, 完治]
 
   - name: 第一候補への変換
     input: kana{SPACE}
