@@ -323,11 +323,12 @@ for (const mode of ["regular", "fullscreen"] as const) {
           const first = harness.frame();
           assert.equal(first.length, rows);
           assert.ok(first.every((line) => visibleWidth(line) === columns));
+          let last: string[] = [];
           for (let page = 0; page < 100; page++) {
             harness.terminal.input("\x1b[6~");
-            harness.frame();
+            last = harness.frame();
+            if (last.some((line) => line.includes("LAST"))) break;
           }
-          const last = harness.frame();
           assert.ok(last.some((line) => line.includes("LAST")));
           for (const option of OPTIONS) assert.ok(last.some((line) => line.includes(option)));
         }
