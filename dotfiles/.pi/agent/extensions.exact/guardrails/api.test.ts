@@ -1,7 +1,11 @@
 import { COMMAND_PREVIEW_LIMIT, truncateText } from "../shared/tool-text.ts";
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "bun:test";
-import { createEventBus, type ExtensionToolContext } from "@earendil-works/pi-coding-agent";
+import {
+  createEventBus,
+  type ExtensionAPI,
+  type ExtensionToolContext,
+} from "@earendil-works/pi-coding-agent";
 import { execFileSync, spawn } from "node:child_process";
 import {
   existsSync,
@@ -63,24 +67,6 @@ function withGuardrail(
       const configPath = join(tempDir, "config.yaml");
       writeFileSync(configPath, configYaml);
       await test(new Guardrail(cwd, configPath));
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
-  };
-}
-
-function withSandboxRunner(
-  configYaml: string,
-  cwd: string,
-  test: (runner: SandboxRunner) => Promise<void> | void,
-): () => Promise<void> {
-  return async () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "guardrail-test-"));
-    try {
-      const configPath = join(tempDir, "config.yaml");
-      writeFileSync(configPath, configYaml);
-      const policy = new Guardrail(cwd, configPath);
-      await test(new SandboxRunner(cwd, (mode, commandCwd) => policy.buildArgs(mode, commandCwd)));
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -5916,154 +5902,127 @@ describe("§7 WSL の子プロセス PATH", () => {
   });
 });
 
-describe("§7 sandbox 実行の同時数の上限", () => {
-  /**
-   * Replace Guardrail.runSandboxProcess (the semaphore-gated run() delegates
-   * here) with a counting stub; restore via the return value. The stub
-   * records call start order and peak concurrency, then delegates the
-   * outcome to `behavior` per call index.
-   */
-  const stubCountingRun = (behavior: (callIndex: number) => Promise<unknown>) => {
-    const guardrailPrototype = SandboxRunner.prototype as unknown as {
-      runSandboxProcess: (command: string, commandArgs: string[], options: any) => Promise<unknown>;
-    };
-    const originalRun = guardrailPrototype.runSandboxProcess;
-    let active = 0;
-    let maxActive = 0;
-    let callIndex = 0;
-    const startOrder: number[] = [];
-    guardrailPrototype.runSandboxProcess = function () {
-      const index = callIndex++;
-      startOrder.push(index);
-      active++;
-      maxActive = Math.max(maxActive, active);
-      return behavior(index).finally(() => {
-        active--;
-      });
-    };
-    return {
-      maxActive: () => maxActive,
-      resetMaxActive: () => {
-        maxActive = 0;
-      },
-      startOrder: () => startOrder,
-      restore: () => {
-        guardrailPrototype.runSandboxProcess = originalRun;
-      },
-    };
-  };
-
-  const okEnvelope = () =>
-    Buffer.from(
-      JSON.stringify({ ok: true, result: { content: [{ type: "text", text: "done" }] } }),
-    );
-  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
+describe("§7 concurrent sandbox execution", () => {
   it(
-    "並行 runTool の同時 sandbox 実行は最大4で、開始順に実行され全呼び出しが完了する",
-    withSandboxRunner("read: []\nwrite: []\n", process.cwd(), async (guardrail) => {
-      const stub = stubCountingRun(async () => {
-        await delay(60);
-        return { exitCode: 0, stdout: okEnvelope(), stderr: Buffer.alloc(0) };
-      });
-      try {
-        const results = await Promise.all(
-          Array.from({ length: 6 }, (_unused, i) =>
-            guardrail.runTool("read", { path: `/tmp/concurrent-${i}.txt` }, { mode: "fs" }),
-          ),
-        );
-        assert.equal(results.length, 6);
-        for (const result of results)
-          assert.equal((result.content[0] as { text: string } | undefined)?.text, "done");
-        assert.equal(stub.maxActive(), 4);
-        assert.deepEqual(stub.startOrder(), [0, 1, 2, 3, 4, 5]);
-      } finally {
-        stub.restore();
-      }
-    }),
-  );
-
-  it(
-    "sandbox 実行が失敗しても待機中の呼び出しが開始される",
-    withSandboxRunner("read: []\nwrite: []\n", process.cwd(), async (guardrail) => {
-      const stub = stubCountingRun((index) =>
-        index === 0
-          ? Promise.reject(new Error("boom"))
-          : delay(30).then(() => ({
-              exitCode: 0,
-              stdout: okEnvelope(),
-              stderr: Buffer.alloc(0),
-            })),
+    "does not start a request cancelled while authorization is pending",
+    withTempDirectory(async (directory) => {
+      const config = join(directory, "config.yaml");
+      writeFileSync(config, "commands:\n  - echo:\n      - allow: []\n");
+      const api = createGuardrailsAPI(
+        { events: createEventBus(), registerTool() {}, on() {} } as unknown as ExtensionAPI,
+        config,
       );
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const controller = new AbortController();
+      const originalAuthorize = Guardrail.prototype.authorizeCommand;
+      const runtime = SandboxRunner.prototype as unknown as {
+        runSandboxProcess: () => Promise<{ exitCode: number; stdout: Buffer; stderr: Buffer }>;
+      };
+      const originalProcess = runtime.runSandboxProcess;
+      let starts = 0;
+      Guardrail.prototype.authorizeCommand = async function (...args) {
+        entered.resolve();
+        await release.promise;
+        return originalAuthorize.apply(this, args);
+      };
+      runtime.runSandboxProcess = async () => {
+        starts++;
+        return {
+          exitCode: 0,
+          stdout: Buffer.from(JSON.stringify({ ok: true, result: { content: [], details: {} } })),
+          stderr: Buffer.alloc(0),
+        };
+      };
       try {
-        const settled = await Promise.allSettled(
-          Array.from({ length: 6 }, (_unused, i) =>
-            guardrail.runTool("read", { path: `/tmp/fail-release-${i}.txt` }, { mode: "fs" }),
-          ),
-        );
-        assert.match(String((settled[0] as PromiseRejectedResult).reason), /boom/);
-        for (const outcome of settled.slice(1)) assert.equal(outcome.status, "fulfilled");
-        assert.equal(stub.maxActive(), 4);
-        assert.deepEqual(stub.startOrder(), [0, 1, 2, 3, 4, 5]);
+        const request = api.execute({
+          id: "cancel-during-authorization",
+          toolName: "bash",
+          params: { command: "echo late" },
+          signal: controller.signal,
+          context: { hasUI: false } as ExtensionToolContext,
+        });
+        const rejected = assert.rejects(request, /cancelled during authorization/);
+        await entered.promise;
+        controller.abort(new Error("cancelled during authorization"));
+        release.resolve();
+        await rejected;
+        assert.equal(starts, 0);
       } finally {
-        stub.restore();
+        release.resolve();
+        Guardrail.prototype.authorizeCommand = originalAuthorize;
+        runtime.runSandboxProcess = originalProcess;
       }
     }),
   );
 
   it(
-    "続く2度目の並行バッチでも同時実行は最大4を維持する",
-    withSandboxRunner("read: []\nwrite: []\n", process.cwd(), async (guardrail) => {
-      const stub = stubCountingRun(async () => {
-        await delay(50);
-        return { exitCode: 0, stdout: okEnvelope(), stderr: Buffer.alloc(0) };
-      });
-      const runBatch = () =>
-        Promise.all(
-          Array.from({ length: 6 }, (_unused, i) =>
-            guardrail.runTool("read", { path: `/tmp/wave-${i}.txt` }, { mode: "fs" }),
-          ),
-        );
-      try {
-        await runBatch();
-        assert.equal(stub.maxActive(), 4);
-        stub.resetMaxActive();
-        await runBatch();
-        assert.equal(
-          stub.maxActive(),
-          4,
-          "second batch must keep the full cap (no leftover slot accounting)",
-        );
-      } finally {
-        stub.restore();
-      }
-    }),
-  );
-
-  it(
-    "Guardrail インスタンスが違っても同時実行はプロセス全体で最大4",
-    withSandboxRunner("read: []\nwrite: []\n", process.cwd(), async (guardrail) => {
-      const policy = new Guardrail(process.cwd());
-      const other = new SandboxRunner(process.cwd(), (mode, commandCwd) =>
-        policy.buildArgs(mode, commandCwd),
+    "starts all API requests before any sandbox finishes",
+    withTempDirectory(async (directory) => {
+      const config = join(directory, "config.yaml");
+      writeFileSync(config, `write:\n  - allow: "${directory}"\n`);
+      const api = createGuardrailsAPI(
+        {
+          events: createEventBus(),
+          registerTool() {},
+          on() {},
+        } as unknown as ExtensionAPI,
+        config,
       );
-      const stub = stubCountingRun(async () => {
-        await delay(50);
-        return { exitCode: 0, stdout: okEnvelope(), stderr: Buffer.alloc(0) };
-      });
+      const runtime = SandboxRunner.prototype as unknown as {
+        runSandboxProcess: () => Promise<{ exitCode: number; stdout: Buffer; stderr: Buffer }>;
+      };
+      const original = runtime.runSandboxProcess;
+      const release = Promise.withResolvers<void>();
+      const allStarted = Promise.withResolvers<void>();
+      let starts = 0;
+      runtime.runSandboxProcess = async () => {
+        if (++starts === 8) allStarted.resolve();
+        await release.promise;
+        return {
+          exitCode: 0,
+          stdout: Buffer.from(
+            JSON.stringify({
+              ok: true,
+              result: { content: [{ type: "text", text: "done" }], details: {} },
+            }),
+          ),
+          stderr: Buffer.alloc(0),
+        };
+      };
+      const requests: ReturnType<typeof api.execute>[] = [];
+      let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
-        const results = await Promise.all([
-          ...Array.from({ length: 3 }, (_unused, i) =>
-            guardrail.runTool("read", { path: `/tmp/multi-a-${i}.txt` }, { mode: "fs" }),
+        requests.push(
+          ...Array.from({ length: 8 }, (_, index) =>
+            api.execute({
+              id: `parallel-${index}`,
+              toolName: "write",
+              params: { path: join(directory, `output-${index}.txt`), content: "fixture" },
+              context: { hasUI: false } as ExtensionToolContext,
+            }),
           ),
-          ...Array.from({ length: 3 }, (_unused, i) =>
-            other.runTool("read", { path: `/tmp/multi-b-${i}.txt` }, { mode: "fs" }),
-          ),
+        );
+        await Promise.race([
+          allStarted.promise,
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error("API requests waited for another sandbox")),
+              1_000,
+            );
+          }),
         ]);
-        assert.equal(results.length, 6);
-        assert.equal(stub.maxActive(), 4);
+        assert.equal(starts, 8);
+        release.resolve();
+        const results = await Promise.all(requests);
+        assert.equal(results.length, 8);
+        for (const result of results)
+          assert.deepEqual(result.content, [{ type: "text", text: "done" }]);
       } finally {
-        stub.restore();
+        clearTimeout(timeout);
+        release.resolve();
+        await Promise.allSettled(requests);
+        runtime.runSandboxProcess = original;
       }
     }),
   );

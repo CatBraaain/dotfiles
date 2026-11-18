@@ -16,7 +16,6 @@ import {
 } from "./tmux.ts";
 
 const TMUX_COMMAND_TIMEOUT_MS = 1_000;
-const LOCK_RETRY_INTERVAL_MS = 50;
 const RECOVERY_RETRY_INTERVAL_MS = 1_000;
 const MAX_NOTIFICATION_LENGTH = 200;
 const PUBLICATION_PROCESS_KEY = Symbol.for("pi.session-state.publication-process");
@@ -132,11 +131,16 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
       title,
       pending: gen.pending,
     });
+    if (gen.pending > 0) return;
     gen.pending++;
     enqueuePublication(gen, async () => {
       try {
         while (!gen.controller.signal.aborted && gen.binding) {
           if (!(await waitForPriorExecution(gen))) return;
+          const state = gen.state;
+          const title = gen.title;
+          if (!state || (gen.lastPublished?.state === state && gen.lastPublished.title === title))
+            return;
           gen.lastPublished = undefined;
           const outcome = await publishState(gen.run, gen.binding, sessionId, state, title);
           probe("publish-outcome", {
@@ -147,16 +151,19 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
             ...(outcome.status === "failed" ? { message: outcome.message } : {}),
           });
           if (gen.controller.signal.aborted) return;
-          const recovery = await recoveryRetry(gen, "session state publication");
+          const recovery = await recoveryRetry(
+            gen,
+            "session state publication",
+            outcome.status === "failed"
+              ? outcome.message
+              : outcome.status === "busy"
+                ? "pi-mux lock is busy"
+                : undefined,
+          );
           if (recovery === "aborted") return;
           if (recovery === "retry") continue;
-          gen.recoveryNotified = false;
-          if (outcome.status !== "busy") {
-            if (outcome.status === "published") gen.lastPublished = { state, title };
-            reportPublicationOutcome(gen, outcome);
-            return;
-          }
-          if (!(await waitToRetry(gen, LOCK_RETRY_INTERVAL_MS))) return;
+          gen.lastPublished = { state, title };
+          if (gen.state === state && gen.title === title) gen.recoveryNotified = false;
         }
       } finally {
         gen.pending--;
@@ -205,7 +212,6 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
         const recovery = await recoveryRetry(gen, "managed tmux pane detection");
         if (recovery === "aborted") return;
         if (recovery === "retry") continue;
-        gen.recoveryNotified = false;
         if (detection.status === "managed") gen.binding = detection.binding;
         probe("pane-detection", { ...identityFields(), status: detection.status });
         if (detection.status === "failed")
@@ -295,8 +301,9 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
 async function recoveryRetry(
   gen: PublicationGeneration,
   operation: string,
+  publicationFailure?: string,
 ): Promise<"proceed" | "retry" | "aborted"> {
-  const failure = gen.lastFailure();
+  const failure = gen.lastFailure() ?? publicationFailure;
   if (failure === undefined) return "proceed";
   if (!gen.recoveryNotified) {
     gen.recoveryNotified = true;
@@ -379,10 +386,6 @@ function makeProcessRunner(
     return failure;
   }
   return { run, lastFailure };
-}
-
-function reportPublicationOutcome(gen: PublicationGeneration, outcome: PublicationOutcome): void {
-  if (outcome.status === "failed") gen.notify(`cannot publish session state: ${outcome.message}`);
 }
 
 function reportCleanupOutcome(gen: PublicationGeneration, outcome: PublicationOutcome): void {

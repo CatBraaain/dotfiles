@@ -440,13 +440,22 @@ async function notifyState(
   if (!/^\$\d+$/.test(session)) throw new Error("Source server or pane lifetime no longer matches");
   await verifyStateTarget(config, id, source);
   const owner = JSON.stringify({ id, ...source });
-  const outcome = await runGuardedStateCommands(config, source, {
+  if (notification.clear) {
+    const currentOwner = await tmux(config, [
+      "show-options",
+      "-pqv",
+      "-t",
+      source.pane,
+      "@pi-mux-state-source",
+    ]);
+    if (currentOwner.stdout.trimEnd() !== owner) return;
+  }
+  await runGuardedStateCommands(config, source, {
     id,
     owner,
     notification,
     session,
   });
-  if (outcome === "rejected") throw new Error("Source server or pane lifetime no longer matches");
   if (notification.clear || notification.state !== "running") return;
   if (await serverOption(config, "@pi-mux-generation"))
     await snapshotSessions(config, undefined, "repair");
@@ -503,16 +512,19 @@ function sourceEntityGuard(config: TmuxConfig, source: StateSource): string {
   const processStartOf = (pid: string) =>
     `"$(sed 's/.*) //' /proc/${pid}/stat | awk '{print $20}')"`;
   const sessionProcess = `p=$(tmux -S ${shLiteral(config.socket)} show-options -pqv -t ${shLiteral(source.pane)} '@pi-tmux-session' 2>/dev/null | base64 -d 2>/dev/null | sed -n 's/.*"processPid":\\([0-9][0-9]*\\).*/\\1/p')`;
-  return [
+  const checks = [
     `[ "#{socket_path}" = ${shLiteral(config.socket)} ]`,
     `[ "#{pid}" = ${String(source.serverPid)} ]`,
-    `[ ${processStartOf("#{pid}")} = ${shLiteral(source.serverStartTime)} ]`,
+    `started=${processStartOf("#{pid}")}`,
+    `[ "$started" = ${shLiteral(source.serverStartTime)} ]`,
     `[ "#{pane_id}" = ${shLiteral(source.pane)} ]`,
     sessionProcess,
     "case $p in ''|*[!0-9]*) p=#{pane_pid};; esac",
     `[ "$p" = ${String(source.pid)} ]`,
-    `[ ${processStartOf("$p")} = ${shLiteral(source.started)} ]`,
-  ].join(" && ");
+    `started=${processStartOf("$p")}`,
+    `[ "$started" = ${shLiteral(source.started)} ]`,
+  ].join("\n");
+  return `bash -e -o pipefail -c ${shLiteral(checks)}`;
 }
 
 function guardedTmuxLine(
@@ -541,20 +553,12 @@ async function runGuardedStateCommands(
     notification: StateNotification;
     session: string;
   },
-): Promise<"written" | "skipped" | "rejected"> {
+): Promise<void> {
   const entity = sourceEntityGuard(config, source);
   const pane = source.pane;
   const lines: string[] = [];
   if (plan.notification.clear) {
-    lines.push(
-      guardedTmuxLine(
-        pane,
-        entity,
-        [["display-message", "-p", "PI_MUX_ENTITY_OK"]],
-        "PI_MUX_STATE_REJECTED",
-      ),
-    );
-    const ownerGuard = `[ "$(tmux -S ${shLiteral(config.socket)} show-options -pqv -t ${shLiteral(pane)} '@pi-mux-state-source' 2>/dev/null)" = ${shLiteral(plan.owner)} ]`;
+    const ownerGuard = `owner=$(tmux -S ${shLiteral(config.socket)} show-options -pqv -t ${shLiteral(pane)} '@pi-mux-state-source' 2>/dev/null) && [ "$owner" = ${shLiteral(plan.owner)} ]`;
     lines.push(
       guardedTmuxLine(
         pane,
@@ -564,7 +568,7 @@ async function runGuardedStateCommands(
           ["set-option", "-pu", "-t", pane, "@pi-mux-state-source"],
           ["display-message", "-p", "PI_MUX_STATE_WRITTEN"],
         ],
-        "PI_MUX_SKIPPED",
+        "PI_MUX_SOURCE_UNVERIFIED",
       ),
     );
   } else {
@@ -583,7 +587,7 @@ async function runGuardedStateCommands(
           ["set-option", "-p", "-t", pane, "@pi_session_state", stateValue],
           ["display-message", "-p", "PI_MUX_STATE_WRITTEN"],
         ],
-        "PI_MUX_STATE_REJECTED",
+        "PI_MUX_SOURCE_UNVERIFIED",
       ),
     );
     if (plan.notification.state === "running") {
@@ -598,9 +602,10 @@ async function runGuardedStateCommands(
   }
   const result = await tmux(config, ["source-file", "-"], false, `${lines.join("\n")}\n`);
   const markers = result.stdout.trim().split("\n").filter(Boolean);
-  if (markers.includes("PI_MUX_STATE_REJECTED")) return "rejected";
-  if (markers.includes("PI_MUX_STATE_WRITTEN")) return "written";
-  return plan.notification.clear ? "skipped" : "rejected";
+  if (markers.includes("PI_MUX_SOURCE_UNVERIFIED"))
+    throw new Error("Cannot verify source for session state update");
+  if (markers.includes("PI_MUX_STATE_WRITTEN")) return;
+  throw new Error("Cannot confirm session state update");
 }
 
 function configuration() {

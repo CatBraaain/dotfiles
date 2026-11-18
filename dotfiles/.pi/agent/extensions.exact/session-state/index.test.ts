@@ -601,7 +601,7 @@ describe("session-state title publication", () => {
     }
   });
 
-  it("captures each queued title and state before a replacement invalidates old work", async () => {
+  it("coalesces queued title and state before a replacement invalidates old work", async () => {
     const h = await createExtensionHarness();
     const pending = Promise.withResolvers<ExecResult>();
     const oldSet = Promise.withResolvers<ExecResult>();
@@ -632,7 +632,6 @@ describe("session-state title publication", () => {
       });
       assert.deepEqual(values, [
         { version: 1, sessionId: "s1", state: "waiting-user", title: "First title" },
-        { version: 1, sessionId: "s1", state: "running", title: "First title" },
         { version: 1, sessionId: "s1", state: "running", title: "Second title" },
       ]);
 
@@ -899,7 +898,7 @@ describe("session-state MVP state boundaries", () => {
     }
   });
 
-  it("retries an equal failed state on the next state request, but not on progress", async () => {
+  it("retries an equal failed state automatically and ignores progress events", async () => {
     const h = await createExtensionHarness();
     try {
       await h.emit("session_start");
@@ -907,7 +906,7 @@ describe("session-state MVP state boundaries", () => {
       h.server.responses["state"] = () => completedResult("", 1, "failure");
       await h.emit("agent_start");
       await waitFor("warning", () =>
-        h.notifications.some((n) => n.message.includes("cannot publish")),
+        h.notifications.some((n) => n.message.includes("publication interrupted")),
       );
       const count = h.server.commands.length;
       await h.emit("message_update");
@@ -923,6 +922,171 @@ describe("session-state MVP state boundaries", () => {
       await h.close();
     }
   });
+});
+
+describe("session-state latest publication recovery", () => {
+  it("coalesces running timeouts and failures into the latest state and title", async () => {
+    const h = await createExtensionHarness();
+    const finish = Promise.withResolvers<ExecResult>();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      const results = [
+        interruptedResult(),
+        interruptedResult(),
+        busyResult(),
+        completedResult("", 1, "write failed"),
+      ];
+      let attempts = 0;
+      h.server.responses.state = () => {
+        attempts++;
+        if (attempts === 1) return finish.promise;
+        const result = results.shift();
+        if (result) return result;
+        h.server.setPaneOption("%0", stateOptionValue("s1", "waiting-user", "Latest title"));
+        return completedResult("");
+      };
+      await h.emit("agent_start");
+      await waitFor("running started", () => h.server.hasPending());
+      await h.emit("agent_settled");
+      await h.emit("session_info_changed", { name: "Superseded title" });
+      await h.emit("session_info_changed", { name: "Latest title" });
+      await finishEventLoopTurn();
+      assert.equal(attempts, 1, "no new execution before the old terminal");
+      finish.resolve(interruptedResult());
+      await waitFor("retries started", () => attempts >= 3);
+      await waitFor(
+        "latest recovered",
+        () =>
+          h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user", "Latest title"),
+      );
+      const requests = stateArguments(h.server.commands);
+      assert.deepEqual(
+        requests.map((args) => args[3]),
+        ["waiting-user", "running", ...Array(5).fill("waiting-user")],
+      );
+      assert.ok(
+        requests
+          .slice(2)
+          .every((args) => JSON.parse(args[args.indexOf("--title") + 1]!) === "Latest title"),
+      );
+      assert.equal(new Set(requests.map((args) => args[args.indexOf("--source") + 1])).size, 1);
+      assert.equal(
+        h.notifications.filter((notice) => /publication interrupted/.test(notice.message)).length,
+        1,
+      );
+      delete h.server.responses.state;
+      await h.emit("agent_settled");
+      await finishEventLoopTurn();
+      assert.equal(stateArguments(h.server.commands).length, requests.length);
+    } finally {
+      finish.resolve(interruptedResult());
+      delete h.server.responses.state;
+      await h.close();
+    }
+  }, 15_000);
+
+  it("recovers a failed latest publication without another event", async () => {
+    const h = await createExtensionHarness();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      await h.emit("agent_start");
+      await waitFor(
+        "running",
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "running"),
+      );
+      h.server.responses.state = () => completedResult("", 1, "write failed");
+      await h.emit("agent_settled");
+      await waitFor("recovery warning", () => h.notifications.length > 0);
+      delete h.server.responses.state;
+      await waitFor(
+        "latest retry",
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user"),
+      );
+      assert.deepEqual(
+        stateArguments(h.server.commands).map((args) => args[3]),
+        ["waiting-user", "running", "waiting-user", "waiting-user"],
+      );
+    } finally {
+      delete h.server.responses.state;
+      await h.close();
+    }
+  });
+
+  it("keeps one recovery warning across failure busy failure until success", async () => {
+    const h = await createExtensionHarness();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      const results = [interruptedResult(), busyResult(), interruptedResult()];
+      h.server.responses.state = () => {
+        const result = results.shift();
+        if (result) return result;
+        h.server.setPaneOption("%0", stateOptionValue("s1", "running"));
+        return completedResult("");
+      };
+      await h.emit("agent_start");
+      await waitFor(
+        "successful recovery",
+        () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "running"),
+      );
+      assert.equal(h.notifications.length, 1);
+      h.server.responses.state = () => interruptedResult();
+      await h.emit("agent_settled");
+      await waitFor("new recovery warning after success", () => h.notifications.length === 2);
+    } finally {
+      delete h.server.responses.state;
+      await h.close();
+    }
+  }, 10_000);
+});
+
+describe("session-state persistent publication recovery", () => {
+  for (const stop of ["shutdown", "replacement"] as const) {
+    it(`stops persistent publication retries on ${stop}`, async () => {
+      const h = await createExtensionHarness();
+      let failures = 0;
+      try {
+        await h.emit("session_start");
+        await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+        h.server.responses.state = () => {
+          failures++;
+          return completedResult("", 126, "publication failed");
+        };
+        await h.emit("agent_start");
+        await waitFor("repeated failures", () => failures >= 2);
+        await h.emit("agent_settled");
+        await h.emit("session_info_changed", { name: "Discarded title" });
+        delete h.server.responses.state;
+        if (stop === "shutdown") {
+          await h.emit("session_shutdown");
+          assert.equal(h.server.paneOptionOf("%0"), undefined);
+        } else {
+          h.sessionId = "replacement";
+          h.sessionName = "Replacement title";
+          await h.emit("session_start");
+          await waitFor(
+            "replacement",
+            () =>
+              h.server.paneOptionOf("%0") ===
+              stateOptionValue("replacement", "waiting-user", "Replacement title"),
+          );
+        }
+        const count = h.server.commands.length;
+        await finishEventLoopTurn();
+        assert.equal(h.server.commands.length, count);
+        assert.equal(
+          h.server.commands.some((command) => command.includes("Discarded title")),
+          false,
+        );
+        assert.equal(h.notifications.length, 1);
+      } finally {
+        delete h.server.responses.state;
+        await h.close();
+      }
+    });
+  }
 });
 
 describe("session-state partial publication recovery", () => {
@@ -942,7 +1106,7 @@ describe("session-state partial publication recovery", () => {
         };
         await h.emit("agent_start");
         await waitFor("publication failure", () =>
-          h.notifications.some((notice) => notice.message.includes("cannot publish")),
+          h.notifications.some((notice) => notice.message.includes("publication interrupted")),
         );
         await finishEventLoopTurn();
         assert.equal(h.server.paneOptionOf("%0"), runningValue);
@@ -974,7 +1138,7 @@ describe("session-state partial publication recovery", () => {
 });
 
 describe("session-state lock retry", () => {
-  it("keeps a contended running notification ahead of later waiting and title notifications", async () => {
+  it("replaces a contended running notification with the latest waiting and title", async () => {
     const h = await createExtensionHarness();
     let busy = true;
     try {
@@ -994,7 +1158,16 @@ describe("session-state lock retry", () => {
         () => h.server.commands.filter((command) => command.startsWith("pi-mux state")).length >= 3,
       );
       const pending = h.server.commands.slice(2).map((command) => parse(command) as string[]);
-      assert.ok(pending.every((argv) => argv[3] === "running"));
+      assert.equal(pending[0]![3], "running");
+      assert.ok(
+        pending
+          .slice(1)
+          .every(
+            (argv) =>
+              argv[3] === "waiting-user" &&
+              JSON.parse(argv[argv.indexOf("--title") + 1]!) === "Later title",
+          ),
+      );
       assert.ok(
         pending.every(
           (argv) =>
@@ -1011,7 +1184,7 @@ describe("session-state lock retry", () => {
         .filter((command) => command.startsWith("pi-mux state"))
         .map((command) => (parse(command) as string[])[3]);
       assert.deepEqual(states.slice(-3), ["running", "waiting-user", "waiting-user"]);
-      assert.deepEqual(h.notifications, []);
+      assert.equal(h.notifications.length, 1);
     } finally {
       delete h.server.responses.state;
       await h.close();
@@ -1050,7 +1223,7 @@ function stateArguments(commands: string[]): string[][] {
 }
 
 describe("session-state lock retries", () => {
-  it("returns from discovery while busy and preserves running before later idle notifications", async () => {
+  it("returns from discovery while busy and coalesces later state and title", async () => {
     const h = await createExtensionHarness();
     try {
       h.server.responses.state = () => busyResult();
@@ -1069,16 +1242,12 @@ describe("session-state lock retries", () => {
       );
       const requests = stateArguments(h.server.commands);
       assert.deepEqual(
-        requests.slice(-3).map((args) => [args[3], JSON.parse(args[args.indexOf("--title") + 1]!)]),
-        [
-          ["running", null],
-          ["running", "Queued title"],
-          ["waiting-user", "Queued title"],
-        ],
+        requests.slice(-1).map((args) => [args[3], JSON.parse(args[args.indexOf("--title") + 1]!)]),
+        [["waiting-user", "Queued title"]],
       );
       const sources = requests.map((args) => args[args.indexOf("--source") + 1]);
       assert.equal(new Set(sources).size, 1);
-      assert.deepEqual(h.notifications, []);
+      assert.equal(h.notifications.length, 1);
     } finally {
       delete h.server.responses.state;
       await h.close();
@@ -1121,7 +1290,7 @@ describe("session-state lock retries", () => {
         stateArguments(h.server.commands).some((args) => args[2] === "s1" && args[3] === "running"),
         false,
       );
-      assert.deepEqual(h.notifications, []);
+      assert.equal(h.notifications.length, 1);
     } finally {
       delete h.server.responses.state;
       await h.close();
@@ -1294,7 +1463,7 @@ describe("session-state CLI execution ordering", () => {
     }
   }, 10_000);
 
-  it("retries a thrown process failure before waiting and title changes accepted during recovery", async () => {
+  it("retries the latest waiting and title after a thrown process failure", async () => {
     const h = await createExtensionHarness();
     try {
       await h.emit("session_start");
@@ -1325,12 +1494,9 @@ describe("session-state CLI execution ordering", () => {
         [
           ["waiting-user", null],
           ["running", null],
-          ["running", null],
-          ["waiting-user", null],
           ["waiting-user", "Queued recovery title"],
         ],
       );
-      assert.deepEqual(requests[2], requests[1]);
       assert.equal(h.notifications.length, 1);
     } finally {
       delete h.server.responses.state;
@@ -1374,7 +1540,7 @@ describe("session-state CLI execution ordering", () => {
     }
   }, 15_000);
 
-  it("recovers interrupted pane detection and publishes states accepted meanwhile", async () => {
+  it("recovers interrupted pane detection and publishes only the latest state and title", async () => {
     const h = await createExtensionHarness();
     try {
       h.server.responses["display-message"] = () => interruptedResult();
@@ -1395,12 +1561,7 @@ describe("session-state CLI execution ordering", () => {
       const requests = stateArguments(h.server.commands);
       assert.deepEqual(
         requests.map((args) => [args[3], JSON.parse(args[args.indexOf("--title") + 1]!)]),
-        [
-          ["waiting-user", null],
-          ["running", null],
-          ["running", "Recovery title"],
-          ["waiting-user", "Recovery title"],
-        ],
+        [["waiting-user", "Recovery title"]],
       );
       assert.equal(h.notifications.length, 1);
       assert.match(h.notifications[0]!.message, /pane detection interrupted/);

@@ -273,6 +273,79 @@ function publicState(fixture: CloseFixture): string {
 }
 
 describe("state notifications", () => {
+  for (const failure of ["metadata", "owner"] as const) {
+    it(`fails closed when ${failure} inspection fails and recovers on retry`, async () => {
+      const fixture = new CloseFixture("none");
+      try {
+        fixture.start();
+        assert.equal(notify(fixture, ["running", "--title", "null"]).status, 0);
+        const before = publicState(fixture);
+        const failing = join(fixture.directory, "guard-failure");
+        const observed = join(fixture.directory, "guard-failure-observed");
+        const option = failure === "owner" ? "@pi-mux-state-source" : "@pi-tmux-session";
+        const condition = `case "$*" in *show-options*${option}*) true;; *) false;; esac`;
+        const wrapper = join(fixture.directory, "bin/tmux");
+        rmSync(wrapper, { force: true });
+        writeFileSync(
+          wrapper,
+          `#!/bin/sh
+if [ -e ${JSON.stringify(failing)} ] && { ${condition}; }; then
+  touch ${JSON.stringify(observed)}
+  exit 1
+fi
+exec ${JSON.stringify(realTmux)} "$@"
+`,
+          { mode: 0o700 },
+        );
+        writeFileSync(failing, "fail");
+        const args = failure === "owner" ? ["--clear"] : ["waiting-user", "--title", "null"];
+        const failed = notify(fixture, args);
+        assert.equal(
+          existsSync(observed),
+          true,
+          "the guarded command must encounter the injected failure",
+        );
+        assert.equal(failed.status, 1, failed.stderr);
+        assert.equal(existsSync(`/proc/${fixture.pid}`), true);
+        assert.equal(publicState(fixture), before);
+        rmSync(failing);
+        const recovered = notify(fixture, args);
+        assert.equal(recovered.status, 0, recovered.stderr);
+        if (failure === "owner") assert.equal(publicState(fixture), "");
+        else assert.equal(JSON.parse(publicState(fixture)).state, "waiting-user");
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  }
+
+  it("fails closed when the write acknowledgement is missing", async () => {
+    const fixture = new CloseFixture("none");
+    try {
+      fixture.start();
+      assert.equal(notify(fixture, ["waiting-user", "--title", "null"]).status, 0);
+      const before = publicState(fixture);
+      const wrapper = join(fixture.directory, "bin/tmux");
+      rmSync(wrapper);
+      writeFileSync(
+        wrapper,
+        `#!/bin/sh
+if [ "$5" = source-file ] && [ "$6" = - ]; then cat >/dev/null; exit 0; fi
+exec ${JSON.stringify(realTmux)} "$@"
+`,
+        { mode: 0o700 },
+      );
+      for (const args of [["running", "--title", "null"], ["--clear"]]) {
+        const result = notify(fixture, args);
+        assert.equal(result.status, 1, result.stderr);
+        assert.match(result.stderr, /Cannot confirm session state update/);
+        assert.equal(publicState(fixture), before);
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   it("rejects a stale source and keeps the replacement pane untouched when the server swaps right before the write", async () => {
     const fixture = new CloseFixture("none");
     try {
@@ -310,7 +383,7 @@ exec ${JSON.stringify(realTmux)} "$@"
         origin,
       );
       assert.equal(result.status, 1);
-      assert.match(result.stderr, /no longer matches/);
+      assert.match(result.stderr, /Cannot verify source/);
       const pane = fixture.tmux(["display-message", "-p", "-t", "swapped", "#{pane_id}"]);
       assert.deepEqual(
         JSON.parse(fixture.tmux(["show-options", "-pqv", "-t", pane, "@pi_session_state"])),

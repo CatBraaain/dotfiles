@@ -273,17 +273,16 @@ describe("sandbox cancellation", () => {
     assert.equal(mountBuilds, 0);
   });
 
-  it("does not spawn a cancelled request after it waited for a sandbox slot", async () => {
+  it("starts additional sandboxes before earlier executions finish", async () => {
     const release = Promise.withResolvers<void>();
-    const allStarted = Promise.withResolvers<void>();
+    const firstFourStarted = Promise.withResolvers<void>();
     const runner = new SandboxRunner(process.cwd(), () => []);
     let starts = 0;
     const runtime = runner as unknown as {
       runSandboxProcess: () => Promise<{ exitCode: number; stdout: Buffer; stderr: Buffer }>;
     };
     runtime.runSandboxProcess = async () => {
-      starts++;
-      if (starts === 4) allStarted.resolve();
+      if (++starts === 4) firstFourStarted.resolve();
       await release.promise;
       return {
         exitCode: 0,
@@ -291,27 +290,30 @@ describe("sandbox cancellation", () => {
         stderr: Buffer.alloc(0),
       };
     };
-    const active = Array.from({ length: 4 }, (_, index) =>
-      runner.runTool(
-        "read",
-        { path: "/tmp/file" },
-        {
-          mode: "fs",
-          executor: index % 2 === 0 ? { entrypoint: "/tmp/fixture.ts" } : undefined,
-        },
-      ),
-    );
-    await allStarted.promise;
-    const controller = new AbortController();
-    const waiting = runner.runTool(
-      "read",
-      { path: "/tmp/waiting" },
-      { mode: "fs", signal: controller.signal, executor: { entrypoint: "/tmp/fixture.ts" } },
-    );
-    controller.abort(new Error("cancelled in queue"));
-    const rejection = assert.rejects(waiting, /cancelled in queue/);
-    release.resolve();
-    await Promise.all([...active, rejection]);
-    assert.equal(starts, 4);
+    const active: Promise<unknown>[] = [];
+    try {
+      active.push(
+        ...Array.from({ length: 4 }, () =>
+          runner.runTool("read", { path: "/tmp/first" }, { mode: "fs" }),
+        ),
+      );
+      await firstFourStarted.promise;
+      active.push(
+        ...Array.from({ length: 4 }, (_, index) =>
+          runner.runTool(
+            "read",
+            { path: "/tmp/next" },
+            {
+              mode: "fs",
+              executor: index % 2 === 0 ? { entrypoint: "/tmp/fixture.ts" } : undefined,
+            },
+          ),
+        ),
+      );
+      assert.equal(starts, 8, "later executions must start before the first four finish");
+    } finally {
+      release.resolve();
+      await Promise.all(active);
+    }
   });
 });

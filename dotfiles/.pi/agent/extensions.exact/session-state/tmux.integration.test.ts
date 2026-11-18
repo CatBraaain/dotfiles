@@ -184,24 +184,20 @@ try {
     assert.ok(failed.finished - failed.started >= 1_000);
     await dispatch("agent_settled");
     assert.equal(executions.filter((execution) => execution.command.includes(" running ")).length, 1);
-    await waitFor("successful retry followed by queued waiting-user", () => {
+    await waitFor("latest waiting-user without retrying running", () => {
       const publications = executions.filter((execution) => execution.command.startsWith("pi-mux state "));
-      return publications.length === 4 && publications[3].finished !== undefined;
+      return publications.length === 3 && publications[2].finished !== undefined;
     });
     const publications = executions.filter((execution) => execution.command.startsWith("pi-mux state "));
     assert.deepEqual(publications.map((execution) => execution.command.split(" ")[3]), [
-      "waiting-user", "running", "running", "waiting-user",
+      "waiting-user", "running", "waiting-user",
     ]);
-    const retried = publications[2];
-    assert.ok(retried.started - failed.finished >= 1_000);
-    assert.equal(retried.command, failed.command);
-    for (const execution of [retried, publications[3]]) {
-      assert.equal(execution.status, "completed", JSON.stringify(execution));
-      assert.equal(execution.result.code, 0);
-      assert.equal(execution.result.killed, false);
-      assert.notEqual(execution.result.truncated, true);
-    }
-    assert.ok(publications[3].started >= retried.finished);
+    const latest = publications[2];
+    assert.ok(latest.started - failed.finished >= 1_000);
+    assert.equal(latest.status, "completed", JSON.stringify(latest));
+    assert.equal(latest.result.code, 0);
+    assert.equal(latest.result.killed, false);
+    assert.notEqual(latest.result.truncated, true);
     assert.match(cli("show-messages", "-J"), /old-write-release/);
     assert.equal(existsSync(join(directory, "old-job-finished")), false);
     assert.equal(readOption(), stateOptionValue(sessionId, "waiting-user"));

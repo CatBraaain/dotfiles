@@ -79,10 +79,7 @@ export class SandboxRunner {
     options: RunOptions = {},
   ): Promise<RunResult> {
     options.signal?.throwIfAborted();
-    return withSandboxSlot(() => {
-      options.signal?.throwIfAborted();
-      return this.runSandboxProcess(command, commandArgs, options);
-    });
+    return this.runSandboxProcess(command, commandArgs, options);
   }
 
   private runSandboxProcess(
@@ -164,23 +161,6 @@ export class SandboxRunner {
       }
       if (options.signal?.aborted) onAbort();
     });
-  }
-}
-
-const MAX_CONCURRENT_SANDBOX_RUNS = 4;
-
-let runningSandboxRuns = 0;
-const sandboxWaiters: (() => void)[] = [];
-
-async function withSandboxSlot<T>(run: () => Promise<T>): Promise<T> {
-  if (runningSandboxRuns >= MAX_CONCURRENT_SANDBOX_RUNS)
-    await new Promise<void>((resolve) => sandboxWaiters.push(resolve));
-  runningSandboxRuns++;
-  try {
-    return await run();
-  } finally {
-    runningSandboxRuns--;
-    sandboxWaiters.shift()?.();
   }
 }
 
