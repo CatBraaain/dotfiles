@@ -6,6 +6,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { expandHomeRoot, positionalArguments } from "./args.ts";
 import { compareCodeUnits, entryDiffers, lstatOrNull } from "./compare.ts";
+import { fileOperationConcurrency, IoLimiter } from "./concurrency.ts";
 import { renderDiffs } from "./diff-render.ts";
 import { mapSegment, type EntryKind } from "./path-mapping.ts";
 import type { Stats } from "node:fs";
@@ -59,7 +60,7 @@ export async function collectDifferences(
     "",
     "",
     { isExactScope: false, scanForSurplus: false },
-    { distRoot, homeRoot, platform, result },
+    { distRoot, homeRoot, platform, result, limiter: new IoLimiter(fileOperationConcurrency) },
   );
   for (const entries of Object.values(result))
     entries.sort((a, b) => compareCodeUnits(a.homePath, b.homePath));
@@ -134,6 +135,7 @@ type WalkContext = {
   homeRoot: string;
   platform: string;
   result: DiffResult;
+  limiter: IoLimiter;
 };
 
 type WalkScope = { isExactScope: boolean; scanForSurplus: boolean };
@@ -147,8 +149,10 @@ async function walk(
   const distDir = join(ctx.distRoot, distRel);
   const homeDir = join(ctx.homeRoot, homeRel);
   const knownHomeNames = new Set<string>();
+  const entries = await ctx.limiter.run(() => readdir(distDir, { withFileTypes: true }));
+  const tasks: Promise<void>[] = [];
 
-  for (const entry of await readdir(distDir, { withFileTypes: true })) {
+  for (const entry of entries) {
     const mapping = mapSegment(entry.name, entry.isDirectory());
     // Track every dist entry's home name (excluded ones included) so the
     // surplus scan below never counts a mapped counterpart as surplus.
@@ -159,45 +163,53 @@ async function walk(
     const childHomeRel = homeRel === "" ? mapping.homeName : `${homeRel}/${mapping.homeName}`;
     const distAbs = join(distDir, entry.name);
     const homeAbs = join(homeDir, mapping.homeName);
-    const homeStat = await lstatOrNull(homeAbs);
+    tasks.push(
+      (async () => {
+        const homeStat = await ctx.limiter.run(() => lstatOrNull(homeAbs));
 
-    if (!homeStat) {
-      ctx.result.added.push({ homePath: childHomeRel, distPath: childDistRel });
-      if (entry.isDirectory()) await collectAddedTree(childDistRel, childHomeRel, ctx);
-      continue;
-    }
+        if (!homeStat) {
+          ctx.result.added.push({ homePath: childHomeRel, distPath: childDistRel });
+          if (entry.isDirectory()) await collectAddedTree(childDistRel, childHomeRel, ctx);
+          return;
+        }
 
-    const homeKind = kindOfStat(homeStat);
-    if (homeKind !== mapping.kind) {
-      ctx.result.typeMismatches.push({ homePath: childHomeRel, distPath: childDistRel });
-      continue;
-    }
+        const homeKind = kindOfStat(homeStat);
+        if (homeKind !== mapping.kind) {
+          ctx.result.typeMismatches.push({ homePath: childHomeRel, distPath: childDistRel });
+          return;
+        }
 
-    if (mapping.kind === "directory") {
-      ctx.result.unchanged.push({ homePath: childHomeRel, distPath: childDistRel });
-      // Exact scope covers only the direct children of a .exact directory
-      // (spec §.exact の解釈); it does not propagate into child directories.
-      const childIsExactScope = mapping.isExactManaged;
-      await walk(
-        childDistRel,
-        childHomeRel,
-        { isExactScope: childIsExactScope, scanForSurplus: true },
-        ctx,
-      );
-      continue;
-    }
+        if (mapping.kind === "directory") {
+          ctx.result.unchanged.push({ homePath: childHomeRel, distPath: childDistRel });
+          // Exact scope covers only the direct children of a .exact directory
+          // (spec §.exact の解釈); it does not propagate into child directories.
+          const childIsExactScope = mapping.isExactManaged;
+          await walk(
+            childDistRel,
+            childHomeRel,
+            { isExactScope: childIsExactScope, scanForSurplus: true },
+            ctx,
+          );
+          return;
+        }
 
-    const differs = await entryDiffers(distAbs, homeAbs, mapping, homeStat, ctx.platform);
-    ctx.result[differs ? "changed" : "unchanged"].push({
-      homePath: childHomeRel,
-      distPath: childDistRel,
-    });
+        const differs = await ctx.limiter.run(() =>
+          entryDiffers(distAbs, homeAbs, mapping, homeStat, ctx.platform),
+        );
+        ctx.result[differs ? "changed" : "unchanged"].push({
+          homePath: childHomeRel,
+          distPath: childDistRel,
+        });
+      })(),
+    );
   }
+  await Promise.all(tasks);
 
   // Surplus scan: only below dist-managed directories (never at the home
   // root). Unmanaged top-level home entries are ignored.
   if (!scope.scanForSurplus) return;
-  for (const homeEntry of await readdir(homeDir, { withFileTypes: true })) {
+  const homeEntries = await ctx.limiter.run(() => readdir(homeDir, { withFileTypes: true }));
+  for (const homeEntry of homeEntries) {
     if (knownHomeNames.has(homeEntry.name)) continue;
     const surplusRel = homeRel === "" ? homeEntry.name : `${homeRel}/${homeEntry.name}`;
     // A surplus directory is reported as one entry (removed with its subtree
@@ -210,14 +222,19 @@ async function walk(
 }
 
 async function collectAddedTree(distRel: string, homeRel: string, ctx: WalkContext): Promise<void> {
-  for (const entry of await readdir(join(ctx.distRoot, distRel), { withFileTypes: true })) {
+  const entries = await ctx.limiter.run(() =>
+    readdir(join(ctx.distRoot, distRel), { withFileTypes: true }),
+  );
+  const tasks: Promise<void>[] = [];
+  for (const entry of entries) {
     const mapping = mapSegment(entry.name, entry.isDirectory());
     if (mapping.isExcluded) continue;
     const childDistRel = `${distRel}/${entry.name}`;
     const childHomeRel = `${homeRel}/${mapping.homeName}`;
     ctx.result.added.push({ homePath: childHomeRel, distPath: childDistRel });
-    if (entry.isDirectory()) await collectAddedTree(childDistRel, childHomeRel, ctx);
+    if (entry.isDirectory()) tasks.push(collectAddedTree(childDistRel, childHomeRel, ctx));
   }
+  await Promise.all(tasks);
 }
 
 function kindOfStat(stat: Stats): EntryKind {

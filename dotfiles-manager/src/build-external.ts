@@ -14,6 +14,7 @@ import {
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import { editMarkdown, normalizeMarkdownEdits, type MarkdownEdit } from "./build-edit-markdown.ts";
+import { fileOperationConcurrency, runWithConcurrency } from "./concurrency.ts";
 import {
   guestMirrorPath,
   mirrorRoot,
@@ -128,7 +129,7 @@ export async function applyExternals(distDir: string, connection?: WslConnection
   }
 }
 
-async function loadExternalConfig(configPath: string): Promise<ExternalConfig> {
+export async function loadExternalConfig(configPath: string): Promise<ExternalConfig> {
   const repos = await readExternalRepos(configPath);
   // Machine-specific layer (gitignored) merged over the shared config by repo
   // key; a machine definition fully replaces the shared one.
@@ -216,19 +217,23 @@ async function resolveEntryPath(mirrorDir: string, path: string): Promise<string
   return matches[0]!;
 }
 
-async function copyTree(
+export async function copyTree(
   sourceDir: string,
   targetDir: string,
   shouldCopy: (entry: Dirent, targetPath: string) => boolean,
 ): Promise<void> {
   await mkdir(targetDir, { recursive: true });
-  for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
-    const sourcePath = join(sourceDir, entry.name);
-    const targetPath = join(targetDir, entry.name);
-    if (!shouldCopy(entry, targetPath)) continue;
-    if (entry.isDirectory()) await copyTree(sourcePath, targetPath, shouldCopy);
-    else await copyFile(sourcePath, targetPath);
-  }
+  await runWithConcurrency(
+    await readdir(sourceDir, { withFileTypes: true }),
+    fileOperationConcurrency,
+    async (entry) => {
+      const sourcePath = join(sourceDir, entry.name);
+      const targetPath = join(targetDir, entry.name);
+      if (!shouldCopy(entry, targetPath)) return;
+      if (entry.isDirectory()) await copyTree(sourcePath, targetPath, shouldCopy);
+      else await copyFile(sourcePath, targetPath);
+    },
+  );
 }
 
 // Skill trees skip VCS metadata and never overwrite files already present in
@@ -253,7 +258,7 @@ async function markPullAt(mirrorDir: string): Promise<void> {
 
 // ------------------------------------------------------------- entry copying
 
-async function copyRepoEntries(
+export async function copyRepoEntries(
   mirrorDir: string,
   destinationDir: string,
   entries: string[],

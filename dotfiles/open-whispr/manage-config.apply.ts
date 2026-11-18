@@ -5,9 +5,11 @@ import {
   closeSync,
   copyFileSync,
   existsSync,
+  fstatSync,
   openSync,
   readFileSync,
   readdirSync,
+  readSync,
   statSync,
 } from "node:fs";
 import { cp, mkdtemp, mkdir, rename, rm, writeFile } from "node:fs/promises";
@@ -270,16 +272,27 @@ function readUInt32LE(bytes: Uint8Array, offset: number): number {
 }
 
 export function parseAsarPackageName(asarBytes: Uint8Array): string {
+  return parseAsarPackageNameRanges(
+    (start, end) => asarBytes.subarray(start, end),
+    asarBytes.length,
+  );
+}
+
+function parseAsarPackageNameRanges(
+  readRange: (start: number, end: number) => Uint8Array,
+  fileSize: number,
+): string {
   const fail = () => new HookError("INVALID_INPUT", "installed app.asar has an unexpected format");
-  if (asarBytes.length < 16 || readUInt32LE(asarBytes, 0) !== 4) throw fail();
-  const headerPickleLength = readUInt32LE(asarBytes, 4);
-  const headerPayloadLength = readUInt32LE(asarBytes, 8);
-  const jsonLength = readUInt32LE(asarBytes, 12);
+  const prefix = readRange(0, 16);
+  if (prefix.length < 16 || readUInt32LE(prefix, 0) !== 4) throw fail();
+  const headerPickleLength = readUInt32LE(prefix, 4);
+  const headerPayloadLength = readUInt32LE(prefix, 8);
+  const jsonLength = readUInt32LE(prefix, 12);
   if (headerPickleLength !== headerPayloadLength + 4) throw fail();
-  if (16 + jsonLength > asarBytes.length) throw fail();
+  if (16 + jsonLength > fileSize) throw fail();
   let header: { files?: Record<string, { offset?: string; size?: number }> };
   try {
-    header = JSON.parse(new TextDecoder().decode(asarBytes.subarray(16, 16 + jsonLength)));
+    header = JSON.parse(new TextDecoder().decode(readRange(16, 16 + jsonLength)));
   } catch {
     throw fail();
   }
@@ -288,12 +301,9 @@ export function parseAsarPackageName(asarBytes: Uint8Array): string {
   const dataStart = 8 + headerPickleLength;
   const packageStart = dataStart + Number(packageEntry.offset);
   const packageEnd = packageStart + packageEntry.size;
-  if (packageStart < dataStart || packageEnd > asarBytes.length || packageEnd < packageStart)
-    throw fail();
+  if (packageStart < dataStart || packageEnd > fileSize || packageEnd < packageStart) throw fail();
   try {
-    const packageJson = JSON.parse(
-      new TextDecoder().decode(asarBytes.subarray(packageStart, packageEnd)),
-    );
+    const packageJson = JSON.parse(new TextDecoder().decode(readRange(packageStart, packageEnd)));
     if (typeof packageJson.name !== "string") throw fail();
     return packageJson.name;
   } catch (error) {
@@ -304,18 +314,40 @@ export function parseAsarPackageName(asarBytes: Uint8Array): string {
 
 export function verifyAppIdentity(appDir: string): void {
   const asarPath = join(appDir, "resources", "app.asar");
-  let asarBytes: Buffer;
+  let fd: number;
   try {
-    asarBytes = readFileSync(asarPath);
+    fd = openSync(asarPath, "r");
   } catch {
     throw new HookError("INVALID_INPUT", `installed app package is missing: ${asarPath}`);
   }
-  const packageName = parseAsarPackageName(asarBytes);
-  if (packageName !== expectedAsarPackageName)
-    throw new HookError(
-      "INVALID_INPUT",
-      `installed app has unexpected package name: ${packageName}`,
+  try {
+    const fileSize = fstatSync(fd).size;
+    const packageName = parseAsarPackageNameRanges(
+      (start, end) => readAsarRange(fd, start, end),
+      fileSize,
     );
+    if (packageName !== expectedAsarPackageName)
+      throw new HookError(
+        "INVALID_INPUT",
+        `installed app has unexpected package name: ${packageName}`,
+      );
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function readAsarRange(fd: number, start: number, end: number): Buffer {
+  const length = end - start;
+  const buffer = Buffer.alloc(length);
+  let read = 0;
+  while (read < length) {
+    const bytes = readSync(fd, buffer, read, length - read, start + read);
+    if (bytes <= 0) break;
+    read += bytes;
+  }
+  if (read < length)
+    throw new HookError("INVALID_INPUT", "installed app.asar has an unexpected format");
+  return buffer;
 }
 
 export function isRecognizedProfile(profileDir: string): boolean {
