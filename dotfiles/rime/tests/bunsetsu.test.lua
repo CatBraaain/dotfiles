@@ -1824,5 +1824,221 @@ do
     check(not mem.session_open, "learn closes the storage session before returning")
 end
 
+local function corrected_route_score(choice, matrix, whole_score)
+    if not choice.route_words then return nil end
+    local base, risk = 0, 0
+    for index, word in ipairs(choice.route_words) do
+        base = base + word.wcost
+        if index > 1 then
+            local connection = matrix[choice.route_words[index - 1].right_id .. " " .. word.left_id]
+            base = base + connection
+            risk = risk + math.max(0, connection)
+        end
+    end
+    return base + math.max(0, risk - math.max(0, whole_score - base)), base
+end
+
+local function clause_texts(clause)
+    local texts = {}
+    for _, choice in ipairs(clause.candidates) do texts[#texts + 1] = choice.text end
+    return table.concat(texts, "/")
+end
+
+print("== 43. the quality gate corrects a synthesis that would flip below whole-reading words")
+do
+    local dictionary = {
+        { surface = "かんな", candidate = "環奈", left_id = 1, right_id = 1, cost = 1200 },
+        { surface = "かんな", candidate = "神奈", left_id = 4, right_id = 4, cost = 1500 },
+        { surface = "かん", candidate = "感", left_id = 2, right_id = 2, cost = 400 },
+        { surface = "な", candidate = "な", left_id = 3, right_id = 3, cost = 100 },
+    }
+    local matrix = pos_matrix({ 1, 2, 3, 4 }, { ["2 3"] = 600 })
+    local readings = { ["かんな"] = {
+        { text = "環奈", phrase = { text = "環奈|1 1", custom_code = "かんな " } },
+        { text = "神奈", phrase = { text = "神奈|4 4", custom_code = "かんな " } },
+        { text = "感な", phrase = { text = "感な|2 3", custom_code = "かんな " } },
+    } }
+    local bunsetsu, context = new_engine(dictionary, matrix, readings, false, function() return false end, {})
+    bunsetsu.start(context, "かんな")
+    local clause = bunsetsu.state(context).clauses[1]
+    check(clause.quality == true, "a flipping synthesis turns the quality gate on")
+    check(clause_texts(clause) == "環奈/神奈/感な",
+        "whole-reading words rank above the corrected synthesis")
+    local whole = clause.candidates[1]
+    check(corrected_route_score(whole, matrix, 1200) == 1200,
+        "the single-word whole route keeps its own score")
+    local synthesis
+    for _, choice in ipairs(clause.unfiltered) do
+        if choice.text == "感な" then synthesis = choice end
+    end
+    check(corrected_route_score(synthesis, matrix, 1200) == 1600,
+        "the corrected score adds the risk beyond the whole-word margin")
+    check(select_clause_text(bunsetsu, context, 1, "感な") and bunsetsu.display(context) == "感な",
+        "the corrected synthesis remains selectable")
+end
+
+print("== 44. sub-clauses, flip-free and wordless readings keep the plain order")
+do
+    local dictionary = {
+        { surface = "かんな", candidate = "環奈", left_id = 1, right_id = 1, cost = 1200 },
+        { surface = "かんな", candidate = "神奈", left_id = 4, right_id = 4, cost = 1500 },
+        { surface = "かん", candidate = "感", left_id = 2, right_id = 2, cost = 400 },
+        { surface = "な", candidate = "な", left_id = 3, right_id = 3, cost = 100 },
+        { surface = "す", candidate = "す", left_id = 6, right_id = 6, cost = 100 },
+    }
+    local matrix = pos_matrix({ 1, 2, 3, 4, 6 }, { ["2 3"] = 600 })
+    local readings = { ["かんな"] = {
+        { text = "環奈", phrase = { text = "環奈|1 1", custom_code = "かんな " } },
+        { text = "神奈", phrase = { text = "神奈|4 4", custom_code = "かんな " } },
+        { text = "感な", phrase = { text = "感な|2 3", custom_code = "かんな " } },
+    } }
+    local bunsetsu, context = new_engine(dictionary, matrix, readings, false, function(right, left)
+        return left == 6
+    end, {})
+    bunsetsu.start(context, "かんなす")
+    local state = bunsetsu.state(context)
+    local clause = state.clauses[1]
+    check(#state.clauses == 2 and state.clauses[2].reading == "す",
+        "the boundary function splits the conversion into two clauses")
+    check(clause.quality == false, "a sub-clause of a longer conversion keeps the gate off")
+    check(clause_texts(clause) == "感な/環奈/神奈",
+        "the sub-clause keeps the plain base-score order without the correction")
+end
+
+do
+    local dictionary = {
+        { surface = "かん", candidate = "感", left_id = 2, right_id = 2, cost = 400 },
+        { surface = "な", candidate = "な", left_id = 3, right_id = 3, cost = 100 },
+    }
+    local matrix = pos_matrix({ 2, 3 }, { ["2 3"] = 600 })
+    local readings = { ["かんな"] = {
+        { text = "感な", phrase = { text = "感な|2 3", custom_code = "かんな " } },
+    } }
+    local bunsetsu, context = new_engine(dictionary, matrix, readings, false, function() return false end, {})
+    bunsetsu.start(context, "かんな")
+    local clause = bunsetsu.state(context).clauses[1]
+    check(clause.quality == false, "a reading without any whole-reading word keeps the gate off")
+    check(bunsetsu.display(context) == "感な" and clause.candidates[1].text == "感な",
+        "a reading without any whole-reading word stays uncorrected")
+end
+
+do
+    local dictionary = {
+        { surface = "かんな", candidate = "環奈", left_id = 1, right_id = 1, cost = 2000 },
+        { surface = "かん", candidate = "感", left_id = 2, right_id = 2, cost = 400 },
+        { surface = "な", candidate = "な", left_id = 3, right_id = 3, cost = 100 },
+    }
+    local matrix = pos_matrix({ 1, 2, 3 }, { ["2 3"] = 600 })
+    local readings = { ["かんな"] = {
+        { text = "環奈", phrase = { text = "環奈|1 1", custom_code = "かんな " } },
+        { text = "感な", phrase = { text = "感な|2 3", custom_code = "かんな " } },
+    } }
+    local bunsetsu, context = new_engine(dictionary, matrix, readings, false, function() return false end, {})
+    bunsetsu.start(context, "かんな")
+    local clause = bunsetsu.state(context).clauses[1]
+    check(clause.quality == false, "a correction that flips no whole-reading word keeps the gate off")
+    check(clause_texts(clause) == "感な/環奈",
+        "a synthesis already covered by its risk margin stays ahead of the whole word")
+end
+
+print("== 45. content whole-reading words exclude the reading, its katakana and longer entries")
+do
+    local dictionary = {
+        { surface = "かんな", candidate = "カンナ", left_id = 5, right_id = 5, cost = 750 },
+        { surface = "かんな", candidate = "かんな", left_id = 6, right_id = 6, cost = 760 },
+        { surface = "かんな", candidate = "感無量也", left_id = 7, right_id = 7, cost = 770 },
+        { surface = "かん", candidate = "感", left_id = 2, right_id = 2, cost = 400 },
+        { surface = "な", candidate = "な", left_id = 3, right_id = 3, cost = 100 },
+    }
+    local matrix = pos_matrix({ 2, 3, 5, 6, 7 }, { ["2 3"] = 200 })
+    local readings = { ["かんな"] = {
+        { text = "カンナ", phrase = { text = "カンナ|5 5", custom_code = "かんな " } },
+        { text = "かんな", phrase = { text = "かんな|6 6", custom_code = "かんな " } },
+        { text = "感無量也", phrase = { text = "感無量也|7 7", custom_code = "かんな " } },
+        { text = "感な", phrase = { text = "感な|2 3", custom_code = "かんな " } },
+    } }
+    local bunsetsu, context = new_engine(dictionary, matrix, readings, false, function() return false end, {})
+    bunsetsu.start(context, "かんな")
+    local clause = bunsetsu.state(context).clauses[1]
+    check(clause.quality == false,
+        "katakana, raw-reading and longer-than-reading entries do not anchor the correction")
+    check(clause.candidates[1].text == "感な",
+        "the synthesis stays first when no content whole-reading word exists")
+end
+
+print("== 46. same-text routes keep the best corrected route and a dictionary-only whole word anchors it")
+do
+    local dictionary = {
+        { surface = "かんな", candidate = "環奈", left_id = 1, right_id = 1, cost = 1200 },
+        { surface = "か", candidate = "環", left_id = 7, right_id = 7, cost = 300 },
+        { surface = "んな", candidate = "奈", left_id = 8, right_id = 8, cost = 300 },
+    }
+    local matrix = pos_matrix({ 1, 7, 8 }, { ["7 8"] = 500 })
+    local readings = { ["かんな"] = {
+        { text = "環奈", phrase = { text = "環奈|1 1", custom_code = "かんな " } },
+        { text = "環奈", phrase = { text = "環奈|7 8", custom_code = "かんな " } },
+    } }
+    local bunsetsu, context = new_engine(dictionary, matrix, readings, false, function() return false end, {})
+    bunsetsu.start(context, "かんな")
+    local clause = bunsetsu.state(context).clauses[1]
+    check(clause.quality == true, "the same-text synthesis flips below the whole-reading route")
+    check(#clause.candidates == 1 and clause.candidates[1].text == "環奈" and #clause.candidates[1].route_words == 1,
+        "a same-text display keeps the better whole-word route after the correction")
+    local routes = {}
+    for _, choice in ipairs(clause.unfiltered) do
+        if choice.text == "環奈" then routes[#routes + 1] = corrected_route_score(choice, matrix, 1200) end
+    end
+    check(#routes == 2 and routes[1] == 1200 and routes[2] == 1500,
+        "the same-text synthesis keeps its corrected route behind the whole-word route")
+end
+
+do
+    local dictionary = {
+        { surface = "かんな", candidate = "環奈", left_id = 1, right_id = 1, cost = 1200 },
+        { surface = "かん", candidate = "感", left_id = 2, right_id = 2, cost = 400 },
+        { surface = "な", candidate = "な", left_id = 3, right_id = 3, cost = 100 },
+    }
+    local matrix = pos_matrix({ 1, 2, 3 }, { ["2 3"] = 500 })
+    local readings = { ["かんな"] = {
+        { text = "感な", phrase = { text = "感な|2 3", custom_code = "かんな " } },
+    } }
+    local bunsetsu, context = new_engine(dictionary, matrix, readings, false, function() return false end, {})
+    bunsetsu.start(context, "かんな")
+    local clause = bunsetsu.state(context).clauses[1]
+    check(clause.quality == true, "a whole-reading word absent from the stock list still anchors the gate")
+    check(clause.candidates[1].text == "環奈" and #clause.candidates[1].route_words == 1,
+        "the dictionary-only whole-reading word is supplied and ranks by its own score")
+    check(clause.candidates[2].text == "感な",
+        "the synthesis ranks below the independently anchored whole word")
+end
+
+print("== 47. a missing connection is not a zero-cost connection")
+do
+    local dictionary = {
+        { surface = "あい", candidate = "赤鳥", left_id = 1, right_id = 1, cost = 1000 },
+        { surface = "あ", candidate = "赤", left_id = 2, right_id = 2, cost = 100 },
+        { surface = "い", candidate = "鳥", left_id = 3, right_id = 3, cost = 100 },
+    }
+    local matrix = pos_matrix({ 1, 2, 3 }, { ["2 3"] = 600 })
+    local readings = { ["あい"] = {
+        { text = "赤鳥", phrase = { text = "赤鳥|1 1", custom_code = "あい " } },
+        { text = "赤鳥", phrase = { text = "赤鳥|2 3", custom_code = "あい " } },
+    } }
+    local bunsetsu, context = new_engine(dictionary, matrix, readings, false, function() return false end, {})
+    bunsetsu.start(context, "あい")
+    local clause = bunsetsu.state(context).clauses[1]
+    check(clause.quality == true, "the connected same-text synthesis flips below the whole word")
+    check(bunsetsu.display(context) == "赤鳥" and #clause.candidates[1].route_words == 1,
+        "the whole-word route wins over the 800-cost same-text composition")
+
+    matrix["2 3"] = nil
+    local completed, display = pcall(function()
+        local engine, fresh_context = new_engine(dictionary, matrix, readings, false, function() return false end, {})
+        engine.start(fresh_context, "あい")
+        return engine.display(fresh_context)
+    end)
+    check(completed and display == "赤鳥", "a missing connection is not treated as a zero-cost connection")
+end
+
 print(string.format("bunsetsu: %d checks, %d failures", checks, failures))
 os.exit(failures == 0 and 0 or 1)

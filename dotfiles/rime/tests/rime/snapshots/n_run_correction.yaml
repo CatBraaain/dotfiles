@@ -29,16 +29,16 @@ cases:
     display: 環奈
   - name: 次候補での一覧表示
     input: kannna{SPACE}{SPACE}
-    display: 感な
-    candidates: [環奈, 感な, カンナ, かんな, 鉋, 間な, 神奈, 神名, 甘奈, 館な]
+    display: カンナ
+    candidates: [環奈, カンナ, かんな, 鉋, 神奈, 神名, 甘奈, 栞奈, 神無, 栞菜]
 
   - name: 第一候補への変換
     input: kannnna{SPACE}
     display: 環奈
   - name: 次候補での一覧表示
     input: kannnna{SPACE}{SPACE}
-    display: 感な
-    candidates: [環奈, 感な, カンナ, かんな, 鉋, 間な, 神奈, 神名, 甘奈, 館な]
+    display: カンナ
+    candidates: [環奈, カンナ, かんな, 鉋, 神奈, 神名, 甘奈, 栞奈, 神無, 栞菜]
 
   - name: 第一候補への変換
     input: konnnitiha{SPACE}
@@ -53,13 +53,13 @@ cases:
     display: 観念
   - name: 次候補での一覧表示
     input: kannnen{SPACE}{SPACE}
-    display: 澗年
-    candidates: [観念, 澗年, 感年, 間年, 閑念, 感念, 館年, 官年, 缶年, かん年]
+    display: 閑念
+    candidates: [観念, 閑念, 澗年, 肝念, 感念, 間念, 感年, 環念, 缶念, 漢念]
 
   - name: 第一候補への変換
     input: kannnnen{SPACE}
     display: 観念
   - name: 次候補での一覧表示
     input: kannnnen{SPACE}{SPACE}
-    display: 澗年
-    candidates: [観念, 澗年, 感年, 間年, 閑念, 感念, 館年, 官年, 缶年, かん年]
+    display: 閑念
+    candidates: [観念, 閑念, 澗年, 肝念, 感念, 間念, 感年, 環念, 缶念, 漢念]
