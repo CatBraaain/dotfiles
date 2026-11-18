@@ -3585,7 +3585,7 @@ case "$*" in`,
                 `
 case "$*" in
   *"set-option -p"*"@pi-tmux-session"*) operation=publication ;;
-  *"if-shell"*"@pi-mux-restoring-"*) operation=confirmation ;;
+  *"if-shell"*"set-option -gu"*"@pi-mux-restoring-"*) operation=confirmation ;;
   *) operation=other ;;
 esac
 ${phase === "committed-publication" ? `if test "$operation" = confirmation; then touch ${quote([verified])}; fi` : ""}
