@@ -1806,26 +1806,22 @@ describe("manager CLI", () => {
       assert.equal(result.code, 0, result.stderr);
       const logs = result.stdout
         .split("\n")
-        .filter((line) =>
-          /^(Build |  (?:rebuild dist |path map |externals |merge |replace |Running |[✓✗] )|stage |command )/.test(
-            line,
-          ),
-        )
+        .filter((line) => /^(\[build\] |  \[|\[apply\] |stage |command )/.test(line))
         .map((line) => line.replace(/\(\d+\.\d{2}s\)$/, "(TIME)"));
       assert.deepEqual(logs, [
-        "Build started",
-        "  rebuild dist (TIME)",
-        "  path map (TIME)",
-        "  externals (TIME)",
-        "  merge (TIME)",
-        "  replace (TIME)",
-        "  Running nested/01-local.build-machine.ts",
-        "  ✓ nested/01-local.build-machine.ts (TIME)",
-        "  Running nested/02-shared.build.ts",
-        "  ✓ nested/02-shared.build.ts (TIME)",
-        "Build complete (TIME)",
-        `stage ${command} start`,
-        `stage ${command} success (TIME)`,
+        "[build] Started",
+        "  [build] rebuild dist (TIME)",
+        "  [build] path map (TIME)",
+        "  [build] externals (TIME)",
+        "  [build] merge (TIME)",
+        "  [build] replace (TIME)",
+        "  [nested/01-local.build-machine.ts] Started",
+        "  [nested/01-local.build-machine.ts] ✓ Complete (TIME)",
+        "  [nested/02-shared.build.ts] Started",
+        "  [nested/02-shared.build.ts] ✓ Complete (TIME)",
+        "[build] Complete (TIME)",
+        command === "apply" ? "[apply] Started" : `stage ${command} start`,
+        command === "apply" ? "[apply] Complete (TIME)" : `stage ${command} success (TIME)`,
         `command ${command} success (TIME)`,
       ]);
       assert.doesNotMatch(result.stdout, new RegExp(`^stage ${command} start \\(`, "m"));
@@ -1838,9 +1834,9 @@ describe("manager CLI", () => {
     assert.equal(result.code, 0, result.stderr);
     assert.match(
       result.stdout,
-      /^Build started\n  rebuild dist \(\d+\.\d{2}s\)\n  path map \(\d+\.\d{2}s\)\n  externals \(\d+\.\d{2}s\)\n  merge \(\d+\.\d{2}s\)\n  replace \(\d+\.\d{2}s\)\nBuild complete \(\d+\.\d{2}s\)$/m,
+      /^\[build\] Started\n  \[build\] rebuild dist \(\d+\.\d{2}s\)\n  \[build\] path map \(\d+\.\d{2}s\)\n  \[build\] externals \(\d+\.\d{2}s\)\n  \[build\] merge \(\d+\.\d{2}s\)\n  \[build\] replace \(\d+\.\d{2}s\)\n\[build\] Complete \(\d+\.\d{2}s\)$/m,
     );
-    assert.doesNotMatch(result.stdout, /^  (?:Running|[✓✗]) /m);
+    assert.doesNotMatch(result.stdout, /^  \[(?!build\])/m);
   });
 
   it("does not add a blank line when a hook writes no stdout", async () => {
@@ -1868,9 +1864,9 @@ describe("manager CLI", () => {
 
     assert.equal(result.code, 0, result.stderr);
     const lines = result.stdout.split("\n");
-    const outputLine = lines.indexOf("hook-output");
+    const outputLine = lines.indexOf("  [output.build.ts] hook-output");
     assert.ok(outputLine >= 0, result.stdout);
-    assert.match(lines[outputLine + 1], /^  ✓ output\.build\.ts \(\d+\.\d{2}s\)$/);
+    assert.match(lines[outputLine + 1], /^  \[output\.build\.ts\] ✓ Complete \(\d+\.\d{2}s\)$/);
   });
 
   for (const fails of [false, true]) {
@@ -1885,11 +1881,13 @@ describe("manager CLI", () => {
 
       assert.equal(result.code, fails ? 1 : 0, result.stderr);
       const lines = result.stdout.split("\n");
-      const outputLine = lines.indexOf("hook-output");
+      const outputLine = lines.indexOf("  [output.build.ts] hook-output");
       assert.equal(outputLine >= 0, true, result.stdout);
       assert.match(
         lines[outputLine + 1],
-        new RegExp(`^  ${fails ? "✗" : "✓"} output\\.build\\.ts \\(\\d+\\.\\d{2}s\\)$`),
+        new RegExp(
+          `^  \\[output\\.build\\.ts\\] ${fails ? "✗ Failed" : "✓ Complete"} \\(\\d+\\.\\d{2}s\\)$`,
+        ),
       );
     });
   }
@@ -1929,8 +1927,8 @@ describe("manager CLI", () => {
 
     assert.equal(result.code, 0, result.stderr);
     for (const pattern of [
-      /^  ✓ delayed\.build\.ts \((\d+\.\d{2})s\)$/m,
-      /^Build complete \((\d+\.\d{2})s\)$/m,
+      /^  \[delayed\.build\.ts\] ✓ Complete \((\d+\.\d{2})s\)$/m,
+      /^\[build\] Complete \((\d+\.\d{2})s\)$/m,
       /^command managed success \((\d+\.\d{2})s\)$/m,
     ]) {
       const elapsed = result.stdout.match(pattern);
@@ -2007,13 +2005,13 @@ describe("manager CLI", () => {
     assert.equal(result.code, 1);
     assert.match(result.stderr, /hook-error\n/);
     assert.match(result.stderr, /local build hook failed: 01-fail\.build\.ts/);
-    assert.match(result.stdout, /^Build started$/m);
-    assert.match(result.stdout, /^  Running 01-fail\.build\.ts$/m);
-    assert.match(result.stdout, /^  ✗ 01-fail\.build\.ts \(\d+\.\d{2}s\)$/m);
-    assert.match(result.stdout, /^Build failed \(\d+\.\d{2}s\)$/m);
+    assert.match(result.stdout, /^\[build\] Started$/m);
+    assert.match(result.stdout, /^  \[01-fail\.build\.ts\] Started$/m);
+    assert.match(result.stdout, /^  \[01-fail\.build\.ts\] ✗ Failed \(\d+\.\d{2}s\)$/m);
+    assert.match(result.stdout, /^\[build\] Failed \(\d+\.\d{2}s\)$/m);
     assert.match(result.stdout, /^command apply failure \(\d+\.\d{2}s\)$/m);
-    assert.doesNotMatch(result.stdout, /^  Running 02-late\.build\.ts$/m);
-    assert.doesNotMatch(result.stdout, /^stage apply start$/m);
+    assert.doesNotMatch(result.stdout, /^  \[02-late\.build\.ts\] Started$/m);
+    assert.doesNotMatch(result.stdout, /^\[apply\] Started$/m);
     assert.equal(existsSync(join(distRoot, "late.txt")), false);
     assert.equal(existsSync(join(homeRoot, "file.txt")), false);
     assert.equal(existsSync(join(homeRoot, "done.txt")), false);
@@ -2028,7 +2026,7 @@ describe("manager CLI", () => {
 
     assert.equal(result.code, 1);
     assert.match(result.stderr, /home root is not a directory:/);
-    assert.match(result.stdout, /^Build complete \(\d+\.\d{2}s\)$/m);
+    assert.match(result.stdout, /^\[build\] Complete \(\d+\.\d{2}s\)$/m);
     assert.match(result.stdout, /^stage diff failure \(\d+\.\d{2}s\)$/m);
     assert.match(result.stdout, /^command diff failure \(\d+\.\d{2}s\)$/m);
   });

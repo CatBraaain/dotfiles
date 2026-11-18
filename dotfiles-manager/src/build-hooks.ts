@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { compareCodeUnits } from "./compare.ts";
 import {
   ensureHookDirectory,
+  forwardHookOutput,
   removeEmptyHookDirectories,
   removeHookSnapshot,
   writeHookSnapshot,
@@ -16,7 +17,6 @@ export type HookEvent = (
   path: string,
   status: "start" | "success" | "failure",
   elapsedSeconds: number,
-  stdoutNeedsNewline?: boolean,
 ) => void;
 
 export async function collectHooks(distDir: string): Promise<Hook[]> {
@@ -78,7 +78,6 @@ async function runHook(
 ): Promise<void> {
   const relativePath = hookRelativePath(hook);
   const started = performance.now();
-  const stdoutState = { needsNewline: false };
   onHookEvent?.(relativePath, "start", 0);
   try {
     const createdDirectories = await ensureHookDirectory(hookDistDir, distDir);
@@ -99,7 +98,6 @@ async function runHook(
           },
           relativePath,
           "local build hook",
-          onHookEvent ? stdoutState : undefined,
         );
       } finally {
         await removeHookSnapshot(snapshotPath, distDir);
@@ -107,19 +105,9 @@ async function runHook(
     } finally {
       await removeEmptyHookDirectories(createdDirectories);
     }
-    onHookEvent?.(
-      relativePath,
-      "success",
-      (performance.now() - started) / 1000,
-      stdoutState.needsNewline,
-    );
+    onHookEvent?.(relativePath, "success", (performance.now() - started) / 1000);
   } catch (error) {
-    onHookEvent?.(
-      relativePath,
-      "failure",
-      (performance.now() - started) / 1000,
-      stdoutState.needsNewline,
-    );
+    onHookEvent?.(relativePath, "failure", (performance.now() - started) / 1000);
     throw error;
   }
 }
@@ -130,23 +118,15 @@ async function runChildProcess(
   env: Record<string, string | undefined>,
   relativePath: string,
   kind: string,
-  stdoutState?: { needsNewline: boolean },
 ): Promise<void> {
   const proc = Bun.spawn(command, {
     cwd,
     env,
     stdin: "ignore",
-    stdout: stdoutState ? "pipe" : "inherit",
-    stderr: "inherit",
+    stdout: "pipe",
+    stderr: "pipe",
   });
-  const forwardStdout = async () => {
-    if (!stdoutState || !proc.stdout) return;
-    for await (const chunk of proc.stdout) {
-      await Bun.write(Bun.stdout, chunk);
-      if (chunk.length > 0) stdoutState.needsNewline = chunk[chunk.length - 1] !== 10;
-    }
-  };
-  const [exitCode] = await Promise.all([proc.exited, forwardStdout()]);
+  const exitCode = await forwardHookOutput(proc, relativePath);
   if (exitCode !== 0) {
     const reason = proc.signalCode ? `signal ${proc.signalCode}` : `exit code ${exitCode}`;
     throw new Error(`${kind} failed: ${relativePath} (${reason})`);

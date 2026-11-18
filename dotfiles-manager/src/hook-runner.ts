@@ -5,6 +5,49 @@ import { mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
+export async function forwardHookOutput(
+  proc: Bun.Subprocess<"ignore", "pipe", "pipe">,
+  path: string,
+): Promise<number> {
+  const pending = [
+    proc.exited,
+    forwardLines(proc.stdout, Bun.stdout, path),
+    forwardLines(proc.stderr, Bun.stderr, path),
+  ] as const;
+  try {
+    const [exitCode] = await Promise.all(pending);
+    return exitCode;
+  } catch (error) {
+    proc.kill();
+    await Promise.allSettled(pending);
+    throw error;
+  }
+}
+
+async function forwardLines(
+  stream: AsyncIterable<Uint8Array>,
+  destination: Bun.BunFile,
+  path: string,
+): Promise<void> {
+  const prefix = Buffer.from(`  [${path}] `);
+  const newline = 10;
+  let atLineStart = true;
+  for await (const chunk of stream) {
+    const parts: Uint8Array[] = [];
+    let start = 0;
+    while (start < chunk.length) {
+      if (atLineStart) parts.push(prefix);
+      const newlineIndex = chunk.indexOf(newline, start);
+      const end = newlineIndex === -1 ? chunk.length : newlineIndex + 1;
+      parts.push(chunk.subarray(start, end));
+      atLineStart = newlineIndex !== -1;
+      start = end;
+    }
+    if (parts.length > 0) await Bun.write(destination, Buffer.concat(parts));
+  }
+  if (!atLineStart) await Bun.write(destination, "\n");
+}
+
 export async function ensureHookDirectory(directory: string, rootDir: string): Promise<string[]> {
   const createdDirectories: string[] = [];
   for (

@@ -44,40 +44,49 @@ export async function main(
 
 async function logBuild(root: string, homeRoot: string, wsl?: WslConnection): Promise<void> {
   const started = performance.now();
-  console.log("Build started");
+  console.log("[build] Started");
   try {
     await build(root, undefined, homeRoot, {
-      onHookEvent: (path, status, elapsedSeconds, stdoutNeedsNewline) => {
+      onHookEvent: (path, status, elapsedSeconds) => {
         if (status === "start") {
-          console.log(`  Running ${path}`);
+          console.log(`  [${path}] Started`);
           return;
         }
-        if (stdoutNeedsNewline) console.log();
-        console.log(
-          `  ${status === "success" ? "✓" : "✗"} ${path} (${elapsedSeconds.toFixed(2)}s)`,
-        );
+        const outcome = status === "success" ? "✓ Complete" : "✗ Failed";
+        console.log(`  [${path}] ${outcome} (${elapsedSeconds.toFixed(2)}s)`);
       },
-      onPhase: (phase, elapsedSeconds) => console.log(`  ${phase} (${elapsedSeconds.toFixed(2)}s)`),
+      onPhase: (phase, elapsedSeconds) =>
+        console.log(`  [build] ${phase} (${elapsedSeconds.toFixed(2)}s)`),
       connection: wsl,
     });
-    console.log(`Build complete (${elapsedSeconds(started)}s)`);
+    console.log(`[build] Complete (${elapsedSeconds(started)}s)`);
   } catch (error) {
-    console.log(`Build failed (${elapsedSeconds(started)}s)`);
+    console.log(`[build] Failed (${elapsedSeconds(started)}s)`);
     throw error;
   }
 }
 
 async function logStage(name: string, action: () => Promise<number>): Promise<number> {
   const started = performance.now();
-  console.log(`stage ${name} start`);
+  console.log(name === "apply" ? "[apply] Started" : `stage ${name} start`);
   try {
     const code = await action();
-    logElapsed(`stage ${name}`, code === 0 ? "success" : "failure", started);
+    logStageOutcome(name, code === 0 ? "success" : "failure", started);
     return code;
   } catch (error) {
-    logElapsed(`stage ${name}`, "failure", started);
+    logStageOutcome(name, "failure", started);
     throw error;
   }
+}
+
+function logStageOutcome(name: string, status: "success" | "failure", started: number): void {
+  if (name === "apply") {
+    console.log(
+      `[apply] ${status === "success" ? "Complete" : "Failed"} (${elapsedSeconds(started)}s)`,
+    );
+    return;
+  }
+  logElapsed(`stage ${name}`, status, started);
 }
 
 function logElapsed(label: string, status: "success" | "failure", started: number): void {

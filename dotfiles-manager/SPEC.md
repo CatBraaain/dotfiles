@@ -42,24 +42,25 @@ buildステージは、内部で次の順に処理する。
 
 内部CLI の `apply` は、適用ステージの差分検知後に `diff: <内訳> (<秒>s)` と §差分表示 に従う差分を表示し、続けて `Apply? [y/N]` を stdout に表示して標準入力から 1行を読む。回答の前後の空白を除いた値が大文字小文字を問わず `y` のときだけ、適用と applyスクリプトの実行へ進む。`y` 以外の回答、または標準入力が回答の前に終端に達したときは `apply aborted` を表示し、home を変更せずapplyスクリプトを実行せず、終了コード0 で終了する。`--yes` を指定したときは確認を行わず、差分の表示の後に直ちに適用へ進む。`--yes` は `apply` に対してのみ指定でき、`diff`・`managed` に対する指定は使用方法を表示して非0 で終了する。
 
-内部CLI の `apply` / `diff` / `managed` では、build の開始に `Build started`、成功時に `Build complete (<秒>s)`、失敗時に `Build failed (<秒>s)` を stdout に表示する。実行する各buildフックの開始には `  Running <path>`、成功時には `  ✓ <path> (<秒>s)`、失敗時には `  ✗ <path> (<秒>s)` を表示する。`<path>` はフックの dist相対パスであり、フック行の先頭には半角スペースを 2個置く。build の各フェーズの完了時には `  <フェーズ> (<秒>s)` をフック行と同じインデントで表示する。`<フェーズ>` は dist再構築の `rebuild dist`、パス対応表の `path map`、外部取得の `externals`、merge変換の `merge`、置換sidecar の `replace` であり、行は実行順に現れる。フック自身の stdout / stderr は加工せずに転送し、stdout が改行で終わらない場合は、後続の完了行または失敗行を新しい行に表示する。
+内部CLI の `apply` / `diff` / `managed` では、build の開始に `[build] Started`、成功時に `[build] Complete (<秒>s)`、失敗時に `[build] Failed (<秒>s)` を stdout に表示する。実行する各buildフックの開始には `  [<path>] Started`、成功時には `  [<path>] ✓ Complete (<秒>s)`、失敗時には `  [<path>] ✗ Failed (<秒>s)` を表示する。`<path>` はフックの dist相対パスであり、フック行の先頭には半角スペースを 2個置く。build の各フェーズの完了時には `  [build] <フェーズ> (<秒>s)` をフック行と同じインデントで表示する。`<フェーズ>` は dist再構築の `rebuild dist`、パス対応表の `path map`、外部取得の `externals`、merge変換の `merge`、置換sidecar の `replace` であり、行は実行順に現れる。フック自身の stdout / stderr は §フックシステム の出力規則に従う。
 
-build、フック、フェーズの秒数はそれぞれの開始から数え、小数第2位まで表示する。後続のコマンド別ステージ（apply / diff / managed）は開始時に `stage <name> start`、成功または失敗時に `stage <name> <success|failure> (<秒>s)` を表示する。最後に `command <name> <success|failure> (<秒>s)` をコマンド開始からの経過秒数とともに stdout に表示する。ログは差分表示や `managed` のパス一覧と同じstdout に現れる。失敗時のエラー表示先は stderr、終了コードは従来どおりとする。引数が不正な場合は build前に終了し、経過時間ログを出さない。
+build、フック、フェーズの秒数はそれぞれの開始から数え、小数第2位まで表示する。後続の applyステージは開始時に `[apply] Started`、成功時に `[apply] Complete (<秒>s)`、失敗時に `[apply] Failed (<秒>s)` を表示する。diff / managedステージは開始時に `stage <name> start`、成功または失敗時に `stage <name> <success|failure> (<秒>s)` を表示する。最後に `command <name> <success|failure> (<秒>s)` をコマンド開始からの経過秒数とともに stdout に表示する。ログは差分表示や `managed` のパス一覧と同じstdout に現れる。失敗時のエラー表示先は stderr、終了コードは従来どおりとする。引数が不正な場合は build前に終了し、経過時間ログを出さない。
 
 内部CLI はロックを取得せず、同一workspace・home の同時実行を排他しない。`src/build.ts`、export関数、`src/diff.ts` と `src/apply.ts` の直接CLI、単独フック、手動Git も同様に排他しない。
 
 例えば `diff` が成功した場合のログは次の形式になる（差分表示は省略）。
 
 ```text
-Build started
-  rebuild dist (0.31s)
-  path map (0.01s)
-  externals (0.02s)
-  merge (0.00s)
-  replace (0.00s)
-  Running .config/foo.build.ts
-  ✓ .config/foo.build.ts (0.42s)
-Build complete (1.20s)
+[build] Started
+  [build] rebuild dist (0.31s)
+  [build] path map (0.01s)
+  [build] externals (0.02s)
+  [build] merge (0.00s)
+  [build] replace (0.00s)
+  [.config/foo.build.ts] Started
+  [.config/foo.build.ts] Compiling...
+  [.config/foo.build.ts] ✓ Complete (0.42s)
+[build] Complete (1.20s)
 stage diff start
 stage diff success (0.08s)
 command diff success (1.28s)
@@ -102,7 +103,7 @@ dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ign
 
 通常フックだけの構成では、親フォルダのフックを子孫より先に実行する従来の順序を保つ。ファイル名の prefix（`01-` など）は、同じフォルダの通常フック同士、または postフック同士の順序を制御する。
 
-フックが終了コード非0 で終了した、シグナルで終了した、またはエラーが発生したとき、エラーメッセージにフックのパス変換後の dist相対パスを含めて異常終了する。フックの stdout と stderr は親プロセスの同じ出力へ転送する。エラー発生後は後続のフックを実行しない。dist の rollback と staging による原子的な置換は行わない。
+フックが終了コード非0 で終了した、シグナルで終了した、またはエラーが発生したとき、エラーメッセージにフックのパス変換後の dist相対パスを含めて異常終了する。フックの stdout と stderr は §フックシステム の出力規則で転送する。エラー発生後は後続のフックを実行しない。dist の rollback と staging による原子的な置換は行わない。
 
 ## build: パス対応表
 
@@ -752,6 +753,17 @@ dist の `<name>.executable` ファイルは、home の `<name>` に owner実行
 
 フックは独立した bun プロセスとして直接実行される。実行プロセスには、通常の親プロセス環境に加えて環境変数で `DOTFILES_DIST_DIR`（distルートの絶対パス）、`DOTFILES_HOME_ROOT`（homeルートの絶対パス）、`DOTFILES_MANAGER_SRC`（dotfiles-managerの `src` ディレクトリの絶対パス）を渡す。build / apply のフックが必要とする外部パッケージは、実行時に Bun の auto-install で解決する。auto-install は依存のバージョン固定ができない。
 
+### フックの出力
+
+build / apply の通常・postフック自身の出力は、各行の先頭に `[<path>]` ラベルを付けて実行中に転送する。`<path>` は実行元フックの dist相対パスであり、ラベルの前に半角スペース2個、後に半角スペース1個を置く。stdout は親の stdout、stderr は親の stderr へ転送し、それぞれの出力内の順序と、元の本文の字下げを保つ。フックが起動したコマンドの出力も、そのフックの出力として同じラベルを使う。
+
+| フックの出力 | 表示 |
+| --- | --- |
+| 複数行 | 各行に同じ接頭辞を付ける。出力の分割位置によらず、本文とラベルが欠落・重複しない |
+| 空行 | 接頭辞を付けた空行を表示する |
+| 出力がない | 行を追加しない |
+| 末尾改行のない出力 | 最終行にも接頭辞を付け、終了時に改行を補い、後続のログを新しい行に表示する |
+
 ## applyスクリプト
 
 | 条件 | 操作 | 結果 |
@@ -767,7 +779,7 @@ dist の `<name>.executable` ファイルは、home の `<name>` に owner実行
 
 これにより、各 postフックは全通常フックと子孫の postフックの完了後に実行される。通常フックだけの構成でも、postフックを含む構成でも、通常フック同士の相対順序は従来どおりである。件数表示の `apply scripts: <数> scripts (<秒>s)` は通常・post の合計を数える。
 
-各applyスクリプトの処理完了時に、成功なら `  ✓ <path> (<秒>s)`、失敗なら `  ✗ <path> (<秒>s)` を stdout に表示する。`<path>` は dist相対パスで、行頭には半角スペースを2個置く。秒数は、そのスクリプトの準備・実行・後始末を含む経過時間を小数第2位まで表示する。未対応拡張子の場合も失敗行を表示する。
+各applyスクリプトの処理開始時に `  [<path>] Started`、処理完了時に成功なら `  [<path>] ✓ Complete (<秒>s)`、失敗なら `  [<path>] ✗ Failed (<秒>s)` を stdout に表示する。`<path>` は dist相対パスで、行頭には半角スペースを2個置く。秒数は、そのスクリプトの準備・実行・後始末を含む経過時間を小数第2位まで表示する。未対応拡張子の場合も失敗行を表示する。
 
 先行スクリプトが検出済みスクリプトを移動または削除しても、収集時に確定した順序と内容で実行する。スクリプトは元の dist相対パスを基準に読み込み、cwd はそのパスに対応するhomeディレクトリとする。実行は、検出時の内容のスナップショットを元の distフォルダへ書いて独立した bun プロセスとして直接実行するという形であり、実行プロセスの環境変数は §フックシステム のとおりである。`import.meta.dir` は元の distフォルダのスナップショットを参照する。applyスクリプトの実行は適用の後の applyライフサイクルの一部であり、`just diff` では実行しない。スクリプトの失敗（未対応拡張子を含む）は通常・post の別によらず後続の実行を止めず、スクリプトごとにパスと理由を含む1行（`apply script failed: <dist相対パス> (exit code <N>)` など）を stderr に表示する。失敗が1件以上あるときの適用全体の終了コードは非0 である。
 

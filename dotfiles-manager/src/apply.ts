@@ -13,6 +13,7 @@ import { collectDifferences, main as diffMain, type DiffEntry, type DiffResult }
 import { renderDiffs } from "./diff-render.ts";
 import {
   ensureHookDirectory,
+  forwardHookOutput,
   removeEmptyHookDirectories,
   removeHookSnapshot,
   writeHookSnapshot,
@@ -106,9 +107,10 @@ export async function runApplyScripts(
   const failures: string[] = [];
   for (const script of scripts) {
     const started = performance.now();
+    writeLine(`  [${script.distPath}] Started`);
     if (!script.distPath.endsWith(".ts")) {
       failures.push(`apply hook has unsupported extension: ${script.distPath}`);
-      writeLine(`  ✗ ${script.distPath} (${elapsedSeconds(started)}s)`);
+      writeLine(`  [${script.distPath}] ✗ Failed (${elapsedSeconds(started)}s)`);
       continue;
     }
     const cwd = join(homeRoot, script.homeFolderRel);
@@ -131,6 +133,7 @@ export async function runApplyScripts(
           DOTFILES_MANAGER_SRC: import.meta.dir,
         },
         label,
+        script.distPath,
       );
     } catch (error) {
       errors.push(messageOf(error));
@@ -151,7 +154,7 @@ export async function runApplyScripts(
       failures.push(diagnostic.startsWith(label) ? diagnostic : `${label}: ${diagnostic}`);
     }
     writeLine(
-      `  ${errors.length === 0 ? "✓" : "✗"} ${script.distPath} (${elapsedSeconds(started)}s)`,
+      `  [${script.distPath}] ${errors.length === 0 ? "✓ Complete" : "✗ Failed"} (${elapsedSeconds(started)}s)`,
     );
   }
   return failures;
@@ -369,15 +372,16 @@ async function spawnChild(
   cwd: string,
   env: Record<string, string | undefined>,
   label: string,
+  path: string,
 ): Promise<void> {
   const proc = Bun.spawn(command, {
     cwd,
     env,
     stdin: "ignore",
-    stdout: "inherit",
-    stderr: "inherit",
+    stdout: "pipe",
+    stderr: "pipe",
   });
-  const exitCode = await proc.exited;
+  const exitCode = await forwardHookOutput(proc, path);
   if (exitCode !== 0) {
     const reason = proc.signalCode ? `signal ${proc.signalCode}` : `exit code ${exitCode}`;
     throw new Error(`${label} (${reason})`);
