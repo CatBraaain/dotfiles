@@ -32,7 +32,8 @@ type Operation =
   | { kind: "history"; cwd: string | undefined }
   | { kind: "workspace"; action: "register" | "unregister"; cwd: string }
   | { kind: "snapshot"; generation?: string }
-  | { kind: "restore" };
+  | { kind: "restore" }
+  | { kind: "restart"; force: boolean };
 type Candidate = { id: string; cwd: string };
 type ManagedSession = Candidate & { session: string; temporary: boolean };
 type StateSource = {
@@ -144,22 +145,37 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux workspace register <cwd>
   pi-mux workspace unregister <cwd>
   pi-mux snapshot [server-generation]
-  pi-mux restore`);
+  pi-mux restore
+  pi-mux restart [--force]`);
       return 0;
     }
     if (operation.kind === "state") {
+      let config: TmuxConfig | undefined;
       try {
-        const config = tmuxConfiguration();
-        prepareDirectory(config.stateDirectory);
+        const activeConfig = tmuxConfiguration();
+        config = activeConfig;
+        prepareDirectory(activeConfig.stateDirectory);
         return await withLock(
-          config,
+          activeConfig,
           async () => {
-            await notifyState(config, operation.id, operation.source, operation.notification);
+            await notifyState(activeConfig, operation.id, operation.source, operation.notification);
             return 0;
           },
           "try",
         );
       } catch (error) {
+        if (
+          error instanceof LockBusyError &&
+          config &&
+          !operation.notification.clear &&
+          operation.notification.state !== "waiting-user"
+        ) {
+          try {
+            await deferRestartBlockingState(config, operation.id, operation.source);
+          } catch (deferredError) {
+            console.error(`pi-mux: state ${operation.id}: ${errorMessage(deferredError)}`);
+          }
+        }
         console.error(`pi-mux: state ${operation.id}: ${errorMessage(error)}`);
         return error instanceof LockBusyError ? 75 : 1;
       }
@@ -201,7 +217,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       });
     }
     const config = configuration();
+    if (operation.kind === "restart" && process.env.TMUX?.split(",")[0] === config.socket)
+      throw new Error("Run restart from a terminal outside the dedicated tmux server");
     prepareDirectory(config.stateDirectory);
+    if (operation.kind === "restart") return await restartServer(config, operation.force);
     const result = await withLock(config, async () => {
       if (operation.kind === "snapshot") {
         await snapshotSessions(config, operation.generation);
@@ -321,11 +340,13 @@ export function parseOperation(argv: string[]): Operation {
     if (argv.length === 1 || (argv.length === 3 && cwd !== undefined && isAbsolute(cwd)))
       return { kind: "history", cwd };
   }
+  if (argv[0] === "restart" && (argv.length === 1 || (argv.length === 2 && argv[1] === "--force")))
+    return { kind: "restart", force: argv[1] === "--force" };
   if (argv.length === 1 && argv[0] === "restore") return { kind: "restore" };
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | close [--if-temporary] <session-id> | list | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] | history [--cwd <absolute-cwd>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore]",
+    "usage: pi-mux [new [--detached] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | close [--if-temporary] <session-id> | list | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] | history [--cwd <absolute-cwd>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | restart [--force]]",
   );
 }
 
@@ -412,12 +433,11 @@ async function promoteSession(config: TmuxConfig, session: string, id: string): 
     await tmux(config, ["set-environment", "-u", "-t", session, "PI_TMUX_TEMPORARY"]);
 }
 
-async function notifyState(
+async function verifyStateSource(
   config: TmuxConfig,
   id: string,
   source: StateSource,
-  notification: StateNotification,
-): Promise<void> {
+): Promise<string> {
   if (source.socket !== config.socket)
     throw new Error("Source socket does not match the dedicated socket");
   const server = await tmux(config, [
@@ -439,6 +459,29 @@ async function notifyState(
   ).stdout.trimEnd();
   if (!/^\$\d+$/.test(session)) throw new Error("Source server or pane lifetime no longer matches");
   await verifyStateTarget(config, id, source);
+  return session;
+}
+
+async function deferRestartBlockingState(
+  config: TmuxConfig,
+  id: string,
+  source: StateSource,
+): Promise<void> {
+  await verifyStateSource(config, id, source);
+  const pending = guardedTmuxLine(source.pane, sourceEntityGuard(config, source), [
+    ["set-option", "-p", "-t", source.pane, "@pi-mux-pending-restart-blocker", "1"],
+    ["set-option", "-g", "@pi-mux-restart-veto", randomUUID()],
+  ]);
+  await tmux(config, ["source-file", "-"], false, `${pending}\n`);
+}
+
+async function notifyState(
+  config: TmuxConfig,
+  id: string,
+  source: StateSource,
+  notification: StateNotification,
+): Promise<void> {
+  const session = await verifyStateSource(config, id, source);
   const owner = JSON.stringify({ id, ...source });
   if (notification.clear) {
     const currentOwner = await tmux(config, [
@@ -566,6 +609,7 @@ async function runGuardedStateCommands(
         [
           ["set-option", "-pu", "-t", pane, "@pi_session_state"],
           ["set-option", "-pu", "-t", pane, "@pi-mux-state-source"],
+          ["set-option", "-pu", "-t", pane, "@pi-mux-pending-restart-blocker"],
           ["display-message", "-p", "PI_MUX_STATE_WRITTEN"],
         ],
         "PI_MUX_SOURCE_UNVERIFIED",
@@ -585,6 +629,7 @@ async function runGuardedStateCommands(
         [
           ["set-option", "-p", "-t", pane, "@pi-mux-state-source", plan.owner],
           ["set-option", "-p", "-t", pane, "@pi_session_state", stateValue],
+          ["set-option", "-pu", "-t", pane, "@pi-mux-pending-restart-blocker"],
           ["display-message", "-p", "PI_MUX_STATE_WRITTEN"],
         ],
         "PI_MUX_SOURCE_UNVERIFIED",
@@ -674,6 +719,145 @@ async function withLock<T>(
     }
   }
   throw new Error("Timed out waiting for another pi-mux operation");
+}
+
+type ServerLifetime = { pid: number; started: string; generation: string };
+
+async function serverLifetime(config: TmuxConfig): Promise<ServerLifetime | undefined> {
+  const result = await tmux(config, ["display-message", "-p", "#{pid}"], true);
+  if (result.exitCode !== 0) {
+    if (serverIsAbsent(config, result.stderr)) return undefined;
+    throw new Error(`Cannot inspect dedicated server: ${result.stderr.trim()}`);
+  }
+  const pid = Number(result.stdout.trim());
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("Invalid dedicated server PID");
+  const started = processStartTime(pid);
+  if (!started) throw new Error("Dedicated server exited during inspection");
+  return { pid, started, generation: await serverOption(config, "@pi-mux-generation") };
+}
+
+async function verifyRestartServer(config: TmuxConfig, expected: ServerLifetime): Promise<void> {
+  const current = await serverLifetime(config);
+  if (
+    !current ||
+    current.pid !== expected.pid ||
+    current.started !== expected.started ||
+    current.generation !== expected.generation
+  )
+    throw new Error("Dedicated server changed during restart");
+}
+
+async function restartIsWaiting(config: TmuxConfig): Promise<boolean> {
+  const panes = await livePanes(config, "list");
+  const managed = await managedSessions(config);
+  for (const session of managed)
+    if (!panes.some((pane) => pane.session === session.session && pane.id === session.id))
+      return false;
+  const states = await tmuxBatch(
+    config,
+    panes.flatMap((pane) => [
+      ["show-options", "-pqv", "-t", pane.pane, "@pi_session_state"],
+      ["show-options", "-pqv", "-t", pane.pane, "@pi-mux-pending-restart-blocker"],
+    ]),
+  );
+  return panes.every((pane, index) => {
+    const result = states[index * 2]!;
+    const pending = states[index * 2 + 1]!;
+    if (pending.exitCode !== 0) throw new Error(`Cannot inspect pending restart state: ${pane.id}`);
+    if (pending.stdout.trim()) return false;
+    if (result.exitCode !== 0) throw new Error(`Cannot inspect restart state: ${pane.id}`);
+    const state = parseSessionState(result.stdout.trimEnd(), pane.id);
+    return pane.startup !== "accepted" && state === "waiting-user";
+  });
+}
+
+async function restartServer(config: Config, force: boolean): Promise<number> {
+  const original = await withLock(config, () => serverLifetime(config));
+  while (true) {
+    const result = await withLock(config, async () => {
+      if (!original) {
+        if (await serverLifetime(config))
+          throw new Error("Dedicated server changed during restart");
+        prepareDirectory(config.directory);
+        return (await startAndRestore(config, true)) > 0 ? 2 : 0;
+      }
+      await verifyRestartServer(config, original);
+      readSnapshot(config);
+      if (!force && !(await restartIsWaiting(config))) return undefined;
+      const panes = await livePanes(config, "list");
+      const initializing = await initializingPanes(config, await managedSessions(config), panes);
+      uniqueCandidates(panes);
+      if (new Set(panes.map((pane) => pane.id)).size !== panes.length)
+        throw new Error("Multiple pi processes match a restart conversation ID");
+      if (!original.generation)
+        throw new Error("Dedicated server has not been initialized by pi-mux");
+      await tmux(config, ["set-option", "-g", "@pi-mux-restart-veto", ""]);
+      await snapshotSessions(config, original.generation, "repair");
+      const saved = readSnapshot(config);
+      if (!saved || saved.generation !== original.generation)
+        throw new Error("Cannot confirm restart snapshot");
+      await setRestoringSessions(config, saved.sessions);
+      await verifyRestartServer(config, original);
+      if (!force && !(await restartIsWaiting(config))) return undefined;
+      const generationCommand = shellCommand([
+        config.tmux,
+        "-S",
+        config.socket,
+        "show-options",
+        "-gqv",
+        "@pi-mux-generation",
+      ]);
+      const guard = `[ "#{pid}" = ${original.pid} ] && [ "$(sed 's/.*) //' /proc/${original.pid}/stat | awk '{print $20}')" = ${shLiteral(original.started)} ] && [ "$(${generationCommand})" = ${shLiteral(original.generation)} ]`;
+      const targets = [...panes, ...initializing].map((pane) => ({
+        pid: pane.pid,
+        started: processStartTime(pane.pid),
+      }));
+      const stopCommand = force
+        ? "kill-server"
+        : tmuxArguments([
+            "if-shell",
+            "-F",
+            "#{==:#{@pi-mux-restart-veto},}",
+            "kill-server",
+            "display-message -p PI_MUX_RESTART_WAIT",
+          ]);
+      const stopped = await tmux(config, [
+        "if-shell",
+        guard,
+        stopCommand,
+        "display-message -p PI_MUX_RESTART_SERVER_CHANGED",
+      ]);
+      if (stopped.stdout.includes("PI_MUX_RESTART_WAIT")) return undefined;
+      if (stopped.stdout.includes("PI_MUX_RESTART_SERVER_CHANGED"))
+        throw new Error("Dedicated server changed before restart stop");
+      for (const target of targets) {
+        if (target.started === undefined || processStartTime(target.pid) !== target.started)
+          continue;
+        try {
+          process.kill(target.pid, "SIGTERM");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+        }
+      }
+      const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+      while (
+        targets.some(
+          (target) =>
+            target.started !== undefined && processStartTime(target.pid) === target.started,
+        )
+      ) {
+        if (Date.now() >= deadline)
+          throw new Error("Timed out waiting for pi to exit during restart");
+        await Bun.sleep(POLL_INTERVAL_MS);
+      }
+      if (await serverLifetime(config))
+        throw new Error("Dedicated server did not remain stopped during restart");
+      prepareDirectory(config.directory);
+      return (await startAndRestore(config, true)) > 0 ? 2 : 0;
+    });
+    if (result !== undefined) return result;
+    await Bun.sleep(POLL_INTERVAL_MS);
+  }
 }
 
 async function startAndRestore(
@@ -1601,7 +1785,8 @@ function processStartTime(pid: number): string | undefined {
   try {
     stat = readFileSync(`/proc/${pid}/stat`, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ESRCH") return undefined;
     throw error;
   }
   const started = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
