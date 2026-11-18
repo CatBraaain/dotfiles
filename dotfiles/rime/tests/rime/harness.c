@@ -4474,6 +4474,49 @@ static int full_list_index_of(const char* text) {
     return index;
 }
 
+static void test_noun_followed_by_separate_ka(void) {
+    static const struct { const char* input; const char* expected; } cases[] = {
+        { "honka", "本か" },
+        { "gakuseika", "学生か" },
+        { "densika", "電子か" },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        fresh_session();
+        type_text(cases[i].input);
+        press(kHenkan);
+        press(kSpace);
+        press_shift(kLeft);
+        check(preview_equals(cases[i].expected),
+              "a separate ka clause after a noun must initially display hiragana ka");
+        press(kRight);
+        press(kSpace);
+        check(active_reading_equals("か"),
+              "the resized final clause must contain only the reading ka");
+        press(kTab);
+        check(full_list_index_of("か") == 0,
+              "a separate ka clause after a noun must rank hiragana ka first");
+        check(full_list_index_of("下") >= 0 && full_list_index_of("化") >= 0,
+              "a separate ka clause must keep 下 and 化 selectable");
+    }
+}
+
+static void test_ka_preserves_whole_clause_and_standalone_ranking(void) {
+    static const struct { const char* input; const char* expected; } cases[] = {
+        { "bunka", "文化" },
+        { "tika", "地下" },
+        { "densika", "電子化" },
+        { "ka", "化" },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        fresh_session();
+        type_text(cases[i].input);
+        press(kHenkan);
+        press(kSpace);
+        check(preview_equals(cases[i].expected),
+              "whole-clause kanji and standalone ka must retain their normal first candidates");
+    }
+}
+
 static void test_bunsetsu_candidates_include_alternative_routes(void) {
     static const char* const alternatives[] = { "今日葉", "馨は", "徼は", "郷は", "矯は" };
     fresh_session();
@@ -5391,6 +5434,8 @@ int main(int argc, char* argv[]) {
         const char* name;
         void (*fn)(void);
     } tests[] = {
+        {"noun_followed_by_separate_ka", test_noun_followed_by_separate_ka},
+        {"ka_preserves_whole_clause_and_standalone_ranking", test_ka_preserves_whole_clause_and_standalone_ranking},
         {"unlearned_part_of_speech_ranking", test_unlearned_part_of_speech_ranking},
         {"bunsetsu_reopened_contextual_order", test_bunsetsu_reopened_contextual_order},
         {"learning_promotes_committed_candidate", test_learning_promotes_committed_candidate},
