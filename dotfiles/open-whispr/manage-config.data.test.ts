@@ -203,11 +203,11 @@ function verifyDictionaryDeclarations(): void {
   {
     const { dictionary } = loadManagedConfig(import.meta.dir);
     assert.ok(dictionary);
-    assert.equal(dictionary.length, 49);
-    assert.equal(dictionary.join(", ").length, 519);
+    assert.equal(dictionary.length, 32);
+    assert.equal(dictionary.join(", ").length, 300);
     assert.equal(
       sha256Hex(JSON.stringify(dictionary)),
-      "d45b094e59b3a50539931afbdbdc50e2848c9ff65e7afe242b8aa4c464e59708",
+      "082daeb3707712456b0fba15dcd18a53de1236be94a687e9ec8f596be179ba4a",
     );
   }
   const fixtureRoot = mkdtempSync(join(tmpdir(), "openwhispr-dictionary-input-"));

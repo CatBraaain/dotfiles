@@ -18,7 +18,7 @@ apply の実行で、`managed-keys.data.yaml` に宣言した localStorage キ�
 - 会議検出通知の無効化（`notifyMeetingDetection=false`）
 - 音声アシスタントの無効化（`useDictationAgent=false`）
 - 「. files」「.files」と文字起こしされる発話を「dotfiles」へ置換するスニペットの登録（`snippets`）
-- 専門固有語を優先した正規表記49語を個人辞書の完全一致正本として管理する（`dictionary`）。辞書は認識ヒントであり、宣言語どおりの認識を保証するものではない
+- 専門固有語を優先した正規表記を個人辞書の完全一致正本として管理する（`dictionary`）。語数・語の集合は `managed-keys.data.yaml` の宣言に従う。辞書は認識ヒントであり、宣言語どおりの認識を保証するものではない
 
 ## 要件・制約
 
