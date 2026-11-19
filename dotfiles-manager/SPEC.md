@@ -125,13 +125,13 @@ dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ign
 
 Windows で実行するbuild と内部CLI は、外部取得と GitAlias のために WSL接続を解決する。ソースworkspace が `\\wsl.localhost\<distro>\...` または `\\wsl$\<distro>\...` 上ならその distro、それ以外なら WSL の既定distro を使う。選択したdistro の既定ユーザー名・HOME と既存Bun の実行パスを取得し、以降の Git、`run_after`、mirror読み取りへ同じdistro/user/HOME を固定して渡す。接続の解決と Bun bridge の確認は dist再構築より前に行う。
 
-`wsl.exe` が実行環境に存在せず起動できないとき、Windows は WSL接続を使わず、§build: 外部取得 の Windowsローカルmirror で外部取得と GitAlias を行う。`wsl.exe` が存在しても distro・ユーザー・HOME・Bun・bridge のいずれかの解決や確認に失敗した場合は、Windowsローカルmirror へ切り替えず異常終了する。
+`wsl.exe` が実行環境に存在せず起動できないとき、および `wsl.exe` が存在してもディストリビューションが1つもインストールされていないとき、Windows は WSL接続を使わず、§build: 外部取得 の Windowsローカルmirror で外部取得と GitAlias を行う。ディストリビューションがインストールされているにもかかわらず distro・ユーザー・HOME・Bun・bridge のいずれかの解決や確認に失敗した場合は、Windowsローカルmirror へ切り替えず異常終了する。
 
 ## build: 外部取得
 
 すべてのパス対応表の適用後、残っている `external.data.yaml` をルートから親フォルダ優先で処理する。`dotfiles/` 以下の各フォルダに置ける。親の対応表で削除された設定は処理せず、移動された設定は移動後のフォルダから読み取る。取得先の `destination` は設定を置いたフォルダからの相対パス。したがって、Linux と Windows では移動後の Rimeフォルダへ辞書を取得し、macOS では Rime の設定が削除されるため取得しない。`.agents` が削除されるWindows と macOS では skills の外部取得および `run_after` を行わない。
 
-`repos` の各リポジトリは GitHub mirror を使う。mirror の場所と更新方法は、Windows では `wsl.exe` が存在するかどうかで決まる。Linux/macOS と、`wsl.exe` が存在しないWindows は、実行環境の home直下の `mirrors/github.com/<owner>/<repo>`（Windows は Windows側home）をローカルGit で使う。それ以外の Windows は選択済みWSLユーザーの `<HOME>/mirrors/github.com/<owner>/<repo>` を使い、Git を WSL内で実行し、その完了後に同じmirror を UNC経由で読み取ってWindows dist へコピーする。いずれの経路でも既存mirror の移動・削除は行わない。
+`repos` の各リポジトリは GitHub mirror を使う。mirror の場所と更新方法は、Windows では WSL接続を解決できるかどうかで決まる（§Windows の WSL接続）。Linux/macOS と、WSL接続を解決できないWindows は、実行環境の home直下の `mirrors/github.com/<owner>/<repo>`（Windows は Windows側home）をローカルGit で使う。それ以外の Windows は選択済みWSLユーザーの `<HOME>/mirrors/github.com/<owner>/<repo>` を使い、Git を WSL内で実行し、その完了後に同じmirror を UNC経由で読み取ってWindows dist へコピーする。いずれの経路でも既存mirror の移動・削除は行わない。
 
 mirror がなければ shallow cloneし、存在するときは前回の取得から `ttlHours`（既定6時間）が経過すると `git pull --ff-only` で更新する。`BUILD_FORCE_PULL=1` は更新を強制する。Git pull が非0 を返したときは、mirror にアクセスできれば警告を表示して既存mirror を利用する。WSL/bridge の失敗は pull の警告として扱わず異常終了する。`entries` のファイルやフォルダを `destination` にコピーし、`run_after` が空でなく、clone または更新前後の HEAD に変更があった場合だけ、mirror cwd で `git clean -fdX` の後に `run_after` の argv配列を記載順に実行してからコピーする。WSL mirror を使うWindows ではこれらを同じWSL内で実行し、Windowsローカルmirror では Windows の mirror cwd で実行する。mirror の `.git/build-pull-time` に epochミリ秒を保存し、clone / 成功したpull（HEAD不変を含む）の後、`run_after` より前に更新する。TTL内の省略と失敗したpull では stamp を保持する。
 
@@ -139,7 +139,7 @@ mirror がなければ shallow cloneし、存在するときは前回の取得�
 
 同じ設定の repo は並列に処理し、失敗時は build を中断する。外部取得はローカルフックの実行ログに現れない。
 
-ルートの `.gitconfig.build.ts` は Linux と Windows で `GitAlias/gitalias` の同じGitHub mirror・既定6時間の更新規則を使い、`gitalias.txt` を dist の `.gitconfig` に追記する。Windows では `context.syncGithubMirror` を使い、WSL が使えるなら §Windows の WSL接続 の mirror を、`wsl.exe` が存在しなければ Windowsローカルmirror を使う。Linux ではフック内のローカル同期が home直下の mirror を同じ規則で同期する。同名の alias が `.gitconfig` に手書きされている場合は手書きの値を有効にする。macOS では追記しない。`.gitconfig` は別ファイルの `.gitconfig.alias` を includeしない。
+ルートの `.gitconfig.build.ts` は Linux と Windows で `GitAlias/gitalias` の同じGitHub mirror・既定6時間の更新規則を使い、`gitalias.txt` を dist の `.gitconfig` に追記する。Windows では `context.syncGithubMirror` を使い、WSL が使えるなら §Windows の WSL接続 の mirror を、WSL接続を解決できなければ Windowsローカルmirror を使う。Linux ではフック内のローカル同期が home直下の mirror を同じ規則で同期する。同名の alias が `.gitconfig` に手書きされている場合は手書きの値を有効にする。macOS では追記しない。`.gitconfig` は別ファイルの `.gitconfig.alias` を includeしない。
 
 ### 取得ファイルの除外
 

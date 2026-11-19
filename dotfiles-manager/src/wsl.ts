@@ -29,7 +29,10 @@ export async function resolveWsl(sourceRoot: string): Promise<WslConnection | un
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   }
-  if (!probe.ok) throw new Error(`WSL resolution failed: ${probe.stderr}`);
+  if (!probe.ok) {
+    if (await hasInstalledDistro()) throw new Error(`WSL resolution failed: ${probe.stderr}`);
+    return undefined;
+  }
   const [distro, user, home, bun] = probe.stdout.split(/\r?\n/);
   if (!distro || !user || !home?.startsWith("/") || !bun?.startsWith("/"))
     throw new Error(
@@ -41,6 +44,17 @@ export async function resolveWsl(sourceRoot: string): Promise<WslConnection | un
   const ready = await runWsl(connection, [bun, "--version"]);
   if (!ready.ok) throw new Error(`WSL Bun unavailable: ${ready.stderr}`);
   return connection;
+}
+
+async function hasInstalledDistro(): Promise<boolean> {
+  const list = await runProcess(["wsl.exe", "--list", "--quiet"]);
+  if (!list.ok) return false;
+  const utf16DistroNames = list.stdout
+    .replaceAll("\0", "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return utf16DistroNames.length > 0;
 }
 
 export function mirrorRoot(connection: WslConnection): string {
