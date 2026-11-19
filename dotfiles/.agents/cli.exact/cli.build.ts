@@ -35,10 +35,11 @@ async function compileCli(
   // The executable carries .executable so apply grants the owner exec bit
   // (spec §.executable の解釈); the --outfile must not collide with the source
   // folder, so build beside it and swap after removing the folder.
-  const buildPath = `${cliDir}.compile`;
+  const exeSuffix = process.platform === "win32" ? ".exe" : "";
+  const buildPath = `${cliDir}.compile${exeSuffix}`;
   await compileWithCache({ name, cliDir, entryPath: `${cliDir}/src/main.ts`, buildPath });
   await rm(cliDir, { recursive: true });
-  await rename(buildPath, `${cliDir}.executable`);
+  await rename(buildPath, `${cliDir}${exeSuffix}.executable`);
 }
 
 function managerSrcDir(): string {

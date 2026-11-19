@@ -6,7 +6,8 @@ async function main(): Promise<void> {
     join(managerSrcDir(), "compile-cache.ts")
   );
   const cliDir = join(process.cwd(), "pi-mux");
-  const buildPath = `${cliDir}.compile`;
+  const exeSuffix = process.platform === "win32" ? ".exe" : "";
+  const buildPath = `${cliDir}.compile${exeSuffix}`;
   await compileWithCache({
     name: "pi-mux",
     cliDir,
@@ -14,7 +15,7 @@ async function main(): Promise<void> {
     buildPath,
   });
   await rm(cliDir, { recursive: true });
-  await rename(buildPath, `${cliDir}.executable`);
+  await rename(buildPath, `${cliDir}${exeSuffix}.executable`);
 }
 
 function managerSrcDir(): string {
