@@ -1,12 +1,29 @@
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
 import {
+  TuiAltScreen,
   matchesKey,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
   type Component,
   type TUI,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
+
+// pi-tui enables mouse reporting only in the alt-screen TUI, so main-screen
+// overlays receive no wheel events unless SGR wheel tracking is enabled here.
+const ENABLE_MOUSE_TRACKING = "\x1b[?1000h\x1b[?1006h";
+const DISABLE_MOUSE_TRACKING = "\x1b[?1006l\x1b[?1000l";
+const WHEEL_SCROLL_LINES = 3;
+const SGR_WHEEL_PREFIX = "\x1b[<6";
+
+function wheelDirection(data: string): number | undefined {
+  if (!data.startsWith(SGR_WHEEL_PREFIX)) return undefined;
+  const tail = data.slice(SGR_WHEEL_PREFIX.length);
+  if (!/^[45];\d+;\d+M$/.test(tail)) return undefined;
+  return tail.startsWith("4") ? -1 : 1;
+}
 
 export async function showNewagentApproval(
   ui: ExtensionUIContext,
@@ -45,6 +62,7 @@ export class NewagentApprovalDialog implements Component {
   private bodyHeight = 1;
   private bodyLines: string[] = [];
   private readonly displayCells: { label: string; text: string }[];
+  private readonly ownsMouseTracking: boolean;
 
   constructor(
     private readonly tui: Pick<TUI, "terminal" | "requestRender">,
@@ -66,34 +84,65 @@ export class NewagentApprovalDialog implements Component {
           : `\\x${character.charCodeAt(0).toString(16).padStart(2, "0")}`,
       ),
     }));
+    this.ownsMouseTracking = !(tui instanceof TuiAltScreen);
+    if (this.ownsMouseTracking) this.tui.terminal.write(ENABLE_MOUSE_TRACKING);
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (event.type !== "wheel" || event.wheelDelta === undefined) return undefined;
+    const direction = Math.sign(event.wheelDelta);
+    if (direction === 0) return undefined;
+    this.scrollBy(direction * WHEEL_SCROLL_LINES);
+    return { handled: true };
   }
 
   handleInput(data: string): void {
+    const wheel = wheelDirection(data);
+    if (wheel !== undefined) {
+      this.scrollBy(wheel * WHEEL_SCROLL_LINES);
+      return;
+    }
     if (matchesKey(data, "escape")) {
-      this.done(undefined);
+      this.finish(undefined);
       return;
     }
     if (matchesKey(data, "return")) {
-      this.done(this.options[this.selectedIndex]);
+      this.finish(this.options[this.selectedIndex]);
       return;
     }
-    if (matchesKey(data, "tab")) {
-      this.selectedIndex = (this.selectedIndex + 1) % this.options.length;
-    } else if (matchesKey(data, "shift+tab")) {
-      this.selectedIndex = (this.selectedIndex + this.options.length - 1) % this.options.length;
-    } else if (matchesKey(data, "up")) {
-      this.scrollTop--;
-    } else if (matchesKey(data, "down")) {
-      this.scrollTop++;
-    } else if (matchesKey(data, "pageUp")) {
-      this.scrollTop -= this.bodyHeight;
-    } else if (matchesKey(data, "pageDown")) {
-      this.scrollTop += this.bodyHeight;
-    } else {
+    if (matchesKey(data, "down") || matchesKey(data, "tab")) {
+      this.moveSelection(1);
       return;
     }
+    if (matchesKey(data, "up") || matchesKey(data, "shift+tab")) {
+      this.moveSelection(-1);
+      return;
+    }
+    if (matchesKey(data, "pageUp")) {
+      this.scrollBy(-this.bodyHeight);
+      return;
+    }
+    if (matchesKey(data, "pageDown")) {
+      this.scrollBy(this.bodyHeight);
+      return;
+    }
+  }
+
+  private scrollBy(lines: number): void {
+    this.scrollTop += lines;
     this.clampScroll();
     this.tui.requestRender();
+  }
+
+  private moveSelection(delta: number): void {
+    const count = this.options.length;
+    this.selectedIndex = (this.selectedIndex + delta + count) % count;
+    this.tui.requestRender();
+  }
+
+  private finish(result: string | undefined): void {
+    if (this.ownsMouseTracking) this.tui.terminal.write(DISABLE_MOUSE_TRACKING);
+    this.done(result);
   }
 
   render(width: number): string[] {
@@ -106,7 +155,7 @@ export class NewagentApprovalDialog implements Component {
       );
     });
     const help = wrapTextWithAnsi(
-      "↑↓ / PgUp/PgDn: scroll • Tab/Shift+Tab: choose • Enter: confirm • Esc: deny",
+      "↑↓/Tab: choose • wheel/PgUp/PgDn: scroll • Enter: confirm • Esc: deny",
       innerWidth,
     );
     const borderRows = 4;

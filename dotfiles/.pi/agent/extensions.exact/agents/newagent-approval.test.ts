@@ -251,24 +251,27 @@ for (const mode of ["regular", "fullscreen"] as const) {
       });
     }
 
-    it("scrolls one line and one page in both directions without changing selection", () => {
+    it("scrolls by wheel and page in both directions without changing selection", () => {
       const harness = approvalHarness(
         mode,
         Array.from({ length: 100 }, (_, index) => `line-${index}`).join("\n"),
       );
       try {
         const start = harness.frame();
-        harness.terminal.input("\x1b[B");
+        harness.terminal.input("\x1b[<65;10;5M");
         const down = harness.frame();
         assert.ok(start[3]?.includes("┌─ prompt "));
         assert.ok(start[4]?.includes("line-0"));
-        assert.ok(down[3]?.includes("line-0"));
-        harness.terminal.input("\x1b[A");
+        assert.ok(down[4]?.includes("line-3"));
+        harness.terminal.input("\x1b[<64;10;5M");
         assert.deepEqual(harness.frame(), start);
+        const beforePress = harness.frame();
+        harness.terminal.input("\x1b[<0;10;5M");
+        assert.deepEqual(harness.frame(), beforePress);
         harness.terminal.input("\x1b[6~");
-        assert.notDeepEqual(harness.frame(), start);
+        assert.notDeepEqual(harness.frame(), beforePress);
         harness.terminal.input("\x1b[5~");
-        assert.deepEqual(harness.frame(), start);
+        assert.deepEqual(harness.frame(), beforePress);
         harness.terminal.input("\r");
         assert.deepEqual(harness.answers, [OPTIONS[0]]);
       } finally {
@@ -342,8 +345,11 @@ for (const mode of ["regular", "fullscreen"] as const) {
       [1, ["\t"]],
       [2, ["\t", "\t"]],
       [3, ["\x1b[Z"]],
+      [1, ["\x1b[B"]],
+      [2, ["\x1b[B", "\x1b[B"]],
+      [3, ["\x1b[A"]],
     ] as const) {
-      it(`confirms choice ${index} with Tab or Shift+Tab`, () => {
+      it(`confirms choice ${index} with Tab, Shift+Tab or arrow keys`, () => {
         const harness = approvalHarness(mode, "prompt: test");
         try {
           const first = harness.frame();
@@ -365,6 +371,25 @@ for (const mode of ["regular", "fullscreen"] as const) {
         harness.frame();
         harness.terminal.input("\x1b");
         assert.deepEqual(harness.answers, [undefined]);
+      } finally {
+        harness.tui.stop();
+      }
+    });
+
+    it("enables SGR wheel tracking only when the TUI does not, and disables it on confirm", () => {
+      const harness = approvalHarness(mode, "prompt: test");
+      try {
+        harness.frame();
+        assert.equal(
+          harness.terminal.output.includes("\x1b[?1000h\x1b[?1006h"),
+          mode === "regular",
+        );
+        assert.equal(harness.terminal.output.includes("\x1b[?1006l\x1b[?1000l"), false);
+        harness.terminal.input("\r");
+        assert.equal(
+          harness.terminal.output.includes("\x1b[?1006l\x1b[?1000l"),
+          mode === "regular",
+        );
       } finally {
         harness.tui.stop();
       }
