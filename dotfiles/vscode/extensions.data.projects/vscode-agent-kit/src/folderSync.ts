@@ -63,11 +63,16 @@ export interface VscodeLike {
       close(tabs: readonly TabLike[], preserveFocus?: boolean): PromiseLike<boolean>;
     };
   };
+  /** SPEC 起動時の遷移: open a folder into the current window (replacing an empty window). */
+  readonly openFolder: (folderPath: string) => PromiseLike<unknown>;
   readonly configurationTarget: { readonly Workspace: unknown };
 }
 
 /** SPEC: worktree detection runs every 2500 ms and never overlaps. */
 export const WORKTREE_DETECT_INTERVAL_MS = 2500;
+
+/** SPEC 起動時の遷移: the timeout that decides a folderless window without a workspace file is an empty window. */
+export const EMPTY_WINDOW_OPEN_TIMEOUT_MS = 10_000;
 
 /** SPEC タイトルバー: the template written for the untitled agents workspace. */
 export const UNTITLED_TITLE_TEMPLATE =
@@ -166,8 +171,10 @@ export class FolderSyncEngine {
   private readonly agentsWorkspace: string;
   private started = false;
   private stopped = false;
-  /** SPEC: an empty window (folder 0 only) neither transitions nor syncs. */
-  private syncDisabled = false;
+  /** Subscription of the startup wait for the window's folders; disposed on stop. */
+  private folderWaitSubscription: { dispose(): void } | undefined;
+  /** Resolves the pending folder wait on stop. */
+  private folderWaitRelease: (() => void) | undefined;
   /** SPEC: a rejected folder-0 swap is retried before the next sync application. */
   private swapPending = false;
   /** SPEC: the first folder application waits for the first successful list acquisition. */
@@ -213,6 +220,7 @@ export class FolderSyncEngine {
 
   private stop(): void {
     this.stopped = true;
+    this.folderWaitRelease?.();
     if (this.detectTimer !== undefined) {
       clearTimeout(this.detectTimer);
       this.detectTimer = undefined;
@@ -244,26 +252,67 @@ export class FolderSyncEngine {
   }
 
   /**
+   * SPEC 起動時のワークスペース遷移: wait for the window to have folders
+   * before the transition and sync. Returns the first non-empty folder
+   * list, or undefined when stopped. While folders are missing (for
+   * example before a saved workspace finishes restoring), neither the
+   * detection nor the sync application runs. A window without a workspace
+   * file never provides folders when it is an empty window, so after the
+   * timeout the agents workspace is opened into this window.
+   */
+  private async waitForFolders(): Promise<readonly WorkspaceFolderLike[] | undefined> {
+    const workspace = this.deps.vscode.workspace;
+    let folders = workspace.workspaceFolders;
+    while (!this.stopped && (folders?.length ?? 0) === 0) {
+      const appeared = await this.waitForFoldersEvent(
+        workspace.workspaceFile === undefined ? EMPTY_WINDOW_OPEN_TIMEOUT_MS : undefined,
+      );
+      if (!appeared && !this.stopped && (workspace.workspaceFolders?.length ?? 0) === 0) {
+        await this.deps.vscode.openFolder(this.agentsWorkspace);
+      }
+      folders = workspace.workspaceFolders;
+    }
+    this.folderWaitSubscription = undefined;
+    return this.stopped ? undefined : folders;
+  }
+
+  /** Resolves true when the window's folders change; false on timeout or stop. */
+  private waitForFoldersEvent(timeoutMs?: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const done = (appeared: boolean) => {
+        subscription.dispose();
+        this.folderWaitSubscription = undefined;
+        this.folderWaitRelease = undefined;
+        if (timeout !== undefined) {
+          clearTimeout(timeout);
+        }
+        resolve(appeared);
+      };
+      const subscription = this.deps.vscode.workspace.onDidChangeWorkspaceFolders(() => done(true));
+      this.folderWaitSubscription = subscription;
+      this.folderWaitRelease = () => done(false);
+      const timeout = timeoutMs === undefined ? undefined : setTimeout(() => done(false), timeoutMs);
+    });
+  }
+
+  /**
    * SPEC 起動時のワークスペース遷移: swap folder 0 to the agents workspace
    * for any other startup configuration, promote a single-folder window
    * already on the agents workspace to an untitled workspace, write the
-   * title bar, and start detection. An empty window neither transitions
-   * nor syncs.
+   * title bar, and start detection. A window may have no folders yet when
+   * the extension activates (for example while a saved workspace is still
+   * restoring), so the startup waits for its folders instead of deciding
+   * the window is empty.
    */
   private async startup(): Promise<void> {
-    if (this.stopped) return;
-    const workspace = this.deps.vscode.workspace;
-    const folders = workspace.workspaceFolders;
-    if (folders === undefined || folders.length === 0) {
-      this.syncDisabled = true;
-      return;
-    }
+    const folders = await this.waitForFolders();
+    if (this.stopped || folders === undefined) return;
     const agentsIdentity = await this.identity(this.agentsWorkspace);
     const folder0Identity = await this.identity(folders[0].uri.fsPath);
     if (this.stopped) return;
     if (folder0Identity !== agentsIdentity) {
       if (!(await this.swapFolder0())) this.swapPending = true;
-    } else if (folders.length === 1 && workspace.workspaceFile === undefined) {
+    } else if (folders.length === 1 && this.deps.vscode.workspace.workspaceFile === undefined) {
       await this.promoteSingleFolder();
     }
     // Title updates are cosmetic; a failure must not break the sync.
@@ -339,7 +388,7 @@ export class FolderSyncEngine {
   }
 
   private scheduleDetection(delayMs: number): void {
-    if (this.stopped || this.syncDisabled) return;
+    if (this.stopped) return;
     this.detectTimer = setTimeout(() => {
       this.detectTimer = undefined;
       // Runs through the serialized chain so detection never overlaps a
@@ -360,7 +409,7 @@ export class FolderSyncEngine {
    * porcelain entry) is excluded.
    */
   private async detect(): Promise<void> {
-    if (this.stopped || this.syncDisabled) return;
+    if (this.stopped) return;
     const folders = this.currentFolders();
     const identities = await Promise.all(folders.map((folder) => this.identity(folder.uri.fsPath)));
     const candidates = new Set<string>();
@@ -410,7 +459,7 @@ export class FolderSyncEngine {
     for (const repoIdentity of this.repoWorktrees.keys()) {
       if (!candidateRepos.has(repoIdentity)) this.repoWorktrees.delete(repoIdentity);
     }
-    if (!this.stopped && !this.syncDisabled) {
+    if (!this.stopped) {
       // The next detection starts one interval after this one completed,
       // independently of how long the diff application takes. Detection
       // runs inside the same serialized chain as the diffs, so runs never
@@ -501,7 +550,7 @@ export class FolderSyncEngine {
    * rejected edit keeps the current state so the next sync retries.
    */
   private async applySync(): Promise<void> {
-    if (this.stopped || this.syncDisabled) return;
+    if (this.stopped) return;
     if (this.swapPending) {
       if (!(await this.swapFolder0())) return;
       this.swapPending = false;

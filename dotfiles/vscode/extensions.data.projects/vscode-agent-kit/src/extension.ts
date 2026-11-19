@@ -57,6 +57,10 @@ function folderSyncApi(): VscodeLike {
           vscode.window.tabGroups.close(tabs as unknown as readonly vscode.Tab[], preserveFocus),
       },
     },
+    openFolder: (folderPath: string) =>
+      vscode.commands.executeCommand("vscode.openFolder", vscode.Uri.file(folderPath), {
+        forceNewWindow: false,
+      }),
     configurationTarget: vscode.ConfigurationTarget,
   };
 }

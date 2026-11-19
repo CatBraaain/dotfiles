@@ -48,6 +48,11 @@ interface MutableWorkspace {
 
 export class FakeVscode implements VscodeLike {
   readonly configurationTarget = { Workspace: WORKSPACE_TARGET };
+  openedFolders: string[] = [];
+  openFolder = (folderPath: string): PromiseLike<unknown> => {
+    this.openedFolders.push(folderPath);
+    return Promise.resolve(undefined);
+  };
   /** When true, the next updateWorkspaceFolders call is rejected (returns false, changes nothing). */
   failNextUpdate = false;
   /** When true, the next tabGroups.close call simulates a cancelled confirmation dialog. */
@@ -159,6 +164,17 @@ export class FakeVscode implements VscodeLike {
 
   get openTabPaths(): string[] {
     return this.tabs.map((tab) => tab.uriPath);
+  }
+
+  /** Simulates VS Code resolving the window's folders after activation (saved workspace restore). */
+  resolveFolders(folderPaths: string[]): void {
+    this.workspace.workspaceFolders = folderPaths.map((p) => ({
+      uri: { scheme: "file" as const, fsPath: p },
+      name: path.basename(p),
+    }));
+    for (const listener of this.listeners) {
+      listener();
+    }
   }
 }
 

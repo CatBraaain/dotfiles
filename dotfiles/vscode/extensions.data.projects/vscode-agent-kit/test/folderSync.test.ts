@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { access, mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  EMPTY_WINDOW_OPEN_TIMEOUT_MS,
   FolderSyncEngine,
   UNTITLED_TITLE_TEMPLATE,
   WORKTREE_DETECT_INTERVAL_MS,
@@ -196,16 +197,57 @@ describe("startup folder-0 swap", () => {
     expect(api.folderPaths).toEqual([AGENTS, MAIN]);
   });
 
-  it("neither transitions nor syncs an empty window", async () => {
-    setup(undefined);
-    await boot();
+  it("waits for folders to appear and then starts the transition and sync", async () => {
+    setup(undefined, { entries: [mainEntry, featEntry] });
+    const booting = boot();
+
+    engine.updateList([MAIN]);
+    await vi.advanceTimersByTimeAsync(WORKTREE_DETECT_INTERVAL_MS);
+    await vi.advanceTimersByTimeAsync(WORKTREE_DETECT_INTERVAL_MS);
+    expect(git.calls).toHaveLength(0);
+    expect(api.added).toEqual([]);
+
+    api.resolveFolders([MAIN]);
+    await booting;
     await pushList([MAIN]);
     await detectOnce();
+
+    expect(api.folderPaths).toEqual([AGENTS, MAIN, FEAT]);
+    expect(api.workspace.workspaceFile?.scheme).toBe("untitled");
+    expect(api.titleUpdates).toEqual([TITLE_UPDATE]);
+  });
+
+  it("does not open a folder while a saved workspace is still restoring", async () => {
+    setup(undefined, {
+      workspaceFile: savedWorkspace(`${AGENTS}/ws.code-workspace`),
+      entries: [mainEntry, featEntry],
+    });
+    const booting = boot();
+
+    await vi.advanceTimersByTimeAsync(EMPTY_WINDOW_OPEN_TIMEOUT_MS);
+    expect(api.openedFolders).toEqual([]);
+
+    api.resolveFolders([MAIN]);
+    await booting;
+    await pushList([MAIN]);
     await detectOnce();
 
+    expect(api.openedFolders).toEqual([]);
+    expect(api.folderPaths).toEqual([AGENTS, MAIN, FEAT]);
+  });
+
+  it("opens the agents workspace when a folderless window never provides folders", async () => {
+    setup(undefined);
+    const booting = boot();
+
+    await vi.advanceTimersByTimeAsync(EMPTY_WINDOW_OPEN_TIMEOUT_MS - 1);
+    expect(api.openedFolders).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(api.openedFolders).toEqual([AGENTS]);
+
+    disposable.dispose();
+    await booting;
     expect(api.added).toEqual([]);
-    expect(git.calls).toHaveLength(0);
-    expect(api.titleUpdates).toEqual([]);
   });
 });
 
