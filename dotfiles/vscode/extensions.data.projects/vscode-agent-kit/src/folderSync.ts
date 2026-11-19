@@ -2,7 +2,7 @@
  * workspaceFolders sync (SPEC "workspaceFolders 同期"): the startup folder-0
  * swap into the agents workspace, periodic worktree detection, the ordered
  * managed-folder application, and the untitled-workspace title bar write.
- * Folder 0 (`~/.agents/agents-workspace`) is fixed and never managed; folder
+ * Folder 0 (`~/.agents/workspace`) is fixed and never managed; folder
  * 1 and beyond are all managed folders.
  *
  * The pi-mux list side of the sync is push-driven: the session provider
@@ -77,7 +77,7 @@ const APPLY_TIMEOUT_MS = 3000;
 
 /** Folder 0 of the managed untitled workspace. */
 export function agentsWorkspacePath(homeDir: string): string {
-  return path.join(homeDir, ".agents", "agents-workspace");
+  return path.join(homeDir, ".agents", "workspace");
 }
 
 /**
@@ -154,11 +154,11 @@ function byFolderName(a: { readonly name: string }, b: { readonly name: string }
 export interface FolderSyncDeps {
   readonly vscode: VscodeLike;
   readonly execFile: ExecFile;
-  /** Home directory used to locate `~/.agents/agents-workspace`. */
+  /** Home directory used to locate `~/.agents/workspace`. */
   readonly homeDir: string;
   /** Overrides path identity resolution for tests. */
   readonly resolveIdentity?: (folderPath: string) => Promise<string>;
-  /** Overrides agents-workspace directory creation for tests. */
+  /** Overrides agents workspace directory creation for tests. */
   readonly ensureDirectory?: (dirPath: string) => Promise<void>;
 }
 

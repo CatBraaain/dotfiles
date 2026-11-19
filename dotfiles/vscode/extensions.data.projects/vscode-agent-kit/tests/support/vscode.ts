@@ -895,7 +895,7 @@ export async function provideVSCodeFixture(
       await expect
         .poll(() => host.snapshot().folders)
         .toEqual([
-          join(host.directory, "home", ".agents", "agents-workspace"),
+          join(host.directory, "home", ".agents", "workspace"),
           join(host.directory, "other"),
         ]);
     }

@@ -20,7 +20,7 @@ import {
 import { cleanup, tempDir } from "./fixtures";
 
 const HOME = "/home/user";
-const AGENTS = "/home/user/.agents/agents-workspace";
+const AGENTS = "/home/user/.agents/workspace";
 const MAIN = "/repo";
 const FEAT = "/repo/wt/feat-x";
 
@@ -144,7 +144,7 @@ describe("startup folder-0 swap", () => {
       const home = join(root, "home");
       const project = join(root, "project");
       await mkdir(project, { recursive: true });
-      const agents = join(home, ".agents", "agents-workspace");
+      const agents = join(home, ".agents", "workspace");
       api = new FakeVscode([project]);
       git = createFakeGit([mainEntry]);
       engine = new FolderSyncEngine({ vscode: api, execFile: git.exec, homeDir: home });
@@ -213,11 +213,11 @@ describe("startup folder-0 swap", () => {
 // agents workspace is transitioned to an untitled workspace by re-applying
 // folder 0 unchanged; other configurations on the agents workspace stay.
 describe("startup workspace transition", () => {
-  it("re-applies folder 0 unchanged for a single agents-workspace folder and writes the title", async () => {
+  it("re-applies folder 0 unchanged for a single agents workspace folder and writes the title", async () => {
     setup([AGENTS]);
     await boot();
 
-    expect(api.added).toEqual([{ path: AGENTS, name: "agents-workspace" }]);
+    expect(api.added).toEqual([{ path: AGENTS, name: "workspace" }]);
     expect(api.removed).toEqual([AGENTS]);
     expect(api.folderPaths).toEqual([AGENTS]);
     expect(api.workspace.workspaceFile?.scheme).toBe("untitled");
@@ -511,7 +511,7 @@ describe("managed folder sync", () => {
     const root = await tempDir("folder-sync-duplicate-");
     try {
       const home = join(root, "home");
-      const agents = join(home, ".agents", "agents-workspace");
+      const agents = join(home, ".agents", "workspace");
       const alias = join(root, "alias");
       await mkdir(agents, { recursive: true });
       await symlink(agents, alias);

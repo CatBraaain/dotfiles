@@ -25,7 +25,7 @@ test(
     // the startup swap prepends the agents workspace; the worktrees of the
     // main repository follow it in folder-name order (fixture-b,
     // fixture-external), and `external` is a registered pi-mux workspace.
-    const agentsWorkspace = join(host.directory, "home", ".agents", "agents-workspace");
+    const agentsWorkspace = join(host.directory, "home", ".agents", "workspace");
     const baseline = [agentsWorkspace, main, host.sessions.B.cwd, external];
 
     await test.step("Show the Explorer to observe workspaceFolders", async () => {
@@ -101,10 +101,10 @@ test.describe("folder-mode startup", () => {
   test.use({ folderMode: true });
 
   test(
-    "フォルダモードの起動でフォルダ0を agents-workspace に付け替え、untitled ワークスペースへ遷移し、タイトルバーからフォルダ名を除く",
+    "フォルダモードの起動でフォルダ0を agents workspace に付け替え、untitled ワークスペースへ遷移し、タイトルバーからフォルダ名を除く",
     { annotation: { type: "spec", description: "E2E-18" } },
     async ({ host }, testInfo) => {
-      const agentsWorkspace = join(host.directory, "home", ".agents", "agents-workspace");
+      const agentsWorkspace = join(host.directory, "home", ".agents", "workspace");
       const openedFolder = join(host.directory, "other");
 
       await test.step("Observe the folder-0 swap with the untitled transition and the title write", async () => {

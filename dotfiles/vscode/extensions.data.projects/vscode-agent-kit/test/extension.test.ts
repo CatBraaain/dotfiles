@@ -411,8 +411,8 @@ describe("extension commands", () => {
     await execFile("git", ["-C", repository, "commit", "--allow-empty", "-q", "-m", "init"]);
     await execFile("git", ["-C", repository, "worktree", "add", "-q", "-b", "feat-x", worktree]);
 
-    const agents = join(root, ".agents", "agents-workspace");
-    api.folders = [{ uri: { fsPath: agents }, name: "agents-workspace" }];
+    const agents = join(root, ".agents", "workspace");
+    api.folders = [{ uri: { fsPath: agents }, name: "workspace" }];
     const subscriptions: { dispose(): void }[] = [];
     activate({
       subscriptions,
@@ -423,10 +423,9 @@ describe("extension commands", () => {
     try {
       // The startup transition re-applies folder 0 and moves the window to
       // an untitled workspace, where the fixed title template is written.
-      await vi.waitFor(
-        () => expect(api.added).toEqual([{ path: agents, name: "agents-workspace" }]),
-        { timeout: 5000 },
-      );
+      await vi.waitFor(() => expect(api.added).toEqual([{ path: agents, name: "workspace" }]), {
+        timeout: 5000,
+      });
       expect(api.titleUpdates).toEqual([
         {
           section: "window",
@@ -449,7 +448,7 @@ describe("extension commands", () => {
           // repository folder is re-added with its existing name together
           // with the detected worktree folder.
           expect(api.added).toEqual([
-            { path: agents, name: "agents-workspace" },
+            { path: agents, name: "workspace" },
             { path: repository, name: undefined },
             { path: repository, name: "main" },
             { path: worktree, name: "feat-x" },
