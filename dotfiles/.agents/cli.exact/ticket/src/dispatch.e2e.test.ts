@@ -477,6 +477,7 @@ describe("ticket dispatch real tmux", () => {
     { releasedStatus: "closed", explicitProject: false },
     { releasedStatus: "cancelled", explicitProject: false },
     { releasedStatus: "blocked", explicitProject: false },
+    { releasedStatus: "draft", explicitProject: false },
     { releasedStatus: "closed", explicitProject: true },
   ])(
     "releases inherited tickets after restarting with changed options (%j)",

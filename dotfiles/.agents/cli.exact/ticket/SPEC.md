@@ -175,7 +175,7 @@ project単位で起動する ID `X` のセッション名は、`--prefix` に `X
 
 | 順 | 条件 | 結果 |
 | --- | --- | --- |
-| 1 | 稼働中ticket の status が `closed`、`cancelled`、`blocked` のいずれか | `done <ID> status=<status>` を記録し、piセッションを保持したまま稼働枠を解放する |
+| 1 | 稼働中ticket の status が `closed`、`cancelled`、`blocked`、`draft` のいずれか | `done <ID> status=<status>` を記録し、piセッションを保持したまま稼働枠を解放する |
 | 2 | 1で解放していない稼働中セッションが tmux 上に存在しない | `incomplete <ID> status=<status\|none> session exited without close` を記録し、稼働枠を解放する。その ticket は再起動しない |
 | 3 | 稼働数が `--max` 未満で、起動可能ticket がある | 起動可能ticket を ID の古い順に空き枠の数だけ選び、起動する。起動ごとに `launched <ID> as <セッション名>` を記録する |
 | 4 | 稼働数が0で、起動可能ticket がない | `dispatcher finished` を記録し、dispatcher用セッションを終了する。終了後の ticket の追加・変化は、次回の start で扱う |

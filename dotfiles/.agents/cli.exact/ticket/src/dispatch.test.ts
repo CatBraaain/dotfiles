@@ -258,7 +258,7 @@ describe("planTick", () => {
     assert.equal(plan.finished, false);
   });
 
-  it.each(["closed", "cancelled", "blocked"])(
+  it.each(["closed", "cancelled", "blocked", "draft"])(
     "releases %s tickets and refills the free slot in the same tick",
     (status) => {
       const plan = planTick({
@@ -321,7 +321,7 @@ describe("planTick", () => {
     assert.equal(planTick({ ...base, tickets: [] }).finished, true);
   });
 
-  it.each(["closed", "cancelled", "blocked"])(
+  it.each(["closed", "cancelled", "blocked", "draft"])(
     "prioritizes done for %s over a missing session",
     (status) => {
       const plan = planTick({
