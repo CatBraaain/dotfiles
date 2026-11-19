@@ -32,7 +32,9 @@ function splitTicketKey(key: string): [string, string] {
 async function validateCwds(
   tickets: TicketSnapshot[],
   started: ReadonlySet<string>,
-): Promise<void> {
+  log: (line: string) => void,
+): Promise<Set<string>> {
+  const skipped = new Set<string>();
   const projects = new Set(
     tickets
       .filter((ticket) => ticket.actionable && !started.has(ticket.id))
@@ -40,9 +42,21 @@ async function validateCwds(
   );
   for (const project of projects) {
     const cwd = join(homedir(), "projects", project);
-    if (!(await stat(cwd)).isDirectory()) throw new Error(`not a directory: ${cwd}`);
+    let entry;
+    try {
+      entry = await stat(cwd);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        skipped.add(project);
+        log(`skipped ${project}: cwd not found: ${cwd}`);
+        continue;
+      }
+      throw error;
+    }
+    if (!entry.isDirectory()) throw new Error(`not a directory: ${cwd}`);
     await access(cwd, constants.X_OK);
   }
+  return skipped;
 }
 
 export function buildPrompt(template: string, id: string): string {
@@ -59,6 +73,7 @@ export type LoadSnapshot = () => Promise<TicketSnapshot[]>;
 
 export interface PlanInput {
   tickets: TicketSnapshot[];
+  skipped?: ReadonlySet<string>;
   started: ReadonlySet<string>;
   running: ReadonlyMap<string, string>;
   max: number;
@@ -104,11 +119,13 @@ export function planTick(input: PlanInput): Plan {
   }
 
   const remainingRunning = input.running.size - done.length - incomplete.length;
-  const launches = input.tickets
+  const candidates = input.tickets
     .filter(
       (ticket) =>
         ticket.actionable && !input.started.has(ticket.id) && !input.running.has(ticket.id),
     )
+    .filter((ticket) => !input.skipped || !input.skipped.has(splitTicketKey(ticket.id)[0]));
+  const launches = candidates
     .slice(0, Math.max(0, input.max - remainingRunning))
     .map((ticket) => ticket.id);
 
@@ -294,7 +311,11 @@ export async function startDispatcher(input: {
     await Bun.file(dispatchPromptPath).text();
     const tickets = await input.loadSnapshot();
     if (project === null)
-      await validateCwds(tickets, new Set(inheritedSessions(socket, project, true).keys()));
+      await validateCwds(
+        tickets,
+        new Set(inheritedSessions(socket, project, true).keys()),
+        console.log,
+      );
     const result = tmux(socket, [
       "new-session",
       "-d",
@@ -364,9 +385,10 @@ export async function run(deps: RunDeps): Promise<void> {
 
   while (true) {
     const tickets = await deps.loadSnapshot();
-    if (deps.all) await validateCwds(tickets, started);
+    const skipped = deps.all ? await validateCwds(tickets, started, deps.log) : undefined;
     const plan = planTick({
       tickets,
+      skipped,
       started,
       running,
       max: options.max,

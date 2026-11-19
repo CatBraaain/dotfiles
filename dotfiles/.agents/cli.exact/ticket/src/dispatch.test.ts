@@ -347,6 +347,84 @@ describe("planTick", () => {
     });
     assert.deepEqual(plan.incomplete, [{ id: "a", name: "fix_a", status: null }]);
   });
+
+  it("excludes tickets of skipped projects from launches", () => {
+    const plan = planTick({
+      ...base,
+      tickets: [
+        { id: "gone/a", status: "open", actionable: true },
+        { id: "kept/b", status: "open", actionable: true },
+      ],
+      skipped: new Set(["gone"]),
+      max: 5,
+    });
+    assert.deepEqual(plan.launches, ["kept/b"]);
+    assert.equal(plan.finished, false);
+  });
+});
+
+describe("dispatch all mode", () => {
+  function runAll(home: string, socket: string, tickets: TicketSnapshot[]) {
+    const script = `
+import { run } from ${JSON.stringify(join(import.meta.dir, "dispatch.ts"))};
+const events = [];
+try {
+  await run({
+    options: { max: 5, prefix: "fix_", interval: 30 },
+    all: true,
+    loadSnapshot: async () => ${JSON.stringify(tickets)},
+    log: (line) => events.push(line),
+    hasSession: () => false,
+    launch(id) { events.push("launch " + id); },
+    async sleepMs() {},
+  });
+  console.log(JSON.stringify({ events }));
+} catch (error) {
+  console.log(JSON.stringify({ events, error: String(error) }));
+}
+`;
+    const result = Bun.spawnSync([process.execPath, "-e", script], {
+      env: { ...process.env, HOME: home, TICKET_TEST_TMUX_SOCKET: socket },
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 5000,
+    });
+    assert.equal(result.exitCode, 0, new TextDecoder().decode(result.stderr));
+    return JSON.parse(new TextDecoder().decode(result.stdout)) as {
+      events: string[];
+      error?: string;
+    };
+  }
+
+  it("skips a missing candidate cwd and launches the remaining projects", () => {
+    const { home, socket } = fixture();
+    mkdirSync(join(home, "projects", "present"), { recursive: true });
+    const { events, error } = runAll(home, socket, [
+      { id: "gone/first", status: "open", actionable: true },
+      { id: "present/second", status: "open", actionable: true },
+    ]);
+    assert.equal(error, undefined);
+    assert.deepEqual(events, [
+      "dispatcher start max=5",
+      `skipped gone: cwd not found: ${join(home, "projects", "gone")}`,
+      "launch present/second",
+      "launched present/second as fix_70726573656e74_second",
+      `skipped gone: cwd not found: ${join(home, "projects", "gone")}`,
+      "incomplete present/second status=open session exited without close",
+      "dispatcher finished",
+    ]);
+  });
+
+  it("still rejects non-directory candidate cwds", () => {
+    const { home, socket } = fixture();
+    mkdirSync(join(home, "projects"), { recursive: true });
+    writeFileSync(join(home, "projects", "gone"), "not a directory");
+    const { events, error } = runAll(home, socket, [
+      { id: "gone/first", status: "open", actionable: true },
+    ]);
+    assert.match(error!, /not a directory/);
+    assert.deepEqual(events, ["dispatcher start max=5"]);
+  });
 });
 
 const fixtures: Array<{ home: string; socket: string }> = [];

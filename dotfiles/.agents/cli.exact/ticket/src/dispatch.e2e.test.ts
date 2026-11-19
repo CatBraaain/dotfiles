@@ -921,7 +921,7 @@ describe("global ticket dispatch", () => {
     TIMEOUT_MS + 5000,
   );
 
-  it.each(["missing", "file", "inaccessible"])(
+  it.each(["file", "inaccessible"])(
     "fails before any pi launch for a %s candidate cwd",
     (kind) => {
       const fixture = setupGlobal();
@@ -947,7 +947,36 @@ describe("global ticket dispatch", () => {
   );
 
   it(
-    "fails fast on a new invalid project during a tick while preserving existing pi",
+    "skips a missing candidate cwd, logs the skip, and launches the other project",
+    async () => {
+      const fixture = setupGlobal();
+      writeTicket(fixture.store, "first", "open");
+      writeTicket(globalStore(fixture, "beta"), "second", "open");
+      rmSync(join(fixture.home, "projects", "beta"), { recursive: true });
+      const started = cli(fixture, ["dispatch", "--all", "--max", "1"]);
+      assert.equal(started.status, 0, started.stderr);
+      assert.match(started.stdout, /skipped beta: cwd not found/);
+      await waitRecorded(fixture, "alpha/first");
+      const pane = isolatedTmux(fixture.socket, [
+        "capture-pane",
+        "-p",
+        "-S",
+        "-100",
+        "-t",
+        `=${dispatcherName(null)}:0.0`,
+      ]);
+      assert.equal(pane.status, 0, pane.stderr);
+      assert.match(pane.stdout, /skipped beta: cwd not found/);
+      assert.deepEqual(recordedLaunches(fixture), ["alpha/first"]);
+      const stopped = cli(fixture, ["dispatch", "stop", "--all", "-p", "../ignored"]);
+      assert.equal(stopped.status, 0, stopped.stderr);
+      assert.match(stopped.stdout, /dispatcher stopped: ticket_dispatch_all/);
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it(
+    "fails fast on a new non-directory project during a tick while preserving existing pi",
     async () => {
       const fixture = setupGlobal();
       writeTicket(fixture.store, "held", "open");
@@ -960,6 +989,7 @@ describe("global ticket dispatch", () => {
       const added = globalStore(fixture, "gamma");
       mkdirSync(added);
       writeTicket(added, "new", "open");
+      writeFileSync(join(fixture.home, "projects", "gamma"), "not a directory");
       await waitGlobalFinished(fixture);
       assert.deepEqual(recordedLaunches(fixture), ["alpha/held"]);
       assert.equal(
@@ -970,6 +1000,33 @@ describe("global ticket dispatch", () => {
         ]).status,
         0,
       );
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it(
+    "keeps the dispatcher alive when a new project has no target directory during a tick",
+    async () => {
+      const fixture = setupGlobal();
+      writeTicket(fixture.store, "held", "open");
+      startServer(fixture);
+      assert.equal(
+        cli(fixture, ["dispatch", "--all", "--max", "1", "--interval", "0.02"]).status,
+        0,
+      );
+      await waitRecorded(fixture, "alpha/held");
+      const added = globalStore(fixture, "gamma");
+      mkdirSync(added);
+      writeTicket(added, "new", "open");
+      await Bun.sleep(500);
+      assert.equal(
+        isolatedTmux(fixture.socket, ["has-session", "-t", `=${dispatcherName(null)}`]).status,
+        0,
+      );
+      assert.deepEqual(recordedLaunches(fixture), ["alpha/held"]);
+      const stopped = cli(fixture, ["dispatch", "stop", "--all", "-p", "../ignored"]);
+      assert.equal(stopped.status, 0, stopped.stderr);
+      assert.match(stopped.stdout, /dispatcher stopped: ticket_dispatch_all/);
     },
     TIMEOUT_MS + 5000,
   );

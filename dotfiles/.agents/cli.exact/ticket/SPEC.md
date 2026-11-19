@@ -194,13 +194,14 @@ project単位で起動する ID `X` のセッション名は、`--prefix` に `X
 | --- | --- |
 | 位置引数の指定、未知のオプション、値の不足、`--max` / `--interval` の値の不正、stop への `--max` / `--interval` / `--prefix` 指定 | usage を呼出元CLI の stderr へ出し、終了コード2 |
 | project名がストアと安全境界の制約に違反 | 既存CLI と同じ validationエラーを呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動・停止しない |
-| start の cwd、またはグローバルで新規起動候補となるticket の対象cwd が存在しない、ディレクトリでない、または移動できない | `I/O error: <エラー内容>` を呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動せず、pi も起動しない |
+| start の cwd、またはグローバルで新規起動候補となるticket の対象cwd がディレクトリでない、または移動できない | `I/O error: <エラー内容>` を呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動せず、pi も起動しない |
+| グローバルで新規起動候補となるticket の対象cwd が存在しない | そのticket は新規起動せず `skipped <project>: cwd not found: <cwd>` を出し、他の候補の確認・起動を続ける。start の事前確認では dispatcher も起動する。ログは start の事前確認では呼出元CLI の stdout へ、各 tick では時刻付きで dispatcher の stdout へ出す |
 | 新規start の事前確認で ticket の値・状態・環境が不正 | 既存CLI と同じ validationエラーを呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動しない |
 | 新規start の事前確認で固定本文読込みに失敗 | `I/O error: <エラー内容>` を呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動しない |
 | dispatcher用tmuxセッションの作成、または稼働中dispatcher の停止に失敗 | 操作と理由を呼出元CLI の stderr へ出し、終了コード1 |
 | start成功後に ticket読取り、固定本文読込み、グローバルの新規起動候補の対象cwd確認などの継続不能なエラー | エラーを dispatcher の stderr と stdout へ出し、dispatcher用セッションを終了する。起動済みpi は作業を続け、呼出元CLI の終了コードは変化しない |
 
-グローバルの新規起動候補の対象cwd は、start の事前確認と各 tick の新規起動前にまとめて確認する。不正な対象cwd が1つでもあれば、その確認に続くpi起動を行わず、上表の失敗時の動作に従う。
+グローバルの新規起動候補の対象cwd は、start の事前確認と各 tick の新規起動前にまとめて確認する。ディレクトリでない・移動できない対象cwd が1つでもあれば、その確認に続くpi起動を行わず、上表の失敗時の動作に従う。存在しない対象cwd のproject は上表のとおりスキップし、スキップは各確認で再評価するため、後から対象cwd が作られれば次の tick の起動候補に戻る。
 
 #### ライフサイクル
 
