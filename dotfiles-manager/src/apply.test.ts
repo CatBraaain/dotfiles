@@ -432,7 +432,7 @@ describe("apply scripts", () => {
     assert.deepEqual(output, [join(homeRoot, "tools"), join(distRoot, "tools")]);
   });
 
-  it("runs scripts in full-path alphabetical order", async () => {
+  it("runs every script exactly once regardless of completion order", async () => {
     const orderFile = join(root, "apply-order.txt");
     const appendOrder = (value: string) =>
       `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(orderFile)}, ${JSON.stringify(`${value}\n`)});`;
@@ -444,11 +444,12 @@ describe("apply scripts", () => {
 
     await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
-    assert.deepEqual((await readFile(orderFile, "utf8")).trim().split("\n"), [
-      "c",
-      "before",
+    // Normal hooks run concurrently, so only the set of runs is guaranteed.
+    assert.deepEqual((await readFile(orderFile, "utf8")).trim().split("\n").sort(), [
       "a",
       "b",
+      "before",
+      "c",
     ]);
   });
 
@@ -469,7 +470,10 @@ describe("apply scripts", () => {
 
     await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
-    assert.equal(await readFile(orderFile, "utf8"), "move\ncollected\n");
+    assert.deepEqual((await readFile(orderFile, "utf8")).trim().split("\n").sort(), [
+      "collected",
+      "move",
+    ]);
     assert.equal(existsSync(movedPath), true);
   });
 
@@ -490,7 +494,10 @@ describe("apply scripts", () => {
 
     await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
-    assert.equal(await readFile(orderFile, "utf8"), "prune\ncollected\n");
+    assert.deepEqual((await readFile(orderFile, "utf8")).trim().split("\n").sort(), [
+      "collected",
+      "prune",
+    ]);
     assert.equal(await readFile(join(distRoot, "pkg/keep.txt"), "utf8"), "keep\n");
     assert.equal(existsSync(join(distRoot, "pkg/sub")), false);
   });
@@ -751,10 +758,11 @@ describe("CLI", () => {
 
     assert.equal(exitCode, 1);
     assert.equal(stderr, "apply script failed: fail.apply.ts (exit code 3)\n");
-    assert.match(
-      stdout,
-      /  \[fail\.apply\.ts\] Started\n  \[fail\.apply\.ts\] ✗ Failed \(\d+\.\d{2}s\)\n  \[late\.apply\.ts\] Started\n  \[late\.apply\.ts\] ✓ Complete \(\d+\.\d{2}s\)\napply scripts: 2 scripts \(\d+\.\d{2}s\)\n$/,
-    );
+    assert.match(stdout, /  \[fail\.apply\.ts\] Started\n/);
+    assert.match(stdout, /  \[fail\.apply\.ts\] ✗ Failed \(\d+\.\d{2}s\)\n/);
+    assert.match(stdout, /  \[late\.apply\.ts\] Started\n/);
+    assert.match(stdout, /  \[late\.apply\.ts\] ✓ Complete \(\d+\.\d{2}s\)\n/);
+    assert.match(stdout, /apply scripts: 2 scripts \(\d+\.\d{2}s\)\n$/);
     assert.equal(await readFile(join(homeRoot, "apply-out.txt"), "utf8"), homeRoot);
   });
 

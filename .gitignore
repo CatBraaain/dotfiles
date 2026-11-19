@@ -1,5 +1,6 @@
 dist
 node_modules
+/.cache
 /.env
 
 dotfiles/**/*.build-machine.ts

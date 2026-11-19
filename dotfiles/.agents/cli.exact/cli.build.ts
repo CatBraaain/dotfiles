@@ -7,6 +7,9 @@ import { readdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 async function main(): Promise<void> {
+  const { compileWithCache } = await import(
+    join(managerSrcDir(), "compile-cache.ts")
+  );
   const distCliDir = process.cwd();
   const entries = await readdir(distCliDir, { withFileTypes: true });
   await Promise.all(
@@ -14,36 +17,35 @@ async function main(): Promise<void> {
       const cliDir = join(distCliDir, entry.name);
       const entryPath = join(cliDir, "src/main.ts");
       if (!entry.isDirectory() || !existsSync(entryPath)) return;
-      await compileCli(entry.name, entryPath, cliDir);
+      await compileCli(entry.name, cliDir, compileWithCache);
     }),
   );
 }
 
-async function compileCli(name: string, entryPath: string, cliDir: string): Promise<void> {
+async function compileCli(
+  name: string,
+  cliDir: string,
+  compileWithCache: (request: {
+    name: string;
+    cliDir: string;
+    entryPath: string;
+    buildPath: string;
+  }) => Promise<void>,
+): Promise<void> {
   // The executable carries .executable so apply grants the owner exec bit
   // (spec §.executable の解釈); the --outfile must not collide with the source
   // folder, so build beside it and swap after removing the folder.
   const buildPath = `${cliDir}.compile`;
-  const executablePath = `${cliDir}.executable`;
-  const compiled = Bun.spawn(
-    [
-      process.execPath,
-      "build",
-      "--compile",
-      "--compile-autoload-package-json",
-      entryPath,
-      "--outfile",
-      buildPath,
-    ],
-    { stdout: "inherit", stderr: "inherit" },
-  );
-  const exitCode = await compiled.exited;
-  if (exitCode !== 0) {
-    await rm(buildPath, { force: true });
-    throw new Error(`bun build --compile failed for ${name} (exit code ${exitCode})`);
-  }
+  await compileWithCache({ name, cliDir, entryPath: `${cliDir}/src/main.ts`, buildPath });
   await rm(cliDir, { recursive: true });
-  await rename(buildPath, executablePath);
+  await rename(buildPath, `${cliDir}.executable`);
+}
+
+function managerSrcDir(): string {
+  const value = process.env.DOTFILES_MANAGER_SRC;
+  if (value === undefined || value === "")
+    throw new Error("hook environment variable is not set: DOTFILES_MANAGER_SRC");
+  return value;
 }
 
 if (import.meta.main) await main();

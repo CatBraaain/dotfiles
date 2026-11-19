@@ -95,69 +95,126 @@ export async function collectDeclarations(distRoot: string): Promise<Declaration
   return declarations;
 }
 
+type PreparedScript = {
+  script: ApplyScript;
+  startedAt: number;
+  cwd: string;
+  snapshotPath?: string;
+  createdDirectories: string[];
+  prepFailure?: string;
+};
+
 // Runs TypeScript apply hooks (spec §apply スクリプト) after applying. Each
 // runs as a standalone bun process from a snapshot in its dist folder, with
-// its cwd at the script folder's home directory (created if missing). Failed
-// hooks are collected and returned without stopping later hooks.
+// its cwd at the script folder's home directory (created if missing). Normal
+// hooks run concurrently, started in collected order; post hooks run after
+// all normal hooks complete, in collected order. Failed hooks are collected
+// and returned without stopping later hooks.
 export async function runApplyScripts(
   scripts: ApplyScript[],
   distRoot: string,
   homeRoot: string,
 ): Promise<string[]> {
-  const failures: string[] = [];
-  for (const script of scripts) {
-    const started = performance.now();
-    writeLine(`  [${script.distPath}] Started`);
-    if (!script.distPath.endsWith(".ts")) {
-      failures.push(`apply hook has unsupported extension: ${script.distPath}`);
-      writeLine(`  [${script.distPath}] ✗ Failed (${elapsedSeconds(started)}s)`);
-      continue;
-    }
-    const cwd = join(homeRoot, script.homeFolderRel);
-    const scriptDirectory = dirname(join(distRoot, script.distPath));
-    const label = `apply script failed: ${script.distPath}`;
-    const errors: string[] = [];
-    let createdDirectories: string[] = [];
-    let snapshotPath: string | undefined;
-    try {
-      createdDirectories = await ensureHookDirectory(scriptDirectory, distRoot);
-      await mkdir(cwd, { recursive: true });
-      snapshotPath = await writeHookSnapshot(scriptDirectory, script.fileName, script.contents);
-      await spawnChild(
-        [process.execPath, resolve(snapshotPath)],
-        cwd,
-        {
-          ...process.env,
-          DOTFILES_DIST_DIR: resolve(distRoot),
-          DOTFILES_HOME_ROOT: resolve(homeRoot),
-          DOTFILES_MANAGER_SRC: import.meta.dir,
-        },
-        label,
-        script.distPath,
-      );
-    } catch (error) {
-      errors.push(messageOf(error));
-    } finally {
-      try {
-        if (snapshotPath) await removeHookSnapshot(snapshotPath, distRoot);
-      } catch (error) {
-        errors.push(`snapshot cleanup failed: ${messageOf(error)}`);
-      }
-      try {
-        await removeEmptyHookDirectories(createdDirectories);
-      } catch (error) {
-        errors.push(`directory cleanup failed: ${messageOf(error)}`);
-      }
-    }
-    if (errors.length > 0) {
-      const diagnostic = errors.join("; ");
-      failures.push(diagnostic.startsWith(label) ? diagnostic : `${label}: ${diagnostic}`);
-    }
-    writeLine(
-      `  [${script.distPath}] ${errors.length === 0 ? "✓ Complete" : "✗ Failed"} (${elapsedSeconds(started)}s)`,
-    );
+  // Snapshots for every script are written up front in collected order, so a
+  // script that moves or removes dist folders cannot race another script's
+  // snapshot preparation.
+  const prepared: PreparedScript[] = [];
+  for (const script of scripts) prepared.push(await prepareScript(script, distRoot, homeRoot));
+
+  const results: Array<string | null> = prepared.map((entry) => entry.prepFailure ?? null);
+  const tasks = prepared
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => entry.prepFailure === undefined);
+  const normal = tasks.filter(({ entry }) => !isPostHookName(entry.script.fileName));
+  const posts = tasks.filter(({ entry }) => isPostHookName(entry.script.fileName));
+  await Promise.all(
+    normal.map(async ({ entry, index }) => {
+      results[index] = await executePrepared(entry, distRoot, homeRoot);
+    }),
+  );
+  for (const { entry, index } of posts)
+    results[index] = await executePrepared(entry, distRoot, homeRoot);
+  return results.filter((failure) => failure !== null);
+}
+
+async function prepareScript(
+  script: ApplyScript,
+  distRoot: string,
+  homeRoot: string,
+): Promise<PreparedScript> {
+  const entry: PreparedScript = {
+    script,
+    startedAt: performance.now(),
+    cwd: join(homeRoot, script.homeFolderRel),
+    createdDirectories: [],
+  };
+  if (!script.distPath.endsWith(".ts")) {
+    entry.prepFailure = `apply hook has unsupported extension: ${script.distPath}`;
+    writeLine(`  [${script.distPath}] ✗ Failed (${elapsedSeconds(entry.startedAt)}s)`);
+    return entry;
   }
-  return failures;
+  const label = `apply script failed: ${script.distPath}`;
+  const scriptDirectory = dirname(join(distRoot, script.distPath));
+  let snapshotPath: string | undefined;
+  try {
+    entry.createdDirectories = await ensureHookDirectory(scriptDirectory, distRoot);
+    await mkdir(entry.cwd, { recursive: true });
+    snapshotPath = await writeHookSnapshot(scriptDirectory, script.fileName, script.contents);
+    entry.snapshotPath = snapshotPath;
+  } catch (error) {
+    const diagnostic = messageOf(error);
+    entry.prepFailure = diagnostic.startsWith(label) ? diagnostic : `${label}: ${diagnostic}`;
+    try {
+      if (snapshotPath) await removeHookSnapshot(snapshotPath, distRoot);
+    } catch {
+      // Snapshot removal must not mask the preparation failure.
+    }
+  }
+  return entry;
+}
+
+async function executePrepared(
+  entry: PreparedScript,
+  distRoot: string,
+  homeRoot: string,
+): Promise<string | null> {
+  const { script } = entry;
+  const label = `apply script failed: ${script.distPath}`;
+  const errors: string[] = [];
+  writeLine(`  [${script.distPath}] Started`);
+  try {
+    await spawnChild(
+      [process.execPath, resolve(entry.snapshotPath!)],
+      entry.cwd,
+      {
+        ...process.env,
+        DOTFILES_DIST_DIR: resolve(distRoot),
+        DOTFILES_HOME_ROOT: resolve(homeRoot),
+        DOTFILES_MANAGER_SRC: import.meta.dir,
+      },
+      label,
+      script.distPath,
+    );
+  } catch (error) {
+    errors.push(messageOf(error));
+  } finally {
+    try {
+      if (entry.snapshotPath) await removeHookSnapshot(entry.snapshotPath, distRoot);
+    } catch (error) {
+      errors.push(`snapshot cleanup failed: ${messageOf(error)}`);
+    }
+    try {
+      await removeEmptyHookDirectories(entry.createdDirectories);
+    } catch (error) {
+      errors.push(`directory cleanup failed: ${messageOf(error)}`);
+    }
+  }
+  writeLine(
+    `  [${script.distPath}] ${errors.length === 0 ? "✓ Complete" : "✗ Failed"} (${elapsedSeconds(entry.startedAt)}s)`,
+  );
+  if (errors.length === 0) return null;
+  const diagnostic = errors.join("; ");
+  return diagnostic.startsWith(label) ? diagnostic : `${label}: ${diagnostic}`;
 }
 
 export function parseArgs(argv: readonly string[]): {
