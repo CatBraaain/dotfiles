@@ -1179,6 +1179,8 @@ async function verifyInstalledRuntime(): Promise<void> {
         { ...seededValues, model: "preserve-fixture-model" },
       );
     }
+    const managedWords = loadManagedConfig(import.meta.dir).dictionary!;
+    const retiredWord = managedWords[managedWords.length - 1]!;
     function declareDictionary(words: string[]): void {
       writeFileSync(
         join(keysDir, MANAGED_KEYS_FILE),
@@ -1209,12 +1211,12 @@ async function verifyInstalledRuntime(): Promise<void> {
           (word, client_dict_id, cloud_id, source, sync_status, shared_at, updated_at)
         VALUES ('PI', 'owner-pi', 'cloud-pi', 'learned', 'synced', '2026-01-01', '2026-01-01'),
                ('owner-only', 'owner-word', 'cloud-word', 'manual', 'synced', NULL, '2026-01-02');
-        INSERT INTO custom_dictionary
-          (word, client_dict_id, cloud_id, source, sync_status, deleted_at, shared_at, fallback_retired)
-        VALUES ('Godot', 'retired-godot', 'cloud-godot', 'learned', 'synced', '2026-01-03', '2026-01-02', 1);
         CREATE TABLE snippets (trigger TEXT, replacement TEXT);
         INSERT INTO snippets VALUES ('owner snippet', 'preserve me');
       `);
+        db.query(
+          "INSERT INTO custom_dictionary (word, client_dict_id, cloud_id, source, sync_status, deleted_at, shared_at, fallback_retired) VALUES (?, 'retired', 'cloud-retired', 'learned', 'synced', '2026-01-03', '2026-01-02', 1)",
+        ).run(retiredWord);
       } finally {
         db.close();
       }
@@ -1296,7 +1298,7 @@ async function verifyInstalledRuntime(): Promise<void> {
       assert.ok(after.rows.find((row) => row.word === "owner-only")?.deleted_at);
       assert.deepEqual(after.schema, before.schema);
       assert.deepEqual(after.snippets, before.snippets);
-      const restored = after.rows.find((row) => row.word === "Godot");
+      const restored = after.rows.find((row) => row.word === retiredWord);
       assert.ok(restored);
       assert.deepEqual(
         [
@@ -1308,7 +1310,7 @@ async function verifyInstalledRuntime(): Promise<void> {
           restored.fallback_retired,
           restored.sync_status,
         ],
-        [null, "cloud-godot", "manual", null, 1, 0, "pending"],
+        [null, "cloud-retired", "manual", null, 1, 0, "pending"],
       );
       for (const row of after.rows.slice(3)) {
         assert.equal(row.sync_status, "pending");
@@ -1376,7 +1378,7 @@ async function verifyInstalledRuntime(): Promise<void> {
       for (const field of ["word", "source", "client_dict_id", "cloud_id"] as const)
         assert.equal(removed[field], before.rows[0]![field]);
       for (const row of before.rows.filter((row) =>
-        ["owner-only", "OWNER-ONLY", " owner-only ", "Godot"].includes(row.word),
+        ["owner-only", "OWNER-ONLY", " owner-only ", retiredWord].includes(row.word),
       )) {
         const preserved = after.rows.find((entry) => entry.word === row.word)!;
         for (const [key, value] of Object.entries(row))
