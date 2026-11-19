@@ -50,15 +50,11 @@ const extensionsForLinux = [
 ];
 
 // Built locally from source and installed via VSIX instead of the Marketplace.
-const localVscodeExtensions = ["catbraaain.worktree-workspace-sync", "todo-lsp.todo"];
+const localVscodeExtensions = ["todo-lsp.todo"];
 
 const home = process.env.HOME;
 if (home === undefined) throw new Error("HOME: unbound variable");
 const todoLspRepo = join(home, "mirrors/github.com/CatBraaain/todo-lsp");
-const worktreeWorkspaceSyncRepo = join(
-  home,
-  "mirrors/github.com/CatBraaain/vscode-worktree-workspace-sync",
-);
 const defaultBranch = "main";
 
 type Label = "linux" | "windows";
@@ -134,11 +130,6 @@ async function syncExtensions(label: Label) {
 
 function localExtensionSource(extension: string) {
   switch (extension) {
-    case "catbraaain.worktree-workspace-sync":
-      return {
-        url: "https://github.com/CatBraaain/vscode-worktree-workspace-sync.git",
-        repo: worktreeWorkspaceSyncRepo,
-      };
     case "todo-lsp.todo":
       return { url: "https://github.com/CatBraaain/todo-lsp.git", repo: todoLspRepo };
     default:
@@ -159,16 +150,7 @@ async function ensureRepo(url: string, repo: string) {
 
 async function buildLocalExtensionVsix(extension: string) {
   let vsixPath: string;
-  if (extension === "catbraaain.worktree-workspace-sync") {
-    const version = (
-      await $`node -p "require('./package.json').version"`.cwd(worktreeWorkspaceSyncRepo).text()
-    ).replace(/\n+$/, "");
-    vsixPath = join(worktreeWorkspaceSyncRepo, `worktree-workspace-sync-${version}.vsix`);
-    rmSync(vsixPath, { force: true });
-    await $`npm install 1>&2`.cwd(worktreeWorkspaceSyncRepo);
-    await $`npm run build 1>&2`.cwd(worktreeWorkspaceSyncRepo);
-    await $`npm run package -- --allow-missing-repository 1>&2`.cwd(worktreeWorkspaceSyncRepo);
-  } else if (extension === "todo-lsp.todo") {
+  if (extension === "todo-lsp.todo") {
     const version = (
       await $`node -p "require('./package.json').version"`
         .cwd(join(todoLspRepo, "vscode-todo"))
