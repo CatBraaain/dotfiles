@@ -549,7 +549,7 @@ describe("dispatch CLI", () => {
     for (const args of invalid) {
       const result = invoke(home, args);
       assert.equal(result.code, 2, JSON.stringify(args));
-      assert.match(result.stderr, /usage: ticket dispatch \[-p <project>\]/);
+      assert.match(result.stderr, /usage: ticket dispatch \[-p\|--project <project>\]/);
       assert.equal(result.stdout, "");
     }
   });

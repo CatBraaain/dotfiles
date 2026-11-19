@@ -20,13 +20,13 @@ import {
 const STATUSES = ["draft", "open", "blocked", "locked", "closed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
-const USAGE = `usage: ticket list [-s <s>[,<s>...]] [-p <project>] [-a] [--json]
+const USAGE = `usage: ticket list [-s|--status <s>[,<s>...]] [-p|--project <project>] [-a|--all] [--json]
        ticket stats [--json]
-       ticket show [<selector>] [-p <project>] [--json]
-       ticket create <json> [-p <project>] [--json]
-       ticket set [<selector>] <json> [-p <project>] [--json]
-       ticket edit [<selector>] <old> <new> [-p <project>] [--json]
-       ticket check [-p <project>] [-a] [--json]
+       ticket show [<selector>] [-p|--project <project>] [--json]
+       ticket create <json> [-p|--project <project>] [--json]
+       ticket set [<selector>] <json> [-p|--project <project>] [--json]
+       ticket edit [<selector>] <old> <new> [-p|--project <project>] [--json]
+       ticket check [-p|--project <project>] [-a|--all] [--json]
        ${DISPATCH_USAGE}`;
 
 interface Flags {

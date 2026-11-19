@@ -16,7 +16,7 @@ export interface DispatchOptions {
 }
 
 export const DISPATCH_USAGE =
-  "ticket dispatch [-p <project>] [-a] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch start [-p <project>] [-a] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch stop [-p <project>] [-a]";
+  "ticket dispatch [-p|--project <project>] [-a|--all] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch start [-p|--project <project>] [-a|--all] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch stop [-p|--project <project>] [-a|--all]";
 
 export function sessionName(prefix: string, id: string, all = false): string {
   if (!all) return prefix + id.split(".").join("_");

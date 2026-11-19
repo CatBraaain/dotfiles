@@ -42,7 +42,7 @@
 
 ## コマンド
 
-### `ticket list [-s <s>[,<s>...]] [-p <project>] [-a] [--json]`
+### `ticket list [-s|--status <s>[,<s>...]] [-p|--project <project>] [-a|--all] [--json]`
 
 位置引数を指定すると usageエラー（終了コード2）とする。
 
@@ -63,23 +63,23 @@ JSON は `project` と各status名をkeyとする件数を持つオブジェク�
 
 位置引数と未対応のオプションは usageエラー（終了コード2）とする。
 
-### `ticket show [<selector>] [-p <project>] [--json]`
+### `ticket show [<selector>] [-p|--project <project>] [--json]`
 
 ID、status、after、title、本文全体を返す。テキスト出力は `id:`、`status:`、`after:`、`title:` の各フィールド行、空行、`body:` 行、本文の順で、本文の末尾空白・改行を保持する。JSON は共通フィールドと末尾空白・改行を保持した `body` を返す。
 
-### `ticket create <json> [-p <project>] [--json]
+### `ticket create <json> [-p|--project <project>] [--json]`
 
 JSON は必須の `title` と任意の `status`、`after`、`body` を持つ。作成するファイルでは frontmatter終端と H1 の間に空行を1行置く。body は H1 の後の空行を挟んで置く。after が未解決で status未指定なら blocked で作る。成功時は `created <id>` に status、after、path を続けるテキスト、または JSON共通フィールドを返す。
 
-### `ticket set [<selector>] <json> [-p <project>] [--json]
+### `ticket set [<selector>] <json> [-p|--project <project>] [--json]`
 
 JSON の許可key は `status` と `after` だけであり、少なくとも一方を含む。frontmatter と status連動を更新する。`status: closed` は上記の原子操作で依存ticket を解放する。成功時は `updated <id>` に status、after、path を続けるテキスト、または JSON共通フィールドを返す。
 
-### `ticket edit [<selector>] <old> <new> [-p <project>] [--json]
+### `ticket edit [<selector>] <old> <new> [-p|--project <project>] [--json]`
 
 frontmatter を除く本文全体（H1 を含む）の literal な `<old>` を検索する。正確に 1回なら `<new>` へ置換する。0回または複数回なら出現数と現在本文を stderr に出し、変更しない。空の old は usage error、空の new は削除である。成功時は `updated <id>` に status、after、path を続けるテキスト、または JSON共通フィールドを返す。
 
-### `ticket check [-p <project>] [-a] [--json]`
+### `ticket check [-p|--project <project>] [-a|--all] [--json]`
 
 frontmatter、重複field、status、missing after、after cycle を検証する。問題の JSON要素は `file`、`kind`、`detail` を持つ。問題なしは `ok` または空配列を返す。
 
@@ -89,9 +89,9 @@ dispatcher は ticket store から起動可能な ticket を探してプロン�
 
 | コマンド | 動作 |
 | --- | --- |
-| `ticket dispatch start [-p <project>] [-a] [--max N] [--interval SEC] [--prefix NAME]` | dispatcher を detached tmuxセッションで起動する |
-| `ticket dispatch [-p <project>] [-a] [--max N] [--interval SEC] [--prefix NAME]` | `start` と同じ動作 |
-| `ticket dispatch stop [-p <project>] [-a]` | 指定した範囲の dispatcher を停止する |
+| `ticket dispatch start [-p\|--project <project>] [-a\|--all] [--max N] [--interval SEC] [--prefix NAME]` | dispatcher を detached tmuxセッションで起動する |
+| `ticket dispatch [-p\|--project <project>] [-a\|--all] [--max N] [--interval SEC] [--prefix NAME]` | `start` と同じ動作 |
+| `ticket dispatch stop [-p\|--project <project>] [-a\|--all]` | 指定した範囲の dispatcher を停止する |
 
 `-a/--all` 指定時は全project を対象とするグローバルdispatcher、未指定時は1 project を対象とするproject単位dispatcher を操作する。操作範囲が同じなら、別のディレクトリ・worktree からも同じ dispatcher を操作する。
 
