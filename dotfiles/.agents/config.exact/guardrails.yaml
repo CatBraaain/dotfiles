@@ -12,7 +12,6 @@ write:
       - ~/.agents/worktrees/${REPOSITORY_NAME}
       - ~/.agents/work/${REPOSITORY_NAME}
       - ~/.agents/tickets
-      - ~/.agents/tickets-archive
       - ~/.pi
       - ~/.config
       - ~/.Surge XT
