@@ -1,19 +1,19 @@
 /**
- * workspaceFolders sync (SPEC "workspaceFolders 同期"): startup workspace
- * transition into the untitled agents workspace, periodic worktree
- * detection, managed-folder adoption and diff application, and the
- * untitled-workspace title bar write. Folder 0 (`~/.agents/agents-workspace`)
- * is fixed and never touched; only folder 1 and beyond are managed.
+ * workspaceFolders sync (SPEC "workspaceFolders 同期"): the startup folder-0
+ * swap into the agents workspace, periodic worktree detection, the ordered
+ * managed-folder application, and the untitled-workspace title bar write.
+ * Folder 0 (`~/.agents/agents-workspace`) is fixed and never managed; folder
+ * 1 and beyond are all managed folders.
  *
  * The pi-mux list side of the sync is push-driven: the session provider
- * calls updateList() with the latest `pi-mux list` cwds on every list
- * acquisition, and each call applies a list-based diff. Worktree
- * detection runs on its own 2500 ms timer and applies a worktree-based
- * diff after each run. The vscode API is injected as VscodeLike so the
- * sync logic never imports "vscode" and tests can use a plain fake.
+ * calls updateList() with the latest `pi-mux list` cwds on every successful
+ * list acquisition, and each call applies one ordered diff. Worktree
+ * detection runs on its own 2500 ms timer. The vscode API is injected as
+ * VscodeLike so the sync logic never imports "vscode" and tests can use a
+ * plain fake.
  */
 
-import { realpath } from "node:fs/promises";
+import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import {
   listWorktrees,
@@ -140,6 +140,17 @@ interface DetectedWorktree {
   readonly name: string;
 }
 
+/** One managed folder entry of the desired order (folder 1 and beyond). */
+interface DesiredFolder {
+  readonly identity: string;
+  readonly uri: UriLike;
+  readonly name?: string;
+}
+
+function byFolderName(a: { readonly name: string }, b: { readonly name: string }): number {
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
+}
+
 export interface FolderSyncDeps {
   readonly vscode: VscodeLike;
   readonly execFile: ExecFile;
@@ -147,20 +158,22 @@ export interface FolderSyncDeps {
   readonly homeDir: string;
   /** Overrides path identity resolution for tests. */
   readonly resolveIdentity?: (folderPath: string) => Promise<string>;
+  /** Overrides agents-workspace directory creation for tests. */
+  readonly ensureDirectory?: (dirPath: string) => Promise<void>;
 }
 
 export class FolderSyncEngine {
   private readonly agentsWorkspace: string;
   private started = false;
   private stopped = false;
-  /** SPEC: single-folder startup outside the agents workspace stops the sync until the next activation. */
+  /** SPEC: an empty window (folder 0 only) neither transitions nor syncs. */
   private syncDisabled = false;
-  private adopted = false;
-  private firstDetectionDone = false;
+  /** SPEC: a rejected folder-0 swap is retried before the next sync application. */
+  private swapPending = false;
+  /** SPEC: the first folder application waits for the first successful list acquisition. */
+  private listReceived = false;
   private detectTimer: ReturnType<typeof setTimeout> | undefined;
-  /** Folder identities this extension added or adopted (folder 1 and beyond). */
-  private readonly managed = new Set<string>();
-  /** Main repository identity per managed worktree folder identity; a failed `.git` read keeps the previous entry. */
+  /** Main repository identity per workspace folder identity (folder 1 and beyond); a failed `.git` read keeps the previous entry. */
   private readonly gitRepos = new Map<string, string>();
   /** Detected worktrees per main repository identity; a failed git run keeps the previous entry. */
   private readonly repoWorktrees = new Map<string, Map<string, DetectedWorktree>>();
@@ -182,11 +195,13 @@ export class FolderSyncEngine {
   }
 
   /**
-   * Receive the latest `pi-mux list` cwds and apply a list-based diff.
-   * Called by the session provider on every successful list acquisition.
+   * Receive the latest `pi-mux list` cwds and apply one ordered diff.
+   * Called by the session provider on every successful list acquisition;
+   * the first call marks that acquisition as done.
    */
   updateList(cwds: readonly string[]): void {
     if (!this.started || this.stopped) return;
+    this.listReceived = true;
     this.latestListCwds = [...cwds];
     void this.enqueue(() => this.applySync());
   }
@@ -217,14 +232,23 @@ export class FolderSyncEngine {
     return (this.deps.resolveIdentity ?? pathIdentity)(folderPath);
   }
 
+  /** SPEC: the agents workspace directory is created before it becomes folder 0. */
+  private ensureDirectory(dirPath: string): Promise<void> {
+    const ensure = this.deps.ensureDirectory;
+    if (ensure !== undefined) return ensure(dirPath);
+    return mkdir(dirPath, { recursive: true }).then(() => undefined);
+  }
+
   private currentFolders(): readonly WorkspaceFolderLike[] {
     return this.deps.vscode.workspace.workspaceFolders ?? [];
   }
 
   /**
-   * SPEC 起動時のワークスペース遷移: promote a single-folder window on the
-   * agents workspace to an untitled workspace, disable the sync for any
-   * other single-folder window, write the title bar, and start detection.
+   * SPEC 起動時のワークスペース遷移: swap folder 0 to the agents workspace
+   * for any other startup configuration, promote a single-folder window
+   * already on the agents workspace to an untitled workspace, write the
+   * title bar, and start detection. An empty window neither transitions
+   * nor syncs.
    */
   private async startup(): Promise<void> {
     if (this.stopped) return;
@@ -234,28 +258,70 @@ export class FolderSyncEngine {
       this.syncDisabled = true;
       return;
     }
-    if (folders.length === 1 && workspace.workspaceFile === undefined) {
-      const identity = await this.identity(folders[0].uri.fsPath);
-      if (this.stopped) return;
-      if (identity !== (await this.identity(this.agentsWorkspace))) {
-        this.syncDisabled = true;
-        return;
-      }
-      // Folders may have grown while the identity was resolved; only a
-      // still-single-folder workspace takes the transition.
-      const current = workspace.workspaceFolders;
-      if (current === undefined || current.length !== 1) return;
-      // Re-apply folder 0 with identical content; the edit itself moves
-      // the window to an untitled workspace. A rejected edit just aborts
-      // the transition: later folder additions bring the untitled state.
-      await updateFoldersAndWait(this.deps.vscode, 0, 1, {
-        uri: current[0].uri,
-        name: current[0].name,
-      });
+    const agentsIdentity = await this.identity(this.agentsWorkspace);
+    const folder0Identity = await this.identity(folders[0].uri.fsPath);
+    if (this.stopped) return;
+    if (folder0Identity !== agentsIdentity) {
+      if (!(await this.swapFolder0())) this.swapPending = true;
+    } else if (folders.length === 1 && workspace.workspaceFile === undefined) {
+      await this.promoteSingleFolder();
     }
     // Title updates are cosmetic; a failure must not break the sync.
     await this.applyTitle().catch(() => undefined);
     this.scheduleDetection(WORKTREE_DETECT_INTERVAL_MS);
+  }
+
+  /**
+   * SPEC 起動時の遷移: re-apply folder 0 with identical content; the edit
+   * itself moves the single-folder window to an untitled workspace. A
+   * rejected edit just aborts the transition: later folder applications
+   * bring the untitled state.
+   */
+  private async promoteSingleFolder(): Promise<void> {
+    // Folders may have grown while the identities were resolved; only a
+    // still-single-folder workspace takes the transition.
+    const current = this.currentFolders();
+    if (current.length !== 1) return;
+    await updateFoldersAndWait(this.deps.vscode, 0, 1, {
+      uri: current[0].uri,
+      name: current[0].name,
+    });
+  }
+
+  /**
+   * SPEC 起動時の付け替え: insert the agents workspace at position 0 and
+   * move the previous folder 0 to position 1 with one edit; in folder
+   * mode the edit itself transitions the window to an untitled
+   * workspace. The agents workspace directory is created first when it
+   * does not exist. Returns false when the edit is rejected or did not
+   * take effect, so the caller retries before the next sync application.
+   */
+  private async swapFolder0(): Promise<boolean> {
+    const folders = this.currentFolders();
+    if (folders.length === 0) return false;
+    const agentsIdentity = await this.identity(this.agentsWorkspace);
+    const previousFolder0 = folders[0];
+    if ((await this.identity(previousFolder0.uri.fsPath)) === agentsIdentity) return true;
+    try {
+      await this.ensureDirectory(this.agentsWorkspace);
+    } catch {
+      return false;
+    }
+    // Folders may have changed while the identities were resolved.
+    const current = this.currentFolders();
+    if (current.length === 0 || current[0].uri.fsPath !== previousFolder0.uri.fsPath) {
+      return false;
+    }
+    await updateFoldersAndWait(
+      this.deps.vscode,
+      0,
+      1,
+      { uri: { fsPath: this.agentsWorkspace } },
+      { uri: previousFolder0.uri, name: previousFolder0.name },
+    );
+    const after = this.currentFolders();
+    if (after.length === 0) return false;
+    return (await this.identity(after[0].uri.fsPath)) === agentsIdentity;
   }
 
   /** SPEC タイトルバー: write the title template once at startup, overwriting any existing value. */
@@ -285,10 +351,13 @@ export class FolderSyncEngine {
 
   /**
    * SPEC worktree の検出: collect main-repository candidates (pi-mux list
-   * cwds plus gitdir-resolvable managed folders), run
+   * cwds plus gitdir-resolvable workspace folders), run
    * `git worktree list --porcelain` per candidate, and keep each
-   * candidate's previous results when its git run fails. The main
-   * worktree (always the first porcelain entry) is excluded.
+   * candidate's previous results when its git run fails. Results are
+   * keyed by the main repository identity: a candidate that is itself a
+   * linked worktree reports its whole repository, so its entries group
+   * under the main repository. The main worktree (always the first
+   * porcelain entry) is excluded.
    */
   private async detect(): Promise<void> {
     if (this.stopped || this.syncDisabled) return;
@@ -298,10 +367,8 @@ export class FolderSyncEngine {
     for (const cwd of this.latestListCwds) {
       candidates.add(await this.identity(cwd));
     }
-    const managedIdentities = new Set<string>();
+    const folderIdentities = new Set(identities.slice(1));
     for (let i = 1; i < folders.length; i++) {
-      if (!this.managed.has(identities[i])) continue;
-      managedIdentities.add(identities[i]);
       const repository = await resolveMainRepository(folders[i].uri.fsPath);
       if (repository !== undefined) {
         this.gitRepos.set(identities[i], await this.identity(repository));
@@ -310,15 +377,18 @@ export class FolderSyncEngine {
       // detection is held instead of dropping the worktrees.
     }
     for (const identity of this.gitRepos.keys()) {
-      if (!managedIdentities.has(identity)) this.gitRepos.delete(identity);
+      if (!folderIdentities.has(identity)) this.gitRepos.delete(identity);
     }
     for (const repository of this.gitRepos.values()) {
       candidates.add(repository);
     }
-    for (const candidate of this.repoWorktrees.keys()) {
-      if (!candidates.has(candidate)) this.repoWorktrees.delete(candidate);
-    }
+    const candidateRepos = new Set<string>();
     for (const candidate of candidates) {
+      // A linked-worktree candidate reports its whole repository, so the
+      // results group under the resolved main repository identity.
+      const repository = await resolveMainRepository(candidate);
+      const repoIdentity = repository !== undefined ? await this.identity(repository) : candidate;
+      candidateRepos.add(repoIdentity);
       let entries;
       try {
         entries = await listWorktrees(candidate, this.deps.execFile);
@@ -335,9 +405,11 @@ export class FolderSyncEngine {
           name: worktreeFolderName(entry),
         });
       }
-      this.repoWorktrees.set(candidate, found);
+      this.repoWorktrees.set(repoIdentity, found);
     }
-    this.firstDetectionDone = true;
+    for (const repoIdentity of this.repoWorktrees.keys()) {
+      if (!candidateRepos.has(repoIdentity)) this.repoWorktrees.delete(repoIdentity);
+    }
     if (!this.stopped && !this.syncDisabled) {
       // The next detection starts one interval after this one completed,
       // independently of how long the diff application takes. Detection
@@ -349,82 +421,118 @@ export class FolderSyncEngine {
   }
 
   /**
-   * SPEC 管理フォルダの採用・管理フォルダの同期: diff the current targets
-   * (pi-mux list cwds plus detected worktrees) against the workspace
-   * folders and apply additions and removals. Targets equal to folder 0
-   * are never added (folder 0 stays fixed), and folders this extension
-   * did not manage are never removed.
+   * SPEC フォルダの並び: the desired folder 1+ order is the pi-mux list
+   * order. Each listed main repository's own worktrees (not themselves
+   * list cwds) follow it directly in display-name order; a folder that is
+   * both a list cwd and a worktree keeps its list position and its
+   * existing name. Worktrees whose main repository is not a list cwd are
+   * appended at the end in display-name order. The agents workspace
+   * (folder 0) and duplicate identities are never included.
    */
-  private async applySync(): Promise<void> {
-    if (this.stopped || this.syncDisabled) return;
-    const folders = this.currentFolders();
-    const identities = await Promise.all(folders.map((folder) => this.identity(folder.uri.fsPath)));
-    const present = new Set(identities);
+  private async desiredFolders(
+    folders: readonly WorkspaceFolderLike[],
+    identities: readonly string[],
+  ): Promise<DesiredFolder[]> {
+    const seen = new Set<string>([await this.identity(this.agentsWorkspace)]);
+    // Existing folders keep their uri and name so a re-edit never renames
+    // them.
+    const existing = new Map<string, WorkspaceFolderLike>();
+    for (let i = 1; i < folders.length; i++) {
+      existing.set(identities[i], folders[i]);
+    }
 
-    // Targets: list cwds first so worktree entries (with their folder
-    // names) win when a path is both.
-    const targets = new Map<string, { path: string; name?: string }>();
+    const desired: DesiredFolder[] = [];
+    const pushFolder = (identity: string, folderPath: string, name: string | undefined) => {
+      if (seen.has(identity)) return;
+      seen.add(identity);
+      const current = existing.get(identity);
+      desired.push({
+        identity,
+        uri: current?.uri ?? { fsPath: folderPath },
+        name: current?.name ?? name,
+      });
+    };
+
+    const detected = new Map<string, DetectedWorktree>();
+    for (const worktrees of this.repoWorktrees.values()) {
+      for (const [identity, worktree] of worktrees) detected.set(identity, worktree);
+    }
+    const listedIdentities = new Set<string>();
+    for (const cwd of this.latestListCwds) {
+      listedIdentities.add(await this.identity(cwd));
+    }
+
     for (const cwd of this.latestListCwds) {
       const identity = await this.identity(cwd);
-      if (!targets.has(identity)) targets.set(identity, { path: cwd });
+      if (seen.has(identity)) continue;
+      pushFolder(identity, cwd, detected.get(identity)?.name);
+      const worktrees = this.repoWorktrees.get(identity);
+      if (worktrees === undefined) continue;
+      for (const [worktreeIdentity, worktree] of [...worktrees].sort(([, a], [, b]) =>
+        byFolderName(a, b),
+      )) {
+        // A worktree that is also a list cwd is placed at its list
+        // position, not inside this group.
+        if (listedIdentities.has(worktreeIdentity)) continue;
+        pushFolder(worktreeIdentity, worktree.path, worktree.name);
+      }
     }
-    for (const worktrees of this.repoWorktrees.values()) {
+
+    const orphanWorktrees: Array<{ identity: string; worktree: DetectedWorktree }> = [];
+    for (const [repoIdentity, worktrees] of this.repoWorktrees) {
+      if (listedIdentities.has(repoIdentity)) continue;
       for (const [identity, worktree] of worktrees) {
-        targets.set(identity, worktree);
+        orphanWorktrees.push({ identity, worktree });
       }
     }
-
-    // SPEC 管理フォルダの採用: folder 1 and beyond are adopted once,
-    // after the first worktree detection completed.
-    if (this.firstDetectionDone && !this.adopted) {
-      this.adopted = true;
-      for (let i = 1; i < folders.length; i++) {
-        if (targets.has(identities[i])) this.managed.add(identities[i]);
-      }
+    orphanWorktrees.sort((a, b) => byFolderName(a.worktree, b.worktree));
+    for (const { identity, worktree } of orphanWorktrees) {
+      pushFolder(identity, worktree.path, worktree.name);
     }
-
-    const additions = [...targets].filter(([identity]) => !present.has(identity));
-    const removals = [...this.managed].filter((identity) => !targets.has(identity));
-
-    if (additions.length > 0) await this.applyAdditions(additions);
-    for (const identity of removals) await this.applyRemoval(identity);
-  }
-
-  private async applyAdditions(
-    additions: ReadonlyArray<[string, { path: string; name?: string }]>,
-  ): Promise<void> {
-    const start = this.currentFolders().length;
-    // Managed even when the edit is rejected, so the next sync retries.
-    for (const [identity] of additions) this.managed.add(identity);
-    await updateFoldersAndWait(
-      this.deps.vscode,
-      start,
-      0,
-      ...additions.map(([, target]) => ({ uri: { fsPath: target.path }, name: target.name })),
-    );
+    return desired;
   }
 
   /**
-   * Remove one managed folder. Tabs under the folder are closed first
-   * and follow VS Code's confirmation dialog for unsaved changes; a
-   * cancelled dialog or a rejected edit keeps the folder managed so the
-   * next sync retries.
+   * SPEC 管理フォルダの同期: build the desired folder 1+ order from the
+   * latest list and the detected worktrees and, when the current folders
+   * differ (order included), close the tabs under the folders that leave
+   * and replace folder 1 and beyond with one edit. Additions, removals,
+   * and reordering are that single edit. A cancelled tab dialog or a
+   * rejected edit keeps the current state so the next sync retries.
    */
-  private async applyRemoval(identity: string): Promise<void> {
-    const folders = this.currentFolders();
-    const identities = await Promise.all(folders.map((folder) => this.identity(folder.uri.fsPath)));
-    const index = identities.indexOf(identity);
-    // Not present anymore, or folder 0 (never managed): just forget it.
-    if (index <= 0) {
-      this.managed.delete(identity);
-      return;
+  private async applySync(): Promise<void> {
+    if (this.stopped || this.syncDisabled) return;
+    if (this.swapPending) {
+      if (!(await this.swapFolder0())) return;
+      this.swapPending = false;
+      // The swap can move the window to an untitled workspace; the title
+      // write is cosmetic and must not break the sync.
+      await this.applyTitle().catch(() => undefined);
     }
-    if (!(await this.closeTabsUnder(folders[index].uri.fsPath))) return;
-    await updateFoldersAndWait(this.deps.vscode, index, 1);
-    const current = await Promise.all(
-      this.currentFolders().map((folder) => this.identity(folder.uri.fsPath)),
+    if (!this.listReceived) return;
+    const folders = this.currentFolders();
+    if (folders.length === 0) return;
+    const identities = await Promise.all(folders.map((folder) => this.identity(folder.uri.fsPath)));
+    const desired = await this.desiredFolders(folders, identities);
+    const isSameOrder =
+      identities.length === desired.length + 1 &&
+      desired.every((entry, i) => entry.identity === identities[i + 1]);
+    if (isSameOrder) return;
+
+    const desiredIdentities = new Set(desired.map((entry) => entry.identity));
+    for (let i = 1; i < folders.length; i++) {
+      if (desiredIdentities.has(identities[i])) continue;
+      // Tabs under leaving folders close first and follow VS Code's
+      // confirmation dialog for unsaved changes; a cancelled dialog
+      // aborts the application so the next sync retries.
+      if (!(await this.closeTabsUnder(folders[i].uri.fsPath))) return;
+    }
+    await updateFoldersAndWait(
+      this.deps.vscode,
+      1,
+      folders.length - 1,
+      ...desired.map((entry) => ({ uri: entry.uri, name: entry.name })),
     );
-    if (!current.includes(identity)) this.managed.delete(identity);
   }
 
   private async closeTabsUnder(folderPath: string): Promise<boolean> {

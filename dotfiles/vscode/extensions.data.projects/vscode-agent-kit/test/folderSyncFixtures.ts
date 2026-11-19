@@ -54,6 +54,10 @@ export class FakeVscode implements VscodeLike {
   cancelNextTabClose = false;
   /** When true, configuration updates reject (title write failure). */
   failTitleUpdate = false;
+  /** Number of updateWorkspaceFolders invocations (one ordered edit = one call). */
+  updateCalls = 0;
+  /** Current `window.title` value; configuration updates overwrite it. */
+  windowTitle: string | undefined = undefined;
   added: { path: string; name: string | undefined }[] = [];
   removed: string[] = [];
   closedTabs: string[] = [];
@@ -68,6 +72,9 @@ export class FakeVscode implements VscodeLike {
     getConfiguration: (section: string): ConfigurationLike => ({
       update: (key: string, value: unknown, target: unknown) => {
         this.titleUpdates.push({ section, key, value, target });
+        if (section === "window" && key === "title") {
+          this.windowTitle = value as string;
+        }
         if (this.failTitleUpdate) {
           return Promise.reject(new Error("configuration update failed"));
         }
@@ -79,6 +86,7 @@ export class FakeVscode implements VscodeLike {
       deleteCount: number | undefined,
       ...toAdd: { uri: UriLike; name?: string }[]
     ) => {
+      this.updateCalls += 1;
       if (this.failNextUpdate) {
         this.failNextUpdate = false;
         return false;

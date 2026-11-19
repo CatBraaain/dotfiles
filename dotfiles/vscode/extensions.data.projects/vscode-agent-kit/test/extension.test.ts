@@ -445,14 +445,18 @@ describe("extension commands", () => {
       provider.deps.onWorkspaces!([repository]);
       await vi.waitFor(
         () =>
+          // The ordered application replaces folder 1 and beyond, so the
+          // repository folder is re-added with its existing name together
+          // with the detected worktree folder.
           expect(api.added).toEqual([
             { path: agents, name: "agents-workspace" },
             { path: repository, name: undefined },
+            { path: repository, name: "main" },
             { path: worktree, name: "feat-x" },
           ]),
         { timeout: 5000 },
       );
-      expect(api.removedPaths).toEqual([agents]);
+      expect(api.removedPaths).toEqual([agents, repository]);
     } finally {
       for (const subscription of subscriptions.splice(0)) subscription.dispose();
     }

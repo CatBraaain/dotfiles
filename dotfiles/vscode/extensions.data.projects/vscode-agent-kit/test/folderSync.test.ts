@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   FolderSyncEngine,
@@ -27,6 +27,13 @@ const FEAT = "/repo/wt/feat-x";
 const mainEntry = wt(MAIN, { branch: "main" });
 const featEntry = wt(FEAT, { branch: "feat-x" });
 
+const TITLE_UPDATE = {
+  section: "window",
+  key: "title",
+  value: UNTITLED_TITLE_TEMPLATE,
+  target: WORKSPACE_TARGET,
+};
+
 interface SetupOptions {
   workspaceFile?: UriLike;
   entries?: readonly WorktreeEntry[] | ((cwd: string) => readonly WorktreeEntry[]);
@@ -36,6 +43,7 @@ let api: FakeVscode;
 let git: FakeGit;
 let engine: FolderSyncEngine;
 let disposable: { dispose(): void };
+let createdDirectories: string[];
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -49,7 +57,15 @@ afterEach(() => {
 function setup(folderPaths: string[] | undefined, options: SetupOptions = {}): void {
   api = new FakeVscode(folderPaths, options.workspaceFile);
   git = createFakeGit(options.entries ?? [mainEntry]);
-  engine = new FolderSyncEngine({ vscode: api, execFile: git.exec, homeDir: HOME });
+  createdDirectories = [];
+  engine = new FolderSyncEngine({
+    vscode: api,
+    execFile: git.exec,
+    homeDir: HOME,
+    ensureDirectory: async (dirPath) => {
+      createdDirectories.push(dirPath);
+    },
+  });
   disposable = engine.start();
 }
 
@@ -75,54 +91,113 @@ async function detectOnce(): Promise<void> {
   await engine.idle();
 }
 
-// SPEC 起動時のワークスペース遷移: a single-folder window on the agents
-// workspace is transitioned to an untitled workspace by re-applying
-// folder 0 unchanged.
-describe("startup workspace transition", () => {
-  it("re-applies folder 0 unchanged for a single agents-workspace folder and writes the title", async () => {
-    setup([AGENTS]);
+// SPEC 起動時の付け替え: a folder 0 outside the agents workspace is swapped
+// to [agents workspace, previous folder 0] with one edit in every startup
+// configuration; in folder mode the edit itself is the untitled transition.
+describe("startup folder-0 swap", () => {
+  it("swaps folder 0 in a folder-mode window, transitions to untitled, and writes the title", async () => {
+    setup(["/other/project"]);
     await boot();
 
-    expect(api.added).toEqual([{ path: AGENTS, name: "agents-workspace" }]);
-    expect(api.removed).toEqual([AGENTS]);
-    expect(api.folderPaths).toEqual([AGENTS]);
+    expect(createdDirectories).toEqual([AGENTS]);
+    expect(api.folderPaths).toEqual([AGENTS, "/other/project"]);
     expect(api.workspace.workspaceFile?.scheme).toBe("untitled");
-    expect(api.titleUpdates).toEqual([
-      {
-        section: "window",
-        key: "title",
-        value: UNTITLED_TITLE_TEMPLATE,
-        target: WORKSPACE_TARGET,
-      },
-    ]);
+    expect(api.titleUpdates).toEqual([TITLE_UPDATE]);
   });
 
-  it("does not transition a saved workspace, an untitled workspace, or a multi-folder window, and keeps syncing", async () => {
-    for (const options of [
-      { workspaceFile: savedWorkspace(`${AGENTS}/ws.code-workspace`) },
-      { workspaceFile: untitledWorkspace() },
-    ] as const) {
-      setup([AGENTS, "/user/dir"], options);
-      await boot();
-      expect(api.added).toEqual([]);
-    }
-    setup([AGENTS, "/user/dir"], {
+  it("swaps folder 0 in a saved workspace without changing the workspace file", async () => {
+    const workspaceFile = savedWorkspace(`${AGENTS}/ws.code-workspace`);
+    setup([MAIN, "/user/dir"], { workspaceFile });
+    await boot();
+
+    expect(createdDirectories).toEqual([AGENTS]);
+    expect(api.folderPaths).toEqual([AGENTS, MAIN, "/user/dir"]);
+    expect(api.workspace.workspaceFile).toEqual(workspaceFile);
+    expect(api.titleUpdates).toEqual([]);
+  });
+
+  it("swaps folder 0 in a multi-folder untitled workspace and keeps syncing", async () => {
+    setup([MAIN, "/user/dir"], {
       workspaceFile: untitledWorkspace(),
       entries: [mainEntry, featEntry],
     });
     await boot();
-    engine.updateList([MAIN]);
+
+    expect(api.folderPaths).toEqual([AGENTS, MAIN, "/user/dir"]);
+
+    await pushList([MAIN]);
     await detectOnce();
-    expect(api.added).toEqual([
-      { path: MAIN, name: undefined },
-      { path: FEAT, name: "feat-x" },
-    ]);
+    expect(api.folderPaths).toEqual([AGENTS, MAIN, FEAT]);
   });
 
-  // SPEC: `~/.agents/agents-workspace` 以外の単一フォルダで起動する → 遷移
-  // せず、同期を停止する。実行中の構成変更で再開しない。
-  it("stops the sync permanently for a single folder outside the agents workspace", async () => {
-    setup(["/other/project"]);
+  it("swaps folder 0 in a single-folder untitled workspace and writes the title", async () => {
+    setup(["/other/project"], { workspaceFile: untitledWorkspace() });
+    await boot();
+
+    expect(api.folderPaths).toEqual([AGENTS, "/other/project"]);
+    expect(api.titleUpdates).toEqual([TITLE_UPDATE]);
+  });
+
+  it("creates the agents workspace directory on the real file system before registering it", async () => {
+    const root = await tempDir("folder-sync-mkdir-");
+    try {
+      const home = join(root, "home");
+      const project = join(root, "project");
+      await mkdir(project, { recursive: true });
+      const agents = join(home, ".agents", "agents-workspace");
+      api = new FakeVscode([project]);
+      git = createFakeGit([mainEntry]);
+      engine = new FolderSyncEngine({ vscode: api, execFile: git.exec, homeDir: home });
+      disposable = engine.start();
+      await boot();
+
+      await expect(access(agents)).resolves.toBeUndefined();
+      expect(api.folderPaths).toEqual([agents, project]);
+    } finally {
+      await cleanup(root);
+    }
+  });
+
+  it("retries a rejected swap before the next sync application", async () => {
+    setup(["/other/project"], { entries: [mainEntry, featEntry] });
+    api.failNextUpdate = true;
+    await boot();
+
+    expect(api.folderPaths).toEqual(["/other/project"]);
+    expect(api.workspace.workspaceFile).toBeUndefined();
+    expect(api.titleUpdates).toEqual([]);
+
+    await pushList([MAIN]);
+    expect(api.folderPaths).toEqual([AGENTS, MAIN]);
+    await detectOnce();
+    expect(api.folderPaths).toEqual([AGENTS, MAIN, FEAT]);
+    expect(api.workspace.workspaceFile?.scheme).toBe("untitled");
+    expect(api.titleUpdates).toEqual([TITLE_UPDATE]);
+  });
+
+  it("aborts the swap when creating the agents workspace fails and retries later", async () => {
+    api = new FakeVscode(["/other/project"]);
+    git = createFakeGit([mainEntry]);
+    let failMkdir = true;
+    engine = new FolderSyncEngine({
+      vscode: api,
+      execFile: git.exec,
+      homeDir: HOME,
+      ensureDirectory: async () => {
+        if (failMkdir) throw new Error("mkdir failed");
+      },
+    });
+    disposable = engine.start();
+    await boot();
+    expect(api.folderPaths).toEqual(["/other/project"]);
+
+    failMkdir = false;
+    await pushList([MAIN]);
+    expect(api.folderPaths).toEqual([AGENTS, MAIN]);
+  });
+
+  it("neither transitions nor syncs an empty window", async () => {
+    setup(undefined);
     await boot();
     await pushList([MAIN]);
     await detectOnce();
@@ -132,9 +207,39 @@ describe("startup workspace transition", () => {
     expect(git.calls).toHaveLength(0);
     expect(api.titleUpdates).toEqual([]);
   });
+});
 
-  // SPEC: 遷移が拒否される → 遷移を中止し、通知しない。同期は続く。
-  it("keeps folder 0 and syncs after a rejected transition", async () => {
+// SPEC 起動時のワークスペース遷移: a single-folder window already on the
+// agents workspace is transitioned to an untitled workspace by re-applying
+// folder 0 unchanged; other configurations on the agents workspace stay.
+describe("startup workspace transition", () => {
+  it("re-applies folder 0 unchanged for a single agents-workspace folder and writes the title", async () => {
+    setup([AGENTS]);
+    await boot();
+
+    expect(api.added).toEqual([{ path: AGENTS, name: "agents-workspace" }]);
+    expect(api.removed).toEqual([AGENTS]);
+    expect(api.folderPaths).toEqual([AGENTS]);
+    expect(api.workspace.workspaceFile?.scheme).toBe("untitled");
+    expect(api.titleUpdates).toEqual([TITLE_UPDATE]);
+  });
+
+  it("does not transition a saved workspace, an untitled workspace, or a multi-folder window on the agents workspace", async () => {
+    for (const options of [
+      { workspaceFile: savedWorkspace(`${AGENTS}/ws.code-workspace`) },
+      { workspaceFile: untitledWorkspace() },
+    ] as const) {
+      setup([AGENTS, "/user/dir"], options);
+      await boot();
+      expect(api.added).toEqual([]);
+      expect(api.folderPaths).toEqual([AGENTS, "/user/dir"]);
+    }
+    setup([AGENTS], { workspaceFile: savedWorkspace(`${AGENTS}/ws.code-workspace`) });
+    await boot();
+    expect(api.added).toEqual([]);
+  });
+
+  it("keeps folder 0 and syncs after a rejected promotion", async () => {
     setup([AGENTS], { entries: [mainEntry, featEntry] });
     api.failNextUpdate = true;
     await boot();
@@ -146,16 +251,13 @@ describe("startup workspace transition", () => {
 
     await pushList([MAIN]);
     await detectOnce();
-    // The folder addition itself moves the window to an untitled workspace.
-    expect(api.added).toEqual([
-      { path: MAIN, name: undefined },
-      { path: FEAT, name: "feat-x" },
-    ]);
+    // The folder application itself moves the window to an untitled workspace.
+    expect(api.added.at(-1)).toEqual({ path: FEAT, name: "feat-x" });
+    expect(api.folderPaths).toEqual([AGENTS, MAIN, FEAT]);
     expect(api.workspace.workspaceFile?.scheme).toBe("untitled");
   });
 
-  // SPEC: 遷移待ちの間にフォルダが増える → 遷移を中止し、通知しない。
-  it("aborts the transition when folders grow while waiting", async () => {
+  it("aborts the promotion when folders grow while waiting", async () => {
     const folders = [AGENTS];
     const currentApi = new FakeVscode(folders);
     let releaseIdentity!: () => void;
@@ -186,7 +288,7 @@ describe("startup workspace transition", () => {
 
 // SPEC worktree の検出.
 describe("worktree detection", () => {
-  it("adds detected worktrees with branch and detached names", async () => {
+  it("adds detected worktrees with branch and detached names in folder-name order", async () => {
     setup([AGENTS], {
       workspaceFile: untitledWorkspace(),
       entries: [
@@ -199,11 +301,8 @@ describe("worktree detection", () => {
     await pushList([MAIN]);
     await detectOnce();
 
-    expect(api.added).toEqual([
-      { path: MAIN, name: undefined },
-      { path: "/repo/wt/topic", name: "topic" },
-      { path: "/repo/wt/det", name: "(detached abcdef1)" },
-    ]);
+    // Folder-name order: "(detached abcdef1)" sorts before "topic".
+    expect(api.folderPaths).toEqual([AGENTS, MAIN, "/repo/wt/det", "/repo/wt/topic"]);
     expect(git.calls[0].args).toEqual(["worktree", "list", "--porcelain"]);
     expect(git.calls[0].cwd).toBe(MAIN);
   });
@@ -228,10 +327,7 @@ describe("worktree detection", () => {
     await pushList([FEAT]);
     await detectOnce();
 
-    expect(api.added).toEqual([
-      { path: FEAT, name: undefined },
-      { path: "/repo/wt/other", name: "other" },
-    ]);
+    expect(api.folderPaths).toEqual([AGENTS, FEAT, "/repo/wt/other"]);
   });
 
   it("polls every 2500 ms", async () => {
@@ -263,8 +359,8 @@ describe("worktree detection", () => {
     });
     disposable = engine.start();
     await boot();
-    // A rejected addition keeps the list cwd managed but absent from the
-    // workspace, so the held detection run stays free of real file reads.
+    // A rejected application keeps the list cwd absent from the workspace,
+    // so the held detection run stays free of real file reads.
     api.failNextUpdate = true;
     engine.updateList([MAIN]);
     await engine.idle();
@@ -272,9 +368,10 @@ describe("worktree detection", () => {
 
     const release = git.holdNext();
     await vi.advanceTimersByTimeAsync(WORKTREE_DETECT_INTERVAL_MS);
-    // Drain the microtask chain so the held git run has started without
-    // waiting for its completion.
-    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    // Drain pending work so the held git run has started without waiting
+    // for its completion; the main-repository resolution reads the real
+    // file system before the git call.
+    await vi.advanceTimersByTimeAsync(1);
     expect(git.calls).toHaveLength(1);
     // While the first run is held, no further detection runs: the next
     // tick is scheduled only after the current run completes.
@@ -300,9 +397,11 @@ describe("worktree detection", () => {
     git.failOnce();
     await detectOnce();
     // The worktree stays (previous results held) and a new list cwd is
-    // still added; MAIN left the list, so its folder is removed.
+    // still added; MAIN left the list, so its folder is removed. The list
+    // cwd comes first; the worktree group without its main repository in
+    // the list is appended at the end.
     await pushList(["/other/list-cwd"]);
-    expect(api.folderPaths).toEqual([AGENTS, FEAT, "/other/list-cwd"]);
+    expect(api.folderPaths).toEqual([AGENTS, "/other/list-cwd", FEAT]);
 
     git.setEntries([mainEntry]);
     await detectOnce();
@@ -322,9 +421,9 @@ describe("worktree detection", () => {
     expect(git.calls).toHaveLength(1);
   });
 
-  // SPEC: 管理フォルダのうち `.git` ファイルを持ち、その `gitdir:` から
-  // 本体リポジトリを解決できるフォルダは検出候補にする（実ディレクトリで検証）。
-  it("keeps detecting through a managed worktree's gitdir after the main repository leaves the list", async () => {
+  // SPEC: 本体リポジトリが list から消えても、worktree フォルダの `.git`
+  // ファイルから本体リポジトリを解決できる限り検出を続ける（実ディレクトリで検証）。
+  it("keeps detecting through a worktree's gitdir after the main repository leaves the list", async () => {
     const root = await tempDir("folder-sync-gitdir-");
     try {
       const mainRepo = join(root, "main");
@@ -349,8 +448,8 @@ describe("worktree detection", () => {
       expect(api.folderPaths).toEqual([AGENTS, mainRepo, worktreeFolder]);
 
       // The repository is unregistered from pi-mux: its own folder leaves
-      // with the list, but the managed worktree's gitdir keeps the
-      // repository a detection candidate, so the worktree folder stays.
+      // with the list, but the worktree's gitdir keeps the repository a
+      // detection candidate, so the worktree folder stays.
       await pushList([]);
       await detectOnce();
       expect(api.folderPaths).toEqual([AGENTS, worktreeFolder]);
@@ -365,69 +464,26 @@ describe("worktree detection", () => {
   });
 });
 
-// SPEC 管理フォルダの採用.
-describe("managed folder adoption", () => {
-  it("adopts folder 1 and beyond matching list cwds or worktrees after the first detection", async () => {
-    setup([AGENTS, MAIN, "/user/dir"], {
+// SPEC 管理フォルダの同期・フォルダの並び.
+describe("managed folder sync", () => {
+  it("applies nothing before the first successful list acquisition", async () => {
+    setup([AGENTS, "/user/dir"], {
       workspaceFile: untitledWorkspace(),
       entries: [mainEntry, featEntry],
     });
     await boot();
-    await pushList([MAIN]);
     await detectOnce();
-    expect(api.folderPaths).toEqual([AGENTS, MAIN, "/user/dir", FEAT]);
-
-    // Both adopted folders leave the target set; only they are removed.
-    await pushList([]);
-    git.setEntries([mainEntry]);
-    await detectOnce();
+    // Detection runs, but no folder is added or removed before the list.
     expect(api.folderPaths).toEqual([AGENTS, "/user/dir"]);
-  });
-
-  it("does not adopt folders whose list cwd appears only after the first detection", async () => {
-    setup([AGENTS, MAIN], { workspaceFile: untitledWorkspace(), entries: [mainEntry] });
-    await boot();
-    // The first detection completes before any list arrives.
-    await detectOnce();
     expect(git.calls).toHaveLength(0);
 
     await pushList([MAIN]);
-    await pushList([]);
     expect(api.folderPaths).toEqual([AGENTS, MAIN]);
+
+    await detectOnce();
+    expect(api.folderPaths).toEqual([AGENTS, MAIN, FEAT]);
   });
 
-  it("adopts by resolved identity, not by literal path", async () => {
-    const root = await tempDir("folder-sync-adopt-");
-    try {
-      const worktreeFolder = join(root, "feat");
-      const alias = join(root, "alias");
-      await mkdir(worktreeFolder, { recursive: true });
-      await symlink(worktreeFolder, alias);
-      const worktreeEntry = wt(worktreeFolder, { branch: "feat" });
-
-      setup([AGENTS, alias], {
-        workspaceFile: untitledWorkspace(),
-        entries: [mainEntry, worktreeEntry],
-      });
-      await boot();
-      await pushList([MAIN]);
-      await detectOnce();
-      expect(api.folderPaths).toEqual([AGENTS, alias, MAIN]);
-      // The alias folder was adopted because it is the same entity as the
-      // detected worktree; removing the worktree removes the alias folder
-      // while the adopted list cwd stays.
-      git.setEntries([mainEntry]);
-      await detectOnce();
-      expect(api.removed).toEqual([alias]);
-      expect(api.folderPaths).toEqual([AGENTS, MAIN]);
-    } finally {
-      await cleanup(root);
-    }
-  });
-});
-
-// SPEC 管理フォルダの同期.
-describe("managed folder sync", () => {
   it("adds a list cwd missing from workspaceFolders", async () => {
     setup([AGENTS], { workspaceFile: untitledWorkspace() });
     await boot();
@@ -437,42 +493,64 @@ describe("managed folder sync", () => {
     expect(api.folderPaths).toEqual([AGENTS, MAIN]);
   });
 
-  it("removes a managed folder when its cwd leaves the list", async () => {
+  it("removes a managed folder when its cwd leaves the list and closes its tabs", async () => {
     setup([AGENTS], { workspaceFile: untitledWorkspace() });
     await boot();
     await pushList([MAIN]);
+    api.openTabs(`${MAIN}/src/a.ts`, `${AGENTS}/README.md`);
+
     await pushList([]);
 
+    expect(api.closedTabs).toEqual([`${MAIN}/src/a.ts`]);
+    expect(api.openTabPaths).toEqual([`${AGENTS}/README.md`]);
     expect(api.removed).toEqual([MAIN]);
     expect(api.folderPaths).toEqual([AGENTS]);
   });
 
-  // SPEC: フォルダ0と同じ実体の cwd が pi-mux list に載る → 重複追加しない。
+  it("removes a folder 1+ folder that is the same entity as the agents workspace", async () => {
+    const root = await tempDir("folder-sync-duplicate-");
+    try {
+      const home = join(root, "home");
+      const agents = join(home, ".agents", "agents-workspace");
+      const alias = join(root, "alias");
+      await mkdir(agents, { recursive: true });
+      await symlink(agents, alias);
+      api = new FakeVscode([agents, alias]);
+      git = createFakeGit([mainEntry]);
+      engine = new FolderSyncEngine({ vscode: api, execFile: git.exec, homeDir: home });
+      disposable = engine.start();
+      await boot();
+
+      await pushList([MAIN]);
+
+      expect(api.removed).toEqual([alias]);
+      expect(api.folderPaths).toEqual([agents, MAIN]);
+    } finally {
+      await cleanup(root);
+    }
+  });
+
   it("does not duplicate folder 0 when the list carries the agents workspace cwd", async () => {
     setup([AGENTS], { workspaceFile: untitledWorkspace() });
     await boot();
     await pushList([AGENTS, MAIN]);
 
     expect(api.added).toEqual([{ path: MAIN, name: undefined }]);
+    expect(api.folderPaths).toEqual([AGENTS, MAIN]);
   });
 
-  it("keeps user-added folders untouched", async () => {
-    setup([AGENTS, "/user/dir"], {
-      workspaceFile: untitledWorkspace(),
-      entries: [mainEntry, featEntry],
-    });
+  it("removes a folder matching neither the list nor the worktrees and closes only its tabs", async () => {
+    setup([AGENTS, "/user/dir"], { workspaceFile: untitledWorkspace(), entries: [mainEntry] });
     await boot();
-    await pushList([MAIN]);
-    await detectOnce();
-    expect(api.folderPaths).toEqual([AGENTS, "/user/dir", MAIN, FEAT]);
+    api.openTabs(`${MAIN}/src/a.ts`, "/user/dir/notes.md", `${AGENTS}/README.md`);
 
-    git.setEntries([mainEntry]);
-    await pushList([]);
-    await detectOnce();
-    expect(api.folderPaths).toEqual([AGENTS, "/user/dir"]);
+    await pushList([MAIN]);
+
+    expect(api.closedTabs).toEqual(["/user/dir/notes.md"]);
+    expect(api.openTabPaths).toEqual([`${MAIN}/src/a.ts`, `${AGENTS}/README.md`]);
+    expect(api.folderPaths).toEqual([AGENTS, MAIN]);
   });
 
-  // SPEC: ユーザーが管理フォルダを workspaceFolders から外す → 次の同期で再追加する。
   it("re-adds a managed folder the user removed", async () => {
     setup([AGENTS], { workspaceFile: untitledWorkspace() });
     await boot();
@@ -484,6 +562,97 @@ describe("managed folder sync", () => {
 
     await pushList([MAIN]);
     expect(api.folderPaths).toEqual([AGENTS, MAIN]);
+  });
+
+  it("places worktrees directly after their main repository in folder-name order", async () => {
+    setup([AGENTS, FEAT], {
+      workspaceFile: untitledWorkspace(),
+      entries: [
+        mainEntry,
+        featEntry,
+        wt("/repo/wt/beta", { branch: "beta" }),
+        wt("/repo/wt/alpha", { branch: "alpha" }),
+      ],
+    });
+    await boot();
+
+    await pushList([MAIN, FEAT]);
+    expect(api.folderPaths).toEqual([AGENTS, MAIN, FEAT]);
+
+    await detectOnce();
+    expect(api.folderPaths).toEqual([AGENTS, MAIN, "/repo/wt/alpha", "/repo/wt/beta", FEAT]);
+  });
+
+  it("reorders folder 1 and beyond into the list order with one edit and keeps tabs open", async () => {
+    setup([AGENTS, "/second", "/first"], {
+      workspaceFile: untitledWorkspace(),
+      entries: [mainEntry],
+    });
+    await boot();
+    api.openTabs("/first/a.ts", "/second/b.ts");
+    const updatesBefore = api.updateCalls;
+
+    await pushList(["/first", "/second"]);
+
+    expect(api.folderPaths).toEqual([AGENTS, "/first", "/second"]);
+    expect(api.updateCalls - updatesBefore).toBe(1);
+    expect(api.openTabPaths).toEqual(["/first/a.ts", "/second/b.ts"]);
+    expect(api.closedTabs).toEqual([]);
+  });
+
+  it("appends worktree groups without a listed main repository at the end in display-name order", async () => {
+    const root = await tempDir("folder-sync-orphans-");
+    try {
+      const worktreeA = join(root, "wt-a");
+      const worktreeB = join(root, "wt-b");
+      const repoA = join(root, "repo-a");
+      const repoB = join(root, "repo-b");
+      await mkdir(worktreeA, { recursive: true });
+      await mkdir(worktreeB, { recursive: true });
+      await writeFile(
+        join(worktreeA, ".git"),
+        `gitdir: ${join(repoA, ".git", "worktrees", "a")}\n`,
+        "utf8",
+      );
+      await writeFile(
+        join(worktreeB, ".git"),
+        `gitdir: ${join(repoB, ".git", "worktrees", "b")}\n`,
+        "utf8",
+      );
+      const worktreeAEntry = wt(worktreeA, { branch: "zeta" });
+      const worktreeBEntry = wt(worktreeB, { branch: "alpha" });
+
+      setup([AGENTS, worktreeA, worktreeB], {
+        workspaceFile: untitledWorkspace(),
+        entries: (cwd) =>
+          cwd === repoA ? [wt(repoA), worktreeAEntry] : [wt(repoB), worktreeBEntry],
+      });
+      await boot();
+      // Detection resolves each worktree folder's own main repository, so
+      // two unlisted repositories become detection candidates.
+      await detectOnce();
+      expect(git.calls.map((call) => call.cwd).sort()).toEqual([repoA, repoB]);
+      expect(api.folderPaths).toEqual([AGENTS, worktreeA, worktreeB]);
+
+      // Without their main repositories in the list, both worktrees are
+      // appended at the end in display-name order across the groups.
+      await pushList([]);
+      expect(api.folderPaths).toEqual([AGENTS, worktreeB, worktreeA]);
+    } finally {
+      await cleanup(root);
+    }
+  });
+
+  it("keeps a prunable worktree folder that is also a list cwd", async () => {
+    setup([AGENTS], { workspaceFile: untitledWorkspace(), entries: [mainEntry, featEntry] });
+    await boot();
+    await pushList([MAIN, FEAT]);
+    await detectOnce();
+    expect(api.folderPaths).toEqual([AGENTS, MAIN, FEAT]);
+
+    git.setEntries([mainEntry, wt(FEAT, { branch: "feat-x", prunable: true })]);
+    await detectOnce();
+    expect(api.folderPaths).toEqual([AGENTS, MAIN, FEAT]);
   });
 
   // SPEC: worktree が検出結果から消える → 削除前にそのフォルダ配下の
@@ -566,10 +735,7 @@ describe("managed folder sync", () => {
     await boot();
     await pushList([MAIN]);
     await detectOnce();
-    expect(api.added).toEqual([
-      { path: MAIN, name: undefined },
-      { path: FEAT, name: "feat-x" },
-    ]);
+    expect(api.folderPaths).toEqual([AGENTS, MAIN, FEAT]);
 
     // Registering the worktree itself as a pi-mux workspace must not add a
     // second folder for it, and the worktree survives the list-driven
@@ -591,14 +757,15 @@ describe("title bar", () => {
     await detectOnce();
     await detectOnce();
 
-    expect(api.titleUpdates).toEqual([
-      {
-        section: "window",
-        key: "title",
-        value: UNTITLED_TITLE_TEMPLATE,
-        target: WORKSPACE_TARGET,
-      },
-    ]);
+    expect(api.titleUpdates).toEqual([TITLE_UPDATE]);
+  });
+
+  it("overwrites an existing window.title value", async () => {
+    setup([AGENTS], { workspaceFile: untitledWorkspace() });
+    api.windowTitle = "${activeEditorShort}";
+    await boot();
+
+    expect(api.windowTitle).toBe(UNTITLED_TITLE_TEMPLATE);
   });
 
   it("does not write the title for a saved workspace", async () => {
@@ -610,20 +777,12 @@ describe("title bar", () => {
     expect(api.titleUpdates).toEqual([]);
   });
 
-  it("does not write the title for another untitled folder 0", async () => {
-    setup(["/other/project"], { workspaceFile: untitledWorkspace() });
-    await boot();
-    await pushList([MAIN]);
-    await detectOnce();
-
-    expect(api.titleUpdates).toEqual([]);
-  });
-
   it("does not write the title while the window stays in folder mode", async () => {
-    setup([AGENTS]);
+    setup(["/other/project"]);
     api.failNextUpdate = true;
     await boot();
 
+    expect(api.workspace.workspaceFile).toBeUndefined();
     expect(api.titleUpdates).toEqual([]);
   });
 

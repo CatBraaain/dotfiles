@@ -17,8 +17,8 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 - pi-mux: Pi を専用 tmux 内で起動・再接続する CLI。専用 tmux の管理と設定適用、セッション ID の採番と固定、保存済みセッションの再開を担う。拡張は pi-mux を通じて Pi を起動・再開し、pi-mux の稼働一覧（`pi-mux list`）で稼働中のセッションを確認する。仕様は dotfiles リポジトリの `pi-mux` SPEC に従う。
 - 本体リポジトリ: worktree でないリポジトリ本体。pi-mux list に載る workspace であり、worktree の検出起点になる。
 - worktree: `git worktree` で作った作業用 worktree。追加・削除と表示名は「workspaceFolders 同期」に従う。
-- フォルダ0: untitled ワークスペースの最初のフォルダ。`~/.agents/agents-workspace` を固定で使い、同期対象から除く。
-- 管理フォルダ: 拡張機能が「workspaceFolders 同期」に従って追加・削除するフォルダ。folder 1 以降。
+- フォルダ0: ワークスペースの最初のフォルダ。起動時の付け替え後は `~/.agents/agents-workspace` を固定で使い、同期対象から除く。
+- 管理フォルダ: 拡張機能が「workspaceFolders 同期」に従って追加・削除・並べ替えするフォルダ。folder 1 以降。
 - untitled ワークスペース: 保存していないマルチルートワークスペース。フォルダ0と管理フォルダをこの形式で扱う。
 - フォルダモード: フォルダをワークスペースとして開いた状態。保存済みワークスペースでも untitled ワークスペースでもない単一フォルダの状態。
 - 同じ実体: パスを正規化し symlink を解決した後の絶対パスが一致すること。
@@ -43,7 +43,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 | E2E-15 | 一覧の取得状態に応じて、取得中・既存一覧・成功空・取得エラーを区別できる | [一覧の取得状態](#一覧の取得状態)どおりの案内・一覧保持・エラー表示 | 初回loading／一覧保持refreshing／成功空／取得error | 保存 E2E（実Webviewへの入力制御） |
 | E2E-16 | 稼働 Pi の list.title と非表示中の workspace 追加を自動反映する | [データソース](#データソース)・[実行フェーズの表示](#実行フェーズの表示)・[空の新規セッションの事前起動](#空の新規セッションの事前起動)どおりの一覧と補充 | なし | 保存 E2E（隔離環境の公開 CLI） |
 | E2E-17 | 本体リポジトリの worktree を作成・削除すると `workspaceFolders` に反映する | [workspaceFolders 同期](#workspacefolders-同期)どおりの管理フォルダの追加・削除 | Worktree added／Worktree removed | 保存 E2E（隔離環境の公開 CLI と git） |
-| E2E-18 | フォルダモードの起動で untitled ワークスペースへ遷移し、タイトルバーからフォルダ名を除く | [workspaceFolders 同期](#workspacefolders-同期)どおりの遷移とタイトルバーの書き込み | Before promotion／After promotion | 保存 E2E |
+| E2E-18 | どの構成で開いた起動でもフォルダ0を `~/.agents/agents-workspace` に付け替え、フォルダモードでは untitled ワークスペースへ遷移し、タイトルバーからフォルダ名を除く | [workspaceFolders 同期](#workspacefolders-同期)どおりの遷移とタイトルバーの書き込み | Before promotion／After promotion | 保存 E2E |
 
 保存 E2E 以外の振る舞いは、unit が workspace 登録 CLI・セッション読み取り・表示名・グルーピング・Webview の描画・グループの開閉・行の選択表示（共有 Terminal の表示先への追従）・メッセージプロトコル・アーカイブ・実行フェーズ表示・Terminal 対応付け・New Session と New Workspace の各契約、worktree の検出・管理フォルダの同期・タイトルバーの書き込みの各契約を検証し、Storybook 静的カタログの smoke が Webview の表示と操作を検証する。各契約の詳細は後続の定義節に従う。
 
@@ -479,16 +479,18 @@ Sessions の標準ビュータイトルにある更新操作の名前とツー�
 
 ## workspaceFolders 同期
 
-拡張機能は pi-mux list の workspace と本体リポジトリの worktree を、VS Code の `workspaceFolders` へ反映する。フォルダ0は `~/.agents/agents-workspace` に固定し、同期対象は folder 1 以降の管理フォルダに限る。ユーザーが手動で追加したフォルダは管理フォルダにしない。
+拡張機能は pi-mux list の workspace と本体リポジトリの worktree を、VS Code の `workspaceFolders` へ反映する。フォルダ0は `~/.agents/agents-workspace` に固定し、同期対象は folder 1 以降の管理フォルダに限る。`workspaceFolders` は、フォルダ0、pi-mux list の順に並ぶ workspace、各 workspace の直後に続くその本体リポジトリの worktree フォルダだけを持つ。
 
 ### 起動時のワークスペース遷移
 
 | 条件 | 動作 |
 | --- | --- |
-| パスが `~/.agents/agents-workspace` の単一フォルダで起動する | フォルダ0を同一内容で保持したまま untitled ワークスペースへ遷移する |
-| 保存済みワークスペース・複数フォルダ・untitled ワークスペースで起動する | 遷移せず、その構成のまま同期を続ける |
-| `~/.agents/agents-workspace` 以外の単一フォルダで起動する | 遷移せず、`workspaceFolders` の同期を停止する。同期の停止は起動時の構成で確定し、実行中の構成変更で再開しない。再開は拡張機能の起動時に行う |
-| 遷移が拒否される、遷移待ちの間にフォルダが増える | 遷移を中止し、通知しない。フォルダの追加適用時に untitled への遷移が起こる |
+| フォルダ0が `~/.agents/agents-workspace` と同じ実体で起動する | 単一フォルダのときは、フォルダ0を同一内容で保持したまま untitled ワークスペースへ遷移する。それ以外の構成では遷移せず、その構成のまま同期を続ける |
+| フォルダ0が `~/.agents/agents-workspace` と異なる実体で起動する（フォルダモード・保存済みワークスペース・複数フォルダ・untitled ワークスペースを含む） | `~/.agents/agents-workspace` を位置0へ挿入し、もとのフォルダ0を位置1へ移す1回の編集でフォルダ0を付け替える。保存済みワークスペースでは、この編集がワークスペースファイルに反映される。フォルダモードでは、この編集自体が untitled ワークスペースへの遷移になる |
+| フォルダ0件の空ウィンドウで起動する | 遷移せず、`workspaceFolders` の同期もしない。その後の構成変更でも遷移も同期もしない |
+| `~/.agents/agents-workspace` が存在しない | フォルダ0として登録する前にディレクトリを作成する |
+| 付け替えの編集が拒否される | 付け替えを中止し、通知しない。次の同期の適用前に再試行する |
+| 単一フォルダの untitled 昇格が拒否される、遷移待ちの間にフォルダが増える | 遷移を中止し、通知しない。フォルダの追加適用時に untitled への遷移が起こる |
 
 ### worktree の検出
 
@@ -501,32 +503,41 @@ Sessions の標準ビュータイトルにある更新操作の名前とツー�
 | bare リポジトリ、不完全な porcelain ブロック | 管理対象に含めない |
 | git コマンドが利用できない、実行が失敗する | worktree の検出を保留し、list に基づく同期は続ける |
 
-検出周期は 2500 ミリ秒とする。検出の実行を重ねず、進行中の検出の完了後に次の検出を行う。worktree フォルダの表示名は worktree のブランチ名とし、detached HEAD のときは `(detached <HEADの先頭7文字>)` とする。
+検出周期は 2500 ミリ秒とする。検出の実行を重ねず、進行中の検出の完了後に次の検出を行う。worktree フォルダの表示名は worktree のブランチ名とし、detached HEAD のときは `(detached <HEADの先頭7文字>)` とする。worktree フォルダの並び順は、表示名のアルファベット順とする。
 
-### 管理フォルダの採用
+### フォルダの並び
 
-folder 1 以降のフォルダの採用は、起動時・再読み込み時の worktree 検出の初回完了後に評価する。フォルダが pi-mux list の cwd または検出済み worktree と同じ実体なら管理フォルダとして採用し、それ以外は非管理フォルダとして扱う。
+`workspaceFolders` の並びは次の規則に従う。順序がこの規則と異なる管理フォルダは、フォルダを追加・削除しない1回の編集で並べ替える。並べ替えでエディタタブは閉じない。
+
+| 対象 | 位置 |
+| --- | --- |
+| フォルダ0（`~/.agents/agents-workspace`） | 先頭 |
+| pi-mux list の各 workspace | フォルダ0の直後から pi-mux list の並び順 |
+| 本体リポジトリの worktree | その本体リポジトリのフォルダの直後に、表示名のアルファベット順 |
+| 本体リポジトリのフォルダが無い worktree | ほかのグループの末尾に、表示名のアルファベット順 |
+| pi-mux list の cwd と worktree の両方に該当するフォルダ | pi-mux list の位置を優先し、既存のフォルダ名を維持する |
 
 ### 管理フォルダの同期
 
-pi-mux list の取得結果と worktree の検出結果を現在の `workspaceFolders` と突き合わせ、差分を適用する。適用の契機は、list の取得完了ごとに list に基づく差分、worktree の検出完了ごとに worktree に基づく差分とする。この拡張機能が担うのはフォルダの追加・削除までであり、SCM への反映は VS Code 内蔵 Git がフォルダの追加・削除に反応して行う。
+pi-mux list の取得結果と worktree の検出結果を現在の `workspaceFolders` と突き合わせ、差分と並び順を適用する。適用の契機は、list の取得完了ごとに list に基づく差分、worktree の検出完了ごとに worktree に基づく差分とする。folder 1 以降のフォルダはすべて管理フォルダとして扱い、最初の適用は起動後の list の初回取得成功後に限る。この拡張機能が担うのはフォルダの追加・削除・並べ替えまでであり、SCM への反映は VS Code 内蔵 Git がフォルダの追加・削除に反応して行う。
 
 | 条件・変化 | 動作 |
 | --- | --- |
-| pi-mux list に載る cwd が `workspaceFolders` に無い | その cwd を管理フォルダとして追加する |
-| 管理フォルダの cwd が pi-mux list から消える | そのフォルダを削除する |
+| pi-mux list に載る cwd が `workspaceFolders` に無い | その cwd を「フォルダの並び」の位置に管理フォルダとして追加する |
+| 管理フォルダの cwd が pi-mux list から消える | そのフォルダを削除する。削除前にそのフォルダ配下のエディタタブを閉じる。未保存の変更があるタブは VS Code の確認ダイアログに従う |
 | worktree が検出結果に現れる | その worktree を管理フォルダとして追加する。pi-mux へは登録しない |
-| worktree が検出結果から消える、または prunable になる | そのフォルダを削除する。削除前にそのフォルダ配下のエディタタブを閉じる。未保存の変更があるタブは VS Code の確認ダイアログに従う |
+| worktree が検出結果から消える、または prunable になる | そのフォルダを削除する。ただし pi-mux list に載る cwd と同じ実体のフォルダは保持する。削除前にそのフォルダ配下のエディタタブを閉じる。未保存の変更があるタブは VS Code の確認ダイアログに従う |
 | フォルダ0と同じ実体の cwd が pi-mux list に載る | 重複追加せず、フォルダ0をその workspace として扱う |
-| ユーザーが手動で追加したフォルダ | 管理対象に含めず、追加・削除・改名をしない |
+| folder 1 以降に、pi-mux list の cwd と検出済み worktree のどちらとも一致しないフォルダがある | そのフォルダを削除する。削除前のタブの扱いは上の削除と同じ |
+| フォルダ0以外に `~/.agents/agents-workspace` と同じ実体のフォルダがある | そのフォルダを削除する。削除前のタブの扱いは上の削除と同じ |
 | ユーザーが管理フォルダを `workspaceFolders` から外す | pi-mux list に載り続ける、または worktree が生存する限り、次の同期で再追加する |
-| エディタタブの確認ダイアログがキャンセルされる、フォルダの追加・削除の適用が拒否される、git の実行が失敗する | 通知せず同期状態を維持し、次の同期で再試行する。キャンセル・拒否された削除対象は管理フォルダに残す |
+| エディタタブの確認ダイアログがキャンセルされる、フォルダの追加・削除・並べ替えの適用が拒否される、git の実行が失敗する | 通知せず同期状態を維持し、次の同期で再試行する。キャンセル・拒否された削除対象は管理フォルダに残す |
 
 ### タイトルバー
 
 | 条件 | 動作 |
 | --- | --- |
-| フォルダ0が `~/.agents/agents-workspace` である untitled ワークスペース | `window.title` のテンプレートを `${dirty}${activeEditorShort}${separator}${profileName}${separator}${appName}` にし、workspace スコープへ書き込む。拡張機能の起動時に書き、既存値を上書きする |
+| フォルダ0が `~/.agents/agents-workspace` である untitled ワークスペース | `window.title` のテンプレートを `${dirty}${activeEditorShort}${separator}${profileName}${separator}${appName}` にし、workspace スコープへ書き込む。拡張機能の起動時に書き、既存値を上書きする。付け替えが起動後の再試行で達成された場合も、達成時に書く |
 | フォルダモード・保存済みワークスペース・フォルダ0が `~/.agents/agents-workspace` 以外の untitled ワークスペース | タイトルバーの設定を書き込まない |
 
 ## セッション選択と Terminal
@@ -597,7 +608,7 @@ pi-mux による再開は既存のセッションファイルへの追記とし�
 
 ### VS Code 再起動
 
-再起動後は保持した追加済み workspace と最新の list・保存済み会話から一覧が復元され、全ワークスペースのモードは未アーカイブ表示（既定）に戻る。untitled ワークスペースは VS Code が復元し、復元後の管理フォルダは「workspaceFolders 同期」の採用と同期に従う。セッションを再選択した際は pi-mux で稼働状態を確認し、生存している Pi があれば同じプロセスへ再接続する。生存 Pi が無い場合は保存されたセッションを再開する。拡張 host の再起動だけを理由に既存の Pi を起動し直さない。最新の list に登録済みの cwd の空の Pi の確保は「空の新規セッションの事前起動」に従い、不足する分だけ起動する。表示用 Terminal はウィンドウ内で1個に保つ。
+再起動後は保持した追加済み workspace と最新の list・保存済み会話から一覧が復元され、全ワークスペースのモードは未アーカイブ表示（既定）に戻る。untitled ワークスペースは VS Code が復元し、復元後の管理フォルダは「workspaceFolders 同期」に従う。セッションを再選択した際は pi-mux で稼働状態を確認し、生存している Pi があれば同じプロセスへ再接続する。生存 Pi が無い場合は保存されたセッションを再開する。拡張 host の再起動だけを理由に既存の Pi を起動し直さない。最新の list に登録済みの cwd の空の Pi の確保は「空の新規セッションの事前起動」に従い、不足する分だけ起動する。表示用 Terminal はウィンドウ内で1個に保つ。
 
 ## 開発補助: e2e 用 VS Code の準備
 

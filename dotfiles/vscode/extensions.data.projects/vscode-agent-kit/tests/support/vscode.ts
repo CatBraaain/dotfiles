@@ -112,7 +112,7 @@ export class VSCodeFixture {
   };
   readonly sessions: Record<string, SessionFixture> = {};
   readonly gitBefore: Record<string, string> = {};
-  /** Launch the window in folder mode on the fixed agents workspace (E2E-18). */
+  /** Launch the window in folder mode on a plain folder, not the agents workspace (E2E-18). */
   folderMode = false;
   responseProvider?: FixedResponseProvider;
   app!: ElectronApplication;
@@ -122,17 +122,15 @@ export class VSCodeFixture {
 
   prepare(): void {
     this.prepareRepositories();
-    if (this.folderMode) {
-      mkdirSync(join(this.directory, "home/.agents/agents-workspace"), { recursive: true });
-    }
     this.prepareSessions();
     this.prepareHost();
     this.preparePiMux();
-    for (const cwd of new Set([
-      this.sessions.A.cwd,
-      this.sessions.B.cwd,
-      this.sessions.External.cwd,
-    ])) {
+    // E2E-18 registers only the opened folder, so the workspaceFolders sync
+    // keeps the swapped-in shape [agents workspace, opened folder] stable.
+    const registeredCwds = this.folderMode
+      ? [join(this.directory, "other")]
+      : [this.sessions.A.cwd, this.sessions.B.cwd, this.sessions.External.cwd];
+    for (const cwd of new Set(registeredCwds)) {
       this.piMux(["workspace", "register", cwd]);
     }
   }
@@ -167,7 +165,7 @@ export class VSCodeFixture {
         "--new-window",
         "--window-size=1600,1000",
         this.folderMode
-          ? join(this.directory, "home/.agents/agents-workspace")
+          ? join(this.directory, "other")
           : join(this.directory, "fixture.code-workspace"),
       ],
       timeout: 30_000,
@@ -417,6 +415,33 @@ export class VSCodeFixture {
     await command.fill(">Developer: Restart Extension Host");
     await command.press("Enter");
     await expect.poll(() => this.snapshot().hostPid).not.toBe(previousPid);
+  }
+
+  /** Runs a fixture probe command through the command palette. */
+  private async runFixtureCommand(title: string): Promise<void> {
+    await this.page.keyboard.press("F1");
+    const command = this.page
+      .locator(".quick-input-widget input")
+      .describe("Fixture command palette");
+    await command.fill(`>${title}`);
+    await command.press("Enter");
+  }
+
+  /** Opens a text file in an editor tab via the fixture probe. */
+  async openTextFile(relativePath: string): Promise<void> {
+    write(
+      join(this.directory, "fixture-file.json"),
+      JSON.stringify({ file: join(this.directory, relativePath) }),
+    );
+    await this.runFixtureCommand("Fixture: Open File");
+    await expect
+      .poll(() => this.snapshot().tabs.some((tab) => tab.uri?.endsWith(relativePath)))
+      .toBe(true);
+  }
+
+  /** Swaps the last two workspace folders via the fixture probe. */
+  async swapLastTwoFolders(): Promise<void> {
+    await this.runFixtureCommand("Fixture: Swap Last Two Folders");
   }
 
   async openLegacyDisplay(key: string): Promise<void> {
@@ -762,6 +787,8 @@ exec '${realTmux}' -N "$@"
         contributes: {
           commands: [
             { command: "fixture.openLegacyDisplay", title: "Fixture: Open Legacy Pi Display" },
+            { command: "fixture.openFile", title: "Fixture: Open File" },
+            { command: "fixture.swapLastFolders", title: "Fixture: Swap Last Two Folders" },
           ],
         },
       }),

@@ -21,7 +21,12 @@ test(
     const main = host.sessions.A.cwd;
     const external = join(host.directory, "external");
     const worktree = join(host.directory, "wt-fixture-new");
-    const baseline = [main, host.sessions.B.cwd, external];
+    // The saved workspace opens with the main repository as folder 0, so
+    // the startup swap prepends the agents workspace; the worktrees of the
+    // main repository follow it in folder-name order (fixture-b,
+    // fixture-external), and `external` is a registered pi-mux workspace.
+    const agentsWorkspace = join(host.directory, "home", ".agents", "agents-workspace");
+    const baseline = [agentsWorkspace, main, host.sessions.B.cwd, external];
 
     await test.step("Show the Explorer to observe workspaceFolders", async () => {
       await host.page.keyboard.press("Control+Shift+E");
@@ -30,6 +35,20 @@ test(
 
     await test.step("Sync the registered workspaces and the existing worktrees into workspaceFolders", async () => {
       await expect.poll(() => host.snapshot().folders).toEqual(baseline);
+    });
+
+    await test.step("Scramble the managed folder order and observe the sync restoring it without closing tabs", async () => {
+      await host.openTextFile(join("worktree/project-b", "same.txt"));
+      await host.swapLastTwoFolders();
+      await expect
+        .poll(() => host.snapshot().folders.slice(-2))
+        .toEqual([external, host.sessions.B.cwd]);
+      // The next sync reorders the managed folders back into the pi-mux
+      // list order and keeps the editor tab open.
+      await expect.poll(() => host.snapshot().folders, { timeout: 20_000 }).toEqual(baseline);
+      await expect
+        .poll(() => host.snapshot().tabs.some((tab) => tab.uri?.endsWith("same.txt")))
+        .toBe(true);
     });
 
     await test.step("Create a worktree of the main repository and observe the managed folder", async () => {
@@ -42,7 +61,12 @@ test(
         .locator(".explorer-viewlet .monaco-list-row", { hasText: "fixture-new" })
         .describe("Added worktree folder row");
       await expect(row).toBeVisible();
-      await expect.poll(() => host.snapshot().folders).toEqual([...baseline, worktree]);
+      // The new worktree is not a pi-mux workspace, so it takes the
+      // worktree position directly after its main repository, before the
+      // registered worktree workspaces at their pi-mux list positions.
+      await expect
+        .poll(() => host.snapshot().folders)
+        .toEqual([agentsWorkspace, main, worktree, host.sessions.B.cwd, external]);
       // The worktree is a workspaceFolders entry only; pi-mux keeps the
       // same registration.
       expect(
@@ -77,29 +101,31 @@ test.describe("folder-mode startup", () => {
   test.use({ folderMode: true });
 
   test(
-    "フォルダモードの起動で untitled ワークスペースへ遷移し、タイトルバーからフォルダ名を除く",
+    "フォルダモードの起動でフォルダ0を agents-workspace に付け替え、untitled ワークスペースへ遷移し、タイトルバーからフォルダ名を除く",
     { annotation: { type: "spec", description: "E2E-18" } },
     async ({ host }, testInfo) => {
       const agentsWorkspace = join(host.directory, "home", ".agents", "agents-workspace");
+      const openedFolder = join(host.directory, "other");
 
-      await test.step("Start a folder-mode window on the agents workspace", async () => {
+      await test.step("Start a folder-mode window on a folder other than the agents workspace", async () => {
         // The folder-mode default title carries the rootName; the extension
         // is not activated until the Sessions view opens.
-        await expect.poll(() => host.page.title()).toContain("agents-workspace");
-        await expect.poll(() => host.snapshot().folders).toEqual([agentsWorkspace]);
+        await expect.poll(() => host.page.title()).toContain("other");
+        await expect.poll(() => host.snapshot().folders).toEqual([openedFolder]);
         await testInfo.attach("Before promotion", {
           body: await host.page.screenshot({ path: testInfo.outputPath("before-promotion.png") }),
           contentType: "image/png",
         });
       });
 
-      await test.step("Open the Sessions view and take the untitled transition with the title write", async () => {
+      await test.step("Open the Sessions view and take the folder-0 swap with the untitled transition and the title write", async () => {
         await host.page
           .getByRole("tab", { name: "Agent Kit", exact: true })
           .describe("Sessions sidebar")
           .click();
-        // The template removes both the folder-mode rootName and the
-        // transient "Untitled (Workspace)" default rootName.
+        // The swap edits the folders of the folder-mode window, which moves
+        // it to an untitled workspace whose folder 0 is the agents
+        // workspace; the opened folder is kept at position 1.
         await expect
           .poll(() => host.page.title())
           .toBe("[Extension Development Host] Visual Studio Code");
@@ -118,8 +144,10 @@ test.describe("folder-mode startup", () => {
         await expect
           .poll(() => host.snapshot().windowTitle?.workspaceValue)
           .toBe(UNTITLED_TITLE_TEMPLATE);
-        // Folder 0 is kept with identical content through the transition.
-        await expect.poll(() => host.snapshot().folders?.[0]).toBe(agentsWorkspace);
+        // Folder 0 is swapped: the agents workspace takes position 0 and
+        // the opened folder is kept at position 1. The opened folder is a
+        // registered workspace, so the sync keeps this shape.
+        await expect.poll(() => host.snapshot().folders).toEqual([agentsWorkspace, openedFolder]);
         await testInfo.attach("After promotion", {
           body: await host.page.screenshot({
             path: testInfo.outputPath("after-promotion.png"),

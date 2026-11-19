@@ -38,6 +38,20 @@ exports.activate = function activate(context) {
         })
         .show();
     }),
+    vscode.commands.registerCommand("fixture.openFile", function openFixtureFile() {
+      const { file } = JSON.parse(
+        fs.readFileSync(path.join(process.env.PI_REVIEW_BASE, "fixture-file.json"), "utf8"),
+      );
+      return vscode.window.showTextDocument(vscode.Uri.file(file));
+    }),
+    vscode.commands.registerCommand("fixture.swapLastFolders", function swapLastFolders() {
+      const folders = vscode.workspace.workspaceFolders ?? [];
+      if (folders.length < 3) {
+        return undefined;
+      }
+      const [secondToLast, last] = folders.slice(-2);
+      return vscode.workspace.updateWorkspaceFolders(folders.length - 2, 2, last, secondToLast);
+    }),
     vscode.window.onDidOpenTerminal(recordDisplays),
     vscode.window.onDidCloseTerminal(recordDisplays),
     vscode.window.tabGroups.onDidChangeTabs(recordDisplays),
