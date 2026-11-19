@@ -135,7 +135,7 @@ Session List は list の cwd を重複なく自動追加する。追加済み w
 
 ## サイドバービュー
 
-Activity Bar に view container `Pi Sessions` を追加し、その中に拡張機能が管理する Webview view を表示する。VS Code 標準の TreeView は使わない。Webview は VS Code のテーマ色を使い、サイドバー幅に合わせて再配置される。セッションのファイル内容・pi-mux の workspace・セッション情報は Webview に渡す表示用データだけに変換し、Webview からファイルシステムを直接操作しない。
+Activity Bar に view container `Agent Kit` を追加し、その中に拡張機能が管理する Webview view を表示する。VS Code 標準の TreeView は使わない。Webview は VS Code のテーマ色を使い、サイドバー幅に合わせて再配置される。セッションのファイル内容・pi-mux の workspace・セッション情報は Webview に渡す表示用データだけに変換し、Webview からファイルシステムを直接操作しない。
 
 ### Webview の表示
 
@@ -299,7 +299,7 @@ Webview に一覧を描画済みで、グループ・行の集合と順序、表
 | 操作エラーの表示中に一覧の取得開始・成功・失敗、通信確認への応答を受信する | 操作エラーの内容と表示期限を保つ。自動更新と手動の Refresh のどちらでも同じとする |
 | 最後の操作エラーの受信から2秒経過する | 操作エラーだけを解除し、一覧の取得状態と表示、ワークスペース登録フォームと入力を保つ |
 
-一覧取得の失敗で VS Code の通知は出さず、失敗の原因も一覧・状態欄に表示しない。原因は出力チャネル `Pi Sessions` に error レベルで記録し、ビューを表示していない間の失敗も同じく記録する。
+一覧取得の失敗で VS Code の通知は出さず、失敗の原因も一覧・状態欄に表示しない。原因は出力チャネル `Agent Kit` に error レベルで記録し、ビューを表示していない間の失敗も同じく記録する。
 
 ### 一覧の通信状態
 
@@ -546,7 +546,7 @@ e2e テストが拡張機能の読み込み先として使う固定バージョ�
 | --- | --- |
 | コマンド | `bun run setup` |
 | 準備対象 | e2e テストが拡張機能の読み込み先として使う Linux 版 VS Code（スクリプトに定義した固定バージョン） |
-| 保存先 | `~/.cache/pi-sessions-screenshots/vscode-<固定バージョン>/`（例: `vscode-1.138.0/`） |
+| 保存先 | `~/.cache/agent-kit-screenshots/vscode-<固定バージョン>/`（例: `vscode-1.138.0/`） |
 | バージョン管理 | ダウンロードした VS Code とその展開物は git の管理対象外 |
 
 | 条件 | 動作 |

@@ -230,15 +230,13 @@ describe("createDemoBridge", () => {
 
   it("removes a group with sessions after unregisterWorkspace", () => {
     const { bridge, last } = setup();
-    bridge.postMessage({ type: "addWorkspace", path: "~/projects/vscode-pi-sessions" });
-    expect(last().groups.some((group) => group.cwd === "~/projects/vscode-pi-sessions")).toBe(true);
+    bridge.postMessage({ type: "addWorkspace", path: "~/projects/vscode-agent-kit" });
+    expect(last().groups.some((group) => group.cwd === "~/projects/vscode-agent-kit")).toBe(true);
 
-    bridge.postMessage({ type: "unregisterWorkspace", cwd: "~/projects/vscode-pi-sessions" });
+    bridge.postMessage({ type: "unregisterWorkspace", cwd: "~/projects/vscode-agent-kit" });
 
     // Registered workspaces are the whitelist: unregistered cwds disappear.
-    expect(last().groups.some((group) => group.cwd === "~/projects/vscode-pi-sessions")).toBe(
-      false,
-    );
+    expect(last().groups.some((group) => group.cwd === "~/projects/vscode-agent-kit")).toBe(false);
   });
 
   it("does not duplicate a group added twice on addWorkspace", () => {

@@ -49,9 +49,7 @@ test(
 
     async function capture(name: string, filename: string): Promise<void> {
       await expect(
-        host.page
-          .getByRole("tab", { name: "Pi Sessions", exact: true })
-          .describe("Sessions sidebar"),
+        host.page.getByRole("tab", { name: "Agent Kit", exact: true }).describe("Sessions sidebar"),
       ).toHaveAttribute("aria-selected", "true");
       await expect(
         host.page.locator(".monaco-workbench").describe("Entire VS Code workbench"),

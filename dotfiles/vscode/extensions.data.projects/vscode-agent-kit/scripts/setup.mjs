@@ -11,7 +11,7 @@ import { pipeline } from "node:stream/promises";
 // Fixed VS Code version for reproducible e2e tests. Bump manually to update.
 const VSCODE_VERSION = "1.138.0";
 
-const CACHE_DIR = path.join(homedir(), ".cache", "pi-sessions-screenshots");
+const CACHE_DIR = path.join(homedir(), ".cache", "agent-kit-screenshots");
 const VSCODE_DIR = path.join(CACHE_DIR, `vscode-${VSCODE_VERSION}`);
 const VSCODE_EXECUTABLE = path.join(VSCODE_DIR, "VSCode-linux-x64", "code");
 

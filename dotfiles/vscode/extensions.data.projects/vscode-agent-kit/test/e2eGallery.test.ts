@@ -18,7 +18,7 @@ import { parseGalleryCases, serializeGalleryRun } from "../tests/support/e2eGall
 import type { GalleryRun, GalleryTest } from "../tests/support/e2eGallery";
 
 const root = resolve(import.meta.dirname, "..");
-const scratchRoot = "/tmp/work/vscode-pi-sessions/unify-e2e-gallery";
+const scratchRoot = "/tmp/work/vscode-agent-kit/unify-e2e-gallery";
 const specSource = readFileSync(join(root, "SPEC.md"), "utf8");
 const viewerSource = readFileSync(join(root, "e2e-gallery.html"), "utf8");
 const png =

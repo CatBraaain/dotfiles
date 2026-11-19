@@ -177,13 +177,13 @@ describe("session list loading in the mounted client", () => {
       .toContain("Connection lost");
     expect(await page.locator("#connection-status").getAttribute("class")).toBe("error");
     expect(await page.locator(".session-row").count()).toBe(2);
-    await page.screenshot({ path: "/tmp/work/vscode-pi-sessions/connection-error.png" });
+    await page.screenshot({ path: "/tmp/work/vscode-agent-kit/connection-error.png" });
     const updated = structuredClone(state);
     updated.groups[0].sessions[0].displayName = "Recovered session";
     await receive({ type: "sessions", state: updated, requestId });
     await expect.poll(() => page.locator("#connection-status").textContent()).toBe("");
     expect(await page.locator(".selected .session-name").textContent()).toBe("Recovered session");
-    await page.screenshot({ path: "/tmp/work/vscode-pi-sessions/connection-recovered.png" });
+    await page.screenshot({ path: "/tmp/work/vscode-agent-kit/connection-recovered.png" });
     expect(await page.locator(".session-row").count()).toBe(2);
     expect(
       await page

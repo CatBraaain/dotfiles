@@ -12,7 +12,7 @@ import { SessionWebviewProvider, VIEW_ID } from "./webview/sessionWebviewProvide
 export function activate(context: vscode.ExtensionContext): void {
   const homeDir = homedir();
   const registry = new TerminalRegistry(editorTerminals());
-  const log = vscode.window.createOutputChannel("Pi Sessions", { log: true });
+  const log = vscode.window.createOutputChannel("Agent Kit", { log: true });
 
   context.subscriptions.push(
     vscode.window.onDidCloseTerminal((closed) => registry.onTerminalClosed(closed)),
@@ -112,7 +112,7 @@ export function activate(context: vscode.ExtensionContext): void {
         for (const watcher of historyWatchers.values()) watcher.dispose();
       },
     },
-    vscode.commands.registerCommand("piSessions.refreshSessions", () => provider.refreshManually()),
+    vscode.commands.registerCommand("agentKit.refreshSessions", () => provider.refreshManually()),
     vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
       webviewOptions: { retainContextWhenHidden: true },
     }),

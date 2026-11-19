@@ -30,7 +30,7 @@ async function withPiMuxProcess(
   program: string,
   run: (cwd: string) => Promise<void>,
 ): Promise<void> {
-  const parent = "/tmp/work/vscode-pi-sessions";
+  const parent = "/tmp/work/vscode-agent-kit";
   mkdirSync(parent, { recursive: true });
   const directory = mkdtempSync(join(parent, "pi-mux-process-"));
   writeFileSync(join(directory, "pi-mux"), `#!/usr/bin/env node\n${program}\n`, { mode: 0o700 });

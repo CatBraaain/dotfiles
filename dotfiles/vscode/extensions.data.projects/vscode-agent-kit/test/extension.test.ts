@@ -80,7 +80,7 @@ describe("extension commands", () => {
     return api.watchers.find(({ base }) => base.fsPath === directory);
   }
 
-  function register(commandId = "piSessions.refreshSessions") {
+  function register(commandId = "agentKit.refreshSessions") {
     const disposable = { dispose: vi.fn() };
     api.registerCommand.mockReturnValue(disposable);
     const context = {
@@ -116,12 +116,10 @@ describe("extension commands", () => {
 
   it("does not register or contribute the removed tmux settings command", () => {
     register();
-    expect(api.registerCommand.mock.calls.map(([id]) => id)).toEqual([
-      "piSessions.refreshSessions",
-    ]);
+    expect(api.registerCommand.mock.calls.map(([id]) => id)).toEqual(["agentKit.refreshSessions"]);
     expect(
       manifest.contributes.commands.some(
-        ({ command }) => command === "piSessions.reapplyTmuxSettings",
+        ({ command }) => command === "agentKit.reapplyTmuxSettings",
       ),
     ).toBe(false);
   });
@@ -133,7 +131,7 @@ describe("extension commands", () => {
     const refresh = vi.spyOn(SessionWebviewProvider.prototype, "refresh").mockResolvedValue();
     register();
     await vi.waitFor(() => expect(api.watchers).toHaveLength(1));
-    expect(api.createOutputChannel).toHaveBeenCalledWith("Pi Sessions", { log: true });
+    expect(api.createOutputChannel).toHaveBeenCalledWith("Agent Kit", { log: true });
     expect(sync).not.toHaveBeenCalled();
     expect(refresh).toHaveBeenCalledOnce();
     expect(api.watchers[0]).toMatchObject({
@@ -293,30 +291,30 @@ describe("extension commands", () => {
 
   it("contributes a named refresh icon only to the Sessions view title", () => {
     expect(manifest.contributes.commands).toContainEqual({
-      command: "piSessions.refreshSessions",
-      category: "Pi Sessions",
+      command: "agentKit.refreshSessions",
+      category: "Agent Kit",
       title: "Refresh Sessions",
       icon: "$(refresh)",
     });
     expect(manifest.contributes.menus).toEqual({
       "view/title": [
         {
-          command: "piSessions.refreshSessions",
-          when: "view == piSessions.sessions",
+          command: "agentKit.refreshSessions",
+          when: "view == agentKit.sessions",
           group: "navigation",
         },
       ],
-      commandPalette: [{ command: "piSessions.refreshSessions", when: "false" }],
+      commandPalette: [{ command: "agentKit.refreshSessions", when: "false" }],
     });
-    expect(manifest.contributes.viewsContainers.activitybar[0].title).toBe("Pi Sessions");
-    expect(manifest.contributes.views.piSessionViews[0].name).toBe("Sessions");
+    expect(manifest.contributes.viewsContainers.activitybar[0].title).toBe("Agent Kit");
+    expect(manifest.contributes.views.agentKitViews[0].name).toBe("Sessions");
   });
 
   it("refreshes the registered Sessions provider manually from the native title command", async () => {
     const refreshManually = vi
       .spyOn(SessionWebviewProvider.prototype, "refreshManually")
       .mockResolvedValue();
-    const command = register("piSessions.refreshSessions");
+    const command = register("agentKit.refreshSessions");
     const provider = api.registerWebviewViewProvider.mock.calls[0][1];
     refreshManually.mockClear();
 

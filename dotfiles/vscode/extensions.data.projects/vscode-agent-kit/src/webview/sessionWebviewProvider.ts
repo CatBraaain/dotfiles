@@ -18,7 +18,7 @@ import {
 import { sessionViewGroups } from "./sessionViewData";
 import { webviewHtml } from "./webviewHtml";
 
-export const VIEW_ID = "piSessions.sessions";
+export const VIEW_ID = "agentKit.sessions";
 export const LIST_REFRESH_INTERVAL_MS = 250;
 const INITIAL_HISTORY_RETRY_MS = 1_000;
 const MAX_HISTORY_RETRY_MS = 30_000;

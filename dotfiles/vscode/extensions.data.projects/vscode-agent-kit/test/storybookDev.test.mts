@@ -10,7 +10,7 @@ it("serves and renders the sample catalog through bun run storybook", async ({
   signal,
   onTestFinished,
 }) => {
-  const scratchRoot = "/tmp/work/vscode-pi-sessions";
+  const scratchRoot = "/tmp/work/vscode-agent-kit";
   await mkdir(scratchRoot, { recursive: true });
   const home = await mkdtemp(join(scratchRoot, "storybook-dev-"));
   const workSignal = AbortSignal.any([signal, AbortSignal.timeout(90_000)]);

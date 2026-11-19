@@ -1,6 +1,6 @@
 {
-  "name": "pi-sessions",
-  "displayName": "Pi Sessions",
+  "name": "agent-kit",
+  "displayName": "Agent Kit",
   "version": "0.1.0",
   "private": true,
   "description": "Browse Pi (pi-coding-agent) sessions in the sidebar and open them in editor terminals.",
@@ -8,7 +8,7 @@
     "Other"
   ],
   "license": "UNLICENSED",
-  "publisher": "pi-sessions",
+  "publisher": "agent-kit",
   "main": "./dist/extension.cjs",
   "scripts": {
     "build": "vp pack && vp build",
@@ -16,7 +16,7 @@
     "setup": "node scripts/setup.mjs",
     "test": "bun run build && bun run storybook:build && vp test",
     "test:e2e": "bun run build && xvfb-run -a playwright test",
-    "vsix": "bun run build && bunx @vscode/vsce package --allow-missing-repository --skip-license --no-dependencies && code --install-extension pi-sessions-0.1.0.vsix --force",
+    "vsix": "bun run build && bunx @vscode/vsce package --allow-missing-repository --skip-license --no-dependencies && code --install-extension agent-kit-0.1.0.vsix --force",
     "storybook": "storybook dev -p 6006",
     "storybook:build": "storybook build"
   },
@@ -37,8 +37,8 @@
   "contributes": {
     "commands": [
       {
-        "command": "piSessions.refreshSessions",
-        "category": "Pi Sessions",
+        "command": "agentKit.refreshSessions",
+        "category": "Agent Kit",
         "title": "Refresh Sessions",
         "icon": "$(refresh)"
       }
@@ -46,14 +46,14 @@
     "menus": {
       "view/title": [
         {
-          "command": "piSessions.refreshSessions",
-          "when": "view == piSessions.sessions",
+          "command": "agentKit.refreshSessions",
+          "when": "view == agentKit.sessions",
           "group": "navigation"
         }
       ],
       "commandPalette": [
         {
-          "command": "piSessions.refreshSessions",
+          "command": "agentKit.refreshSessions",
           "when": "false"
         }
       ]
@@ -61,16 +61,16 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "piSessionViews",
-          "title": "Pi Sessions",
-          "icon": "media/pi-sessions.svg"
+          "id": "agentKitViews",
+          "title": "Agent Kit",
+          "icon": "media/agent-kit.svg"
         }
       ]
     },
     "views": {
-      "piSessionViews": [
+      "agentKitViews": [
         {
-          "id": "piSessions.sessions",
+          "id": "agentKit.sessions",
           "name": "Sessions",
           "type": "webview"
         }

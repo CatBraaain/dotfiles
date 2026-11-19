@@ -84,7 +84,7 @@ export const SampleSessions: SessionsStory = storyFromDemoState(
 );
 
 export const AllMode: SessionsStory = storyFromDemoState("Sample — workspace All mode", "sample", {
-  allModeCwd: "~/projects/vscode-pi-sessions",
+  allModeCwd: "~/projects/vscode-agent-kit",
 });
 
 export const EmptySessions: SessionsStory = storyFromDemoState(

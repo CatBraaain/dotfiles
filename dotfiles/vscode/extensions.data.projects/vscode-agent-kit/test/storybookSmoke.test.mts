@@ -28,8 +28,8 @@ const atlasArchivedId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
 const piToolsPlainId = "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72";
 const piToolsOtherId = "4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83";
 const worktreeId = "5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94";
-const projectModeSelector = '[data-mode-toggle="~/projects/vscode-pi-sessions"]';
-const worktreeModeSelector = '[data-mode-toggle="~/.agents/worktrees/vscode-pi-sessions"]';
+const projectModeSelector = '[data-mode-toggle="~/projects/vscode-agent-kit"]';
+const worktreeModeSelector = '[data-mode-toggle="~/.agents/worktrees/vscode-agent-kit"]';
 const piToolsModeSelector = '[data-mode-toggle="~/projects/pi-tools"]';
 
 // A stale static build renders old DOM and silently fails selector waits, so
@@ -649,11 +649,11 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       page.locator(".group").filter({ has: page.locator(`.group-header[title="${title}"]`) });
     expect(await groupByTitle("~/projects/pi-tools").locator(".session-row").count()).toBe(2);
     expect(
-      await groupByTitle("~/.agents/worktrees/vscode-pi-sessions").locator(".session-row").count(),
+      await groupByTitle("~/.agents/worktrees/vscode-agent-kit").locator(".session-row").count(),
     ).toBe(1);
-    expect(
-      await groupByTitle("~/projects/vscode-pi-sessions").locator(".session-row").count(),
-    ).toBe(2);
+    expect(await groupByTitle("~/projects/vscode-agent-kit").locator(".session-row").count()).toBe(
+      2,
+    );
 
     await page.click(`[data-archive="${atlasCurrentId}"]`);
     await page.waitForFunction(
@@ -1317,7 +1317,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await installBridgeMessageRecorder(page);
     const group = page
       .locator(".group")
-      .filter({ has: page.locator('.group-header[title="~/projects/vscode-pi-sessions"]') });
+      .filter({ has: page.locator('.group-header[title="~/projects/vscode-agent-kit"]') });
     const chevron = group.locator(".group-chevron").describe("Project group chevron");
     const name = group.locator(".group-title").describe("Project group name");
     expect(await chevron.getAttribute("aria-expanded")).toBe("true");
@@ -1360,9 +1360,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await installBridgeMessageRecorder(page);
     const group = page
       .locator(".group")
-      .filter({ has: page.locator('.group-header[title="~/projects/vscode-pi-sessions"]') });
+      .filter({ has: page.locator('.group-header[title="~/projects/vscode-agent-kit"]') });
     const plus = group.locator(".group-new-session").describe("Project group New session button");
-    expect(await plus.getAttribute("aria-label")).toBe("New session in vscode-pi-sessions");
+    expect(await plus.getAttribute("aria-label")).toBe("New session in vscode-agent-kit");
     const rowsBefore = await group.locator(".session-row").count();
 
     await plus.click();
@@ -1378,7 +1378,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         return messages.filter((message) => message.type === "newSession");
       }),
     ).toEqual([
-      { type: "newSession", cwd: "~/projects/vscode-pi-sessions", requestId: expect.any(String) },
+      { type: "newSession", cwd: "~/projects/vscode-agent-kit", requestId: expect.any(String) },
     ]);
     expect(await group.locator(".group-new-session").getAttribute("aria-busy")).toBe("false");
     await page.close();
@@ -1842,11 +1842,11 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
 
   it.each([
     ["~/projects/agenda", 0, "pointer"],
-    ["~/projects/vscode-pi-sessions", 1, "pointer"],
-    ["~/.agents/worktrees/vscode-pi-sessions", 1, "pointer"],
+    ["~/projects/vscode-agent-kit", 1, "pointer"],
+    ["~/.agents/worktrees/vscode-agent-kit", 1, "pointer"],
     ["~/projects/agenda", 0, "ellipsis"],
-    ["~/projects/vscode-pi-sessions", 1, "ellipsis"],
-    ["~/.agents/worktrees/vscode-pi-sessions", 1, "ellipsis"],
+    ["~/projects/vscode-agent-kit", 1, "ellipsis"],
+    ["~/.agents/worktrees/vscode-agent-kit", 1, "ellipsis"],
   ] as const)(
     "unregisters %s directly once with %s sessions via %s without confirmation",
     async (cwd, sessionCount, invocation) => {
@@ -1929,10 +1929,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     async (invocation) => {
       const page = await openStory("sessions-sidebar--sample-sessions");
       await installBridgeMessageRecorder(page);
-      for (const cwd of [
-        "~/projects/vscode-pi-sessions",
-        "~/.agents/worktrees/vscode-pi-sessions",
-      ]) {
+      for (const cwd of ["~/projects/vscode-agent-kit", "~/.agents/worktrees/vscode-agent-kit"]) {
         const header = page.locator(`.group-header[title="${cwd}"]`);
         if (invocation === "context") await header.click({ button: "right" });
         else await header.locator(".group-workspace-menu").click();
@@ -1947,19 +1944,19 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         await page.evaluate(
           () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
         ),
-      ).toEqual([{ type: "unregisterWorkspace", cwd: "~/.agents/worktrees/vscode-pi-sessions" }]);
-      expect(
-        await page.locator('.group-header[title="~/projects/vscode-pi-sessions"]').count(),
-      ).toBe(1);
+      ).toEqual([{ type: "unregisterWorkspace", cwd: "~/.agents/worktrees/vscode-agent-kit" }]);
+      expect(await page.locator('.group-header[title="~/projects/vscode-agent-kit"]').count()).toBe(
+        1,
+      );
       await page.close();
     },
   );
 
   it.each([
-    ["~/projects/vscode-pi-sessions", "remove preceding"],
-    ["~/.agents/worktrees/vscode-pi-sessions", "remove preceding"],
-    ["~/projects/vscode-pi-sessions", "reverse"],
-    ["~/.agents/worktrees/vscode-pi-sessions", "reverse"],
+    ["~/projects/vscode-agent-kit", "remove preceding"],
+    ["~/.agents/worktrees/vscode-agent-kit", "remove preceding"],
+    ["~/projects/vscode-agent-kit", "reverse"],
+    ["~/.agents/worktrees/vscode-agent-kit", "reverse"],
   ] as const)("preserves menu target for %s after %s", async (cwd, update) => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
@@ -2028,7 +2025,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     async (selector) => {
       const page = await openStory("sessions-sidebar--sample-sessions");
       await installBridgeMessageRecorder(page);
-      const header = page.locator('.group-header[title="~/projects/vscode-pi-sessions"]');
+      const header = page.locator('.group-header[title="~/projects/vscode-agent-kit"]');
       const trigger = header.locator(selector);
       for (const shortcut of ["Shift+F10", "ContextMenu"]) {
         await trigger.press(shortcut);
@@ -2053,7 +2050,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await installBridgeMessageRecorder(page);
     const group = page
       .locator(".group")
-      .filter({ has: page.locator('.group-header[title="~/projects/vscode-pi-sessions"]') });
+      .filter({ has: page.locator('.group-header[title="~/projects/vscode-agent-kit"]') });
     const chevron = group.locator(".group-chevron");
     expect(await chevron.getAttribute("aria-expanded")).toBe("true");
     // The displayed session's row is the only selected row.
@@ -2122,8 +2119,8 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       const hints = await headings.evaluateAll((headers) =>
         headers.map((header) => header.getAttribute("title")),
       );
-      expect(hints).toContain("~/projects/vscode-pi-sessions");
-      expect(hints).toContain("~/.agents/worktrees/vscode-pi-sessions");
+      expect(hints).toContain("~/projects/vscode-agent-kit");
+      expect(hints).toContain("~/.agents/worktrees/vscode-agent-kit");
       expect(await page.locator(".group-path").count()).toBe(0);
       const hasOverflow = await page.evaluate(
         () => document.documentElement.scrollWidth > window.innerWidth,
@@ -2135,7 +2132,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
 
   it("captures a screenshot of the static output without the extension host", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 640 });
-    const path = join(tmpdir(), `pi-sessions-storybook-smoke-${process.pid}.png`);
+    const path = join(tmpdir(), `agent-kit-storybook-smoke-${process.pid}.png`);
     await page.screenshot({ path });
     const screenshot = await stat(path);
     expect(screenshot.size).toBeGreaterThan(0);

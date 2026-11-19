@@ -31,9 +31,9 @@ export interface DemoBridge {
   onMessage(callback: (message: unknown) => void): void;
 }
 
-const PROJECT_CWD = "~/projects/vscode-pi-sessions";
+const PROJECT_CWD = "~/projects/vscode-agent-kit";
 const PI_TOOLS_CWD = "~/projects/pi-tools";
-const PROJECT_WORKTREE_CWD = "~/.agents/worktrees/vscode-pi-sessions";
+const PROJECT_WORKTREE_CWD = "~/.agents/worktrees/vscode-agent-kit";
 const REGISTERED_ONLY_CWD = "~/projects/agenda";
 
 const sampleSessions: SessionSummary[] = [

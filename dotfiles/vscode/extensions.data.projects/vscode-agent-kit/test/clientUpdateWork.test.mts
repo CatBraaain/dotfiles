@@ -81,7 +81,7 @@ describe("single-row display work", () => {
   let clientSource: string;
 
   beforeAll(async () => {
-    const artifactRoot = join(tmpdir(), "work", "vscode-pi-sessions", "reduce-session-update-work");
+    const artifactRoot = join(tmpdir(), "work", "vscode-agent-kit", "reduce-session-update-work");
     await mkdir(artifactRoot, { recursive: true });
     const outputDir = await mkdtemp(join(artifactRoot, "row-update-tests-"));
     const clientPath = resolve("src/webview/client.tsx");

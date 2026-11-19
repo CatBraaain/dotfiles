@@ -40,7 +40,7 @@ const realFlock = execFileSync("which", ["flock"], { encoding: "utf8" }).trim();
 let compiledPiMux: string | undefined;
 const executablePath =
   process.env.PI_REVIEW_VSCODE ??
-  join(homedir(), ".cache/pi-sessions-screenshots/vscode-1.138.0/VSCode-linux-x64/code");
+  join(homedir(), ".cache/agent-kit-screenshots/vscode-1.138.0/VSCode-linux-x64/code");
 
 interface SessionFixture {
   id: string;
@@ -192,7 +192,7 @@ export class VSCodeFixture {
 
   async sessionFrame(): Promise<Frame> {
     const tab = this.page
-      .getByRole("tab", { name: "Pi Sessions", exact: true })
+      .getByRole("tab", { name: "Agent Kit", exact: true })
       .describe("Sessions sidebar");
     if ((await tab.getAttribute("aria-selected")) !== "true") await tab.click();
     let readyFrame: Frame | undefined;
@@ -767,7 +767,7 @@ exec '${realTmux}' -N "$@"
 }
 
 function fixtureDirectory(): string {
-  const parent = "/tmp/work/vscode-pi-sessions/tmux-runtime";
+  const parent = "/tmp/work/vscode-agent-kit/tmux-runtime";
   mkdirSync(parent, { recursive: true });
   return mkdtempSync(join(parent, "fixture-"));
 }
