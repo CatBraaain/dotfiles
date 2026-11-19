@@ -1981,24 +1981,137 @@ describe("new initial request", () => {
     assert.deepEqual(parseOperation(["new", "fix the failing test"]), {
       kind: "new",
       detached: false,
+      clientPid: undefined,
       request: "fix the failing test",
     });
     assert.deepEqual(parseOperation(["new", "--detached", "fix the failing test"]), {
       kind: "new",
       detached: true,
+      clientPid: undefined,
       request: "fix the failing test",
     });
     assert.deepEqual(parseOperation(["new", "--detached", "--detached"]), {
       kind: "new",
       detached: true,
+      clientPid: undefined,
       request: "--detached",
     });
     assert.deepEqual(parseOperation(["new", "--"]), {
       kind: "new",
       detached: false,
+      clientPid: undefined,
       request: "--",
     });
   });
+
+  it("accepts a client pid before the initial request in any option order", () => {
+    assert.deepEqual(parseOperation(["new", "--client-pid", "42"]), {
+      kind: "new",
+      detached: false,
+      clientPid: 42,
+    });
+    assert.deepEqual(parseOperation(["new", "--client-pid", "42", "--detached", "fix it"]), {
+      kind: "new",
+      detached: true,
+      clientPid: 42,
+      request: "fix it",
+    });
+    assert.deepEqual(parseOperation(["new", "--detached", "--client-pid", "7"]), {
+      kind: "new",
+      detached: true,
+      clientPid: 7,
+    });
+  });
+
+  it("rejects malformed or repeated client pid options", () => {
+    for (const args of [
+      ["new", "--client-pid", "0"],
+      ["new", "--client-pid", "-1"],
+      ["new", "--client-pid", "1", "--client-pid", "2"],
+      ["new", "--client-pid", "1", "extra", "extra"],
+    ])
+      assert.throws(() => parseOperation(args), /usage/);
+    assert.deepEqual(parseOperation(["new", "--client-pid"]), {
+      kind: "new",
+      detached: false,
+      clientPid: undefined,
+      request: "--client-pid",
+    });
+  });
+});
+
+function prepareNewEmpty(fixture: SessionFixture): void {
+  writeFileSync(
+    join(fixture.directory, "bin/pi"),
+    `#!${process.execPath}
+import { spawnSync } from "node:child_process";
+const id = process.env.PI_TMUX_SESSION_ID;
+const pane = process.env.TMUX_PANE;
+const file = ${JSON.stringify(join(fixture.directory, "conversations"))} + "/" + id + ".jsonl";
+const metadata = { id, cwd: process.cwd(), file, pid: process.pid, startup: "ready" };
+function tmux(args) {
+  const result = spawnSync(${JSON.stringify(realTmux)}, ["-S", ${JSON.stringify(fixture.socket)}, ...args]);
+  if (result.status !== 0) process.exit(99);
+}
+tmux(["set-option", "-p", "-t", pane, "@pi-tmux-session", Buffer.from(JSON.stringify(metadata)).toString("base64")]);
+await Bun.sleep(300000);
+`,
+    { mode: 0o700 },
+  );
+}
+
+describe("new with a client switch", () => {
+  it("secures an empty pi and switches the client pid to it, reusing the same empty pi", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareNewEmpty(fixture);
+      fixture.plainSession("plain");
+      await fixture.attach("plain");
+      const client = fixture.clients()[0]!;
+      const result = fixture.run(["new", "--client-pid", String(client.pid)]);
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 0, result.stderr);
+      const switched = fixture.clients()[0]!;
+      assert.equal(switched.pid, client.pid);
+      assert.match(switched.session, /^pi-empty/);
+      const pane = fixture.tmux(["display-message", "-p", "-t", switched.session, "#{pane_id}"]);
+      const metadata = JSON.parse(
+        Buffer.from(
+          fixture.tmux(["show-options", "-pqv", "-t", pane, "@pi-tmux-session"]),
+          "base64",
+        ).toString(),
+      );
+      assert.equal(metadata.cwd, fixture.cwd);
+      assert.match(result.stdout, new RegExp(`^Pi session ${metadata.id}\\nAttach with: `));
+      const reused = fixture.run(["new", "--client-pid", String(client.pid)]);
+      assert.equal(reused.status, 0, reused.stderr);
+      assert.match(reused.stdout, new RegExp(`^Pi session ${metadata.id}\\n`));
+      assert.equal(fixture.clients()[0]!.session, switched.session);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("keeps the client display unchanged when the client pid matches no client", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareNewEmpty(fixture);
+      fixture.plainSession("plain");
+      await fixture.attach("plain");
+      const before = fixture.clients()[0]!.session;
+      const result = fixture.run(["new", "--client-pid", "999999999"]);
+      assert.equal(result.status, 1);
+      assert.ok(result.stderr.includes("Cannot identify the tmux client"));
+      assert.equal(fixture.clients()[0]!.session, before);
+      const emptySessions = fixture
+        .tmux(["list-sessions", "-F", "#{session_name}"])
+        .split("\n")
+        .filter((name) => name.startsWith("pi-empty"));
+      assert.equal(emptySessions.length, 1);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
 });
 
 describe("restart", () => {

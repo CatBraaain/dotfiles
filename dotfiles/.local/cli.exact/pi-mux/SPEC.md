@@ -31,7 +31,7 @@ CLIのsession-dirs記録と、稼働piの保存先を探索に使わない。
 | --- | --- |
 | `pi-mux` | `pi-mux new` と同じ |
 | `pi-mux -h`、`pi-mux --help` | ヘルプを表示する |
-| `pi-mux new [--detached] [initial-request]` | 初期依頼の有無で会話を選び、通常はTUIへ接続する。`--detached` では会話IDと接続コマンドを返す |
+| `pi-mux new [--detached] [--client-pid <pid>] [initial-request]` | 初期依頼の有無で会話を選び、通常はTUIへ接続する。`--detached` では会話IDと接続コマンドを返す。`--client-pid <pid>` では会話確保後に指定クライアントの表示をその会話へ切替え、会話IDと接続コマンドを返す |
 | `pi-mux open [--temporary] <session-id>` | 完全一致する会話IDのpi実体へ接続する。稼働していなければ、保存会話を元のcwdで再開する。`--temporary` は一時再開を指定する |
 | `pi-mux state <session-id> <state> --source <JSON> --title <JSON>` | 通知元を照合して実行フェーズとタイトルを公開する。`running` は一時再開を通常へ昇格させる |
 | `pi-mux state <session-id> --clear --source <JSON>` | 通知元が公開した実行フェーズとタイトルを除去する |
@@ -72,9 +72,11 @@ CLIのsession-dirs記録と、稼働piの保存先を探索に使わない。
 | `new -h`、`new --help` | 初期依頼に採用せずヘルプを表示する |
 | `new --`、`new --detached --` | `--` 自体を初期依頼として渡す |
 | `new -- request`、`new first second` | 複数の末尾引数としてエラーにする |
+| `new --client-pid <pid>` | 非接続で会話を確保し、指定PIDのtmuxクライアントをその会話へ切替える |
+| `new --client-pid <pid> 'fix the build'` | 初期依頼ありで非接続起動し、指定クライアントをその会話へ切替える |
 | `new --detached --detached` | 先頭を非接続指定、末尾を初期依頼文字列 `--detached` として扱う |
 
-`new` の直後にある先頭1個の `--detached` だけを非接続指定として消費する。区切りの `--` は使わない。その後の1引数が `-h` または `--help` のときはヘルプを表示し、それ以外は初期依頼としてそのまま渡す。`@file` を含め、pi CLIへ渡した後の処理は標準pi CLIに従う。
+`new` の直後にある先頭1個の `--detached` と、初期依頼より前の1個の `--client-pid <pid>` だけをオプションとして消費し、順序は問わない。`--client-pid` の値は `switch` と同じ正の整数とし、指定の重複・不正値・値の欠落の位置から先は、オプションとして解釈せず初期依頼の規則に従う。区切りの `--` は使わない。その後の1引数が `-h` または `--help` のときはヘルプを表示し、それ以外は初期依頼としてそのまま渡す。`@file` を含め、pi CLIへ渡した後の処理は標準pi CLIに従う。
 
 | 初期依頼 | 状態 | 選ぶ会話 |
 | --- | --- | --- |
@@ -85,7 +87,9 @@ CLIのsession-dirs記録と、稼働piの保存先を探索に使わない。
 | なし | 異なるcwdで同時に複数の `new` | cwdごとに別の空新規を選ぶか作成する |
 | あり | 空新規の有無によらず | 呼び出し時のcwdで常に独立した会話IDとtmux sessionを作る。その会話は、保存前も空新規の再利用対象にしない |
 
-会話の選択は `--detached` の有無によらない。指定がなければ選んだ会話のTUIへ接続し、指定があればTUIへ接続せず会話IDとその会話への接続コマンドを返す。新しいsessionの最初のwindow名はCLIが `pi` とする。
+会話の選択は `--detached` と `--client-pid` の有無によらない。選んだ会話のTUIへは、両オプションのどちらも指定がなければ接続し、どちらかがあれば接続せず会話IDとその会話への接続コマンドを返す。新しいsessionの最初のwindow名はCLIが `pi` とする。
+
+`--client-pid <pid>` を指定した場合、`--detached` の有無によらず、選んだ会話の確保とworkspace登録の後に、`switch` と同じ機構（PIDとその親プロセスからのクライアント特定、セッション名の厳密一致による切替）で、指定クライアントの表示をその会話のtmuxセッションへ切り替える。呼び出し元端末へは接続しないため、`--detached` の併用は結果を変えない。会話の確保に失敗したときは指定クライアントの表示を変えない。クライアントの特定・切替に失敗したときは、確保済みの会話を停止せず維持したままエラーにする。
 
 保存済みになった会話は、`open` で同じpi実体へ戻れる。起動済みの旧形式tmux session `pi-empty` も、呼び出し時と同じcwdの空新規なら再利用する。
 

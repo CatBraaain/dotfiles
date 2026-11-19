@@ -22,7 +22,7 @@ import { HistorySummaryCache } from "./history-summary";
 
 type Operation =
   | { kind: "help" }
-  | { kind: "new"; detached: boolean; request?: string }
+  | { kind: "new"; detached: boolean; clientPid?: number; request?: string }
   | { kind: "open"; id: string; temporary: boolean }
   | { kind: "state"; id: string; source: StateSource; notification: StateNotification }
   | { kind: "close"; id: string; ifTemporary: boolean }
@@ -133,7 +133,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux
   pi-mux -h
   pi-mux --help
-  pi-mux new [--detached] [initial-request]
+  pi-mux new [--detached] [--client-pid <pid>] [initial-request]
   pi-mux open [--temporary] <session-id>
   pi-mux state <session-id> <state> --source <JSON> --title <JSON>
   pi-mux state <session-id> --clear --source <JSON>
@@ -260,7 +260,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         console.error(`pi-mux: workspace registration deferred: ${errorMessage(error)}`);
       }
       rememberSessionRoot(config, dirname(target.file));
-      if (operation.kind === "new" && operation.detached) {
+      if (operation.kind === "new" && (operation.detached || operation.clientPid !== undefined)) {
+        if (operation.clientPid !== undefined)
+          await switchSession(config, target.id, operation.clientPid);
         const attach = shellCommand([
           config.tmux,
           "-S",
@@ -290,13 +292,32 @@ export function parseOperation(argv: string[]): Operation {
   if (argv.length === 1 && (argv[0] === "-h" || argv[0] === "--help")) return { kind: "help" };
   if (argv.length === 0) return { kind: "new", detached: false };
   if (argv[0] === "new") {
-    const detached = argv[1] === "--detached";
-    const requests = argv.slice(detached ? 2 : 1);
+    let index = 1;
+    let detached = false;
+    let clientPid: number | undefined;
+    while (index < argv.length) {
+      if (argv[index] === "--detached" && !detached) {
+        detached = true;
+        index++;
+        continue;
+      }
+      if (
+        argv[index] === "--client-pid" &&
+        clientPid === undefined &&
+        /^[1-9]\d*$/.test(argv[index + 1] ?? "")
+      ) {
+        clientPid = Number(argv[index + 1]);
+        index += 2;
+        continue;
+      }
+      break;
+    }
+    const requests = argv.slice(index);
     const request = requests[0];
-    if (requests.length === 0) return { kind: "new", detached };
+    if (requests.length === 0) return { kind: "new", detached, clientPid };
     if (requests.length === 1 && request?.trim() && !request.includes("\0")) {
       if (request === "-h" || request === "--help") return { kind: "help" };
-      return { kind: "new", detached, request };
+      return { kind: "new", detached, clientPid, request };
     }
   }
   if (argv[0] === "state") return parseStateOperation(argv);
@@ -348,7 +369,7 @@ export function parseOperation(argv: string[]): Operation {
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | close [--if-temporary] <session-id> | list | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] | history [--cwd <absolute-cwd>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | restart [--force]]",
+    "usage: pi-mux [new [--detached] [--client-pid <pid>] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | close [--if-temporary] <session-id> | list | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] | history [--cwd <absolute-cwd>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | restart [--force]]",
   );
 }
 
