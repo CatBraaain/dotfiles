@@ -1,5 +1,5 @@
 {
-  "name": "pi-session-move-cli",
+  "name": "project-move-cli",
   "private": true,
   "main": "./src/main.ts",
   "scripts": {

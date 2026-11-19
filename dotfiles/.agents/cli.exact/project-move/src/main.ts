@@ -5,13 +5,13 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { parseArgs } from "node:util";
 import { preserveMtime, readHeader, rewriteSession, type SessionHeader } from "./preserve";
 
-const USAGE = `Usage: pi-session-move <old-cwd> <new-cwd>
-       pi-session-move --execute --pi-stopped <old-cwd> <new-cwd>
-       pi-session-move --help
+const USAGE = `Usage: project-move <old-cwd> <new-cwd>
+       project-move --execute --pi-stopped <old-cwd> <new-cwd>
+       project-move --help
 
 Preview is the default and never writes files.
-Stop pi and all writers of affected sessions, work files and their paths until completion.
-Moves standard normal/archive sessions and ~/.agents/work/<cwd-basename>.
+Stop pi and all writers of affected sessions, work files, tickets and their paths until completion.
+Moves standard normal/archive sessions and ~/.agents/work/<cwd-basename> and ~/.agents/tickets/<cwd-basename>.
 Subagents and custom session directories are not scanned.`;
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PERMISSIONS_MASK = 0o777;
@@ -49,7 +49,7 @@ interface Artifact {
   verified: boolean;
 }
 interface Unit {
-  kind: "session" | "work";
+  kind: "session" | "work" | "tickets";
   source: string;
   destination: string;
   backup: string;
@@ -70,6 +70,10 @@ interface Plan {
   sourceWork: string;
   destinationWork: string;
   workStatus: "move" | "unchanged" | "absent";
+  ticketsRoot: string;
+  sourceTickets: string;
+  destinationTickets: string;
+  ticketsStatus: "move" | "unchanged" | "absent";
   backupRoot: string;
   units: Unit[];
 }
@@ -100,7 +104,7 @@ export function run(argv: readonly string[], env: RunEnv = {}): number {
     printPlan(plan, args.execute, runtime.stdout);
     if (!args.execute) {
       runtime.stdout(
-        "preview: no files changed; backups: <agent-dir>/session-move-backups/<run-id>/",
+        "preview: no files changed; backups: <agent-dir>/project-move-backups/<run-id>/",
       );
       return 0;
     }
@@ -210,7 +214,7 @@ function createPlan(args: Extract<Arguments, { kind: "move" }>, runtime: Runtime
     fail("Session directory encoding collision", sourceSessions);
   guardDirectoryChain(join(sourceSessions, "archive"));
   guardDirectoryChain(join(destinationSessions, "archive"));
-  const backupRoot = join(agentDir, "session-move-backups", randomUUID());
+  const backupRoot = join(agentDir, "project-move-backups", randomUUID());
   const units = sessionPaths(sourceSessions).map((source) => {
     const entry = loadEntry(source, "", true);
     const header = readHeaderAt(entry.bytes!, source, "source");
@@ -243,37 +247,18 @@ function createPlan(args: Extract<Arguments, { kind: "move" }>, runtime: Runtime
     }
   }
   const workRoot = join(runtime.home, ".agents", "work");
-  const sourceWork = join(workRoot, basename(oldCwd));
-  const destinationWork = join(workRoot, basename(newCwd));
-  let workStatus: Plan["workStatus"] = "unchanged";
-  if (pathKey(sourceWork) !== pathKey(destinationWork)) {
-    guardDirectoryChain(dirname(sourceWork));
-    workStatus = lstat(sourceWork) ? "move" : "absent";
-    if (workStatus === "move") {
-      guardDirectoryChain(dirname(destinationWork));
-      if (lstat(destinationWork)) fail("Work destination already exists", destinationWork);
-      const entries = loadTree(sourceWork, true);
-      if (!entries[0]?.stat.isDirectory()) fail("Work source is not a directory", sourceWork);
-      const work = newUnit(
-        "work",
-        sourceWork,
-        destinationWork,
-        join(backupRoot, "work-files", basename(oldCwd)),
-        entries,
-      );
-      const workPaths = [work.source, work.destination, work.backup];
-      const sessionLocations = units.flatMap((unit) => [
-        unit.source,
-        unit.destination,
-        unit.backup,
-      ]);
-      for (let index = 0; index < workPaths.length; index++) {
-        const path = workPaths[index]!;
-        const others = [...workPaths.slice(index + 1), ...sessionLocations];
-        if (others.some((other) => overlaps(path, other)))
-          fail("Overlapping migration paths", path);
-      }
-      units.push(work);
+  const work = planDirectory("work", workRoot, oldCwd, newCwd, backupRoot);
+  const ticketsRoot = join(runtime.home, ".agents", "tickets");
+  const tickets = planDirectory("tickets", ticketsRoot, oldCwd, newCwd, backupRoot);
+  for (const planned of [work, tickets]) {
+    if (planned.unit) units.push(planned.unit);
+  }
+  const locationSets = units.map((unit) => [unit.source, unit.destination, unit.backup]);
+  for (let left = 0; left < locationSets.length; left++) {
+    for (const path of locationSets[left]!) {
+      const others = locationSets.slice(left + 1).flat();
+      if (others.some((other) => overlaps(path, other)))
+        fail("Overlapping migration paths", path);
     }
   }
   if (units.length > 0) guardDirectoryChain(dirname(backupRoot));
@@ -284,12 +269,44 @@ function createPlan(args: Extract<Arguments, { kind: "move" }>, runtime: Runtime
     sourceSessions,
     destinationSessions,
     workRoot,
-    sourceWork,
-    destinationWork,
-    workStatus,
+    sourceWork: work.source,
+    destinationWork: work.destination,
+    workStatus: work.status,
+    ticketsRoot,
+    sourceTickets: tickets.source,
+    destinationTickets: tickets.destination,
+    ticketsStatus: tickets.status,
     backupRoot,
     units,
   };
+}
+
+function planDirectory(
+  kind: "work" | "tickets",
+  root: string,
+  oldCwd: string,
+  newCwd: string,
+  backupRoot: string,
+): { source: string; destination: string; status: "move" | "unchanged" | "absent"; unit?: Unit } {
+  const label = kind === "work" ? "Work" : "Tickets";
+  const source = join(root, basename(oldCwd));
+  const destination = join(root, basename(newCwd));
+  if (pathKey(source) === pathKey(destination))
+    return { source, destination, status: "unchanged" };
+  guardDirectoryChain(dirname(source));
+  if (!lstat(source)) return { source, destination, status: "absent" };
+  guardDirectoryChain(dirname(destination));
+  if (lstat(destination)) fail(`${label} destination already exists`, destination);
+  const entries = loadTree(source, true);
+  if (!entries[0]?.stat.isDirectory()) fail(`${label} source is not a directory`, source);
+  const unit = newUnit(
+    kind,
+    source,
+    destination,
+    join(backupRoot, kind === "work" ? "work-files" : "tickets", basename(oldCwd)),
+    entries,
+  );
+  return { source, destination, status: "move", unit };
 }
 
 function readHeaderAt(bytes: Buffer, path: string, kind: "source" | "existing") {
@@ -516,7 +533,8 @@ function printPlan(plan: Plan, execute: boolean, stdout: Runtime["stdout"]): voi
       destinationSessions: plan.destinationSessions,
       normal: sessions.length - archived,
       archive: archived,
-      precondition: "pi and all writers of affected sessions, work files and their paths stopped",
+      precondition:
+        "pi and all writers of affected sessions, work files, tickets and their paths stopped",
     })}`,
   );
   for (const unit of sessions) {
@@ -531,19 +549,53 @@ function printPlan(plan: Plan, execute: boolean, stdout: Runtime["stdout"]): voi
       })}`,
     );
   }
-  const work = plan.units.find((unit) => unit.kind === "work");
+  printDirectoryPlan(
+    "work",
+    plan.workRoot,
+    plan.sourceWork,
+    plan.destinationWork,
+    plan.workStatus,
+    plan.units.find((unit) => unit.kind === "work"),
+    plan.oldCwd,
+    plan.newCwd,
+    stdout,
+  );
+  printDirectoryPlan(
+    "tickets",
+    plan.ticketsRoot,
+    plan.sourceTickets,
+    plan.destinationTickets,
+    plan.ticketsStatus,
+    plan.units.find((unit) => unit.kind === "tickets"),
+    plan.oldCwd,
+    plan.newCwd,
+    stdout,
+  );
+}
+
+function printDirectoryPlan(
+  kind: "work" | "tickets",
+  root: string,
+  source: string,
+  destination: string,
+  status: "move" | "unchanged" | "absent",
+  unit: Unit | undefined,
+  oldCwd: string,
+  newCwd: string,
+  stdout: Runtime["stdout"],
+): void {
   stdout(
-    `work: ${JSON.stringify({
-      source: plan.sourceWork,
-      destination: plan.destinationWork,
-      oldName: basename(plan.oldCwd),
-      newName: basename(plan.newCwd),
-      workRoot: plan.workRoot,
-      status: plan.workStatus,
-      files: work?.entries.filter((entry) => entry.stat.isFile()).length,
-      directories: work?.entries.filter((entry) => entry.name !== "" && entry.stat.isDirectory())
+    `${kind}: ${JSON.stringify({
+      source,
+      destination,
+      oldName: basename(oldCwd),
+      newName: basename(newCwd),
+      root,
+      status,
+      files: unit?.entries.filter((entry) => entry.stat.isFile()).length,
+      directories: unit?.entries.filter((entry) => entry.name !== "" && entry.stat.isDirectory())
         .length,
-      scanned: work !== undefined,
+      scanned: unit !== undefined,
     })}`,
   );
 }
@@ -552,11 +604,13 @@ function printResults(plan: Plan, stdout: Runtime["stdout"]): void {
   const sessions = plan.units.filter((unit) => unit.kind === "session");
   const completed = sessions.filter((unit) => unit.removed.has("")).length;
   const work = plan.units.find((unit) => unit.kind === "work");
+  const tickets = plan.units.find((unit) => unit.kind === "tickets");
   stdout(
     `result: ${JSON.stringify({
       sessionsCompleted: completed,
       sessionsPending: sessions.length - completed,
       work: work ? unitStatus(work) : plan.workStatus,
+      tickets: tickets ? unitStatus(tickets) : plan.ticketsStatus,
       targets: plan.units.length,
     })}`,
   );
@@ -586,6 +640,10 @@ function printResults(plan: Plan, stdout: Runtime["stdout"]): void {
   }
   if (!work)
     stdout(`work-result: ${JSON.stringify({ status: plan.workStatus, backup: "not-created" })}`);
+  if (!tickets)
+    stdout(
+      `tickets-result: ${JSON.stringify({ status: plan.ticketsStatus, backup: "not-created" })}`,
+    );
 }
 
 function unitStatus(unit: Unit): "complete" | "pending" | "partially-deleted" {
