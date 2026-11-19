@@ -107,25 +107,12 @@ test.describe("folder-mode startup", () => {
       const agentsWorkspace = join(host.directory, "home", ".agents", "agents-workspace");
       const openedFolder = join(host.directory, "other");
 
-      await test.step("Start a folder-mode window on a folder other than the agents workspace", async () => {
-        // The folder-mode default title carries the rootName; the extension
-        // is not activated until the Sessions view opens.
-        await expect.poll(() => host.page.title()).toContain("other");
-        await expect.poll(() => host.snapshot().folders).toEqual([openedFolder]);
-        await testInfo.attach("Before promotion", {
-          body: await host.page.screenshot({ path: testInfo.outputPath("before-promotion.png") }),
-          contentType: "image/png",
-        });
-      });
-
-      await test.step("Open the Sessions view and take the folder-0 swap with the untitled transition and the title write", async () => {
-        await host.page
-          .getByRole("tab", { name: "Agent Kit", exact: true })
-          .describe("Sessions sidebar")
-          .click();
-        // The swap edits the folders of the folder-mode window, which moves
-        // it to an untitled workspace whose folder 0 is the agents
-        // workspace; the opened folder is kept at position 1.
+      await test.step("Observe the folder-0 swap with the untitled transition and the title write", async () => {
+        // The extension activates on startup (onStartupFinished), so the
+        // swap happens without opening the Sessions view. The swap edits
+        // the folders of the folder-mode window, which moves it to an
+        // untitled workspace whose folder 0 is the agents workspace; the
+        // opened folder is kept at position 1.
         await expect
           .poll(() => host.page.title())
           .toBe("[Extension Development Host] Visual Studio Code");

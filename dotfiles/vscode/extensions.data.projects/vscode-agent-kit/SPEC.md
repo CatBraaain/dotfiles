@@ -43,7 +43,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 | E2E-15 | 一覧の取得状態に応じて、取得中・既存一覧・成功空・取得エラーを区別できる | [一覧の取得状態](#一覧の取得状態)どおりの案内・一覧保持・エラー表示 | 初回loading／一覧保持refreshing／成功空／取得error | 保存 E2E（実Webviewへの入力制御） |
 | E2E-16 | 稼働 Pi の list.title と非表示中の workspace 追加を自動反映する | [データソース](#データソース)・[実行フェーズの表示](#実行フェーズの表示)・[空の新規セッションの事前起動](#空の新規セッションの事前起動)どおりの一覧と補充 | なし | 保存 E2E（隔離環境の公開 CLI） |
 | E2E-17 | 本体リポジトリの worktree を作成・削除すると `workspaceFolders` に反映する | [workspaceFolders 同期](#workspacefolders-同期)どおりの管理フォルダの追加・削除 | Worktree added／Worktree removed | 保存 E2E（隔離環境の公開 CLI と git） |
-| E2E-18 | どの構成で開いた起動でもフォルダ0を `~/.agents/agents-workspace` に付け替え、フォルダモードでは untitled ワークスペースへ遷移し、タイトルバーからフォルダ名を除く | [workspaceFolders 同期](#workspacefolders-同期)どおりの遷移とタイトルバーの書き込み | Before promotion／After promotion | 保存 E2E |
+| E2E-18 | どの構成で開いた起動でもフォルダ0を `~/.agents/agents-workspace` に付け替え、フォルダモードでは untitled ワークスペースへ遷移し、タイトルバーからフォルダ名を除く | [workspaceFolders 同期](#workspacefolders-同期)どおりの遷移とタイトルバーの書き込み | After promotion | 保存 E2E |
 
 保存 E2E 以外の振る舞いは、unit が workspace 登録 CLI・セッション読み取り・表示名・グルーピング・Webview の描画・グループの開閉・行の選択表示（共有 Terminal の表示先への追従）・メッセージプロトコル・アーカイブ・実行フェーズ表示・Terminal 対応付け・New Session と New Workspace の各契約、worktree の検出・管理フォルダの同期・タイトルバーの書き込みの各契約を検証し、Storybook 静的カタログの smoke が Webview の表示と操作を検証する。各契約の詳細は後続の定義節に従う。
 

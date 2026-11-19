@@ -889,9 +889,15 @@ export async function provideVSCodeFixture(
         }
       });
     } else {
-      // Folder mode keeps the extension inactive until the test opens the
-      // Sessions view, so the startup transition stays observable.
-      await expect.poll(() => host.snapshot().folders).toHaveLength(1);
+      // The extension activates on startup (onStartupFinished), so the
+      // folder-0 swap completes during the launch without opening the
+      // Sessions view.
+      await expect
+        .poll(() => host.snapshot().folders)
+        .toEqual([
+          join(host.directory, "home", ".agents", "agents-workspace"),
+          join(host.directory, "other"),
+        ]);
     }
     expect(host.tmux(["-V"]).trim()).toBe("tmux 3.8");
     await use(host);
