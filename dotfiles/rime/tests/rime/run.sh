@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build and run the headless librime behavior harness for the managed Kagiroi
-# config. The workspace under TMPDIR mirrors the deployed layout: managed
-# files from dotfiles/rime and stock Kagiroi files from the local mirror.
+# config. The workspace under TMPDIR mirrors the deployed layout: managed files
+# from dotfiles/rime (including the vendored kagiroi lua engine) and stock
+# Kagiroi dictionaries and opencc data from the local mirror.
 # Every invocation deploys into its own private workspace and removes it when
 # the run exits.
 # Options: --clean  accepted for compatibility; every run deploys from scratch
@@ -59,7 +60,7 @@ workspace="$run/user"
 mkdir -p "$workspace/lua/kagiroi"
 touch "$workspace/.rime-test-workspace"
 
-# Stock Kagiroi files first, so the managed files always win.
+# Stock Kagiroi dictionaries first, so the managed files always win.
 # kagiroi.yaml carries the alphabet/key_bindings/punct nodes the schema includes.
 # Common punctuation/key binding presets come from shared data, as in deployment.
 # The dependency schemas are needed so their dictionaries get prism/reverse tables.
@@ -73,7 +74,6 @@ install -m 644 "$mirror"/kagiroi.schema.yaml "$mirror"/kagiroi.yaml \
     "$mirror"/kagiroi_szromaji.dict.yaml "$mirror"/kagiroi_szromaji.schema.yaml \
     "$mirror"/kagiroi_matrix.dict.yaml "$mirror"/kagiroi_matrix.schema.yaml \
     "$mirror"/kagiroi_custom_phrases.txt "$workspace/"
-cp -r "$mirror"/lua/kagiroi/. "$workspace/lua/kagiroi/"
 cp -r "$mirror"/opencc "$workspace/"
 
 # Managed files under test, in the same relative layout as the deployment.
@@ -83,6 +83,8 @@ install -m 644 "$root"/default.custom.yaml "$root"/kagiroi.custom.yaml \
     "$root"/kagiroi_romaji.custom.yaml "$workspace/"
 bun "$root/zenkaku.build.ts" --output "$workspace/kagiroi_dotfiles_zenkaku.dict.yaml"
 install -m 644 "$root"/lua/kagiroi/*.lua "$workspace/lua/kagiroi/"
+mkdir -p "$workspace/lua/kagiroi/dic"
+install -m 644 "$root"/lua/kagiroi/dic/* "$workspace/lua/kagiroi/dic/"
 install -m 644 "$root/tests/rime/snapshot.lua" "$workspace/lua/rime_snapshot.lua"
 bun --eval '
     import { readFileSync, writeFileSync } from "node:fs";

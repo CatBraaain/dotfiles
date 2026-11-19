@@ -15,7 +15,7 @@ cleanup() { rm -rf "$scratch"; }
 trap cleanup EXIT
 trap 'exit 130' INT
 
-mkdir -p "$scratch/fake-bin" "$scratch/mirror/lua/kagiroi" "$scratch/mirror/opencc" \
+mkdir -p "$scratch/fake-bin" "$scratch/mirror" "$scratch/mirror/opencc" \
     "$scratch/shared-a" "$scratch/shared b"
 for stock_file in kagiroi.schema.yaml kagiroi.yaml kagiroi.manual.dict.yaml \
     kagiroi.mozc.dict.yaml kagiroi.nico.dict.yaml kagiroi_kanji.dict.yaml \
@@ -26,8 +26,8 @@ for stock_file in kagiroi.schema.yaml kagiroi.yaml kagiroi.manual.dict.yaml \
     kagiroi_matrix.schema.yaml kagiroi_custom_phrases.txt; do
     echo "stub $stock_file" >"$scratch/mirror/$stock_file"
 done
-echo 'return {}' >"$scratch/mirror/lua/kagiroi/stock.lua"
 echo stub >"$scratch/mirror/opencc/data.txt"
+echo 'return {}' >"$scratch/mirror/stock.lua"
 
 cat >"$scratch/fake-bin/cc" <<'STUB_CC'
 #!/usr/bin/env bash
@@ -61,6 +61,13 @@ fi
 for file in "$MANAGED_RIME_ROOT"/lua/kagiroi/*.lua; do
     cmp "$file" "$user/lua/kagiroi/$(basename "$file")" || exit 3
 done
+for file in "$MANAGED_RIME_ROOT"/lua/kagiroi/dic/*; do
+    cmp "$file" "$user/lua/kagiroi/dic/$(basename "$file")" || exit 3
+done
+if compgen -G "$user/lua/kagiroi/stock.lua" >/dev/null; then
+    echo "mirror lua leaked into the workspace" >&2
+    exit 3
+fi
 "$REAL_BUN" --eval '
     import assert from "node:assert/strict";
     import { readFileSync } from "node:fs";
