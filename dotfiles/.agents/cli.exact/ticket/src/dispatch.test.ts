@@ -13,12 +13,14 @@ import assert from "node:assert/strict";
 import {
   buildPrompt,
   dispatcherName,
+  formatDispatchers,
   hasSession,
   parseDispatchArgs,
   planTick,
   run,
   sessionName,
   shQuote,
+  sortDispatchers,
   type TicketSnapshot,
 } from "./dispatch";
 
@@ -226,6 +228,25 @@ describe("parseDispatchArgs", () => {
     }
   });
 
+  it("parses the bare list action and rejects its arguments", () => {
+    assert.deepEqual(parseDispatchArgs(["list"]), {
+      action: "list",
+      project: undefined,
+      all: false,
+    });
+    assert.equal(parseDispatchArgs(["list", "-p", "w"]).error, "unknown option: -p");
+    for (const args of [
+      ["list", "--project", "w"],
+      ["list", "-a"],
+      ["list", "--max", "1"],
+      ["list", "start"],
+      ["list", "--"],
+      ["list", ""],
+    ]) {
+      assert.ok(parseDispatchArgs(args).error, JSON.stringify(args));
+    }
+  });
+
   it("requires a positive integer max and a positive finite interval", () => {
     for (const max of ["0", "-1", "1.5", "Infinity", "NaN", ""]) {
       assert.equal(parseDispatchArgs(["--max", max]).error, "--max must be an integer >= 1");
@@ -236,6 +257,29 @@ describe("parseDispatchArgs", () => {
         "--interval must be a number > 0",
       );
     }
+  });
+});
+
+describe("dispatch list", () => {
+  it("sorts the global dispatcher first and projects alphabetically", () => {
+    const sorted = sortDispatchers([
+      { project: "beta", name: "b", created: 1 },
+      { project: null, name: "g", created: 2 },
+      { project: "alpha", name: "a", created: 3 },
+    ]);
+    assert.deepEqual(sorted.map((entry) => entry.project), [null, "alpha", "beta"]);
+  });
+
+  it("aligns columns and renders the global marker with local time", () => {
+    const created = Math.floor(new Date(2026, 0, 2, 3, 4, 5).getTime() / 1000);
+    const formatted = formatDispatchers([
+      { project: null, name: "ticket_dispatch_all", created },
+      { project: "alpha", name: "ticket_dispatch_long_name", created },
+    ]);
+    assert.deepEqual(formatted.split("\n"), [
+      "(all)  ticket_dispatch_all        2026-01-02 03:04:05",
+      "alpha  ticket_dispatch_long_name  2026-01-02 03:04:05",
+    ]);
   });
 });
 
@@ -627,7 +671,21 @@ describe("dispatch CLI", () => {
     for (const args of invalid) {
       const result = invoke(home, args);
       assert.equal(result.code, 2, JSON.stringify(args));
-      assert.match(result.stderr, /usage: ticket dispatch \[-p\|--project <project>\]/);
+      assert.match(result.stderr, /usage: ticket dispatch list/);
+      assert.equal(result.stdout, "");
+    }
+  });
+
+  it("rejects list arguments with the same usage status", () => {
+    const { home } = fixture();
+    for (const args of [
+      ["list", "-p", "w"],
+      ["list", "start"],
+      ["list", "--"],
+    ]) {
+      const result = invoke(home, args);
+      assert.equal(result.code, 2, JSON.stringify(args));
+      assert.match(result.stderr, /usage: ticket dispatch list/);
       assert.equal(result.stdout, "");
     }
   });

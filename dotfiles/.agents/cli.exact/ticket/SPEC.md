@@ -89,6 +89,7 @@ dispatcher は ticket store から起動可能な ticket を探してプロン�
 
 | コマンド | 動作 |
 | --- | --- |
+| `ticket dispatch list` | 同じ tmux socket 上で動作中の dispatcher を一覧する |
 | `ticket dispatch start [-p\|--project <project>] [-a\|--all] [--max N] [--interval SEC] [--prefix NAME]` | dispatcher を detached tmuxセッションで起動する |
 | `ticket dispatch [-p\|--project <project>] [-a\|--all] [--max N] [--interval SEC] [--prefix NAME]` | `start` と同じ動作 |
 | `ticket dispatch stop [-p\|--project <project>] [-a\|--all]` | 指定した範囲の dispatcher を停止する |
@@ -136,6 +137,12 @@ stop は `--all` 指定時にグローバルdispatcher、それ以外では共�
 | 終了時 | 要約に続けて、何がどう改善したか、検証で分かったこと、残件、user の対応要否を説明する |
 
 最後の説明は、ticket のタイトルや内部用語だけで済ませず、仕組みの役割と支障を先に伝え、ファイル名・内部用語・詳細な根拠はその後に添える。過去の失敗と現在の影響、原因の解消と症状への対処を区別し、背景や影響が不明な箇所を推測で補わない。
+
+#### list
+
+`ticket dispatch list` は同じ tmux socket 上のセッションから、この CLI が起動した dispatcher をすべて一覧する。範囲の指定・フィルタは行わず、`-p/--project`、`-a/--all`、`--max`、`--interval`、`--prefix` は受け付けない。ticket store の読み取りや起動先ディレクトリの確認は行わず、tmux server 未起動や list-sessions の失敗も 0件として扱う。
+
+1行を「project名・セッション名・起動時刻」の列とし、project単位は project名、グローバルは `(all)` を project名として表示する。並び順はグローバルを先に、project名の辞書順とする。起動時刻はローカル時刻の `YYYY-MM-DD HH:MM:SS`。dispatcher がないときは `no dispatcher running` を出す。
 
 #### start と stop
 

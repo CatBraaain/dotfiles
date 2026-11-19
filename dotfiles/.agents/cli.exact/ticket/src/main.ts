@@ -11,6 +11,9 @@ import { basename, join, relative } from "node:path";
 import {
   dispatch,
   DISPATCH_USAGE,
+  dispatchSocket,
+  formatDispatchers,
+  listDispatchers,
   parseDispatchArgs,
   startDispatcher,
   stopDispatcher,
@@ -797,6 +800,11 @@ async function main(): Promise<void> {
     const parsed = parseDispatchArgs(dispatchArgs);
     if (parsed.error || !parsed.action)
       throw new TicketError(2, `${parsed.error}\nusage: ${DISPATCH_USAGE}`);
+    if (parsed.action === "list") {
+      const entries = listDispatchers(dispatchSocket());
+      console.log(entries.length === 0 ? "no dispatcher running" : formatDispatchers(entries));
+      return;
+    }
     const project = parsed.all
       ? null
       : isWorker

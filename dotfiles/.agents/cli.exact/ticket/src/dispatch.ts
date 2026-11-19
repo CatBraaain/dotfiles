@@ -16,7 +16,7 @@ export interface DispatchOptions {
 }
 
 export const DISPATCH_USAGE =
-  "ticket dispatch [-p|--project <project>] [-a|--all] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch start [-p|--project <project>] [-a|--all] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch stop [-p|--project <project>] [-a|--all]";
+  "ticket dispatch list\n       ticket dispatch [-p|--project <project>] [-a|--all] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch start [-p|--project <project>] [-a|--all] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch stop [-p|--project <project>] [-a|--all]";
 
 export function sessionName(prefix: string, id: string, all = false): string {
   if (!all) return prefix + id.split(".").join("_");
@@ -138,20 +138,23 @@ export function planTick(input: PlanInput): Plan {
 }
 
 export function parseDispatchArgs(argv: string[]): {
-  action?: "start" | "stop";
+  action?: "start" | "stop" | "list";
   project?: string;
   all?: boolean;
   options?: DispatchOptions;
   error?: string;
 } {
-  const action = argv[0] === "stop" ? "stop" : "start";
-  if (argv[0] === "start" || argv[0] === "stop") argv = argv.slice(1);
+  const action =
+    argv[0] === "stop" ? "stop" : argv[0] === "list" ? "list" : "start";
+  if (argv[0] === "start" || argv[0] === "stop" || argv[0] === "list")
+    argv = argv.slice(1);
   const given = new Map<string, string>();
   let project: string | undefined;
   let all = false;
   let optionsEnded = false;
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]!;
+    if (action === "list") return { error: `unknown option: ${arg}` };
     const isProject = arg === "-p" || arg === "--project";
     if (optionsEnded) return { error: "positional arguments are not supported" };
     if (arg === "--") optionsEnded = true;
@@ -171,7 +174,7 @@ export function parseDispatchArgs(argv: string[]): {
     } else if (arg.startsWith("-")) return { error: `unknown option: ${arg}` };
     else return { error: "positional arguments are not supported" };
   }
-  if (action === "stop") return { action, project, all };
+  if (action !== "start") return { action, project, all };
   const max = given.has("--max") ? Number(given.get("--max")) : 5;
   if (!Number.isInteger(max) || max < 1) return { error: "--max must be an integer >= 1" };
   const interval = given.has("--interval") ? Number(given.get("--interval")) : 30;
@@ -189,12 +192,11 @@ export function parseDispatchArgs(argv: string[]): {
   };
 }
 
-function timestamp(): string {
-  const now = new Date();
+function timestamp(date = new Date()): string {
   function pad(value: number): string {
     return String(value).padStart(2, "0");
   }
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 export function shQuote(value: string): string {
@@ -363,6 +365,55 @@ function inheritedSessions(
 
 export function hasSession(socket: string, name: string): boolean {
   return tmux(socket, ["has-session", "-t", `=${name}`]).ok;
+}
+
+export interface DispatcherEntry {
+  project: string | null;
+  name: string;
+  created: number;
+}
+
+export function sortDispatchers(entries: DispatcherEntry[]): DispatcherEntry[] {
+  return [...entries].sort((left, right) => {
+    if (left.project === null) return right.project === null ? 0 : -1;
+    if (right.project === null) return 1;
+    return left.project < right.project ? -1 : left.project > right.project ? 1 : 0;
+  });
+}
+
+export function formatDispatchers(entries: DispatcherEntry[]): string {
+  const projectWidth = Math.max(...entries.map((entry) => (entry.project ?? "(all)").length));
+  const nameWidth = Math.max(...entries.map((entry) => entry.name.length));
+  return entries
+    .map((entry) =>
+      [
+        (entry.project ?? "(all)").padEnd(projectWidth),
+        entry.name.padEnd(nameWidth),
+        timestamp(new Date(entry.created * 1000)),
+      ].join("  "),
+    )
+    .join("\n");
+}
+
+export function listDispatchers(socket: string): DispatcherEntry[] {
+  const result = tmux(socket, [
+    "list-sessions",
+    "-F",
+    "#{session_name}\t#{session_created}",
+  ]);
+  if (!result.ok) return [];
+  const entries: DispatcherEntry[] = [];
+  for (const line of result.stdout.trimEnd().split("\n")) {
+    const separator = line.indexOf("\t");
+    if (separator === -1) continue;
+    const name = line.slice(0, separator);
+    const created = Number(line.slice(separator + 1));
+    if (sessionEnv(socket, name, ROLE_ENV) !== "dispatcher") continue;
+    const owner = sessionEnv(socket, name, PROJECT_ENV);
+    if (owner === undefined || !Number.isFinite(created)) continue;
+    entries.push({ project: owner === "" ? null : owner, name, created });
+  }
+  return sortDispatchers(entries);
 }
 
 export interface RunDeps {

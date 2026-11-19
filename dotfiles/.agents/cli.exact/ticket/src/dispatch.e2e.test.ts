@@ -1055,6 +1055,41 @@ describe("global ticket dispatch", () => {
     },
     TIMEOUT_MS + 5000,
   );
+
+  it(
+    "lists running dispatchers and clears them on stop",
+    async () => {
+      const fixture = setup("alpha");
+      const { root, socket, records, store } = fixture;
+      const env = { ...fixture.env, STUB_WAIT: "1" };
+      try {
+        mkdirSync(join(fixture.home, "projects", "alpha"), { recursive: true });
+        writeTicket(store, "held", "open");
+        startServer(fixture, env);
+        const empty = cli(fixture, ["dispatch", "list"]);
+        assert.equal(empty.status, 0, empty.stderr);
+        assert.equal(empty.stdout, "no dispatcher running\n");
+        const start = cli(fixture, ["dispatch", "-p", "alpha", "--max", "1", "--interval", "60"]);
+        assert.equal(start.status, 0, start.stderr);
+        await waitFor(() => existsSync(join(records, "held.json")), "held pi did not start");
+        const listing = cli(fixture, ["dispatch", "list"]);
+        assert.equal(listing.status, 0, listing.stderr);
+        const [project, name, time] = listing.stdout.trimEnd().split("  ");
+        assert.equal(project, "alpha");
+        assert.equal(name, dispatcherName("alpha"));
+        assert.match(time!, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+        const stopped = cli(fixture, ["dispatch", "stop", "-p", "alpha"]);
+        assert.equal(stopped.status, 0, stopped.stderr);
+        const cleared = cli(fixture, ["dispatch", "list"]);
+        assert.equal(cleared.status, 0, cleared.stderr);
+        assert.equal(cleared.stdout, "no dispatcher running\n");
+      } finally {
+        isolatedTmux(socket, ["kill-server"]);
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    TIMEOUT_MS + 5000,
+  );
 });
 
 describe("global dispatch dynamic projects", () => {
