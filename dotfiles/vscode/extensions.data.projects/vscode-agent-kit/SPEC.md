@@ -1,6 +1,6 @@
 # VS Code Pi Session Manager spec
 
-Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧し、選択して Editor Area の Terminal で Pi TUI を開く VS Code 拡張機能の仕様。この拡張機能は Pi TUI を置き換えず、チャット UI やメッセージ表示も持たない。複数セッションの一覧・切替、明示的なアーカイブによる一覧の整理を提供する。読者は利用者と拡張機能の開発者である。セッション一覧は VS Code 標準の TreeView ではなく、拡張機能が描画する Webview UI を使う。保存 E2E のテストケースを「テストケース」節に一覧し、各ケースの期待する結果から各定義節を参照する読み方をする。
+Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧し、選択して Editor Area の Terminal で Pi TUI を開く VS Code 拡張機能の仕様。この拡張機能は Pi TUI を置き換えず、チャット UI やメッセージ表示も持たない。複数セッションの一覧・切替、明示的なアーカイブによる一覧の整理、pi-mux の workspace と本体リポジトリの worktree の `workspaceFolders` への同期を提供する。読者は利用者と拡張機能の開発者である。セッション一覧は VS Code 標準の TreeView ではなく、拡張機能が描画する Webview UI を使う。保存 E2E のテストケースを「テストケース」節に一覧し、各ケースの期待する結果から各定義節を参照する読み方をする。
 
 ## 用語
 
@@ -15,6 +15,13 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 - 登録済みワークスペース: `pi-mux list` が返す workspace の `cwd`。セッションが0件でもグループとして表示する。
 - 追加済みワークスペース: Session List に追加された cwd。「workspace 登録と永続情報」に従って保持する。
 - pi-mux: Pi を専用 tmux 内で起動・再接続する CLI。専用 tmux の管理と設定適用、セッション ID の採番と固定、保存済みセッションの再開を担う。拡張は pi-mux を通じて Pi を起動・再開し、pi-mux の稼働一覧（`pi-mux list`）で稼働中のセッションを確認する。仕様は dotfiles リポジトリの `pi-mux` SPEC に従う。
+- 本体リポジトリ: worktree でないリポジトリ本体。pi-mux list に載る workspace であり、worktree の検出起点になる。
+- worktree: `git worktree` で作った作業用 worktree。追加・削除と表示名は「workspaceFolders 同期」に従う。
+- フォルダ0: untitled ワークスペースの最初のフォルダ。`~/.agents/agents-workspace` を固定で使い、同期対象から除く。
+- 管理フォルダ: 拡張機能が「workspaceFolders 同期」に従って追加・削除するフォルダ。folder 1 以降。
+- untitled ワークスペース: 保存していないマルチルートワークスペース。フォルダ0と管理フォルダをこの形式で扱う。
+- フォルダモード: フォルダをワークスペースとして開いた状態。保存済みワークスペースでも untitled ワークスペースでもない単一フォルダの状態。
+- 同じ実体: パスを正規化し symlink を解決した後の絶対パスが一致すること。
 
 ## テストケース
 
@@ -35,8 +42,10 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 | E2E-14 | Pi が生存する未アーカイブセッションで実行フェーズの変化を表示できる | [実行フェーズの表示](#実行フェーズの表示)どおりのアイコン・ヒント・スロットと reduced-motion 表示 | running / waiting-approval / waiting-user | 保存 E2E |
 | E2E-15 | 一覧の取得状態に応じて、取得中・既存一覧・成功空・取得エラーを区別できる | [一覧の取得状態](#一覧の取得状態)どおりの案内・一覧保持・エラー表示 | 初回loading／一覧保持refreshing／成功空／取得error | 保存 E2E（実Webviewへの入力制御） |
 | E2E-16 | 稼働 Pi の list.title と非表示中の workspace 追加を自動反映する | [データソース](#データソース)・[実行フェーズの表示](#実行フェーズの表示)・[空の新規セッションの事前起動](#空の新規セッションの事前起動)どおりの一覧と補充 | なし | 保存 E2E（隔離環境の公開 CLI） |
+| E2E-17 | 本体リポジトリの worktree を作成・削除すると `workspaceFolders` に反映する | [workspaceFolders 同期](#workspacefolders-同期)どおりの管理フォルダの追加・削除 | Worktree added／Worktree removed | 保存 E2E（隔離環境の公開 CLI と git） |
+| E2E-18 | フォルダモードの起動で untitled ワークスペースへ遷移し、タイトルバーからフォルダ名を除く | [workspaceFolders 同期](#workspacefolders-同期)どおりの遷移とタイトルバーの書き込み | Before promotion／After promotion | 保存 E2E |
 
-保存 E2E 以外の振る舞いは、unit が workspace 登録 CLI・セッション読み取り・表示名・グルーピング・Webview の描画・グループの開閉・行の選択表示（共有 Terminal の表示先への追従）・メッセージプロトコル・アーカイブ・実行フェーズ表示・Terminal 対応付け・New Session と New Workspace の各契約を検証し、Storybook 静的カタログの smoke が Webview の表示と操作を検証する。各契約の詳細は後続の定義節に従う。
+保存 E2E 以外の振る舞いは、unit が workspace 登録 CLI・セッション読み取り・表示名・グルーピング・Webview の描画・グループの開閉・行の選択表示（共有 Terminal の表示先への追従）・メッセージプロトコル・アーカイブ・実行フェーズ表示・Terminal 対応付け・New Session と New Workspace の各契約、worktree の検出・管理フォルダの同期・タイトルバーの書き込みの各契約を検証し、Storybook 静的カタログの smoke が Webview の表示と操作を検証する。各契約の詳細は後続の定義節に従う。
 
 既知の未達と範囲外課題は、この文書に書かず tickets で管理する。
 
@@ -127,7 +136,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 
 pi-mux の workspace 登録と復元候補の永続管理は pi-mux が担う。拡張機能は `pi-mux list` の cwd を登録判定の正とし、登録の追加・解除は各アクションに定める公開 CLI で行う。セッションの所属も pi-mux の起動・再接続と一覧に従う。
 
-Session List は list の cwd を重複なく自動追加する。追加済み workspace は同じ VS Codeプロファイル内で共有し、拡張機能の再起動後も保持する。list から消えても見出しを保持し、削除は「ワークスペース登録解除」の成功時だけ行う。削除後に list へ再び現れた cwd は自動追加する。追加・保持によって VS Code の `workspaceFolders` を変更しない。
+Session List は list の cwd を重複なく自動追加する。追加済み workspace は同じ VS Codeプロファイル内で共有し、拡張機能の再起動後も保持する。list から消えても見出しを保持し、削除は「ワークスペース登録解除」の成功時だけ行う。削除後に list へ再び現れた cwd は自動追加する。Session List への追加・保持は `workspaceFolders` を変更せず、`workspaceFolders` への反映は「workspaceFolders 同期」に従う。
 
 拡張機能は pi-mux の管理ファイルを直接読み書き・監視しない。
 
@@ -468,6 +477,58 @@ Sessions の標準ビュータイトルにある更新操作の名前とツー�
 
 空の Pi の自発終了だけでは自動で起動し直さない。拡張機能の終了・再読み込みや表示用 Terminal の閉鎖でも、事前起動・補充した Pi を終了しない。
 
+## workspaceFolders 同期
+
+拡張機能は pi-mux list の workspace と本体リポジトリの worktree を、VS Code の `workspaceFolders` へ反映する。フォルダ0は `~/.agents/agents-workspace` に固定し、同期対象は folder 1 以降の管理フォルダに限る。ユーザーが手動で追加したフォルダは管理フォルダにしない。
+
+### 起動時のワークスペース遷移
+
+| 条件 | 動作 |
+| --- | --- |
+| パスが `~/.agents/agents-workspace` の単一フォルダで起動する | フォルダ0を同一内容で保持したまま untitled ワークスペースへ遷移する |
+| 保存済みワークスペース・複数フォルダ・untitled ワークスペースで起動する | 遷移せず、その構成のまま同期を続ける |
+| `~/.agents/agents-workspace` 以外の単一フォルダで起動する | 遷移せず、`workspaceFolders` の同期を停止する。同期の停止は起動時の構成で確定し、実行中の構成変更で再開しない。再開は拡張機能の起動時に行う |
+| 遷移が拒否される、遷移待ちの間にフォルダが増える | 遷移を中止し、通知しない。フォルダの追加適用時に untitled への遷移が起こる |
+
+### worktree の検出
+
+検出対象の本体リポジトリを次の方法で収集し、各本体リポジトリで `git worktree list --porcelain` を実行して worktree を検出する。本体リポジトリ自身（main worktree）は検出結果の worktree に含めない。
+
+| 条件 | 動作 |
+| --- | --- |
+| pi-mux list に載る cwd | 本体リポジトリ候補にする |
+| 管理フォルダのうち `.git` ファイルを持ち、その `gitdir:` から本体リポジトリの `.git` ディレクトリを解決できるフォルダ | その本体リポジトリを候補にする |
+| bare リポジトリ、不完全な porcelain ブロック | 管理対象に含めない |
+| git コマンドが利用できない、実行が失敗する | worktree の検出を保留し、list に基づく同期は続ける |
+
+検出周期は 2500 ミリ秒とする。検出の実行を重ねず、進行中の検出の完了後に次の検出を行う。worktree フォルダの表示名は worktree のブランチ名とし、detached HEAD のときは `(detached <HEADの先頭7文字>)` とする。
+
+### 管理フォルダの採用
+
+folder 1 以降のフォルダの採用は、起動時・再読み込み時の worktree 検出の初回完了後に評価する。フォルダが pi-mux list の cwd または検出済み worktree と同じ実体なら管理フォルダとして採用し、それ以外は非管理フォルダとして扱う。
+
+### 管理フォルダの同期
+
+pi-mux list の取得結果と worktree の検出結果を現在の `workspaceFolders` と突き合わせ、差分を適用する。適用の契機は、list の取得完了ごとに list に基づく差分、worktree の検出完了ごとに worktree に基づく差分とする。この拡張機能が担うのはフォルダの追加・削除までであり、SCM への反映は VS Code 内蔵 Git がフォルダの追加・削除に反応して行う。
+
+| 条件・変化 | 動作 |
+| --- | --- |
+| pi-mux list に載る cwd が `workspaceFolders` に無い | その cwd を管理フォルダとして追加する |
+| 管理フォルダの cwd が pi-mux list から消える | そのフォルダを削除する |
+| worktree が検出結果に現れる | その worktree を管理フォルダとして追加する。pi-mux へは登録しない |
+| worktree が検出結果から消える、または prunable になる | そのフォルダを削除する。削除前にそのフォルダ配下のエディタタブを閉じる。未保存の変更があるタブは VS Code の確認ダイアログに従う |
+| フォルダ0と同じ実体の cwd が pi-mux list に載る | 重複追加せず、フォルダ0をその workspace として扱う |
+| ユーザーが手動で追加したフォルダ | 管理対象に含めず、追加・削除・改名をしない |
+| ユーザーが管理フォルダを `workspaceFolders` から外す | pi-mux list に載り続ける、または worktree が生存する限り、次の同期で再追加する |
+| エディタタブの確認ダイアログがキャンセルされる、フォルダの追加・削除の適用が拒否される、git の実行が失敗する | 通知せず同期状態を維持し、次の同期で再試行する。キャンセル・拒否された削除対象は管理フォルダに残す |
+
+### タイトルバー
+
+| 条件 | 動作 |
+| --- | --- |
+| フォルダ0が `~/.agents/agents-workspace` である untitled ワークスペース | `window.title` のテンプレートを `${dirty}${activeEditorShort}${separator}${profileName}${separator}${appName}` にし、workspace スコープへ書き込む。拡張機能の起動時に書き、既存値を上書きする |
+| フォルダモード・保存済みワークスペース・フォルダ0が `~/.agents/agents-workspace` 以外の untitled ワークスペース | タイトルバーの設定を書き込まない |
+
 ## セッション選択と Terminal
 
 セッション項目をクリックすると、選択したセッションの Pi TUI を Editor Area の共有 Terminal に前面表示する。この拡張の表示用 Terminal は VS Code ウィンドウごとに同時に最大1個とし、表示しない通常 Pi は裏で稼働を続ける。続けてセッションを選択した場合は、実行中の処理を終えてから、最新の選択先だけを処理する。Pi の起動・再接続先はセッションの cwd である。
@@ -536,7 +597,7 @@ pi-mux による再開は既存のセッションファイルへの追記とし�
 
 ### VS Code 再起動
 
-再起動後は保持した追加済み workspace と最新の list・保存済み会話から一覧が復元され、全ワークスペースのモードは未アーカイブ表示（既定）に戻る。セッションを再選択した際は pi-mux で稼働状態を確認し、生存している Pi があれば同じプロセスへ再接続する。生存 Pi が無い場合は保存されたセッションを再開する。拡張 host の再起動だけを理由に既存の Pi を起動し直さない。最新の list に登録済みの cwd の空の Pi の確保は「空の新規セッションの事前起動」に従い、不足する分だけ起動する。表示用 Terminal はウィンドウ内で1個に保つ。
+再起動後は保持した追加済み workspace と最新の list・保存済み会話から一覧が復元され、全ワークスペースのモードは未アーカイブ表示（既定）に戻る。untitled ワークスペースは VS Code が復元し、復元後の管理フォルダは「workspaceFolders 同期」の採用と同期に従う。セッションを再選択した際は pi-mux で稼働状態を確認し、生存している Pi があれば同じプロセスへ再接続する。生存 Pi が無い場合は保存されたセッションを再開する。拡張 host の再起動だけを理由に既存の Pi を起動し直さない。最新の list に登録済みの cwd の空の Pi の確保は「空の新規セッションの事前起動」に従い、不足する分だけ起動する。表示用 Terminal はウィンドウ内で1個に保つ。
 
 ## 開発補助: e2e 用 VS Code の準備
 
@@ -561,4 +622,5 @@ e2e テストが拡張機能の読み込み先として使う固定バージョ�
 - Pi がセッションとエージェントの source of truth である。拡張機能は Pi を再実装せず、Pi セッション形式の独自変換も行わない
 - Pi の保持先は pi-mux が管理する専用 tmux である。拡張は専用 tmux への socket 接続や tmux コマンドを直接使わず、表示の切替と表示中セッションの確認は pi-mux CLI（`switch` / `current`）、Pi の停止は公開操作 `pi-mux close` を使う。pi-mux の設定・管理対象を変更しない
 - workspace 登録と復元候補の共有は pi-mux の公開 CLI を通じて行う。拡張機能による永続情報の扱いは「workspace 登録と永続情報」に従う
+- `workspaceFolders` の同期は pi-mux list と `git worktree list` を正とする。フォルダ0 (`~/.agents/agents-workspace`) を固定で使い、同期は folder 1 以降の管理フォルダに限る
 - セッションファイルは read-only として扱い、セッションの作成・更新は Pi CLI に行わせる

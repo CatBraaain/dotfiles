@@ -51,6 +51,8 @@ exports.activate = function activate(context) {
         maxOwnedDisplays,
         maxTerminalTabs,
         folders: vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath),
+        windowTitle: vscode.workspace.getConfiguration("window").inspect("title"),
+        workspaceFileScheme: vscode.workspace.workspaceFile?.scheme,
         terminals: await Promise.all(
           vscode.window.terminals.map(async (terminal) => ({
             name: terminal.name,

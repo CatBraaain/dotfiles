@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { execFile as execFileCallback } from "node:child_process";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as os from "node:os";
+import { promisify } from "node:util";
 import type * as vscode from "vscode";
 import manifest from "../package.json";
 import { activate } from "../src/extension";
@@ -27,6 +29,52 @@ const api = vi.hoisted(() => ({
   createFileSystemWatcher: vi.fn(),
   createOutputChannel: vi.fn(),
   watchers: [] as WatcherStub[],
+  // workspaceFolders-sync state: folders, the untitled transition, and the
+  // recorded workspace edits and title writes.
+  folders: [] as { uri: { fsPath: string }; name: string }[],
+  workspaceFile: undefined as { scheme: string; fsPath: string } | undefined,
+  added: [] as { path: string; name: string | undefined }[],
+  removedPaths: [] as string[],
+  titleUpdates: [] as { section: string; key: string; value: unknown; target: unknown }[],
+  folderListeners: new Set<() => void>(),
+  updateWorkspaceFolders: vi.fn(
+    (
+      start: number,
+      deleteCount: number | undefined,
+      ...toAdd: { uri: { fsPath: string }; name?: string }[]
+    ) => {
+      const removed = api.folders.splice(
+        start,
+        deleteCount ?? 0,
+        ...toAdd.map((folder) => ({
+          uri: folder.uri,
+          name: folder.name ?? folder.uri.fsPath.split("/").pop()!,
+        })),
+      );
+      api.added.push(...toAdd.map((folder) => ({ path: folder.uri.fsPath, name: folder.name })));
+      api.removedPaths.push(...removed.map((folder) => folder.uri.fsPath));
+      // Mirror VS Code: editing the folders of a single-folder window
+      // (no workspace file yet) moves it to an untitled workspace.
+      if (api.workspaceFile === undefined) {
+        api.workspaceFile = { scheme: "untitled", fsPath: "/1555503116870" };
+      }
+      for (const listener of api.folderListeners) {
+        listener();
+      }
+      return true;
+    },
+  ),
+  onDidChangeWorkspaceFolders: vi.fn((listener: () => void) => {
+    api.folderListeners.add(listener);
+    return { dispose: () => api.folderListeners.delete(listener) };
+  }),
+  getConfiguration: vi.fn((section: string) => ({
+    update: (key: string, value: unknown, target: unknown) => {
+      api.titleUpdates.push({ section, key, value, target });
+      return Promise.resolve();
+    },
+  })),
+  tabGroups: { all: [] as never[], close: vi.fn(async () => true) },
 }));
 
 vi.mock("node:os", { spy: true });
@@ -34,7 +82,24 @@ vi.mock("node:os", { spy: true });
 vi.mock("vscode", () => ({
   commands: { registerCommand: api.registerCommand },
   window: api,
-  workspace: { createFileSystemWatcher: api.createFileSystemWatcher },
+  workspace: {
+    createFileSystemWatcher: api.createFileSystemWatcher,
+    get workspaceFolders() {
+      return api.folders.length > 0 ? api.folders : undefined;
+    },
+    get workspaceFile() {
+      return api.workspaceFile;
+    },
+    getConfiguration: api.getConfiguration,
+    updateWorkspaceFolders: (
+      start: number,
+      deleteCount: number | undefined,
+      ...toAdd: { uri: { fsPath: string }; name?: string }[]
+    ) => api.updateWorkspaceFolders(start, deleteCount, ...toAdd),
+    onDidChangeWorkspaceFolders: (listener: () => void) =>
+      api.onDidChangeWorkspaceFolders(listener),
+  },
+  ConfigurationTarget: { Workspace: 2 },
   Uri: { file: (fsPath: string) => ({ fsPath }) },
   RelativePattern: class {
     constructor(
@@ -50,6 +115,12 @@ describe("extension commands", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     api.watchers = [];
+    api.folders = [];
+    api.workspaceFile = undefined;
+    api.added = [];
+    api.removedPaths = [];
+    api.titleUpdates = [];
+    api.folderListeners = new Set();
     api.createFileSystemWatcher.mockImplementation(
       (pattern: { base: { fsPath: string }; pattern: string }) => {
         const watcher = {
@@ -324,5 +395,66 @@ describe("extension commands", () => {
     expect(refreshManually.mock.instances[0]).toBe(provider);
     expect(api.showInformationMessage).not.toHaveBeenCalled();
     expect(api.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  // SPEC workspaceFolders 同期: verify the real activate() wiring from the
+  // vscode adapter down to the sync engine, with git running for real in a
+  // temporary repository.
+  it("promotes the agents workspace folder, writes the title, and syncs worktree folders", async () => {
+    vi.spyOn(EmptySessionPool.prototype, "syncWorkspaces").mockImplementation(() => {});
+    const execFile = promisify(execFileCallback);
+    const repository = join(root, "main");
+    const worktree = join(root, "feat-x");
+    await execFile("git", ["init", "-q", repository]);
+    await execFile("git", ["-C", repository, "config", "user.email", "test@example.com"]);
+    await execFile("git", ["-C", repository, "config", "user.name", "test"]);
+    await execFile("git", ["-C", repository, "commit", "--allow-empty", "-q", "-m", "init"]);
+    await execFile("git", ["-C", repository, "worktree", "add", "-q", "-b", "feat-x", worktree]);
+
+    const agents = join(root, ".agents", "agents-workspace");
+    api.folders = [{ uri: { fsPath: agents }, name: "agents-workspace" }];
+    const subscriptions: { dispose(): void }[] = [];
+    activate({
+      subscriptions,
+      extensionUri: { fsPath: "/extension" },
+      globalStorageUri: { fsPath: join(root, "profile-storage") },
+    } as unknown as vscode.ExtensionContext);
+
+    try {
+      // The startup transition re-applies folder 0 and moves the window to
+      // an untitled workspace, where the fixed title template is written.
+      await vi.waitFor(
+        () => expect(api.added).toEqual([{ path: agents, name: "agents-workspace" }]),
+        { timeout: 5000 },
+      );
+      expect(api.titleUpdates).toEqual([
+        {
+          section: "window",
+          key: "title",
+          value: "${dirty}${activeEditorShort}${separator}${profileName}${separator}${appName}",
+          target: 2,
+        },
+      ]);
+
+      // A pi-mux list push through the provider wiring adds the repository
+      // cwd, and the detected worktree folder follows after the first
+      // 2500 ms detection with the branch name.
+      const provider = api.registerWebviewViewProvider.mock.calls[0][1] as unknown as {
+        deps: ConstructorParameters<typeof SessionWebviewProvider>[0];
+      };
+      provider.deps.onWorkspaces!([repository]);
+      await vi.waitFor(
+        () =>
+          expect(api.added).toEqual([
+            { path: agents, name: "agents-workspace" },
+            { path: repository, name: undefined },
+            { path: worktree, name: "feat-x" },
+          ]),
+        { timeout: 5000 },
+      );
+      expect(api.removedPaths).toEqual([agents]);
+    } finally {
+      for (const subscription of subscriptions.splice(0)) subscription.dispose();
+    }
   });
 });

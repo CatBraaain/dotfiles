@@ -42,6 +42,11 @@ const executablePath =
   process.env.PI_REVIEW_VSCODE ??
   join(homedir(), ".cache/agent-kit-screenshots/vscode-1.138.0/VSCode-linux-x64/code");
 
+/** Project root handed to --extensionDevelopmentPath when launching VS Code. */
+export const extensionRoot = root;
+/** The fixed-version VS Code executable the e2e fixture launches. */
+export const vscodeExecutablePath = executablePath;
+
 interface SessionFixture {
   id: string;
   cwd: string;
@@ -54,6 +59,14 @@ export interface Snapshot {
   maxOwnedDisplays: number;
   maxTerminalTabs: number;
   folders: string[];
+  /** `window.title` configuration inspection recorded by the probe. */
+  windowTitle?: {
+    key: string;
+    defaultValue?: string;
+    globalValue?: string;
+    workspaceValue?: string;
+    workspaceFolderValue?: string;
+  };
   activeEditor?: string;
   terminals: {
     name: string;
@@ -99,6 +112,8 @@ export class VSCodeFixture {
   };
   readonly sessions: Record<string, SessionFixture> = {};
   readonly gitBefore: Record<string, string> = {};
+  /** Launch the window in folder mode on the fixed agents workspace (E2E-18). */
+  folderMode = false;
   responseProvider?: FixedResponseProvider;
   app!: ElectronApplication;
   page!: Page;
@@ -107,6 +122,9 @@ export class VSCodeFixture {
 
   prepare(): void {
     this.prepareRepositories();
+    if (this.folderMode) {
+      mkdirSync(join(this.directory, "home/.agents/agents-workspace"), { recursive: true });
+    }
     this.prepareSessions();
     this.prepareHost();
     this.preparePiMux();
@@ -148,7 +166,9 @@ export class VSCodeFixture {
         "--skip-release-notes",
         "--new-window",
         "--window-size=1600,1000",
-        join(this.directory, "fixture.code-workspace"),
+        this.folderMode
+          ? join(this.directory, "home/.agents/agents-workspace")
+          : join(this.directory, "fixture.code-workspace"),
       ],
       timeout: 30_000,
     });
@@ -669,10 +689,6 @@ exec '${realTmux}' -N "$@"
         join(agentSource, "extensions.exact/pi-mux-bridge", name),
         join(this.directory, "agent/extensions/pi-mux-bridge", name),
       );
-    copyFileSync(
-      join(agentSource, "extensions.exact/tools/background-bash.ts"),
-      join(this.directory, "agent/extensions/tools/background-bash.ts"),
-    );
     const sourceModules = join(agentSource, "node_modules");
     const installedModules = join(homedir(), ".pi/agent/node_modules");
     symlinkSync(
@@ -777,8 +793,13 @@ function write(path: string, content: string): void {
   writeFileSync(path, content);
 }
 
-export const test = baseTest.extend<{ host: VSCodeFixture; fixedResponse: boolean }>({
+export const test = baseTest.extend<{
+  host: VSCodeFixture;
+  fixedResponse: boolean;
+  folderMode: boolean;
+}>({
   fixedResponse: [false, { option: true }],
+  folderMode: [false, { option: true }],
   host: provideVSCodeFixture,
 });
 
@@ -786,12 +807,14 @@ export async function provideVSCodeFixture(
   {
     playwright,
     fixedResponse,
-  }: Pick<PlaywrightWorkerArgs, "playwright"> & { fixedResponse: boolean },
+    folderMode,
+  }: Pick<PlaywrightWorkerArgs, "playwright"> & { fixedResponse: boolean; folderMode?: boolean },
   use: (host: VSCodeFixture) => Promise<void>,
   testInfo: TestInfo,
 ): Promise<void> {
   void playwright;
   const host = new VSCodeFixture();
+  host.folderMode = folderMode ?? false;
   let tracePath: string | undefined;
   let failed = false;
   try {
@@ -823,20 +846,26 @@ export async function provideVSCodeFixture(
       );
     }
     await host.launch();
-    await test.step("Check the A/B work folder paths and names", async () => {
-      const frame = await host.sessionFrame();
-      for (const key of ["A", "B"]) {
-        const expectedName = key === "A" ? "project-a" : "project-b";
-        const relativeDirectory = key === "A" ? expectedName : join("worktree", expectedName);
-        expect(host.sessions[key].cwd).toBe(join(host.directory, relativeDirectory));
-        await expect(
-          frame
-            .getByTitle(host.sessions[key].cwd, { exact: true })
-            .locator(".group-title")
-            .describe(`${key} work folder name`),
-        ).toHaveText(expectedName);
-      }
-    });
+    if (!folderMode) {
+      await test.step("Check the A/B work folder paths and names", async () => {
+        const frame = await host.sessionFrame();
+        for (const key of ["A", "B"]) {
+          const expectedName = key === "A" ? "project-a" : "project-b";
+          const relativeDirectory = key === "A" ? expectedName : join("worktree", expectedName);
+          expect(host.sessions[key].cwd).toBe(join(host.directory, relativeDirectory));
+          await expect(
+            frame
+              .getByTitle(host.sessions[key].cwd, { exact: true })
+              .locator(".group-title")
+              .describe(`${key} work folder name`),
+          ).toHaveText(expectedName);
+        }
+      });
+    } else {
+      // Folder mode keeps the extension inactive until the test opens the
+      // Sessions view, so the startup transition stays observable.
+      await expect.poll(() => host.snapshot().folders).toHaveLength(1);
+    }
     expect(host.tmux(["-V"]).trim()).toBe("tmux 3.8");
     await use(host);
   } catch (error) {

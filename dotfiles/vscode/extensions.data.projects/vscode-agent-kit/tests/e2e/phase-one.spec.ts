@@ -1534,8 +1534,13 @@ test(
       host.piMux(["workspace", "register", workspaceCwd]);
       const frame = await host.sessionFrame();
       await host.refreshSessions();
+      // Headers of workspaces unregistered through the CLI are retained in
+      // the list, so scope to the shared workspace's own group.
       await expect(
-        frame.locator("section.group").describe("Only the shared workspace"),
+        frame
+          .locator("section.group")
+          .filter({ has: frame.locator(`.group-header[title="${workspaceCwd}"]`) })
+          .describe("Shared workspace group"),
       ).toHaveCount(1);
       const mode = frame.locator(`[data-mode-toggle="${workspaceCwd}"]`);
       if ((await mode.getAttribute("data-mode")) === "unarchived") await mode.click();
@@ -1666,6 +1671,7 @@ test(
       const frame = await host.sessionFrame();
       const group = frame
         .locator("section.group")
+        .filter({ has: frame.locator(`.group-header[title="${workspaceCwd}"]`) })
         .describe("Shared workspace with all four states");
       await expect(group).toHaveCount(1);
       await expect(group.locator(".group-header")).toHaveAttribute("title", workspaceCwd);

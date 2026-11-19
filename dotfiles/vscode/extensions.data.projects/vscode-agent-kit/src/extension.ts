@@ -1,13 +1,65 @@
 import * as vscode from "vscode";
+import { execFile as execFileCallback } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
+import { promisify } from "node:util";
 import { SessionLauncher } from "./launcher";
 import { EmptySessionPool } from "./emptySessionPool";
+import { FolderSyncEngine, type VscodeLike } from "./folderSync";
+import type { ExecFile } from "./gitWorktrees";
 import { resolveConfiguredSessionRoot } from "./paths";
 import { TerminalRegistry } from "./terminalRegistry";
 import { editorTerminals } from "./terminals";
 import { WorkspaceStore } from "./workspaceStore";
 import { SessionWebviewProvider, VIEW_ID } from "./webview/sessionWebviewProvider";
+
+const execFileAsync = promisify(execFileCallback);
+
+const execFile: ExecFile = async (file, args, options) => {
+  const { stdout } = await execFileAsync(file, args, {
+    ...options,
+    windowsHide: true,
+  });
+  return { stdout };
+};
+
+/** Structural adapter from the real vscode API to the sync engine's VscodeLike. */
+function folderSyncApi(): VscodeLike {
+  return {
+    workspace: {
+      get workspaceFolders() {
+        return vscode.workspace.workspaceFolders;
+      },
+      get workspaceFile() {
+        return vscode.workspace.workspaceFile;
+      },
+      getConfiguration: (section) => vscode.workspace.getConfiguration(section),
+      updateWorkspaceFolders: (start, deleteCount, ...folders) =>
+        vscode.workspace.updateWorkspaceFolders(
+          start,
+          deleteCount,
+          ...folders.map((folder) => ({
+            uri: vscode.Uri.file(folder.uri.fsPath),
+            name: folder.name,
+          })),
+        ),
+      onDidChangeWorkspaceFolders: (listener) =>
+        vscode.workspace.onDidChangeWorkspaceFolders(listener),
+    },
+    window: {
+      tabGroups: {
+        get all() {
+          // The real Tab type is a wide union; the sync only reads
+          // input.uri / input.modified, so the structural narrowing is safe.
+          return vscode.window.tabGroups.all as unknown as VscodeLike["window"]["tabGroups"]["all"];
+        },
+        close: (tabs, preserveFocus) =>
+          vscode.window.tabGroups.close(tabs as unknown as readonly vscode.Tab[], preserveFocus),
+      },
+    },
+    configurationTarget: vscode.ConfigurationTarget,
+  };
+}
 
 export function activate(context: vscode.ExtensionContext): void {
   const homeDir = homedir();
@@ -25,6 +77,12 @@ export function activate(context: vscode.ExtensionContext): void {
       void vscode.window.showErrorMessage(message);
     },
   });
+  const folderSync = new FolderSyncEngine({
+    vscode: folderSyncApi(),
+    execFile,
+    homeDir,
+  });
+  context.subscriptions.push(folderSync.start());
   const launcher: SessionLauncher = new SessionLauncher({
     registry,
     emptySessions,
@@ -42,7 +100,10 @@ export function activate(context: vscode.ExtensionContext): void {
     registry,
     emptySessions,
     startNewSession: (cwd, onPresented) => launcher.start(cwd, onPresented),
-    onWorkspaces: (cwds) => emptySessions.syncWorkspaces(cwds),
+    onWorkspaces: (cwds) => {
+      emptySessions.syncWorkspaces(cwds);
+      folderSync.updateList(cwds);
+    },
     onSessionFiles: (files) => {
       const directories = new Set(files.map(({ file }) => dirname(file)));
       for (const [directory, watcher] of historyWatchers) {
