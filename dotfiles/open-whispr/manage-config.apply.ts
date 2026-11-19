@@ -6,13 +6,17 @@ import {
   copyFileSync,
   existsSync,
   fstatSync,
+  linkSync,
+  mkdirSync,
   openSync,
   readFileSync,
   readdirSync,
   readSync,
+  realpathSync,
   statSync,
+  unlinkSync,
 } from "node:fs";
-import { cp, mkdtemp, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -647,6 +651,28 @@ function isUninstallerEntry(name: string): boolean {
   return /^uninstall/i.test(name);
 }
 
+function linkFileOrCopy(source: string, destination: string): void {
+  let resolved = source;
+  try {
+    resolved = realpathSync(source);
+  } catch {}
+  try {
+    linkSync(resolved, destination);
+  } catch {
+    copyFileSync(resolved, destination);
+  }
+}
+
+function linkTreeOrCopy(source: string, destination: string): void {
+  mkdirSync(destination, { recursive: true });
+  for (const entry of readdirSync(source, { withFileTypes: true })) {
+    const childSource = join(source, entry.name);
+    const childDestination = join(destination, entry.name);
+    if (statSync(childSource).isDirectory()) linkTreeOrCopy(childSource, childDestination);
+    else linkFileOrCopy(childSource, childDestination);
+  }
+}
+
 export async function ensureShadowRuntime(appDir: string, platform: PlatformName): Promise<string> {
   const appBinaryName = platform === "linux" ? linuxAppBinaryName : windowsAppBinaryName;
   const electronBinaryName = platform === "linux" ? "electron" : "electron.exe";
@@ -657,24 +683,37 @@ export async function ensureShadowRuntime(appDir: string, platform: PlatformName
   } catch {
     throw new HookError("INVALID_INPUT", `installed app binary is missing: ${sourceBinary}`);
   }
-  const binaryHash = sha256Hex(readFileSync(sourceBinary));
+  const binaryMtimeMs = Math.round(binaryStat.mtimeMs);
   const runtimeDir = join(
     tmpdir(),
-    `openwhispr-register-runtime-${platform}-${binaryHash.slice(0, 16)}-${binaryStat.size}`,
+    `openwhispr-register-runtime-${platform}-${binaryStat.size}-${binaryMtimeMs}`,
   );
+  const harnessHash = sha256Hex(buildHarnessSource());
+  const manifestPath = join(runtimeDir, ".runtime-manifest.json");
+  try {
+    const stored = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      version?: unknown;
+      size?: unknown;
+      mtimeMs?: unknown;
+      harness?: unknown;
+    };
+    if (
+      stored.version === 4 &&
+      stored.size === binaryStat.size &&
+      stored.mtimeMs === binaryMtimeMs &&
+      stored.harness === harnessHash &&
+      existsSync(join(runtimeDir, electronBinaryName))
+    )
+      return runtimeDir;
+  } catch {}
+  const binaryHash = sha256Hex(readFileSync(sourceBinary));
   const manifest = JSON.stringify({
-    version: 2,
+    version: 4,
     sha256: binaryHash,
     size: binaryStat.size,
-    harness: sha256Hex(buildHarnessSource()),
+    mtimeMs: binaryMtimeMs,
+    harness: harnessHash,
   });
-  const manifestPath = join(runtimeDir, ".runtime-manifest.json");
-  if (
-    existsSync(manifestPath) &&
-    readFileSync(manifestPath, "utf8") === manifest &&
-    existsSync(join(runtimeDir, electronBinaryName))
-  )
-    return runtimeDir;
 
   const stagingDir = await mkdtemp(join(tmpdir(), "openwhispr-runtime-"));
   try {
@@ -684,11 +723,24 @@ export async function ensureShadowRuntime(appDir: string, platform: PlatformName
       if (platform === "linux" && entry.name === "open-whispr") continue;
       const source = join(appDir, entry.name);
       const destination = join(stagingDir, entry.name);
-      if (entry.isDirectory()) await cp(source, destination, { recursive: true });
-      else await cp(source, destination);
+      if (statSync(source).isDirectory()) linkTreeOrCopy(source, destination);
+      else linkFileOrCopy(source, destination);
     }
-    copyFileSync(sourceBinary, join(stagingDir, electronBinaryName));
-    if (platform === "linux") chmodSync(join(stagingDir, electronBinaryName), 0o755);
+    const electronPath = join(stagingDir, electronBinaryName);
+    if (platform === "linux") {
+      let linked = false;
+      try {
+        linkSync(realpathSync(sourceBinary), electronPath);
+        linked = true;
+      } catch {}
+      if (!linked || (statSync(electronPath).mode & 0o777) !== 0o755) {
+        if (linked) unlinkSync(electronPath);
+        copyFileSync(sourceBinary, electronPath);
+        chmodSync(electronPath, 0o755);
+      }
+    } else {
+      linkFileOrCopy(sourceBinary, electronPath);
+    }
     const appOverlayDir = join(stagingDir, "resources", "app");
     await mkdir(appOverlayDir, { recursive: true });
     await writeFile(join(appOverlayDir, "package.json"), buildHarnessPackageJson());
