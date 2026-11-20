@@ -1,13 +1,18 @@
 #!/usr/bin/env bun
 import { $ } from "bun";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-const extensionsForWindows = ["ms-vscode-remote.remote-wsl", "tomoki1207.pdf"];
+const extensionsForWindows = [
+  "be5invis.vscode-custom-css",
+  "ms-vscode-remote.remote-wsl",
+  "tomoki1207.pdf",
+];
 
 const extensionsForLinux = [
   "alefragnani.bookmarks",
   "apaya.webm-player",
+  "be5invis.vscode-custom-css",
   "bierner.markdown-yaml-preamble",
   "bpruitt-goddard.mermaid-markdown-syntax-highlighting",
   "catbraaain.auto-fix-venv",
@@ -50,7 +55,19 @@ const extensionsForLinux = [
 ];
 
 // Built locally from source and installed via VSIX instead of the Marketplace.
-const localVscodeExtensions = ["todo-lsp.todo"];
+// "targets" lists the OS installations each extension is synced to.
+const localVscodeExtensions: { id: string; targets: Label[] }[] = [
+  { id: "todo-lsp.todo", targets: ["linux"] },
+  { id: "catbraaain.scm-collapse-reapply", targets: ["linux", "windows"] },
+];
+const localExtensionIds = localVscodeExtensions.map((extension) => extension.id);
+
+// Extensions packaged by build hooks into this dist folder. Values are the
+// VSIX file name prefix ("name-version.data.vsix"; the reserved .data. marker
+// keeps the file out of the home deployment).
+const workspaceVsixPrefixes: Record<string, string> = {
+  "catbraaain.scm-collapse-reapply": "scm-collapse-reapply-",
+};
 
 const home = process.env.HOME;
 if (home === undefined) throw new Error("HOME: unbound variable");
@@ -59,12 +76,13 @@ const defaultBranch = "main";
 
 type Label = "linux" | "windows";
 
-let linuxExtensionLines: string[] | undefined;
+let linuxExtensionEntries: [string, string][] | undefined;
 
 async function main() {
   if (await hasCommand("code")) {
-    for (const extension of localVscodeExtensions) {
-      await installLocalExtension(extension);
+    for (const { id, targets } of localVscodeExtensions) {
+      if (!targets.includes("linux")) continue;
+      await installLocalExtension(id);
     }
     await syncExtensions("linux");
   } else {
@@ -78,11 +96,24 @@ async function main() {
     // Missing or unreadable /proc/version does not indicate WSL.
   }
   if (isWsl && (await hasCommand("powershell.exe"))) {
+    for (const { id, targets } of localVscodeExtensions) {
+      if (!targets.includes("windows")) continue;
+      await installLocalExtensionToWindows(id);
+    }
     await syncExtensions("windows");
   }
 }
 
 async function installLocalExtension(extension: string) {
+  if (workspaceVsixPrefixes[extension] !== undefined) {
+    const vsix = findWorkspaceVsix(extension);
+    if ((await installedExtensionVersion("linux", extension)) === vsix.version) return;
+    console.log(`[linux] install ${vsix.path}`);
+    await $`code --install-extension ${vsix.path} --force`;
+    linuxExtensionEntries = undefined;
+    return;
+  }
+
   const { url, repo } = localExtensionSource(extension);
   if (isDirectory(join(repo, ".git"))) {
     const localHead = (await $`git -C ${repo} rev-parse HEAD`.text()).trimEnd();
@@ -101,15 +132,44 @@ async function installLocalExtension(extension: string) {
   const vsixPath = await buildLocalExtensionVsix(extension);
   console.log(`[linux] install ${vsixPath}`);
   await $`code --install-extension ${vsixPath} --force`;
-  linuxExtensionLines = undefined;
+  linuxExtensionEntries = undefined;
+}
+
+async function installLocalExtensionToWindows(extension: string) {
+  const vsix = findWorkspaceVsix(extension);
+  if ((await installedExtensionVersion("windows", extension)) === vsix.version) return;
+  const windowsPath = (await $`wslpath -w ${vsix.path}`.text()).replace(/\n+$/, "");
+  console.log(`[windows] install ${vsix.path}`);
+  await runCode("windows", ["--install-extension", windowsPath, "--force"]);
+}
+
+// Build hooks leave their VSIX next to this apply script in the dist folder
+// (import.meta.dir is the original dist folder, see SPEC apply scripts).
+function findWorkspaceVsix(extension: string): { path: string; version: string } {
+  const prefix = workspaceVsixPrefixes[extension];
+  if (prefix === undefined) {
+    throw new Error(`error: unknown workspace extension '${extension}'`);
+  }
+  const suffix = ".data.vsix";
+  const candidates = readdirSync(import.meta.dir).filter(
+    (name) => name.startsWith(prefix) && name.endsWith(suffix),
+  );
+  if (candidates.length !== 1) {
+    throw new Error(
+      `error: expected exactly one ${prefix}*${suffix} beside ${import.meta.url}, found ${candidates.length}`,
+    );
+  }
+  const fileName = candidates[0]!;
+  const version = fileName.slice(prefix.length, -suffix.length);
+  return { path: join(import.meta.dir, fileName), version };
 }
 
 async function syncExtensions(label: Label) {
   const desired = label === "linux" ? extensionsForLinux : extensionsForWindows;
-  const installed = await listExtensions(label);
+  const installed = await installedExtensionIds(label);
   const marketplace = (extensions: string[]) =>
     [
-      ...new Set(extensions.filter((extension) => !localVscodeExtensions.includes(extension))),
+      ...new Set(extensions.filter((extension) => !localExtensionIds.includes(extension))),
     ].sort();
   const installedMarketplace = marketplace(installed);
   const desiredMarketplace = marketplace(desired);
@@ -170,30 +230,45 @@ async function buildLocalExtensionVsix(extension: string) {
   return vsixPath;
 }
 
-async function readExtensionLines(label: Label): Promise<string[]> {
-  if (label === "linux" && linuxExtensionLines !== undefined) return linuxExtensionLines;
+const extensionIdPattern = /^([a-z0-9-]+\.[a-z0-9-]+)@/;
+
+async function readExtensionEntries(label: Label): Promise<[string, string][]> {
+  if (label === "linux" && linuxExtensionEntries !== undefined) return linuxExtensionEntries;
   const codeCommand = codeExecutable(label);
-  const { stdout, exitCode } = await $`${codeCommand} --list-extensions`.quiet().nothrow();
+  const { stdout, exitCode } = await $`${codeCommand} --list-extensions --show-versions`.quiet().nothrow();
   if (exitCode !== 0) return [];
-  const extensions = stdout.toString().replace(/\r/g, "").split("\n");
-  if (label === "linux") linuxExtensionLines = extensions;
-  return extensions;
+  const entries = stdout
+    .toString()
+    .replace(/\r/g, "")
+    .split("\n")
+    .filter((line) => extensionIdPattern.test(line))
+    .map((line): [string, string] => {
+      const at = line.indexOf("@");
+      return [line.slice(0, at), line.slice(at + 1)];
+    });
+  if (label === "linux") linuxExtensionEntries = entries;
+  return entries;
 }
 
-async function listExtensions(label: Label): Promise<string[]> {
-  const extensions = await readExtensionLines(label);
-  return extensions.filter((extension) => /^[a-z0-9-]+\.[a-z0-9-]+$/.test(extension));
+async function installedExtensionIds(label: Label): Promise<string[]> {
+  const entries = await readExtensionEntries(label);
+  return entries.map(([id]) => id);
+}
+
+async function installedExtensionVersion(label: Label, extension: string): Promise<string | undefined> {
+  const entries = await readExtensionEntries(label);
+  return entries.find(([id]) => id === extension)?.[1];
 }
 
 async function isExtensionInstalled(label: Label, extension: string): Promise<boolean> {
-  const extensions = await readExtensionLines(label);
-  return extensions.includes(extension);
+  const entries = await readExtensionEntries(label);
+  return entries.some(([id]) => id === extension);
 }
 
 async function runCode(label: Label, args: string[]) {
   const codeCommand = codeExecutable(label);
   await $`${codeCommand} ${args}`;
-  if (label === "linux") linuxExtensionLines = undefined;
+  if (label === "linux") linuxExtensionEntries = undefined;
 }
 
 async function hasCommand(command: string) {

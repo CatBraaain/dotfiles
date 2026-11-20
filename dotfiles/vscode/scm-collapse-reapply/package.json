@@ -1,0 +1,17 @@
+{
+  "name": "scm-collapse-reapply",
+  "publisher": "catbraaain",
+  "version": "1.0.0",
+  "displayName": "SCM Collapse Reapply",
+  "description": "Reapplies the Custom CSS and JS Loader patch after VS Code updates overwrite the patched workbench HTML.",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js"
+}

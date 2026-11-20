@@ -587,6 +587,9 @@
   "ty.inlayHints.variableTypes": false,
   "update.mode": "start",
   "vscode-just.lspPath": "/home/linuxbrew/.linuxbrew/bin/just-lsp",
+  "vscode_custom_css.imports": [
+    "file://${userHome}/AppData/Roaming/Code/User/custom-css-js/scm-collapse.js"
+  ],
   "window.commandCenter": false,
   "window.confirmSaveUntitledWorkspace": false,
   "window.customMenuBarAltFocus": false,

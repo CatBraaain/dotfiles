@@ -36,7 +36,7 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | sharex | - | Documents/ShareX | - |
 | tmux | .config/tmux | - | - |
 | vscode/sync_vscode_extensions.apply.ts |  | - |  |
-| vscode |  | AppData/Roaming/Code/User | - |
+| vscode | .config/Code/User | AppData/Roaming/Code/User | - |
 | windows-menu | - | AppData/Roaming/Microsoft/Windows/Start Menu/Programs | - |
 | windows-terminal | - | AppData/Local/Packages/Microsoft.WindowsTerminal_8wekyb3d8bbwe/LocalState | - |
 | zed | .config/zed | AppData/Roaming/Zed | - |
