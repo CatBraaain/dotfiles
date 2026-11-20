@@ -379,7 +379,7 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 
 ### bwrap起動
 
-各ツール呼び出しは次の構成で `bwrap` を起動する。
+sandbox対象プラットフォームでは、各ツール呼び出しは次の構成で `bwrap` を起動する。
 
 1. `--die-with-parent` を設定する。`read.allow` に `"*"` が含まれる場合は `/` を read-only bindしてから、新しいprocfs を `--proc /proc` でマウントする。新しい `/dev` は `--dev /dev` でマウントする。procfs は root bind より後にマウントし、nested user namespace に必要な書き込みを可能にする。bash では、GPU用デバイス `/dev/dxg` と `/dev/dri` をそれぞれ `--dev-bind-try /dev/dxg /dev/dxg` と `--dev-bind-try /dev/dri /dev/dri` で追加公開する。`--dev-bind-try` は対象が存在しない環境では無視される。
 2. 設定済みの allowパスを `--bind-try`、read-onlyパスと credentials を `--ro-bind-try` で bindする。設定由来の `write` の書き込み可能bind は後勝ちで `allow` に確定したパスのみとする。動的許可と bash の read-only 保護は §6.1 に従う。
@@ -387,16 +387,20 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 4. sandbox内で選択されたentrypointをbunで実行し、network namespace は分離しない。ホストで user namespace が利用可能な場合、sandbox内のプロセスは nested user namespace を作成でき、Firefox のプロセスsandbox や GTK の nested `bwrap` helper が起動できる。
 5. 実行中のキャンセルと timeout は次の契約に従う。
 
+### sandbox対象外プラットフォームの直実行
+
+bwrap は Linux 固有の機能に依存するため、`process.platform` が `linux` 以外の環境（windows・macOS）では bwrap を起動せず、worker（`bun` と選択されたentrypoint）を host の直接 child process として起動する。`buildSandboxArgs` は構築せず、mount 構成（書き込み制限・denyパス・credentials の隠蔽・bash 用デバイス公開）は適用されない。この環境の実行は認可（§2・§4）とコマンド照合のみで守る。child process 環境の sanitize（§7.1 を含む）は両経路で適用する。キャンセルと timeout の契約は bwrap 起動時と同一で、停止対象が bwrap child の代わりに直接 child になるだけである。
+
 ### 実行中のキャンセルと timeout
 
-公開APIへのBash要求は、呼び出し経路によらず同じキャンセル契約を持つ。既定executorでは、中断をsandbox内のSDK標準Bashへ伝達する。SDKが管理するshellの終了と標準tool definitionの終了を待ち、workerとbwrapの終了後に実行Promiseを中断エラーで終端する。呼び出し元が要求結果を先に確定した場合も、この実行終端の条件は変わらない。
+公開APIへのBash要求は、呼び出し経路によらず同じキャンセル契約を持つ。既定executorでは、中断をsandbox内のSDK標準Bashへ伝達する。SDKが管理するshellの終了と標準tool definitionの終了を待ち、workerとsandbox childの終了後に実行Promiseを中断エラーで終端する。呼び出し元が要求結果を先に確定した場合も、この実行終端の条件は変わらない。
 
 | 条件 | 結果 |
 | --- | --- |
 | Bashの `params.timeout` に達する | sandbox内のSDK標準Bashが停止と終了待機を行い、標準tool definitionのtimeout結果を返す |
 | 既定Bashのsandbox実行自体にtimeoutを適用する | キャンセルと同じ中断伝達・終了待機を行い、実行Promiseをtimeoutエラーで終端する |
 | 中断の通知失敗・workerの異常終了 | 実行エラーとして返す。下位の終了未確認を停止完了として扱わない |
-| 非Bashまたは差替えexecutorのキャンセル | bwrapのchild processを停止し、終了を待って実行Promiseを終端する |
+| 非Bashまたは差替えexecutorのキャンセル | sandbox child process（bwrap または直実行 child）を停止し、終了を待って実行Promiseを終端する |
 
 SDK管理下の終了待機は、`setsid` 等で離脱した子孫や、正常終了後に残る常駐プロセス全体の終了確認とは区別する。既定Bashでは、SDKの停止対象から離脱した子孫が存続する場合がある。
 

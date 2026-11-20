@@ -142,4 +142,41 @@ describe("guarded execution boundary", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it("detects image MIME types without a bwrap prefix when the sandbox is unavailable", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "guarded-image-fallback-"));
+    try {
+      const config = join(directory, "config.yaml");
+      writeFileSync(config, `read:\n  - allow: "*"\ncommands:\n  - file:\n      - allow: []\n`);
+      const guardrail = new Guardrail(directory, config);
+      const runner = new SandboxRunner(
+        directory,
+        (mode) => guardrail.buildArgs(mode),
+        () => false,
+      );
+      const commands: string[] = [];
+      runner.runTool = async () => ({ content: [], details: {} });
+      const request = {
+        toolName: "read",
+        params: { path: join(directory, "input.txt") },
+        executor: { entrypoint: join(directory, "fixture.ts") },
+        context: {
+          hasUI: true,
+          executeTool: async (_toolName: string, params: { command: string }) => {
+            commands.push(params.command);
+            return {
+              isError: false,
+              result: { content: [{ type: "text", text: "text/plain" }], details: {} },
+            };
+          },
+        },
+      } as unknown as GuardedToolRequest;
+      await executeGuardedTool(guardrail, runner, directory, request);
+      assert.equal(commands.length, 1);
+      assert.match(commands[0] ?? "", /^file /);
+      assert.equal(commands[0]?.includes("bwrap"), false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });

@@ -149,7 +149,9 @@ async function imageMimeType(
   const outcome = await request.context.executeTool(
     "bash",
     {
-      command: quote(["bwrap", ...runner.buildArgs("fs"), ...fileArgs]),
+      command: quote(
+        runner.sandboxed() ? ["bwrap", ...runner.buildArgs("fs"), ...fileArgs] : fileArgs,
+      ),
     },
     { signal: request.signal },
   );

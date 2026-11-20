@@ -19,6 +19,12 @@ type RunResult = { exitCode: number | null; stdout: Buffer; stderr: Buffer };
 
 type RunToolsResponse = { ok: true; result: AgentToolResult<any> } | { ok: false; error: string };
 
+// bwrap relies on Linux-only user namespaces; every other platform runs the
+// worker as a direct child process with authorization checks only.
+function platformSandboxes(): boolean {
+  return process.platform === "linux";
+}
+
 export class SandboxRunner {
   private readonly runToolsPath = join(dirname(fileURLToPath(import.meta.url)), "run-tools.ts");
   private readonly piPackageDir = getPackageDir();
@@ -26,6 +32,7 @@ export class SandboxRunner {
   constructor(
     private readonly cwd: string,
     readonly buildArgs: (mode: SandboxMode, commandCwd?: string) => string[],
+    readonly sandboxed: () => boolean = platformSandboxes,
   ) {}
 
   async runTool(
@@ -90,9 +97,10 @@ export class SandboxRunner {
     return new Promise((resolveRun, rejectRun) => {
       options.signal?.throwIfAborted();
       const environment = sanitizeSandboxEnvironment({ ...process.env, ...options.env });
+      const isolated = this.sandboxed();
       const child = spawn(
-        "bwrap",
-        [...this.buildArgs(options.mode ?? "fs"), command, ...commandArgs],
+        isolated ? "bwrap" : command,
+        isolated ? [...this.buildArgs(options.mode ?? "fs"), command, ...commandArgs] : commandArgs,
         {
           cwd: this.cwd,
           env: environment,

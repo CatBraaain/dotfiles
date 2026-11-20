@@ -1,5 +1,6 @@
-// Runs inside the guardrail bwrap sandbox: executes one pi-standard tool
-// definition per invocation and prints the result as a JSON envelope on stdout.
+// Runs inside the guardrail sandbox (bwrap where supported, direct child
+// process otherwise): executes one pi-standard tool definition per invocation
+// and prints the result as a JSON envelope on stdout.
 //
 // The pi package cannot be imported by its bare specifier here (no jiti
 // virtualModules outside the pi process), so the extension passes the pi

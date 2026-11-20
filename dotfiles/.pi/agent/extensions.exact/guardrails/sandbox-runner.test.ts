@@ -317,3 +317,45 @@ describe("sandbox cancellation", () => {
     }
   });
 });
+
+describe("sandbox unavailable fallback", () => {
+  it("runs the executor as a direct child without building bwrap mounts", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sandbox-direct-"));
+    try {
+      const entrypoint = join(directory, "executor.ts");
+      writeFileSync(
+        entrypoint,
+        `import { readFileSync } from "node:fs";
+        const request = JSON.parse(readFileSync(0, "utf8"));
+        console.log(JSON.stringify({ok:true,result:{content:[{type:"text",text:process.argv[2]}],details:{cwd:process.cwd(),requestedPath:request.params.path}}}));`,
+      );
+      let mountBuilds = 0;
+      const runner = new SandboxRunner(
+        directory,
+        () => {
+          mountBuilds++;
+          return [];
+        },
+        () => false,
+      );
+      const path = join(directory, "input.txt");
+      const result = (await runner.runTool(
+        "read",
+        { path },
+        {
+          mode: "fs",
+          executor: { entrypoint },
+        },
+      )) as {
+        content: { type: string; text: string }[];
+        details: Record<string, unknown>;
+      };
+      assert.equal(result.content[0]?.text, "read");
+      assert.equal(result.details.cwd, directory);
+      assert.equal(result.details.requestedPath, path);
+      assert.equal(mountBuilds, 0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
