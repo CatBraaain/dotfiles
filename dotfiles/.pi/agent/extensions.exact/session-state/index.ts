@@ -7,6 +7,7 @@ import type { ExecResult, ExtensionAPI, ExtensionContext } from "@earendil-works
 import { subagentSessionDir } from "../agents/index.ts";
 import {
   detectManagedPane,
+  launchToken,
   publishState,
   unsetStateOption,
   type BashRunner,
@@ -196,7 +197,10 @@ export default function sessionStateExtension(pi: ExtensionAPI): void {
     enqueuePublication(gen, async () => {
       while (!gen.controller.signal.aborted) {
         if (!(await waitForPriorExecution(gen))) return;
-        const detection = await detectManagedPane(gen.run, gen.environment);
+        const detection = await detectManagedPane(gen.run, {
+          ...gen.environment,
+          PI_TMUX_LAUNCH_TOKEN: launchToken(),
+        });
         if (gen.controller.signal.aborted) return;
         const recovery = await recoveryRetry(gen, gen.lastFailure() !== undefined);
         if (recovery === "aborted") return;

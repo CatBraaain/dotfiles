@@ -146,14 +146,15 @@ sourceは通知元が捕捉した次の情報を持つJSON objectとする。会
 | --- | --- |
 | `socket` | 専用socketの絶対パスの文字列 |
 | `serverPid` | 専用serverのPIDを表す正の整数 |
-| `serverStartTime` | Linuxの専用serverプロセスの開始時刻（process start time）を表す10進文字列 |
 | `pane` | 通知元のpane IDの文字列 |
 | `pid` | 通知元piのPIDを表す正の整数 |
-| `started` | Linuxの通知元piプロセスの開始時刻（process start time）を表す10進文字列 |
+| `token` | 通知元piの起動トークンを表すUUID文字列 |
 
-通知元serverの生存期間は `serverPid` と `serverStartTime` の組で識別する。CLI初期化の有無によらず照合し、「snapshotと復元」のCLI発行 `server-generation` は通知元の必須条件にしない。
+起動トークンは、CLIがpiを起動する単位で新規に発行し、`PI_TMUX_LAUNCH_TOKEN` 環境変数でpiへ渡し、paneの `@pi-mux-launch` に記録する。CLIが起動したpiでは、拡張が公開するpaneメタデータ(`@pi-tmux-session`)も同じトークンを記録する。専用tmux内でCLIによらず起動したpiは、拡張が生成したトークンをpaneメタデータへ記録して使う。トークンは起動ごとに新しく、再利用しない。
 
-sourceの全項目、会話ID、現在のpaneのpi実体を、稼働中の専用serverと照合してから変更する。PIDの再利用、pane IDの再利用、serverの再起動は同じ通知元と見なさない。未知・停止済み・複数実体・対応不一致の通知は、公開値・一時状態・復元記録を変更せずエラーにする。server起動・初期化・復元・pi起動・接続・workspace登録は行わない。
+通知元の生存期間は `serverPid` と起動トークンで識別する。CLI初期化の有無によらず照合し、「snapshotと復元」のCLI発行 `server-generation` は通知元の必須条件にしない。
+
+sourceの全項目、会話ID、現在のpaneのpi実体を、稼働中の専用serverと照合してから変更する。照合では、paneの `@pi-mux-launch` のトークン(記録がない場合はpaneメタデータのトークン)と source の `token` の一致を確認する。トークンは起動ごとに新しいため、PIDの再利用、pane IDの再利用、serverの再起動は同じ通知元と見なさない。未知・停止済み・複数実体・対応不一致の通知は、公開値・一時状態・復元記録を変更せずエラーにする。server起動・初期化・復元・pi起動・接続・workspace登録は行わない。
 
 | 通知・状態 | 結果 |
 | --- | --- |
@@ -287,7 +288,7 @@ metadataは会話ID・絶対パスのcwdとfileを検証する。paneを直接�
 
 | 条件 | 結果 |
 | --- | --- |
-| `--client-pid <pid>` 指定時 | 接続中クライアントのうち、クライアントプロセスのPIDが `pid` と一致するか、`/proc/<クライアントPID>/status` のPPidが `pid` と一致するものを1つ使う。該当がない・複数あるときは切替せずエラーにする |
+| `--client-pid <pid>` 指定時 | 接続中クライアントのうち、クライアントプロセスのPIDが `pid` と一致するか、`/proc/<クライアントPID>/status` のPPidが `pid` と一致するものを1つ使う。該当がない・複数あるときは切替せずエラーにする。Windows ではPPidとの一致を使わず、PIDの一致だけで特定する(「Windows での挙動差」参照) |
 | `--client-pid` 省略時 | 接続中クライアントがちょうど1つのときそれを使う。0個または2個以上のときは切替せずエラーにする |
 
 切替は `switch-client -c <クライアント> -t =<tmuxセッション名>` としてセッション名の厳密一致で行う。成功時はstdout・stderrへ出力せず終了コード0で終了する。失敗時は理由をstderrへ表示して非0で終了する。クライアントがattachし切っていない場合のリトライは呼び出し側の責務である。
@@ -466,11 +467,11 @@ snapshotと復元候補の更新は、登録workspaceを保持したまま `sess
 
 ## 専用tmux
 
-対象環境は Linux、PATH上の pi と tmux 3.8である。全pi実体を起動時から専用tmux内で実行する。接続クライアントの切断や起動元端末の終了後も、同じpi実体と進行中の処理が存続する。
+対象環境は、PATH上の pi と tmux 3.8である。Windows では、PATH上の `tmux` コマンドとして psmux(tmuxコマンド互換実装)を用いる。全pi実体を起動時から専用tmux内で実行する。接続クライアントの切断や起動元端末の終了後も、同じpi実体と進行中の処理が存続する。
 
 | 項目 | 振る舞い |
 | --- | --- |
-| 管理先 | `${XDG_RUNTIME_DIR:-/run/user/<uid>}/pi-tmux/server.sock` を使う。管理ディレクトリは所有者専用とする |
+| 管理先 | POSIX では `${XDG_RUNTIME_DIR:-/run/user/<uid>}/pi-tmux/server.sock` を、Windows では `~/.local/state/pi-tmux/server.sock` を使う。管理ディレクトリは所有者専用とする。Windows では `-S` のパスをサーバー識別に使い、socketファイルは作成・検査しない |
 | 起動 | `new`・`open`・`restore` は専用serverがなければ起動して復元する |
 | 存続 | クライアントや会話がなくなってもサーバーを存続させる |
 | 設定 | 起動操作で専用設定を適用する。通常tmuxの設定を読み込まず、他のサーバーへ作用しない |
@@ -483,6 +484,19 @@ snapshotと復元候補の更新は、登録workspaceを保持したまま `sess
 上記の未対応による例外以外で設定の適用に失敗した場合は、起動準備のエラーとして扱う。
 
 新しいpi実体は、現在の呼び出し環境とtmux・CLIが必要とする生成値で起動する。過去の呼び出しにだけ存在した環境変数を持ち越さない。同時起動でも環境を混線させず、既に稼働しているpi実体の環境は変更しない。
+
+## Windows での挙動差
+
+Windows では、tmuxの代わりに PATH上の `tmux` コマンドとして psmux を用いる。この節に挙げる差異を除き、本書の各操作の振る舞いはプラットフォームで共通とする。
+
+| 項目 | 振る舞い |
+| --- | --- |
+| shell実行 | tmux設定のhookとpaneコマンドなど、shell として解釈するコマンド文字列は Windows PowerShell の構文で実行する。pwsh または powershell が PATH上に必要である |
+| 排他 | 操作の排他に使う接続先を名前付きパイプに切り替える。排他の待機・競合時の扱いは共通とする |
+| サーバーとpaneの同一性 | サーバーの識別は `#{pid}` のPIDとserver世代で、piの識別は起動トークンで行い、POSIXと同じ手順で通知元を検証する |
+| 起動中piの特定 | 起動中の管理piを `/proc` の環境変数とcwdで照会しない。paneの `@pi-mux-launch` の会話ID・PID・トークンの形式の一致だけで特定する |
+| クライアント特定 | `--client-pid` はクライアントプロセスのPIDとの一致だけで特定する。親プロセス(PPid)との一致は使わない |
+| 実行ファイル | pi・pi-muxは各々 Windows 上で `bun build --compile` した実行ファイルを用意する。クロスコンパイルは行わない |
 
 ## エラー
 

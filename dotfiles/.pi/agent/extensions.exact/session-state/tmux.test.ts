@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createServer } from "node:net";
 import { parse } from "shell-quote";
@@ -12,20 +14,19 @@ import {
   publishState,
   unsetStateOption,
   stateCommand,
-  processStartTime,
   type BashRunner,
   type ManagedPaneBinding,
 } from "./tmux.ts";
 
 const DEDICATED_SOCKET = "/run/user/dedicated/pi-tmux/server.sock";
+const TEST_TOKEN = randomUUID();
 
 const verifiedBinding: ManagedPaneBinding = {
   socketPath: DEDICATED_SOCKET,
   serverPid: process.pid,
   paneId: "%0",
-  serverStartTime: processStartTime(process.pid),
+  token: TEST_TOKEN,
   pid: process.pid,
-  started: processStartTime(process.pid),
 };
 function completedResult(stdout: string, code = 0, stderr = ""): ExecResult {
   return { stdout, stderr, code, killed: false };
@@ -35,6 +36,7 @@ type TmuxKeywordResponse = () => ExecResult | Promise<ExecResult>;
 
 class FakeTmuxServer {
   readonly commands: string[] = [];
+  launchRecord = "";
   private readonly paneOptions = new Map<string, string>();
 
   constructor(
@@ -80,7 +82,7 @@ class FakeTmuxServer {
       this.socketPath,
       String(process.pid),
       "%0",
-      readlinkSync("/proc/self/fd/0"),
+      this.launchRecord,
       String(process.pid),
     ];
     return fields.join("\t");
@@ -92,8 +94,13 @@ function dedicatedEnv(overrides: Record<string, string | undefined> = {}): NodeJ
     XDG_RUNTIME_DIR: "/run/user/dedicated",
     TMUX: `${DEDICATED_SOCKET},${process.pid}`,
     TMUX_PANE: "%0",
+    PI_TMUX_LAUNCH_TOKEN: TEST_TOKEN,
     ...overrides,
   };
+}
+
+function launchRecordOf(token: string): string {
+  return JSON.stringify({ id: "session", pid: process.pid, token });
 }
 
 async function createDedicatedCandidate() {
@@ -110,6 +117,7 @@ async function createDedicatedCandidate() {
     XDG_RUNTIME_DIR: runtimeDir,
     TMUX: `${socketPath},${process.pid}`,
     TMUX_PANE: "%0",
+    PI_TMUX_LAUNCH_TOKEN: TEST_TOKEN,
   };
   return {
     env,
@@ -131,6 +139,13 @@ describe("dedicatedSocketPath", () => {
 
   it("uses /run/user/<uid> when XDG_RUNTIME_DIR is unset", () => {
     assert.equal(dedicatedSocketPath({}), `/run/user/${process.getuid!()}/pi-tmux/server.sock`);
+  });
+
+  it("uses ~/.local/state on Windows regardless of XDG_RUNTIME_DIR", () => {
+    assert.equal(
+      dedicatedSocketPath({ XDG_RUNTIME_DIR: "/isolated" }, "win32"),
+      join(homedir(), ".local", "state", "pi-tmux", "server.sock"),
+    );
   });
 });
 
@@ -169,10 +184,9 @@ describe("state command builder", () => {
     assert.deepEqual(JSON.parse(argv[argv.indexOf("--source") + 1]!), {
       socket: DEDICATED_SOCKET,
       serverPid: process.pid,
-      serverStartTime: verifiedBinding.serverStartTime,
       pane: "%0",
       pid: process.pid,
-      started: verifiedBinding.started,
+      token: TEST_TOKEN,
     });
     assert.equal(argv.includes("-F"), false);
   });
@@ -242,22 +256,30 @@ describe("detectManagedPane", () => {
     }
   });
 
-  it("does not mark the pane as managed when the server PID, pane ID, PTY, or startup PID does not match", async () => {
+  it("does not mark the pane as managed when the server PID, pane ID, or launch token does not match", async () => {
     const candidate = await createDedicatedCandidate();
     try {
       const selfPid = process.pid;
-      const tty = readlinkSync("/proc/self/fd/0");
       const socketPath = candidate.socketPath;
-      const matching = [socketPath, String(process.pid), "%0", tty, String(selfPid)].join("\t");
+      const launch = launchRecordOf(TEST_TOKEN);
+      const matching = [socketPath, String(process.pid), "%0", launch, String(selfPid)].join("\t");
       const mismatchedReplies = [
-        ["serverPid", [socketPath, "9999", "%0", tty, String(selfPid)].join("\t")],
-        ["paneId", [socketPath, String(process.pid), "%9", tty, String(selfPid)].join("\t")],
+        ["serverPid", [socketPath, "not-a-pid", "%0", launch, String(selfPid)].join("\t")],
+        ["paneId", [socketPath, String(process.pid), "%9", launch, String(selfPid)].join("\t")],
         [
-          "paneTty",
-          [socketPath, String(process.pid), "%0", "/dev/other/pty", String(selfPid)].join("\t"),
+          "launchToken",
+          [
+            socketPath,
+            String(process.pid),
+            "%0",
+            launchRecordOf(randomUUID()),
+            String(selfPid),
+          ].join("\t"),
         ],
-        ["panePid", [socketPath, String(process.pid), "%0", tty, String(selfPid + 1)].join("\t")],
-        ["socket", ["/other/socket", String(process.pid), "%0", tty, String(selfPid)].join("\t")],
+        [
+          "socket",
+          ["/other/socket", String(process.pid), "%0", launch, String(selfPid)].join("\t"),
+        ],
         ["shortLine", [socketPath, String(process.pid)].join("\t")],
       ] as const;
       for (const [field, reply] of mismatchedReplies) {
@@ -279,6 +301,73 @@ describe("detectManagedPane", () => {
       });
     } finally {
       await candidate.cleanup();
+    }
+  });
+
+  it("adopts a pane without a launch record only when no launch token is set", async () => {
+    const candidate = await createDedicatedCandidate();
+    try {
+      const socketPath = candidate.socketPath;
+      const server = new FakeTmuxServer(
+        {
+          "display-message": () =>
+            completedResult(
+              [socketPath, String(process.pid), "%0", "", String(process.pid)].join("\t"),
+            ),
+        },
+        socketPath,
+      );
+      const detection = await detectManagedPane(server.run, {
+        ...candidate.env,
+        PI_TMUX_LAUNCH_TOKEN: undefined,
+      });
+      assert.equal(detection.status, "managed");
+      assert.match(
+        detection.status === "managed" ? detection.binding.token : "",
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
+    } finally {
+      await candidate.cleanup();
+    }
+  });
+
+  it("captures the reply server PID instead of the TMUX environment value", async () => {
+    const candidate = await createDedicatedCandidate();
+    try {
+      const socketPath = candidate.socketPath;
+      const server = new FakeTmuxServer({}, socketPath);
+      const detection = await detectManagedPane(server.run, {
+        ...candidate.env,
+        TMUX: `${socketPath},9999`,
+      });
+      assert.deepEqual(detection, {
+        status: "managed",
+        binding: { ...verifiedBinding, socketPath },
+      });
+    } finally {
+      await candidate.cleanup();
+    }
+  });
+
+  it("verifies a Windows pane without a socket file", async () => {
+    const socketPath = dedicatedSocketPath({}, "win32");
+    const server = new FakeTmuxServer({}, socketPath);
+    const detection = await detectManagedPane(
+      server.run,
+      { XDG_RUNTIME_DIR: "/ignored", TMUX: `${socketPath},7`, TMUX_PANE: "%0" },
+      process.pid,
+      "win32",
+    );
+    assert.equal(detection.status, "managed");
+    if (detection.status === "managed") {
+      assert.equal(detection.binding.socketPath, socketPath);
+      assert.equal(detection.binding.serverPid, process.pid);
+      assert.equal(detection.binding.paneId, "%0");
+      assert.equal(detection.binding.pid, process.pid);
+      assert.match(
+        detection.binding.token,
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
     }
   });
 

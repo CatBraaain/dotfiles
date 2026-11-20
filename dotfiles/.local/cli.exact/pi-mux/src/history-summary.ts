@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { platform } from "./platform";
 
 const SUMMARY_READ_CHUNK_BYTES = 256 * 1024;
 const SUMMARY_CACHE_VERSION = 5;
@@ -53,8 +54,7 @@ export class HistorySummaryCache {
     try {
       mkdirSync(directory, { recursive: true, mode: 0o700 });
       const stat = lstatSync(directory);
-      if (stat.isDirectory() && stat.uid === process.getuid!() && (stat.mode & 0o077) === 0)
-        this.directory = directory;
+      if (stat.isDirectory() && platform.ownedFileEntry(stat)) this.directory = directory;
     } catch {
       this.directory = undefined;
     }
@@ -112,8 +112,7 @@ export class HistorySummaryCache {
     try {
       fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       const stat = fstatSync(fd);
-      if (!stat.isFile() || stat.uid !== process.getuid!() || (stat.mode & 0o077) !== 0)
-        return undefined;
+      if (!stat.isFile() || !platform.ownedFileEntry(stat)) return undefined;
       const entry: unknown = JSON.parse(readFileSync(fd, "utf8"));
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
       const record = entry as Record<string, unknown>;

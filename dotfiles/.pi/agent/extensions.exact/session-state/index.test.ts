@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import * as fsPromises from "node:fs/promises";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createServer } from "node:net";
-import { readlinkSync } from "node:fs";
 import { setImmediate } from "node:timers/promises";
 import { parse } from "shell-quote";
 import { describe, it, spyOn } from "bun:test";
@@ -75,13 +75,7 @@ class FakeTmuxServer {
   }
 
   private verifiedFieldsLine(): string {
-    const fields = [
-      this.socketPath,
-      String(process.pid),
-      "%0",
-      readlinkSync("/proc/self/fd/0"),
-      String(process.pid),
-    ];
+    const fields = [this.socketPath, String(process.pid), "%0", "", String(process.pid)];
     return fields.join("\t");
   }
 }
@@ -146,9 +140,11 @@ async function createExtensionHarness(
     XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
     TMUX: process.env.TMUX,
     TMUX_PANE: process.env.TMUX_PANE,
+    PI_TMUX_LAUNCH_TOKEN: process.env.PI_TMUX_LAUNCH_TOKEN,
   };
   const agent = options.agent ?? "main";
   process.env.XDG_RUNTIME_DIR = runtimeDir;
+  process.env.PI_TMUX_LAUNCH_TOKEN = randomUUID();
   if (options.dedicated === false) {
     process.env.TMUX = `/other/socket,${process.pid}`;
     process.env.TMUX_PANE = "%0";
@@ -1261,13 +1257,7 @@ describe("session-state CLI execution ordering", () => {
         if (argv[argv.indexOf("-t") + 1] === "%9")
           throw new Error("obsolete inspection transport failed");
         return completedResult(
-          [
-            h.server.socketPath,
-            String(process.pid),
-            "%0",
-            readlinkSync("/proc/self/fd/0"),
-            String(process.pid),
-          ].join("\t"),
+          [h.server.socketPath, String(process.pid), "%0", "", String(process.pid)].join("\t"),
         );
       };
       process.env.TMUX_PANE = "%9";

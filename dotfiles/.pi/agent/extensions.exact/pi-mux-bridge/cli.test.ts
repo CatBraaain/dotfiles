@@ -182,7 +182,7 @@ case "$*" in
       fi
       exit "$code"
     fi ;;
-  *"source-file -")
+  *"new-session"*)
     if test "$TEST_PAUSE_CREATE" = 1; then
       touch ${quote([join(root, "create-ready")])}
       while ! test -f ${quote([join(root, "create-released")])}; do sleep 0.02; done
@@ -511,17 +511,18 @@ function enableStatePublisher(f: MuxFixture): void {
 async function notificationSource(f: MuxFixture, pane: Pick<Pane, "pane" | "pid">) {
   const server = await f.tmux(["display-message", "-p", "-t", pane.pane, "#{pid}"]);
   const serverPid = Number(server.out.trim());
-  function started(pid: number): string {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]!;
-  }
+  const launch = await f.tmux(["show-options", "-pqv", "-t", pane.pane, "@pi-mux-launch"]);
+  const metadata = await f.tmux(["show-options", "-pqv", "-t", pane.pane, "@pi-tmux-session"]);
+  const token =
+    launch.out.trim() !== ""
+      ? JSON.parse(launch.out.trim()).token
+      : JSON.parse(Buffer.from(metadata.out.trim(), "base64").toString("utf8")).token;
   return {
     socket: f.socket,
     serverPid,
-    serverStartTime: started(serverPid),
     pane: pane.pane,
     pid: pane.pid,
-    started: started(pane.pid),
+    token,
   };
 }
 
@@ -585,6 +586,7 @@ async function publishedIdlePane(
     cwd: f.cwdA,
     file,
     pid: Number(pid),
+    token: randomUUID(),
     ...(startup === "legacy" ? {} : { startup }),
   };
   const published = await f.tmux([
@@ -1586,6 +1588,7 @@ export default function (pi) {
           (await f.tmux(["set-option", "-pu", "-t", pane!, "@pi-tmux-session"])).code,
           0,
         );
+        const launchToken = randomUUID();
         assert.equal(
           (
             await f.tmux([
@@ -1596,6 +1599,7 @@ export default function (pi) {
               "--",
               "/usr/bin/env",
               `PI_TMUX_SESSION_ID=${metadata.id}`,
+              `PI_TMUX_LAUNCH_TOKEN=${launchToken}`,
               "sleep",
               "120",
             ])
@@ -1605,8 +1609,6 @@ export default function (pi) {
         const currentPid = Number(
           (await f.tmux(["display-message", "-p", "-t", pane!, "#{pane_pid}"])).out.trim(),
         );
-        const stat = readFileSync(`/proc/${currentPid}/stat`, "utf8");
-        const started = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]!;
         assert.equal(
           (
             await f.tmux([
@@ -1615,7 +1617,7 @@ export default function (pi) {
               "-t",
               pane!,
               "@pi-mux-launch",
-              JSON.stringify({ id: metadata.id, pid: currentPid, started }),
+              JSON.stringify({ id: metadata.id, pid: currentPid, token: launchToken }),
             ])
           ).code,
           0,
@@ -2033,15 +2035,24 @@ export default function (pi) {
 
 describe("pi-mux new argument contract", () => {
   it("defaults to an attached empty new session", () => {
-    assert.deepEqual(parseOperation([]), { kind: "new", detached: false });
-    assert.deepEqual(parseOperation(["new"]), { kind: "new", detached: false });
-    assert.deepEqual(parseOperation(["new", "--detached"]), { kind: "new", detached: true });
+    assert.deepEqual(parseOperation([]), { kind: "new", detached: false, clientPid: undefined });
+    assert.deepEqual(parseOperation(["new"]), {
+      kind: "new",
+      detached: false,
+      clientPid: undefined,
+    });
+    assert.deepEqual(parseOperation(["new", "--detached"]), {
+      kind: "new",
+      detached: true,
+      clientPid: undefined,
+    });
   });
 
   it("consumes only the first --detached and keeps the next argument as a request", () => {
     assert.deepEqual(parseOperation(["new", "--detached", "--detached"]), {
       kind: "new",
       detached: true,
+      clientPid: undefined,
       request: "--detached",
     });
   });
@@ -2059,7 +2070,12 @@ describe("pi-mux new argument contract", () => {
     ]) {
       it(`keeps one literal request with detached=${detached}: ${JSON.stringify(request)}`, () => {
         const args = ["new", ...(detached ? ["--detached"] : []), request];
-        assert.deepEqual(parseOperation(args), { kind: "new", detached, request });
+        assert.deepEqual(parseOperation(args), {
+          kind: "new",
+          detached,
+          clientPid: undefined,
+          request,
+        });
       });
     }
   }
@@ -3528,7 +3544,7 @@ export default function (pi) {
                 'case "$*" in',
                 `
 case "$*" in
-  *"display-message"*"#{pane_tty}"*)
+  *"display-message"*"#{@pi-mux-launch}"*)
     touch ${quote([attempted])}
     echo "injected ${failure}" >&2
     ${failure === "helper-timeout" ? "exec sleep 6" : "exit 42"} ;;
@@ -4056,6 +4072,7 @@ describe("pi-mux state identity and persistence boundaries", () => {
           cwd: target.cwd,
           file: join(f.agent, "sibling.jsonl"),
           pid: Number(pid),
+          token: randomUUID(),
         };
         assert.equal(
           (
@@ -4278,10 +4295,9 @@ describe("pi-mux state identity and persistence boundaries", () => {
         const badSources = [
           { ...source, socket: f.outer },
           { ...source, serverPid: source.serverPid + 1 },
-          { ...source, serverStartTime: "0" },
           { ...source, pane: "%99999" },
           { ...source, pid: source.pid + 1 },
-          { ...source, started: "0" },
+          { ...source, token: "11111111-2222-4333-8444-555555555555" },
         ];
         for (const invalid of badSources) {
           const failed = await stateFor(f, metadata.id, invalid, "running");
@@ -4360,10 +4376,9 @@ describe("pi-mux temporary conversations", () => {
     const source = {
       socket: "/tmp/server.sock",
       serverPid: 1,
-      serverStartTime: "1",
       pane: "%0",
       pid: 2,
-      started: "2",
+      token: "11111111-2222-4333-8444-555555555555",
     };
     const json = JSON.stringify(source);
     assert.deepEqual(
@@ -4841,6 +4856,7 @@ describe("pi-mux conditional close edge paths", () => {
     async () => {
       await fixture(async (f) => {
         const id = "initializing-temporary";
+        const launchToken = randomUUID();
         mkdirSync(dirname(f.socket), { recursive: true, mode: 0o700 });
         const created = await f.tmux([
           "new-session",
@@ -4856,6 +4872,7 @@ describe("pi-mux conditional close edge paths", () => {
           "/usr/bin/env",
           `PI_TMUX_SESSION_ID=${id}`,
           `PI_TMUX_TEMPORARY=${id}`,
+          `PI_TMUX_LAUNCH_TOKEN=${launchToken}`,
           "sleep",
           "120",
         ]);
@@ -4871,8 +4888,6 @@ describe("pi-mux conditional close edge paths", () => {
           (await f.tmux(["set-environment", "-t", session, "PI_TMUX_TEMPORARY", id])).code,
           0,
         );
-        const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-        const started = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]!;
         assert.equal(
           (
             await f.tmux([
@@ -4881,7 +4896,7 @@ describe("pi-mux conditional close edge paths", () => {
               "-t",
               pane,
               "@pi-mux-launch",
-              JSON.stringify({ id, pid, started }),
+              JSON.stringify({ id, pid, token: launchToken }),
             ])
           ).code,
           0,

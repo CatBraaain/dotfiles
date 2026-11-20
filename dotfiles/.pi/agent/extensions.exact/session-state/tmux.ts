@@ -1,4 +1,6 @@
-import { readFileSync, readlinkSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
+import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { quote } from "shell-quote";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
@@ -12,9 +14,8 @@ export interface ManagedPaneBinding {
   socketPath: string;
   serverPid: number;
   paneId: string;
-  serverStartTime: string;
+  token: string;
   pid: number;
-  started: string;
 }
 
 export type BashRunner = (command: string) => Promise<ExecResult>;
@@ -29,7 +30,19 @@ export type PublicationOutcome =
   | { status: "busy" }
   | { status: "failed"; message: string };
 
-export function dedicatedSocketPath(env: NodeJS.ProcessEnv = process.env): string {
+export function launchToken(env: NodeJS.ProcessEnv = process.env): string {
+  const existing = env.PI_TMUX_LAUNCH_TOKEN;
+  if (existing !== undefined && existing !== "") return existing;
+  const token = randomUUID();
+  env.PI_TMUX_LAUNCH_TOKEN = token;
+  return token;
+}
+
+export function dedicatedSocketPath(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform | string = process.platform,
+): string {
+  if (platform === "win32") return join(homedir(), ".local", "state", "pi-tmux", "server.sock");
   const runtimeDir = env.XDG_RUNTIME_DIR || `/run/user/${process.getuid!()}`;
   if (!isAbsolute(runtimeDir)) throw new Error("XDG_RUNTIME_DIR must be absolute");
   return join(runtimeDir, "pi-tmux", "server.sock");
@@ -56,53 +69,44 @@ export function stateCommand(
   const source = {
     socket: binding.socketPath,
     serverPid: binding.serverPid,
-    serverStartTime: binding.serverStartTime,
     pane: binding.paneId,
     pid: binding.pid,
-    started: binding.started,
+    token: binding.token,
   };
   return quote(["pi-mux", "state", sessionId, ...args, "--source", JSON.stringify(source)]);
-}
-
-export function processStartTime(pid: number): string {
-  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-  const started = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
-  if (!started || !/^\d+$/.test(started))
-    throw new Error(`Cannot identify process start time: ${pid}`);
-  return started;
 }
 
 export async function detectManagedPane(
   run: BashRunner,
   env: NodeJS.ProcessEnv = process.env,
   selfPid: number = process.pid,
+  platform: NodeJS.Platform | string = process.platform,
 ): Promise<ManagedPaneDetection> {
   try {
     if (!env.TMUX) return { status: "unmanaged" };
-    const socketPath = dedicatedSocketPath(env);
-    const [tmuxSocket, tmuxServerPid] = env.TMUX.split(",");
+    const windows = platform === "win32";
+    const socketPath = dedicatedSocketPath(env, platform);
+    const [tmuxSocket] = env.TMUX.split(",");
     const paneId = env.TMUX_PANE;
     if (tmuxSocket !== socketPath) return { status: "unmanaged" };
-    if (!paneId || !/^%\d+$/.test(paneId) || !tmuxServerPid || !/^[1-9]\d*$/.test(tmuxServerPid))
+    if (!paneId || !/^%\d+$/.test(paneId)) return { status: "unmanaged" };
+    if (!windows && !statSync(socketPath, { throwIfNoEntry: false })?.isSocket())
       return { status: "unmanaged" };
-    if (!statSync(socketPath, { throwIfNoEntry: false })?.isSocket())
-      return { status: "unmanaged" };
-    const stdinTty = readlinkSync("/proc/self/fd/0");
-    const inspectFormat = "#{socket_path}\t#{pid}\t#{pane_id}\t#{pane_tty}\t#{pane_pid}";
+    const inspectFormat = "#{socket_path}\t#{pid}\t#{pane_id}\t#{@pi-mux-launch}\t#{pane_pid}";
     const outcome = await run(
       tmuxCommandLine(socketPath, ["display-message", "-p", "-t", paneId, inspectFormat]),
     );
     const failure = processFailure(outcome);
     if (failure !== undefined) return { status: "failed", message: failure };
     const fields = outcome.stdout.trimEnd().split("\t");
-    const [actualSocket, actualServerPid, actualPaneId, actualTty, actualPanePid] = fields;
+    const [actualSocket, actualServerPid, actualPaneId, launch, actualPanePid] = fields;
+    const recorded = launchRecordToken(launch);
     const isVerified =
       fields.length === 5 &&
       actualSocket === socketPath &&
-      actualServerPid === tmuxServerPid &&
+      /^[1-9]\d*$/.test(actualServerPid ?? "") &&
       actualPaneId === paneId &&
-      actualTty === stdinTty &&
-      Number(actualPanePid) === selfPid;
+      (recorded === undefined || recorded === env.PI_TMUX_LAUNCH_TOKEN);
     if (!isVerified) return { status: "unmanaged" };
     return {
       status: "managed",
@@ -110,9 +114,8 @@ export async function detectManagedPane(
         socketPath,
         serverPid: Number(actualServerPid),
         paneId,
-        serverStartTime: processStartTime(Number(actualServerPid)),
+        token: launchToken(env),
         pid: selfPid,
-        started: processStartTime(selfPid),
       },
     };
   } catch (error) {
@@ -148,6 +151,19 @@ export async function unsetStateOption(
   } catch (error) {
     return { status: "failed", message: errorMessage(error) };
   }
+}
+
+function launchRecordToken(launch: string | undefined): string | undefined {
+  if (!launch) return undefined;
+  let record: unknown;
+  try {
+    record = JSON.parse(launch);
+  } catch {
+    return undefined;
+  }
+  if (record === null || typeof record !== "object" || Array.isArray(record)) return undefined;
+  const token = (record as { token?: unknown }).token;
+  return typeof token === "string" ? token : undefined;
 }
 
 function executionFailure(result: ExecResult): PublicationOutcome | undefined {

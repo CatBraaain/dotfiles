@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -104,7 +105,13 @@ function context() {
 }
 async function dispatch(type, fields = {}) {
   if (type === "session_start") {
-    const metadata = { id: sessionId, cwd: directory, file: join(directory, "external.jsonl"), pid: process.pid };
+    const metadata = {
+      id: sessionId,
+      cwd: directory,
+      file: join(directory, "external.jsonl"),
+      pid: process.pid,
+      token: process.env.PI_TMUX_LAUNCH_TOKEN,
+    };
     cli("set-option", "-p", "-t", pane, "@pi-tmux-session", Buffer.from(JSON.stringify(metadata)).toString("base64"));
   }
   currentContext = context();
@@ -242,11 +249,13 @@ try {
     async function run(command) {
       return execProcess("bash", ["-c", command], { timeout: 1000 });
     }
-    const [actualSocket, actualServer] = process.env.TMUX.split(",");
-    const forged = await detectManagedPane(run, { ...process.env, TMUX: actualSocket + ",99999999" });
-    assert.equal(forged.status, "unmanaged", JSON.stringify(forged));
-    const child = await detectManagedPane(run, process.env, process.pid + 1);
-    assert.equal(child.status, "unmanaged", JSON.stringify(child));
+    const [actualSocket] = process.env.TMUX.split(",");
+    const mismatchedServerEnv = await detectManagedPane(run, { ...process.env, TMUX: actualSocket + ",99999999" });
+    assert.equal(mismatchedServerEnv.status, "managed", JSON.stringify(mismatchedServerEnv));
+    cli("set-option", "-p", "-t", pane, "@pi-mux-launch", JSON.stringify({ id: "session-external", pid: process.pid, token: "00000000-0000-4000-8000-000000000000" }));
+    const wrongLaunchToken = await detectManagedPane(run, process.env);
+    assert.equal(wrongLaunchToken.status, "unmanaged", JSON.stringify(wrongLaunchToken));
+    cli("set-option", "-pu", "-t", pane, "@pi-mux-launch");
     const callsBefore = sandboxCommands.length;
     const ordinary = await detectManagedPane(run, { ...process.env, TMUX: "/tmp/unrelated.sock,1" });
     assert.equal(ordinary.status, "unmanaged");
@@ -364,7 +373,13 @@ const { session } = await createAgentSession({
   settingsManager: settings, sessionManager: manager, resourceLoader: loader, tools: [],
 });
 try {
-  const identity = { id: manager.getSessionId(), cwd: directory, file: manager.getSessionFile(), pid: process.pid };
+  const identity = {
+    id: manager.getSessionId(),
+    cwd: directory,
+    file: manager.getSessionFile(),
+    pid: process.pid,
+    token: process.env.PI_TMUX_LAUNCH_TOKEN,
+  };
   cli("set-option", "-p", "-t", pane, "@pi-tmux-session", Buffer.from(JSON.stringify(identity)).toString("base64"));
   await session.bindExtensions({ mode: "rpc", onError: error => errors.push(error) });
   await waitFor("initial state", () => readOption()?.state === "waiting-user");
@@ -497,6 +512,7 @@ async function runScenario(
     PI_TEST_SDK_URL: SDK_URL,
     PI_TEST_ORDER: order,
     PI_TEST_RACE: race ? "1" : "0",
+    PI_TMUX_LAUNCH_TOKEN: randomUUID(),
   };
   const bin = join(directory, "bin");
   mkdirSync(bin);

@@ -25,21 +25,20 @@
 
 ## 管理paneの初期照合
 
-専用socketは `${XDG_RUNTIME_DIR:-/run/user/<uid>}/pi-tmux/server.sock` の絶対パスとする。全tmux操作で `-S <絶対パス>` を指定し、既存サーバーに接続する。
+専用socketは、POSIX では `${XDG_RUNTIME_DIR:-/run/user/<uid>}/pi-tmux/server.sock`、Windows では `~/.local/state/pi-tmux/server.sock` の絶対パスとする。全tmux操作で `-S <絶対パス>` を指定し、既存サーバーに接続する。Windows では実socketをファイルシステムで確認しない。
 
-`TMUX` のsocketが専用pathと一致し、`TMUX_PANE` がある場合だけ候補とする。実socketをファイルシステムで確認した後、`display-message` のtab区切り応答から次の値を照合する。
+`TMUX` のsocketが専用pathと一致し、`TMUX_PANE` がある場合だけ候補とする。POSIX では実socketをファイルシステムで確認した後、`display-message` のtab区切り応答から次の値を照合する。
 
 | 照合値 | 一致条件 |
 | --- | --- |
 | socket path | 専用socketの絶対パス |
-| server PID | `TMUX` にあるserver PID |
+| server PID | 応答のserver PIDが正の整数であること |
 | pane ID | `TMUX_PANE` |
-| pane PTY | `/proc/self/fd/0` のリンク先 |
-| pane起動PID | 現在のpiの `process.pid` |
+| 起動トークン | 応答のpaneの起動記録(`@pi-mux-launch`)にトークンがある場合、`PI_TMUX_LAUNCH_TOKEN` 環境変数と一致すること。起動記録がないpane(CLIによらず起動したpi)はこの照合を省略する |
 
-全項目が一致したpaneだけを公開先にする。専用paneの子プロセスや偽マーカーを持つプロセスは、照合不一致により公開対象外になる。照合は各世代の `resources_discover` で、全拡張の `session_start` 初期化が完了した後に行う。その世代では捕捉済みの接続先を使う。
+全項目が一致したpaneだけを公開先にする。CLIが起動したpiは `PI_TMUX_LAUNCH_TOKEN` 環境変数を受け取り、それを公開メタデータ(`@pi-tmux-session`)のトークンとして記録する。CLIによらず起動したpiは、拡張が生成したトークンを同じ環境変数と公開メタデータに設定して使う。照合は各世代の `resources_discover` で、全拡張の `session_start` 初期化が完了した後に行う。その世代では捕捉済みの接続先を使う。
 
-専用serverプロセスの開始時刻とpi自身のprocess start timeも捕捉し、socket・server PID・pane ID・pi PIDとともに、state操作の `--source` の各項目へ渡す。serverの開始時刻は `serverStartTime`、piの開始時刻は `started` とする。CLI初期化の有無によらず、専用serverのPIDと開始時刻で生存期間を識別する。再送時にも捕捉済みsourceを維持し、古い通知を新server・新pane・新piへ付け替えない。pi-muxは変更の直前に通知元を再照合する。
+state操作の `--source` には、socket・server PID・pane ID・pi PIDとともに起動トークンを渡す。server PID は `TMUX` 環境変数ではなく応答の `#{pid}` から捕捉する。トークンは起動ごとに新しいため、PID・pane ID の再利用や server の再起動後は同じ通知元と見なされない。再送時にも捕捉済みsourceを維持し、古い通知を新server・新pane・新piへ付け替えない。pi-muxは変更の直前に通知元を再照合する。
 
 ## 状態通知の公開契約
 

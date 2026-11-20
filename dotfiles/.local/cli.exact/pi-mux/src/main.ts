@@ -19,6 +19,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HistorySummaryCache } from "./history-summary";
+import { platform } from "./platform";
 
 type Operation =
   | { kind: "help" }
@@ -39,10 +40,9 @@ type ManagedSession = Candidate & { session: string; temporary: boolean };
 type StateSource = {
   socket: string;
   serverPid: number;
-  serverStartTime: string;
   pane: string;
   pid: number;
-  started: string;
+  token: string;
 };
 type StateNotification =
   | { clear: true }
@@ -121,6 +121,7 @@ const PARENT_ENV_KEYS = new Set([
   "PI_TMUX_TEMPORARY",
   "PI_TMUX_STARTUP_COMMAND",
   "PI_TMUX_STARTUP_MODE",
+  "PI_TMUX_LAUNCH_TOKEN",
 ]);
 const PANE_FORMAT =
   "#{pane_id}\t#{session_id}\t#{session_name}\t#{@pi-tmux-session}\t#{pane_pid}\t#{pane_dead}\t#{window_active}\t#{pane_active}";
@@ -268,7 +269,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       if (operation.kind === "new" && (operation.detached || operation.clientPid !== undefined)) {
         if (operation.clientPid !== undefined)
           await switchSession(config, target.id, operation.clientPid);
-        const attach = shellCommand([
+        const attach = platform.quoteCommand([
           config.tmux,
           "-S",
           config.socket,
@@ -295,7 +296,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 
 export function parseOperation(argv: string[]): Operation {
   if (argv.length === 1 && (argv[0] === "-h" || argv[0] === "--help")) return { kind: "help" };
-  if (argv.length === 0) return { kind: "new", detached: false };
+  if (argv.length === 0) return { kind: "new", detached: false, clientPid: undefined };
   if (argv[0] === "new") {
     let index = 1;
     let detached = false;
@@ -410,14 +411,12 @@ function parseStateOperation(argv: string[]): Operation {
       !isAbsolute(source.socket) ||
       !Number.isSafeInteger(source.serverPid) ||
       Number(source.serverPid) <= 0 ||
-      typeof source.serverStartTime !== "string" ||
-      !/^\d+$/.test(source.serverStartTime) ||
       typeof source.pane !== "string" ||
       !/^%\d+$/.test(source.pane) ||
       !Number.isSafeInteger(source.pid) ||
       Number(source.pid) <= 0 ||
-      typeof source.started !== "string" ||
-      !/^\d+$/.test(source.started)
+      typeof source.token !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(source.token)
     )
       throw new Error("Invalid source");
     const title = options.get("--title");
@@ -428,10 +427,9 @@ function parseStateOperation(argv: string[]): Operation {
       source: {
         socket: source.socket,
         serverPid: Number(source.serverPid),
-        serverStartTime: source.serverStartTime,
         pane: source.pane,
         pid: Number(source.pid),
-        started: source.started,
+        token: source.token,
       },
       notification: clear
         ? { clear: true }
@@ -472,7 +470,7 @@ async function verifyStateSource(
   config: TmuxConfig,
   id: string,
   source: StateSource,
-): Promise<string> {
+): Promise<{ session: string; panePid: number }> {
   if (source.socket !== config.socket)
     throw new Error("Source socket does not match the dedicated socket");
   const server = await tmux(config, [
@@ -483,18 +481,14 @@ async function verifyStateSource(
     "#{pid}:#{pane_id}",
   ]);
   const [serverPid, paneId] = server.stdout.trimEnd().split(":");
-  if (
-    Number(serverPid) !== source.serverPid ||
-    paneId !== source.pane ||
-    processStartTime(source.serverPid) !== source.serverStartTime
-  )
+  if (Number(serverPid) !== source.serverPid || paneId !== source.pane)
     throw new Error("Source server or pane lifetime no longer matches");
   const session = (
     await tmux(config, ["display-message", "-p", "-t", source.pane, "#{session_id}"])
   ).stdout.trimEnd();
   if (!/^\$\d+$/.test(session)) throw new Error("Source server or pane lifetime no longer matches");
-  await verifyStateTarget(config, id, source);
-  return session;
+  const target = await verifyStateTarget(config, id, source);
+  return { session, panePid: target.panePid };
 }
 
 async function deferRestartBlockingState(
@@ -502,11 +496,15 @@ async function deferRestartBlockingState(
   id: string,
   source: StateSource,
 ): Promise<void> {
-  await verifyStateSource(config, id, source);
-  const pending = guardedTmuxLine(source.pane, sourceEntityGuard(config, source), [
-    ["set-option", "-p", "-t", source.pane, "@pi-mux-pending-restart-blocker", "1"],
-    ["set-option", "-g", "@pi-mux-restart-veto", randomUUID()],
-  ]);
+  const { panePid } = await verifyStateSource(config, id, source);
+  const pending = guardedTmuxLine(
+    source.pane,
+    paneEntityGuard(source.serverPid, source.pane, panePid),
+    [
+      ["set-option", "-p", "-t", source.pane, "@pi-mux-pending-restart-blocker", "1"],
+      ["set-option", "-g", "@pi-mux-restart-veto", randomUUID()],
+    ],
+  );
   await tmux(config, ["source-file", "-"], false, `${pending}\n`);
 }
 
@@ -516,7 +514,7 @@ async function notifyState(
   source: StateSource,
   notification: StateNotification,
 ): Promise<void> {
-  const session = await verifyStateSource(config, id, source);
+  const { session, panePid } = await verifyStateSource(config, id, source);
   const owner = JSON.stringify({ id, ...source });
   if (notification.clear) {
     const currentOwner = await tmux(config, [
@@ -533,35 +531,59 @@ async function notifyState(
     owner,
     notification,
     session,
+    panePid,
   });
   if (notification.clear || notification.state !== "running") return;
   if (await serverOption(config, "@pi-mux-generation"))
     await snapshotSessions(config, undefined, "repair");
 }
 
-function shLiteral(value: string): string {
-  return "'" + value.replaceAll("'", "'\\''") + "'";
+function paneEntityGuard(serverPid: number, pane: string, panePid: number): string {
+  return `#{&&:#{==:#{pid},${serverPid}},#{&&:#{==:#{pane_id},${pane}},#{==:#{pane_pid},${panePid}}}}`;
 }
 
+function guardedTmuxLine(
+  pane: string,
+  condition: string,
+  whenTrue: string[][],
+  elseMarker?: string,
+): string {
+  const quoted = [
+    "if-shell",
+    "-t",
+    pane,
+    "-F",
+    condition,
+    whenTrue.map((args) => tmuxArguments(args)).join(" ; "),
+  ];
+  if (elseMarker !== undefined) quoted.push(tmuxArguments(["display-message", "-p", elseMarker]));
+  return tmuxArguments(quoted);
+}
 async function verifyStateTarget(
   config: TmuxConfig,
   id: string,
   source: StateSource,
-): Promise<void> {
+): Promise<{ pane: string; pid: number; panePid: number }> {
   const result = await tmux(config, [
     "list-panes",
     "-a",
     "-F",
-    "#{pane_id}|#{@pi-tmux-session}|#{pane_pid}|#{pane_dead}",
+    "#{pane_id}|#{@pi-tmux-session}|#{pane_pid}|#{pane_dead}|#{@pi-mux-launch}",
   ]);
   const matching = result.stdout
     .trimEnd()
     .split("\n")
     .filter(Boolean)
     .flatMap((line) => {
-      const [pane, encoded, panePid, dead] = line.split("|");
+      const [pane, encoded, panePid, dead, launchEncoded] = line.split("|");
       if (dead !== "0" || !pane || !encoded) return [];
-      let metadata: { id?: unknown; pid?: unknown; processPid?: unknown; startup?: unknown };
+      let metadata: {
+        id?: unknown;
+        pid?: unknown;
+        processPid?: unknown;
+        startup?: unknown;
+        token?: unknown;
+      };
       try {
         metadata = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
       } catch {
@@ -578,48 +600,28 @@ async function verifyStateTarget(
         return [];
       const pid = typeof metadata.processPid === "number" ? metadata.processPid : Number(panePid);
       if (!Number.isSafeInteger(pid) || pid <= 0) return [];
-      return [{ pane, pid }];
+      const token = launchRecordToken(launchEncoded) ?? metadata.token;
+      return [{ pane, pid, panePid: Number(panePid), token }];
     });
-  if (matching.length !== 1 || matching[0]!.pane !== source.pane || matching[0]!.pid !== source.pid)
+  if (
+    matching.length !== 1 ||
+    matching[0]!.pane !== source.pane ||
+    matching[0]!.pid !== source.pid ||
+    matching[0]!.token !== source.token
+  )
     throw new Error("Source Pi process does not match the conversation and pane");
-  if (processStartTime(source.pid) !== source.started)
-    throw new Error("Source Pi process does not match the conversation and pane");
+  return matching[0]!;
 }
 
-function sourceEntityGuard(config: TmuxConfig, source: StateSource): string {
-  const processStartOf = (pid: string) =>
-    `"$(sed 's/.*) //' /proc/${pid}/stat | awk '{print $20}')"`;
-  const sessionProcess = `p=$(tmux -S ${shLiteral(config.socket)} show-options -pqv -t ${shLiteral(source.pane)} '@pi-tmux-session' 2>/dev/null | base64 -d 2>/dev/null | sed -n 's/.*"processPid":\\([0-9][0-9]*\\).*/\\1/p')`;
-  const checks = [
-    `[ "#{socket_path}" = ${shLiteral(config.socket)} ]`,
-    `[ "#{pid}" = ${String(source.serverPid)} ]`,
-    `started=${processStartOf("#{pid}")}`,
-    `[ "$started" = ${shLiteral(source.serverStartTime)} ]`,
-    `[ "#{pane_id}" = ${shLiteral(source.pane)} ]`,
-    sessionProcess,
-    "case $p in ''|*[!0-9]*) p=#{pane_pid};; esac",
-    `[ "$p" = ${String(source.pid)} ]`,
-    `started=${processStartOf("$p")}`,
-    `[ "$started" = ${shLiteral(source.started)} ]`,
-  ].join("\n");
-  return `bash -e -o pipefail -c ${shLiteral(checks)}`;
-}
-
-function guardedTmuxLine(
-  pane: string,
-  guard: string,
-  whenTrue: string[][],
-  elseMarker?: string,
-): string {
-  const quoted = [
-    "if-shell",
-    "-t",
-    pane,
-    guard,
-    whenTrue.map((args) => tmuxArguments(args)).join(" ; "),
-  ];
-  if (elseMarker !== undefined) quoted.push(tmuxArguments(["display-message", "-p", elseMarker]));
-  return tmuxArguments(quoted);
+function launchRecordToken(launch: string | undefined): string | undefined {
+  if (!launch) return undefined;
+  let record: unknown;
+  try {
+    record = JSON.parse(launch);
+  } catch {
+    return undefined;
+  }
+  return isRecord(record) && typeof record.token === "string" ? record.token : undefined;
 }
 
 async function runGuardedStateCommands(
@@ -630,17 +632,18 @@ async function runGuardedStateCommands(
     owner: string;
     notification: StateNotification;
     session: string;
+    panePid: number;
   },
 ): Promise<void> {
-  const entity = sourceEntityGuard(config, source);
+  await verifyStateSource(config, plan.id, source);
+  const entity = paneEntityGuard(source.serverPid, source.pane, plan.panePid);
   const pane = source.pane;
   const lines: string[] = [];
   if (plan.notification.clear) {
-    const ownerGuard = `owner=$(tmux -S ${shLiteral(config.socket)} show-options -pqv -t ${shLiteral(pane)} '@pi-mux-state-source' 2>/dev/null) && [ "$owner" = ${shLiteral(plan.owner)} ]`;
     lines.push(
       guardedTmuxLine(
         pane,
-        `${entity} && ${ownerGuard}`,
+        entity,
         [
           ["set-option", "-pu", "-t", pane, "@pi_session_state"],
           ["set-option", "-pu", "-t", pane, "@pi-mux-state-source"],
@@ -670,15 +673,16 @@ async function runGuardedStateCommands(
         "PI_MUX_SOURCE_UNVERIFIED",
       ),
     );
-    if (plan.notification.state === "running") {
-      const temporaryGuard = `[ "$(tmux -S ${shLiteral(config.socket)} show-environment -t ${shLiteral(plan.session)} PI_TMUX_TEMPORARY 2>/dev/null)" = ${shLiteral(`PI_TMUX_TEMPORARY=${plan.id}`)} ]`;
+    if (
+      plan.notification.state === "running" &&
+      (await isTemporarySession(config, plan.session, plan.id))
+    )
       lines.push(
-        guardedTmuxLine(pane, `${entity} && ${temporaryGuard}`, [
+        guardedTmuxLine(pane, entity, [
           ["set-environment", "-u", "-t", plan.session, "PI_TMUX_TEMPORARY"],
           ["display-message", "-p", "PI_MUX_PROMOTED"],
         ]),
       );
-    }
   }
   const result = await tmux(config, ["source-file", "-"], false, `${lines.join("\n")}\n`);
   const markers = result.stdout.trim().split("\n").filter(Boolean);
@@ -698,10 +702,8 @@ function configuration() {
 }
 
 function tmuxConfiguration() {
-  const runtime = process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid!()}`;
-  if (!isAbsolute(runtime)) throw new Error("XDG_RUNTIME_DIR must be absolute");
+  const directory = join(platform.runtimeStateRoot(), "pi-tmux");
   const agentDir = expandPath(process.env.PI_CODING_AGENT_DIR || "~/.pi/agent");
-  const directory = join(runtime, "pi-tmux");
   const extension = join(agentDir, "extensions", "pi-mux-bridge", "index.ts");
   const tmuxConfig = join(homedir(), ".config", "tmux", "pi.conf");
   const env = Object.fromEntries(
@@ -730,7 +732,7 @@ async function withLock<T>(
   mode: "wait" | "try" = "wait",
 ): Promise<T> {
   const key = createHash("sha256").update(realpathSync(config.stateDirectory)).digest("hex");
-  const address = `\0pi-mux-${process.getuid!()}-${key}`;
+  const address = platform.lockAddress(key);
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const lock = createServer((socket) => socket.destroy());
@@ -756,7 +758,7 @@ async function withLock<T>(
   throw new Error("Timed out waiting for another pi-mux operation");
 }
 
-type ServerLifetime = { pid: number; started: string; generation: string };
+type ServerLifetime = { pid: number; generation: string };
 
 async function serverLifetime(config: TmuxConfig): Promise<ServerLifetime | undefined> {
   const result = await tmux(config, ["display-message", "-p", "#{pid}"], true);
@@ -766,19 +768,12 @@ async function serverLifetime(config: TmuxConfig): Promise<ServerLifetime | unde
   }
   const pid = Number(result.stdout.trim());
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("Invalid dedicated server PID");
-  const started = processStartTime(pid);
-  if (!started) throw new Error("Dedicated server exited during inspection");
-  return { pid, started, generation: await serverOption(config, "@pi-mux-generation") };
+  return { pid, generation: await serverOption(config, "@pi-mux-generation") };
 }
 
 async function verifyRestartServer(config: TmuxConfig, expected: ServerLifetime): Promise<void> {
   const current = await serverLifetime(config);
-  if (
-    !current ||
-    current.pid !== expected.pid ||
-    current.started !== expected.started ||
-    current.generation !== expected.generation
-  )
+  if (!current || current.pid !== expected.pid || current.generation !== expected.generation)
     throw new Error("Dedicated server changed during restart");
 }
 
@@ -788,7 +783,7 @@ async function restartIsWaiting(config: TmuxConfig): Promise<boolean> {
   for (const session of managed)
     if (!panes.some((pane) => pane.session === session.session && pane.id === session.id))
       return false;
-  const states = await tmuxBatch(
+  const states = await tmuxQueries(
     config,
     panes.flatMap((pane) => [
       ["show-options", "-pqv", "-t", pane.pane, "@pi_session_state"],
@@ -834,20 +829,7 @@ async function restartServer(config: Config, force: boolean): Promise<number> {
       await setRestoringSessions(config, saved.sessions);
       await verifyRestartServer(config, original);
       if (!force && !(await restartIsWaiting(config))) return undefined;
-      const generationCommand = shellCommand([
-        config.tmux,
-        "-S",
-        config.socket,
-        "show-options",
-        "-gqv",
-        "@pi-mux-generation",
-      ]);
-      const guard = `[ "#{pid}" = ${original.pid} ] && [ "$(sed 's/.*) //' /proc/${original.pid}/stat | awk '{print $20}')" = ${shLiteral(original.started)} ] && [ "$(${generationCommand})" = ${shLiteral(original.generation)} ]`;
-      const targets = [...panes, ...initializing].map((pane) => ({
-        pid: pane.pid,
-        started: processStartTime(pane.pid),
-      }));
-      const stopCommand = force
+      const stopBranch = force
         ? "kill-server"
         : tmuxArguments([
             "if-shell",
@@ -858,16 +840,17 @@ async function restartServer(config: Config, force: boolean): Promise<number> {
           ]);
       const stopped = await tmux(config, [
         "if-shell",
-        guard,
-        stopCommand,
+        "-F",
+        `#{==:#{@pi-mux-generation},${original.generation}}`,
+        stopBranch,
         "display-message -p PI_MUX_RESTART_SERVER_CHANGED",
       ]);
       if (stopped.stdout.includes("PI_MUX_RESTART_WAIT")) return undefined;
       if (stopped.stdout.includes("PI_MUX_RESTART_SERVER_CHANGED"))
         throw new Error("Dedicated server changed before restart stop");
+      const targets = [...panes, ...initializing].map((pane) => ({ pid: pane.pid }));
       for (const target of targets) {
-        if (target.started === undefined || processStartTime(target.pid) !== target.started)
-          continue;
+        if (!platform.processIsAlive(target.pid)) continue;
         try {
           process.kill(target.pid, "SIGTERM");
         } catch (error) {
@@ -875,12 +858,7 @@ async function restartServer(config: Config, force: boolean): Promise<number> {
         }
       }
       const deadline = Date.now() + STARTUP_TIMEOUT_MS;
-      while (
-        targets.some(
-          (target) =>
-            target.started !== undefined && processStartTime(target.pid) === target.started,
-        )
-      ) {
+      while (targets.some((target) => platform.processIsAlive(target.pid))) {
         if (Date.now() >= deadline)
           throw new Error("Timed out waiting for pi to exit during restart");
         await Bun.sleep(POLL_INTERVAL_MS);
@@ -905,18 +883,20 @@ async function startAndRestore(
   const existing = await serverOption(config, "@pi-mux-generation");
   const generation = existing || randomUUID();
   if (!existing) await tmux(config, ["set-option", "-g", "@pi-mux-generation", generation]);
-  const invocation = import.meta.path.startsWith("/$bunfs/")
+  const invocation = compiledEntry()
     ? [process.execPath]
     : [process.execPath, fileURLToPath(import.meta.url)];
-  const hookCommand = shellCommand([
-    "/usr/bin/env",
-    `HOME=${config.env.HOME || homedir()}`,
-    `PATH=${config.env.PATH || ""}`,
-    `XDG_RUNTIME_DIR=${dirname(config.directory)}`,
-    `PI_CODING_AGENT_DIR=${config.agentDir}`,
-    ...invocation,
-    "snapshot",
-  ]);
+  const hookCommand = platform.hookCommand(
+    [...invocation, "snapshot"],
+    platform.windows
+      ? { PI_CODING_AGENT_DIR: config.agentDir }
+      : {
+          HOME: config.env.HOME || homedir(),
+          PATH: config.env.PATH || "",
+          XDG_RUNTIME_DIR: dirname(config.directory),
+          PI_CODING_AGENT_DIR: config.agentDir,
+        },
+  );
   await tmux(config, ["set-option", "-g", "@pi-mux-snapshot", hookCommand]);
   const restored = await serverOption(config, "@pi-mux-restored");
   if (!restoreRequested && restored === generation) return 0;
@@ -998,13 +978,13 @@ async function snapshotSessions(
   const candidates = (previous?.sessions ?? []).filter(
     (candidate) => !temporaryIds.has(candidate.id),
   );
-  const markers = await tmuxBatch(
+  const markers = await tmuxQueries(
     config,
     candidates.map(({ id }) => ["show-options", "-gqv", `@pi-mux-restoring-${id}`]),
   );
   const restoring = candidates.filter((_, index) => {
     const result = markers[index]!;
-    if (result.exitCode !== 0) throw new Error(`tmux show-options failed: ${result.stdout.trim()}`);
+    if (result.exitCode !== 0) throw new Error(`tmux show-options failed: ${result.stderr.trim()}`);
     const marker = result.stdout.trim();
     if (marker && marker !== "1") throw new Error("Invalid in-memory restore state");
     return marker === "1";
@@ -1036,7 +1016,7 @@ async function managedSessions(config: TmuxConfig): Promise<ManagedSession[]> {
     throw new Error(`Cannot inspect managed sessions: ${listed.stderr.trim()}`);
   }
   const targets = listed.stdout.trim().split("\n").filter(Boolean);
-  const attributes = await tmuxBatch(
+  const attributes = await tmuxQueries(
     config,
     targets.flatMap((session) => [
       ["show-environment", "-t", session, "PI_TMUX_SESSION_ID"],
@@ -1048,8 +1028,8 @@ async function managedSessions(config: TmuxConfig): Promise<ManagedSession[]> {
   for (const [index, session] of targets.entries()) {
     const environment = attributes[index * 3]!;
     if (environment.exitCode !== 0) {
-      if (environment.stdout.includes("unknown variable: PI_TMUX_SESSION_ID")) continue;
-      throw new Error(`Cannot inspect tmux session ${session}: ${environment.stdout.trim()}`);
+      if (environment.stderr.includes("unknown variable: PI_TMUX_SESSION_ID")) continue;
+      throw new Error(`Cannot inspect tmux session ${session}: ${environment.stderr.trim()}`);
     }
     const id = environment.stdout.replace(/\n$/, "").slice("PI_TMUX_SESSION_ID=".length);
     if (!SESSION_ID_PATTERN.test(id))
@@ -1061,9 +1041,9 @@ async function managedSessions(config: TmuxConfig): Promise<ManagedSession[]> {
     const temporary = attributes[index * 3 + 2]!;
     if (
       temporary.exitCode !== 0 &&
-      !temporary.stdout.includes("unknown variable: PI_TMUX_TEMPORARY")
+      !temporary.stderr.includes("unknown variable: PI_TMUX_TEMPORARY")
     )
-      throw new Error(`Cannot inspect temporary session ${session}: ${temporary.stdout.trim()}`);
+      throw new Error(`Cannot inspect temporary session ${session}: ${temporary.stderr.trim()}`);
     sessions.push({
       id,
       cwd,
@@ -1074,8 +1054,13 @@ async function managedSessions(config: TmuxConfig): Promise<ManagedSession[]> {
   return sessions;
 }
 
-async function tmuxBatch(config: TmuxConfig, commands: string[][]) {
+async function tmuxQueries(config: TmuxConfig, commands: string[][]) {
   if (commands.length === 0) return [];
+  if (platform.windows) {
+    const results: Awaited<ReturnType<typeof tmux>>[] = [];
+    for (const command of commands) results.push(await tmux(config, command, true));
+    return results;
+  }
   const args = commands.flatMap((command, index) => [
     ...(index === 0 ? [] : [";"]),
     "if-shell",
@@ -1095,7 +1080,7 @@ async function tmuxBatch(config: TmuxConfig, commands: string[][]) {
     const wrapper = frames[index * 2]!;
     const frame = frames[index * 2 + 1]!;
     if (wrapper[3] !== "end") throw new Error("Cannot inspect managed sessions: tmux batch failed");
-    return { stdout: frame[2]!, exitCode: frame[3] === "end" ? 0 : 1 };
+    return { stdout: frame[2]!, stderr: frame[2]!, exitCode: frame[3] === "end" ? 0 : 1 };
   });
 }
 
@@ -1217,8 +1202,8 @@ async function createIndependent(config: Config, request: string): Promise<Pane>
   return await waitForSession(config, created ?? name, id, "accepted");
 }
 
-function shellCommand(args: string[]): string {
-  return args.map((arg) => "'" + arg.replaceAll("'", "'\\''") + "'").join(" ");
+function compiledEntry(): boolean {
+  return import.meta.path.startsWith("/$bunfs/") || /^[Bb]:\\+~BUN\\/i.test(import.meta.path);
 }
 
 function errorMessage(error: unknown): string {
@@ -1297,9 +1282,11 @@ async function createSession(
 ): Promise<string | undefined> {
   const startupCommand =
     session.request === undefined ? `pi-mux-startup-${randomUUID()}` : undefined;
+  const launchToken = randomUUID();
   const desired = {
     ...config.env,
     PI_TMUX_SESSION_ID: session.id,
+    PI_TMUX_LAUNCH_TOKEN: launchToken,
     ...(session.temporary ? { PI_TMUX_TEMPORARY: session.id } : {}),
     ...(startupCommand === undefined
       ? { PI_TMUX_STARTUP_MODE: "create" }
@@ -1312,37 +1299,42 @@ async function createSession(
     .filter((key) => !Object.hasOwn(desired, key) && !GENERATED_ENV_KEYS.has(key));
   const environment = Object.entries(desired).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
   const selection = session.file ? ["--session", session.file] : ["--session-id", session.id];
-  const command = [
-    "new-session",
-    "-d",
-    "-P",
-    "-F",
-    "#{session_id}\t#{pane_id}\t#{pane_pid}",
-    "-s",
-    name,
-    "-n",
-    "pi",
-    "-c",
-    session.cwd,
-    "-x",
-    String(process.stdout.columns || 80),
-    "-y",
-    String(process.stdout.rows || 24),
-    ...environment,
-    "--",
-    "/usr/bin/env",
-    ...removed.flatMap((key) => ["-u", key]),
-    config.pi,
-    ...selection,
-    "-e",
-    config.extension,
-    ...(session.request === undefined
-      ? ["--", `/${startupCommand}`]
-      : ["--agent", "main", "--", session.request]),
-  ]
-    .map(quoteTmuxArgument)
-    .join(" ");
-  const result = await tmux(config, ["source-file", "-"], true, `${command}\n`);
+  const paneCommand = platform.paneCommand(
+    [
+      config.pi,
+      ...selection,
+      "-e",
+      config.extension,
+      ...(session.request === undefined
+        ? ["--", `/${startupCommand}`]
+        : ["--agent", "main", "--", session.request]),
+    ],
+    removed,
+  );
+  const result = await tmux(
+    config,
+    [
+      "new-session",
+      "-d",
+      "-P",
+      "-F",
+      "#{session_id}\t#{pane_id}\t#{pane_pid}",
+      "-s",
+      name,
+      "-n",
+      "pi",
+      "-c",
+      session.cwd,
+      "-x",
+      String(process.stdout.columns || 80),
+      "-y",
+      String(process.stdout.rows || 24),
+      ...environment,
+      "--",
+      paneCommand,
+    ],
+    true,
+  );
   if (result.exitCode === 0) {
     const [target, pane, pid] = result.stdout.trim().split("\t");
     if (
@@ -1354,8 +1346,7 @@ async function createSession(
       !/^[1-9]\d*$/.test(pid)
     )
       throw new Error("Cannot identify the created tmux session and pane");
-    const started = processStartTime(Number(pid));
-    if (started === undefined)
+    if (!platform.processIsAlive(Number(pid)))
       throw new Error(`pi exited before launch was recorded: ${session.id}`);
     await tmux(config, [
       "set-option",
@@ -1363,7 +1354,7 @@ async function createSession(
       "-t",
       pane,
       "@pi-mux-launch",
-      JSON.stringify({ id: session.id, pid: Number(pid), started }),
+      JSON.stringify({ id: session.id, pid: Number(pid), token: launchToken }),
     ]);
     return target;
   }
@@ -1482,16 +1473,6 @@ async function tmuxClients(config: TmuxConfig): Promise<TmuxClient[]> {
     });
 }
 
-function processParentPid(pid: number): number | undefined {
-  try {
-    const status = readFileSync(`/proc/${pid}/status`, "utf8");
-    const ppid = /^PPid:\s+(\d+)$/m.exec(status);
-    return ppid ? Number(ppid[1]) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 async function resolveClient(
   config: TmuxConfig,
   clientPid: number | undefined,
@@ -1501,7 +1482,8 @@ async function resolveClient(
     clientPid === undefined
       ? clients
       : clients.filter(
-          (client) => client.pid === clientPid || processParentPid(client.pid) === clientPid,
+          (client) =>
+            client.pid === clientPid || platform.processParentPid(client.pid) === clientPid,
         );
   if (matching.length !== 1)
     throw new Error(
@@ -1627,7 +1609,7 @@ async function closeSession(config: TmuxConfig, id: string, ifTemporary = false)
       const current = await livePanes(config, "list");
       if (
         !current.some((pane) => pane.id === id) &&
-        !targets.some((pane) => processIsAlive(pane.pid))
+        !targets.some((pane) => platform.processIsAlive(pane.pid))
       )
         break;
       if (Date.now() >= deadline) throw new Error("Timed out waiting for pi to exit");
@@ -1689,11 +1671,11 @@ async function terminatePanes(config: TmuxConfig, targets: StopTarget[]): Promis
           "-t",
           pane.pane,
           `#{==:#{pane_pid},${pane.panePid}}`,
-          shellCommand(["kill-pane", "-t", pane.pane]),
+          tmuxArguments(["kill-pane", "-t", pane.pane]),
         ],
         true,
       );
-      if (result.exitCode !== 0 && processIsAlive(pane.pid))
+      if (result.exitCode !== 0 && platform.processIsAlive(pane.pid))
         throw new Error(`Cannot stop pi in pane ${pane.pane}: ${result.stderr.trim()}`);
     }
   }
@@ -1723,7 +1705,7 @@ async function unregisterWorkspace(config: TmuxConfig, cwd: string): Promise<voi
     if (
       !remaining &&
       initializing.length === 0 &&
-      !targets.some((pane) => processIsAlive(pane.pid))
+      !targets.some((pane) => platform.processIsAlive(pane.pid))
     )
       break;
     if (Date.now() >= deadline) throw new Error(`Timed out stopping workspace: ${cwd}`);
@@ -1775,12 +1757,9 @@ async function initializingPanes(
       });
     const matching: StopTarget[] = [];
     for (const target of unpublished) {
-      const environment = readFileSync(`/proc/${target.pid}/environ`, "utf8").split("\0");
-      if (
-        !environment.includes(`PI_TMUX_SESSION_ID=${session.id}`) ||
-        realpathSync(`/proc/${target.pid}/cwd`) !== realpathSync(session.cwd)
-      )
-        continue;
+      const environment = platform.processEnvironment(target.pid);
+      const workingDirectory =
+        environment === undefined ? undefined : platform.processWorkingDirectory(target.pid);
       const option = await tmux(config, [
         "show-options",
         "-pqv",
@@ -1798,10 +1777,16 @@ async function initializingPanes(
         !isRecord(launch) ||
         launch.id !== session.id ||
         launch.pid !== target.pid ||
-        typeof launch.started !== "string" ||
-        launch.started !== processStartTime(target.pid)
+        typeof launch.token !== "string"
       )
         throw new Error(`Cannot safely identify initializing pi ${session.id} in ${target.pane}`);
+      if (
+        (environment !== undefined &&
+          (!environment.includes(`PI_TMUX_SESSION_ID=${session.id}`) ||
+            !environment.includes(`PI_TMUX_LAUNCH_TOKEN=${launch.token}`))) ||
+        (workingDirectory !== undefined && workingDirectory !== realpathSync(session.cwd))
+      )
+        continue;
       matching.push(target);
     }
     if (
@@ -1815,50 +1800,9 @@ async function initializingPanes(
   return targets;
 }
 
-function processStartTime(pid: number): string | undefined {
-  let stat: string;
-  try {
-    stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ESRCH") return undefined;
-    throw error;
-  }
-  const started = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
-  if (!started || !/^\d+$/.test(started))
-    throw new Error(`Cannot identify process start time: ${pid}`);
-  return started;
-}
-
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
-    throw error;
-  }
-}
-
-function processDescendsFrom(pid: number, ancestor: number): boolean {
-  let current = pid;
-  while (current > 0) {
-    if (current === ancestor) return true;
-    let stat: string;
-    try {
-      stat = readFileSync(`/proc/${current}/stat`, "utf8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-      throw error;
-    }
-    current = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
-  }
-  return false;
-}
-
 function serverIsAbsent(config: TmuxConfig, stderr: string): boolean {
   return (
-    stderr.includes(`no server running on ${config.socket}`) ||
+    stderr.includes("no server running on ") ||
     stderr.includes(`error connecting to ${config.socket} (No such file or directory)`)
   );
 }
@@ -1899,7 +1843,11 @@ async function livePanes(
       if (metadata.processPid !== undefined) {
         if (!Number.isSafeInteger(metadata.processPid) || metadata.processPid <= 0)
           throw new Error(`Invalid pi session metadata in pane ${pane}`);
-        if (!processDescendsFrom(metadata.processPid, Number(pid))) return [];
+        if (
+          platform.processAncestryAvailable &&
+          !platform.processDescendsFrom(metadata.processPid, Number(pid))
+        )
+          return [];
       }
       return [
         {
@@ -2103,9 +2051,7 @@ function readHeader(
 
 function prepareDirectory(path: string): void {
   mkdirSync(path, { recursive: true, mode: 0o700 });
-  const stat = lstatSync(path);
-  if (!stat.isDirectory() || stat.uid !== process.getuid!() || (stat.mode & 0o077) !== 0)
-    throw new Error(`Unsafe runtime directory: ${path}`);
+  platform.assertDirectorySafety(lstatSync(path), path);
 }
 
 function expandPath(path: string): string {

@@ -35,6 +35,7 @@ class CloseFixture {
   readonly env: Record<string, string>;
   readonly conversationBefore = "saved conversation sentinel\n";
   readonly generation = randomUUID();
+  readonly launchToken = randomUUID();
   pid = 0;
 
   constructor(failure: Failure) {
@@ -128,6 +129,7 @@ exec ${JSON.stringify(realTmux)} "$@"
           file: this.conversation,
           pid: this.pid,
           startup: "ready",
+          token: this.launchToken,
         }),
       ).toString("base64"),
     ]);
@@ -238,11 +240,6 @@ describe("close cleanup", () => {
   }
 });
 
-function processStarted(pid: number): string {
-  const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-  return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19]!;
-}
-
 function stateSource(fixture: CloseFixture) {
   const [serverPid, pane] = fixture
     .tmux(["display-message", "-p", "#{pid}\t#{pane_id}"])
@@ -250,10 +247,9 @@ function stateSource(fixture: CloseFixture) {
   return {
     socket: fixture.socket,
     serverPid: Number(serverPid),
-    serverStartTime: processStarted(Number(serverPid)),
     pane: pane!,
     pid: fixture.pid,
-    started: processStarted(fixture.pid),
+    token: fixture.launchToken,
   };
 }
 
@@ -285,7 +281,8 @@ describe("state notifications", () => {
         const failing = join(fixture.directory, "guard-failure");
         const observed = join(fixture.directory, "guard-failure-observed");
         const option = failure === "owner" ? "@pi-mux-state-source" : "@pi-tmux-session";
-        const condition = `case "$*" in *show-options*${option}*) true;; *) false;; esac`;
+        const query = failure === "owner" ? "show-options" : "list-panes";
+        const condition = `case "$*" in *${query}*${option}*) true;; *) false;; esac`;
         const wrapper = join(fixture.directory, "bin/tmux");
         rmSync(wrapper, { force: true });
         writeFileSync(
@@ -534,17 +531,19 @@ exec ${JSON.stringify(realTmux)} "$@"
       for (const changed of [
         { socket: fixture.socket + ".other" },
         { serverPid: process.pid },
-        { serverStartTime: "0" },
         { pane: "%99999" },
         { pid: process.pid },
-        { started: "0" },
+        { token: "00000000-0000-4000-8000-000000000000" },
       ]) {
         const result = notify(fixture, ["running", "--title", "null"], { ...original, ...changed });
         assert.equal(result.status, 1, JSON.stringify(changed));
         assert.equal(publicState(fixture), before);
         assert.equal(readFileSync(fixture.restore, "utf8"), snapshot);
       }
-      const staleClear = notify(fixture, ["--clear"], { ...original, started: "0" });
+      const staleClear = notify(fixture, ["--clear"], {
+        ...original,
+        token: "00000000-0000-4000-8000-000000000000",
+      });
       assert.equal(staleClear.status, 1);
       assert.equal(publicState(fixture), before);
       fixture.tmux(["set-option", "-p", "@pi-mux-state-source", "another publisher"]);
@@ -577,6 +576,15 @@ class SessionFixture {
   readonly env: Record<string, string>;
   private readonly attached: Bun.Subprocess[] = [];
   private readonly panePids: number[] = [];
+  private readonly launchTokens = new Map<string, string>();
+
+  launchTokenOf(name: string): string {
+    const existing = this.launchTokens.get(name);
+    if (existing !== undefined) return existing;
+    const token = randomUUID();
+    this.launchTokens.set(name, token);
+    return token;
+  }
 
   constructor() {
     assert.ok(realTmux && Bun.which("script"), "tmux and script must be installed");
@@ -627,7 +635,7 @@ exec ${JSON.stringify(realTmux)} "$@"
     this.tmux(["set-environment", "-t", session, "PI_TMUX_SESSION_ID", entry.id]);
     if (entry.temporary)
       this.tmux(["set-environment", "-t", session, "PI_TMUX_TEMPORARY", entry.id]);
-    this.publishPiMetadata(pane, pid, entry);
+    this.publishPiMetadata(pane, pid, entry, this.launchTokenOf(name));
   }
 
   plainSession(name: string): void {
@@ -650,7 +658,7 @@ exec ${JSON.stringify(realTmux)} "$@"
     ]).split("\t");
     assert.ok(pane && pid, `cannot start a pi window in ${session}`);
     this.panePids.push(Number(pid));
-    this.publishPiMetadata(pane, pid, entry);
+    this.publishPiMetadata(pane, pid, entry, this.launchTokenOf(session));
   }
 
   plainWindow(session: string): void {
@@ -670,7 +678,12 @@ exec ${JSON.stringify(realTmux)} "$@"
     this.panePids.push(Number(pid));
   }
 
-  private publishPiMetadata(pane: string, pid: string, entry: { id: string; file: string }): void {
+  private publishPiMetadata(
+    pane: string,
+    pid: string,
+    entry: { id: string; file: string },
+    token: string,
+  ): void {
     this.tmux([
       "set-option",
       "-p",
@@ -684,6 +697,7 @@ exec ${JSON.stringify(realTmux)} "$@"
           file: entry.file,
           pid: Number(pid),
           startup: "ready",
+          token,
         }),
       ).toString("base64"),
     ]);
@@ -1918,7 +1932,14 @@ import { appendFileSync } from "node:fs";
 const id = process.env.PI_TMUX_SESSION_ID;
 const file = process.argv[process.argv.indexOf("--session") + 1];
 const pane = process.env.TMUX_PANE;
-const metadata = { id, cwd: process.cwd(), file, pid: process.pid, startup: "ready" };
+const metadata = {
+  id,
+  cwd: process.cwd(),
+  file,
+  pid: process.pid,
+  startup: "ready",
+  token: process.env.PI_TMUX_LAUNCH_TOKEN,
+};
 function tmux(args) {
   const result = spawnSync(${JSON.stringify(realTmux)}, ["-S", ${JSON.stringify(fixture.socket)}, ...args]);
   if (result.status !== 0) process.exit(99);
@@ -2303,10 +2324,9 @@ describe("restart", () => {
         const origin = {
           socket: fixture.socket,
           serverPid,
-          serverStartTime: processStarted(serverPid),
           pane,
           pid,
-          started: processStarted(pid),
+          token: fixture.launchTokenOf("blocked"),
         };
         for (const phase of state === "waiting-approval"
           ? ["running", "waiting-user"]
@@ -2400,10 +2420,9 @@ describe("restart safety", () => {
         const origin = {
           socket: fixture.socket,
           serverPid,
-          serverStartTime: processStarted(serverPid),
           pane,
           pid,
-          started: processStarted(pid),
+          token: fixture.launchTokenOf("target"),
         };
         const notification = [
           process.execPath,

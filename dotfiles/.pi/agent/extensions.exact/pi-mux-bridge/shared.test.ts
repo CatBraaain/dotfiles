@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
-import { readlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "bun:test";
 import { parse } from "shell-quote";
 import { attachCommand, getTmuxPaths, inspectManagedPane, tmuxArgs } from "./shared.ts";
+
+function launchRecordOf(token: string): string {
+  return JSON.stringify({ id: "session", pid: 4242, token });
+}
 
 describe("dedicated tmux paths", () => {
   it("uses an absolute dedicated socket independent of TMUX and TMUX_TMPDIR", () => {
@@ -42,47 +46,42 @@ describe("dedicated tmux paths", () => {
     ]);
   });
 
-  for (const managed of [false, true]) {
-    it("recognizes a shell ancestor only for an external pi, managed=" + managed, async () => {
-      const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated" });
-      const identity = await inspectManagedPane(
-        async () => ({
-          stdout: [
-            paths.socketPath,
-            "123",
-            "%1",
-            readlinkSync("/proc/self/fd/0"),
-            String(process.ppid),
-          ].join("\t"),
-          stderr: "",
-          code: 0,
-          killed: false,
-        }),
-        paths,
-        {
-          TMUX: paths.socketPath + ",123,0",
-          TMUX_PANE: "%1",
-          ...(managed ? { PI_TMUX_SESSION_ID: "managed" } : {}),
-        },
-      );
-      assert.deepEqual(identity, managed ? undefined : { pane: "%1", pid: process.ppid });
+  function reply(paths: { socketPath: string }, launch: string, pid = "4242") {
+    return async () => ({
+      stdout: [paths.socketPath, "123", "%1", launch, pid].join("\t"),
+      stderr: "",
+      code: 0,
+      killed: false,
     });
   }
 
-  it("does not recognize an unrelated process as the pi pane owner", async () => {
+  it("adopts a pane whose launch record matches the environment token", async () => {
     const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated" });
-    const identity = await inspectManagedPane(
-      async () => ({
-        stdout: [paths.socketPath, "123", "%1", readlinkSync("/proc/self/fd/0"), "2147483647"].join(
-          "\t",
-        ),
-        stderr: "",
-        code: 0,
-        killed: false,
-      }),
-      paths,
-      { TMUX: paths.socketPath + ",123,0", TMUX_PANE: "%1" },
-    );
+    const token = randomUUID();
+    const identity = await inspectManagedPane(reply(paths, launchRecordOf(token)), paths, {
+      TMUX: paths.socketPath + ",123,0",
+      TMUX_PANE: "%1",
+      PI_TMUX_LAUNCH_TOKEN: token,
+    });
+    assert.deepEqual(identity, { pane: "%1", pid: 4242, serverPid: 123 });
+  });
+
+  it("adopts a pane without a launch record when no environment token is set", async () => {
+    const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated" });
+    const identity = await inspectManagedPane(reply(paths, ""), paths, {
+      TMUX: paths.socketPath + ",123,0",
+      TMUX_PANE: "%1",
+    });
+    assert.deepEqual(identity, { pane: "%1", pid: 4242, serverPid: 123 });
+  });
+
+  it("does not recognize a pane whose launch record token differs", async () => {
+    const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated" });
+    const identity = await inspectManagedPane(reply(paths, launchRecordOf(randomUUID())), paths, {
+      TMUX: paths.socketPath + ",123,0",
+      TMUX_PANE: "%1",
+      PI_TMUX_LAUNCH_TOKEN: randomUUID(),
+    });
     assert.equal(identity, undefined);
   });
 
@@ -96,5 +95,10 @@ describe("dedicated tmux paths", () => {
       { TMUX: "/other/socket,1,0", TMUX_PANE: "%1" },
     );
     assert.equal(pane, undefined);
+  });
+
+  it("uses ~/.local/state on Windows regardless of XDG_RUNTIME_DIR", () => {
+    const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated" }, "win32");
+    assert.equal(paths.socketPath, join(homedir(), ".local", "state", "pi-tmux", "server.sock"));
   });
 });

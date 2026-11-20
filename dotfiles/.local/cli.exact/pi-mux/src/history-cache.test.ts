@@ -195,18 +195,40 @@ switch (args[0]) {
     if (args.at(-1) === "@pi-mux-generation" || args.at(-1) === "@pi-mux-restored") console.log("test-generation");
     if (args.at(-1) === "@pi_session_state" && existsSync(directory + "/published.json")) console.log(readFileSync(directory + "/published.json", "utf8"));
     break;
-  case "source-file":
-    if (args[1] === "-") {
-      const command = await Bun.stdin.text();
-      appendFileSync(directory + "/launch.log", command);
-      const tokens = (command.match(/"(?:\\\\.|[^"\\\\])*"/g) ?? []).map((token) => JSON.parse(token.replaceAll("\\\\$", "$")));
-      pane.id = tokens.find((token) => token.startsWith("PI_TMUX_SESSION_ID=")).slice("PI_TMUX_SESSION_ID=".length);
-      pane.cwd = tokens[tokens.indexOf("-c") + 1];
-      const selected = tokens.indexOf("--session");
-      if (selected >= 0) pane.file = tokens[selected + 1];
-      writeFileSync(runningFile, JSON.stringify(pane));
-      console.log(["$1", "%1", pane.pid].join("\\t"));
+  case "new-session": {
+    const environment = new Map();
+    for (let index = 0; index < args.length - 1; index++)
+      if (args[index] === "-e") {
+        const assignment = args[index + 1];
+        environment.set(assignment.slice(0, assignment.indexOf("=")), assignment.slice(assignment.indexOf("=") + 1));
+      }
+    pane.id = environment.get("PI_TMUX_SESSION_ID");
+    pane.cwd = args[args.indexOf("-c") + 1];
+    const paneCommand = args.at(-1);
+    const paneTokens = [];
+    let current = null;
+    for (let index = 0; index < paneCommand.length; index++) {
+      if (paneCommand[index] !== "'") {
+        if (current !== null) current += paneCommand[index];
+        continue;
+      }
+      if (current === null) current = "";
+      else if (paneCommand.slice(index, index + 4) === "'\\''") {
+        current += "'";
+        index += 3;
+      } else {
+        paneTokens.push(current);
+        current = null;
+      }
     }
+    const selected = paneTokens.indexOf("--session");
+    if (selected >= 0) pane.file = paneTokens[selected + 1];
+    writeFileSync(runningFile, JSON.stringify(pane));
+    appendFileSync(directory + "/launch.log", [...args.slice(0, -1), ...paneTokens].map((token) => JSON.stringify(token)).join(" ") + "\\n");
+    console.log(["$1", "%1", pane.pid].join("\\t"));
+    break;
+  }
+  case "source-file":
     break;
   case "has-session":
     process.exitCode = existsSync(runningFile) ? 0 : 1;

@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { quote } from "shell-quote";
-import { getTmuxPaths, inspectManagedPane, tmuxArgs, type Execute } from "./shared.ts";
+import { getTmuxPaths, inspectManagedPane, launchToken, tmuxArgs, type Execute } from "./shared.ts";
 
 const TMUX_TIMEOUT_MS = 1_000;
 
@@ -16,7 +16,7 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
   pi.on("session_before_fork", (_event, ctx) => rejectSessionChange(ctx));
   const startupCommand = process.env.PI_TMUX_STARTUP_COMMAND;
   let startupPending = true;
-  let ready: { id: string; pane: string; serverPid: string } | undefined;
+  let ready: { id: string; pane: string; serverPid: number; panePid: number } | undefined;
   if (process.env.PI_TMUX_STARTUP_MODE === "create")
     pi.on("resources_discover", async (_event, ctx) => publish(ctx, "accepted"));
   else if (startupCommand) {
@@ -36,7 +36,7 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
     if (!ready) {
       const identity = await inspectManagedPane(execute, paths);
       if (!identity) return;
-      const { pane } = identity;
+      const { pane, pid } = identity;
       const published = await execute(
         "tmux",
         tmuxArgs(paths, ["display-message", "-p", "-t", pane, "#{@pi-tmux-session}"]),
@@ -44,11 +44,17 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
       if (!published.stdout.trim()) return;
       const metadata = JSON.parse(Buffer.from(published.stdout.trim(), "base64").toString("utf8"));
       const id = ctx.sessionManager.getSessionId();
-      if (metadata?.id !== id || metadata.pid !== process.pid || metadata.startup !== "ready")
+      if (
+        metadata?.id !== id ||
+        metadata.pid !== pid ||
+        metadata.token !== launchToken() ||
+        (metadata.processPid !== undefined && metadata.processPid !== process.pid) ||
+        metadata.startup !== "ready"
+      )
         return;
-      ready = { id, pane, serverPid: process.env.TMUX!.split(",")[1]! };
+      ready = { id, pane, serverPid: identity.serverPid, panePid: pid };
     }
-    const { id, pane, serverPid } = ready;
+    const { id, pane, serverPid, panePid } = ready;
     await execute(
       "tmux",
       tmuxArgs(paths, [
@@ -56,7 +62,7 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
         "-F",
         "-t",
         pane,
-        `#{&&:#{==:#{pid},${serverPid}},#{==:#{pane_pid},${process.pid}}}`,
+        `#{&&:#{==:#{pid},${serverPid}},#{==:#{pane_pid},${panePid}}}`,
         quote(["set-option", "-gu", `@pi-mux-restoring-${id}`]),
       ]),
     );
@@ -84,6 +90,7 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
           cwd: ctx.cwd,
           pid,
           startup,
+          token: launchToken(),
           ...(pid === process.pid ? {} : { processPid: process.pid }),
         }),
       ).toString("base64");
@@ -93,7 +100,7 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
         tmuxArgs(paths, ["set-option", "-p", "-t", pane, "@pi-tmux-session", metadata]),
       );
       if (startup === "ready") {
-        ready = { id, pane, serverPid: process.env.TMUX!.split(",")[1]! };
+        ready = { id, pane, serverPid: identity.serverPid, panePid: identity.pid };
       }
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);

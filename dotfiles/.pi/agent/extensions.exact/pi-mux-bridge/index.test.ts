@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { describe, it } from "bun:test";
 import {
   createEventBus,
@@ -66,6 +66,7 @@ async function withManagedEnvironment(test: () => Promise<void>): Promise<void> 
     PI_TMUX_SESSION_ID: "fixed-id",
     PI_TMUX_STARTUP_COMMAND: "pi-mux-startup-fixture",
     PI_TMUX_STARTUP_MODE: "",
+    PI_TMUX_LAUNCH_TOKEN: UNIT_TOKEN,
   };
   const previous = Object.fromEntries(Object.keys(updates).map((key) => [key, process.env[key]]));
   Object.assign(process.env, updates);
@@ -79,12 +80,14 @@ async function withManagedEnvironment(test: () => Promise<void>): Promise<void> 
   }
 }
 
+const UNIT_TOKEN = randomUUID();
+
 function managedPaneOutput(): string {
   return [
     "/tmp/work/dotfiles/pi-mux-unit/pi-tmux/server.sock",
     "123",
     "%3",
-    readlinkSync("/proc/self/fd/0"),
+    JSON.stringify({ id: "fixed-id", pid: process.pid, token: UNIT_TOKEN }),
     String(process.pid),
   ].join("\t");
 }
@@ -186,6 +189,7 @@ describe("fixed conversation identity", () => {
           cwd: "/original cwd",
           pid: process.pid,
           startup,
+          token: UNIT_TOKEN,
         });
       });
     });
@@ -217,7 +221,12 @@ describe("fixed conversation identity", () => {
             if (args.includes("if-shell")) restoring = false;
             const metadata = published
               ? Buffer.from(
-                  JSON.stringify({ id: "fixed-id", pid: process.pid, startup: "ready" }),
+                  JSON.stringify({
+                    id: "fixed-id",
+                    pid: process.pid,
+                    startup: "ready",
+                    token: UNIT_TOKEN,
+                  }),
                 ).toString("base64")
               : "";
             return {
@@ -293,7 +302,7 @@ describe("fixed conversation identity", () => {
       await withManagedEnvironment(async () => {
         let confirmations = 0;
         const metadata = Buffer.from(
-          JSON.stringify({ id: "fixed-id", pid: process.pid, startup }),
+          JSON.stringify({ id: "fixed-id", pid: process.pid, startup, token: UNIT_TOKEN }),
         ).toString("base64");
         const handlers = captureHandlers(async (_command, args) => {
           if (args.includes("if-shell")) confirmations++;
