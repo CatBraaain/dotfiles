@@ -22,7 +22,7 @@ import { HistorySummaryCache } from "./history-summary";
 
 type Operation =
   | { kind: "help" }
-  | { kind: "new"; detached: boolean; clientPid?: number; request?: string }
+  | { kind: "new"; detached: boolean; clientPid?: number; request?: string; cwd?: string }
   | { kind: "open"; id: string; temporary: boolean }
   | { kind: "state"; id: string; source: StateSource; notification: StateNotification }
   | { kind: "close"; id: string; ifTemporary: boolean }
@@ -133,7 +133,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux
   pi-mux -h
   pi-mux --help
-  pi-mux new [--detached] [--client-pid <pid>] [initial-request]
+  pi-mux new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request]
   pi-mux open [--temporary] <session-id>
   pi-mux state <session-id> <state> --source <JSON> --title <JSON>
   pi-mux state <session-id> --clear --source <JSON>
@@ -221,6 +221,11 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       throw new Error("Run restart from a terminal outside the dedicated tmux server");
     prepareDirectory(config.stateDirectory);
     if (operation.kind === "restart") return await restartServer(config, operation.force);
+    if (operation.kind === "new" && operation.cwd !== undefined) {
+      if (!statSync(operation.cwd).isDirectory())
+        throw new Error(`Workspace is not a directory: ${operation.cwd}`);
+      process.chdir(operation.cwd);
+    }
     const result = await withLock(config, async () => {
       if (operation.kind === "snapshot") {
         await snapshotSessions(config, operation.generation);
@@ -295,6 +300,7 @@ export function parseOperation(argv: string[]): Operation {
     let index = 1;
     let detached = false;
     let clientPid: number | undefined;
+    let cwd: string | undefined;
     while (index < argv.length) {
       if (argv[index] === "--detached" && !detached) {
         detached = true;
@@ -310,14 +316,20 @@ export function parseOperation(argv: string[]): Operation {
         index += 2;
         continue;
       }
+      const cwdValue = argv[index + 1];
+      if (argv[index] === "--cwd" && cwd === undefined && cwdValue !== undefined && isAbsolute(cwdValue)) {
+        cwd = cwdValue;
+        index += 2;
+        continue;
+      }
       break;
     }
     const requests = argv.slice(index);
     const request = requests[0];
-    if (requests.length === 0) return { kind: "new", detached, clientPid };
+    if (requests.length === 0) return { kind: "new", detached, clientPid, cwd };
     if (requests.length === 1 && request?.trim() && !request.includes("\0")) {
       if (request === "-h" || request === "--help") return { kind: "help" };
-      return { kind: "new", detached, clientPid, request };
+      return { kind: "new", detached, clientPid, request, cwd };
     }
   }
   if (argv[0] === "state") return parseStateOperation(argv);
@@ -369,7 +381,7 @@ export function parseOperation(argv: string[]): Operation {
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [--client-pid <pid>] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | close [--if-temporary] <session-id> | list | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] | history [--cwd <absolute-cwd>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | restart [--force]]",
+    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | close [--if-temporary] <session-id> | list | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] | history [--cwd <absolute-cwd>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | restart [--force]]",
   );
 }
 

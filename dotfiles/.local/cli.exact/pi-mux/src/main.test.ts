@@ -1973,6 +1973,8 @@ describe("new initial request", () => {
       ["new", "-h"],
       ["new", "--detached", "--help"],
       ["new", "--detached", "-h"],
+      ["new", "--cwd", "/tmp/project", "--help"],
+      ["new", "--cwd", "/tmp/project", "-h"],
     ])
       assert.deepEqual(parseOperation(args), { kind: "help" });
   });
@@ -1983,24 +1985,28 @@ describe("new initial request", () => {
       detached: false,
       clientPid: undefined,
       request: "fix the failing test",
+      cwd: undefined,
     });
     assert.deepEqual(parseOperation(["new", "--detached", "fix the failing test"]), {
       kind: "new",
       detached: true,
       clientPid: undefined,
       request: "fix the failing test",
+      cwd: undefined,
     });
     assert.deepEqual(parseOperation(["new", "--detached", "--detached"]), {
       kind: "new",
       detached: true,
       clientPid: undefined,
       request: "--detached",
+      cwd: undefined,
     });
     assert.deepEqual(parseOperation(["new", "--"]), {
       kind: "new",
       detached: false,
       clientPid: undefined,
       request: "--",
+      cwd: undefined,
     });
   });
 
@@ -2009,17 +2015,20 @@ describe("new initial request", () => {
       kind: "new",
       detached: false,
       clientPid: 42,
+      cwd: undefined,
     });
     assert.deepEqual(parseOperation(["new", "--client-pid", "42", "--detached", "fix it"]), {
       kind: "new",
       detached: true,
       clientPid: 42,
       request: "fix it",
+      cwd: undefined,
     });
     assert.deepEqual(parseOperation(["new", "--detached", "--client-pid", "7"]), {
       kind: "new",
       detached: true,
       clientPid: 7,
+      cwd: undefined,
     });
   });
 
@@ -2036,6 +2045,58 @@ describe("new initial request", () => {
       detached: false,
       clientPid: undefined,
       request: "--client-pid",
+      cwd: undefined,
+    });
+  });
+
+  it("accepts an absolute cwd option before the initial request in any option order", () => {
+    assert.deepEqual(parseOperation(["new", "--cwd", "/tmp/project"]), {
+      kind: "new",
+      detached: false,
+      clientPid: undefined,
+      cwd: "/tmp/project",
+    });
+    assert.deepEqual(parseOperation(["new", "--cwd", "/tmp/project", "--detached", "fix it"]), {
+      kind: "new",
+      detached: true,
+      clientPid: undefined,
+      request: "fix it",
+      cwd: "/tmp/project",
+    });
+    assert.deepEqual(parseOperation(["new", "--detached", "--cwd", "/tmp/project"]), {
+      kind: "new",
+      detached: true,
+      clientPid: undefined,
+      cwd: "/tmp/project",
+    });
+    assert.deepEqual(parseOperation(["new", "--client-pid", "42", "--cwd", "/tmp/project"]), {
+      kind: "new",
+      detached: false,
+      clientPid: 42,
+      cwd: "/tmp/project",
+    });
+    assert.deepEqual(parseOperation(["new", "--cwd", "/tmp/project", "--client-pid", "42"]), {
+      kind: "new",
+      detached: false,
+      clientPid: 42,
+      cwd: "/tmp/project",
+    });
+  });
+
+  it("rejects relative or repeated cwd options and keeps a missing value as a request", () => {
+    for (const args of [
+      ["new", "--cwd", "relative/path"],
+      ["new", "--cwd", "-h"],
+      ["new", "--cwd", "/a", "--cwd", "/b"],
+      ["new", "--cwd", "/a", "extra", "extra"],
+    ])
+      assert.throws(() => parseOperation(args), /usage/);
+    assert.deepEqual(parseOperation(["new", "--cwd"]), {
+      kind: "new",
+      detached: false,
+      clientPid: undefined,
+      request: "--cwd",
+      cwd: undefined,
     });
   });
 });
@@ -2108,6 +2169,49 @@ describe("new with a client switch", () => {
         .split("\n")
         .filter((name) => name.startsWith("pi-empty"));
       assert.equal(emptySessions.length, 1);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+});
+
+describe("new with a cwd option", () => {
+  it("starts the empty pi in the requested cwd from a different working directory", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareNewEmpty(fixture);
+      const from = join(fixture.directory, "from");
+      const target = join(fixture.directory, "target");
+      mkdirSync(from, { recursive: true, mode: 0o700 });
+      mkdirSync(target, { recursive: true, mode: 0o700 });
+      const result = spawnSync(
+        process.execPath,
+        ["run", source, "new", "--cwd", target, "--detached"],
+        { cwd: from, env: fixture.env, encoding: "utf8", timeout: 10_000 },
+      );
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 0, result.stderr);
+      const id = /^Pi session (\S+)\n/.exec(result.stdout)?.[1];
+      assert.ok(id);
+      const panes = fixture
+        .tmux(["list-panes", "-F", "#{session_name}\t#{pane_current_path}"])
+        .split("\n")
+        .map((line) => line.split("\t"));
+      const started = panes.filter(([, path]) => path === target);
+      assert.equal(started.length, 1);
+      const [sessionName] = started[0]!;
+      assert.ok(sessionName);
+      assert.match(sessionName, /^pi-empty/);
+      const pane = fixture.tmux(["display-message", "-p", "-t", sessionName, "#{pane_id}"]);
+      const metadata = JSON.parse(
+        Buffer.from(
+          fixture.tmux(["show-options", "-pqv", "-t", pane, "@pi-tmux-session"]),
+          "base64",
+        ).toString(),
+      );
+      assert.equal(metadata.cwd, target);
+      assert.equal(metadata.id, id);
+      assert.equal(panes.filter(([, path]) => path === fixture.cwd).length, 0);
     } finally {
       await fixture.cleanup();
     }
