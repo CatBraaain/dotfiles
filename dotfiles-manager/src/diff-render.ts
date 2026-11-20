@@ -62,7 +62,7 @@ async function collectAddedContents(
   for (const entry of entries) {
     const input = displayInput(entry, options, "dist");
     if ((await lstatOrNull(input.source))?.isDirectory()) continue;
-    inputs.push(...(await collectInputs(input)));
+    for (const leaf of await collectInputs(input)) inputs.push(leaf);
   }
   return Promise.all(inputs.map((input) => loader.load(input)));
 }
@@ -73,8 +73,9 @@ async function collectRemovedContents(
   loader: LeafLoader,
 ): Promise<LeafContent[]> {
   const inputs: DisplayInput[] = [];
-  for (const entry of entries)
-    inputs.push(...(await collectInputs(displayInput(entry, options, "home"))));
+  for (const entry of entries) {
+    for (const leaf of await collectInputs(displayInput(entry, options, "home"))) inputs.push(leaf);
+  }
   return Promise.all(inputs.map((input) => loader.load(input)));
 }
 
@@ -526,18 +527,19 @@ function unifiedBody(marks: Mark[], oldSplit: SplitText, newSplit: SplitText): s
   for (const [firstChange, lastChange] of mergedRuns) {
     const firstIndex = Math.max(0, firstChange - CONTEXT_LINES);
     const lastIndex = Math.min(positioned.length - 1, lastChange + CONTEXT_LINES);
-    body.push(...hunkLines(positioned, firstIndex, lastIndex, oldSplit, newSplit));
+    appendHunkLines(positioned, firstIndex, lastIndex, oldSplit, newSplit, body);
   }
   return body;
 }
 
-function hunkLines(
+function appendHunkLines(
   positioned: PositionedMark[],
   firstIndex: number,
   lastIndex: number,
   oldSplit: SplitText,
   newSplit: SplitText,
-): string[] {
+  body: string[],
+): void {
   let oldStart = 0;
   let oldCount = 0;
   let newStart = 0;
@@ -555,15 +557,14 @@ function hunkLines(
   }
   if (oldCount === 0) oldStart = positioned[firstIndex]!.oldPos;
   if (newCount === 0) newStart = positioned[firstIndex]!.newPos;
-  const lines = [`@@ -${rangeText(oldStart, oldCount)} +${rangeText(newStart, newCount)} @@`];
+  body.push(`@@ -${rangeText(oldStart, oldCount)} +${rangeText(newStart, newCount)} @@`);
   for (let index = firstIndex; index <= lastIndex; index++) {
     const op = positioned[index]!;
-    if (op.mark === "-") lines.push(`-${oldSplit.lines[op.oldPos]!}`);
-    else if (op.mark === "+") lines.push(`+${newSplit.lines[op.newPos]!}`);
-    else lines.push(` ${oldSplit.lines[op.oldPos]!}`);
-    if (needsNoNewlineMarker(op, oldSplit, newSplit)) lines.push("\\ No newline at end of file");
+    if (op.mark === "-") body.push(`-${oldSplit.lines[op.oldPos]!}`);
+    else if (op.mark === "+") body.push(`+${newSplit.lines[op.newPos]!}`);
+    else body.push(` ${oldSplit.lines[op.oldPos]!}`);
+    if (needsNoNewlineMarker(op, oldSplit, newSplit)) body.push("\\ No newline at end of file");
   }
-  return lines;
 }
 
 function needsNoNewlineMarker(
@@ -592,37 +593,59 @@ function rangeText(start: number, count: number): string {
 
 const MYERS_STEP_LIMIT = 1024;
 
+type LineRegion = { aLo: number; aHi: number; bLo: number; bHi: number };
+type DiffWork = { kind: "region"; region: LineRegion } | { kind: "common"; count: number };
+
 function diffSequences(oldLines: string[], newLines: string[]): Mark[] {
   const marks: Mark[] = [];
-  diffRegion(oldLines, newLines, 0, oldLines.length, 0, newLines.length, marks);
+  const pending: DiffWork[] = [
+    { kind: "region", region: { aLo: 0, aHi: oldLines.length, bLo: 0, bHi: newLines.length } },
+  ];
+  while (pending.length > 0) {
+    const work = pending.pop()!;
+    if (work.kind === "common") {
+      for (let index = 0; index < work.count; index++) marks.push(" ");
+    } else {
+      diffRegion(oldLines, newLines, work.region, marks, pending);
+    }
+  }
   return marks;
 }
 
 function diffRegion(
   a: string[],
   b: string[],
-  aLo: number,
-  aHi: number,
-  bLo: number,
-  bHi: number,
+  region: LineRegion,
   marks: Mark[],
+  pending: DiffWork[],
 ): void {
+  let { aLo, aHi, bLo, bHi } = region;
   while (aLo < aHi && bLo < bHi && a[aLo] === b[bLo]) {
     marks.push(" ");
     aLo++;
     bLo++;
   }
-  const suffix: Mark[] = [];
   while (aHi > aLo && bHi > bLo && a[aHi - 1] === b[bHi - 1]) {
     aHi--;
     bHi--;
-    suffix.push(" ");
   }
-  if (aLo < aHi || bLo < bHi) {
-    if (!diffMiddle(a, b, aLo, aHi, bLo, bHi, marks))
-      diffAroundAnchor(a, b, aLo, aHi, bLo, bHi, marks);
+  const suffixCount = region.aHi - aHi;
+  if (suffixCount > 0) pending.push({ kind: "common", count: suffixCount });
+  if (diffMiddle(a, b, aLo, aHi, bLo, bHi, marks)) return;
+
+  const anchor = findAnchor(a, b, aLo, aHi, bLo, bHi);
+  if (anchor === null) {
+    for (let index = aLo; index < aHi; index++) marks.push("-");
+    for (let index = bLo; index < bHi; index++) marks.push("+");
+    return;
   }
-  marks.push(...suffix);
+  const left: LineRegion = { aLo, aHi: anchor.old, bLo, bHi: anchor.new };
+  const right: LineRegion = { aLo: anchor.old + 1, aHi, bLo: anchor.new + 1, bHi };
+  pending.push(
+    { kind: "region", region: right },
+    { kind: "common", count: 1 },
+    { kind: "region", region: left },
+  );
 }
 
 function diffMiddle(
@@ -702,20 +725,18 @@ function diffMiddle(
     y--;
     reverseMarks.push(" ");
   }
-  reverseMarks.reverse();
-  marks.push(...reverseMarks);
+  for (let index = reverseMarks.length - 1; index >= 0; index--) marks.push(reverseMarks[index]!);
   return true;
 }
 
-function diffAroundAnchor(
+function findAnchor(
   a: string[],
   b: string[],
   aLo: number,
   aHi: number,
   bLo: number,
   bHi: number,
-  marks: Mark[],
-): void {
+): { old: number; new: number } | null {
   const oldCounts = new Map<string, number>();
   for (let index = aLo; index < aHi; index++) {
     oldCounts.set(a[index]!, (oldCounts.get(a[index]!) ?? 0) + 1);
@@ -740,22 +761,12 @@ function diffAroundAnchor(
       anchorOld = index;
     }
   }
-  if (anchorOld === -1) {
-    for (let index = aLo; index < aHi; index++) marks.push("-");
-    for (let index = bLo; index < bHi; index++) marks.push("+");
-    return;
-  }
+  if (anchorOld === -1) return null;
   const anchorLine = a[anchorOld]!;
-  let anchorNew = -1;
   for (let index = bLo; index < bHi; index++) {
-    if (b[index] === anchorLine) {
-      anchorNew = index;
-      break;
-    }
+    if (b[index] === anchorLine) return { old: anchorOld, new: index };
   }
-  diffRegion(a, b, aLo, anchorOld, bLo, anchorNew, marks);
-  marks.push(" ");
-  diffRegion(a, b, anchorOld + 1, aHi, anchorNew + 1, bHi, marks);
+  return null;
 }
 
 // ---------------------------------------------------------------- rendering
