@@ -17,7 +17,12 @@
   function dispatchCollapse(el) {
     for (const type of ["mousedown", "mouseup", "click"]) {
       el.dispatchEvent(
-        new MouseEvent(type, { bubbles: true, cancelable: true, view: window, button: 0 }),
+        new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          button: 0,
+        }),
       );
     }
   }
@@ -37,12 +42,12 @@
       try {
         if (!pane.isConnected) return;
         if (!pane.querySelector(EXPANDED_ROW_SELECTOR)) return;
-        const el = pane.querySelector(BUTTON_SELECTOR);
-        if (!el) return scheduleRetry();
-        const actionItem = el.closest(".action-item");
-        if (actionItem && actionItem.classList.contains("disabled")) return scheduleRetry();
-        dispatchCollapse(el);
-        scheduleRetry();
+        const button = pane.querySelector(BUTTON_SELECTOR);
+        if (!button) return scheduleRetry();
+        const actionItem = button.closest(".action-item");
+        if (actionItem && actionItem.classList.contains("disabled"))
+          return scheduleRetry();
+        dispatchCollapse(button);
       } catch {
         // Never throw from DOM observation.
       }
