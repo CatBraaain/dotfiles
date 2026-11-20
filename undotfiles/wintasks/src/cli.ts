@@ -77,6 +77,7 @@ export function runWithScheduler(
     nowLocal(),
     out,
     err,
+    { args, execPath: process.execPath, scriptPath: import.meta.path },
   );
 }
 

@@ -2,6 +2,7 @@
 
 import type { DateTime } from "./datetime.ts";
 import { parseDefs, TRIGGER_FOLDERS, type Definitions, type TaskDef } from "./def.ts";
+import { elevateIfNeeded, type ElevationRequest } from "./elevate.ts";
 import { extractTasks, type ExistingTask, type Schtasks } from "./schtasks.ts";
 import { normalizedTaskXml, renderTaskXml, taskXmlDiff } from "./xml.ts";
 
@@ -59,6 +60,7 @@ export function runSync(
   now: DateTime,
   out: Writer,
   err: Writer,
+  elevation?: ElevationRequest,
 ): number {
   let desired: Array<[string, string]>;
   try {
@@ -96,6 +98,13 @@ export function runSync(
       return fail((reportError as Error).message, err);
     }
     return 0;
+  }
+
+  if (elevation !== undefined) {
+    const changesNeeded =
+      deletions.length > 0 || plan.some((task) => task.action !== "no-change");
+    const exitCode = elevateIfNeeded(changesNeeded, elevation, err);
+    if (exitCode !== undefined) return exitCode;
   }
 
   const errors: string[] = [];

@@ -272,7 +272,11 @@ mount folder 配下の既存タスクは Description の内容にかかわらず
 5. `--dry-run` 指定時は分類までを実行し、システムを変更せず各分類を表示する。`update` と `delete` の分類行には正規化した XML の unified diff を続ける（「### --dry-run の diff 表示」）。
 6. `--dry-run` でないときは、desired state の定義順に `create`、`update`、`no-change` を処理し、その後 `delete` をタスクパスの昇順で処理する。各処理の完了後に分類を stdout へ出力し、`update` と `delete` の分類行には `--dry-run` と同じ unified diff を続ける。
 
-schtasks の create / delete の呼び出し失敗（権限不足など）は処理を続行し、最後に失敗したタスクパスと schtasks のエラーを報告して非ゼロ終了する。`/Query` の失敗は分類ができないため、即時にエラー終了する。wintasks は管理者権限へ自動昇格しない。
+schtasks の create / delete の呼び出し失敗（権限不足など）は処理を続行し、最後に失敗したタスクパスと schtasks のエラーを報告して非ゼロ終了する。`/Query` の失敗は分類ができないため、即時にエラー終了する。
+
+変更が必要なとき、wintasks は gsudo を使って一度だけ昇格する。`--dry-run` では gsudo の検索と昇格を行わない。それ以外の実行で分類結果に `create` / `update` / `delete` が 1 つでもあるとき、管理者権限のないプロセスはシステムを変更せず、同じカレントディレクトリで同じ引数により自分自身を昇格して再実行し、再実行したプロセスの終了コードを自分の終了コードにする。再実行が成立しなかったときは非ゼロで終了する。昇格の確認画面（UAC）はこの再実行の 1 回だけ表示される。分類結果がすべて `no-change` で削除するタスクもないときは、昇格せずに終了コード 0 で終了する。すでに管理者権限を持つプロセスは再実行せず、そのまま同期する。Windows 以外のプラットフォームでは昇格の判定と再実行を行わない。
+
+gsudo が PATH に見つからないとき、変更が必要な場合はシステムを変更せず `wintasks: gsudo was not found in PATH` を stderr へ出力して終了コード 1 で即時に終了する。変更が必要ない場合はエラーにせず、終了コード 0 で終了する。
 
 ### --dry-run の diff 表示
 
@@ -299,7 +303,7 @@ update \WinTasks\cron\backup
 |---|---|
 | 成功（変更の有無を問わない） | 0 |
 | usage エラー（不明な引数・オプションの不正） | 2 |
-| ファイル読み取り失敗、YAML パースエラー、mount 形式エラー、XML 生成エラー、`/Query` 失敗、schtasks の失敗 | 1 |
+| ファイル読み取り失敗、YAML パースエラー、mount 形式エラー、XML 生成エラー、`/Query` 失敗、gsudo 不在、schtasks の失敗 | 1 |
 
 ### エラー表示
 

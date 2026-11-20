@@ -21,4 +21,4 @@ Windows のスケジュールタスクを YAML の desired state として宣言
 
 - TypeScript で実装し、ランタイムは bun を使う。構成は `undotfiles/wintasks/` に置く
 - 公開はしない。個人利用の構成として管理する
-- CLI は管理者権限へ自動昇格しない
+- タスクの登録・更新・削除には管理者権限が必要であり、昇格には gsudo を使う
