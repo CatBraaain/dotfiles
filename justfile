@@ -17,8 +17,8 @@ install:
   bun undotfiles/install/linux.ts sync
 
 [windows]
-install *args:
-  bun undotfiles/install/windows.ts {{ args }}
+install:
+  bun undotfiles/install/windows.ts
 
 format:
   ~/.bun/install/global/node_modules/oxfmt/bin/oxfmt . "!**/*.md"
