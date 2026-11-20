@@ -1,7 +1,7 @@
 // Internal command entry point for the dotfiles manager.
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { main as apply } from "./apply.ts";
+import { confirmApplyStdin, main as apply } from "./apply.ts";
 import { main as build } from "./build.ts";
 import { main as diff } from "./diff.ts";
 import { resolveWsl, type WslConnection } from "./wsl.ts";
@@ -22,6 +22,7 @@ export async function main(
   if (!isSingleArgument || !isKnownCommand || !isYesAllowed) throw new Error(usage);
 
   const started = performance.now();
+  let confirmationWaitMs = 0;
   // Resolved once here and shared with build, externals and the GitAlias hook
   // (spec: §Windows の WSL 接続); Linux/macOS resolve no connection.
   const connection = await resolveWsl(root);
@@ -29,16 +30,36 @@ export async function main(
     await logBuild(root, homeRoot, connection);
 
     const distRoot = join(root, "dist");
-    const code = await logStage(command, () =>
-      command === "apply"
-        ? apply([distRoot, homeRoot, ...(yes ? ["--yes"] : [])])
-        : diff(command === "managed" ? ["--managed", distRoot, homeRoot] : [distRoot, homeRoot]),
+    const code = await logStage(
+      command,
+      () =>
+        command === "apply"
+          ? apply([distRoot, homeRoot, ...(yes ? ["--yes"] : [])], confirmApply)
+          : diff(command === "managed" ? ["--managed", distRoot, homeRoot] : [distRoot, homeRoot]),
+      elapsedWithoutConfirmation,
     );
-    logElapsed(`command ${command}`, code === 0 ? "success" : "failure", started);
+    logElapsed(
+      `command ${command}`,
+      code === 0 ? "success" : "failure",
+      elapsedWithoutConfirmation(started),
+    );
     return code;
   } catch (error) {
-    logElapsed(`command ${command}`, "failure", started);
+    logElapsed(`command ${command}`, "failure", elapsedWithoutConfirmation(started));
     throw error;
+  }
+
+  async function confirmApply(): Promise<boolean> {
+    const waitStarted = performance.now();
+    try {
+      return await confirmApplyStdin();
+    } finally {
+      confirmationWaitMs = performance.now() - waitStarted;
+    }
+  }
+
+  function elapsedWithoutConfirmation(started: number): string {
+    return elapsedSeconds(started, confirmationWaitMs);
   }
 }
 
@@ -66,35 +87,37 @@ async function logBuild(root: string, homeRoot: string, wsl?: WslConnection): Pr
   }
 }
 
-async function logStage(name: string, action: () => Promise<number>): Promise<number> {
+async function logStage(
+  name: string,
+  action: () => Promise<number>,
+  elapsedSince: (started: number) => string,
+): Promise<number> {
   const started = performance.now();
   console.log(name === "apply" ? "[apply] Started" : `stage ${name} start`);
   try {
     const code = await action();
-    logStageOutcome(name, code === 0 ? "success" : "failure", started);
+    logStageOutcome(name, code === 0 ? "success" : "failure", elapsedSince(started));
     return code;
   } catch (error) {
-    logStageOutcome(name, "failure", started);
+    logStageOutcome(name, "failure", elapsedSince(started));
     throw error;
   }
 }
 
-function logStageOutcome(name: string, status: "success" | "failure", started: number): void {
+function logStageOutcome(name: string, status: "success" | "failure", seconds: string): void {
   if (name === "apply") {
-    console.log(
-      `[apply] ${status === "success" ? "Complete" : "Failed"} (${elapsedSeconds(started)}s)`,
-    );
+    console.log(`[apply] ${status === "success" ? "Complete" : "Failed"} (${seconds}s)`);
     return;
   }
-  logElapsed(`stage ${name}`, status, started);
+  logElapsed(`stage ${name}`, status, seconds);
 }
 
-function logElapsed(label: string, status: "success" | "failure", started: number): void {
-  console.log(`${label} ${status} (${elapsedSeconds(started)}s)`);
+function logElapsed(label: string, status: "success" | "failure", seconds: string): void {
+  console.log(`${label} ${status} (${seconds}s)`);
 }
 
-function elapsedSeconds(started: number): string {
-  return ((performance.now() - started) / 1000).toFixed(2);
+function elapsedSeconds(started: number, excludedMs = 0): string {
+  return ((performance.now() - started - excludedMs) / 1000).toFixed(2);
 }
 
 if (import.meta.main) {

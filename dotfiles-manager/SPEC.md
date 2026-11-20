@@ -44,7 +44,7 @@ buildステージは、内部で次の順に処理する。
 
 内部CLI の `apply` / `diff` / `managed` では、build の開始に `[build] Started`、成功時に `[build] Complete (<秒>s)`、失敗時に `[build] Failed (<秒>s)` を stdout に表示する。実行する各buildフックの開始には `  [<path>] Started`、成功時には `  [<path>] ✓ Complete (<秒>s)`、失敗時には `  [<path>] ✗ Failed (<秒>s)` を表示する。`<path>` はフックの dist相対パスであり、フック行の先頭には半角スペースを 2個置く。build の各フェーズの完了時には `  [build] <フェーズ> (<秒>s)` をフック行と同じインデントで表示する。`<フェーズ>` は dist再構築の `rebuild dist`、パス対応表の `path map`、外部取得の `externals`、merge変換の `merge`、置換sidecar の `replace` であり、行は実行順に現れる。フック自身の stdout / stderr は §フックシステム の出力規則に従う。
 
-build、フック、フェーズの秒数はそれぞれの開始から数え、小数第2位まで表示する。後続の applyステージは開始時に `[apply] Started`、成功時に `[apply] Complete (<秒>s)`、失敗時に `[apply] Failed (<秒>s)` を表示する。diff / managedステージは開始時に `stage <name> start`、成功または失敗時に `stage <name> <success|failure> (<秒>s)` を表示する。最後に `command <name> <success|failure> (<秒>s)` をコマンド開始からの経過秒数とともに stdout に表示する。ログは差分表示や `managed` のパス一覧と同じstdout に現れる。失敗時のエラー表示先は stderr、終了コードは従来どおりとする。引数が不正な場合は build前に終了し、経過時間ログを出さない。
+build、フック、フェーズの秒数はそれぞれの開始から数え、小数第2位まで表示する。後続の applyステージは開始時に `[apply] Started`、成功時に `[apply] Complete (<秒>s)`、失敗時に `[apply] Failed (<秒>s)` を表示する。diff / managedステージは開始時に `stage <name> start`、成功または失敗時に `stage <name> <success|failure> (<秒>s)` を表示する。最後に `command <name> <success|failure> (<秒>s)` をコマンド開始からの経過秒数とともに stdout に表示する。applyステージと `command apply` の経過秒数には、確認プロンプトの表示から回答または標準入力の終端を受け取るまでの時間を含めない。ログは差分表示や `managed` のパス一覧と同じstdout に現れる。失敗時のエラー表示先は stderr、終了コードは従来どおりとする。引数が不正な場合は build前に終了し、経過時間ログを出さない。
 
 内部CLI はロックを取得せず、同一workspace・home の同時実行を排他しない。`src/build.ts`、export関数、`src/diff.ts` と `src/apply.ts` の直接CLI、単独フック、手動Git も同様に排他しない。
 
