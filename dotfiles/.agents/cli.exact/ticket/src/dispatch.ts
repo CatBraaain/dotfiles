@@ -296,15 +296,19 @@ export async function startDispatcher(input: {
   const socket = dispatchSocket();
   await withDispatcherLock(socket, async () => {
     const name = dispatcherName(project);
-    if (ownsSession(socket, name, project, "dispatcher")) {
-      console.log(`dispatcher already running: ${name}`);
-      return;
-    }
     for (const other of sessionNames(socket, true)) {
+      if (other === name) continue;
       if (sessionEnv(socket, other, ROLE_ENV) !== "dispatcher") continue;
       const owner = sessionEnv(socket, other, PROJECT_ENV);
       if (owner !== undefined && (project === null || owner === ""))
         throw new Error(`overlapping dispatcher already running: ${other}`);
+    }
+    let restarted = false;
+    if (ownsSession(socket, name, project, "dispatcher")) {
+      const killed = tmux(socket, ["kill-session", "-t", `=${name}`]);
+      if (!killed.ok && ownsSession(socket, name, project, "dispatcher"))
+        throw new Error(`dispatcher restart failed for ${name}: ${killed.stderr.trim()}`);
+      restarted = true;
     }
     await Bun.file(dispatchPromptPath).text();
     const tickets = await input.loadSnapshot();
@@ -325,7 +329,7 @@ export async function startDispatcher(input: {
       `exec ${input.command.map(shQuote).join(" ")}`,
     ]);
     if (!result.ok) throw new Error(`dispatcher start failed for ${name}: ${result.stderr.trim()}`);
-    console.log(`dispatcher started: ${name}`);
+    console.log(`dispatcher ${restarted ? "restarted" : "started"}: ${name}`);
   });
 }
 

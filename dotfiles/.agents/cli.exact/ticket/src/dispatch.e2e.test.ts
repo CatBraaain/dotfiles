@@ -327,15 +327,10 @@ describe("ticket dispatch real tmux", () => {
             stderr: await new Response(child.stderr).text(),
           })),
         );
-        for (const result of results) assert.equal(result.code, 0, result.stderr);
-        assert.equal(
-          results.filter((result) => result.stdout.includes("dispatcher started:")).length,
-          1,
-        );
-        assert.equal(
-          results.filter((result) => result.stdout.includes("already running:")).length,
-          1,
-        );
+        for (const result of results) {
+          assert.equal(result.code, 0, result.stderr);
+          assert.match(result.stdout, /dispatcher (started|restarted):/);
+        }
         await waitFor(
           () => existsSync(join(records, "a.v1.json")),
           "concurrent start did not launch pi",
@@ -343,6 +338,43 @@ describe("ticket dispatch real tmux", () => {
         assert.equal(readFileSync(join(records, "launches"), "utf8"), "a.v1\n");
         assert.equal(cli(fixture, ["dispatch", "stop"]).status, 0);
         assert.equal(isolatedTmux(socket, ["has-session", "-t", "=handle_a_v1"]).status, 0);
+      } finally {
+        isolatedTmux(socket, ["kill-server"]);
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    TIMEOUT_MS + 5000,
+  );
+  it(
+    "applies the new --max when restarting a running dispatcher",
+    async () => {
+      const fixture = setup();
+      const { root, cwd, store, socket, records } = fixture;
+      const env = { ...fixture.env, STUB_WAIT: "1" };
+      try {
+        writeTicket(store, "a.v1", "open");
+        writeTicket(store, "b.v2", "open");
+        startServer(fixture, env);
+        const first = cli(fixture, ["dispatch", "start", "--max", "1"]);
+        assert.equal(first.status, 0, first.stderr);
+        assert.match(first.stdout, /dispatcher started:/);
+        await waitFor(
+          () => existsSync(join(records, "a.v1.json")),
+          "first dispatcher did not launch a.v1",
+        );
+        await Bun.sleep(150);
+        assert.equal(readFileSync(join(records, "launches"), "utf8"), "a.v1\n");
+        const second = cli(fixture, ["dispatch", "start", "--max", "2"]);
+        assert.equal(second.status, 0, second.stderr);
+        assert.match(second.stdout, /dispatcher restarted:/);
+        await waitFor(
+          () => existsSync(join(records, "b.v2.json")),
+          "restarted dispatcher did not apply the new max",
+        );
+        assert.equal(readFileSync(join(records, "launches"), "utf8"), "a.v1\nb.v2\n");
+        assert.equal(cli(fixture, ["dispatch", "stop"]).status, 0);
+        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=handle_a_v1"]).status, 0);
+        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=handle_b_v2"]).status, 0);
       } finally {
         isolatedTmux(socket, ["kill-server"]);
         rmSync(root, { recursive: true, force: true });
@@ -512,7 +544,7 @@ describe("ticket dispatch real tmux", () => {
         assert.match(piPid, /^\d+\n$/);
         const duplicate = cli(fixture, ["dispatch"], otherCwd, env);
         assert.equal(duplicate.status, 0, duplicate.stderr);
-        assert.match(duplicate.stdout, /already running/);
+        assert.match(duplicate.stdout, /dispatcher restarted:/);
         const stop = cli(fixture, ["dispatch", "stop"], otherCwd, env);
         assert.equal(stop.status, 0, stop.stderr);
         assert.match(stop.stdout, /dispatcher stopped:/);
@@ -842,7 +874,7 @@ describe("global ticket dispatch", () => {
       await waitRecorded(fixture, "alpha/held");
       const duplicate = cli(fixture, ["dispatch", ...firstArgs]);
       assert.equal(duplicate.status, 0, duplicate.stderr);
-      assert.match(duplicate.stdout, /already running/);
+      assert.match(duplicate.stdout, /dispatcher restarted:/);
       const overlap = cli(fixture, ["dispatch", ...secondArgs]);
       assert.equal(overlap.status, 1);
       assert.match(overlap.stderr, /overlapping dispatcher already running/);

@@ -149,7 +149,7 @@ stop は `--all` 指定時にグローバルdispatcher、それ以外では共�
 
 | 条件・操作 | 結果 |
 | --- | --- |
-| 同じ範囲の dispatcher が起動済みで start | 既存セッション名と起動済みである旨を stdout へ出して終了コード0。既存の起動条件・監視を保持する |
+| 同じ範囲の dispatcher が起動済みで start | 既存の dispatcher用セッションだけを終了し、今回の start のオプションで作り直す。`dispatcher restarted: <セッション名>` を stdout へ出して終了コード0。稼働済みpi は stop 後の start と同じ規則で引き継ぐ |
 | グローバル起動中にproject単位を start、またはproject単位が1つでも起動中にグローバルを start | 重複する範囲の dispatcher が起動中である旨を stderr へ出して終了コード1。既存セッションを保持する |
 | dispatcher が未起動で start | 固定本文・対象範囲のticket store を読み、その範囲を識別する名前の detached tmuxセッションを作る |
 | dispatcher用tmuxセッションの作成成功 | セッション名を stdout へ出し、呼出元CLI は終了コード0で戻る。全ticket の完了を待たない |
