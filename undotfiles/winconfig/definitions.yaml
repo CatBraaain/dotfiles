@@ -68,6 +68,15 @@ Definitions:
               type: DWord
               new_value: "1"
               old_value: "0"
+    EnableDeveloperMode:
+      description: Enable Windows Developer Mode.
+      registries:
+        - path: HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+          entries:
+            - name: AllowDevelopmentWithoutDevLicense
+              type: DWord
+              new_value: "1"
+              old_value: "0"
 
   Taskbar:
     AlignTaskbarLeft:
