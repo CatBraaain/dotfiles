@@ -99,11 +99,11 @@ describe("createDemoBridge", () => {
     expect(untouched?.isArchived).toBe(false);
   });
 
-  it("selects the first unarchived same-cwd row when archiving the displayed session", () => {
+  it("clears selection when archiving the displayed session even with an unarchived same-cwd row", () => {
     const { bridge, last } = setup();
     bridge.postMessage({ type: "unarchiveSession", sessionId: projectArchivedId });
     bridge.postMessage({ type: "archiveSession", sessionId: projectCurrentId });
-    expect(last().displayedSessionId).toBe(projectArchivedId);
+    expect(last().displayedSessionId).toBeUndefined();
     expect(
       sessions(last()).find((session) => session.sessionId === projectCurrentId)?.isArchived,
     ).toBe(true);

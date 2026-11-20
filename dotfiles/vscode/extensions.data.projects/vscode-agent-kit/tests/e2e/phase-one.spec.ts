@@ -1210,9 +1210,8 @@ test(
     let temporaryA!: ReturnType<VSCodeFixture["piProcesses"]>[number];
     let sourceA = "";
     let sourceB = "";
-    let replacementId = "";
-    let displayPid = 0;
-    await test.step("Start isolated A and B Pi runtimes and an ordinary fixture tmux session", async () => {
+    let sameCwdPid = 0;
+    await test.step("Start Pi runtimes in A's workspace and another workspace, plus an ordinary tmux session", async () => {
       await host.activateSession("A");
       await host.activateSession("B");
       await host.selectSession("B");
@@ -1222,7 +1221,7 @@ test(
       await host.expectNativeDisplay("A");
       initialA = host.sessionRuntime("A")!;
       initialB = host.sessionRuntime("B")!;
-      displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
+      sameCwdPid = host.sessionRuntime("Deleted")!.pid;
       expect(initialA).toBeDefined();
       expect(initialB).toBeDefined();
       sourceA = readFileSync(host.sessions.A.session, "utf8");
@@ -1236,18 +1235,12 @@ test(
         .locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`)
         .describe("A workspace display mode");
       if ((await toggle.getAttribute("data-mode")) === "all") await toggle.click();
-      const candidates = frame
-        .locator("section.group")
-        .filter({ has: frame.getByTitle(host.sessions.A.cwd, { exact: true }) })
-        .locator(".session-row [data-session]")
-        .describe("Same-cwd replacement rows");
-      const ids = await candidates.evaluateAll((buttons) =>
-        buttons.map((button) => button.getAttribute("data-session")),
-      );
-      replacementId = ids.find((id) => id !== aId) ?? "";
-      expect(replacementId).not.toBe("");
+      expect(host.sessions.Deleted.cwd).toBe(host.sessions.A.cwd);
+      await expect(
+        rowIn(frame, host.sessions.Deleted.id).describe("Other running row in A's workspace"),
+      ).toBeVisible();
     });
-    await test.step("Archive directly, switch the existing tab and view the saved row in All", async () => {
+    await test.step("Archive directly, close the displayed tab without switching and view the saved row in All", async () => {
       const frame = await host.sessionFrame();
       await rowIn(frame, aId)
         .locator(`[data-archive="${aId}"]`)
@@ -1266,30 +1259,10 @@ test(
       expect(host.piProcesses().find((entry) => entry.target === initialB.target)?.pid).toBe(
         initialB.pid,
       );
+      expect(host.sessionRuntime("Deleted")?.pid).toBe(sameCwdPid);
       await expect
-        .poll(() =>
-          host
-            .snapshot()
-            .terminals.filter((terminal) => terminal.owned)
-            .map((terminal) => terminal.pid),
-        )
-        .toEqual([displayPid]);
-      await expect(
-        frame
-          .locator(`.session-row.selected [data-session="${replacementId}"]`)
-          .describe("Selected same-cwd replacement"),
-      ).toBeVisible();
-      await expect
-        .poll(() => {
-          const target = host.tmux(["list-clients", "-F", "#{session_name}"]).trim();
-          const encoded = host
-            .tmux(["display-message", "-p", "-t", target, "#{@pi-tmux-session}"])
-            .trim();
-          return encoded === ""
-            ? undefined
-            : (JSON.parse(Buffer.from(encoded, "base64").toString("utf8")) as { id: string }).id;
-        })
-        .toBe(replacementId);
+        .poll(() => host.snapshot().terminals.filter((terminal) => terminal.owned))
+        .toEqual([]);
       expect(readFileSync(host.sessions.A.session, "utf8")).toBe(sourceA);
       expect(readFileSync(host.sessions.B.session, "utf8")).toBe(sourceB);
       expect(aIsListed()).toBe(false);
@@ -1300,6 +1273,9 @@ test(
         .click({ steps: 15 });
       const row = rowIn(frame, aId);
       await expect(row).toHaveClass(/archived/);
+      await expect(
+        frame.locator(".session-row.selected").describe("Selected session rows in All"),
+      ).toHaveCount(0);
       await expect(row.locator(`[data-unarchive="${aId}"]`)).toBeVisible();
       const status = row.locator(".session-status").describe("Archived A empty status slot");
       await expect(status.locator("*")).toHaveCount(0);

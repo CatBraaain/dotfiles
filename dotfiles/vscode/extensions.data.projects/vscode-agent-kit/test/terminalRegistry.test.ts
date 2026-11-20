@@ -878,166 +878,46 @@ describe("TerminalRegistry", () => {
     expect(live.has("B")).toBe(true);
   });
 
-  it("closes an archived conversation display and clears selection", async () => {
-    const { registry, live } = setup();
+  it("closes the archived display without switching to a live same-cwd Pi", async () => {
+    const { registry, live, mocks, displays } = setup();
+    const sibling = live.get("B");
     const { terminal } = await registry.open(session("A"));
+    const dispose = vi.spyOn(terminal, "dispose");
+
     await registry.stop("A");
-    expect(live.has("A")).toBe(false);
-    expect(live.has("B")).toBe(true);
-    expect(terminal.dispose).toHaveBeenCalledOnce();
-    expect(registry.displayedSessionId).toBeUndefined();
-  });
 
-  it("switches the attached client before stopping the displayed Pi without closing its tab", async () => {
-    const { registry, live, mocks, displays, client } = setup();
-    const cwd = process.cwd();
-    const { terminal } = await registry.open(session("A", cwd));
-    const close = mocks.closeSession.getMockImplementation()!;
-    mocks.closeSession.mockImplementationOnce(async (id) => {
-      expect(client.attachedId).toBe("B");
-      return close(id);
-    });
-    expect(await registry.stop("A", { replacement: session("B", cwd) })).toEqual({
-      switched: true,
-      switchError: undefined,
-    });
-    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith("A");
+    expect(live.has("A")).toBe(false);
+    expect(live.get("B")).toBe(sibling);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(registry.displayedSessionId).toBeUndefined();
+    expect(mocks.switch).not.toHaveBeenCalled();
     expect(displays.create).toHaveBeenCalledOnce();
-    expect(registry.displayedSessionId).toBe("B");
+  });
+
+  it("closes a restored display of the archived Pi without switching or rechecking its identity", async () => {
+    const existing = displayTerminal();
+    const { registry, client, mocks, displays, live } = setup(existing);
+    const dispose = vi.spyOn(existing, "dispose");
+    client.attachedId = "A";
+
+    await registry.stop("A");
+
+    expect(mocks.current).toHaveBeenCalledExactlyOnceWith(123);
+    expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith("A");
     expect(live.has("A")).toBe(false);
     expect(live.has("B")).toBe(true);
-  });
-
-  it("waits for an opening client before archiving into a replacement on the same tab", async () => {
-    const { registry, mocks, displays, client, live } = setup();
-    const cwd = process.cwd();
-    const { terminal } = await registry.open(session("A", cwd));
-    expect(mocks.current).not.toHaveBeenCalled();
-    client.attachedId = undefined;
-    let attach!: (current: PiMuxCurrentSession) => void;
-    const attaching = new Promise<PiMuxCurrentSession>((resolve) => {
-      attach = resolve;
-    });
-    mocks.current.mockResolvedValueOnce(undefined).mockReturnValueOnce(attaching);
-    const stopping = registry.run(() => registry.stop("A", { replacement: session("B", cwd) }));
-    try {
-      await vi.waitFor(() => expect(mocks.current).toHaveBeenCalledTimes(2), { timeout: 500 });
-      expect(mocks.closeSession).not.toHaveBeenCalled();
-      expect(mocks.switch).not.toHaveBeenCalled();
-      expect(terminal.dispose).not.toHaveBeenCalled();
-      client.attachedId = "A";
-      attach({ id: "A", cwd, file: "/sessions/A.jsonl", target: "pi-A" });
-      expect(await stopping).toEqual({ switched: true, switchError: undefined });
-      expect(mocks.switch).toHaveBeenCalledExactlyOnceWith("B", 123);
-      expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith("A");
-      expect(terminal.dispose).not.toHaveBeenCalled();
-      expect(displays.create).toHaveBeenCalledOnce();
-      expect(registry.displayedSessionId).toBe("B");
-      expect(live.has("A")).toBe(false);
-      expect(live.has("B")).toBe(true);
-    } finally {
-      attach({ id: "A", cwd, file: "/sessions/A.jsonl", target: "pi-A" });
-      await stopping;
-    }
-  });
-
-  it.each(["closed", "exited", "lookup failed"] as const)(
-    "finishes Archive when an unattached display fails: %s",
-    async (failure) => {
-      const { registry, mocks, live } = setup();
-      const cwd = process.cwd();
-      const { terminal } = await registry.open(session("A", cwd));
-      mocks.current.mockResolvedValueOnce(undefined).mockImplementationOnce(async () => {
-        if (failure === "closed") registry.onTerminalClosed(terminal);
-        if (failure === "exited") {
-          Object.defineProperty(terminal, "exitStatus", { value: { code: 1 }, configurable: true });
-        }
-        if (failure === "lookup failed") throw new Error(failure);
-        return undefined;
-      });
-      const result = await registry.run(() =>
-        registry.stop("A", { replacement: session("B", cwd) }),
-      );
-      expect(result.switched).toBe(false);
-      expect(result.switchError).toContain(failure);
-      expect(mocks.switch).not.toHaveBeenCalled();
-      expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith("A");
-      expect(registry.displayedSessionId).toBeUndefined();
-      expect(live.has("A")).toBe(false);
-      expect(live.has("B")).toBe(true);
-    },
-  );
-
-  it("restores the original client when stopping after a switch fails", async () => {
-    const { registry, live, mocks, client } = setup();
-    const cwd = process.cwd();
-    const { terminal } = await registry.open(session("A", cwd));
-    mocks.closeSession.mockRejectedValueOnce(new Error("close denied"));
-    await expect(registry.stop("A", { replacement: session("B", cwd) })).rejects.toThrow(
-      "close denied",
-    );
-    expect(client.attachedId).toBe("A");
-    expect(registry.displayedSessionId).toBe("A");
-    expect(terminal.dispose).not.toHaveBeenCalled();
-    expect(live.has("A")).toBe(true);
-  });
-
-  it("closes the display and stops Pi if its replacement disappeared", async () => {
-    const { registry, live } = setup();
-    const cwd = process.cwd();
-    const { terminal } = await registry.open(session("A", cwd));
-    live.delete("B");
-    const result = await registry.stop("A", { replacement: session("B", cwd) });
-    expect(result.switchError).toContain("no longer running");
-    expect(terminal.dispose).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
     expect(registry.displayedSessionId).toBeUndefined();
-    expect(live.has("A")).toBe(false);
-    expect(live.has("B")).toBe(false);
-  });
-
-  it("switches a restored display when its attached session is archived", async () => {
-    const cwd = process.cwd();
-    const existing = displayTerminal(cwd);
-    const { registry, client, displays, live } = setup(existing);
-    live.set("A", { ...session("A", cwd), target: "pi-A" });
-    client.attachedId = "A";
-    await registry.stop("A", { replacement: session("B", cwd) });
-    expect(existing.dispose).not.toHaveBeenCalled();
+    expect(mocks.switch).not.toHaveBeenCalled();
     expect(displays.create).not.toHaveBeenCalled();
-    expect(registry.displayedSessionId).toBe("B");
-    expect(client.attachedId).toBe("B");
-  });
-
-  it("uses a confirmed restored display when later client lookup fails", async () => {
-    const cwd = process.cwd();
-    const existing = displayTerminal(cwd);
-    const { registry, client, mocks, live } = setup(existing);
-    live.set("A", { ...session("A", cwd), target: "pi-A" });
-    client.attachedId = "A";
-    const current = { id: "A", cwd, file: "/sessions/A.jsonl", target: "pi-A" };
-    mocks.current
-      .mockResolvedValueOnce(current)
-      .mockResolvedValueOnce(current)
-      .mockRejectedValue(new Error("client lookup denied"));
-    const confirmedDisplay = await registry.displayForSession("A");
-    expect(confirmedDisplay).toBe(existing);
-    const stopped = await registry.stop("A", {
-      replacement: session("B", cwd),
-      confirmedDisplay,
-    });
-    expect(stopped.switchError).toContain("client lookup denied");
-    expect(mocks.closeSession).toHaveBeenCalledWith("A");
-    expect(live.has("A")).toBe(false);
-    expect(existing.dispose).toHaveBeenCalledOnce();
-    expect(registry.displayedSessionId).toBeUndefined();
   });
 
   it("stops Pi without closing an unconfirmed restored display when client lookup fails", async () => {
     const existing = displayTerminal();
     const { registry, mocks, live } = setup(existing);
     mocks.current.mockRejectedValue(new Error("client lookup denied"));
-    const stopped = await registry.stop("A");
-    expect(stopped).toEqual({ switched: false, switchError: undefined });
+    await registry.stop("A");
     expect(mocks.closeSession).toHaveBeenCalledWith("A");
     expect(live.has("A")).toBe(false);
     expect(existing.dispose).not.toHaveBeenCalled();

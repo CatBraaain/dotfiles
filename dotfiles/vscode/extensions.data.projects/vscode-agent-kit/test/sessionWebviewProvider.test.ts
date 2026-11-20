@@ -2492,16 +2492,13 @@ describe("SessionWebviewProvider", () => {
     },
   );
 
-  it("closes the confirmed conversation while retaining old membership and its source", async () => {
+  it("archives the displayed conversation without switching to a live same-cwd session", async () => {
     const { webview, registry, terminal, live, mocks, filePath } = await archiveFixture();
     const source = await readFile(filePath, "utf8");
-    await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    mocks.open({ sessionId: inactiveSessionId, cwd: root });
     const otherRuntime = live.get(inactiveSessionId);
-    const stop = mocks.closeSession.getMockImplementation()!;
-    mocks.closeSession.mockImplementationOnce(async (sessionId) => {
-      return stop(sessionId);
-    });
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    const startsBefore = mocks.open.mock.calls.length;
+    webview.postMessage.mockClear();
 
     await webview.receive({
       type: "archiveSession",
@@ -2510,32 +2507,32 @@ describe("SessionWebviewProvider", () => {
       pid: 1,
     });
 
-    expect(mocks.closeSession).toHaveBeenCalledWith(activeSessionId);
+    expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith(activeSessionId);
     expect(live.has(activeSessionId)).toBe(false);
     expect(live.get(inactiveSessionId)).toBe(otherRuntime);
-
-    expect(terminal.dispose).not.toHaveBeenCalled();
-    expect(registry.displayedSessionId).toBe(inactiveSessionId);
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.displayedSessionId).toBe(
-      inactiveSessionId,
+    expect(terminal.dispose).toHaveBeenCalledOnce();
+    expect(mocks.switch).not.toHaveBeenCalled();
+    expect(mocks.open).toHaveBeenCalledTimes(startsBefore);
+    expect(registry.displayedSessionId).toBeUndefined();
+    const publishedSelections = webview.postMessage.mock.calls.map(
+      ([message]) => message.state?.displayedSessionId,
+    );
+    expect(publishedSelections.filter((id) => id !== undefined && id !== activeSessionId)).toEqual(
+      [],
+    );
+    const state: WebviewState = webview.postMessage.mock.calls.at(-1)?.[0].state;
+    expect(state.displayedSessionId).toBeUndefined();
+    expect(state.groups[0].sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ sessionId: activeSessionId, isArchived: true }),
+        expect.objectContaining({ sessionId: inactiveSessionId, isArchived: false }),
+      ]),
     );
     expect(await readFile(filePath, "utf8")).toBe(source);
 
-    const startsBefore = mocks.open.mock.calls.length;
     await webview.receive({ type: "unarchiveSession", sessionId: activeSessionId });
-    // unarchive reopens the stored conversation: Pi starts again from the same source
     expect(mocks.open).toHaveBeenCalledTimes(startsBefore + 1);
     expect(mocks.open).toHaveBeenLastCalledWith({ sessionId: activeSessionId, cwd: root });
-  });
-
-  it("closes the displayed archive target when only archived or different-cwd alternatives remain", async () => {
-    const { webview, registry, terminal, live, provider } = await archiveFixture();
-    await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    live.get(inactiveSessionId)!.cwd = join(root, "another-workspace");
-    await provider.refresh();
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
-    expect(terminal.dispose).toHaveBeenCalledOnce();
-    expect(registry.displayedSessionId).toBeUndefined();
   });
 
   it("does not reopen a tab the user closed before archiving", async () => {
@@ -2566,81 +2563,34 @@ describe("SessionWebviewProvider", () => {
     );
   });
 
-  it("completes archive and closes the tab when switching fails", async () => {
-    const { webview, registry, terminal, live, mocks } = await archiveFixture();
-    await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    mocks.switch.mockRejectedValueOnce(new Error("switch denied"));
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
-    expect(terminal.dispose).toHaveBeenCalledOnce();
-    expect(registry.displayedSessionId).toBeUndefined();
-    expect(live.has(activeSessionId)).toBe(false);
+  it.each(["confirmed", "lookup retried"] as const)(
+    "closes an archived session's restored tab without switching: %s",
+    async (lookup) => {
+      const { webview, registry, terminal, mocks, client, live } = await archiveFixture();
+      Object.assign(terminal.creationOptions, {
+        env: { PI_SESSIONS_DISPLAY: "1" },
+      });
+      Object.assign(vscodeMocks.terminals, [terminal]);
+      client.attachedId = activeSessionId;
+      if (lookup === "lookup retried") {
+        mocks.current.mockRejectedValueOnce(new Error("initial client lookup denied"));
+      }
 
-    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
-      expect.stringContaining("switch denied"),
-    );
-  });
-
-  it("completes archive when replacement discovery fails", async () => {
-    const { webview, registry, terminal, live, mocks } = await archiveFixture();
-    await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    mocks.list.mockRejectedValueOnce(new Error("list denied"));
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
-    expect(terminal.dispose).toHaveBeenCalledOnce();
-    expect(registry.displayedSessionId).toBeUndefined();
-    expect(live.has(activeSessionId)).toBe(false);
-    expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith(activeSessionId);
-    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
-      expect.stringContaining("list denied"),
-    );
-  });
-
-  it("archives and closes a confirmed restored display when the next client lookup fails", async () => {
-    const { webview, registry, terminal, mocks, client, live } = await archiveFixture();
-    const restored = terminal;
-    Object.assign(restored.creationOptions, {
-      env: { PI_SESSIONS_DISPLAY: "1" },
-    });
-    Object.assign(vscodeMocks.terminals, [restored]);
-    client.attachedId = activeSessionId;
-    const current = {
-      id: activeSessionId,
-      cwd: root,
-      file: `/saved/${activeSessionId}.jsonl`,
-      target: `pi-${activeSessionId}`,
-    };
-    mocks.current
-      .mockResolvedValueOnce(current)
-      .mockResolvedValueOnce(current)
-      .mockRejectedValue(new Error("client lookup denied"));
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
-    expect(mocks.closeSession).toHaveBeenCalledWith(activeSessionId);
-    expect(live.has(activeSessionId)).toBe(false);
-
-    expect(restored.dispose).toHaveBeenCalledOnce();
-    expect(registry.displayedSessionId).toBeUndefined();
-    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
-      expect.stringContaining("client lookup denied"),
-    );
-    vscodeMocks.terminals.length = 0;
-  });
-
-  it("closes its restored tab through the in-stop lookup after an initial display lookup failure", async () => {
-    const { webview, registry, terminal, mocks, client, live } = await archiveFixture();
-    const restored = terminal;
-    Object.assign(restored.creationOptions, {
-      env: { PI_SESSIONS_DISPLAY: "1" },
-    });
-    Object.assign(vscodeMocks.terminals, [restored]);
-    client.attachedId = activeSessionId;
-    mocks.current.mockRejectedValueOnce(new Error("initial client lookup denied"));
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
-    expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith(activeSessionId);
-    expect(live.has(activeSessionId)).toBe(false);
-    expect(restored.dispose).toHaveBeenCalledOnce();
-    expect(registry.displayedSessionId).toBeUndefined();
-    expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
-    vscodeMocks.terminals.length = 0;
-  });
+      try {
+        await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+        expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith(activeSessionId);
+        expect(live.has(activeSessionId)).toBe(false);
+        expect(live.has(inactiveSessionId)).toBe(true);
+        expect(terminal.dispose).toHaveBeenCalledOnce();
+        expect(mocks.switch).not.toHaveBeenCalled();
+        expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();
+        expect(registry.displayedSessionId).toBeUndefined();
+        expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
+      } finally {
+        vscodeMocks.terminals.length = 0;
+      }
+    },
+  );
 
   it("keeps an unrelated restored tab when display lookup fails", async () => {
     const { webview, terminal, mocks, client, live } = await archiveFixture();
@@ -2718,6 +2668,8 @@ describe("SessionWebviewProvider", () => {
     expect(await readFile(statePath, "utf8")).toBe(before);
     expect(terminal.dispose).not.toHaveBeenCalled();
     expect(registry.displayedSessionId).toBe(activeSessionId);
+    expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith(activeSessionId);
+    expect(mocks.switch).not.toHaveBeenCalled();
     expect(vscodeMocks.showErrorMessage).toHaveBeenLastCalledWith(
       expect.stringMatching(/Failed to stop Pi session .*stop denied/),
     );
@@ -4677,7 +4629,7 @@ describe("SessionWebviewProvider", () => {
       expect(runtimes.mocks.closeSession).toHaveBeenCalledExactlyOnceWith(inactiveSessionId);
       expect(runtimes.mocks.closeTemporarySession).not.toHaveBeenCalled();
       expect(runtimes.live.has(inactiveSessionId)).toBe(false);
-      expect(registry.displayedSessionId).toBe(activeSessionId);
+      expect(registry.displayedSessionId).toBeUndefined();
       if (kind === "missing") expect(existsSync(statePath)).toBe(false);
       else expect(await readFile(statePath, "utf8")).toBe("invalid JSON");
       expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
@@ -4721,7 +4673,7 @@ describe("SessionWebviewProvider", () => {
       await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
       expect(await readFile(statePath, "utf8")).toBe(before);
       expect(live.has(activeSessionId)).toBe(false);
-      expect(registry.displayedSessionId).toBe(inactiveSessionId);
+      expect(registry.displayedSessionId).toBeUndefined();
       expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith(activeSessionId);
       expect(mocks.closeTemporarySession).not.toHaveBeenCalled();
       expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();

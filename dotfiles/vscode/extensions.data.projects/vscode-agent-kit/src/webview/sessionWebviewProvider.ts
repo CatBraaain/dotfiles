@@ -7,7 +7,7 @@ import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory
 import { DisplayRecoveryCancelledError, type TerminalRegistry } from "../terminalRegistry";
 import type { EmptySessionPool } from "../emptySessionPool";
 import { errorMessage } from "../guards";
-import { archiveReplacement, cwdGroupKey } from "../grouping";
+import { cwdGroupKey } from "../grouping";
 import { flattenPiMuxSessions, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../piMux";
 import {
   parseWebviewRequest,
@@ -573,28 +573,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       this.postError(`Session not found: ${sessionId}`);
       return;
     }
-    let replacement: SessionSummary | undefined;
-    let confirmedDisplay: vscode.Terminal | undefined;
-    let switchError: string | undefined;
     try {
-      confirmedDisplay = await this.deps.registry.displayForSession(sessionId);
-      if (confirmedDisplay !== undefined) {
-        const snapshot = await listSessionSnapshot(
-          this.historySnapshot ?? [],
-          await this.readWorkspaces(),
-        );
-        replacement = archiveReplacement(snapshot.sessions, snapshot.archivedIds, session);
-      }
-    } catch (error) {
-      switchError = `Failed to find another Pi session in ${session.cwd}: ${errorMessage(error)}`;
-    }
-    let switched = false;
-    try {
-      const stopped = await this.deps.registry.stop(sessionId, { replacement, confirmedDisplay });
-      switched = stopped.switched;
-      if (stopped.switchError !== undefined) {
-        switchError = `Failed to switch Pi session after archiving ${sessionId}: ${stopped.switchError}`;
-      }
+      await this.deps.registry.stop(sessionId);
     } catch (error) {
       this.postError(
         `Failed to stop Pi session ${sessionId} in ${session.cwd}: ${errorMessage(error)}`,
@@ -618,8 +598,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         displayedSessionId: this.deps.registry.displayedSessionId,
       });
     }
-    if (switched && replacement !== undefined) this.unreadSessionIds.delete(replacement.sessionId);
-    if (switchError !== undefined) this.postError(switchError);
     await this.refresh(false);
   }
 
