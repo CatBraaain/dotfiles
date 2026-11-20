@@ -260,7 +260,7 @@ test(
                 .map(({ label, active }) => ({ label, active })),
             )
             .toEqual([{ label: title, active: true }]);
-          await expect(terminalInput).toBeFocused();
+          await expect(terminalInput).not.toBeFocused();
           await expect(terminalScreen).toContainText(host.sessions[key].cwd);
           await expect(terminalScreen).toContainText(`• Fixture ${key}`);
           expect(host.tmux(["list-clients", "-F", "#{session_name}"]).trim()).toBe(displayTarget);

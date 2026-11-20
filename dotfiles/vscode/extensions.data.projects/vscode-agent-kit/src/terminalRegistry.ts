@@ -58,7 +58,7 @@ export class TerminalRegistry implements vscode.Disposable {
     const version = ++this.presentationVersion;
     return (terminal) => {
       if (this.disposed || this.closed.has(terminal)) return;
-      terminal.show();
+      terminal.show(true);
       void terminal.processId.then(
         (pid) => {
           if (
@@ -70,7 +70,7 @@ export class TerminalRegistry implements vscode.Disposable {
             this.currentDisplay() === terminal &&
             this.terminals.canFocus(terminal)
           )
-            terminal.show();
+            terminal.show(true);
         },
         () => {},
       );

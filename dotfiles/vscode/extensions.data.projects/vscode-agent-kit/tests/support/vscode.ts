@@ -300,7 +300,6 @@ export class VSCodeFixture {
       .getByRole("textbox", { name: /^Terminal [0-9]+/ })
       .describe("Shared Pi TUI input");
     await expect(input).toBeVisible();
-    await expect(input).toBeFocused();
     await expect
       .poll(() => this.snapshot().terminals.filter((terminal) => terminal.owned))
       .toHaveLength(1);
