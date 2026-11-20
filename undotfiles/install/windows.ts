@@ -10,7 +10,17 @@
 // elevated, so the relaunch happens at most once.
 
 import { mkdtemp } from "node:fs/promises";
-import { constants, copyFileSync, mkdirSync, readdirSync, rmSync, symlinkSync } from "node:fs";
+import {
+  constants,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { markingPath, readInstallProfile, type InstallProfile } from "./marking.ts";
@@ -94,6 +104,10 @@ async function main(): Promise<void> {
   installWingetPackages(profile);
   refreshProcessPath();
   installPi();
+  runAllowingFailure(["cmd", "/c", "npm", "install", "-g", "--ignore-scripts", "@playwright/cli"]);
+  await installCamoufox().catch((error: unknown) =>
+    console.error(`camoufox install failed: ${message(error)}`),
+  );
   await installOpenSerp().catch((error: unknown) =>
     console.error(`openserp install failed: ${message(error)}`),
   );
@@ -151,6 +165,42 @@ function refreshProcessPath(): void {
     "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')";
   const combined = output(["powershell", "-NoProfile", "-Command", script]);
   if (combined) process.env.Path = combined;
+}
+
+async function installCamoufox(): Promise<void> {
+  const programsDir = join(localAppData(), "Programs");
+  const installDir = join(programsDir, "Camoufox");
+  const executable = "camoufox.exe";
+  if (statSync(join(installDir, executable), { throwIfNoEntry: false })?.isFile()) return;
+  if (existsSync(installDir))
+    throw new Error(`installation directory already exists: ${installDir}`);
+
+  mkdirSync(programsDir, { recursive: true });
+  const directory = await mkdtemp(join(programsDir, "bootstrap-camoufox-"));
+  const archive = join(directory, "camoufox.zip");
+  const browserDir = join(directory, "browser");
+  try {
+    run([
+      "gh",
+      "release",
+      "download",
+      "--repo",
+      "daijro/camoufox",
+      "--pattern",
+      "camoufox-*-win.x86_64.zip",
+      "--output",
+      archive,
+    ]);
+    mkdirSync(browserDir);
+    run(["tar.exe", "-xf", archive, "-C", browserDir]);
+    if (!statSync(join(browserDir, executable), { throwIfNoEntry: false })?.isFile()) {
+      throw new Error(`release archive is missing ${executable}`);
+    }
+    renameSync(browserDir, installDir);
+    console.log(`Camoufox installed at ${join(installDir, executable)}`);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 async function installOpenSerp(): Promise<void> {
