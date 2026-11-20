@@ -5,7 +5,7 @@ import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SessionLauncher } from "../src/launcher";
 import { TerminalRegistry } from "../src/terminalRegistry";
-import { editorTerminals, NEW_SESSION_COMMAND } from "../src/terminals";
+import { editorTerminals } from "../src/terminals";
 import { fakeRuntimes } from "./runtimeFixtures";
 import { cleanup, tempDir } from "./fixtures";
 
@@ -41,8 +41,8 @@ beforeEach(async () => {
       dispose: vi.fn(() => registry.onTerminalClosed(terminal as unknown as vscode.Terminal)),
     };
     const args = creationOptions.shellArgs as string[];
-    if (creationOptions.shellPath === "sh") {
-      void runtimes.mocks.newSession(args[3]).then((sessionId) => {
+    if (args[0] === "new") {
+      void runtimes.mocks.newSession(args[2]).then((sessionId) => {
         runtimes.client.attachedId = sessionId;
       });
       return terminal;
@@ -138,8 +138,8 @@ describe("SessionLauncher", () => {
       expect.objectContaining({
         cwd: { fsPath: homedir() },
         location: 1,
-        shellPath: "sh",
-        shellArgs: ["-c", NEW_SESSION_COMMAND, "pi-mux-new", root],
+        shellPath: "pi-mux",
+        shellArgs: ["new", "--cwd", root],
       }),
     );
     expect(runtimes.mocks.list).not.toHaveBeenCalled();
@@ -255,12 +255,7 @@ describe("SessionLauncher", () => {
     await launcher.start(root);
     expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(root);
     expect(api.createTerminal).toHaveBeenCalledOnce();
-    expect(api.createTerminal.mock.calls[0][0].shellArgs).toEqual([
-      "-c",
-      NEW_SESSION_COMMAND,
-      "pi-mux-new",
-      root,
-    ]);
+    expect(api.createTerminal.mock.calls[0][0].shellArgs).toEqual(["new", "--cwd", root]);
     expect(startedIds()).toEqual(new Set(["new-1"]));
   });
 

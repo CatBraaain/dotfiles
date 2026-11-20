@@ -11,7 +11,7 @@ import { WorkspaceStore } from "../src/workspaceStore";
 import * as workDirectory from "../src/workDirectory";
 import { PiMux, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../src/piMux";
 import { TerminalRegistry } from "../src/terminalRegistry";
-import { editorTerminals, NEW_SESSION_COMMAND } from "../src/terminals";
+import { editorTerminals } from "../src/terminals";
 import { fakeRuntimes } from "./runtimeFixtures";
 import {
   LIST_REFRESH_INTERVAL_MS,
@@ -217,7 +217,7 @@ function mockTerminal(
   const { mocks, client } = runtimes;
   let created = false;
   vscodeMocks.createTerminal.mockImplementation((options) => {
-    if (options.shellPath === "sh") {
+    if (options.shellArgs?.at(0) === "new") {
       void mocks.newSession(options.shellArgs.at(-1) as string).then((sessionId) => {
         client.attachedId = sessionId;
       });
@@ -3855,8 +3855,8 @@ describe("SessionWebviewProvider", () => {
     expect(fakePiMuxCommand.mock.calls.some(([, args]) => args[0] === "new")).toBe(false);
     expect(vscodeMocks.createTerminal).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        shellPath: "sh",
-        shellArgs: ["-c", NEW_SESSION_COMMAND, "pi-mux-new", root],
+        shellPath: "pi-mux",
+        shellArgs: ["new", "--cwd", root],
       }),
     );
     expect(terminal.show).toHaveBeenCalledTimes(1);

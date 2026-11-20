@@ -523,7 +523,9 @@ describe("EmptySessionPool", () => {
     });
     const launching = launcher.start(root);
     await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
-    expect(api.createTerminal).toHaveBeenCalledWith(expect.objectContaining({ shellPath: "sh" }));
+    expect(api.createTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({ shellArgs: ["new", "--cwd", root] }),
+    );
     expect(terminal.show).toHaveBeenCalledOnce();
     expect(runtimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(root);
     expect(runtimes.mocks.current).not.toHaveBeenCalled();

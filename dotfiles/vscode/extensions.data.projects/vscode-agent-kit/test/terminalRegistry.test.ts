@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import type * as vscode from "vscode";
 import { TabInputTerminal } from "vscode";
 import { TerminalRegistry } from "../src/terminalRegistry";
-import { editorTerminals, NEW_SESSION_COMMAND } from "../src/terminals";
+import { editorTerminals } from "../src/terminals";
 import type { PiMuxCurrentSession, PiMuxWorkspace, PiSession } from "../src/piMux";
 import { fakeRuntimes } from "./runtimeFixtures";
 
@@ -1184,8 +1184,8 @@ describe("editorTerminals", () => {
     expect(windowMock.createTerminal).toHaveBeenCalledExactlyOnceWith({
       cwd: { fsPath: homedir() },
       location: 1,
-      shellPath: "sh",
-      shellArgs: ["-c", NEW_SESSION_COMMAND, "pi-mux-new", "/project with 'quotes'; && spaces"],
+      shellPath: "pi-mux",
+      shellArgs: ["new", "--cwd", "/project with 'quotes'; && spaces"],
       env: { PI_SESSIONS_DISPLAY: "1", TMUX: null, TMUX_PANE: null },
       isTransient: false,
     });
