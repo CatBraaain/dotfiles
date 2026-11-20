@@ -7,7 +7,7 @@ declare global {
 
 export const PANE_ID = "workbench.view.scm";
 export const BUTTON_SELECTOR = ".action-item .codicon-collapse-all";
-export const EXPANDED_ROW_SELECTOR = ".monaco-list-row[aria-expanded='true']";
+export const ROW_SELECTOR = ".monaco-list-row";
 export const POLL_INTERVAL_MS = 250;
 export const MAX_ATTEMPTS = 60;
 
@@ -36,7 +36,7 @@ function runCollapseCycle(pane: HTMLElement): void {
     timer = 0;
     try {
       if (!pane.isConnected) return;
-      if (!pane.querySelector(EXPANDED_ROW_SELECTOR)) return scheduleRetry();
+      if (!pane.querySelector(ROW_SELECTOR)) return scheduleRetry();
       const button = pane.querySelector(BUTTON_SELECTOR);
       if (!button) return scheduleRetry();
       const actionItem = button.closest(".action-item");

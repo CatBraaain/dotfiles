@@ -2,10 +2,10 @@ import { beforeEach, describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import {
   BUTTON_SELECTOR,
-  EXPANDED_ROW_SELECTOR,
   MAX_ATTEMPTS,
   PANE_ID,
   POLL_INTERVAL_MS,
+  ROW_SELECTOR,
   start,
 } from "./main.ts";
 
@@ -28,7 +28,7 @@ class FakeButton {
 class FakePane {
   isConnected = true;
   visible = true;
-  expandedRows = 0;
+  rowCount = 0;
   button = new FakeButton();
 
   getClientRects(): unknown[] {
@@ -36,7 +36,7 @@ class FakePane {
   }
 
   querySelector(selector: string): unknown {
-    if (selector === EXPANDED_ROW_SELECTOR) return this.expandedRows > 0 ? {} : null;
+    if (selector === ROW_SELECTOR) return this.rowCount > 0 ? {} : null;
     if (selector === BUTTON_SELECTOR) return this.button;
     return null;
   }
@@ -101,7 +101,7 @@ beforeEach(() => {
 describe("scm-collapse", () => {
   it("targets the SCM view pane and its collapse-all button", () => {
     assert.equal(PANE_ID, "workbench.view.scm");
-    assert.equal(EXPANDED_ROW_SELECTOR, ".monaco-list-row[aria-expanded='true']");
+    assert.equal(ROW_SELECTOR, ".monaco-list-row");
     assert.equal(BUTTON_SELECTOR, ".action-item .codicon-collapse-all");
   });
 
@@ -119,9 +119,9 @@ describe("scm-collapse", () => {
     });
   });
 
-  it("collapses once when the pane is visible with an expanded row", () => {
+  it("collapses once when the pane is visible with only collapsed rows", () => {
     harness.pane = new FakePane();
-    harness.pane.expandedRows = 1;
+    harness.pane.rowCount = 1;
     start();
     assert.deepEqual(harness.pane.button.dispatched, ["mousedown", "mouseup", "click"]);
     assert.equal(harness.timers.length, 0);
@@ -140,7 +140,7 @@ describe("scm-collapse", () => {
     start();
     assert.equal(harness.pane.button.dispatched.length, 0);
     assert.equal(harness.timers.length, 1);
-    harness.pane.expandedRows = 1;
+    harness.pane.rowCount = 1;
     advance(POLL_INTERVAL_MS);
     assert.deepEqual(harness.pane.button.dispatched, ["mousedown", "mouseup", "click"]);
     assert.equal(harness.timers.length, 0);
@@ -148,7 +148,7 @@ describe("scm-collapse", () => {
 
   it("collapses again when the view is closed and reopened", () => {
     harness.pane = new FakePane();
-    harness.pane.expandedRows = 1;
+    harness.pane.rowCount = 1;
     start();
     const firstClicks = harness.pane.button.dispatched.length;
     assert.ok(firstClicks > 0);
@@ -162,7 +162,7 @@ describe("scm-collapse", () => {
     assert.equal(harness.pane.button.dispatched.length, firstClicks * 2);
   });
 
-  it("gives up without clicking when no expanded row appears", () => {
+  it("gives up without clicking when no row renders", () => {
     harness.pane = new FakePane();
     start();
     advance(MAX_ATTEMPTS * POLL_INTERVAL_MS + POLL_INTERVAL_MS);
