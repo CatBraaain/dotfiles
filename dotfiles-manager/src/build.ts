@@ -1,11 +1,11 @@
 // Build stage of the dotfiles manager (spec: SPEC.md
 // §ライフサイクル): regenerates dist from dotfiles/ — path maps,
 // externals, merge composition, replace sidecars, local hooks.
-import { cp, mkdir, readdir, rm } from "node:fs/promises";
+import { cp, mkdir, open, readdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, sep, win32 } from "node:path";
 import { applyPathMap, createCopyRouter, type CopyRouter } from "./build-path-map.ts";
-import { currentPlatform, type Platform } from "./path-mapping.ts";
+import { currentPlatform, mapSegment, type Platform } from "./path-mapping.ts";
 import { applyExternals } from "./build-external.ts";
 import { composeMergeTargets } from "./build-merge.ts";
 import { applyReplaceSidecars } from "./build-replace.ts";
@@ -37,7 +37,12 @@ export async function main(
 
   await timed("rebuild dist", onPhase, async () => {
     await rm(distDir, { recursive: true, force: true });
-    await copyDir(sourceDir, distDir, await createCopyRouter(platform));
+    await copyDir(sourceDir, distDir, {
+      sourceRoot: sourceDir,
+      distRoot: distDir,
+      router: await createCopyRouter(platform),
+      platform,
+    });
   });
   await timed("path map", onPhase, () => applyPathMap(distDir, platform));
   const hooks = await collectHooks(distDir, platform);
@@ -47,11 +52,19 @@ export async function main(
   await runHooks(hooks, distDir, homeRoot, onHookEvent);
 }
 
+type CopyContext = {
+  sourceRoot: string;
+  distRoot: string;
+  router: CopyRouter;
+  platform: Platform;
+};
+
 async function copyDir(
   sourceDir: string,
   destinationDir: string,
-  router: CopyRouter,
+  context: CopyContext,
 ): Promise<void> {
+  const { router } = context;
   await router.enter(sourceDir, destinationDir);
   await mkdir(destinationDir, { recursive: true });
   for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
@@ -66,13 +79,68 @@ async function copyDir(
     if (entry.isDirectory()) {
       // A moved destination replaces any existing entry (spec: 置き換える).
       if (route.kind === "copy-to") await rm(destinationPath, { recursive: true, force: true });
-      await copyDir(sourcePath, destinationPath, router);
+      await copyDir(sourcePath, destinationPath, context);
     } else {
       if (route.kind === "copy-to") await mkdir(dirname(destinationPath), { recursive: true });
-      await cp(sourcePath, destinationPath);
+      if (
+        entry.isFile() &&
+        isSymlinkDeclaration(context.sourceRoot, sourcePath) &&
+        isSymlinkDeclaration(context.distRoot, destinationPath) &&
+        (await hasDistParent(context.distRoot, destinationPath))
+      ) {
+        await copySymlinkDeclaration(sourcePath, destinationPath, context.platform);
+      } else {
+        await cp(sourcePath, destinationPath);
+      }
     }
   }
   router.exit();
+}
+
+function isSymlinkDeclaration(root: string, path: string): boolean {
+  const relativePath = relative(root, path);
+  if (!isWithinRoot(relativePath)) return false;
+
+  const segments = relativePath.split(sep);
+  const name = segments.pop();
+  return (
+    name !== undefined &&
+    mapSegment(name, false).kind === "symlink" &&
+    segments.every((directory) => !mapSegment(directory, true).isExcluded)
+  );
+}
+
+async function hasDistParent(distRoot: string, destination: string): Promise<boolean> {
+  const [root, parent] = await Promise.all([realpath(distRoot), realpath(dirname(destination))]);
+  return parent === root || parent.startsWith(`${root}${sep}`);
+}
+
+function isWithinRoot(relativePath: string): boolean {
+  return !isAbsolute(relativePath) && relativePath !== ".." && !relativePath.startsWith(`..${sep}`);
+}
+
+async function copySymlinkDeclaration(
+  source: string,
+  destination: string,
+  platform: Platform,
+): Promise<void> {
+  const target = await readFile(source, "latin1");
+  const separator = platform === "windows" ? win32.sep : posix.sep;
+  const normalizedTarget = target.replaceAll(/[\\/]/g, separator);
+  if (target === normalizedTarget) {
+    await cp(source, destination);
+    return;
+  }
+
+  const { mode } = await stat(source);
+  await rm(destination, { force: true });
+  const file = await open(destination, "wx", mode);
+  try {
+    await file.writeFile(normalizedTarget, "latin1");
+    await file.chmod(mode);
+  } finally {
+    await file.close();
+  }
 }
 
 async function timed(
