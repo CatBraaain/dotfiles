@@ -92,6 +92,8 @@ async function main(): Promise<void> {
   const profile = await readInstallProfile(() => Bun.file(markingPath).text());
   if (!isElevated()) await selfElevate();
   installWingetPackages(profile);
+  refreshProcessPath();
+  installPi();
   await installRustDesk().catch((error: unknown) =>
     console.error(`rustdesk install failed: ${message(error)}`),
   );
@@ -128,6 +130,24 @@ function installWingetPackages(profile: InstallProfile): void {
   runAllowingFailure(["winget", "install", ...unmanaged, "--no-upgrade", "--source", "winget"]);
   runAllowingFailure(["winget", "install", ...managed, "--source", "winget"]);
   runAllowingFailure(["winget", "install", ...managedDevPackages, "--source", "winget"]);
+}
+
+const piNpmPackage = "@earendil-works/pi-coding-agent";
+
+// pi has no winget package; --ignore-scripts is required by its install docs
+// (https://github.com/earendil-works/pi#install).
+function installPi(): void {
+  run(["cmd", "/c", "npm", "install", "-g", "--ignore-scripts", piNpmPackage]);
+}
+
+function refreshProcessPath(): void {
+  // winget updates the registry PATH, but a running process keeps the PATH
+  // snapshot from its start, so npm and gh installed above are unresolved
+  // until the registry values are re-read.
+  const script =
+    "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')";
+  const combined = output(["powershell", "-NoProfile", "-Command", script]);
+  if (combined) process.env.Path = combined;
 }
 
 const rustDeskRepo = "rustdesk/rustdesk";
