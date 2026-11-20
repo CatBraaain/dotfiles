@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { quote } from "shell-quote";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 
 export type SessionState = "running" | "waiting-approval" | "waiting-user";
@@ -18,7 +17,7 @@ export interface ManagedPaneBinding {
   pid: number;
 }
 
-export type BashRunner = (command: string) => Promise<ExecResult>;
+export type CommandRunner = (file: string, args: string[]) => Promise<ExecResult>;
 
 export type ManagedPaneDetection =
   | { status: "managed"; binding: ManagedPaneBinding }
@@ -56,16 +55,16 @@ export function stateOptionValue(
   return JSON.stringify({ version: OPTION_VALUE_VERSION, sessionId, state, title });
 }
 
-export function tmuxCommandLine(socketPath: string, args: string[]): string {
+export function tmuxCommandArgs(socketPath: string, args: string[]): string[] {
   if (!isAbsolute(socketPath)) throw new Error("tmux socket path must be absolute");
-  return quote(["tmux", "-S", socketPath, ...args]);
+  return ["-S", socketPath, ...args];
 }
 
-export function stateCommand(
+export function stateCommandArgs(
   binding: ManagedPaneBinding,
   sessionId: string,
   args: string[],
-): string {
+): string[] {
   const source = {
     socket: binding.socketPath,
     serverPid: binding.serverPid,
@@ -73,11 +72,11 @@ export function stateCommand(
     pid: binding.pid,
     token: binding.token,
   };
-  return quote(["pi-mux", "state", sessionId, ...args, "--source", JSON.stringify(source)]);
+  return ["state", sessionId, ...args, "--source", JSON.stringify(source)];
 }
 
 export async function detectManagedPane(
-  run: BashRunner,
+  run: CommandRunner,
   env: NodeJS.ProcessEnv = process.env,
   selfPid: number = process.pid,
   platform: NodeJS.Platform | string = process.platform,
@@ -94,7 +93,8 @@ export async function detectManagedPane(
       return { status: "unmanaged" };
     const inspectFormat = "#{socket_path}\t#{pid}\t#{pane_id}\t#{@pi-mux-launch}\t#{pane_pid}";
     const outcome = await run(
-      tmuxCommandLine(socketPath, ["display-message", "-p", "-t", paneId, inspectFormat]),
+      "tmux",
+      tmuxCommandArgs(socketPath, ["display-message", "-p", "-t", paneId, inspectFormat]),
     );
     const failure = processFailure(outcome);
     if (failure !== undefined) return { status: "failed", message: failure };
@@ -124,7 +124,7 @@ export async function detectManagedPane(
 }
 
 export async function publishState(
-  run: BashRunner,
+  run: CommandRunner,
   binding: ManagedPaneBinding,
   sessionId: string,
   state: SessionState,
@@ -132,7 +132,8 @@ export async function publishState(
 ): Promise<PublicationOutcome> {
   try {
     const result = await run(
-      stateCommand(binding, sessionId, [state, "--title", JSON.stringify(title)]),
+      "pi-mux",
+      stateCommandArgs(binding, sessionId, [state, "--title", JSON.stringify(title)]),
     );
     return executionFailure(result) ?? { status: "published" };
   } catch (error) {
@@ -141,12 +142,12 @@ export async function publishState(
 }
 
 export async function unsetStateOption(
-  run: BashRunner,
+  run: CommandRunner,
   binding: ManagedPaneBinding,
   sessionId: string,
 ): Promise<PublicationOutcome> {
   try {
-    const result = await run(stateCommand(binding, sessionId, ["--clear"]));
+    const result = await run("pi-mux", stateCommandArgs(binding, sessionId, ["--clear"]));
     return executionFailure(result) ?? { status: "published" };
   } catch (error) {
     return { status: "failed", message: errorMessage(error) };

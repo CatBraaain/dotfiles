@@ -6,7 +6,6 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createServer } from "node:net";
 import { setImmediate } from "node:timers/promises";
-import { parse } from "shell-quote";
 import { describe, it, spyOn } from "bun:test";
 import {
   createEventBus,
@@ -20,12 +19,21 @@ import sessionStateExtension from "./index.ts";
 import { stateOptionValue } from "./tmux.ts";
 
 type EventHandler = (event: ExtensionEvent, ctx: ExtensionContext) => unknown;
-type KeywordResponse = (command: string) => ExecResult | Promise<ExecResult>;
+type KeywordResponse = (file: string, args: string[]) => ExecResult | Promise<ExecResult>;
+
+interface CommandCall {
+  file: string;
+  args: string[];
+}
+
+function isStateCall(call: CommandCall): boolean {
+  return call.file === "pi-mux" && call.args[0] === "state";
+}
 
 const WAIT_TIMEOUT_MS = 5_000;
 
 class FakeTmuxServer {
-  readonly commands: string[] = [];
+  readonly commands: CommandCall[] = [];
   readonly responses: Partial<Record<string, KeywordResponse>> = {};
   private pendingCount = 0;
   private readonly paneOptions = new Map<string, string>();
@@ -45,25 +53,24 @@ class FakeTmuxServer {
     return this.pendingCount > 0;
   }
 
-  async run(command: string): Promise<ExecResult> {
+  async run(file: string, args: string[]): Promise<ExecResult> {
     this.pendingCount++;
     try {
-      this.commands.push(command);
-      const argv = parse(command) as string[];
-      const keyword = argv[0] === "pi-mux" ? "state" : argv[3]!;
-      const custom = this.responses[keyword]?.(command);
+      this.commands.push({ file, args });
+      const keyword = file === "pi-mux" ? "state" : args[2]!;
+      const custom = this.responses[keyword]?.(file, args);
       if (custom) return await custom;
       if (keyword === "display-message") return completedResult(this.verifiedFieldsLine());
       if (keyword === "state") {
-        const source = JSON.parse(argv[argv.indexOf("--source") + 1]!);
-        if (argv.includes("--clear")) this.paneOptions.delete(source.pane);
+        const source = JSON.parse(args[args.indexOf("--source") + 1]!);
+        if (args.includes("--clear")) this.paneOptions.delete(source.pane);
         else
           this.paneOptions.set(
             source.pane,
             stateOptionValue(
-              argv[2]!,
-              argv[3] as "running",
-              JSON.parse(argv[argv.indexOf("--title") + 1]!),
+              args[1]!,
+              args[2] as "running",
+              JSON.parse(args[args.indexOf("--title") + 1]!),
             ),
           );
         return completedResult("");
@@ -198,10 +205,9 @@ async function createExtensionHarness(
     registerCommand(name: string, command: Parameters<ExtensionAPI["registerCommand"]>[1]) {
       commands.set(name, command);
     },
-    exec(_command: string, args: string[], options: { timeout?: number; signal?: AbortSignal }) {
-      assert.deepEqual(args.slice(0, 1), ["-c"]);
+    exec(command: string, args: string[], options: { timeout?: number; signal?: AbortSignal }) {
       assert.deepEqual(options, { timeout: 1_000 });
-      return server.run(args[1]!);
+      return server.run(command, args);
     },
   } as unknown as ExtensionAPI;
 
@@ -395,11 +401,14 @@ describe("sessionStateExtension in top-level sessions", () => {
       await harness.emit("message_update");
       await finishEventLoopTurn();
 
-      const displayCount = harness.server.commands.filter((command) =>
-        command.includes("display-message"),
+      const displayCount = harness.server.commands.filter(
+        (call) => call.file === "tmux" && call.args.includes("display-message"),
       ).length;
       assert.equal(displayCount, 1);
-      assert.ok(harness.server.commands[0]!.includes(`-S ${harness.server.socketPath}`));
+      assert.deepEqual(harness.server.commands[0]!.args.slice(0, 2), [
+        "-S",
+        harness.server.socketPath,
+      ]);
     } finally {
       await harness.close();
     }
@@ -428,19 +437,20 @@ describe("sessionStateExtension in top-level sessions", () => {
       harness.server.responses["display-message"] = () => completedResult("", 1, "no such server");
       await harness.emit("session_start");
       await waitFor("detection attempt", () =>
-        harness.server.commands.some((command) => command.includes("display-message")),
+        harness.server.commands.some(
+          (call) => call.file === "tmux" && call.args.includes("display-message"),
+        ),
       );
 
       await harness.emit("agent_start");
       await finishEventLoopTurn();
       assert.equal(
-        harness.server.commands.filter((command) => command.includes("display-message")).length,
+        harness.server.commands.filter(
+          (call) => call.file === "tmux" && call.args.includes("display-message"),
+        ).length,
         1,
       );
-      assert.equal(
-        harness.server.commands.filter((command) => command.startsWith("pi-mux state ")).length,
-        0,
-      );
+      assert.equal(harness.server.commands.filter((call) => isStateCall(call)).length, 0);
     } finally {
       await harness.close();
     }
@@ -602,16 +612,17 @@ describe("session-state title publication", () => {
         "queued snapshots",
         () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "running", "Second title"),
       );
-      const values = h.server.commands.slice(count).map((command) => {
-        const argv = parse(command) as string[];
-        return JSON.parse(
-          stateOptionValue(
-            argv[2]!,
-            argv[3] as "running",
-            JSON.parse(argv[argv.indexOf("--title") + 1]!),
+      const values = h.server.commands
+        .slice(count)
+        .map((call) =>
+          JSON.parse(
+            stateOptionValue(
+              call.args[1]!,
+              call.args[2] as "running",
+              JSON.parse(call.args[call.args.indexOf("--title") + 1]!),
+            ),
           ),
         );
-      });
       assert.deepEqual(values, [
         { version: 1, sessionId: "s1", state: "waiting-user", title: "First title" },
         { version: 1, sessionId: "s1", state: "running", title: "Second title" },
@@ -633,7 +644,7 @@ describe("session-state title publication", () => {
           stateOptionValue("replacement", "waiting-user", "Replacement title"),
       );
       assert.equal(
-        h.server.commands.some((command) => command.includes("Discarded title")),
+        h.server.commands.some((call) => call.args.includes("Discarded title")),
         false,
       );
     } finally {
@@ -664,10 +675,14 @@ describe("session-state MVP state boundaries", () => {
         await finishEventLoopTurn();
         assert.equal(h.server.commands.length, count, event);
       }
-      assert.equal(h.server.commands.filter((c) => c.includes("display-message")).length, 1);
-      assert.equal(h.server.commands.filter((c) => c.startsWith("pi-mux state ")).length, 5);
       assert.equal(
-        h.server.commands.some((c) => c.includes("show-options")),
+        h.server.commands.filter((c) => c.file === "tmux" && c.args.includes("display-message"))
+          .length,
+        1,
+      );
+      assert.equal(h.server.commands.filter((c) => isStateCall(c)).length, 5);
+      assert.equal(
+        h.server.commands.some((c) => c.args.includes("show-options")),
         false,
       );
     } finally {
@@ -806,7 +821,7 @@ describe("session-state MVP state boundaries", () => {
       );
       await waitFor("old drained", () => !h.server.hasPending());
       assert.equal(
-        h.server.commands.some((c) => c.includes(stateOptionValue("s1", "waiting-user"))),
+        h.server.commands.some((call) => isStateCall(call) && call.args[1] === "s1"),
         false,
       );
     } finally {
@@ -938,7 +953,7 @@ describe("session-state latest publication recovery", () => {
       );
       const requests = stateArguments(h.server.commands);
       assert.deepEqual(
-        requests.map((args) => args[3]),
+        requests.map((args) => args[2]),
         ["waiting-user", "running", ...Array(5).fill("waiting-user")],
       );
       assert.ok(
@@ -977,7 +992,7 @@ describe("session-state latest publication recovery", () => {
         () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user"),
       );
       assert.deepEqual(
-        stateArguments(h.server.commands).map((args) => args[3]),
+        stateArguments(h.server.commands).map((args) => args[2]),
         ["waiting-user", "running", "waiting-user", "waiting-user"],
       );
     } finally {
@@ -1022,7 +1037,7 @@ describe("session-state persistent publication recovery", () => {
         await finishEventLoopTurn();
         assert.equal(h.server.commands.length, count);
         assert.equal(
-          h.server.commands.some((command) => command.includes("Discarded title")),
+          h.server.commands.some((call) => call.args.includes("Discarded title")),
           false,
         );
       } finally {
@@ -1062,7 +1077,7 @@ describe("session-state partial publication recovery", () => {
         await finishEventLoopTurn();
         const requests = stateArguments(h.server.commands);
         assert.deepEqual(
-          requests.map((args) => args[3]),
+          requests.map((args) => args[2]),
           ["waiting-user", "running", "waiting-user"],
         );
         assert.deepEqual(
@@ -1094,29 +1109,32 @@ describe("session-state lock retry", () => {
       await h.emit("agent_start");
       await waitFor(
         "first attempt",
-        () => h.server.commands.filter((command) => command.startsWith("pi-mux state")).length >= 2,
+        () => h.server.commands.filter((call) => isStateCall(call)).length >= 2,
       );
       await h.emit("agent_settled");
       await h.emit("session_info_changed", { name: "Later title" });
       await waitFor(
         "background retry",
-        () => h.server.commands.filter((command) => command.startsWith("pi-mux state")).length >= 3,
+        () => h.server.commands.filter((call) => isStateCall(call)).length >= 3,
       );
-      const pending = h.server.commands.slice(2).map((command) => parse(command) as string[]);
-      assert.equal(pending[0]![3], "running");
+      const pending = h.server.commands
+        .filter((call) => isStateCall(call))
+        .slice(1)
+        .map((call) => call.args);
+      assert.equal(pending[0]![2], "running");
       assert.ok(
         pending
           .slice(1)
           .every(
-            (argv) =>
-              argv[3] === "waiting-user" &&
-              JSON.parse(argv[argv.indexOf("--title") + 1]!) === "Later title",
+            (args) =>
+              args[2] === "waiting-user" &&
+              JSON.parse(args[args.indexOf("--title") + 1]!) === "Later title",
           ),
       );
       assert.ok(
         pending.every(
-          (argv) =>
-            argv[argv.indexOf("--source") + 1] === pending[0]![pending[0]!.indexOf("--source") + 1],
+          (args) =>
+            args[args.indexOf("--source") + 1] === pending[0]![pending[0]!.indexOf("--source") + 1],
         ),
       );
       busy = false;
@@ -1126,8 +1144,8 @@ describe("session-state lock retry", () => {
         () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user", "Later title"),
       );
       const states = h.server.commands
-        .filter((command) => command.startsWith("pi-mux state"))
-        .map((command) => (parse(command) as string[])[3]);
+        .filter((call) => isStateCall(call))
+        .map((call) => call.args[2]);
       assert.deepEqual(states.slice(-3), ["running", "waiting-user", "waiting-user"]);
     } finally {
       delete h.server.responses.state;
@@ -1145,7 +1163,7 @@ describe("session-state lock retry", () => {
       await waitFor("contended running", () => h.server.commands.length >= 3);
       await h.emit("session_shutdown");
       const count = h.server.commands.length;
-      assert.equal(h.server.commands.filter((command) => command.includes("--clear")).length, 1);
+      assert.equal(h.server.commands.filter((call) => call.args.includes("--clear")).length, 1);
       await new Promise((resolve) => setTimeout(resolve, 100));
       assert.equal(h.server.commands.length, count);
     } finally {
@@ -1159,10 +1177,8 @@ function busyResult(): ExecResult {
   return completedResult("", 75, "pi-mux lock is busy");
 }
 
-function stateArguments(commands: string[]): string[][] {
-  return commands
-    .filter((command) => command.startsWith("pi-mux state "))
-    .map((command) => parse(command) as string[]);
+function stateArguments(commands: CommandCall[]): string[][] {
+  return commands.filter((call) => isStateCall(call)).map((call) => call.args);
 }
 
 describe("session-state lock retries", () => {
@@ -1185,7 +1201,7 @@ describe("session-state lock retries", () => {
       );
       const requests = stateArguments(h.server.commands);
       assert.deepEqual(
-        requests.slice(-1).map((args) => [args[3], JSON.parse(args[args.indexOf("--title") + 1]!)]),
+        requests.slice(-1).map((args) => [args[2], JSON.parse(args[args.indexOf("--title") + 1]!)]),
         [["waiting-user", "Queued title"]],
       );
       const sources = requests.map((args) => args[args.indexOf("--source") + 1]);
@@ -1228,7 +1244,7 @@ describe("session-state lock retries", () => {
         () => h.server.paneOptionOf("%0") === stateOptionValue("replacement", "waiting-user"),
       );
       assert.equal(
-        stateArguments(h.server.commands).some((args) => args[2] === "s1" && args[3] === "running"),
+        stateArguments(h.server.commands).some((args) => args[1] === "s1" && args[2] === "running"),
         false,
       );
     } finally {
@@ -1252,9 +1268,8 @@ describe("session-state CLI execution ordering", () => {
       };
       await h.emit("agent_start");
       await waitFor("old set started", () => h.server.hasPending());
-      h.server.responses["display-message"] = (command) => {
-        const argv = parse(command) as string[];
-        if (argv[argv.indexOf("-t") + 1] === "%9")
+      h.server.responses["display-message"] = (file, args) => {
+        if (args[args.indexOf("-t") + 1] === "%9")
           throw new Error("obsolete inspection transport failed");
         return completedResult(
           [h.server.socketPath, String(process.pid), "%0", "", String(process.pid)].join("\t"),
@@ -1274,9 +1289,7 @@ describe("session-state CLI execution ordering", () => {
         () => h.server.paneOptionOf("%0") === stateOptionValue("replacement", "waiting-user"),
       );
       assert.equal(
-        h.server.commands
-          .slice(count)
-          .some((command) => (parse(command) as string[]).includes("%9")),
+        h.server.commands.slice(count).some((call) => call.args.includes("%9")),
         false,
       );
       assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("replacement", "waiting-user"));
@@ -1412,7 +1425,7 @@ describe("session-state CLI execution ordering", () => {
       await finishEventLoopTurn();
       const requests = stateArguments(h.server.commands);
       assert.deepEqual(
-        requests.map((args) => [args[3], JSON.parse(args[args.indexOf("--title") + 1]!)]),
+        requests.map((args) => [args[2], JSON.parse(args[args.indexOf("--title") + 1]!)]),
         [
           ["waiting-user", null],
           ["running", null],
@@ -1433,7 +1446,9 @@ describe("session-state CLI execution ordering", () => {
       await waitFor(
         "detection retry",
         () =>
-          h.server.commands.filter((command) => command.includes("display-message")).length >= 2,
+          h.server.commands.filter(
+            (call) => call.file === "tmux" && call.args.includes("display-message"),
+          ).length >= 2,
       );
       await h.emit("agent_start");
       await h.emit("session_info_changed", { name: "Recovery title" });
@@ -1447,7 +1462,7 @@ describe("session-state CLI execution ordering", () => {
       await finishEventLoopTurn();
       const requests = stateArguments(h.server.commands);
       assert.deepEqual(
-        requests.map((args) => [args[3], JSON.parse(args[args.indexOf("--title") + 1]!)]),
+        requests.map((args) => [args[2], JSON.parse(args[args.indexOf("--title") + 1]!)]),
         [["waiting-user", "Recovery title"]],
       );
     } finally {
@@ -1583,13 +1598,12 @@ describe("session-state without restore-record access", () => {
               assert.deepEqual([...h.commands.keys()], [], event);
             }
             assert.equal(
-              h.server.commands.filter((command) => command.includes("display-message")).length,
+              h.server.commands.filter(
+                (call) => call.file === "tmux" && call.args.includes("display-message"),
+              ).length,
               1,
             );
-            assert.equal(
-              h.server.commands.filter((command) => command.startsWith("pi-mux state ")).length,
-              6,
-            );
+            assert.equal(h.server.commands.filter((call) => isStateCall(call)).length, 6);
             if (initialRecord === "absent") {
               await assert.rejects(readFile(h.restorePath, "utf8"), { code: "ENOENT" });
             } else {

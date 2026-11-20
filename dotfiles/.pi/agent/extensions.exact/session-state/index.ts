@@ -10,7 +10,7 @@ import {
   launchToken,
   publishState,
   unsetStateOption,
-  type BashRunner,
+  type CommandRunner,
   type ManagedPaneBinding,
   type SessionState,
 } from "./tmux.ts";
@@ -86,7 +86,7 @@ interface PublicationGeneration {
   pending: number;
   title: string | null;
   sessionId: string;
-  run: BashRunner;
+  run: CommandRunner;
   lastFailure: () => unknown;
   environment: Pick<NodeJS.ProcessEnv, "XDG_RUNTIME_DIR" | "TMUX" | "TMUX_PANE">;
 }
@@ -336,20 +336,20 @@ function makeProcessRunner(
   pi: Pick<ExtensionAPI, "exec">,
   sessionId: string,
 ): {
-  run: BashRunner;
+  run: CommandRunner;
   lastFailure: () => unknown;
 } {
   let failure: unknown;
   let sequence = 0;
-  async function run(command: string): Promise<ExecResult> {
+  async function run(file: string, args: string[]): Promise<ExecResult> {
     const execId = ++sequence;
-    probe("process-request", { sessionId, execId, command });
+    probe("process-request", { sessionId, execId, file });
     const completion = Promise.withResolvers<void>();
     const execution: ExecutionBoundary = { settled: false, promise: completion.promise };
     publicationProcess.execution = execution;
     failure = undefined;
     try {
-      const result = await pi.exec("bash", ["-c", command], { timeout: TMUX_COMMAND_TIMEOUT_MS });
+      const result = await pi.exec(file, args, { timeout: TMUX_COMMAND_TIMEOUT_MS });
       if (result.killed || ("truncated" in result && result.truncated === true))
         failure = new Error(
           result.killed ? "Process interrupted or timed out" : "Process output truncated",

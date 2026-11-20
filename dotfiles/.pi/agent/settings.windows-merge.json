@@ -1,6 +1,0 @@
-// https://pi.dev/docs/latest/settings — Windows additions on top of
-// settings.merge.json (pi-mux is not available on Windows, so the
-// pi-mux-bridge extension replaces the shared extensions list).
-{
-  "extensions": ["-builtin:codemode"]
-}

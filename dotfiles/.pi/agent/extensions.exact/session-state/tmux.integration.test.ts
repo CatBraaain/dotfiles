@@ -41,7 +41,7 @@ const tools = new Map();
 const commandNames = [];
 const { execCommand } = await import(new URL("./core/exec.js", process.env.PI_TEST_SDK_URL));
 async function execProcess(command, args, options = {}) {
-  const shellCommand = args[1];
+  const shellCommand = [command, ...args].join(" ");
   sandboxCommands.push(shellCommand);
   const execution = { command: shellCommand, timeout: options.timeout, started: Date.now() };
   executions.push(execution);
@@ -246,8 +246,8 @@ try {
       thinkingLevel: "off",
       sessionManager: { getSessionId: () => sessionId, getSessionFile: () => undefined },
     };
-    async function run(command) {
-      return execProcess("bash", ["-c", command], { timeout: 1000 });
+    async function run(file, args) {
+      return execProcess(file, args, { timeout: 1000 });
     }
     const [actualSocket] = process.env.TMUX.split(",");
     const mismatchedServerEnv = await detectManagedPane(run, { ...process.env, TMUX: actualSocket + ",99999999" });
@@ -343,7 +343,7 @@ const loader = new DefaultResourceLoader({
     (pi) => {
       const originalExec = pi.exec.bind(pi);
       pi.exec = async (command, args, options) => {
-        const shellCommand = args[1];
+        const shellCommand = [command, ...args].join(" ");
         sandboxCommands.push(shellCommand);
         const execution = { command: shellCommand, timeout: options?.timeout, started: Date.now() };
         executions.push(execution);

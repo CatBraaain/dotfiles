@@ -4,7 +4,6 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createServer } from "node:net";
-import { parse } from "shell-quote";
 import { describe, it } from "bun:test";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import {
@@ -13,10 +12,15 @@ import {
   stateOptionValue,
   publishState,
   unsetStateOption,
-  stateCommand,
-  type BashRunner,
+  stateCommandArgs,
+  type CommandRunner,
   type ManagedPaneBinding,
 } from "./tmux.ts";
+
+interface CommandCall {
+  file: string;
+  args: string[];
+}
 
 const DEDICATED_SOCKET = "/run/user/dedicated/pi-tmux/server.sock";
 const TEST_TOKEN = randomUUID();
@@ -35,7 +39,7 @@ function completedResult(stdout: string, code = 0, stderr = ""): ExecResult {
 type TmuxKeywordResponse = () => ExecResult | Promise<ExecResult>;
 
 class FakeTmuxServer {
-  readonly commands: string[] = [];
+  readonly commands: CommandCall[] = [];
   launchRecord = "";
   private readonly paneOptions = new Map<string, string>();
 
@@ -53,23 +57,22 @@ class FakeTmuxServer {
     return this.paneOptions.get(paneId);
   }
 
-  readonly run: BashRunner = async (command) => {
-    this.commands.push(command);
-    const argv = parse(command) as string[];
-    const keyword = argv[0] === "pi-mux" ? "state" : argv[3]!;
+  readonly run: CommandRunner = async (file, args) => {
+    this.commands.push({ file, args });
+    const keyword = file === "pi-mux" ? "state" : args[2]!;
     const custom = this.responses[keyword]?.();
     if (custom) return custom;
     if (keyword === "display-message") return completedResult(this.verifiedFieldsLine());
     if (keyword === "state") {
-      const source = JSON.parse(argv[argv.indexOf("--source") + 1]!);
-      if (argv.includes("--clear")) this.paneOptions.delete(source.pane);
+      const source = JSON.parse(args[args.indexOf("--source") + 1]!);
+      if (args.includes("--clear")) this.paneOptions.delete(source.pane);
       else
         this.paneOptions.set(
           source.pane,
           stateOptionValue(
-            argv[2]!,
-            argv[3] as "running",
-            JSON.parse(argv[argv.indexOf("--title") + 1]!),
+            args[1]!,
+            args[2] as "running",
+            JSON.parse(args[args.indexOf("--title") + 1]!),
           ),
         );
       return completedResult("");
@@ -157,7 +160,7 @@ describe("state option value", () => {
     );
   });
 
-  it("preserves title text through JSON and shell escaping", async () => {
+  it("preserves title text through JSON and direct argv passing", async () => {
     const title = "Quoted 'title' \"\n; $(touch /unsafe) #{pane_id}";
     const server = new FakeTmuxServer();
     assert.deepEqual(await publishState(server.run, verifiedBinding, "s1", "running", title), {
@@ -169,26 +172,28 @@ describe("state option value", () => {
       state: "running",
       title,
     });
-    assert.equal((parse(server.commands[0]!) as string[]).includes("-F"), false);
+    assert.equal(server.commands[0]!.args.includes("-F"), false);
   });
 });
 
 describe("state command builder", () => {
   it("passes source and title as single JSON arguments without tmux expansion", () => {
     const title = "Quoted 'title' \"\n; $(touch /unsafe) #{pane_id}";
-    const argv = parse(
-      stateCommand(verifiedBinding, "s1", ["running", "--title", JSON.stringify(title)]),
-    ) as string[];
-    assert.deepEqual(argv.slice(0, 4), ["pi-mux", "state", "s1", "running"]);
-    assert.equal(JSON.parse(argv[argv.indexOf("--title") + 1]!), title);
-    assert.deepEqual(JSON.parse(argv[argv.indexOf("--source") + 1]!), {
+    const args = stateCommandArgs(verifiedBinding, "s1", [
+      "running",
+      "--title",
+      JSON.stringify(title),
+    ]);
+    assert.deepEqual(args.slice(0, 3), ["state", "s1", "running"]);
+    assert.equal(JSON.parse(args[args.indexOf("--title") + 1]!), title);
+    assert.deepEqual(JSON.parse(args[args.indexOf("--source") + 1]!), {
       socket: DEDICATED_SOCKET,
       serverPid: process.pid,
       pane: "%0",
       pid: process.pid,
       token: TEST_TOKEN,
     });
-    assert.equal(argv.includes("-F"), false);
+    assert.equal(args.includes("-F"), false);
   });
 });
 
@@ -247,10 +252,11 @@ describe("detectManagedPane", () => {
         binding: { ...verifiedBinding, socketPath: candidate.socketPath },
       });
       assert.equal(server.commands.length, 1);
-      const argv = parse(server.commands[0]!) as string[];
-      assert.deepEqual(argv.slice(0, 4), ["tmux", "-S", candidate.socketPath, "display-message"]);
-      assert.ok(argv.join(" ").includes("#{socket_path}"));
-      assert.ok(argv.join(" ").includes("#{pane_pid}"));
+      const call = server.commands[0]!;
+      assert.equal(call.file, "tmux");
+      assert.deepEqual(call.args.slice(0, 3), ["-S", candidate.socketPath, "display-message"]);
+      assert.ok(call.args.join(" ").includes("#{socket_path}"));
+      assert.ok(call.args.join(" ").includes("#{pane_pid}"));
     } finally {
       await candidate.cleanup();
     }
@@ -429,7 +435,7 @@ describe("publishState", () => {
       });
       assert.equal(server.commands.length, 1);
       assert.equal(server.paneOptionOf("%0"), stateOptionValue("s1", state));
-      assert.equal((parse(server.commands[0]!) as string[]).includes("-F"), false);
+      assert.equal(server.commands[0]!.args.includes("-F"), false);
     });
   }
   for (const [outcome, expected] of [

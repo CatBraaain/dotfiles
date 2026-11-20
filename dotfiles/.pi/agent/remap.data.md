@@ -6,6 +6,6 @@ Keys use the expanded (`.exact`-stripped) home-relative paths.
 
 | key | linux | windows | macos |
 | --- | --- | --- | --- |
-| extensions/pi-mux-bridge |  | - | - |
+| extensions/pi-mux-bridge |  |  | - |
 | extensions/openui-preview |  | - |  |
-| extensions/session-state |  | - | - |
+| extensions/session-state |  |  | - |
