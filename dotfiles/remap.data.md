@@ -9,9 +9,9 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | .agents/SYSTEM_PROMPT.yaml |  | - | - |
 | .agents/config |  |  | - |
 | .agents/scripts |  | - | - |
-| .config |  | - | - |
+| .config |  |  | - |
 | .gitconfig.local.sample | - | - | - |
-| .local/cli |  | - | - |
+| .local/cli |  |  | - |
 | .pi |  |  | - |
 | .playwright |  | - | - |
 | .wslconfig | - |  | - |
@@ -34,7 +34,8 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | powershell | - | Documents/PowerShell | - |
 | rtk | .config/rtk | - | - |
 | sharex | - | Documents/ShareX | - |
-| tmux | .config/tmux | - | - |
+| tmux | .config/tmux | .config/tmux | - |
+| tmux/tmux.conf |  | - |  |
 | vscode/sync_vscode_extensions.apply.ts |  | - |  |
 | vscode | .config/Code/User | AppData/Roaming/Code/User | - |
 | windows-menu | - | AppData/Roaming/Microsoft/Windows/Start Menu/Programs | - |
