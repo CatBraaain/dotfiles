@@ -34,6 +34,7 @@ type Operation =
   | { kind: "workspace"; action: "register" | "unregister"; cwd: string }
   | { kind: "snapshot"; generation?: string }
   | { kind: "restore" }
+  | { kind: "reload"; id?: string }
   | { kind: "restart"; force: boolean };
 type Candidate = { id: string; cwd: string };
 type ManagedSession = Candidate & { session: string; temporary: boolean };
@@ -147,6 +148,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux workspace unregister <cwd>
   pi-mux snapshot [server-generation]
   pi-mux restore
+  pi-mux reload [<session-id>]
   pi-mux restart [--force]`);
       return 0;
     }
@@ -218,10 +220,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       });
     }
     const config = configuration();
-    if (operation.kind === "restart" && process.env.TMUX?.split(",")[0] === config.socket)
-      throw new Error("Run restart from a terminal outside the dedicated tmux server");
+    if (
+      (operation.kind === "restart" || operation.kind === "reload") &&
+      process.env.TMUX?.split(",")[0] === config.socket
+    )
+      throw new Error("Run restart and reload from a terminal outside the dedicated tmux server");
     prepareDirectory(config.stateDirectory);
     if (operation.kind === "restart") return await restartServer(config, operation.force);
+    if (operation.kind === "reload") return await reloadPanes(config, operation.id);
     if (operation.kind === "new" && operation.cwd !== undefined) {
       if (!statSync(operation.cwd).isDirectory())
         throw new Error(`Workspace is not a directory: ${operation.cwd}`);
@@ -376,13 +382,18 @@ export function parseOperation(argv: string[]): Operation {
     if (argv.length === 1 || (argv.length === 3 && cwd !== undefined && isAbsolute(cwd)))
       return { kind: "history", cwd };
   }
+  if (argv[0] === "reload") {
+    if (argv.length === 1) return { kind: "reload", id: undefined };
+    const id = argv[1];
+    if (argv.length === 2 && id && SESSION_ID_PATTERN.test(id)) return { kind: "reload", id };
+  }
   if (argv[0] === "restart" && (argv.length === 1 || (argv.length === 2 && argv[1] === "--force")))
     return { kind: "restart", force: argv[1] === "--force" };
   if (argv.length === 1 && argv[0] === "restore") return { kind: "restore" };
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | close [--if-temporary] <session-id> | list | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] | history [--cwd <absolute-cwd>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | restart [--force]]",
+    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | close [--if-temporary] <session-id> | list | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] | history [--cwd <absolute-cwd>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | reload [<session-id>] | restart [--force]]",
   );
 }
 
@@ -771,10 +782,14 @@ async function serverLifetime(config: TmuxConfig): Promise<ServerLifetime | unde
   return { pid, generation: await serverOption(config, "@pi-mux-generation") };
 }
 
-async function verifyRestartServer(config: TmuxConfig, expected: ServerLifetime): Promise<void> {
+async function verifyServerLifetime(
+  config: TmuxConfig,
+  expected: ServerLifetime,
+  phase = "restart",
+): Promise<void> {
   const current = await serverLifetime(config);
   if (!current || current.pid !== expected.pid || current.generation !== expected.generation)
-    throw new Error("Dedicated server changed during restart");
+    throw new Error(`Dedicated server changed during ${phase}`);
 }
 
 async function restartIsWaiting(config: TmuxConfig): Promise<boolean> {
@@ -811,7 +826,7 @@ async function restartServer(config: Config, force: boolean): Promise<number> {
         prepareDirectory(config.directory);
         return (await startAndRestore(config, true)) > 0 ? 2 : 0;
       }
-      await verifyRestartServer(config, original);
+      await verifyServerLifetime(config, original);
       readSnapshot(config);
       if (!force && !(await restartIsWaiting(config))) return undefined;
       const panes = await livePanes(config, "list");
@@ -827,7 +842,7 @@ async function restartServer(config: Config, force: boolean): Promise<number> {
       if (!saved || saved.generation !== original.generation)
         throw new Error("Cannot confirm restart snapshot");
       await setRestoringSessions(config, saved.sessions);
-      await verifyRestartServer(config, original);
+      await verifyServerLifetime(config, original);
       if (!force && !(await restartIsWaiting(config))) return undefined;
       const stopBranch = force
         ? "kill-server"
@@ -873,11 +888,333 @@ async function restartServer(config: Config, force: boolean): Promise<number> {
   }
 }
 
-async function startAndRestore(
+class ServerChangedError extends Error {}
+
+type ReloadScan =
+  | { kind: "target"; session: ManagedSession; pane: Pane }
+  | { kind: "done" }
+  | { kind: "wait" };
+
+async function reloadPanes(config: Config, onlyId?: string): Promise<number> {
+  const original = await withLock(config, () => serverLifetime(config));
+  if (!original) {
+    return await withLock(config, async () => {
+      if (await serverLifetime(config))
+        throw new Error("Dedicated server changed during reload");
+      prepareDirectory(config.directory);
+      return (await startAndRestore(config, true)) > 0 ? 2 : 0;
+    });
+  }
+  if (!original.generation)
+    throw new Error("Dedicated server has not been initialized by pi-mux");
+  await withLock(config, async () => {
+    await verifyServerLifetime(config, original, "reload");
+    readSnapshot(config);
+    if (onlyId) await validateReloadTarget(config, onlyId);
+    await bootstrapServer(config);
+  });
+  const reloaded = new Set<string>();
+  const failed = new Map<string, string>();
+  while (true) {
+    const scan = await withLock(config, async () => {
+      await verifyServerLifetime(config, original, "reload");
+      return await scanReloadTarget(config, reloaded, failed, onlyId);
+    });
+    if (scan.kind === "done") return failed.size > 0 ? 2 : 0;
+    if (scan.kind === "target")
+      await withLock(config, () =>
+        reloadTarget(config, original, scan.session, scan.pane, reloaded, failed),
+      );
+    await Bun.sleep(POLL_INTERVAL_MS);
+  }
+}
+
+async function validateReloadTarget(config: Config, id: string): Promise<void> {
+  if ((await managedSessions(config)).some((session) => session.id === id)) return;
+  const known =
+    readSnapshot(config)?.sessions.some((session) => session.id === id) ||
+    (await findSaved(config, id)) !== undefined;
+  if (known) throw new Error(`The conversation is not running: ${id}`);
+  throw new Error(`Session not found (use the complete ID): ${id}`);
+}
+
+async function scanReloadTarget(
+  config: TmuxConfig,
+  reloaded: Set<string>,
+  failed: Map<string, string>,
+  onlyId?: string,
+): Promise<ReloadScan> {
+  const panes = await livePanes(config, "list");
+  const managed = (await managedSessions(config)).filter(
+    (session) => !onlyId || session.id === onlyId,
+  );
+  const owned = panes.filter((pane) =>
+    managed.some((session) => session.session === pane.session && session.id === pane.id),
+  );
+  const markFailed = (id: string, reason: string) => {
+    if (failed.has(id)) return;
+    failed.set(id, reason);
+    console.error(`pi-mux: reload ${id}: ${reason}`);
+  };
+  for (const pane of owned) {
+    if (reloaded.has(pane.id) || failed.has(pane.id)) continue;
+    const conflicts = owned.filter((entry) => entry.id === pane.id);
+    if (conflicts.length > 1) {
+      const reason =
+        new Set(conflicts.map((entry) => entry.cwd)).size > 1
+          ? `Conflicting working directories for conversation ${pane.id}`
+          : "Multiple pi processes match the conversation ID";
+      markFailed(pane.id, reason);
+    }
+  }
+  const pending = managed.filter((session) => !reloaded.has(session.id) && !failed.has(session.id));
+  if (pending.length === 0) return { kind: "done" };
+  const rowsOfSession = await tmuxQueries(
+    config,
+    pending.map((session) => [
+      "list-panes",
+      "-s",
+      "-t",
+      session.session,
+      "-F",
+      "#{pane_id}\t#{pane_pid}\t#{pane_dead}",
+    ]),
+  );
+  const rows = pending.map((session, index) =>
+    rowsOfSession[index]!
+      .stdout.trimEnd()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [pane, pid, dead] = line.split("\t");
+        return { pane: pane ?? "", pid: pid ?? "", dead: dead ?? "" };
+      })
+      .filter((row) => row.pane && /^[1-9]\d*$/.test(row.pid) && row.dead === "0")
+      .map((row) => ({
+        ...row,
+        published: owned.some(
+          (entry) =>
+            entry.pane === row.pane && entry.session === session.session && entry.id === session.id,
+        ),
+      })),
+  );
+  const unpublished = rows.flatMap((sessionRows, index) =>
+    sessionRows
+      .filter((row) => !row.published)
+      .map((row) => ({ session: pending[index]!, row })),
+  );
+  const launches = await tmuxQueries(
+    config,
+    unpublished.map(({ row }) => ["show-options", "-pqv", "-t", row.pane, "@pi-mux-launch"]),
+  );
+  const bootingBySession = new Map<string, number>();
+  for (const [index, { session, row }] of unpublished.entries()) {
+    let record: unknown;
+    try {
+      record = JSON.parse(launches[index]!.stdout);
+    } catch {
+      record = undefined;
+    }
+    if (
+      isRecord(record) &&
+      record.id === session.id &&
+      typeof record.token === "string" &&
+      (record.pid === Number(row.pid) ||
+        (Number.isSafeInteger(record.pid) &&
+          Number(record.pid) > 0 &&
+          !platform.processIsAlive(Number(record.pid))))
+    )
+      bootingBySession.set(session.id, (bootingBySession.get(session.id) ?? 0) + 1);
+  }
+  const states = await tmuxQueries(
+    config,
+    owned.flatMap((pane) => [
+      ["show-options", "-pqv", "-t", pane.pane, "@pi_session_state"],
+      ["show-options", "-pqv", "-t", pane.pane, "@pi-mux-pending-restart-blocker"],
+    ]),
+  );
+  const inspected = new Map(
+    owned.map((pane, index) => [
+      pane.pane,
+      {
+        state: states[index * 2]!,
+        blocker: states[index * 2 + 1]!,
+      },
+    ]),
+  );
+  let candidate: { session: ManagedSession; pane: Pane } | undefined;
+  for (const [index, session] of pending.entries()) {
+    const publishedRows = rows[index]!.filter((row) => row.published);
+    if (publishedRows.length === 0) {
+      if ((bootingBySession.get(session.id) ?? 0) > 0) continue;
+      markFailed(session.id, "The managed pi is not running");
+      continue;
+    }
+    for (const row of publishedRows) {
+      const pane = owned.find((entry) => entry.pane === row.pane)!;
+      const inspection = inspected.get(pane.pane)!;
+      if (inspection.blocker.exitCode !== 0)
+        throw new Error(`Cannot inspect pending reload state: ${pane.id}`);
+      if (inspection.state.exitCode !== 0)
+        throw new Error(`Cannot inspect reload state: ${pane.id}`);
+      const ready =
+        !inspection.blocker.stdout.trim() &&
+        parseSessionState(inspection.state.stdout.trimEnd(), pane.id) === "waiting-user" &&
+        pane.startup !== "accepted";
+      if (!ready) continue;
+      candidate ??= { session, pane };
+      break;
+    }
+  }
+  if (candidate) return { kind: "target", ...candidate };
+  return { kind: "wait" };
+}
+
+async function reloadTarget(
   config: Config,
-  restoreRequested: boolean,
-  temporaryTarget?: string,
-): Promise<number> {
+  original: ServerLifetime,
+  session: ManagedSession,
+  pane: Pane,
+  reloaded: Set<string>,
+  failed: Map<string, string>,
+): Promise<void> {
+  const state = await tmux(config, ["show-options", "-pqv", "-t", pane.pane, "@pi_session_state"]);
+  if (state.exitCode !== 0) throw new Error(`Cannot inspect reload state: ${pane.id}`);
+  const blocker = await tmux(config, [
+    "show-options",
+    "-pqv",
+    "-t",
+    pane.pane,
+    "@pi-mux-pending-restart-blocker",
+  ]);
+  if (blocker.exitCode !== 0) throw new Error(`Cannot inspect pending reload state: ${pane.id}`);
+  if (
+    blocker.stdout.trim() ||
+    parseSessionState(state.stdout.trimEnd(), pane.id) !== "waiting-user"
+  )
+    return;
+  await tmux(config, ["set-option", "-g", "@pi-mux-restart-veto", ""]);
+  await snapshotSessions(config, original.generation, "repair");
+  const saved = readSnapshot(config);
+  if (!saved || saved.generation !== original.generation)
+    throw new Error("Cannot confirm reload snapshot");
+  await verifyServerLifetime(config, original, "reload");
+  const launchToken = randomUUID();
+  const startupCommand = `pi-mux-startup-${randomUUID()}`;
+  const desired: Record<string, string> = {
+    ...config.env,
+    PI_TMUX_SESSION_ID: pane.id,
+    PI_TMUX_LAUNCH_TOKEN: launchToken,
+    PI_TMUX_STARTUP_COMMAND: startupCommand,
+    ...(session.temporary ? { PI_TMUX_TEMPORARY: pane.id } : {}),
+  };
+  await refreshSessionEnvironment(config, session.session, desired);
+  const global = await tmux(config, ["show-environment", "-gs"]);
+  const assignments = global.stdout.replace(/"(?:\\.|[^"\\])*"/gs, "");
+  const removed = [...assignments.matchAll(/; export ([^;\n]+);/g)]
+    .map((match) => match[1]!)
+    .filter((key) => !Object.hasOwn(desired, key) && !GENERATED_ENV_KEYS.has(key));
+  const selection = existsSync(pane.file)
+    ? ["--session", pane.file]
+    : ["--session-id", pane.id];
+  const paneCommand = platform.paneCommand(
+    [config.pi, ...selection, "-e", config.extension, "--", `/${startupCommand}`],
+    removed,
+  );
+  const reloadBranch = tmuxArguments([
+    "if-shell",
+    "-F",
+    "#{==:#{@pi-mux-restart-veto},}",
+    [
+      tmuxArguments(["set-option", "-pu", "-t", pane.pane, "@pi-tmux-session"]),
+      tmuxArguments(["respawn-pane", "-k", "-t", pane.pane, "--", paneCommand]),
+    ].join(" ; "),
+    "display-message -p PI_MUX_RELOAD_WAIT",
+  ]);
+  try {
+    const respawned = await tmux(
+      config,
+      [
+        "if-shell",
+        "-F",
+        `#{==:#{@pi-mux-generation},${original.generation}}`,
+        reloadBranch,
+        "display-message -p PI_MUX_RELOAD_SERVER_CHANGED",
+      ],
+      true,
+    );
+    if (respawned.stdout.includes("PI_MUX_RELOAD_SERVER_CHANGED")) throw new ServerChangedError();
+    if (respawned.stdout.includes("PI_MUX_RELOAD_WAIT")) return;
+    const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+    while (true) {
+      const list = await tmux(
+        config,
+        ["list-panes", "-t", session.session, "-F", "#{pane_id}\t#{pane_pid}"],
+        true,
+      );
+      const row = list.stdout
+        .trimEnd()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => line.split("\t"))
+        .find(([paneId]) => paneId === pane.pane);
+      if (!row) throw new Error(`pi exited before reload was recorded: ${pane.id}`);
+      const metadata = await tmux(config, [
+        "show-options",
+        "-pqv",
+        "-t",
+        pane.pane,
+        "@pi-tmux-session",
+      ]);
+      if (metadata.exitCode === 0 && metadata.stdout.trim()) {
+        await tmux(config, [
+          "set-option",
+          "-p",
+          "-t",
+          pane.pane,
+          "@pi-mux-launch",
+          JSON.stringify({ id: pane.id, pid: Number(row[1]), token: launchToken }),
+        ]);
+        reloaded.add(pane.id);
+        console.log(`reloaded ${pane.id}`);
+        return;
+      }
+      if (Date.now() >= deadline)
+        throw new Error(`pi startup timed out during reload: ${pane.id}`);
+      await Bun.sleep(POLL_INTERVAL_MS);
+    }
+  } catch (error) {
+    if (error instanceof ServerChangedError)
+      throw new Error("Dedicated server changed during reload");
+    failed.set(pane.id, errorMessage(error));
+    console.error(`pi-mux: reload ${pane.id}: ${errorMessage(error)}`);
+  }
+}
+
+async function refreshSessionEnvironment(
+  config: TmuxConfig,
+  session: string,
+  desired: Record<string, string>,
+): Promise<void> {
+  const current = await tmux(config, ["show-environment", "-t", session]);
+  const existing = new Map<string, string | undefined>();
+  for (const line of current.stdout.trimEnd().split("\n").filter(Boolean)) {
+    if (line.startsWith("-")) {
+      existing.set(line.slice(1), undefined);
+      continue;
+    }
+    const key = line.slice(0, line.indexOf("="));
+    if (key) existing.set(key, line.slice(key.length + 1));
+  }
+  for (const [key, value] of Object.entries(desired))
+    if (existing.get(key) !== value)
+      await tmux(config, ["set-environment", "-t", session, key, value]);
+  for (const [key, value] of existing)
+    if (value !== undefined && !Object.hasOwn(desired, key))
+      await tmux(config, ["set-environment", "-u", "-t", session, key]);
+}
+
+async function bootstrapServer(config: Config): Promise<string> {
   await tmux(config, ["start-server"]);
   await tmux(config, ["source-file", config.tmuxConfig]);
   const existing = await serverOption(config, "@pi-mux-generation");
@@ -898,6 +1235,15 @@ async function startAndRestore(
         },
   );
   await tmux(config, ["set-option", "-g", "@pi-mux-snapshot", hookCommand]);
+  return generation;
+}
+
+async function startAndRestore(
+  config: Config,
+  restoreRequested: boolean,
+  temporaryTarget?: string,
+): Promise<number> {
+  const generation = await bootstrapServer(config);
   const restored = await serverOption(config, "@pi-mux-restored");
   if (!restoreRequested && restored === generation) return 0;
   let failures = 0;

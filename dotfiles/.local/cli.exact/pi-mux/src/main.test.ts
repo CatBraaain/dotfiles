@@ -1923,14 +1923,18 @@ exec ${JSON.stringify(realTmux)} "$@"
   }, 20000);
 });
 
-function prepareRestart(fixture: SessionFixture): void {
+function prepareManagedPi(fixture: SessionFixture): void {
   writeFileSync(
     join(fixture.directory, "bin/pi"),
     `#!${process.execPath}
 import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
+import { join } from "node:path";
 const id = process.env.PI_TMUX_SESSION_ID;
-const file = process.argv[process.argv.indexOf("--session") + 1];
+const sessionIndex = process.argv.indexOf("--session");
+const file = sessionIndex >= 0
+  ? process.argv[sessionIndex + 1]
+  : join(process.env.PI_CODING_AGENT_DIR, "sessions", id + ".jsonl");
 const pane = process.env.TMUX_PANE;
 const metadata = {
   id,
@@ -1978,13 +1982,31 @@ async function finishRestart(child: Bun.Subprocess<"ignore", "pipe", "pipe">) {
   assert.equal(status, 0, stderr);
 }
 
-function addRestartSession(fixture: SessionFixture, name: string, state: string): string {
+function addManagedSession(fixture: SessionFixture, name: string, state: string): string {
   const id = randomUUID();
   const file = conversationFile(fixture.agentDir, fixture.cwd, id);
   fixture.piSession(name, { id, file });
   fixture.tmux(["set-option", "-g", "@pi-mux-generation", "before-restart"]);
   restartState(fixture, name, id, state);
   return id;
+}
+
+function startReload(fixture: SessionFixture, args: string[] = []) {
+  return Bun.spawn([process.execPath, "run", source, "reload", ...args], {
+    cwd: fixture.cwd,
+    env: fixture.env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
+async function finishReload(child: Bun.Subprocess<"ignore", "pipe", "pipe">) {
+  const [status, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  return { status, stdout, stderr };
 }
 
 describe("new initial request", () => {
@@ -2251,8 +2273,8 @@ describe("restart", () => {
     it(`restarts ${state} with ${state === "waiting-user" ? "normal" : "force"} and restores the same conversation`, async () => {
       const fixture = new SessionFixture();
       try {
-        prepareRestart(fixture);
-        const id = addRestartSession(fixture, "target", state);
+        prepareManagedPi(fixture);
+        const id = addManagedSession(fixture, "target", state);
         const previousPid = fixture.tmux(["display-message", "-p", "#{pid}"]);
         const previousPi = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]);
         const result = fixture.run(["restart", ...(state === "waiting-user" ? [] : ["--force"])]);
@@ -2285,9 +2307,9 @@ describe("restart", () => {
       const fixture = new SessionFixture();
       let child: ReturnType<typeof startRestart> | undefined;
       try {
-        prepareRestart(fixture);
-        addRestartSession(fixture, "ready", "waiting-user");
-        const id = addRestartSession(fixture, "blocked", state);
+        prepareManagedPi(fixture);
+        addManagedSession(fixture, "ready", "waiting-user");
+        const id = addManagedSession(fixture, "blocked", state);
         const pid = Number(fixture.tmux(["display-message", "-p", "-t", "blocked", "#{pane_pid}"]));
         const pane = fixture.tmux(["display-message", "-p", "-t", "blocked", "#{pane_id}"]);
         if (state === "unpublished")
@@ -2371,8 +2393,8 @@ describe("restart", () => {
   it("does not stop a running pi when force cannot read the snapshot", async () => {
     const fixture = new SessionFixture();
     try {
-      prepareRestart(fixture);
-      addRestartSession(fixture, "target", "running");
+      prepareManagedPi(fixture);
+      addManagedSession(fixture, "target", "running");
       const pid = fixture.tmux(["display-message", "-p", "#{pid}"]);
       writeFileSync(restoreFile(fixture), "{broken");
       const result = fixture.run(["restart", "--force"]);
@@ -2388,8 +2410,8 @@ describe("restart", () => {
   it("retains retry candidates after post-stop restoration fails", async () => {
     const fixture = new SessionFixture();
     try {
-      prepareRestart(fixture);
-      const id = addRestartSession(fixture, "target", "waiting-user");
+      prepareManagedPi(fixture);
+      const id = addManagedSession(fixture, "target", "waiting-user");
       writeFileSync(join(fixture.directory, "bin/pi"), "#!/bin/sh\nexit 99\n", { mode: 0o700 });
       const result = fixture.run(["restart"]);
       assert.equal(result.status, 2, result.stderr);
@@ -2412,8 +2434,8 @@ describe("restart safety", () => {
       const fixture = new SessionFixture();
       let child: ReturnType<typeof startRestart> | undefined;
       try {
-        prepareRestart(fixture);
-        const id = addRestartSession(fixture, "target", "waiting-user");
+        prepareManagedPi(fixture);
+        const id = addManagedSession(fixture, "target", "waiting-user");
         const pane = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_id}"]);
         const pid = Number(fixture.tmux(["display-message", "-p", "-t", pane, "#{pane_pid}"]));
         const serverPid = Number(fixture.tmux(["display-message", "-p", "#{pid}"]));
@@ -2507,8 +2529,8 @@ describe("restart safety", () => {
   it("stops temporary and unsaved pi without adding them to the restored set", async () => {
     const fixture = new SessionFixture();
     try {
-      prepareRestart(fixture);
-      const id = addRestartSession(fixture, "target", "waiting-user");
+      prepareManagedPi(fixture);
+      const id = addManagedSession(fixture, "target", "waiting-user");
       const temporaryId = randomUUID();
       const temporaryFile = conversationFile(fixture.agentDir, fixture.cwd, temporaryId);
       fixture.piSession("temporary", { id: temporaryId, file: temporaryFile, temporary: true });
@@ -2548,8 +2570,8 @@ describe("restart safety", () => {
     const fixture = new SessionFixture();
     const stateDirectory = dirname(restoreFile(fixture));
     try {
-      prepareRestart(fixture);
-      addRestartSession(fixture, "target", "running");
+      prepareManagedPi(fixture);
+      addManagedSession(fixture, "target", "running");
       const pid = fixture.tmux(["display-message", "-p", "#{pid}"]);
       const before = readFileSync(restoreFile(fixture), "utf8");
       chmodSync(stateDirectory, 0o500);
@@ -2568,8 +2590,8 @@ describe("restart safety", () => {
     const fixture = new SessionFixture();
     let child: ReturnType<typeof startRestart> | undefined;
     try {
-      prepareRestart(fixture);
-      addRestartSession(fixture, "target", "running");
+      prepareManagedPi(fixture);
+      addManagedSession(fixture, "target", "running");
       child = startRestart(fixture);
       await Bun.sleep(250);
       assert.equal(child.exitCode, null);
@@ -2589,8 +2611,8 @@ describe("restart safety", () => {
     it(`preserves candidates on ${failure} and prevents shutdown hooks from erasing them`, async () => {
       const fixture = new SessionFixture();
       try {
-        prepareRestart(fixture);
-        const id = addRestartSession(fixture, "target", "waiting-user");
+        prepareManagedPi(fixture);
+        const id = addManagedSession(fixture, "target", "waiting-user");
         const wrapper = join(fixture.directory, "bin/tmux");
         const before = readFileSync(wrapper, "utf8");
         const injected =
@@ -2633,8 +2655,8 @@ describe("restart safety", () => {
     const fixture = new SessionFixture();
     const socket = join(fixture.directory, "outside.sock");
     try {
-      prepareRestart(fixture);
-      addRestartSession(fixture, "target", "waiting-user");
+      prepareManagedPi(fixture);
+      addManagedSession(fixture, "target", "waiting-user");
       const outside = spawnSync(
         realTmux!,
         [
@@ -2668,8 +2690,8 @@ describe("restart safety", () => {
   it("rejects restart from inside the dedicated server before stopping it", async () => {
     const fixture = new SessionFixture();
     try {
-      prepareRestart(fixture);
-      addRestartSession(fixture, "target", "waiting-user");
+      prepareManagedPi(fixture);
+      addManagedSession(fixture, "target", "waiting-user");
       const before = readFileSync(restoreFile(fixture), "utf8");
       fixture.env.TMUX = `${fixture.socket},123,0`;
       const result = fixture.run(["restart", "--force"]);
@@ -2686,8 +2708,8 @@ describe("restart safety", () => {
     const fixture = new SessionFixture();
     const children: ReturnType<typeof startRestart>[] = [];
     try {
-      prepareRestart(fixture);
-      const id = addRestartSession(fixture, "target", "running");
+      prepareManagedPi(fixture);
+      const id = addManagedSession(fixture, "target", "running");
       children.push(startRestart(fixture), startRestart(fixture));
       await Bun.sleep(300);
       assert.equal(
@@ -2713,7 +2735,7 @@ describe("restart safety", () => {
   it("restores the saved set when no server exists", async () => {
     const fixture = new SessionFixture();
     try {
-      prepareRestart(fixture);
+      prepareManagedPi(fixture);
       const id = randomUUID();
       conversationFile(fixture.agentDir, fixture.cwd, id);
       writeFileSync(
@@ -2727,6 +2749,589 @@ describe("restart safety", () => {
       const result = fixture.run(["restart"]);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(restoreDocument(fixture).workspaces, [{ cwd: fixture.cwd, sessions: [id] }]);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20000);
+});
+
+describe("reload", () => {
+  it("accepts an optional conversation ID", () => {
+    assert.deepEqual(parseOperation(["reload"]), { kind: "reload", id: undefined });
+    const id = randomUUID();
+    assert.deepEqual(parseOperation(["reload", id]), { kind: "reload", id });
+    for (const args of [["--force"], [id, "extra"], ["invalid id"], [id, "--force"]])
+      assert.throws(() => parseOperation(["reload", ...args]), /usage/);
+  });
+
+  it("replaces a waiting pi in place and keeps the server, session, pane, and record", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      const id = addManagedSession(fixture, "target", "waiting-user");
+      const serverPid = fixture.tmux(["display-message", "-p", "#{pid}"]);
+      const session = fixture.tmux(["display-message", "-p", "-t", "target", "#{session_id}"]);
+      const pane = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_id}"]);
+      const oldPid = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]);
+      const result = await finishReload(startReload(fixture));
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), `reloaded ${id}`);
+      assert.equal(fixture.tmux(["display-message", "-p", "#{pid}"]), serverPid);
+      assert.equal(fixture.tmux(["display-message", "-p", "-t", "target", "#{session_id}"]), session);
+      assert.equal(fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_id}"]), pane);
+      assert.equal(existsSync(`/proc/${oldPid}`), false);
+      const newPid = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]);
+      assert.notEqual(newPid, oldPid);
+      assert.equal(fixture.tmux(["show-options", "-gqv", "@pi-mux-generation"]), "before-restart");
+      const launch = JSON.parse(fixture.tmux(["show-options", "-pqv", "-t", pane, "@pi-mux-launch"]));
+      assert.equal(launch.id, id);
+      assert.equal(launch.pid, Number(newPid));
+      const hook = fixture.tmux(["show-options", "-gqv", "@pi-mux-snapshot"]);
+      assert.ok(hook.includes(source), hook);
+      assert.ok(hook.includes("snapshot"), hook);
+      const launched = JSON.parse(
+        readFileSync(join(fixture.directory, "launches.jsonl"), "utf8").trim(),
+      );
+      assert.equal(launched.id, id);
+      assert.equal(launched.cwd, fixture.cwd);
+      assert.ok(launched.args.includes("--session"));
+      assert.deepEqual(restoreDocument(fixture), {
+        version: 1,
+        generation: "before-restart",
+        workspaces: [{ cwd: fixture.cwd, sessions: [id] }],
+      });
+      const stale = fixture.run(["snapshot", "before-restart"]);
+      assert.equal(stale.status, 0, stale.stderr);
+      assert.deepEqual(restoreDocument(fixture).workspaces, [{
+        cwd: fixture.cwd,
+        sessions: [id],
+      }]);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  for (const state of ["waiting-approval", "running", "unknown", "unpublished", "startup"]) {
+    it(`waits for a ${state} pi and replaces it when it becomes ready`, async () => {
+      const fixture = new SessionFixture();
+      let child: ReturnType<typeof startReload> | undefined;
+      try {
+        prepareManagedPi(fixture);
+        const id = addManagedSession(fixture, "blocked", state);
+        const pid = Number(fixture.tmux(["display-message", "-p", "-t", "blocked", "#{pane_pid}"]));
+        const pane = fixture.tmux(["display-message", "-p", "-t", "blocked", "#{pane_id}"]);
+        if (state === "unpublished")
+          fixture.tmux(["set-option", "-pu", "-t", pane, "@pi_session_state"]);
+        if (state === "startup") {
+          const encoded = fixture.tmux(["show-options", "-pqv", "-t", pane, "@pi-tmux-session"]);
+          const metadata = JSON.parse(Buffer.from(encoded, "base64").toString());
+          fixture.tmux([
+            "set-option",
+            "-p",
+            "-t",
+            pane,
+            "@pi-tmux-session",
+            Buffer.from(JSON.stringify({ ...metadata, startup: "accepted" })).toString("base64"),
+          ]);
+        }
+        child = startReload(fixture);
+        await Bun.sleep(250);
+        assert.equal(child.exitCode, null);
+        assert.equal(existsSync(`/proc/${pid}`), true);
+        if (state === "startup") {
+          const encoded = fixture.tmux(["show-options", "-pqv", "-t", pane, "@pi-tmux-session"]);
+          const metadata = JSON.parse(Buffer.from(encoded, "base64").toString());
+          fixture.tmux([
+            "set-option",
+            "-p",
+            "-t",
+            pane,
+            "@pi-tmux-session",
+            Buffer.from(JSON.stringify({ ...metadata, startup: "ready" })).toString("base64"),
+          ]);
+        }
+        const serverPid = Number(fixture.tmux(["display-message", "-p", "#{pid}"]));
+        const origin = {
+          socket: fixture.socket,
+          serverPid,
+          pane,
+          pid,
+          token: fixture.launchTokenOf("blocked"),
+        };
+        for (const phase of state === "waiting-approval"
+          ? ["running", "waiting-user"]
+          : ["waiting-user"]) {
+          let notified = fixture.run([
+            "state",
+            id,
+            phase,
+            "--source",
+            JSON.stringify(origin),
+            "--title",
+            "null",
+          ]);
+          for (let attempt = 0; notified.status === 75 && attempt < 100; attempt++) {
+            await Bun.sleep(50);
+            notified = fixture.run([
+              "state",
+              id,
+              phase,
+              "--source",
+              JSON.stringify(origin),
+              "--title",
+              "null",
+            ]);
+          }
+          assert.equal(notified.status, 0, notified.stderr);
+          if (phase === "running") {
+            await Bun.sleep(150);
+            assert.equal(child.exitCode, null);
+            assert.equal(existsSync(`/proc/${pid}`), true);
+          }
+        }
+        const result = await finishReload(child);
+        child = undefined;
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout.trim(), `reloaded ${id}`);
+        assert.equal(existsSync(`/proc/${pid}`), false);
+      } finally {
+        child?.kill();
+        if (child) await child.exited;
+        await fixture.cleanup();
+      }
+    }, 20000);
+  }
+
+  it("waits when a running notification is deferred during the replacement window", async () => {
+    const fixture = new SessionFixture();
+    let child: ReturnType<typeof startReload> | undefined;
+    try {
+      prepareManagedPi(fixture);
+      const id = addManagedSession(fixture, "target", "waiting-user");
+      const pane = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_id}"]);
+      const pid = Number(fixture.tmux(["display-message", "-p", "-t", pane, "#{pane_pid}"]));
+      const serverPid = Number(fixture.tmux(["display-message", "-p", "#{pid}"]));
+      const origin = {
+        socket: fixture.socket,
+        serverPid,
+        pane,
+        pid,
+        token: fixture.launchTokenOf("target"),
+      };
+      const notification = [
+        process.execPath,
+        "run",
+        source,
+        "state",
+        id,
+        "running",
+        "--source",
+        JSON.stringify(origin),
+        "--title",
+        "null",
+      ]
+        .map((arg) => JSON.stringify(arg))
+        .join(" ");
+      const wrapper = join(fixture.directory, "bin/tmux");
+      const before = readFileSync(wrapper, "utf8");
+      const injected = join(fixture.directory, "injected-status");
+      writeFileSync(
+        wrapper,
+        before.replace(
+          "exec ",
+          `if [ "$5" = if-shell ] && [ ! -e ${JSON.stringify(injected)} ]; then\n  ${notification} > ${JSON.stringify(injected + ".stdout")} 2> ${JSON.stringify(injected + ".stderr")}\n  printf '%s' "$?" > ${JSON.stringify(injected)}\nfi\nexec `,
+        ),
+      );
+      child = startReload(fixture);
+      await waitUntil(() => existsSync(injected));
+      assert.equal(
+        readFileSync(injected, "utf8"),
+        "75",
+        readFileSync(injected + ".stderr", "utf8"),
+      );
+      await Bun.sleep(150);
+      assert.equal(child.exitCode, null);
+      assert.equal(existsSync(`/proc/${pid}`), true);
+      let notified = fixture.run([
+        "state",
+        id,
+        "waiting-user",
+        "--source",
+        JSON.stringify(origin),
+        "--title",
+        "null",
+      ]);
+      for (let attempt = 0; notified.status === 75 && attempt < 100; attempt++) {
+        await Bun.sleep(50);
+        notified = fixture.run([
+          "state",
+          id,
+          "waiting-user",
+          "--source",
+          JSON.stringify(origin),
+          "--title",
+          "null",
+        ]);
+      }
+      assert.equal(notified.status, 0, notified.stderr);
+      const result = await finishReload(child);
+      child = undefined;
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(existsSync(`/proc/${pid}`), false);
+      assert.deepEqual(restoreDocument(fixture).workspaces, [{
+        cwd: fixture.cwd,
+        sessions: [id],
+      }]);
+    } finally {
+      child?.kill();
+      if (child) await child.exited;
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("keeps the restore record and reports a conversation whose pi exits immediately", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      const id = addManagedSession(fixture, "target", "waiting-user");
+      writeFileSync(join(fixture.directory, "bin/pi"), "#!/bin/sh\nexit 99\n", { mode: 0o700 });
+      const serverPid = fixture.tmux(["display-message", "-p", "#{pid}"]);
+      const result = await finishReload(startReload(fixture));
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, new RegExp(id));
+      assert.equal(result.stdout.trim(), "");
+      assert.equal(fixture.tmux(["display-message", "-p", "#{pid}"]), serverPid);
+      assert.deepEqual(restoreDocument(fixture), {
+        version: 1,
+        generation: "before-restart",
+        workspaces: [{ cwd: fixture.cwd, sessions: [id] }],
+      });
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("restores the saved set when no server exists", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      const id = randomUUID();
+      conversationFile(fixture.agentDir, fixture.cwd, id);
+      writeFileSync(
+        restoreFile(fixture),
+        JSON.stringify({
+          version: 1,
+          generation: "previous",
+          workspaces: [{ cwd: fixture.cwd, sessions: [id] }],
+        }),
+      );
+      const result = await finishReload(startReload(fixture));
+      assert.equal(result.status, 0, result.stderr);
+      assert.notEqual(restoreDocument(fixture).generation, "previous");
+      assert.deepEqual(restoreDocument(fixture).workspaces, [{ cwd: fixture.cwd, sessions: [id] }]);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("rejects reload from inside the dedicated server before replacing pi", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      addManagedSession(fixture, "target", "waiting-user");
+      const before = readFileSync(restoreFile(fixture), "utf8");
+      const panePid = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]);
+      fixture.env.TMUX = `${fixture.socket},123,0`;
+      const result = await finishReload(startReload(fixture));
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /outside/);
+      assert.equal(readFileSync(restoreFile(fixture), "utf8"), before);
+      assert.equal(fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]), panePid);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("rejects a server generation change while waiting", async () => {
+    const fixture = new SessionFixture();
+    let child: ReturnType<typeof startReload> | undefined;
+    try {
+      prepareManagedPi(fixture);
+      addManagedSession(fixture, "target", "running");
+      child = startReload(fixture);
+      await Bun.sleep(250);
+      assert.equal(child.exitCode, null);
+      const pid = fixture.tmux(["display-message", "-p", "#{pid}"]);
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "replacement"]);
+      assert.equal(await child.exited, 1);
+      assert.match(await new Response(child.stderr).text(), /server changed/);
+      assert.equal(fixture.tmux(["display-message", "-p", "#{pid}"]), pid);
+    } finally {
+      child?.kill();
+      if (child) await child.exited;
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("reloads temporary and unsaved pi while preserving their state", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      const id = addManagedSession(fixture, "target", "waiting-user");
+      const temporaryId = randomUUID();
+      const temporaryFile = conversationFile(fixture.agentDir, fixture.cwd, temporaryId);
+      fixture.piSession("temporary", { id: temporaryId, file: temporaryFile, temporary: true });
+      restartState(fixture, "temporary", temporaryId, "waiting-user");
+      const emptyId = randomUUID();
+      fixture.piSession("empty", { id: emptyId, file: join(fixture.directory, "unsaved.jsonl") });
+      restartState(fixture, "empty", emptyId, "waiting-user");
+      const oldPids = fixture.tmux(["list-panes", "-a", "-F", "#{pane_pid}"]).split("\n");
+      const result = await finishReload(startReload(fixture));
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(
+        oldPids.some((entry) => existsSync(`/proc/${entry}`)),
+        false,
+      );
+      const launched = readFileSync(join(fixture.directory, "launches.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      assert.deepEqual(
+        launched.map(({ id: launchedId }) => launchedId).sort(),
+        [emptyId, id, temporaryId].sort(),
+      );
+      assert.ok(launched.find(({ id: launchedId }) => launchedId === temporaryId).args.includes("--session"));
+      assert.ok(launched.find(({ id: launchedId }) => launchedId === emptyId).args.includes("--session-id"));
+      const listed = JSON.parse(fixture.run(["list"]).stdout);
+      assert.equal(listed.length, 1);
+      assert.deepEqual(
+        listed[0].sessions.map((entry: { id: string }) => entry.id).sort(),
+        [id, temporaryId].sort(),
+      );
+      assert.equal(
+        listed[0].sessions.find((entry: { id: string }) => entry.id === temporaryId)?.temporary,
+        true,
+      );
+      assert.deepEqual(
+        listed[0].empty.map((entry: { id: string }) => entry.id),
+        [emptyId],
+      );
+      assert.deepEqual(
+        restoreDocument(fixture).workspaces[0]!.sessions.sort(),
+        [emptyId, id].sort(),
+      );
+      assert.equal(
+        fixture.tmux(["show-environment", "-t", "temporary", "PI_TMUX_TEMPORARY"]),
+        `PI_TMUX_TEMPORARY=${temporaryId}`,
+      );
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("reports duplicate conversation IDs and keeps reloading the rest", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      const readyId = addManagedSession(fixture, "ready", "waiting-user");
+      const duplicateId = randomUUID();
+      const duplicateFile = conversationFile(fixture.agentDir, fixture.cwd, duplicateId);
+      fixture.piSession("duplicate-a", { id: duplicateId, file: duplicateFile });
+      fixture.piSession("duplicate-b", { id: duplicateId, file: duplicateFile });
+      restartState(fixture, "duplicate-a", duplicateId, "waiting-user");
+      restartState(fixture, "duplicate-b", duplicateId, "waiting-user");
+      const duplicatePids = [
+        fixture.tmux(["display-message", "-p", "-t", "duplicate-a", "#{pane_pid}"]),
+        fixture.tmux(["display-message", "-p", "-t", "duplicate-b", "#{pane_pid}"]),
+      ];
+      const result = await finishReload(startReload(fixture));
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, new RegExp(duplicateId));
+      assert.match(result.stderr, /Multiple pi processes/);
+      assert.equal(result.stdout.trim(), `reloaded ${readyId}`);
+      assert.equal(
+        duplicatePids.every((entry) => existsSync(`/proc/${entry}`)),
+        true,
+      );
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("leaves unmanaged panes untouched and completes without targets", async () => {
+    const fixture = new SessionFixture();
+    try {
+      fixture.plainSession("plain");
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "before-restart"]);
+      const plainPid = fixture.tmux(["display-message", "-p", "-t", "plain", "#{pane_pid}"]);
+      const result = await finishReload(startReload(fixture));
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, "");
+      assert.equal(existsSync(`/proc/${plainPid}`), true);
+      assert.match(fixture.tmux(["list-sessions", "-F", "#{session_name}"]), /plain/);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("replaces only the targeted conversation and leaves a busy sibling untouched", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      const targetId = addManagedSession(fixture, "target", "waiting-user");
+      const siblingId = addManagedSession(fixture, "sibling", "running");
+      const siblingPane = fixture.tmux(["display-message", "-p", "-t", "sibling", "#{pane_id}"]);
+      const siblingPid = fixture.tmux(["display-message", "-p", "-t", "sibling", "#{pane_pid}"]);
+      const targetPid = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]);
+      const result = await finishReload(startReload(fixture, [targetId]));
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), `reloaded ${targetId}`);
+      assert.equal(existsSync(`/proc/${targetPid}`), false);
+      assert.equal(existsSync(`/proc/${siblingPid}`), true);
+      assert.equal(
+        fixture.tmux(["display-message", "-p", "-t", "sibling", "#{pane_pid}"]),
+        siblingPid,
+      );
+      assert.deepEqual(
+        JSON.parse(fixture.tmux(["show-options", "-pqv", "-t", siblingPane, "@pi_session_state"])),
+        { version: 1, sessionId: siblingId, state: "running" },
+      );
+      const snapshot = restoreDocument(fixture);
+      assert.equal(snapshot.generation, "before-restart");
+      assert.deepEqual(snapshot.workspaces[0]!.sessions.sort(), [siblingId, targetId].sort());
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("waits for the targeted conversation when it is busy", async () => {
+    const fixture = new SessionFixture();
+    let child: ReturnType<typeof startReload> | undefined;
+    try {
+      prepareManagedPi(fixture);
+      const id = addManagedSession(fixture, "target", "running");
+      const pane = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_id}"]);
+      const pid = Number(fixture.tmux(["display-message", "-p", "-t", pane, "#{pane_pid}"]));
+      child = startReload(fixture, [id]);
+      await Bun.sleep(250);
+      assert.equal(child.exitCode, null);
+      assert.equal(existsSync(`/proc/${pid}`), true);
+      const serverPid = Number(fixture.tmux(["display-message", "-p", "#{pid}"]));
+      const origin = {
+        socket: fixture.socket,
+        serverPid,
+        pane,
+        pid,
+        token: fixture.launchTokenOf("target"),
+      };
+      let notified = fixture.run([
+        "state",
+        id,
+        "waiting-user",
+        "--source",
+        JSON.stringify(origin),
+        "--title",
+        "null",
+      ]);
+      for (let attempt = 0; notified.status === 75 && attempt < 100; attempt++) {
+        await Bun.sleep(50);
+        notified = fixture.run([
+          "state",
+          id,
+          "waiting-user",
+          "--source",
+          JSON.stringify(origin),
+          "--title",
+          "null",
+        ]);
+      }
+      assert.equal(notified.status, 0, notified.stderr);
+      const result = await finishReload(child);
+      child = undefined;
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), `reloaded ${id}`);
+      assert.equal(existsSync(`/proc/${pid}`), false);
+    } finally {
+      child?.kill();
+      if (child) await child.exited;
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("rejects a targeted conversation that is not running", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      const stoppedId = randomUUID();
+      conversationFile(fixture.agentDir, fixture.cwd, stoppedId);
+      addManagedSession(fixture, "target", "waiting-user");
+      writeFileSync(
+        restoreFile(fixture),
+        JSON.stringify({
+          version: 1,
+          generation: "before-restart",
+          workspaces: [{ cwd: fixture.cwd, sessions: [stoppedId] }],
+        }),
+      );
+      const targetPid = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]);
+      const result = await finishReload(startReload(fixture, [stoppedId]));
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, new RegExp(stoppedId));
+      assert.match(result.stderr, /not running/);
+      assert.equal(fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]), targetPid);
+      assert.deepEqual(restoreDocument(fixture), {
+        version: 1,
+        generation: "before-restart",
+        workspaces: [{ cwd: fixture.cwd, sessions: [stoppedId] }],
+      });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("rejects an unknown targeted conversation ID", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      addManagedSession(fixture, "target", "waiting-user");
+      const unknownId = randomUUID();
+      const before = readFileSync(restoreFile(fixture), "utf8");
+      const targetPid = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]);
+      const result = await finishReload(startReload(fixture, [unknownId]));
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, new RegExp(unknownId));
+      assert.match(result.stderr, /Session not found/);
+      assert.equal(readFileSync(restoreFile(fixture), "utf8"), before);
+      assert.equal(fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]), targetPid);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("reports duplicate panes of the targeted conversation", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      const duplicateId = randomUUID();
+      const duplicateFile = conversationFile(fixture.agentDir, fixture.cwd, duplicateId);
+      fixture.piSession("duplicate-a", { id: duplicateId, file: duplicateFile });
+      fixture.piSession("duplicate-b", { id: duplicateId, file: duplicateFile });
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "before-restart"]);
+      restartState(fixture, "duplicate-a", duplicateId, "waiting-user");
+      restartState(fixture, "duplicate-b", duplicateId, "waiting-user");
+      const duplicatePids = [
+        fixture.tmux(["display-message", "-p", "-t", "duplicate-a", "#{pane_pid}"]),
+        fixture.tmux(["display-message", "-p", "-t", "duplicate-b", "#{pane_pid}"]),
+      ];
+      const result = await finishReload(startReload(fixture, [duplicateId]));
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, new RegExp(duplicateId));
+      assert.match(result.stderr, /Multiple pi processes/);
+      assert.equal(result.stdout.trim(), "");
+      assert.equal(
+        duplicatePids.every((entry) => existsSync(`/proc/${entry}`)),
+        true,
+      );
     } finally {
       await fixture.cleanup();
     }
