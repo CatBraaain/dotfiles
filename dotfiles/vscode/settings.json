@@ -376,6 +376,7 @@
   "explorer.incrementalNaming": "smart",
   "extensions.ignoreRecommendations": true,
   "files.associations": {
+    "**/AppData/Roaming/Code/Workspaces/**": "plaintext",
     "*.ahk": "ahk2",
     // "*.css": "tailwindcss",
     "*.json": "jsonc",
