@@ -59,7 +59,7 @@ const extensionsForLinux = [
 const localVscodeExtensions: { id: string; targets: Label[] }[] = [
   { id: "todo-lsp.todo", targets: ["linux"] },
   { id: "agent-kit.agent-kit", targets: ["linux"] },
-  { id: "catbraaain.scm-collapse-reapply", targets: ["linux", "windows"] },
+  { id: "catbraaain.custom-css-reapply", targets: ["linux", "windows"] },
 ];
 const localExtensionIds = localVscodeExtensions.map((extension) => extension.id);
 
@@ -67,7 +67,7 @@ const localExtensionIds = localVscodeExtensions.map((extension) => extension.id)
 // VSIX file name prefix ("name-version.data.vsix"; the reserved .data. marker
 // keeps the file out of the home deployment).
 const workspaceVsixPrefixes: Record<string, string> = {
-  "catbraaain.scm-collapse-reapply": "scm-collapse-reapply-",
+  "catbraaain.custom-css-reapply": "custom-css-reapply-",
 };
 
 const home = process.env.HOME;

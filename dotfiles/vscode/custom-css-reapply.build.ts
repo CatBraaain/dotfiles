@@ -1,4 +1,4 @@
-// Build hook: package the scm-collapse-reapply extension source into a VSIX
+// Build hook: package the custom-css-reapply extension source into a VSIX
 // named with the reserved .data. marker (kept out of the home deployment),
 // then remove the source folder so applying dist leaves no extension sources
 // behind. The apply script installs the VSIX from this dist folder.
@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 async function main(): Promise<void> {
   const distDir = process.cwd();
-  const sourceDir = join(distDir, "scm-collapse-reapply");
+  const sourceDir = join(distDir, "custom-css-reapply");
   const manifestPath = join(sourceDir, "package.json");
   if (!existsSync(manifestPath)) {
     throw new Error("missing extension source: " + manifestPath);

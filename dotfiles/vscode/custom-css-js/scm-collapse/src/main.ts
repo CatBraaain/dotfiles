@@ -36,7 +36,7 @@ function runCollapseCycle(pane: HTMLElement): void {
     timer = 0;
     try {
       if (!pane.isConnected) return;
-      if (!pane.querySelector(EXPANDED_ROW_SELECTOR)) return;
+      if (!pane.querySelector(EXPANDED_ROW_SELECTOR)) return scheduleRetry();
       const button = pane.querySelector(BUTTON_SELECTOR);
       if (!button) return scheduleRetry();
       const actionItem = button.closest(".action-item");
@@ -50,10 +50,14 @@ function runCollapseCycle(pane: HTMLElement): void {
   step();
 }
 
+function isPaneVisible(pane: HTMLElement): boolean {
+  return pane.getClientRects().length > 0;
+}
+
 function check(): void {
   try {
     const pane = document.getElementById(PANE_ID);
-    if (!pane) {
+    if (!pane || !isPaneVisible(pane)) {
       currentPane = null;
       return;
     }
@@ -81,7 +85,14 @@ export function start(): void {
     const observer = new MutationObserver(onMutations);
     // The Loader injects this script before the DOM exists, so observe the
     // document node itself; documentElement and body are not available yet.
-    observer.observe(document, { childList: true, subtree: true });
+    // View switching toggles pane visibility via class/style changes, not
+    // childList mutations.
+    observer.observe(document, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "style"],
+    });
     // Keep a reachable reference; an unreferenced observer can be garbage
     // collected before it ever fires.
     window.__scmCollapseObserver = observer;

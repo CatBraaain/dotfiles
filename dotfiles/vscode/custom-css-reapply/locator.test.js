@@ -3,7 +3,14 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, it } from "bun:test";
-import { findWorkbenchHtml, hasPatchMarker, workbenchSearchDirs } from "./locator.js";
+import {
+  expectedPatchSegment,
+  findWorkbenchHtml,
+  hasPatchMarker,
+  isPatchFresh,
+  patchSegment,
+  workbenchSearchDirs,
+} from "./locator.js";
 
 const tempRoots = [];
 
@@ -12,7 +19,7 @@ afterAll(() => {
 });
 
 function makeTempRoot(name) {
-  const dir = mkdtempSync(join(tmpdir(), `scm-collapse-reapply-${name}-`));
+  const dir = mkdtempSync(join(tmpdir(), `custom-css-reapply-${name}-`));
   tempRoots.push(dir);
   return dir;
 }
@@ -97,5 +104,102 @@ describe("findWorkbenchHtml", () => {
     const mainFilename = join(app, "out", "cli.js");
     const found = findWorkbenchHtml(workbenchSearchDirs({ mainFilename }));
     assert.equal(found, join(app, "out/vs/code/electron-sandbox/workbench/workbench.html"));
+  });
+});
+
+const SESSION_ID = "12345678-abcd-1234-abcd-1234567890ab";
+
+function patchedHtml(segment) {
+  return [
+    "<html><head>",
+    `<!-- !! VSCODE-CUSTOM-CSS-SESSION-ID ${SESSION_ID} !! -->`,
+    "<!-- !! VSCODE-CUSTOM-CSS-START !! -->",
+    `${segment}<!-- !! VSCODE-CUSTOM-CSS-END !! -->`,
+    "</head></html>",
+  ].join("\n");
+}
+
+const variables = { userHome: () => "/home/tester" };
+
+function reader(files) {
+  return (filePath) => {
+    if (!(filePath in files)) throw new Error(`missing file: ${filePath}`);
+    return files[filePath];
+  };
+}
+
+describe("patchSegment", () => {
+  it("extracts the embedded content between the markers", () => {
+    const html = patchedHtml("<script>inject()</script>");
+    assert.equal(patchSegment(html), "<script>inject()</script>");
+  });
+
+  it("returns null without markers", () => {
+    assert.equal(patchSegment("<html><head></head></html>"), null);
+  });
+});
+
+describe("expectedPatchSegment", () => {
+  it("wraps a js import in a script tag", () => {
+    const imports = ["file://${userHome}/custom-css-js/scm-collapse.js"];
+    const read = reader({ "/home/tester/custom-css-js/scm-collapse.js": "start();\n" });
+    assert.equal(expectedPatchSegment(imports, variables, read), "<script>start();\n</script>");
+  });
+
+  it("wraps a css import in a style tag", () => {
+    const imports = ["file://${userHome}/theme.css"];
+    const read = reader({ "/home/tester/theme.css": "body{}" });
+    assert.equal(expectedPatchSegment(imports, variables, read), "<style>body{}</style>");
+  });
+
+  it("concatenates imports in order", () => {
+    const imports = ["file://${userHome}/a.js", "file://${userHome}/b.css"];
+    const read = reader({
+      "/home/tester/a.js": "a();",
+      "/home/tester/b.css": "b{}",
+    });
+    assert.equal(
+      expectedPatchSegment(imports, variables, read),
+      "<script>a();</script><style>b{}</style>",
+    );
+  });
+
+  it("returns null for an unreadable file", () => {
+    const imports = ["file://${userHome}/missing.js"];
+    assert.equal(expectedPatchSegment(imports, variables, reader({})), null);
+  });
+
+  it("returns null for a non-file URL", () => {
+    assert.equal(expectedPatchSegment(["https://example.com/x.js"], variables, reader({})), null);
+  });
+
+  it("returns null for an empty or non-string item", () => {
+    assert.equal(expectedPatchSegment([""], variables, reader({})), null);
+    assert.equal(expectedPatchSegment([42], variables, reader({})), null);
+  });
+});
+
+describe("isPatchFresh", () => {
+  const imports = ["file://${userHome}/custom-css-js/scm-collapse.js"];
+  const read = reader({ "/home/tester/custom-css-js/scm-collapse.js": "start();\n" });
+  const freshHtml = patchedHtml("<script>start();\n</script>");
+
+  it("is true when the embedded content matches the imports", () => {
+    assert.equal(isPatchFresh(freshHtml, imports, variables, read), true);
+  });
+
+  it("is false when the embedded content is stale", () => {
+    assert.equal(
+      isPatchFresh(patchedHtml("<script>old();\n</script>"), imports, variables, read),
+      false,
+    );
+  });
+
+  it("is false when the patch is missing", () => {
+    assert.equal(isPatchFresh("<html><head></head></html>", imports, variables, read), false);
+  });
+
+  it("is null when imports cannot be resolved", () => {
+    assert.equal(isPatchFresh(freshHtml, ["file://${userHome}/missing.js"], variables, read), null);
   });
 });

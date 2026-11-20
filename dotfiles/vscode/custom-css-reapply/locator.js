@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { fileURLToPath } = require("url");
 
 const SESSION_ID_PATTERN = /<!-- !! VSCODE-CUSTOM-CSS-SESSION-ID ([0-9a-fA-F-]+) !! -->/;
 
@@ -10,11 +11,7 @@ const WORKBENCH_DIR_CANDIDATES = [
   path.join("vs", "code", "electron-sandbox"),
 ];
 
-const HTML_FILE_CANDIDATES = [
-  "workbench-dev.html",
-  "workbench.esm.html",
-  "workbench.html",
-];
+const HTML_FILE_CANDIDATES = ["workbench-dev.html", "workbench.esm.html", "workbench.html"];
 
 function listDirectories(dir) {
   try {
@@ -28,10 +25,7 @@ function listDirectories(dir) {
 }
 
 function pushAppOutBases(dirs, seen, root) {
-  for (const base of [
-    path.join(root, "out"),
-    path.join(root, "resources", "app", "out"),
-  ]) {
+  for (const base of [path.join(root, "out"), path.join(root, "resources", "app", "out")]) {
     if (seen.has(base)) continue;
     seen.add(base);
     dirs.push(base);
@@ -92,10 +86,66 @@ function hasPatchMarker(html) {
   return SESSION_ID_PATTERN.test(html);
 }
 
+const PATCH_SEGMENT_PATTERN =
+  /<!-- !! VSCODE-CUSTOM-CSS-START !! -->\n([\s\S]*?)<!-- !! VSCODE-CUSTOM-CSS-END !! -->/;
+
+const DEFAULT_READ_FILE = (filePath) => fs.readFileSync(filePath, "utf-8");
+
+function patchSegment(html) {
+  const match = html.match(PATCH_SEGMENT_PATTERN);
+  return match ? match[1] : null;
+}
+
+// Mirrors the Loader's variable substitution inside file: imports
+// (see be5invis.vscode-custom-css resolveVariable).
+function resolveImportUrl(item, variables) {
+  return String(item).replaceAll(/\$\{([^{}]+)\}/g, (substr, key) => {
+    if (key in variables) return variables[key]();
+    if (key.startsWith("env:")) {
+      const [_, envKey, optionalDefault] = key.split(":");
+      return process.env[envKey] ?? optionalDefault ?? "";
+    }
+    return substr;
+  });
+}
+
+// Rebuilds the exact segment the Loader embeds between its markers, or null
+// when an import cannot be resolved locally (freshness unknown).
+function expectedPatchSegment(imports, variables, readFile = DEFAULT_READ_FILE) {
+  let segment = "";
+  for (const item of imports) {
+    if (typeof item !== "string" || item === "") return null;
+    const resolved = resolveImportUrl(item, variables);
+    if (!/^file:/.test(resolved)) return null;
+    let content;
+    try {
+      content = readFile(fileURLToPath(resolved));
+    } catch {
+      return null;
+    }
+    const extension = path.extname(resolved);
+    if (extension === ".js") segment += `<script>${content}</script>`;
+    else if (extension === ".css") segment += `<style>${content}</style>`;
+    else return null;
+  }
+  return segment;
+}
+
+// true: embedded content matches the imports. false: missing or stale patch.
+// null: imports cannot be resolved locally, freshness is unknown.
+function isPatchFresh(html, imports, variables, readFile = DEFAULT_READ_FILE) {
+  const expected = expectedPatchSegment(imports, variables, readFile);
+  if (expected === null) return null;
+  return patchSegment(html) === expected;
+}
+
 module.exports = {
   SESSION_ID_PATTERN,
   defaultInstallRoots,
+  expectedPatchSegment,
   findWorkbenchHtml,
   hasPatchMarker,
+  isPatchFresh,
+  patchSegment,
   workbenchSearchDirs,
 };
