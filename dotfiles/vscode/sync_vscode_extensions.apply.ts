@@ -58,6 +58,7 @@ const extensionsForLinux = [
 // "targets" lists the OS installations each extension is synced to.
 const localVscodeExtensions: { id: string; targets: Label[] }[] = [
   { id: "todo-lsp.todo", targets: ["linux"] },
+  { id: "agent-kit.agent-kit", targets: ["linux"] },
   { id: "catbraaain.scm-collapse-reapply", targets: ["linux", "windows"] },
 ];
 const localExtensionIds = localVscodeExtensions.map((extension) => extension.id);
@@ -72,6 +73,7 @@ const workspaceVsixPrefixes: Record<string, string> = {
 const home = process.env.HOME;
 if (home === undefined) throw new Error("HOME: unbound variable");
 const todoLspRepo = join(home, "mirrors/github.com/CatBraaain/todo-lsp");
+const agentKitRepo = join(home, "mirrors/github.com/CatBraaain/vscode-agent-kit");
 const defaultBranch = "main";
 
 type Label = "linux" | "windows";
@@ -192,6 +194,8 @@ function localExtensionSource(extension: string) {
   switch (extension) {
     case "todo-lsp.todo":
       return { url: "https://github.com/CatBraaain/todo-lsp.git", repo: todoLspRepo };
+    case "agent-kit.agent-kit":
+      return { url: "https://github.com/CatBraaain/vscode-agent-kit.git", repo: agentKitRepo };
     default:
       throw new Error(`error: unknown local extension '${extension}'`);
   }
@@ -220,6 +224,17 @@ async function buildLocalExtensionVsix(extension: string) {
     rmSync(vsixPath, { force: true });
     await $`bun install --frozen-lockfile 1>&2`.cwd(todoLspRepo);
     await $`just package 1>&2`.cwd(todoLspRepo);
+  } else if (extension === "agent-kit.agent-kit") {
+    const version = (
+      await $`node -p "require('./package.json').version"`.cwd(agentKitRepo).text()
+    ).replace(/\n+$/, "");
+    vsixPath = join(agentKitRepo, `agent-kit-${version}.vsix`);
+    rmSync(vsixPath, { force: true });
+    await $`bun install --frozen-lockfile 1>&2`.cwd(agentKitRepo);
+    await $`bun run build 1>&2`.cwd(agentKitRepo);
+    await $`bunx @vscode/vsce package --allow-missing-repository --skip-license --no-dependencies 1>&2`.cwd(
+      agentKitRepo,
+    );
   } else {
     throw new Error(`error: unknown local extension '${extension}'`);
   }
