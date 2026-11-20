@@ -1,7 +1,10 @@
 // Compile cache shared by build hooks that produce standalone executables
 // (bun build --compile). dist is rebuilt from scratch on every build, so the
-// cached binaries live outside dist under <repoRoot>/.cache/compile-cache/<name>/
-// and are keyed by a hash of the CLI source tree plus the Bun version.
+// cached binaries live outside dist under
+// <repoRoot>/.cache/compile-cache/<name>/<platform>/ and are keyed by a hash of
+// the CLI source tree plus the Bun version. Entries are separated per platform
+// so builds on one host (for example WSL) do not evict or reuse the binaries
+// built on another host sharing the same repository (for example Windows).
 import { copyFile, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -20,6 +23,7 @@ export async function compileWithCache(request: CompileRequest): Promise<void> {
     ".cache",
     "compile-cache",
     request.name,
+    process.platform,
   );
   const cachePath = join(cacheDir, await hashSource(request));
   try {
