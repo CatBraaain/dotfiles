@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
-import startupExtension, { startupScriptPath, type SpawnFn } from "./index";
+import startupExtension, { spawnTarget, startupScriptPath, type SpawnFn } from "./index";
 
 interface FakeChild {
   errorListener: (() => void) | undefined;
@@ -70,6 +70,24 @@ async function startSession(
 describe("スクリプトのパス", () => {
   it(".agents/scripts/startup を指す", () => {
     assert.equal(startupScriptPath("/home/u"), "/home/u/.agents/scripts/startup");
+  });
+});
+
+describe("spawn コマンド", () => {
+  it("POSIX ではスクリプトを実行ビット付きで直接実行する", () => {
+    const target = spawnTarget(startupScriptPath("/home/u"), "linux");
+    assert.deepEqual(target, {
+      command: "/home/u/.agents/scripts/startup",
+      args: [],
+    });
+  });
+
+  it("windows では bun 経由でスクリプトを実行する", () => {
+    const target = spawnTarget(startupScriptPath("C:/Users/u"), "win32");
+    assert.deepEqual(target, {
+      command: "bun",
+      args: ["C:/Users/u/.agents/scripts/startup"],
+    });
   });
 });
 

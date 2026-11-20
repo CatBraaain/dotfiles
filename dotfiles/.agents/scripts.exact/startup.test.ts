@@ -103,6 +103,91 @@ for (const { status, launches, label } of cases) {
   });
 }
 
+function writeBrowseStub(home: string): void {
+  const cliDir = join(home, ".agents", "cli");
+  mkdirSync(cliDir, { recursive: true });
+  const stub = join(cliDir, "browse");
+  writeFileSync(stub, '#!/bin/sh\nprintf "%s\\n" "$@" >> "$PROBE_LOG"\n');
+  chmodSync(stub, 0o755);
+}
+
+async function runScript(env: Record<string, string>): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  const child = Bun.spawn([process.execPath, scriptPath], {
+    cwd: env.HOME,
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
+test("launches browse server start when the camoufox port is closed", async () => {
+  const home = mkdtempSync(join(tmpdir(), "startup-camoufox-"));
+  const spawnLog = join(home, "spawn.log");
+  writeBrowseStub(home);
+
+  const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+  const camoufoxPort = probe.port;
+  probe.stop(true);
+
+  try {
+    const { exitCode, stdout, stderr } = await runScript({
+      HOME: home,
+      PATH: home,
+      TMPDIR: home,
+      XDG_CACHE_HOME: home,
+      CAMOUFOX_BASE_URL: `ws://127.0.0.1:${camoufoxPort}/camoufox`,
+      PROBE_LOG: spawnLog,
+    });
+    assert.equal(exitCode, 0);
+    assert.equal(stdout, "");
+    assert.equal(stderr, "");
+
+    await waitForFile(spawnLog, 2000);
+    const stubArgs = readFileSync(spawnLog, "utf8").trim().split("\n");
+    assert.deepEqual(stubArgs, ["server", "start"]);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("skips browse server start when the camoufox port is open", async () => {
+  const home = mkdtempSync(join(tmpdir(), "startup-camoufox-"));
+  const spawnLog = join(home, "spawn.log");
+  writeBrowseStub(home);
+
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+
+  try {
+    const { exitCode, stdout, stderr } = await runScript({
+      HOME: home,
+      PATH: home,
+      TMPDIR: home,
+      XDG_CACHE_HOME: home,
+      CAMOUFOX_BASE_URL: `ws://127.0.0.1:${server.port}/camoufox`,
+      PROBE_LOG: spawnLog,
+    });
+    assert.equal(exitCode, 0);
+    assert.equal(stdout, "");
+    assert.equal(stderr, "");
+
+    await Bun.sleep(150);
+    assert.equal(existsSync(spawnLog), false);
+  } finally {
+    server.stop(true);
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 async function waitForFile(path: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!existsSync(path) && Date.now() < deadline) {

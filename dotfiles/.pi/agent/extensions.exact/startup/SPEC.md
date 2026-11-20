@@ -11,12 +11,14 @@ pi のセッション開始時に、共通primingスクリプト `~/.agents/scri
 
 ## spawn の条件
 
-| 項目 | 値 |
-| --- | --- |
-| コマンド | `startupScriptPath()` = `~/.agents/scripts/startup`（実行ビット付きで直接実行） |
-| 引数 | なし |
-| `detached` | `true`（pi終了後も子プロセスが生きる） |
-| `stdio` | `"ignore"` |
+| 項目 | POSIX | windows |
+| --- | --- | --- |
+| コマンド | `startupScriptPath()` = `~/.agents/scripts/startup`（実行ビット付きで直接実行） | `bun`（PATH から解決） |
+| 引数 | なし | スクリプトのパス 1件 |
+| `detached` | `true`（pi終了後も子プロセスが生きる） | 同じ |
+| `stdio` | `"ignore"` | 同じ |
+
+windows には実行ビットと shebang による解決がないため、bun 経由でスクリプトを実行する。bun が PATH に無い場合は spawn が失敗し、「失敗時」の節どおり握り潰す。
 
 spawnした子プロセスは `unref()` し、pi の終了を妨げない。
 

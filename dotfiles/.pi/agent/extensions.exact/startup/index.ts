@@ -17,11 +17,22 @@ export function startupScriptPath(home: string = homedir()): string {
   return join(home, ".agents", "scripts", "startup");
 }
 
+export type SpawnTarget = { command: string; args: readonly string[] };
+
+export function spawnTarget(
+  scriptPath: string,
+  platform: NodeJS.Platform = process.platform,
+): SpawnTarget {
+  if (platform === "win32") return { command: "bun", args: [scriptPath] };
+  return { command: scriptPath, args: [] };
+}
+
 export default function startupExtension(pi: ExtensionAPI, spawnProcess: SpawnFn = spawn): void {
   pi.on("session_start", async (event) => {
     if (event.reason !== "startup") return;
+    const { command, args } = spawnTarget(startupScriptPath());
     try {
-      const child = spawnProcess(startupScriptPath(), [], { detached: true, stdio: "ignore" });
+      const child = spawnProcess(command, args, { detached: true, stdio: "ignore" });
       // Script absence arrives as an async "error" event: without a listener
       // it would crash pi, even though priming is optional here.
       child.on("error", () => {});

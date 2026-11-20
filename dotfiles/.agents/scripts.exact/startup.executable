@@ -3,6 +3,7 @@ import { $ } from "bun";
 import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { connect } from "node:net";
+import { homedir } from "node:os";
 
 await Promise.allSettled([updatePi(), startCamoufox(), startOpenserp()]);
 process.exit(0);
@@ -17,8 +18,13 @@ async function updatePi() {
   startDetached(flock, ["-n", lock, pi, "update", "--all"]);
 }
 
+function browseCliPath(): string {
+  const suffix = process.platform === "win32" ? ".exe" : "";
+  return `${homedir()}/.agents/cli/browse${suffix}`;
+}
+
 async function startCamoufox() {
-  const cli = `${process.env.HOME}/.agents/cli/browse`;
+  const cli = browseCliPath();
   if (!(await Bun.file(cli).exists())) return;
 
   const url = new URL(process.env.CAMOUFOX_BASE_URL || "ws://127.0.0.1:9378/camoufox");
@@ -26,7 +32,7 @@ async function startCamoufox() {
   const port = Number(url.port || (url.protocol === "wss:" ? "443" : "80"));
   if (await portOpen(host, port)) return;
 
-  const logDir = `${process.env.XDG_CACHE_HOME || `${process.env.HOME}/.cache`}/pi/web-search`;
+  const logDir = `${process.env.XDG_CACHE_HOME || `${homedir()}/.cache`}/pi/web-search`;
   await $`mkdir -p ${logDir}`.quiet();
   const log = openSync(`${logDir}/camoufox-server.log`, "a");
   try {
