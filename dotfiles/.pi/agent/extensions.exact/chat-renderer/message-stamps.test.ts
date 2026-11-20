@@ -370,6 +370,19 @@ describe("user message boxes", () => {
 });
 
 describe("assistant message stamps", () => {
+  it("keeps one timestamp row across repeated renders of cached lines", () => {
+    const component = textResponse("hello");
+    const baseline = renderWithoutBox(component, 80);
+    const lengths: number[] = [];
+    for (let index = 0; index < 3; index++) {
+      const lines = component.render(80);
+      lengths.push(lines.length);
+      assert.equal(stripTerminalSequences(lines.at(-1)!), " ".repeat(72) + stamp);
+    }
+    assert.deepEqual(lengths, [baseline.length + 1, baseline.length + 1, baseline.length + 1]);
+    assert.deepEqual(renderWithoutBox(component, 80), baseline);
+  });
+
   it("appends a right-aligned timestamp row without a background", () => {
     const component = textResponse("hello");
     const baseline = renderWithoutBox(component, 80);

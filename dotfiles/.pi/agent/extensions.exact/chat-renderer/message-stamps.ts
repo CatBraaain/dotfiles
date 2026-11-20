@@ -29,8 +29,9 @@ export function installMessageStamps(theme: Theme): () => void {
     if (!active || lines.length === 0) return lines;
     const part = this as unknown as AssistantPart;
     if (part.hasToolCalls) return lines;
-    appendStamp(lines, width, stampTime(part.timestamp ?? part.lastMessage?.timestamp));
-    return lines;
+    const time = stampTime(part.timestamp ?? part.lastMessage?.timestamp);
+    if (!displayTheme || time === "") return lines;
+    return [...lines, displayTheme.fg("dim", stampSuffix("", time, width))];
   }
 
   function renderUser(this: UserMessageComponent, width: number): string[] {
@@ -68,11 +69,6 @@ export function recordMessageStart(message: { role: string; timestamp?: number }
   if (message.role === "user" && typeof message.timestamp === "number") {
     pendingUserStampsMs.push(message.timestamp);
   }
-}
-
-function appendStamp(lines: string[], width: number, stamp: string): void {
-  if (!displayTheme || stamp === "") return;
-  lines.push(displayTheme.fg("dim", stampSuffix("", stamp, width)));
 }
 
 function renderMessageBox(
