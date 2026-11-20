@@ -10,7 +10,7 @@
 // elevated, so the relaunch happens at most once.
 
 import { mkdtemp } from "node:fs/promises";
-import { readdirSync, rmSync, symlinkSync } from "node:fs";
+import { constants, copyFileSync, mkdirSync, readdirSync, rmSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { markingPath, readInstallProfile, type InstallProfile } from "./marking.ts";
@@ -94,6 +94,9 @@ async function main(): Promise<void> {
   installWingetPackages(profile);
   refreshProcessPath();
   installPi();
+  await installOpenSerp().catch((error: unknown) =>
+    console.error(`openserp install failed: ${message(error)}`),
+  );
   await installRustDesk().catch((error: unknown) =>
     console.error(`rustdesk install failed: ${message(error)}`),
   );
@@ -148,6 +151,36 @@ function refreshProcessPath(): void {
     "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')";
   const combined = output(["powershell", "-NoProfile", "-Command", script]);
   if (combined) process.env.Path = combined;
+}
+
+async function installOpenSerp(): Promise<void> {
+  if (Bun.which("openserp")) return;
+  const releaseArch = process.arch === "x64" ? "amd64" : process.arch;
+  const directory = await mkdtemp(join(tmpdir(), "bootstrap-openserp-"));
+  const archive = join(directory, "openserp.tgz");
+  try {
+    run([
+      "gh",
+      "release",
+      "download",
+      "--repo",
+      "karust/openserp",
+      "--pattern",
+      `openserp-windows-${releaseArch}-*.tgz`,
+      "--output",
+      archive,
+    ]);
+    run(["tar.exe", "-xzf", archive, "-C", directory, "openserp.exe"]);
+    const linksDir = wingetLinksDir();
+    mkdirSync(linksDir, { recursive: true });
+    copyFileSync(
+      join(directory, "openserp.exe"),
+      join(linksDir, "openserp.exe"),
+      constants.COPYFILE_EXCL,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 const rustDeskRepo = "rustdesk/rustdesk";
@@ -215,8 +248,12 @@ function removeDesktopShortcuts(): void {
   }
 }
 
+function wingetLinksDir(): string {
+  return join(localAppData(), "Microsoft", "WinGet", "Links");
+}
+
 function linkWingetPackageExes(): void {
-  const linksDir = join(localAppData(), "Microsoft", "WinGet", "Links");
+  const linksDir = wingetLinksDir();
   const packagesDir = join(localAppData(), "Microsoft", "WinGet", "Packages");
   for (const relative of readdirSync(packagesDir, { recursive: true, encoding: "utf8" })) {
     if (!relative.endsWith(".exe")) continue;
