@@ -71,9 +71,13 @@ winconfig *args:
   bun undotfiles/winconfig/engine.ts @args
   exit $LASTEXITCODE
 
+[positional-arguments]
+[script("pwsh", "-NoProfile", "-File")]
 [windows]
-wintasks:
-  gsudo wintasks apply --path undotfiles/wintasks/wintasks.yaml
+wintasks *args:
+  $all = @("--path", "undotfiles/wintasks/wintasks.yaml") + $args
+  bun undotfiles/wintasks @all
+  exit $LASTEXITCODE
 
 [windows]
 msime mode="apply":

@@ -11,7 +11,8 @@
     "typeRoots": [
       "./node_modules/@types",
       "./dotfiles-manager/node_modules/@types",
-      "./undotfiles/winconfig/node_modules/@types"
+      "./undotfiles/winconfig/node_modules/@types",
+      "./undotfiles/wintasks/node_modules/@types"
     ],
     "types": ["bun", "node"]
   },
@@ -27,7 +28,8 @@
     "dotfiles/.agents/**/*.postapply.ts",
     "dotfiles/.agents/**/*.postapply-machine.ts",
     "dotfiles/**/*.edit.ts",
-    "undotfiles/winconfig/engine.ts"
+    "undotfiles/winconfig/engine.ts",
+    "undotfiles/wintasks/src/*.ts"
   ],
   "exclude": [
     "dotfiles-manager/**/*.test.ts",
