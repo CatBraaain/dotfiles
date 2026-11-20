@@ -10,7 +10,7 @@ description: >-
 
 - 本skillはspec・requirements形式（`SPEC.md`・`REQUIREMENTS.md`・`specs/<feature-name>.spec.md`等）の要否、配置、作成、修正を所有する。
 - CSDDの適用条件、正本の確定、CSDD適合性レビュー、乖離検知、収束時の引継ぎは`../csdd/SKILL.md`が所有する。4軸の照合規則を複製しない。
-- 文書の自己完結は`../readable-docs/SKILL.md`の「文書の自己完結」、一般的な重複排除は同Skillの「重複の排除」、記法の選択は同Skillの「記法の選択」を正本とする。
+- 文書の自己完結は`../writing/references/docs.md`の「文書の自己完結」、一般的な重複排除は同ファイルの「重複の排除」、記法の選択は同ファイルの「記法の選択」を正本とする。
 
 ## 正本の階層
 
@@ -54,7 +54,7 @@ description: >-
 - requirementsの変更には人間の承認が必要である。人間の回答によって確定した詳細仕様はspecへ反映し、人間に同じ内容の再承認を求めない。
 - 記載例は、対象固有の課題・目的・期待する成果・制約に置き換える:
 
-````markdown
+```markdown
 # REQUIREMENTS.md
 
 この文書は、ローカル文書検索の要件を確認する利用者と開発者に向けて、解決する課題と期待する成果を定める。
@@ -74,7 +74,7 @@ description: >-
 ## 制約
 
 検索対象の文書と検索処理は、利用者の端末内で扱う。
-````
+```
 
 ## specの作成・修正
 
@@ -106,4 +106,4 @@ description: >-
 ## 出力
 
 - 完了報告は作成・更新した正本のパス、`Verify: n/n 合格`、各セルフチェックの観点・判定（合格または適用外）・正本内根拠を含める。未実行の確認を合格と報告しない。
-- セルフチェックは、「観測対象」（`../csdd/SKILL.md`）、「requirementsの作成」「specの作成・修正」の各規則と、`../readable-docs/SKILL.md`の「文書の自己完結」を個別に確認する。照合は対象に存在する上流に対してだけ行い、存在しない上流との照合は適用外とする。specとrequirementsの両方がある対象は、CSDD適合性レビューのcoverage第1段（`../csdd/SKILL.md`）をセルフチェックでも確認する。
+- セルフチェックは、「観測対象」（`../csdd/SKILL.md`）、「requirementsの作成」「specの作成・修正」の各規則と、`../writing/references/docs.md`の「文書の自己完結」を個別に確認する。照合は対象に存在する上流に対してだけ行い、存在しない上流との照合は適用外とする。specとrequirementsの両方がある対象は、CSDD適合性レビューのcoverage第1段（`../csdd/SKILL.md`）をセルフチェックでも確認する。

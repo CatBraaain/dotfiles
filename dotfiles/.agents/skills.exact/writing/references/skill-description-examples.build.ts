@@ -1,6 +1,7 @@
 // Builds references/skill-description-examples.md, the few-shot corpus of
-// every description field in the anthropics/skills mirror that
-// SKILL.md §SKILL.mdについて points to as the canonical examples. Runs as a
+// every description field in the anthropics/skills mirror that the
+// SKILL.mdについて section of references/effective-prompt.md points to
+// as the canonical examples. Runs as a
 // local build hook on every build so the examples track upstream without
 // manual curation. The extraction lives in a sibling file executed as a child
 // bun process: gray-matter is resolved by Bun auto-install at runtime, which
@@ -16,7 +17,7 @@ async function main(): Promise<void> {
   const { buildHookContext } = await import(`${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`);
   const { syncGithubMirror } = await buildHookContext();
   const mirror = await syncGithubMirror("anthropics/skills");
-  const output = join(process.cwd(), "references", "skill-description-examples.md");
+  const output = join(process.cwd(), "skill-description-examples.md");
   const extractor = join(import.meta.dir, "skill-description-examples.extract.ts");
   try {
     await $`bun ${extractor} ${mirror} ${output}`.quiet();

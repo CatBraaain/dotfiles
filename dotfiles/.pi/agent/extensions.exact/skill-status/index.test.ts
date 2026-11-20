@@ -514,10 +514,10 @@ describe("UI", () => {
     const { context, widgetCalls } = widgetContext(true, availableWidth);
 
     for (const skillName of [
-      "readable-coding",
+      "research-strategy",
       "diagnosing-bugs",
       "sdd",
-      "instruction-authoring",
+      "thinking-partner",
     ]) {
       recordSkill(handlers, context, skillName);
     }

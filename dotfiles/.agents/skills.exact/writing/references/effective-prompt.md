@@ -1,10 +1,6 @@
----
-name: instruction-authoring
-description: >-
-  SKILL.md、AGENTS.md、SPEC.md・REQUIREMENTS.md などの指示・仕様テキスト、システムプロンプト、プロンプトテンプレートなど、AI に与える指示テキストの作成・編集・レビュー・リファクタリングや、その内容・適用境界の相談に使う品質基準。AI の行動を指示しない人間向け文書、実装コード、静的な設定値だけの変更には使わない。spec・requirements の要否・配置は skill `specs`・`csdd` が所有する。
----
-
 # 指示テキストの品質基準
+
+対象は、SKILL.md・AGENTS.md・SPEC.md・REQUIREMENTS.md などの指示・仕様テキスト、システムプロンプト、プロンプトテンプレートなど、AI に与える指示テキストの作成・編集・レビュー・リファクタリング。AI の行動を指示しない人間向け文書、実装コード、静的な設定値だけの変更には使わない。spec・requirements の要否・配置は skill `specs`・`csdd` が所有する。
 
 ## Decision Ladder記法
 
@@ -32,9 +28,9 @@ Decision Ladder は、優先順位が明確な行動を記述するための記�
 
 ## 既存文書の構造リファクタリング
 
-指示テキストは文書でもある。構造リファクタリングの定義、手順、照合は、readable-docs（`../readable-docs/SKILL.md` の「既存文書の構造リファクタリング」）が所有する。
+指示テキストは文書でもある。構造リファクタリングの定義、手順、照合は、同フォルダの readable-docs.md（「既存文書の構造リファクタリング」）が所有する。
 
-複数の節またはファイルを簡素化、統合、再編するときは、readable-docs が所有する構造リファクタリングを適用する。対応表、承認、照合の規則をここへ再掲しない。
+複数の節またはファイルを簡素化、統合、再編するときは、readable-docs.md が所有する構造リファクタリングを適用する。対応表、承認、照合の規則をここへ再掲しない。
 
 ## 最小変更
 
@@ -79,7 +75,7 @@ Decision Ladder は、優先順位が明確な行動を記述するための記�
 - frontmatter の `description` には what（その skill が何をする・どういう規範か）と when（どういうときに発火するか）を書く。what を先に書き、when が what に内包できない限り when を続ける。発火条件は `description` 内で完結させ、本文には書かない。起動後の作業境界は本文に置く。
 - what は機能要約にとどめ、手法・判断軸・適用境界の細目を書かない。それらは本文の仕事である。
 - 否定条件（使わない対象）は、誤発火が現実に起きる排他境界があるときだけ書く。
-- `description`の書き方の正本は実例集 `references/skill-description-examples.md`（公式 skills 全件の description）。description を書く・調整するときはこれを読み、書き方を合わせる。
+- `description`の書き方の正本は実例集 `skill-description-examples.md`（公式 skills 全件の description）。description を書く・調整するときはこれを読み、書き方を合わせる。
 
 ### SKILL.md の本文構成
 

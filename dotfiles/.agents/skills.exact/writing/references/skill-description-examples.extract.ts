@@ -1,6 +1,6 @@
 // Extracts the description field from every SKILL.md in the anthropics/skills
-// mirror and writes the few-shot list that SKILL.md §SKILL.mdについて points to
-// (references/skill-description-examples.md). This file is deliberately not
+// mirror and writes the few-shot list that the SKILL.mdについて section of
+// references/effective-prompt.md points to. This file is deliberately not
 // named *.build.ts: gray-matter is resolved by Bun auto-install at runtime
 // (this repo has no root package.json, so tsc cannot see it and must not
 // include this file), and the version is pinned in the import against
