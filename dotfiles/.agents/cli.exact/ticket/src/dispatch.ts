@@ -7,16 +7,23 @@ import { join } from "node:path";
 import { Database, SQLiteError } from "bun:sqlite";
 import dispatchPromptPath from "../dispatch-prompt.md" with { type: "file" };
 
-const OPTION_KEYS = ["--max", "--interval", "--prefix"];
+const OPTION_KEYS = ["--max"];
+
+const SESSION_NAME_PREFIX = "handle_";
+
+const DEFAULT_TICK_MS = 3_000;
 
 export interface DispatchOptions {
   max: number;
-  prefix: string;
-  interval: number;
 }
 
 export const DISPATCH_USAGE =
-  "ticket dispatch list\n       ticket dispatch [-p|--project <project>] [-a|--all] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch start [-p|--project <project>] [-a|--all] [--max N] [--interval SEC] [--prefix NAME]\n       ticket dispatch stop [-p|--project <project>] [-a|--all]";
+  "ticket dispatch list\n       ticket dispatch [-p|--project <project>] [-a|--all] [--max N]\n       ticket dispatch start [-p|--project <project>] [-a|--all] [--max N]\n       ticket dispatch stop [-p|--project <project>] [-a|--all]";
+
+function tickMs(): number {
+  const override = Number(process.env.TICKET_TEST_TICK_MS);
+  return Number.isFinite(override) && override > 0 ? override : DEFAULT_TICK_MS;
+}
 
 export function sessionName(prefix: string, id: string, all = false): string {
   if (!all) return prefix + id.split(".").join("_");
@@ -177,19 +184,7 @@ export function parseDispatchArgs(argv: string[]): {
   if (action !== "start") return { action, project, all };
   const max = given.has("--max") ? Number(given.get("--max")) : 5;
   if (!Number.isInteger(max) || max < 1) return { error: "--max must be an integer >= 1" };
-  const interval = given.has("--interval") ? Number(given.get("--interval")) : 30;
-  if (!Number.isFinite(interval) || interval <= 0)
-    return { error: "--interval must be a number > 0" };
-  return {
-    action: "start",
-    project,
-    all,
-    options: {
-      max,
-      prefix: given.get("--prefix") ?? "fix_",
-      interval,
-    },
-  };
+  return { action: "start", project, all, options: { max } };
 }
 
 function timestamp(date = new Date()): string {
@@ -244,6 +239,7 @@ function sessionEnvArgs(project: string | null, role: string): string[] {
     HOME: process.env.HOME,
     PATH: process.env.PATH,
     TICKET_TEST_TMUX_SOCKET: process.env.TICKET_TEST_TMUX_SOCKET,
+    TICKET_TEST_TICK_MS: process.env.TICKET_TEST_TICK_MS,
     [PROJECT_ENV]: project ?? "",
     [ROLE_ENV]: role,
   };
@@ -456,7 +452,7 @@ export async function run(deps: RunDeps): Promise<void> {
       running.delete(entry.id);
     }
     for (const id of plan.launches) {
-      const name = sessionName(options.prefix, id, deps.all);
+      const name = sessionName(SESSION_NAME_PREFIX, id, deps.all);
       const promptId = deps.all ? splitTicketKey(id)[1] : id;
       started.add(id);
       if (deps.launch(id, name, buildPrompt(template, promptId)) !== false) {
@@ -465,7 +461,7 @@ export async function run(deps: RunDeps): Promise<void> {
       }
     }
     if (plan.finished) break;
-    await deps.sleepMs(options.interval * 1000);
+    await deps.sleepMs(tickMs());
   }
   deps.log("dispatcher finished");
 }

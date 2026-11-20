@@ -76,6 +76,7 @@ if (id !== "b") {
     SHELL: "/bin/sh",
     PATH: `${bin}:${process.env.PATH ?? ""}`,
     TICKET_TEST_TMUX_SOCKET: socket,
+    TICKET_TEST_TICK_MS: "50",
   };
   return { root, home, cwd, project, store, socket, records, env };
 }
@@ -89,7 +90,7 @@ function writeTicket(store: string, id: string, status: string) {
 function startServer(fixture: Fixture, env = fixture.env) {
   const started = isolatedTmux(
     fixture.socket,
-    ["-f", "/dev/null", "new-session", "-d", "-s", "e2e_a_v1_extra", "-c", fixture.cwd, "sleep 60"],
+    ["-f", "/dev/null", "new-session", "-d", "-s", "handle_a_v1_extra", "-c", fixture.cwd, "sleep 60"],
     env,
   );
   assert.equal(started.status, 0, started.stderr);
@@ -136,7 +137,7 @@ describe("ticket dispatch real tmux", () => {
         writeTicket(store, "a.v1", "open");
         writeFileSync(join(cwd, "fix-prompt-template.txt"), "ticket=wrong-cwd-template");
         startServer(fixture);
-        const start = cli(fixture, ["dispatch", "--interval", "0.05"]);
+        const start = cli(fixture, ["dispatch"]);
         assert.equal(start.status, 0, start.stderr);
         await waitFinished(fixture);
         const expected = expectedPrompt("a.v1");
@@ -149,7 +150,7 @@ describe("ticket dispatch real tmux", () => {
           TICKET_DISPATCH_ROLE: "pi",
           TICKET_DISPATCH_ID: "a.v1",
         })) {
-          const metadata = isolatedTmux(socket, ["show-environment", "-t", "=fix_a_v1", key]);
+          const metadata = isolatedTmux(socket, ["show-environment", "-t", "=handle_a_v1", key]);
           assert.equal(metadata.status, 0, metadata.stderr);
           assert.equal(metadata.stdout, `${key}=${value}\n`);
         }
@@ -191,7 +192,7 @@ describe("ticket dispatch real tmux", () => {
         startServer(fixture, env);
         const result = cli(
           fixture,
-          ["dispatch", ...action, flag, project, "--interval", "0.05"],
+          ["dispatch", ...action, flag, project],
           caller,
           env,
         );
@@ -226,7 +227,7 @@ describe("ticket dispatch real tmux", () => {
           isolatedTmux(socket, ["has-session", "-t", `=${dispatcherName(project)}`]).status,
           0,
         );
-        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=fix_a_v1"]).status, 0);
+        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=handle_a_v1"]).status, 0);
       } finally {
         isolatedTmux(socket, ["kill-server"]);
         rmSync(root, { recursive: true, force: true });
@@ -312,7 +313,7 @@ describe("ticket dispatch real tmux", () => {
           ? [process.env.TICKET_DISPATCH_BIN]
           : [process.execPath, CLI];
         const starts = [0, 1].map(() =>
-          Bun.spawn([...command, "dispatch", "start", "--interval", "0.05"], {
+          Bun.spawn([...command, "dispatch", "start"], {
             cwd,
             env,
             stdout: "pipe",
@@ -341,7 +342,7 @@ describe("ticket dispatch real tmux", () => {
         );
         assert.equal(readFileSync(join(records, "launches"), "utf8"), "a.v1\n");
         assert.equal(cli(fixture, ["dispatch", "stop"]).status, 0);
-        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=fix_a_v1"]).status, 0);
+        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=handle_a_v1"]).status, 0);
       } finally {
         isolatedTmux(socket, ["kill-server"]);
         rmSync(root, { recursive: true, force: true });
@@ -365,15 +366,7 @@ describe("ticket dispatch real tmux", () => {
         ])
           writeTicket(store, id!, status!);
         startServer(fixture);
-        const result = cli(fixture, [
-          "dispatch",
-          "--max",
-          "2",
-          "--prefix",
-          "e2e_",
-          "--interval",
-          "0.1",
-        ]);
+        const result = cli(fixture, ["dispatch", "--max", "2"]);
         assert.equal(result.status, 0, result.stderr);
         assert.equal(result.stderr, "");
         assert.match(result.stdout, /dispatcher started:/);
@@ -389,7 +382,7 @@ describe("ticket dispatch real tmux", () => {
             args: [expected],
             cwd,
           });
-          const name = `=e2e_${id.replaceAll(".", "_")}`;
+          const name = `=handle_${id.replaceAll(".", "_")}`;
           const session = isolatedTmux(socket, ["has-session", "-t", name]);
           if (id === "b") {
             assert.notEqual(session.status, 0);
@@ -407,7 +400,7 @@ describe("ticket dispatch real tmux", () => {
             );
           }
         }
-        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=e2e_a_v1_extra"]).status, 0);
+        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=handle_a_v1_extra"]).status, 0);
       } finally {
         isolatedTmux(socket, ["kill-server"]);
         rmSync(root, { recursive: true, force: true });
@@ -428,7 +421,7 @@ describe("ticket dispatch real tmux", () => {
         startServer(fixture, env);
         const start = cli(
           fixture,
-          ["dispatch", "start", "--max", "1", "--prefix", "e2e_", "--interval", "0.05"],
+          ["dispatch", "start", "--max", "1"],
           cwd,
           env,
         );
@@ -447,7 +440,7 @@ describe("ticket dispatch real tmux", () => {
             args: [expectedPrompt(id)],
             cwd,
           });
-          const name = `=e2e_${id.replaceAll(".", "_")}`;
+          const name = `=handle_${id.replaceAll(".", "_")}`;
           const session = isolatedTmux(socket, ["has-session", "-t", name]);
           if (id === "b") {
             assert.notEqual(session.status, 0);
@@ -498,7 +491,7 @@ describe("ticket dispatch real tmux", () => {
         startServer(fixture, env);
         const first = cli(
           fixture,
-          ["dispatch", "start", "--max", "2", "--prefix", "e2e_", "--interval", "0.05"],
+          ["dispatch", "start", "--max", "2"],
           cwd,
           env,
         );
@@ -513,7 +506,7 @@ describe("ticket dispatch real tmux", () => {
           "display-message",
           "-p",
           "-t",
-          "=e2e_a_v1:0.0",
+          "=handle_a_v1:0.0",
           "#{pane_pid}",
         ]).stdout;
         assert.match(piPid, /^\d+\n$/);
@@ -523,7 +516,7 @@ describe("ticket dispatch real tmux", () => {
         const stop = cli(fixture, ["dispatch", "stop"], otherCwd, env);
         assert.equal(stop.status, 0, stop.stderr);
         assert.match(stop.stdout, /dispatcher stopped:/);
-        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=e2e_a_v1"]).status, 0);
+        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=handle_a_v1"]).status, 0);
         assert.notEqual(
           isolatedTmux(socket, ["has-session", "-t", `=${dispatcherName("project")}`]).status,
           0,
@@ -540,10 +533,6 @@ describe("ticket dispatch real tmux", () => {
             ...(explicitProject ? ["-p", "project"] : []),
             "--max",
             "1",
-            "--prefix",
-            "changed_",
-            "--interval",
-            "0.05",
           ],
           otherCwd,
           env,
@@ -551,7 +540,7 @@ describe("ticket dispatch real tmux", () => {
         assert.equal(restart.status, 0, restart.stderr);
         assert.equal(readFileSync(join(records, "launches"), "utf8"), "a.v1\n");
         assert.equal(
-          isolatedTmux(socket, ["display-message", "-p", "-t", "=e2e_a_v1:0.0", "#{pane_pid}"])
+          isolatedTmux(socket, ["display-message", "-p", "-t", "=handle_a_v1:0.0", "#{pane_pid}"])
             .stdout,
           piPid,
         );
@@ -561,9 +550,9 @@ describe("ticket dispatch real tmux", () => {
         );
         await waitFor(
           () => existsSync(join(records, "c.json")),
-          "new prefix ticket did not start after adoption release",
+          "ticket did not start after adoption release",
         );
-        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=changed_c"]).status, 0);
+        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=handle_c"]).status, 0);
         assert.deepEqual(JSON.parse(readFileSync(join(records, "c.json"), "utf8")), {
           args: [expectedPrompt("c")],
           cwd: launchCwd,
@@ -576,19 +565,19 @@ describe("ticket dispatch real tmux", () => {
         assert.equal(cli(fixture, ["set", "c", '{"status":"closed"}']).status, 0);
         await waitFinished(fixture);
         assert.deepEqual(readdirSync(otherCwd), [".git"]);
-        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=e2e_a_v1"]).status, 0);
+        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=handle_a_v1"]).status, 0);
         assert.equal(
-          isolatedTmux(socket, ["display-message", "-p", "-t", "=e2e_a_v1:0.0", "#{pane_pid}"])
+          isolatedTmux(socket, ["display-message", "-p", "-t", "=handle_a_v1:0.0", "#{pane_pid}"])
             .stdout,
           piPid,
         );
-        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=changed_c"]).status, 0);
+        assert.equal(isolatedTmux(socket, ["has-session", "-t", "=handle_c"]).status, 0);
         assert.equal(
           isolatedTmux(socket, [
             "display-message",
             "-p",
             "-t",
-            "=changed_c:0.0",
+            "=handle_c:0.0",
             "#{pane_pid}",
           ]).stdout.trim(),
           readFileSync(join(records, "c.pid"), "utf8"),
@@ -613,7 +602,7 @@ describe("ticket dispatch real tmux", () => {
         startServer(fixture);
         for (const [name, metadata] of [
           [
-            "e2e_a_v1",
+            "handle_a_v1",
             [
               "-e",
               "TICKET_DISPATCH_PROJECT=foreign",
@@ -623,7 +612,7 @@ describe("ticket dispatch real tmux", () => {
               "TICKET_DISPATCH_ID=a.v1",
             ],
           ],
-          ["e2e_b", []],
+          ["handle_b", []],
         ] as const) {
           const result = isolatedTmux(socket, [
             "new-session",
@@ -635,11 +624,11 @@ describe("ticket dispatch real tmux", () => {
           ]);
           assert.equal(result.status, 0, result.stderr);
         }
-        const start = cli(fixture, ["dispatch", "--prefix", "e2e_", "--interval", "0.05"]);
+        const start = cli(fixture, ["dispatch"]);
         assert.equal(start.status, 0, start.stderr);
         await waitFinished(fixture);
         assert.equal(existsSync(join(records, "launches")), false);
-        for (const name of ["e2e_a_v1", "e2e_b", "e2e_a_v1_extra"])
+        for (const name of ["handle_a_v1", "handle_b", "handle_a_v1_extra"])
           assert.equal(isolatedTmux(socket, ["has-session", "-t", `=${name}`]).status, 0);
         const conflictName = dispatcherName("project");
         assert.equal(
@@ -739,16 +728,7 @@ describe("global ticket dispatch", () => {
       for (const status of ["draft", "blocked", "locked", "closed", "cancelled"])
         writeTicket(beta, status, status);
       startServer(fixture);
-      const started = cli(fixture, [
-        "dispatch",
-        "--all",
-        "-p",
-        "../ignored",
-        "--max",
-        "1",
-        "--interval",
-        "0.02",
-      ]);
+      const started = cli(fixture, ["dispatch", "--all", "-p", "../ignored", "--max", "1"]);
       assert.equal(started.status, 0, started.stderr);
       const expected = [
         "beta/20260101-000000",
@@ -770,7 +750,7 @@ describe("global ticket dispatch", () => {
       await waitGlobalFinished(fixture);
       assert.deepEqual(recordedLaunches(fixture), expected);
       for (const project of ["alpha", "beta"]) {
-        const name = sessionName("fix_", `${project}/20260102-000000`, true);
+        const name = sessionName("handle_", `${project}/20260102-000000`, true);
         assert.equal(isolatedTmux(fixture.socket, ["has-session", "-t", `=${name}`]).status, 0);
       }
     },
@@ -784,9 +764,9 @@ describe("global ticket dispatch", () => {
       writeTicket(globalStore(fixture, "alpha"), "first", "open");
       writeTicket(globalStore(fixture, "beta"), "second", "open");
       startServer(fixture);
-      assert.equal(cli(fixture, ["dispatch", "--interval", "0.02"]).status, 0);
+      assert.equal(cli(fixture, ["dispatch"]).status, 0);
       await waitRecorded(fixture, "alpha/first");
-      const inheritedName = "fix_first";
+      const inheritedName = "handle_first";
       const pid = isolatedTmux(fixture.socket, [
         "display-message",
         "-p",
@@ -795,16 +775,7 @@ describe("global ticket dispatch", () => {
         "#{pane_pid}",
       ]).stdout;
       assert.equal(cli(fixture, ["dispatch", "stop"]).status, 0);
-      const global = cli(fixture, [
-        "dispatch",
-        "--all",
-        "--max",
-        "1",
-        "--prefix",
-        "new_",
-        "--interval",
-        "0.02",
-      ]);
+      const global = cli(fixture, ["dispatch", "--all", "--max", "1"]);
       assert.equal(global.status, 0, global.stderr);
       await waitFor(
         () =>
@@ -831,7 +802,7 @@ describe("global ticket dispatch", () => {
       await waitRecorded(fixture, "beta/second");
       assert.equal(cli(fixture, ["dispatch", "stop", "--all"]).status, 0);
       writeTicket(globalStore(fixture, "beta"), "third", "open");
-      const local = cli(fixture, ["dispatch", "-p", "beta", "--max", "1", "--interval", "0.02"]);
+      const local = cli(fixture, ["dispatch", "-p", "beta", "--max", "1"]);
       assert.equal(local.status, 0, local.stderr);
       await waitFor(
         () =>
@@ -866,7 +837,7 @@ describe("global ticket dispatch", () => {
       startServer(fixture);
       const firstArgs = globalFirst ? ["--all"] : [];
       const secondArgs = globalFirst ? [] : ["--all"];
-      const first = cli(fixture, ["dispatch", ...firstArgs, "--interval", "0.02"]);
+      const first = cli(fixture, ["dispatch", ...firstArgs]);
       assert.equal(first.status, 0, first.stderr);
       await waitRecorded(fixture, "alpha/held");
       const duplicate = cli(fixture, ["dispatch", ...firstArgs]);
@@ -900,7 +871,7 @@ describe("global ticket dispatch", () => {
         ? [process.env.TICKET_DISPATCH_BIN]
         : [process.execPath, CLI];
       const children = [[], ["--all"]].map((flags) =>
-        Bun.spawn([...command, "dispatch", ...flags, "--interval", "0.02"], {
+        Bun.spawn([...command, "dispatch", ...flags], {
           cwd: fixture.cwd,
           env: fixture.env,
           stdout: "pipe",
@@ -982,7 +953,7 @@ describe("global ticket dispatch", () => {
       writeTicket(fixture.store, "held", "open");
       startServer(fixture);
       assert.equal(
-        cli(fixture, ["dispatch", "--all", "--max", "1", "--interval", "0.02"]).status,
+        cli(fixture, ["dispatch", "--all", "--max", "1"]).status,
         0,
       );
       await waitRecorded(fixture, "alpha/held");
@@ -996,7 +967,7 @@ describe("global ticket dispatch", () => {
         isolatedTmux(fixture.socket, [
           "has-session",
           "-t",
-          `=${sessionName("fix_", "alpha/held", true)}`,
+          `=${sessionName("handle_", "alpha/held", true)}`,
         ]).status,
         0,
       );
@@ -1011,7 +982,7 @@ describe("global ticket dispatch", () => {
       writeTicket(fixture.store, "held", "open");
       startServer(fixture);
       assert.equal(
-        cli(fixture, ["dispatch", "--all", "--max", "1", "--interval", "0.02"]).status,
+        cli(fixture, ["dispatch", "--all", "--max", "1"]).status,
         0,
       );
       await waitRecorded(fixture, "alpha/held");
@@ -1037,7 +1008,13 @@ describe("global ticket dispatch", () => {
       const fixture = setupGlobal();
       writeTicket(fixture.store, "held", "open");
       startServer(fixture);
-      assert.equal(cli(fixture, ["dispatch", "--all", "--interval", "60"]).status, 0);
+      assert.equal(
+        cli(fixture, ["dispatch", "--all"], fixture.cwd, {
+          ...fixture.env,
+          TICKET_TEST_TICK_MS: "60000",
+        }).status,
+        0,
+      );
       await waitRecorded(fixture, "alpha/held");
       rmSync(join(fixture.home, ".agents", "tickets"), { recursive: true });
       rmSync(join(fixture.home, "projects"), { recursive: true });
@@ -1048,7 +1025,7 @@ describe("global ticket dispatch", () => {
         isolatedTmux(fixture.socket, [
           "has-session",
           "-t",
-          `=${sessionName("fix_", "alpha/held", true)}`,
+          `=${sessionName("handle_", "alpha/held", true)}`,
         ]).status,
         0,
       );
@@ -1069,7 +1046,7 @@ describe("global ticket dispatch", () => {
         const empty = cli(fixture, ["dispatch", "list"]);
         assert.equal(empty.status, 0, empty.stderr);
         assert.equal(empty.stdout, "no dispatcher running\n");
-        const start = cli(fixture, ["dispatch", "-p", "alpha", "--max", "1", "--interval", "60"]);
+        const start = cli(fixture, ["dispatch", "-p", "alpha", "--max", "1"]);
         assert.equal(start.status, 0, start.stderr);
         await waitFor(() => existsSync(join(records, "held.json")), "held pi did not start");
         const listing = cli(fixture, ["dispatch", "list"]);
@@ -1099,7 +1076,7 @@ describe("global dispatch dynamic projects", () => {
       const fixture = setupGlobal();
       writeTicket(fixture.store, "first", "open");
       startServer(fixture);
-      const started = cli(fixture, ["dispatch", "--all", "--max", "1", "--interval", "0.02"]);
+      const started = cli(fixture, ["dispatch", "--all", "--max", "1"]);
       assert.equal(started.status, 0, started.stderr);
       await waitRecorded(fixture, "alpha/first");
       const project = "quoted 'project'";

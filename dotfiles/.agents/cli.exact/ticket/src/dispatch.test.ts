@@ -118,12 +118,8 @@ describe("parseDispatchArgs", () => {
     assert.equal(explicitStart.action, "start");
   });
 
-  it("uses the three option defaults without an explicit project", () => {
-    assert.deepEqual(parseDispatchArgs([]).options, {
-      max: 5,
-      prefix: "fix_",
-      interval: 30,
-    });
+  it("uses the max default without an explicit project", () => {
+    assert.deepEqual(parseDispatchArgs([]).options, { max: 5 });
   });
 
   it("accepts project and all flags after stop", () => {
@@ -151,20 +147,14 @@ describe("parseDispatchArgs", () => {
     for (const args of [
       ["stop", "w"],
       ["stop", "--max", "1"],
-      ["stop", "--interval", "1"],
-      ["stop", "--prefix", "x"],
     ]) {
       assert.ok(parseDispatchArgs(args).error, JSON.stringify(args));
     }
   });
 
-  it("accepts the three overrides and positional option termination", () => {
-    const parsed = parseDispatchArgs(["--max", "3", "--interval", "0.2", "--prefix", "t_", "--"]);
-    assert.deepEqual(parsed.options, {
-      max: 3,
-      prefix: "t_",
-      interval: 0.2,
-    });
+  it("accepts the max override and positional option termination", () => {
+    const parsed = parseDispatchArgs(["--max", "3", "--"]);
+    assert.deepEqual(parsed.options, { max: 3 });
   });
 
   it.each(["w", "other project", "quote's project", "start", "stop"])(
@@ -185,10 +175,9 @@ describe("parseDispatchArgs", () => {
   );
 
   it("accepts a project between options", () => {
-    const parsed = parseDispatchArgs(["--max", "3", "-p", "other", "--prefix", "t_"]);
+    const parsed = parseDispatchArgs(["--max", "3", "-p", "other"]);
     assert.equal(parsed.project, "other");
     assert.equal(parsed.options?.max, 3);
-    assert.equal(parsed.options?.prefix, "t_");
   });
 
   it("rejects positionals and missing option values", () => {
@@ -204,7 +193,7 @@ describe("parseDispatchArgs", () => {
       ["--project", "--max", "1"],
       ["-p", "-p", "x"],
       ["--max"],
-      ["--interval", "--prefix", "x"],
+      ["--max", "--max", "1"],
     ]) {
       assert.equal(parseDispatchArgs(args).options, undefined, JSON.stringify(args));
     }
@@ -223,6 +212,8 @@ describe("parseDispatchArgs", () => {
       "--json",
       "--help",
       "--nope",
+      "--interval",
+      "--prefix",
     ]) {
       assert.equal(parseDispatchArgs([flag, "x"]).error, `unknown option: ${flag}`);
     }
@@ -247,15 +238,9 @@ describe("parseDispatchArgs", () => {
     }
   });
 
-  it("requires a positive integer max and a positive finite interval", () => {
+  it("requires a positive integer max", () => {
     for (const max of ["0", "-1", "1.5", "Infinity", "NaN", ""]) {
       assert.equal(parseDispatchArgs(["--max", max]).error, "--max must be an integer >= 1");
-    }
-    for (const interval of ["0", "-1", "Infinity", "NaN", ""]) {
-      assert.equal(
-        parseDispatchArgs(["--interval", interval]).error,
-        "--interval must be a number > 0",
-      );
     }
   });
 });
@@ -414,7 +399,7 @@ import { run } from ${JSON.stringify(join(import.meta.dir, "dispatch.ts"))};
 const events = [];
 try {
   await run({
-    options: { max: 5, prefix: "fix_", interval: 30 },
+    options: { max: 5 },
     all: true,
     loadSnapshot: async () => ${JSON.stringify(tickets)},
     log: (line) => events.push(line),
@@ -452,7 +437,7 @@ try {
       "dispatcher start max=5",
       `skipped gone: cwd not found: ${join(home, "projects", "gone")}`,
       "launch present/second",
-      "launched present/second as fix_70726573656e74_second",
+      "launched present/second as handle_70726573656e74_second",
       `skipped gone: cwd not found: ${join(home, "projects", "gone")}`,
       "incomplete present/second status=open session exited without close",
       "dispatcher finished",
@@ -482,7 +467,7 @@ function fixture() {
   fixtures.push({ home, socket });
   const store = join(home, ".agents", "tickets", basename(home));
   mkdirSync(store, { recursive: true });
-  const options = parseDispatchArgs(["--interval", "0.25", "--max", "2"]).options!;
+  const options = parseDispatchArgs(["--max", "2"]).options!;
   return { home, store, options, socket };
 }
 
@@ -550,7 +535,7 @@ describe("dispatch execution", () => {
           return tickets;
         },
         log: (line) => events.push(line),
-        hasSession: (name) => name !== "fix_b",
+        hasSession: (name) => name !== "handle_b",
         launch: (id, name, prompt) => {
           assert.ok(prompt.startsWith(`ticket ${id} に対応する。`));
           assert.match(prompt, /user はticketを読んでいない前提で/);
@@ -558,7 +543,7 @@ describe("dispatch execution", () => {
           events.push(`start ${name}`);
         },
         sleepMs: async (ms) => {
-          assert.equal(ms, 250);
+          assert.equal(ms, 3000);
           sleeps++;
           assert.ok(sleeps <= 3, "dispatcher did not finish");
           if (sleeps === 2) {
@@ -579,13 +564,13 @@ describe("dispatch execution", () => {
       assert.equal(scans, 4);
       assert.deepEqual(events, [
         "dispatcher start max=2",
-        "start fix_a",
-        "launched a as fix_a",
+        "start handle_a",
+        "launched a as handle_a",
         `done a status=${releasedStatus}`,
-        "start fix_b",
-        "launched b as fix_b",
-        "start fix_c",
-        "launched c as fix_c",
+        "start handle_b",
+        "launched b as handle_b",
+        "start handle_c",
+        "launched c as handle_c",
         "done c status=cancelled",
         "incomplete b status=open session exited without close",
         "dispatcher finished",
@@ -657,8 +642,8 @@ describe("dispatch CLI", () => {
       ["start", ""],
       ["--max"],
       ["--max", "0"],
-      ["--interval", "NaN"],
-      ["--interval", "0"],
+      ["--interval"],
+      ["--prefix"],
       ["--template"],
       ["--socket", "x"],
       ["-p"],
@@ -743,7 +728,7 @@ describe("dispatch CLI", () => {
 
   it("returns after detached start and finishes an empty store without artifacts", async () => {
     const { home, socket } = fixture();
-    const result = invoke(home, ["start", "--interval", "0.01"]);
+    const result = invoke(home, ["start"]);
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.stderr, "");
     assert.equal(result.stdout, `dispatcher started: ${dispatcherName(basename(home))}\n`);
@@ -866,7 +851,7 @@ describe("global dispatch snapshot validation", () => {
     "finishes an empty global store without requiring project directories (%s)",
     async (flag) => {
       const { home, socket } = fixture();
-      const result = invoke(home, [flag, "--interval", "0.01"]);
+      const result = invoke(home, [flag]);
       assert.equal(result.code, 0, result.stderr);
       assert.equal(result.stdout, `dispatcher started: ${dispatcherName(null)}\n`);
       const deadline = Date.now() + 5000;
@@ -892,9 +877,9 @@ describe("global dispatch snapshot validation", () => {
 
 describe("dispatcher lock recovery", () => {
   it.each([
-    { name: "global start", args: ["--all", "--interval", "0.01"], project: null },
+    { name: "global start", args: ["--all"], project: null },
     { name: "global stop", args: ["stop", "--all"], project: null },
-    { name: "project start", args: ["--interval", "0.01"], project: "local" },
+    { name: "project start", args: [], project: "local" },
     { name: "project stop", args: ["stop"], project: "local" },
   ])(
     "recovers $name after a lock holder is killed during its snapshot read",

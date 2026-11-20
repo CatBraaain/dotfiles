@@ -90,15 +90,15 @@ dispatcher は ticket store から起動可能な ticket を探してプロン�
 | コマンド | 動作 |
 | --- | --- |
 | `ticket dispatch list` | 同じ tmux socket 上で動作中の dispatcher を一覧する |
-| `ticket dispatch start [-p\|--project <project>] [-a\|--all] [--max N] [--interval SEC] [--prefix NAME]` | dispatcher を detached tmuxセッションで起動する |
-| `ticket dispatch [-p\|--project <project>] [-a\|--all] [--max N] [--interval SEC] [--prefix NAME]` | `start` と同じ動作 |
+| `ticket dispatch start [-p\|--project <project>] [-a\|--all] [--max N]` | dispatcher を detached tmuxセッションで起動する |
+| `ticket dispatch [-p\|--project <project>] [-a\|--all] [--max N]` | `start` と同じ動作 |
 | `ticket dispatch stop [-p\|--project <project>] [-a\|--all]` | 指定した範囲の dispatcher を停止する |
 
 `-a/--all` 指定時は全project を対象とするグローバルdispatcher、未指定時は1 project を対象とするproject単位dispatcher を操作する。操作範囲が同じなら、別のディレクトリ・worktree からも同じ dispatcher を操作する。
 
 #### 入力と配置
 
-start と stop は共通の `-p/--project <name>` と `-a/--all` を受け付ける。start は、さらに次の3オプションを受け付ける。
+start と stop は共通の `-p/--project <name>` と `-a/--all` を受け付ける。start は、さらに次のオプションを受け付ける。
 
 | start の入力 | ticket store のproject | dispatcher の cwd | 新規pi の cwd |
 | --- | --- | --- | --- |
@@ -113,13 +113,12 @@ stop は `--all` 指定時にグローバルdispatcher、それ以外では共�
 | オプション | 既定値 | 内容 |
 | --- | --- | --- |
 | `--max N` | `5` | dispatcher全体の未解放の監視枠数（稼働数）の上限。1以上の整数。グローバルでは全project の合計に適用する |
-| `--interval SEC` | `30` | tick間隔の秒数。0より大きい有限の数値、小数可 |
-| `--prefix NAME` | `fix_` | piセッション名の接頭辞 |
 
 | 入出力 | パス・規則 |
 | --- | --- |
 | 固定本文 | CLI同梱の `dispatch-prompt.md` の冒頭 `ticket {{ TICKET_ID }}` に ticket ID を文字どおり埋め込む |
 | tmux socket | `/run/user/1000/pi-tmux/server.sock`。`TICKET_TEST_TMUX_SOCKET` 指定時はその socket を使う |
+| tick間隔の上書き（テスト用） | `TICKET_TEST_TICK_MS` に0より大きい数値を指定すると、その値をミリ秒としてtick間隔に使う。不正な値・0以下の場合は既定の3秒を使う |
 
 固定本文は dispatch の実行ごとに読み込む。作業ディレクトリにテンプレートを用意する必要はなく、ソースからの実行とコンパイル済みCLI のどちらでも同梱本文を使う。dispatch は ticket と作業ディレクトリの既存ファイルを変更しない。dispatch の引数、ticket読取り、ログ、終了条件は本節に従う。
 
@@ -140,13 +139,13 @@ stop は `--all` 指定時にグローバルdispatcher、それ以外では共�
 
 #### list
 
-`ticket dispatch list` は同じ tmux socket 上のセッションから、この CLI が起動した dispatcher をすべて一覧する。範囲の指定・フィルタは行わず、`-p/--project`、`-a/--all`、`--max`、`--interval`、`--prefix` は受け付けない。ticket store の読み取りや起動先ディレクトリの確認は行わず、tmux server 未起動や list-sessions の失敗も 0件として扱う。
+`ticket dispatch list` は同じ tmux socket 上のセッションから、この CLI が起動した dispatcher をすべて一覧する。範囲の指定・フィルタは行わず、`-p/--project`、`-a/--all`、`--max` は受け付けない。ticket store の読み取りや起動先ディレクトリの確認は行わず、tmux server 未起動や list-sessions の失敗も 0件として扱う。
 
 1行を「project名・セッション名・起動時刻」の列とし、project単位は project名、グローバルは `(all)` を project名として表示する。並び順はグローバルを先に、project名の辞書順とする。起動時刻はローカル時刻の `YYYY-MM-DD HH:MM:SS`。dispatcher がないときは `no dispatcher running` を出す。
 
 #### start と stop
 
-同じ範囲の dispatcher は同時に1つだけ動作する。dispatcher の識別は `--prefix` に依存せず、グローバルと各project を区別する。グローバルとproject単位の dispatcher の同時稼働は、起動順にかかわらず拒否する。同時に start が呼ばれた場合も、この境界を守る。異なるproject のproject単位dispatcher は、それぞれ動作できる。
+同じ範囲の dispatcher は同時に1つだけ動作する。dispatcher の識別はpiセッション名に依存せず、グローバルと各project を区別する。グローバルとproject単位の dispatcher の同時稼働は、起動順にかかわらず拒否する。同時に start が呼ばれた場合も、この境界を守る。異なるproject のproject単位dispatcher は、それぞれ動作できる。
 
 | 条件・操作 | 結果 |
 | --- | --- |
@@ -160,7 +159,7 @@ stop は `--all` 指定時にグローバルdispatcher、それ以外では共�
 
 stop は指定した範囲の dispatcher だけを対象とする。グローバルの stop でproject単位dispatcher を停止せず、project単位の stop でグローバルdispatcher を停止しない。
 
-引継ぎ対象は ticket CLI が起動したpiセッションであり、グローバルでは全project、project単位ではそのproject に限る。以前の起動がグローバルかproject単位かにかかわらず、対象範囲の残存pi を引き継ぐ。引き継いだpi のセッション名と cwd は保持する。新しい `--prefix` で start しても残存pi を引き継ぎ、新規起動には今回の start の条件を使う。残存pi の数が今回の `--max` 以上なら、その数が上限未満になるまで新規起動を待つ。
+引継ぎ対象は ticket CLI が起動したpiセッションであり、グローバルでは全project、project単位ではそのproject に限る。以前の起動がグローバルかproject単位かにかかわらず、対象範囲の残存pi を引き継ぐ。引き継いだpi のセッション名と cwd は保持する。残存pi の数が今回の `--max` 以上なら、その数が上限未満になるまで新規起動を待つ。
 
 start の成功は dispatcher用tmuxセッションの作成成功を表し、その後の監視継続や pi起動成功を保証しない。ソースからのCLI起動とコンパイル済みCLI のどちらでも同じ動作を提供する。
 
@@ -168,7 +167,7 @@ start の成功は dispatcher用tmuxセッションの作成成功を表し、�
 
 ticket はproject と ID の組で識別し、異なるproject に同じ ID があっても別ticket として起動・監視する。
 
-project単位で起動する ID `X` のセッション名は、`--prefix` に `X` の `.` を `_` へ全置換した文字列を連結した名前である。グローバルで新規起動する場合は、`--prefix`、project名をUTF-8として小文字の16進表記にした文字列、`_`、同じ変換をした ID を連結する。
+piセッション名の接頭辞は `handle_` で固定であり、オプションでは指定できない。project単位で起動する ID `X` のセッション名は、接頭辞に `X` の `.` を `_` へ全置換した文字列を連結した名前である。グローバルで新規起動する場合は、接頭辞、project名をUTF-8として小文字の16進表記にした文字列、`_`、同じ変換をした ID を連結する。
 
 起動対象ごとに生成した prompt の内容全体を単一引数として `pi` へ直接渡す。本文の空白・引用符・末尾改行を保持する。
 
@@ -178,7 +177,7 @@ project単位で起動する ID `X` のセッション名は、`--prefix` に `X
 
 #### tick と終了
 
-起動時に `dispatcher start max=<max>` を記録する。最初の tick を直ちに行い、その後は `--interval` 秒ごとに次の順で繰り返す。各 tick で対象範囲の ticket store を読み直し、起動可能ticket と稼働中ticket の status を判定する。グローバルでは各 tick でproject一覧も読み直す。
+起動時に `dispatcher start max=<max>` を記録する。最初の tick を直ちに行い、その後は3秒ごとに次の順で繰り返す。各 tick で対象範囲の ticket store を読み直し、起動可能ticket と稼働中ticket の status を判定する。グローバルでは各 tick でproject一覧も読み直す。
 
 | 順 | 条件 | 結果 |
 | --- | --- | --- |
@@ -199,7 +198,7 @@ project単位で起動する ID `X` のセッション名は、`--prefix` に `X
 
 | 条件 | 結果 |
 | --- | --- |
-| 位置引数の指定、未知のオプション、値の不足、`--max` / `--interval` の値の不正、stop への `--max` / `--interval` / `--prefix` 指定 | usage を呼出元CLI の stderr へ出し、終了コード2 |
+| 位置引数の指定、未知のオプション、値の不足、`--max` の値の不正、stop への `--max` 指定 | usage を呼出元CLI の stderr へ出し、終了コード2 |
 | project名がストアと安全境界の制約に違反 | 既存CLI と同じ validationエラーを呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動・停止しない |
 | start の cwd、またはグローバルで新規起動候補となるticket の対象cwd がディレクトリでない、または移動できない | `I/O error: <エラー内容>` を呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動せず、pi も起動しない |
 | グローバルで新規起動候補となるticket の対象cwd が存在しない | そのticket は新規起動せず `skipped <project>: cwd not found: <cwd>` を出し、他の候補の確認・起動を続ける。start の事前確認では dispatcher も起動する。ログは start の事前確認では呼出元CLI の stdout へ、各 tick では時刻付きで dispatcher の stdout へ出す |
