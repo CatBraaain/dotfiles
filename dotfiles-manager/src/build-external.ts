@@ -50,7 +50,7 @@ type SyncContext = {
 
 type MirrorSyncResult = { mirrorDir: string; changed: boolean };
 
-const externalMachineFileName = "external.data-machine.yaml";
+const externalMachineFileName = "external.machine-data.yaml";
 
 const defaultTtlHours = 6;
 const pullTimeFileName = "build-pull-time";
@@ -91,7 +91,11 @@ export async function syncGithubMirror(repo: string, connection?: WslConnection)
   return sync.mirrorDir;
 }
 
-export async function applyExternals(distDir: string, connection?: WslConnection): Promise<void> {
+export async function applyExternals(
+  distDir: string,
+  connection: WslConnection | undefined,
+  platform: string,
+): Promise<void> {
   const configPaths: string[] = [];
   async function collect(directory: string): Promise<void> {
     const entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
@@ -110,7 +114,7 @@ export async function applyExternals(distDir: string, connection?: WslConnection
   const context = await defaultContext(connection);
   for (const configPath of configPaths) {
     if (!existsSync(configPath)) continue;
-    const config = await loadExternalConfig(configPath);
+    const config = await loadExternalConfig(configPath, platform);
     await Promise.all(
       config.repos.map(async (repo) => {
         const sync = await syncMirror(repo.repo, repo.ttlMs, context);
@@ -129,14 +133,23 @@ export async function applyExternals(distDir: string, connection?: WslConnection
   }
 }
 
-export async function loadExternalConfig(configPath: string): Promise<ExternalConfig> {
+export async function loadExternalConfig(configPath: string, platform: string): Promise<ExternalConfig> {
   const repos = await readExternalRepos(configPath);
-  // Machine-specific layer (gitignored) merged over the shared config by repo
-  // key; a machine definition fully replaces the shared one.
-  const machinePath = join(dirname(configPath), externalMachineFileName);
-  if (!existsSync(machinePath)) return { repos };
+  // Replacement layers per repo key, later ones win (spec: SPEC.md §build: 外部取得):
+  // shared -> platform layer (matching build platform only) -> machine layer
+  // -> platform machine layer.
+  const dir = dirname(configPath);
   const byRepo = new Map(repos.map((repo) => [repo.repo, repo]));
-  for (const repo of await readExternalRepos(machinePath)) byRepo.set(repo.repo, repo);
+  const replacementNames = [
+    `external.${platform}-data.yaml`,
+    "external.machine-data.yaml",
+    `external.${platform}-machine-data.yaml`,
+  ];
+  for (const name of replacementNames) {
+    const path = join(dir, name);
+    if (!existsSync(path)) continue;
+    for (const repo of await readExternalRepos(path)) byRepo.set(repo.repo, repo);
+  }
   return { repos: [...byRepo.values()] };
 }
 

@@ -9,7 +9,11 @@ import {
   removeHookSnapshot,
   writeHookSnapshot,
 } from "./hook-runner.ts";
-import { isBuildHookName, isPostHookName } from "./path-mapping.ts";
+import {
+  hookPlatform,
+  isBuildHookName,
+  isPostHookName,
+} from "./path-mapping.ts";
 
 type Hook = { absolutePath: string; relativeParent: string; name: string; contents: string };
 
@@ -19,7 +23,7 @@ export type HookEvent = (
   elapsedSeconds: number,
 ) => void;
 
-export async function collectHooks(distDir: string): Promise<Hook[]> {
+export async function collectHooks(distDir: string, platform: string): Promise<Hook[]> {
   const hooks: Hook[] = [];
   async function walk(directory: string, relativeParent: string): Promise<void> {
     const entries = (await readdir(directory, { withFileTypes: true })).sort((left, right) =>
@@ -28,6 +32,11 @@ export async function collectHooks(distDir: string): Promise<Hook[]> {
     const postHooks: Hook[] = [];
     for (const entry of entries) {
       if (!entry.isFile() || !isBuildHookName(entry.name)) continue;
+      // OS-modified hooks (spec: SPEC.md §フックシステム) only run when the
+      // build platform matches the modifier; other platforms treat them as
+      // absent.
+      const hookPlatformName = hookPlatform(entry.name);
+      if (hookPlatformName !== undefined && hookPlatformName !== platform) continue;
       const entryPath = join(directory, entry.name);
       const hook = {
         absolutePath: entryPath,

@@ -31,7 +31,7 @@ type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: strin
 
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
-const sidecarPattern = /\.(merge|merge-existing)(?:-machine)?\.(json|yaml|toml|ini)$/;
+const sidecarPattern = /\.(?:(linux|macos|windows)-)?(machine-)?(merge|merge-existing)\.(json|yaml|toml|ini)$/;;
 const iniReservedNames = new Set([...Object.getOwnPropertyNames(Object.prototype), "prototype"]);
 const jsonNumberPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 const rawJson = JSON as typeof JSON & {
@@ -55,14 +55,18 @@ const fileFormats = {
   },
 } as const;
 
-export async function composeMergeTargets(distDir: string, homeRoot: string): Promise<void> {
-  const targets = await collectMergeTargets(distDir);
+export async function composeMergeTargets(
+  distDir: string,
+  homeRoot: string,
+  platform: string,
+): Promise<void> {
+  const targets = await collectMergeTargets(distDir, platform);
   for (const target of targets) {
     const hasBase = existsSync(target.outputPath);
     const sourcePath = relative(distDir, target.outputPath).split(sep).join("/");
     const homeRelativePath = homeRelPath(sourcePath);
     try {
-      await composeMergeTarget(target, hasBase, join(homeRoot, homeRelativePath));
+      await composeMergeTarget(target, hasBase, join(homeRoot, homeRelativePath), platform);
     } catch (error) {
       throw new Error(
         `merge target failed: ${homeRelativePath}: ${error instanceof Error ? error.message : String(error)}`,
@@ -76,11 +80,24 @@ async function composeMergeTarget(
   target: MergeTarget,
   hasBase: boolean,
   homePath: string,
+  platform: string,
 ): Promise<void> {
   const stem = target.outputPath.slice(0, -(target.format.length + 1));
   const hasHome = existsSync(homePath);
-  const sidecars = ["merge", "merge-existing", "merge-machine", "merge-existing-machine"]
-    .filter((suffix) => hasHome || !suffix.startsWith("merge-existing"))
+  // OS-modified layers sit right after their unmodified counterpart so the
+  // later layer wins (spec: SPEC.md §build: merge変換 の適用順).
+  const suffixes = [
+    "merge",
+    `${platform}-merge`,
+    "merge-existing",
+    `${platform}-merge-existing`,
+    "machine-merge",
+    `${platform}-machine-merge`,
+    "machine-merge-existing",
+    `${platform}-machine-merge-existing`,
+  ];
+  const sidecars = suffixes
+    .filter((suffix) => hasHome || !suffix.includes("merge-existing"))
     .map((suffix) => `${stem}.${suffix}.${target.format}`)
     .filter((path) => existsSync(path));
 
@@ -100,14 +117,22 @@ async function composeMergeTarget(
   for (const sidecar of target.sidecarPaths) await rm(sidecar);
 }
 
-async function collectMergeTargets(distDir: string): Promise<MergeTarget[]> {
+async function collectMergeTargets(distDir: string, platform: string): Promise<MergeTarget[]> {
   const targets = new Map<string, MergeTarget>();
   for (const entry of await collectEntries(distDir)) {
     const name = basename(entry.path);
     const match = sidecarPattern.exec(name);
     if (entry.isDirectory || !match) continue;
+    // OS modifiers apply only on the matching platform (spec: SPEC.md
+    // §build: merge変換); on other platforms the sidecar is absent — remove
+    // it from dist like any other sidecar.
+    const sidecarPlatform = match[1];
+    if (sidecarPlatform !== undefined && sidecarPlatform !== platform) {
+      await rm(entry.path);
+      continue;
+    }
 
-    const format = match[2] as FileFormat;
+    const format = match[4] as FileFormat;
     const outputPath = join(dirname(entry.path), name.replace(sidecarPattern, `.${format}`));
     const target = targets.get(outputPath) ?? {
       outputPath,

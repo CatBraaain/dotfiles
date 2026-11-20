@@ -5,13 +5,14 @@ import { cp, mkdir, readdir, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { applyPathMap, createCopyRouter, type CopyRouter } from "./build-path-map.ts";
+import { currentPlatform, type Platform } from "./path-mapping.ts";
 import { applyExternals } from "./build-external.ts";
 import { composeMergeTargets } from "./build-merge.ts";
 import { applyReplaceSidecars } from "./build-replace.ts";
 import { collectHooks, runHooks, type HookEvent } from "./build-hooks.ts";
 import { resolveWsl, type WslConnection } from "./wsl.ts";
 
-export type Platform = "windows" | "linux" | "darwin";
+export type { Platform };
 
 export type BuildPhase = "rebuild dist" | "path map" | "externals" | "merge" | "replace";
 export type PhaseEvent = (phase: BuildPhase, elapsedSeconds: number) => void;
@@ -39,9 +40,9 @@ export async function main(
     await copyDir(sourceDir, distDir, await createCopyRouter(platform));
   });
   await timed("path map", onPhase, () => applyPathMap(distDir, platform));
-  const hooks = await collectHooks(distDir);
-  await timed("externals", onPhase, () => applyExternals(distDir, wsl));
-  await timed("merge", onPhase, () => composeMergeTargets(distDir, homeRoot));
+  const hooks = await collectHooks(distDir, platform);
+  await timed("externals", onPhase, () => applyExternals(distDir, wsl, platform));
+  await timed("merge", onPhase, () => composeMergeTargets(distDir, homeRoot, platform));
   await timed("replace", onPhase, () => applyReplaceSidecars(distDir, homeRoot));
   await runHooks(hooks, distDir, homeRoot, onHookEvent);
 }
@@ -85,19 +86,6 @@ async function timed(
 }
 
 const platformNames = ["windows", "linux", "darwin"] as const;
-
-function currentPlatform(): Platform {
-  switch (process.platform) {
-    case "win32":
-      return "windows";
-    case "linux":
-      return "linux";
-    case "darwin":
-      return "darwin";
-    default:
-      throw new Error(`Unsupported platform: ${process.platform}`);
-  }
-}
 
 function assertPlatform(platform: string): asserts platform is Platform {
   if (!platformNames.includes(platform as Platform))

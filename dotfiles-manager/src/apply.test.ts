@@ -387,7 +387,7 @@ describe("apply scripts", () => {
   it("runs machine-specific scripts after applying without placing them in home", async () => {
     await put(distRoot, "tools/keep.txt", "same\n");
     await put(homeRoot, "tools/keep.txt", "same\n");
-    await putApplyScript(distRoot, "tools/setup.apply-machine.ts");
+    await putApplyScript(distRoot, "tools/setup.machine-apply.ts");
     const declarations = await collectDeclarations(distRoot);
     const result = await diffAndApply();
 
@@ -395,10 +395,10 @@ describe("apply scripts", () => {
 
     assert.deepEqual(
       declarations.applyScripts.map((script) => script.distPath),
-      ["tools/setup.apply-machine.ts"],
+      ["tools/setup.machine-apply.ts"],
     );
     assert.deepEqual(result.added, []);
-    assert.equal(existsSync(join(homeRoot, "tools/setup.apply-machine.ts")), false);
+    assert.equal(existsSync(join(homeRoot, "tools/setup.machine-apply.ts")), false);
     assert.equal(
       await readFile(join(homeRoot, "tools/apply-out.txt"), "utf8"),
       join(homeRoot, "tools"),

@@ -125,6 +125,46 @@ describe("run", () => {
     assert.equal(existsSync(join(distRoot, "vscode")), false);
   });
 
+  it("applies windows-merge only on the Windows build and removes it otherwise", async () => {
+    await put(root, "dotfiles/settings.merge.json", '{"shared":true,"tools":"both"}');
+    await put(root, "dotfiles/settings.windows-merge.json", '{"tools":"windows","mux":false}');
+    await put(homeRoot, "settings.json", '{"old":true}');
+
+    await main(root, "windows", homeRoot);
+
+    assert.deepEqual(JSON.parse(await readFile(join(distRoot, "settings.json"), "utf8")), {
+      old: true,
+      shared: true,
+      tools: "windows",
+      mux: false,
+    });
+    assert.equal(existsSync(join(distRoot, "settings.windows-merge.json")), false);
+    assert.equal(existsSync(join(distRoot, "settings.merge.json")), false);
+
+    await main(root, "linux", homeRoot);
+
+    assert.deepEqual(JSON.parse(await readFile(join(distRoot, "settings.json"), "utf8")), {
+      old: true,
+      shared: true,
+      tools: "both",
+    });
+    assert.equal(existsSync(join(distRoot, "settings.windows-merge.json")), false);
+  });
+
+  it("runs a windows-build hook only on the Windows build", async () => {
+    await put(
+      root,
+      "dotfiles/windows-hook.windows-build.ts",
+      `import { appendFile } from "node:fs/promises";\nif (import.meta.main) {\n  await appendFile("ran.txt", "windows\\n");\n}`,
+    );
+
+    await main(root, "linux", homeRoot);
+    assert.equal(existsSync(join(distRoot, "ran.txt")), false);
+
+    await main(root, "windows", homeRoot);
+    assert.equal(await readFile(join(distRoot, "ran.txt"), "utf8"), "windows\n");
+  });
+
   it("skips node_modules directories without excluding files of the same name", async () => {
     await put(root, "dotfiles/node_modules/pkg/index.js", "excluded\n");
     await put(root, "dotfiles/nested/node_modules/pkg/index.js", "excluded\n");
@@ -238,7 +278,7 @@ if (import.meta.main) {
     );
     await put(
       root,
-      "dotfiles/nested/01-local.build-machine.ts",
+      "dotfiles/nested/01-local.machine-build.ts",
       `import { appendFile } from "node:fs/promises";
 if (import.meta.main) {
   await appendFile("order.txt", "machine\\n");
@@ -310,7 +350,7 @@ if (import.meta.main) {
     await put(homeRoot, "settings.json", '{"home":true,"value":"home"}');
     await put(root, "dotfiles/settings.json", '{"plain":true,"value":"plain"}');
     await put(root, "dotfiles/settings.merge.json", '{"shared":true,"value":"shared"}');
-    await put(root, "dotfiles/settings.merge-machine.json", '{"machine":true,"value":"machine"}');
+    await put(root, "dotfiles/settings.machine-merge.json", '{"machine":true,"value":"machine"}');
     await put(
       root,
       "dotfiles/format.build.ts",
@@ -318,7 +358,7 @@ if (import.meta.main) {
 import { existsSync } from "node:fs";
 if (import.meta.main) {
   assert.equal(existsSync("settings.merge.json"), false);
-  assert.equal(existsSync("settings.merge-machine.json"), false);
+  assert.equal(existsSync("settings.machine-merge.json"), false);
   const completed = await Bun.file("settings.json").json();
   await Bun.write("settings.json", JSON.stringify(completed));
 }`,
@@ -519,7 +559,7 @@ if (import.meta.main) {
       );
       await put(
         root,
-        `dotfiles/kit/settings.merge-machine.${format}`,
+        `dotfiles/kit/settings.machine-merge.${format}`,
         serialize({ mode: "machine" }),
       );
 
@@ -527,7 +567,7 @@ if (import.meta.main) {
 
       const output = parse(await readFile(join(distRoot, `kit/settings.${format}`), "utf8"));
       assert.deepEqual({ ...output }, { mode: "machine", homeOnly: "present" });
-      assert.equal(existsSync(join(distRoot, `kit/settings.merge-machine.${format}`)), false);
+      assert.equal(existsSync(join(distRoot, `kit/settings.machine-merge.${format}`)), false);
     });
 
     for (const hasBase of [false, true]) {
@@ -564,7 +604,7 @@ if (import.meta.main) {
         );
         await put(
           root,
-          `dotfiles/kit/settings.merge-machine.${format}`,
+          `dotfiles/kit/settings.machine-merge.${format}`,
           serialize({
             machine: "present",
             existingVsMachine: "machine",
@@ -573,7 +613,7 @@ if (import.meta.main) {
         );
         await put(
           root,
-          `dotfiles/kit/settings.merge-existing-machine.${format}`,
+          `dotfiles/kit/settings.machine-merge-existing.${format}`,
           serialize({
             existingMachine: "present",
             machineVsExistingMachine: "existing-machine",
@@ -598,8 +638,8 @@ if (import.meta.main) {
         for (const suffix of [
           "merge",
           "merge-existing",
-          "merge-machine",
-          "merge-existing-machine",
+          "machine-merge",
+          "machine-merge-existing",
         ]) {
           assert.equal(existsSync(join(distRoot, `kit/settings.${suffix}.${format}`)), false);
         }
@@ -609,7 +649,7 @@ if (import.meta.main) {
         const plainContent = serialize({ plainOnly: "present" });
         if (hasBase) await put(root, `dotfiles/kit/settings.${format}`, plainContent);
         await put(root, `dotfiles/kit/settings.merge-existing.${format}`, "[");
-        await put(root, `dotfiles/kit/settings.merge-existing-machine.${format}`, "[");
+        await put(root, `dotfiles/kit/settings.machine-merge-existing.${format}`, "[");
 
         await main(root, "linux", homeRoot);
 
@@ -618,7 +658,7 @@ if (import.meta.main) {
         if (hasBase) assert.equal(await readFile(outputPath, "utf8"), plainContent);
         assert.equal(existsSync(join(distRoot, `kit/settings.merge-existing.${format}`)), false);
         assert.equal(
-          existsSync(join(distRoot, `kit/settings.merge-existing-machine.${format}`)),
+          existsSync(join(distRoot, `kit/settings.machine-merge-existing.${format}`)),
           false,
         );
       });
@@ -737,10 +777,10 @@ replacements:
   it("ignores external machine overlays in the root and arbitrary nested folders", () => {
     const repoRoot = join(import.meta.dir, "../..");
     for (const path of [
-      "dotfiles/external.data-machine.yaml",
-      "dotfiles/rime/external.data-machine.yaml",
-      "dotfiles/.agents/skills.exact/external.data-machine.yaml",
-      "dotfiles/other/nested/external.data-machine.yaml",
+      "dotfiles/external.machine-data.yaml",
+      "dotfiles/rime/external.machine-data.yaml",
+      "dotfiles/.agents/skills.exact/external.machine-data.yaml",
+      "dotfiles/other/nested/external.machine-data.yaml",
     ]) {
       const result = Bun.spawnSync([
         "git",
@@ -765,7 +805,7 @@ replacements:
     assert.equal(shared.exitCode, 1);
   });
 
-  it("prefers external.data-machine.yaml and ignores the obsolete machine filename", async () => {
+  it("prefers external.machine-data.yaml and ignores the obsolete machine filename", async () => {
     await put(
       root,
       "dotfiles/external.data.yaml",
@@ -777,7 +817,7 @@ replacements:
     );
     await put(
       root,
-      "dotfiles/external.data-machine.yaml",
+      "dotfiles/external.machine-data.yaml",
       `repos:
   example/repo:
     destination: machine
@@ -1374,10 +1414,10 @@ co = checkout
 
   it("appends the machine layer with the sample machine build hook", async () => {
     const hook = await readFile(
-      join(import.meta.dir, "../../dotfiles/.gitconfig.build-machine.ts.sample"),
+      join(import.meta.dir, "../../dotfiles/.gitconfig.machine-build.ts.sample"),
       "utf-8",
     );
-    await put(root, "dotfiles/.gitconfig.build-machine.ts", hook);
+    await put(root, "dotfiles/.gitconfig.machine-build.ts", hook);
     await put(root, "dotfiles/.gitconfig", "[core]\neditor = code --wait\n");
 
     await main(root, "linux", homeRoot);
@@ -1725,10 +1765,10 @@ const context = await buildHookContext();
     assert.equal(existsSync(join(distRoot, "vscode")), false);
   });
   it("rejects a machine hook with an unsupported extension during discovery", async () => {
-    await put(root, "dotfiles/vscode/local.build-machine.sh", "echo hook output\n");
+    await put(root, "dotfiles/vscode/local.machine-build.sh", "echo hook output\n");
     await assert.rejects(
       main(root, "linux", homeRoot),
-      /build hook has unsupported extension: vscode\/local\.build-machine\.sh/,
+      /build hook has unsupported extension: vscode\/local\.machine-build\.sh/,
     );
   });
 
@@ -1797,7 +1837,7 @@ process.stderr.write("\\n__LOG_TIMES__" + JSON.stringify(logTimes));`;
 describe("manager CLI", () => {
   for (const command of ["apply", "diff", "managed"]) {
     it(`logs each stage and build hook in order for ${command}`, async () => {
-      await put(root, "dotfiles/nested/01-local.build-machine.ts", "if (import.meta.main) {};");
+      await put(root, "dotfiles/nested/01-local.machine-build.ts", "if (import.meta.main) {};");
       await put(root, "dotfiles/nested/02-shared.build.ts", "if (import.meta.main) {};");
       await put(root, "dotfiles/new.txt", "content\n");
 
@@ -1815,8 +1855,8 @@ describe("manager CLI", () => {
         "  [build] externals (TIME)",
         "  [build] merge (TIME)",
         "  [build] replace (TIME)",
-        "  [nested/01-local.build-machine.ts] Started",
-        "  [nested/01-local.build-machine.ts] ✓ Complete (TIME)",
+        "  [nested/01-local.machine-build.ts] Started",
+        "  [nested/01-local.machine-build.ts] ✓ Complete (TIME)",
         "  [nested/02-shared.build.ts] Started",
         "  [nested/02-shared.build.ts] ✓ Complete (TIME)",
         "[build] Complete (TIME)",

@@ -18,7 +18,13 @@ import {
   removeHookSnapshot,
   writeHookSnapshot,
 } from "./hook-runner.ts";
-import { isApplyScriptName, isPostHookName, mapSegment } from "./path-mapping.ts";
+import {
+  currentPlatform,
+  hookPlatform,
+  isApplyScriptName,
+  isPostHookName,
+  mapSegment,
+} from "./path-mapping.ts";
 
 export type ApplyResult = { added: string[]; changed: string[]; removed: string[] };
 export type ApplyScript = {
@@ -89,7 +95,8 @@ export async function applyDifferences(
 
 export async function collectDeclarations(distRoot: string): Promise<Declarations> {
   const declarations: Declarations = { applyScripts: [] };
-  const postScripts = await walkDeclarations(distRoot, "", declarations);
+  const platform = currentPlatform();
+  const postScripts = await walkDeclarations(distRoot, "", declarations, platform);
   declarations.applyScripts.sort((left, right) => compareCodeUnits(left.distPath, right.distPath));
   declarations.applyScripts.push(...postScripts);
   return declarations;
@@ -388,6 +395,7 @@ async function walkDeclarations(
   dirAbs: string,
   dirRel: string,
   out: Declarations,
+  platform: string,
 ): Promise<ApplyScript[]> {
   const entries = (await readdir(dirAbs, { withFileTypes: true })).sort((left, right) =>
     compareCodeUnits(left.name, right.name),
@@ -396,10 +404,14 @@ async function walkDeclarations(
   for (const entry of entries) {
     if (!entry.isDirectory() || mapSegment(entry.name, true).isExcluded) continue;
     const childRel = dirRel === "" ? entry.name : `${dirRel}/${entry.name}`;
-    postScripts.push(...(await walkDeclarations(join(dirAbs, entry.name), childRel, out)));
+    postScripts.push(...(await walkDeclarations(join(dirAbs, entry.name), childRel, out, platform)));
   }
   for (const entry of entries) {
     if (!entry.isFile() || !isApplyScriptName(entry.name)) continue;
+    // OS-modified scripts (spec: SPEC.md §フックシステム) only run on the
+    // matching platform; apply runs on the environment applying the dist.
+    const scriptPlatform = hookPlatform(entry.name);
+    if (scriptPlatform !== undefined && scriptPlatform !== platform) continue;
     const script = {
       distPath: dirRel === "" ? entry.name : `${dirRel}/${entry.name}`,
       fileName: entry.name,

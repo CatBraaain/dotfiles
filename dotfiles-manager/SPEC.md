@@ -135,7 +135,9 @@ Windows で実行するbuild と内部CLI は、外部取得と GitAlias のた�
 
 mirror がなければ shallow cloneし、存在するときは前回の取得から `ttlHours`（既定6時間）が経過すると `git pull --ff-only` で更新する。`BUILD_FORCE_PULL=1` は更新を強制する。Git pull が非0 を返したときは、mirror にアクセスできれば警告を表示して既存mirror を利用する。WSL/bridge の失敗は pull の警告として扱わず異常終了する。`entries` のファイルやフォルダを `destination` にコピーし、`run_after` が空でなく、clone または更新前後の HEAD に変更があった場合だけ、mirror cwd で `git clean -fdX` の後に `run_after` の argv配列を記載順に実行してからコピーする。WSL mirror を使うWindows ではこれらを同じWSL内で実行し、Windowsローカルmirror では Windows の mirror cwd で実行する。mirror の `.git/build-pull-time` に epochミリ秒を保存し、clone / 成功したpull（HEAD不変を含む）の後、`run_after` より前に更新する。TTL内の省略と失敗したpull では stamp を保持する。
 
-同じフォルダの `external.data-machine.yaml` があればリポジトリ単位で共有設定を置き換える。このマシン固有ファイルは `dotfiles/` 内の設置階層によらずgitignore の対象となる。
+同じフォルダの `external.{platform}-data.yaml`（`linux`・`macos`・`windows` のいずれか）があれば、対応するOS の build でリポジトリ単位で共有設定を置き換える。他のOS の build では、このファイルは存在しないものとして扱う。
+
+同じフォルダの `external.machine-data.yaml` があればリポジトリ単位で共有設定を置き換える。このマシン固有ファイルは `dotfiles/` 内の設置階層によらずgitignore の対象となる。置換は共有設定 → `external.{platform}-data.yaml`（対応するOS のとき） → `external.machine-data.yaml` → `external.{platform}-machine-data.yaml` の順で行い、後段ほど優先する（machine ファイルの定義が最も具体性が高い）。
 
 同じ設定の repo は並列に処理し、失敗時は build を中断する。外部取得はローカルフックの実行ログに現れない。
 
@@ -244,9 +246,15 @@ JSON/YAML/TOML/INI の設定ファイルを、plain base または home現状を
 | --- | --- | --- |
 | `<name>.{json,yaml,toml,ini}` | git | plain base（リポジトリのベース本体。任意） |
 | `<name>.merge.{json,yaml,toml,ini}` | git | 共有mergeレイヤー（任意） |
+| `<name>.{platform}-merge.{json,yaml,toml,ini}` | git | 対応するOS の build で採用されるmergeレイヤー（任意） |
 | `<name>.merge-existing.{json,yaml,toml,ini}` | git | 共有の条件付きレイヤー（任意） |
-| `<name>.merge-machine.{json,yaml,toml,ini}` | gitignore | マシン固有mergeレイヤー（任意） |
-| `<name>.merge-existing-machine.{json,yaml,toml,ini}` | gitignore | マシン固有の条件付きレイヤー（任意） |
+| `<name>.{platform}-merge-existing.{json,yaml,toml,ini}` | git | 対応するOS の build で採用される条件付きレイヤー（任意） |
+| `<name>.machine-merge.{json,yaml,toml,ini}` | gitignore | マシン固有mergeレイヤー（任意） |
+| `<name>.{platform}-machine-merge.{json,yaml,toml,ini}` | gitignore | マシン固有の OS別mergeレイヤー（任意） |
+| `<name>.machine-merge-existing.{json,yaml,toml,ini}` | gitignore | マシン固有の条件付きレイヤー（任意） |
+| `<name>.{platform}-machine-merge-existing.{json,yaml,toml,ini}` | gitignore | マシン固有の OS別条件付きレイヤー（任意） |
+
+`<platform>-` は OS 修飾とし、`linux`・`macos`・`windows` のいずれかで、その名前の build でのみ採用する。該当しないOS の build では、OS 修飾を付けたsidecar は存在しないものとして扱う。`machine-` はマシン固有の修飾とする。修飾子は `<name>` と役割の間に `platform`、`machine` の順で並べ、`merge-existing` のような役割名は1つにまとめて扱う。
 
 上表の sidecar が1つ以上存在するとき、その `<name>.{json,yaml,toml,ini}` は mergeターゲットとなる。上表以外のファイルは sidecar として認識せず、mergeターゲットでないファイルは dist へそのまま残す。
 
@@ -262,15 +270,19 @@ sidecar名から出力ファイル名への対応（4形式共通）:
 | sidecar | 出力ファイル名 |
 | --- | --- |
 | `foo.merge.{json,yaml,toml,ini}` | `foo.{json,yaml,toml,ini}` |
+| `foo.{linux,macos,windows}-merge.{json,yaml,toml,ini}` | `foo.{json,yaml,toml,ini}` |
 | `foo.merge-existing.{json,yaml,toml,ini}` | `foo.{json,yaml,toml,ini}` |
-| `foo.merge-machine.{json,yaml,toml,ini}` | `foo.{json,yaml,toml,ini}` |
-| `foo.merge-existing-machine.{json,yaml,toml,ini}` | `foo.{json,yaml,toml,ini}` |
+| `foo.{linux,macos,windows}-merge-existing.{json,yaml,toml,ini}` | `foo.{json,yaml,toml,ini}` |
+| `foo.machine-merge.{json,yaml,toml,ini}` | `foo.{json,yaml,toml,ini}` |
+| `foo.{linux,macos,windows}-machine-merge.{json,yaml,toml,ini}` | `foo.{json,yaml,toml,ini}` |
+| `foo.machine-merge-existing.{json,yaml,toml,ini}` | `foo.{json,yaml,toml,ini}` |
+| `foo.{linux,macos,windows}-machine-merge-existing.{json,yaml,toml,ini}` | `foo.{json,yaml,toml,ini}` |
 
 入力と出力は同じ拡張子になる。同一出力パスに sidecar が複数あるときは 1ターゲットにまとめる。
 
 ### レイヤーと適用順
 
-`merge-existing` と `merge-existing-machine` を条件付きレイヤーと呼び、解決後の homeパスを基準に次の条件で採用する。通常の `merge` と `merge-machine` は home の有無によらず採用する。
+`merge-existing` を含むレイヤー（`merge-existing`・`{platform}-merge-existing`・`machine-merge-existing`・`{platform}-machine-merge-existing`）を条件付きレイヤーと呼び、解決後の homeパスを基準に次の条件で採用する。それ以外の merge系レイヤー（`merge`・`{platform}-merge`・`machine-merge`・`{platform}-machine-merge`）は home の有無によらず採用する。
 
 | home対象ファイル | 条件付きレイヤーの扱い |
 | --- | --- |
@@ -290,11 +302,15 @@ sidecar名から出力ファイル名への対応（4形式共通）:
 | --- | --- | --- |
 | 1 | 基底 | 上表で選択した plain base または home |
 | 2 | merge | `<name>.merge.{json,yaml,toml,ini}` |
-| 3 | merge-existing | `<name>.merge-existing.{json,yaml,toml,ini}` |
-| 4 | merge-machine | `<name>.merge-machine.{json,yaml,toml,ini}` |
-| 5 | merge-existing-machine | `<name>.merge-existing-machine.{json,yaml,toml,ini}` |
+| 3 | {platform}-merge | `<name>.{platform}-merge.{json,yaml,toml,ini}` |
+| 4 | merge-existing | `<name>.merge-existing.{json,yaml,toml,ini}` |
+| 5 | {platform}-merge-existing | `<name>.{platform}-merge-existing.{json,yaml,toml,ini}` |
+| 6 | machine-merge | `<name>.machine-merge.{json,yaml,toml,ini}` |
+| 7 | {platform}-machine-merge | `<name>.{platform}-machine-merge.{json,yaml,toml,ini}` |
+| 8 | machine-merge-existing | `<name>.machine-merge-existing.{json,yaml,toml,ini}` |
+| 9 | {platform}-machine-merge-existing | `<name>.{platform}-machine-merge-existing.{json,yaml,toml,ini}` |
 
-後段レイヤーほど優先される。各レイヤーへの適用は §パッチ適用 に従う。
+後段レイヤーほど優先される。各レイヤーの OS 修飾版は、対応する無修飾レイヤーの直後に適用する。
 
 ### dist への出力
 
@@ -305,14 +321,14 @@ mergeターゲットごとに:
 
 ### 例
 
-`.agents/config.exact/agents.yaml` + `agents.merge-machine.yaml`（共有merge なし）:
+`.agents/config.exact/agents.yaml` + `agents.machine-merge.yaml`（共有merge なし）:
 
-1. 合成: plain base（`agents.yaml`）→ merge-machine
+1. 合成: plain base（`agents.yaml`）→ machine-merge
 2. 出力: `dist/.agents/config.exact/agents.yaml`。sidecar は削除され、plain base は完成形で上書きされる
 
 `foo.json` と4種類の sidecar が揃い、home に `foo.json` が存在する場合:
 
-1. 合成: plain base → merge → merge-existing → merge-machine → merge-existing-machine
+1. 合成: plain base → merge → merge-existing → machine-merge → merge-existing-machine
 2. 出力: `foo.json`。全sidecar は削除され、plain base は完成形で上書きされる
 
 plain base がなく、`foo.merge.json` と home の `foo.json` が存在する場合:
@@ -512,7 +528,7 @@ OldSetting.$unset=true
 マシン固有で tiers を上書き:
 
 ```yaml
-# config.merge-machine.yaml
+# config.machine-merge.yaml
 tiers:
   high:
     - provider: cursor
@@ -522,7 +538,7 @@ tiers:
 ネストで操作キーを書く。次の 2つは等価である:
 
 ```yaml
-# config.merge-machine.yaml
+# config.machine-merge.yaml
 tiers:
   high:
     "$replace":
@@ -530,7 +546,7 @@ tiers:
 ```
 
 ```yaml
-# config.merge-machine.yaml
+# config.machine-merge.yaml
 "tiers.high.$replace":
   - provider: cursor
 ```
@@ -538,13 +554,13 @@ tiers:
 TOML では `$` を含むキー名を quoted key で書く。次の 2つは等価である:
 
 ```toml
-# config.merge-machine.toml
+# config.machine-merge.toml
 [tiers.high]
 "$replace" = [{ provider = "cursor" }]
 ```
 
 ```toml
-# config.merge-machine.toml
+# config.machine-merge.toml
 tiers.high."$replace" = [{ provider = "cursor" }]
 ```
 
@@ -566,7 +582,7 @@ dist を再帰走査し、home の対応するエントリと対照する。エ�
 - symlink は、リンク先（末尾改行1つを除いた内容）を比較する。
 - 実行権は、linux と darwin で owner実行権の有無を比較する。windows では実行権を比較しない。
 
-dist の相対パスの各要素が `.build` で始まるエントリ、名前に `.data.` を含むエントリ、名前が `external.data-machine.yaml` のエントリ、および §フックシステム の宣言ファイル名に一致するファイルは、差分検知と適用の対象外であり、管理対象の一覧にも含めない。`external.data.machine.yaml` は `.data.` を含むため同じく対象外となる。`.data.` は buildステージのデータファイルのための予約名であり、`.build` 接頭辞はリネーム前のデータファイル名との互換のために残す。フックが生成した `node_modules/` は通常のエントリと同じく差分検知・適用の対象になる。`<name>.machine.{json,yaml,toml,ini}` と `.edit.ts` は、上記の除外条件に当たらなければ通常のエントリとして差分検知・適用される。`.edit.ts` は buildフックとして実行されない。
+dist の相対パスの各要素が `.build` で始まるエントリ、名前に `.data.` を含むエントリ（`external.data.yaml`・`external.windows-data.yaml` 等の外部取得データファイルを含む）、§フックシステム の宣言ファイル名に一致するファイルは、差分検知と適用の対象外であり、管理対象の一覧にも含めない。`external.data.machine.yaml` は `.data.` を含むため同じく対象外となる。`.data.` は buildステージのデータファイルのための予約名であり、`.build` 接頭辞はリネーム前のデータファイル名との互換のために残す。フックが生成した `node_modules/` は通常のエントリと同じく差分検知・適用の対象になる。`<name>.machine.{json,yaml,toml,ini}` と `.edit.ts` は、上記の除外条件に当たらなければ通常のエントリとして差分検知・適用される。`.edit.ts` は buildフックとして実行されない。
 
 | dist | home | 分類 |
 | --- | --- | --- |
@@ -746,10 +762,10 @@ dist の `<name>.executable` ファイルは、home の `<name>` に owner実行
 
 | ポイント | 通常フックの宣言ファイル | postフックの宣言ファイル | 実行タイミング | 標準入力 | 失敗時の結果 |
 | --- | --- | --- | --- | --- | --- |
-| build | `*.build.<拡張子>`、`*.build-machine.<拡張子>` | `*.postbuild.<拡張子>`、`*.postbuild-machine.<拡張子>` | 外部取得・merge・置換sidecar の完了後（§build: ローカルフック のとおり） | なし | dist生成を中断する |
-| apply | `*.apply.<拡張子>`、`*.apply-machine.<拡張子>` | `*.postapply.<拡張子>`、`*.postapply-machine.<拡張子>` | 適用の後（§applyスクリプト のとおり） | なし | 失敗を記録し、後続の applyスクリプトを実行してから非0 で終了する |
+| build | `*.build.<拡張子>`、`*.machine-build.<拡張子>`、`*.linux-build.<拡張子>`、`*.macos-build.<拡張子>`、`*.windows-build.<拡張子>` など | `*.postbuild.<拡張子>`、`*.machine-postbuild.<拡張子>`、`*.linux-postbuild.<拡張子>`、`*.macos-postbuild.<拡張子>`、`*.windows-postbuild.<拡張子>` など | 外部取得・merge・置換sidecar の完了後（§build: ローカルフック のとおり） | なし | dist生成を中断する |
+| apply | `*.apply.<拡張子>`、`*.machine-apply.<拡張子>`、`*.linux-apply.<拡張子>`、`*.macos-apply.<拡張子>`、`*.windows-apply.<拡張子>` など | `*.postapply.<拡張子>`、`*.machine-postapply.<拡張子>`、`*.linux-postapply.<拡張子>`、`*.macos-postapply.<拡張子>`、`*.windows-postapply.<拡張子>` など | 適用の後（§applyスクリプト のとおり） | なし | 失敗を記録し、後続の applyスクリプトを実行してから非0 で終了する |
 
-通常・post とも、`-machine` の有無によって実行規則は変わらない。build / apply のフックは `.ts` ファイルだけをサポートし、Bun で実行する。`.sh`、`.bash`、`.ps1` を含むその他の拡張子は未対応である。shebang の有無や内容は実行に影響しない。未対応拡張子はエラーにし、build ではパス変換後の dist相対パス、apply では dist相対パスをエラーメッセージに含める。
+通常・post とも、`machine-` の有無によって実行規則は変わらない。OS 修飾（`linux-`・`macos-`・`windows-`）を付けたフックは、修飾が実行 platform と一致するときだけ実行し、それ以外の build・apply では実行しない。build / apply のフックは `.ts` ファイルだけをサポートし、Bun で実行する。`.sh`、`.bash`、`.ps1` を含むその他の拡張子は未対応である。shebang の有無や内容は実行に影響しない。未対応拡張子はエラーにし、build ではパス変換後の dist相対パス、apply では dist相対パスをエラーメッセージに含める。
 
 フックは独立した bun プロセスとして直接実行される。実行プロセスには、通常の親プロセス環境に加えて環境変数で `DOTFILES_DIST_DIR`（distルートの絶対パス）、`DOTFILES_HOME_ROOT`（homeルートの絶対パス）、`DOTFILES_MANAGER_SRC`（dotfiles-managerの `src` ディレクトリの絶対パス）を渡す。build / apply のフックが必要とする外部パッケージは、実行時に Bun の auto-install で解決する。auto-install は依存のバージョン固定ができない。
 
