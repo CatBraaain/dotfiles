@@ -354,7 +354,7 @@ async function applyEntry(
       // A .symlink entry is a plain file in dist; the target is its content
       // with one trailing newline stripped (spec §.symlink の解釈).
       await rm(homeAbs, { force: true });
-      await symlink(await readSymlinkTarget(distAbs), homeAbs);
+      await createSymlink(await readSymlinkTarget(distAbs), homeAbs, ctx.platform);
     } else {
       // Atomic write: build the new file beside the target, then rename it in,
       // so no half-written state ever appears at the home path.
@@ -375,6 +375,21 @@ async function applyEntry(
     throw new Error(`apply failed: ${entry.homePath}: ${messageOf(error)}`);
   }
   (behavior.isChange ? ctx.applied.changed : ctx.applied.added).push(entry.homePath);
+}
+
+async function createSymlink(target: string, path: string, platform: string): Promise<void> {
+  try {
+    await symlink(target, path);
+  } catch (error) {
+    const isWindowsPermissionError =
+      platform === "win32" && error instanceof Error && "code" in error && error.code === "EPERM";
+    if (!isWindowsPermissionError) throw error;
+    throw new Error(
+      `${error.message}\n` +
+        "1. Enable Developer Mode in Windows Settings and retry.\n" +
+        '2. If Developer Mode is unavailable or the error persists, open PowerShell with "Run as administrator" and retry.',
+    );
+  }
 }
 
 async function applyTree(ctx: ApplyContext, distRel: string, homeRel: string): Promise<void> {

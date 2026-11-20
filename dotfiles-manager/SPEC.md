@@ -752,6 +752,11 @@ dist の `<name>.exact` ディレクトリは、home の `<name>` ディレク�
 
 dist の `<name>.symlink` ファイルは、home の `<name>` へ symlink として配置する。リンク先はファイル内容（末尾改行1つを除く）で、相対パスはリンクが置かれるディレクトリから解決する。既存symlink のリンク先が一致するとき、再作成しない。
 
+Windows で symlink の作成が `EPERM` で失敗した場合は、元のエラーに次の2つの対処方法をこの順で追記する。
+
+1. Windows の設定で開発者モードを有効にして再試行する。
+2. 開発者モードを使えない場合や解消しない場合は、管理者として開いた PowerShell で再試行する。
+
 ### `.executable` の解釈
 
 dist の `<name>.executable` ファイルは、home の `<name>` に owner実行権を付けて配置する。windows では実行権の処理を行わず、ファイル名はそのまま使う。
