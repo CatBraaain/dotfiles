@@ -55,6 +55,8 @@ const externalMachineFileName = "external.machine-data.yaml";
 const defaultTtlHours = 6;
 const pullTimeFileName = "build-pull-time";
 const defaultMirrorRoot = join(homedir(), "mirrors", "github.com");
+// Without core.longpaths, Git for Windows cannot delete paths over MAX_PATH (learn.microsoft.com/windows/win32/fileio/maximum-file-path-limitation)
+const longPathArgs = ["-c", "core.longpaths=true"];
 
 async function defaultContext(connection?: WslConnection): Promise<SyncContext> {
   const wsl = connection ?? (await resolveWsl(resolve(import.meta.dir, "../..")));
@@ -77,7 +79,7 @@ async function defaultContext(connection?: WslConnection): Promise<SyncContext> 
     mirrorRoot: defaultMirrorRoot,
     forcePull: process.env.BUILD_FORCE_PULL === "1",
     repoUrl: (repo) => `https://github.com/${repo}.git`,
-    runGit: (args) => runProcess(["git", ...args]),
+    runGit: (args) => runProcess(["git", ...longPathArgs, ...args]),
     runCommand: (args, cwd) => runProcess(args, cwd),
   };
 }

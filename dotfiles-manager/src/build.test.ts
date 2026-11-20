@@ -897,8 +897,10 @@ writeFileSync("payload.txt", "processed\\n");`;
           `#!${process.execPath}
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-const args = process.argv.slice(2);
-appendFileSync(${JSON.stringify(gitCalls)}, JSON.stringify(args) + "\\n");
+const rawArgs = process.argv.slice(2);
+appendFileSync(${JSON.stringify(gitCalls)}, JSON.stringify(rawArgs) + "\\n");
+const args =
+  rawArgs[0] === "-c" && rawArgs[1] === "core.longpaths=true" ? rawArgs.slice(2) : rawArgs;
 if (args[0] === "clone") {
   if (process.env.TEST_EXTERNAL_MODE === "clone-failure") {
     console.error("fixture clone failure");
@@ -946,9 +948,11 @@ if (args[0] === "clone") {
           .trimEnd()
           .split("\n")
           .map((line) => JSON.parse(line));
+        const longPathArgs = ["-c", "core.longpaths=true"];
         const expectedCalls: string[][] = isClone
           ? [
               [
+                ...longPathArgs,
                 "clone",
                 "--depth",
                 "1",
@@ -958,12 +962,15 @@ if (args[0] === "clone") {
               ],
             ]
           : [
-              ["-C", mirrorDir, "rev-parse", "HEAD"],
-              ["-C", mirrorDir, "pull", "--ff-only", "--quiet"],
-              ["-C", mirrorDir, "rev-parse", "HEAD"],
+              [...longPathArgs, "-C", mirrorDir, "rev-parse", "HEAD"],
+              [...longPathArgs, "-C", mirrorDir, "pull", "--ff-only", "--quiet"],
+              [...longPathArgs, "-C", mirrorDir, "rev-parse", "HEAD"],
             ];
         if (shouldRunAfter)
-          expectedCalls.push(["-C", mirrorDir, "clean", "-fdX"], ["run_after", mirrorDir]);
+          expectedCalls.push(
+            [...longPathArgs, "-C", mirrorDir, "clean", "-fdX"],
+            ["run_after", mirrorDir],
+          );
         assert.deepEqual(calls, expectedCalls);
         const outputPath = join(fixtureRoot, "dist/output/payload.txt");
         const runAfterPath = join(mirrorDir, "run-after.txt");
