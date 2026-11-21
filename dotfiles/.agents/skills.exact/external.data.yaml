@@ -7,6 +7,8 @@ repos:
       - skills/eli5
     edit_markdown:
       skills/eli5/SKILL.md:
+        frontmatter:
+          description: 任意の話題・コード・概念・エラーを、特定の読者層の理解度に合わせて説明する。特定の相手・読者層向けの説明依頼、平易化やELI5等の語の言及を含む説明依頼で使う。非技術者向けや理解レベルを指定した説明も対象。
         sections:
           説明の言語: |
             ユーザーが指定した言語で説明する。指定がなければユーザーの発話言語を使う。
@@ -62,9 +64,12 @@ repos:
             2. `git rev-parse <fixed-point>` で固定点を解決する。参照が無効なら停止する。`git merge-base <fixed-point> HEAD` で比較の基点を求める。
             3. コミット済みの変更には `git diff <fixed-point>...HEAD` を使う。作業途中の変更を含む依頼では、`git diff <merge-base>` で staged・unstaged の変更を含める。`git ls-files --others --exclude-standard` で未追跡ファイルを列挙し、レビュー対象のファイルを読む。`git log <fixed-point>..HEAD --oneline` でコミットを記録する。
             4. 選択した差分と、対象に含める未追跡ファイル一覧が両方とも空の場合だけ、レビュー対象なしと報告する。その場合はレビュアーを起動しない。それ以外は、両レビュアーへ同じ要求・比較の基点・差分・対象の未追跡ファイルの内容を渡す。
+      skills/engineering/diagnosing-bugs/SKILL.md:
+        frontmatter:
+          description: 難易度の高いバグ・性能劣化の診断ループ。診断・デバッグを求める依頼、壊れた・エラーで失敗する・遅い等の症状が報告されているタスクで使う。
       skills/productivity/grilling/SKILL.md:
         frontmatter:
-          description: 前提と選択を明確にする集中的な質問で、計画・判断・アイデアを問い直す。自分の判断について、厳しく問い詰めてほしい、集中的に質問してほしい、直接異論を示してほしいとユーザーが求めたときに使う。一般的な思考・分析・意思決定の支援には thinking-partner を使う。
+          description: 前提と選択を明確にする集中的な質問で、計画・判断・アイデアを問い直す。自分の判断についての厳しい問い詰め・集中的な質問・直接の異論提示を求める依頼で使う。一般的な思考・分析・意思決定の支援には thinking-partner を使う。
         sections:
           Local question rounds: |
             上記の、現時点で回答可能な質問だけを出す進め方と質問テンプレートではなく、この手順を使う。

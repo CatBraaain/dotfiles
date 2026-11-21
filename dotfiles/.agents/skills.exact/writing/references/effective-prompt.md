@@ -73,6 +73,7 @@ Decision Ladder は、優先順位が明確な行動を記述するための記�
 
 - [Agent Skills Spec](https://agentskills.io/specification)に従う。
 - frontmatter の `description` には what（その skill が何をする・どういう規範か）と when（どういうときに発火するか）を書く。what を先に書き、when が what に内包できない限り when を続ける。発火条件は `description` 内で完結させ、本文には書かない。起動後の作業境界は本文に置く。
+- when は依頼元の形式に依存しない形で書く。チャット発話・チケット本文・指示文のどれでも発火できるよう、「ユーザーが〜と言った/求めた」という発話形式を条件にせず、作業・対象・文脈の語彙で条件を書く。ELI5など識別力のある語彙は「語の言及があるとき」として残してよい。
 - what は機能要約にとどめ、手法・判断軸・適用境界の細目を書かない。それらは本文の仕事である。
 - 否定条件（使わない対象）は、誤発火が現実に起きる排他境界があるときだけ書く。
 - `description`の書き方の正本は実例集 `skill-description-examples.md`（公式 skills 全件の description）。description を書く・調整するときはこれを読み、書き方を合わせる。
