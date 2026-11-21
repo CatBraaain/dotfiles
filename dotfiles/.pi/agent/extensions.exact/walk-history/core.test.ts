@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
 import { SessionManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
-import { extractMessageText, findUndoTarget } from "./core.ts";
+import { extractMessageText, findBackTarget } from "./core.ts";
 
 type UserContent =
   | string
@@ -49,7 +49,7 @@ describe("extractMessageText", () => {
   });
 });
 
-describe("findUndoTarget", () => {
+describe("findBackTarget", () => {
   it("ブランチの末尾から見て最後の user 発言を選ぶ(末尾に assistant があっても)", () => {
     const entries = branch(
       entry("u1", null, "user", "はじめ"),
@@ -57,7 +57,7 @@ describe("findUndoTarget", () => {
       entry("u2", "a1", "user", "やり直したい"),
       entry("a2", "u2", "assistant", [{ type: "text", text: "ok" }]),
     );
-    const target = findUndoTarget(entries);
+    const target = findBackTarget(entries);
     assert.equal(target?.entryId, "u2");
     assert.equal(target?.text, "やり直したい");
   });
@@ -67,24 +67,24 @@ describe("findUndoTarget", () => {
       entry("u1", null, "user", "はじめ"),
       entry("a1", "u1", "assistant", [{ type: "text", text: "hello" }]),
     );
-    const target = findUndoTarget(entries);
+    const target = findBackTarget(entries);
     assert.equal(target?.entryId, "u1");
     assert.equal(target?.text, "はじめ");
   });
 
   it("user 発言が会話の最初の1件のみのとき、その発言を選ぶ", () => {
     const entries = branch(entry("u1", null, "user", "はじめ"));
-    const target = findUndoTarget(entries);
+    const target = findBackTarget(entries);
     assert.equal(target?.entryId, "u1");
   });
 
   it("user 発言がないブランチでは undefined を返す", () => {
     const entries = branch(entry("a1", null, "assistant", [{ type: "text", text: "hello" }]));
-    assert.equal(findUndoTarget(entries), undefined);
+    assert.equal(findBackTarget(entries), undefined);
   });
 
   it("空のブランチでは undefined を返す", () => {
-    assert.equal(findUndoTarget(branch()), undefined);
+    assert.equal(findBackTarget(branch()), undefined);
   });
 
   it("実 SessionManager の getBranch() 順序(root→leaf)でも最後の user 発言を選ぶ", () => {
@@ -103,7 +103,7 @@ describe("findUndoTarget", () => {
     manager.appendMessage(assistantMessage);
     manager.appendMessage(userMessage("やり直したい", 3));
 
-    const target = findUndoTarget(manager.getBranch());
+    const target = findBackTarget(manager.getBranch());
     assert.equal(target?.text, "やり直したい");
   });
 });

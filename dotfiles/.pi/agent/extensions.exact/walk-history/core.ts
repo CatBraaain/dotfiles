@@ -1,11 +1,11 @@
 import type { ImageContent, TextContent, UserMessage } from "@earendil-works/pi-ai";
 import type { SessionEntry, SessionMessageEntry } from "@earendil-works/pi-coding-agent";
 
-/** A user message that /undo reverts the conversation to. */
-export interface UndoTarget {
-  /** Session entry ID of the user message to undo. */
+/** A user message that /back reverts the conversation to. */
+export interface BackTarget {
+  /** Session entry ID of the user message to go back to. */
   entryId: string;
-  /** Text of the user message, restored into the editor after undoing. */
+  /** Text of the user message, restored into the editor after going back. */
   text: string;
 }
 
@@ -29,11 +29,11 @@ export function extractMessageText(content: string | (TextContent | ImageContent
 }
 
 /**
- * Find the entry /undo reverts to: the last user message on the active branch.
+ * Find the entry /back reverts to: the last user message on the active branch.
  * `branchEntries` is the branch as returned by getBranch() (root first, leaf last).
  * Returns undefined when the branch has no user message.
  */
-export function findUndoTarget(branchEntries: SessionEntry[]): UndoTarget | undefined {
+export function findBackTarget(branchEntries: SessionEntry[]): BackTarget | undefined {
   const entry = branchEntries.findLast(isUserMessageEntry);
   if (!entry) return undefined;
   return { entryId: entry.id, text: extractMessageText(entry.message.content) };
