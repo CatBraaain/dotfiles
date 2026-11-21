@@ -95,7 +95,6 @@ type HistoryEntry = {
 type Config = ReturnType<typeof configuration>;
 type TmuxConfig = ReturnType<typeof tmuxConfiguration>;
 
-const EMPTY_SESSION = "pi-empty";
 const SESSION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
 const STARTUP_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 50;
@@ -253,9 +252,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       const target =
         operation.kind === "open"
           ? await openSaved(config, operation.id, operation.temporary ? "temporary" : "normal")
-          : operation.request === undefined
-            ? await openNew(config)
-            : await createIndependent(config, operation.request);
+          : await createIndependent(config, operation.request);
       if (operation.kind === "open") {
         try {
           if (!operation.temporary) await promoteSession(config, target.session, target.id);
@@ -1533,7 +1530,7 @@ function writeSnapshot(config: TmuxConfig, state: RestoreState): void {
   }
 }
 
-async function createIndependent(config: Config, request: string): Promise<Pane> {
+async function createIndependent(config: Config, request?: string): Promise<Pane> {
   const id = randomUUID();
   const name = sessionName(id);
   const created = await createSession(
@@ -1541,11 +1538,12 @@ async function createIndependent(config: Config, request: string): Promise<Pane>
     {
       id,
       cwd: process.cwd(),
-      request,
+      ...(request !== undefined ? { request } : {}),
     },
     name,
   );
-  return await waitForSession(config, created ?? name, id, "accepted");
+  if (request !== undefined) return await waitForSession(config, created ?? name, id, "accepted");
+  return await waitForSession(config, created ?? name, id);
 }
 
 function compiledEntry(): boolean {
@@ -1554,43 +1552,6 @@ function compiledEntry(): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-async function openNew(config: Config): Promise<Pane> {
-  const cwd = process.cwd();
-  const name = `${EMPTY_SESSION}-${createHash("sha256").update(cwd).digest("hex")}`;
-  const deadline = Date.now() + STARTUP_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const panes = await livePanes(config);
-    const empty = panes.filter(
-      (pane) =>
-        (pane.name === name || pane.name === EMPTY_SESSION) &&
-        pane.cwd === cwd &&
-        !existsSync(pane.file),
-    );
-    if (empty.length > 1) throw new Error("Multiple unsaved new sessions are running");
-    if (empty[0]) return empty[0];
-
-    const reserved = await hasSession(config, name);
-    if (reserved) {
-      const previous = (await livePanes(config)).find((pane) => pane.name === name);
-      if (!previous) {
-        await Bun.sleep(POLL_INTERVAL_MS);
-        continue;
-      }
-      if (previous.cwd === cwd && !existsSync(previous.file)) return previous;
-      const renamed = await tmux(
-        config,
-        ["rename-session", "-t", previous.session, sessionName(previous.id)],
-        true,
-      );
-      if (renamed.exitCode !== 0) continue;
-    }
-    const id = randomUUID();
-    const created = await createSession(config, { id, cwd }, name);
-    if (created) return await waitForSession(config, created, id);
-  }
-  throw new Error("Timed out reserving an unsaved new session");
 }
 
 async function resolveSaved(config: Config, id: string) {

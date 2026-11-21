@@ -1861,7 +1861,7 @@ spyOn(fs, "renameSync").mockImplementation((...args) => {
     }
   });
 
-  it("preserves registration through temporary open, normal promotion, and empty-new reuse", async () => {
+  it("preserves registration through temporary open, normal promotion, and independent new sessions", async () => {
     const fixture = new SessionFixture();
     try {
       writeFileSync(
@@ -1910,13 +1910,19 @@ exec ${JSON.stringify(realTmux)} "$@"
       assert.equal(firstNew.status, 0, firstNew.stderr);
       const secondNew = fixture.run(["new", "--detached"]);
       assert.equal(secondNew.status, 0, secondNew.stderr);
-      assert.equal(secondNew.stdout, firstNew.stdout);
+      const firstId = /^Pi session (\S+)\n/.exec(firstNew.stdout)?.[1];
+      const secondId = /^Pi session (\S+)\n/.exec(secondNew.stdout)?.[1];
+      assert.ok(firstId && secondId);
+      assert.notEqual(secondId, firstId);
       const list = fixture.run(["list"]);
       assert.equal(list.status, 0, list.stderr);
       const listed = JSON.parse(list.stdout);
       assert.equal(listed.length, 1);
       assert.equal(listed[0].sessions[0].id, id);
-      assert.equal(listed[0].empty.length, 1);
+      assert.deepEqual(
+        listed[0].empty.map((entry: { id: string }) => entry.id).sort(),
+        [firstId, secondId].sort(),
+      );
     } finally {
       await fixture.cleanup();
     }
@@ -2165,7 +2171,7 @@ await Bun.sleep(300000);
 }
 
 describe("new with a client switch", () => {
-  it("secures an empty pi and switches the client pid to it, reusing the same empty pi", async () => {
+  it("secures a fresh empty pi and switches the client pid to it", async () => {
     const fixture = new SessionFixture();
     try {
       prepareNewEmpty(fixture);
@@ -2177,7 +2183,7 @@ describe("new with a client switch", () => {
       assert.equal(result.status, 0, result.stderr);
       const switched = fixture.clients()[0]!;
       assert.equal(switched.pid, client.pid);
-      assert.match(switched.session, /^pi-empty/);
+      assert.match(switched.session, /^pi-[0-9a-f]{64}$/);
       const pane = fixture.tmux(["display-message", "-p", "-t", switched.session, "#{pane_id}"]);
       const metadata = JSON.parse(
         Buffer.from(
@@ -2187,10 +2193,13 @@ describe("new with a client switch", () => {
       );
       assert.equal(metadata.cwd, fixture.cwd);
       assert.match(result.stdout, new RegExp(`^Pi session ${metadata.id}\\nAttach with: `));
-      const reused = fixture.run(["new", "--client-pid", String(client.pid)]);
-      assert.equal(reused.status, 0, reused.stderr);
-      assert.match(reused.stdout, new RegExp(`^Pi session ${metadata.id}\\n`));
-      assert.equal(fixture.clients()[0]!.session, switched.session);
+      const second = fixture.run(["new", "--client-pid", String(client.pid)]);
+      assert.equal(second.status, 0, second.stderr);
+      const secondId = /^Pi session (\S+)\n/.exec(second.stdout)?.[1];
+      assert.ok(secondId);
+      assert.notEqual(secondId, metadata.id);
+      const secondSession = `pi-${createHash("sha256").update(secondId).digest("hex")}`;
+      assert.equal(fixture.clients()[0]!.session, secondSession);
     } finally {
       await fixture.cleanup();
     }
@@ -2210,7 +2219,7 @@ describe("new with a client switch", () => {
       const emptySessions = fixture
         .tmux(["list-sessions", "-F", "#{session_name}"])
         .split("\n")
-        .filter((name) => name.startsWith("pi-empty"));
+        .filter((name) => /^pi-[0-9a-f]{64}$/.test(name));
       assert.equal(emptySessions.length, 1);
     } finally {
       await fixture.cleanup();
@@ -2244,7 +2253,7 @@ describe("new with a cwd option", () => {
       assert.equal(started.length, 1);
       const [sessionName] = started[0]!;
       assert.ok(sessionName);
-      assert.match(sessionName, /^pi-empty/);
+      assert.match(sessionName, /^pi-[0-9a-f]{64}$/);
       const pane = fixture.tmux(["display-message", "-p", "-t", sessionName, "#{pane_id}"]);
       const metadata = JSON.parse(
         Buffer.from(
