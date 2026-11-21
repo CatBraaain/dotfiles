@@ -96,6 +96,23 @@ describe("findWorkbenchHtml", () => {
     assert.ok(found?.startsWith(join(install, "0ffee000aa")), `unexpected: ${found}`);
   });
 
+  it("finds the commit-hash directory from install roots without an execPath", () => {
+    const install = join(makeTempRoot("installroots"), "install");
+    mkdirSync(install, { recursive: true });
+    buildWorkbenchTree(join(install, "69047191fc"), {
+      workbenchDir: "resources/app/out/vs/code/electron-browser/workbench",
+      htmlFile: "workbench.html",
+    });
+    const found = findWorkbenchHtml(workbenchSearchDirs({ extraRoots: [install] }));
+    assert.equal(
+      found,
+      join(
+        install,
+        "69047191fc/resources/app/out/vs/code/electron-browser/workbench/workbench.html",
+      ),
+    );
+  });
+
   it("prefers workbench-dev.html over workbench.html", () => {
     const install = join(makeTempRoot("dev"), "install");
     const dir = join(install, "out", "vs", "code", "electron-browser", "workbench");

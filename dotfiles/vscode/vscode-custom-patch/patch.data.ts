@@ -82,6 +82,8 @@ export function installRoots(): string[] {
 //   <install>/Code.exe + <install>/resources/app/out/...
 //   <install>/Code.exe + <install>/<commit>/resources/app/out/...  (self-update)
 //   <install>/<commit>/Code.exe + <install>/<commit>/out/...
+// extraRoots are scanned one child level deep so apply-time and CLI runs
+// without an execPath also reach the self-update commit layout.
 export function workbenchSearchDirs({
   execPath,
   mainFilename,
@@ -108,7 +110,10 @@ export function workbenchSearchDirs({
     pushAppOutBases(dirs, seen, dirname(dirname(mainFilename)));
   }
 
-  for (const root of extraRoots ?? []) pushAppOutBases(dirs, seen, root);
+  for (const root of extraRoots ?? []) {
+    pushAppOutBases(dirs, seen, root);
+    for (const child of listDirectories(root)) pushAppOutBases(dirs, seen, child);
+  }
 
   return dirs;
 }
