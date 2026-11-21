@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { parseOperation } from "./main";
+import { parseOperation, type StateSource } from "./main";
 
 const source = join(import.meta.dir, "main.ts");
 const realTmux = Bun.which("tmux");
@@ -253,7 +253,7 @@ function stateSource(fixture: CloseFixture) {
   };
 }
 
-function notify(fixture: CloseFixture, args: string[], origin = stateSource(fixture)) {
+function notify(fixture: CloseFixture, args: string[], origin: StateSource = stateSource(fixture)) {
   return spawnSync(
     process.execPath,
     ["run", source, "state", fixture.id, ...args, "--source", JSON.stringify(origin)],
@@ -268,6 +268,28 @@ function notify(fixture: CloseFixture, args: string[], origin = stateSource(fixt
 
 function publicState(fixture: CloseFixture): string {
   return fixture.tmux(["show-options", "-pqv", "@pi_session_state"]);
+}
+
+function pendingState(fixture: CloseFixture): string {
+  return fixture.tmux(["show-options", "-pqv", "@pi_session_state_pending"]);
+}
+
+function runList(fixture: CloseFixture) {
+  return spawnSync(process.execPath, ["run", source, "list"], {
+    cwd: fixture.cwd,
+    env: fixture.env,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+}
+
+async function holdSharedLock(fixture: CloseFixture, lock: ReturnType<typeof createServer>) {
+  const key = createHash("sha256").update(join(fixture.directory, "agent/pi-tmux")).digest("hex");
+  await new Promise<void>((resolve, reject) => {
+    lock.once("error", reject);
+    lock.listen(`\0pi-mux-${process.getuid!()}-${key}`, resolve);
+  });
+  return lock;
 }
 
 describe("state notifications", () => {
@@ -427,26 +449,165 @@ exec ${JSON.stringify(realTmux)} "$@"
     }
   });
 
-  it("returns 75 without changes when another operation holds the shared lock", async () => {
+  it("publishes running, marks the pending publication, and returns 75 when another operation holds the shared lock", async () => {
     const fixture = new CloseFixture("none");
     const lock = createServer();
     try {
       fixture.start();
-      const key = createHash("sha256")
-        .update(join(fixture.directory, "agent/pi-tmux"))
-        .digest("hex");
-      await new Promise<void>((resolve, reject) => {
-        lock.once("error", reject);
-        lock.listen(`\0pi-mux-${process.getuid!()}-${key}`, resolve);
-      });
+      await holdSharedLock(fixture, lock);
       const before = readFileSync(fixture.restore, "utf8");
       const result = notify(fixture, ["running", "--title", "null"]);
       assert.equal(result.status, 75, result.stderr);
       assert.match(result.stderr, /lock/);
-      assert.equal(publicState(fixture), "");
+      assert.deepEqual(JSON.parse(publicState(fixture)), {
+        version: 1,
+        sessionId: fixture.id,
+        state: "running",
+        title: null,
+      });
+      const marked = JSON.parse(pendingState(fixture));
+      assert.equal(marked.version, 1);
+      assert.equal(marked.sessionId, fixture.id);
+      assert.ok(
+        typeof marked.attemptAt === "number" &&
+          Number.isSafeInteger(marked.attemptAt) &&
+          marked.attemptAt > 0,
+        "attemptAt must be a positive integer",
+      );
       assert.equal(readFileSync(fixture.restore, "utf8"), before);
     } finally {
+      if (lock?.listening) await new Promise<void>((resolve) => lock.close(() => resolve()));
+      await fixture.cleanup();
+    }
+  });
+
+  it("completes waiting, approval, and clear while another operation holds the shared lock", async () => {
+    const fixture = new CloseFixture("none");
+    const lock = createServer();
+    try {
+      fixture.start();
+      await holdSharedLock(fixture, lock);
+      const before = readFileSync(fixture.restore, "utf8");
+      const deferred = notify(fixture, ["running", "--title", "null"]);
+      assert.equal(deferred.status, 75, deferred.stderr);
+      assert.ok(pendingState(fixture), "contention must mark the pending publication");
+      const waiting = notify(fixture, [
+        "waiting-user",
+        "--title",
+        JSON.stringify("Waiting under contention"),
+      ]);
+      assert.equal(waiting.status, 0, waiting.stderr);
+      assert.deepEqual(JSON.parse(publicState(fixture)), {
+        version: 1,
+        sessionId: fixture.id,
+        state: "waiting-user",
+        title: "Waiting under contention",
+      });
+      assert.ok(pendingState(fixture), "waiting notifications must not change the pending mark");
+      const approval = notify(fixture, ["waiting-approval", "--title", "null"]);
+      assert.equal(approval.status, 0, approval.stderr);
+      assert.deepEqual(JSON.parse(publicState(fixture)), {
+        version: 1,
+        sessionId: fixture.id,
+        state: "waiting-approval",
+        title: null,
+      });
+      assert.ok(pendingState(fixture), "approval notifications must not change the pending mark");
+      const cleared = notify(fixture, ["--clear"]);
+      assert.equal(cleared.status, 0, cleared.stderr);
+      assert.equal(publicState(fixture), "");
+      assert.equal(pendingState(fixture), "", "clear must remove the pending mark");
+      assert.equal(readFileSync(fixture.restore, "utf8"), before);
+    } finally {
+      if (lock?.listening) await new Promise<void>((resolve) => lock.close(() => resolve()));
+      await fixture.cleanup();
+    }
+  });
+
+  it("relays the deferred running publication through list and clears it after the lock part succeeds", async () => {
+    const fixture = new CloseFixture("none");
+    const lock = createServer();
+    try {
+      fixture.start();
+      fixture.tmux(["set-environment", "-t", "target", "PI_TMUX_TEMPORARY", fixture.id]);
+      fixture.tmux(["set-option", "-g", `@pi-mux-restoring-${fixture.otherId}`, "1"]);
+      await holdSharedLock(fixture, lock);
+      const deferred = notify(fixture, ["running", "--title", "null"]);
+      assert.equal(deferred.status, 75, deferred.stderr);
+      assert.ok(pendingState(fixture), "contention must mark the pending publication");
+      const deferredListing = runList(fixture);
+      assert.equal(deferredListing.status, 0, deferredListing.stderr);
+      const deferredSession = JSON.parse(deferredListing.stdout)[0].sessions.find(
+        (entry: { id: string }) => entry.id === fixture.id,
+      );
+      assert.equal(deferredSession.state, "running");
+      assert.ok(
+        Number.isSafeInteger(deferredSession.publishPending?.attemptAt) &&
+          deferredSession.publishPending.attemptAt > 0,
+        "list must relay the pending attempt time",
+      );
+      assert.equal(deferredSession.temporary, true);
       if (lock.listening) await new Promise<void>((resolve) => lock.close(() => resolve()));
+      const repaired = notify(fixture, ["running", "--title", "null"]);
+      assert.equal(repaired.status, 0, repaired.stderr);
+      assert.equal(pendingState(fixture), "");
+      const repairedListing = runList(fixture);
+      assert.equal(repairedListing.status, 0, repairedListing.stderr);
+      const repairedSession = JSON.parse(repairedListing.stdout)[0].sessions.find(
+        (entry: { id: string }) => entry.id === fixture.id,
+      );
+      assert.equal(repairedSession.publishPending, null);
+      assert.equal(repairedSession.temporary, undefined);
+    } finally {
+      if (lock?.listening) await new Promise<void>((resolve) => lock.close(() => resolve()));
+      await fixture.cleanup();
+    }
+  });
+
+  it("relays only a valid pending publication through list and returns null otherwise", async () => {
+    const fixture = new CloseFixture("none");
+    try {
+      fixture.start();
+      const pane = fixture.tmux(["display-message", "-p", "#{pane_id}"]);
+      const entryOf = (listing: string) =>
+        JSON.parse(listing)[0].sessions.find((entry: { id: string }) => entry.id === fixture.id);
+      const attemptAt = 1735689600000;
+      const invalid = [
+        "{broken",
+        JSON.stringify({ version: 2, sessionId: fixture.id, attemptAt }),
+        JSON.stringify({ version: 1, sessionId: "other-session", attemptAt }),
+        JSON.stringify({ version: 1, sessionId: fixture.id, attemptAt: 0 }),
+        JSON.stringify({ version: 1, sessionId: fixture.id, attemptAt: -5 }),
+        JSON.stringify({ version: 1, sessionId: fixture.id, attemptAt: 1.5 }),
+        JSON.stringify({ version: 1, sessionId: fixture.id, attemptAt: String(attemptAt) }),
+        JSON.stringify({ version: 1, sessionId: fixture.id }),
+      ];
+      for (const value of invalid) {
+        fixture.tmux(["set-option", "-p", "-t", pane, "@pi_session_state_pending", value]);
+        const listing = runList(fixture);
+        assert.equal(listing.status, 0, listing.stderr);
+        assert.equal(
+          entryOf(listing.stdout).publishPending,
+          null,
+          `invalid value must resolve to null: ${value}`,
+        );
+      }
+      fixture.tmux([
+        "set-option",
+        "-p",
+        "-t",
+        pane,
+        "@pi_session_state_pending",
+        JSON.stringify({ version: 1, sessionId: fixture.id, attemptAt }),
+      ]);
+      const valid = runList(fixture);
+      assert.equal(valid.status, 0, valid.stderr);
+      assert.deepEqual(entryOf(valid.stdout).publishPending, { attemptAt });
+      fixture.tmux(["set-option", "-pu", "-t", pane, "@pi_session_state_pending"]);
+      const cleared = runList(fixture);
+      assert.equal(cleared.status, 0, cleared.stderr);
+      assert.equal(entryOf(cleared.stdout).publishPending, null);
+    } finally {
       await fixture.cleanup();
     }
   });
@@ -891,7 +1052,15 @@ describe("list workspace panes", () => {
       assert.deepEqual(JSON.parse(result.stdout), [
         {
           cwd: fixture.cwd,
-          sessions: [{ id: savedId, file: savedFile, state: null, title: "Saved title" }],
+          sessions: [
+            {
+              id: savedId,
+              file: savedFile,
+              state: null,
+              title: "Saved title",
+              publishPending: null,
+            },
+          ],
           empty: [{ id: emptyId, file: emptyFile, temporary: true }],
         },
       ]);
@@ -2472,18 +2641,19 @@ describe("restart safety", () => {
         const wrapper = join(fixture.directory, "bin/tmux");
         const before = readFileSync(wrapper, "utf8");
         const injected = join(fixture.directory, "injected-status");
+        const pendingMarker = join(fixture.directory, "injected-pending");
         writeFileSync(
           wrapper,
           before.replace(
             "exec ",
-            `if [ "$5" = if-shell ] && [ ! -e ${JSON.stringify(injected)} ]; then\n  ${notification} > ${JSON.stringify(injected + ".stdout")} 2> ${JSON.stringify(injected + ".stderr")}\n  printf '%s' "$?" > ${JSON.stringify(injected)}\nfi\nexec `,
+            `if [ "$5" = source-file ] && [ ! -e ${JSON.stringify(injected)} ] && [ ! -e ${JSON.stringify(pendingMarker)} ]; then\n  touch ${JSON.stringify(pendingMarker)}\n  ${notification} > ${JSON.stringify(injected + ".stdout")} 2> ${JSON.stringify(injected + ".stderr")}\n  printf '%s' "$?" > ${JSON.stringify(injected)}\n  rm -f ${JSON.stringify(pendingMarker)}\nfi\nexec `,
           ),
         );
         child = startRestart(fixture, force ? ["--force"] : []);
         await waitUntil(() => existsSync(injected));
         assert.equal(
           readFileSync(injected, "utf8"),
-          "75",
+          notificationState === "waiting-approval" ? "0" : "75",
           readFileSync(injected + ".stderr", "utf8"),
         );
         if (!force) {
@@ -2626,8 +2796,8 @@ describe("restart safety", () => {
         const before = readFileSync(wrapper, "utf8");
         const injected =
           failure === "generation-race"
-            ? `if [ "$5" = if-shell ]; then ${JSON.stringify(realTmux)} -S ${JSON.stringify(fixture.socket)} set-option -g @pi-mux-generation replacement; fi\n`
-            : `if [ "$5" = ${failure === "stop" ? "if-shell" : "start-server"} ]; then echo injected-${failure}-failure >&2; exit 1; fi\n`;
+            ? `if [ "$5" = source-file ]; then ${JSON.stringify(realTmux)} -S ${JSON.stringify(fixture.socket)} set-option -g @pi-mux-generation replacement; fi\n`
+            : `if [ "$5" = ${failure === "stop" ? "source-file" : "start-server"} ]; then echo injected-${failure}-failure >&2; exit 1; fi\n`;
         writeFileSync(wrapper, before.replace("exec ", injected + "exec "));
         const result = fixture.run(["restart"]);
         assert.equal(result.status, 1, result.stderr);
@@ -2786,13 +2956,18 @@ describe("reload", () => {
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout.trim(), `reloaded ${id}`);
       assert.equal(fixture.tmux(["display-message", "-p", "#{pid}"]), serverPid);
-      assert.equal(fixture.tmux(["display-message", "-p", "-t", "target", "#{session_id}"]), session);
+      assert.equal(
+        fixture.tmux(["display-message", "-p", "-t", "target", "#{session_id}"]),
+        session,
+      );
       assert.equal(fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_id}"]), pane);
       assert.equal(existsSync(`/proc/${oldPid}`), false);
       const newPid = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]);
       assert.notEqual(newPid, oldPid);
       assert.equal(fixture.tmux(["show-options", "-gqv", "@pi-mux-generation"]), "before-restart");
-      const launch = JSON.parse(fixture.tmux(["show-options", "-pqv", "-t", pane, "@pi-mux-launch"]));
+      const launch = JSON.parse(
+        fixture.tmux(["show-options", "-pqv", "-t", pane, "@pi-mux-launch"]),
+      );
       assert.equal(launch.id, id);
       assert.equal(launch.pid, Number(newPid));
       const hook = fixture.tmux(["show-options", "-gqv", "@pi-mux-snapshot"]);
@@ -2811,10 +2986,12 @@ describe("reload", () => {
       });
       const stale = fixture.run(["snapshot", "before-restart"]);
       assert.equal(stale.status, 0, stale.stderr);
-      assert.deepEqual(restoreDocument(fixture).workspaces, [{
-        cwd: fixture.cwd,
-        sessions: [id],
-      }]);
+      assert.deepEqual(restoreDocument(fixture).workspaces, [
+        {
+          cwd: fixture.cwd,
+          sessions: [id],
+        },
+      ]);
     } finally {
       await fixture.cleanup();
     }
@@ -2987,10 +3164,92 @@ describe("reload", () => {
       child = undefined;
       assert.equal(result.status, 0, result.stderr);
       assert.equal(existsSync(`/proc/${pid}`), false);
-      assert.deepEqual(restoreDocument(fixture).workspaces, [{
-        cwd: fixture.cwd,
-        sessions: [id],
-      }]);
+      assert.deepEqual(restoreDocument(fixture).workspaces, [
+        {
+          cwd: fixture.cwd,
+          sessions: [id],
+        },
+      ]);
+    } finally {
+      child?.kill();
+      if (child) await child.exited;
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("waits when a waiting-approval notification lands in the replacement window without writing the veto", async () => {
+    const fixture = new SessionFixture();
+    let child: ReturnType<typeof startReload> | undefined;
+    try {
+      prepareManagedPi(fixture);
+      const id = addManagedSession(fixture, "target", "waiting-user");
+      const pane = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_id}"]);
+      const pid = Number(fixture.tmux(["display-message", "-p", "-t", pane, "#{pane_pid}"]));
+      const serverPid = Number(fixture.tmux(["display-message", "-p", "#{pid}"]));
+      const origin = {
+        socket: fixture.socket,
+        serverPid,
+        pane,
+        pid,
+        token: fixture.launchTokenOf("target"),
+      };
+      const notification = [
+        process.execPath,
+        "run",
+        source,
+        "state",
+        id,
+        "waiting-approval",
+        "--source",
+        JSON.stringify(origin),
+        "--title",
+        "null",
+      ]
+        .map((arg) => JSON.stringify(arg))
+        .join(" ");
+      const wrapper = join(fixture.directory, "bin/tmux");
+      const before = readFileSync(wrapper, "utf8");
+      const injected = join(fixture.directory, "injected-status");
+      writeFileSync(
+        wrapper,
+        before.replace(
+          "exec ",
+          `if [ "$5" = if-shell ] && [ ! -e ${JSON.stringify(injected)} ]; then\n  ${notification} > ${JSON.stringify(injected + ".stdout")} 2> ${JSON.stringify(injected + ".stderr")}\n  printf '%s' "$?" > ${JSON.stringify(injected)}\nfi\nexec `,
+        ),
+      );
+      child = startReload(fixture, [id]);
+      await waitUntil(() => existsSync(injected));
+      assert.equal(readFileSync(injected, "utf8"), "0", readFileSync(injected + ".stderr", "utf8"));
+      await Bun.sleep(150);
+      assert.equal(child.exitCode, null);
+      assert.equal(existsSync(`/proc/${pid}`), true);
+      let notified = fixture.run([
+        "state",
+        id,
+        "waiting-user",
+        "--source",
+        JSON.stringify(origin),
+        "--title",
+        "null",
+      ]);
+      for (let attempt = 0; notified.status === 75 && attempt < 100; attempt++) {
+        await Bun.sleep(50);
+        notified = fixture.run([
+          "state",
+          id,
+          "waiting-user",
+          "--source",
+          JSON.stringify(origin),
+          "--title",
+          "null",
+        ]);
+      }
+      assert.equal(notified.status, 0, notified.stderr);
+      const result = await finishReload(child);
+      child = undefined;
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), `reloaded ${id}`);
+      assert.equal(existsSync(`/proc/${pid}`), false);
     } finally {
       child?.kill();
       if (child) await child.exited;
@@ -3109,8 +3368,14 @@ describe("reload", () => {
         launched.map(({ id: launchedId }) => launchedId).sort(),
         [emptyId, id, temporaryId].sort(),
       );
-      assert.ok(launched.find(({ id: launchedId }) => launchedId === temporaryId).args.includes("--session"));
-      assert.ok(launched.find(({ id: launchedId }) => launchedId === emptyId).args.includes("--session-id"));
+      assert.ok(
+        launched
+          .find(({ id: launchedId }) => launchedId === temporaryId)
+          .args.includes("--session"),
+      );
+      assert.ok(
+        launched.find(({ id: launchedId }) => launchedId === emptyId).args.includes("--session-id"),
+      );
       const listed = JSON.parse(fixture.run(["list"]).stdout);
       assert.equal(listed.length, 1);
       assert.deepEqual(
@@ -3287,7 +3552,10 @@ describe("reload", () => {
       assert.equal(result.status, 1);
       assert.match(result.stderr, new RegExp(stoppedId));
       assert.match(result.stderr, /not running/);
-      assert.equal(fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]), targetPid);
+      assert.equal(
+        fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]),
+        targetPid,
+      );
       assert.deepEqual(restoreDocument(fixture), {
         version: 1,
         generation: "before-restart",
@@ -3311,7 +3579,10 @@ describe("reload", () => {
       assert.match(result.stderr, new RegExp(unknownId));
       assert.match(result.stderr, /Session not found/);
       assert.equal(readFileSync(restoreFile(fixture), "utf8"), before);
-      assert.equal(fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]), targetPid);
+      assert.equal(
+        fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]),
+        targetPid,
+      );
     } finally {
       await fixture.cleanup();
     }

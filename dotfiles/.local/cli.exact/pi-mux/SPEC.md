@@ -160,9 +160,23 @@ sourceの全項目、会話ID、現在のpaneのpi実体を、稼働中の専用
 
 昇格の基準は `running` 通知であり、userメッセージの保存ではない。拡張や自動処理による実行開始も同じ条件で扱う。
 
-状態公開・昇格・復元記録更新は、他の変更操作と同じ排他の中で処理する。`state` はロック取得を待たず、競合時は変更せず、stderrへ理由を表示して終了コード75で終了する。これにより起動・復元が保持するロックを状態通知が待ち続けない。
+state の処理は、排他ロックを要しない「pane 公開」と、必要なときだけロックを取る「昇格・修復」の2段で構成し、この順で実行する。
 
-成功時はstdout・stderrへ出力せず終了コード0とする。競合以外の失敗はIDと理由をstderrへ表示して終了コード1とする。公開・昇格・記録更新の途中失敗では一部が反映済みの場合があり、piの動作は継続する。同じ通知の再送で未完了の更新を修復できる。保存済みの復元記録が不正な場合は上書きせず、復元保証は最後に保存完了した集合までとする。
+#### pane 公開（排他の外）
+
+全通知で、source検証と、ガード付きの pane 属性書込み（`@pi_session_state` と `@pi-mux-state-source` の公開、`@pi-mux-pending-restart-blocker` の除去）を行う。`waiting-user`・`waiting-approval`・`--clear` はここまでで完了する。
+
+#### 昇格・修復（排他の中）
+
+`running` で、一時再開中の昇格（`PI_TMUX_TEMPORARY` 除去）または server世代の修復（`@pi-mux-generation` 存在による snapshot repair）を要するときだけ、snapshot・restore・new・open・close・workspace解除と同じ排他の中で両方を行う。ロックの取得は待たない。これにより起動・復元が保持するロックを状態通知が待ち続けない。競合した場合は、`@pi-mux-pending-restart-blocker` と `@pi-mux-restart-veto` を書き、`@pi_session_state_pending` を公開して終了する。ロック部分が成功したときは `@pi_session_state_pending` を除去する。
+
+| 終了条件 | 終了コード |
+| --- | --- |
+| pane 公開が完了し、昇格・修復が不要または完了した | 0 |
+| 昇格・修復のロックが競合した（pane 公開は完了済み、昇格・修復は未完了） | 75 |
+| pane 公開の失敗など、競合以外の失敗 | 1 |
+
+成功時はstdout・stderrへ出力しない。競合以外の失敗はIDと理由をstderrへ表示する。公開・昇格・記録更新の途中失敗では一部が反映済みの場合があり、piの動作は継続する。同じ通知の再送で未完了の更新を修復できる。保存済みの復元記録が不正な場合は上書きせず、復元保証は最後に保存完了した集合までとする。
 
 #### pane optionの公開契約
 
@@ -184,7 +198,23 @@ pane-local user option `@pi_session_state` に、次のJSON文字列を公開す
 | `state` | 通知で指定した実行フェーズ |
 | `title` | 通知で指定した文字列または `null` |
 
-公開値はworkspace登録と復元候補とは別に扱う。pane終了でpane-localの値も消滅する。
+ロック部分の競合時は、pane-local user option `@pi_session_state_pending` に、次のJSON文字列を公開する。公開は source検証済みのpaneへガード付きで行い、tmux format展開は行わない。
+
+```json
+{
+  "version": 1,
+  "sessionId": "<会話ID>",
+  "attemptAt": 1735689600000
+}
+```
+
+| 項目 | 値 |
+| --- | --- |
+| `version` | `1` |
+| `sessionId` | 通知で指定した会話ID |
+| `attemptAt` | 競合した昇格・修復の試行時刻を表す正の整数（epoch ms） |
+
+ロック部分が成功したときと `--clear` 成功時に、`@pi_session_state_pending` を除去する。`waiting-user`・`waiting-approval` は `@pi_session_state_pending` を変えない。通常openによる昇格やpaneの置換でも、`@pi_session_state_pending` を変えない。公開値はworkspace登録と復元候補とは別に扱う。pane終了でpane-localの値も消滅する。
 
 ### close
 
@@ -239,11 +269,11 @@ register・unregisterの成功時はstdout・stderrへ出力せず終了コー�
 
 ### list
 
-`list` は復元記録の登録済みcwdと専用tmuxの稼働piを統合し、stdoutへ `[{"cwd":"/path/to/workspace","sessions":[{"id":"session-id","file":"/path/to/session.jsonl","state":null,"title":null}],"empty":[{"id":"empty-session-id","file":"/path/to/session.jsonl"}]}]` 形式のJSON配列と末尾改行を返す。workspaceの `cwd` は絶対パス、`sessions` は会話ファイルが存在する稼働piだけの配列であり、該当がなければ空配列になる。復元候補を稼働piとして代用しない。PID・tmux targetは内部検証に使う。
+`list` は復元記録の登録済みcwdと専用tmuxの稼働piを統合し、stdoutへ `[{"cwd":"/path/to/workspace","sessions":[{"id":"session-id","file":"/path/to/session.jsonl","state":null,"title":null,"publishPending":null}],"empty":[{"id":"empty-session-id","file":"/path/to/session.jsonl"}]}]` 形式のJSON配列と末尾改行を返す。workspaceの `cwd` は絶対パス、`sessions` は会話ファイルが存在する稼働piだけの配列であり、該当がなければ空配列になる。復元候補を稼働piとして代用しない。PID・tmux targetは内部検証に使う。
 
-各sessionは次の4項目を持ち、一時再開中だけ `temporary: true` を追加する。通常状態では `temporary` 属性を省略する。一時再開中も `sessions` に掲載し、`id`・`file`・`state`・`title` の意味は維持する。
+各sessionは次の5項目を持ち、一時再開中だけ `temporary: true` を追加する。通常状態では `temporary` 属性を省略する。一時再開中も `sessions` に掲載し、`id`・`file`・`state`・`title`・`publishPending` の意味は維持する。
 
-空新規（会話ファイルが未作成の稼働pi）は `sessions` に入れず、workspaceオブジェクトの `empty` 配列に置く。存在判定はmetadataの `file` パスに対する存在チェックによる。`empty` の各要素は `id` と `file` の2項目を持ち、`state`・`title` は持たない。`temporary` の付与は `sessions` と同じで、一時再開中だけ `temporary: true` を追加する。`empty` も該当がなければ空配列になる。
+空新規（会話ファイルが未作成の稼働pi）は `sessions` に入れず、workspaceオブジェクトの `empty` 配列に置く。存在判定はmetadataの `file` パスに対する存在チェックによる。`empty` の各要素は `id` と `file` の2項目を持ち、`state`・`title`・`publishPending` は持たない。`temporary` の付与は `sessions` と同じで、一時再開中だけ `temporary: true` を追加する。`empty` も該当がなければ空配列になる。
 
 | 項目 | 型 | 値 |
 | --- | --- | --- |
@@ -251,6 +281,7 @@ register・unregisterの成功時はstdout・stderrへ出力せず終了コー�
 | `file` | `string` | 会話ファイルの絶対パス。未作成の保存予定先も含む |
 | `state` | `string \| null` | `running`・`waiting-approval`・`waiting-user` のいずれか。確認できない場合は `null` |
 | `title` | `string \| null` | セッションのタイトル。公開値を優先し、公開値がなければ会話ファイルから解決したタイトル（保存済みセッション名、なければ最初の user メッセージ）を使う。いずれも確認できない場合は `null` |
+| `publishPending` | `{"attemptAt": number} \| null` | pane に未完了の昇格・修復の試行が記録されているとき、その試行時刻を含むオブジェクト。それ以外は `null` |
 
 stateとtitleは、同じpane option `@pi_session_state` のJSONから取得する。titleは公開値を優先し、公開値がなければ会話ファイルから解決したタイトル（保存済みセッション名、なければ後述の最初の user メッセージ）を使う。公開形式と更新契約は「state」の「pane optionの公開契約」に従う。接続・セッションのアクティブ化・保存会話の再読み込みを行わず、タイトル公開後の `list` に反映する。
 
@@ -260,6 +291,8 @@ stateとtitleは、同じpane option `@pi_session_state` のJSONから取得す�
 | `version` と `sessionId` が有効 | 上記3値のいずれかなら採用し、それ以外は `null` | 文字列ならそのまま採用し、`null`・欠落・その他の型は会話ファイルから解決したタイトル |
 
 共通のversion・会話ID検証後はstateとtitleを独立して検証する。titleを持たない旧形式やtitleの型が不正な値でも、有効なstateは保持する。stateが不正でも有効なtitleは保持する。いずれの値が `null` でも、pi自体は一覧に残す。
+
+`publishPending` は、pane option `@pi_session_state_pending` のJSONから取得する。optionが未公開、不正JSON、`version` が1でない、`sessionId` が一覧の会話IDと一致しない、または `attemptAt` が正の整数でない場合は `null` とし、それ以外は `{"attemptAt":<attemptAt>}` を返す。公開形式と除去の契約は「state」の「pane optionの公開契約」に従う。`publishPending` は追加フィールドであり、既存項目の型・値・検証を変えない。`@pi_session_state_pending` が未公開のpaneでは `publishPending` は `null` になり、この項目を解釈しない一覧の読み手は、既存項目だけを同じ契約で扱える。
 
 会話ファイルから解決したタイトルは、会話ファイル内で最後の `session_info` エントリの `name` とし、セッション名が利用できない場合は最初の user メッセージとする。セッション名は、ファイル末尾から逆順に走査して最初に見つけた `session_info` エントリを使う。`name` が空白のみを含む文字列・空文字列・`undefined` のエントリはセッション名の明示的なクリアとして扱い、さらに前のエントリへは辿らない。これはpi本体がセッション名の共有値として返す規則と同じである。セッション名が利用できない場合、titleは最初の user メッセージへフォールバックする。ファイル先頭から順に走査し、`type` が `message` で `message.role` が `user`、テキスト部分が空でない最初のエントリを使う。`content` が文字列ならそのまま使い、配列なら `type` が `text` のブロックの `text` を単一のスペースで結合する。pi本体のセッション一覧が最初のメッセージとして扱う規則と同じである。フォールバックのタイトルは、改行を含む連続する空白を単一のスペースへ置き換え、前後の空白も取り除いた上で、最初の80 code pointsへ切り詰める。サロゲートペアは1 code pointとして数え、省略記号は付けない。会話ファイルが未作成・読み取れない場合や、セッション名も最初の user メッセージも解決できない場合は、titleを `null` にする。
 
@@ -422,7 +455,7 @@ CLIは対象の状態を繰り返し確認し、置き換えの条件を満た�
 | 同じ会話IDの稼働実体が複数、または同じ会話IDでcwdの矛盾がある | 置き換えず、理由を報告して対象から外す |
 | 管理sessionの稼働piがなく、起動途中の管理piも確認できない | 置き換えず、理由を報告して対象から外す |
 
-待機中はpiの処理・状態通知・他のCLI操作を継続できる。待機時間だけを理由に置き換えへ切り替えない。置き換えの直前に対象の実行フェーズを再確認し、有効な `waiting-user` を確認できない場合は待機へ戻る。待機中に新しいpiが起動した場合は対象に加え、対象がなくなった時点で終了する。中断では、置き換え済みのpiを維持し、残りの対象は現状維持のまま終了する。それまでに出力された再読込済みの会話IDが進捗を示す。
+待機中はpiの処理・状態通知・他のCLI操作を継続できる。待機時間だけを理由に置き換えへ切り替えない。置き換えの直前に対象の実行フェーズを再確認し、有効な `waiting-user` を確認できない場合は待機へ戻る。この再確認に加え、`respawn-pane` の実行を、他のtmuxクライアントによるpane属性の書込みを挟まないtmuxのコマンド列の中で行い、そのコマンド列の中でも、対象の公開実行フェーズが `waiting-user` であることを公開値の形式一致で確認する。待機中に新しいpiが起動した場合は対象に加え、対象がなくなった時点で終了する。中断では、置き換え済みのpiを維持し、残りの対象は現状維持のまま終了する。それまでに出力された再読込済みの会話IDが進捗を示す。
 
 1会話の置き換えは、既存の変更操作と同じ排他の中で次の順で行う。
 
@@ -456,7 +489,7 @@ CLIは対象の状態を繰り返し確認し、置き換えの条件を満た�
 | 実行フェーズが未公開・不正・不一致、または管理piが起動途中 | 停止可能と見なさず、有効な `waiting-user` を確認できるまで待つ | 状態を待たず停止へ進む |
 | 配下にpiがない | 状態を待たず停止へ進む | 状態を待たず停止へ進む |
 
-待機中はpiの処理・状態通知・他のCLI操作を継続できる。待機時間だけを理由に強制停止へ切り替えない。停止開始の直前に対象pi集合と各状態を再確認し、新しいpiや `running`・`waiting-approval` のpi、有効な `waiting-user` を確認できないpiがあれば待機へ戻る。待機中の中断ではpiを停止しない。
+待機中はpiの処理・状態通知・他のCLI操作を継続できる。待機時間だけを理由に強制停止へ切り替えない。停止開始の直前に対象pi集合と各状態を再確認し、新しいpiや `running`・`waiting-approval` のpi、有効な `waiting-user` を確認できないpiがあれば待機へ戻る。この再確認に加え、停止の実行を、他のtmuxクライアントによるpane属性の書込みを挟まないtmuxのコマンド列の中で行い、そのコマンド列の中でも、各paneの公開実行フェーズが `waiting-user` であることを公開値の形式一致で確認する。待機中の中断ではpiを停止しない。
 
 待機条件が成立した場合、または `--force` を指定した場合は、次の順で処理する。
 

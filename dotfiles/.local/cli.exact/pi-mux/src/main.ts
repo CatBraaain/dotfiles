@@ -38,7 +38,7 @@ type Operation =
   | { kind: "restart"; force: boolean };
 type Candidate = { id: string; cwd: string };
 type ManagedSession = Candidate & { session: string; temporary: boolean };
-type StateSource = {
+export type StateSource = {
   socket: string;
   serverPid: number;
   pane: string;
@@ -72,11 +72,13 @@ type Pane = Session & {
   startup?: "accepted" | "ready";
 };
 type StopTarget = Pick<Pane, "pane" | "pid" | "panePid">;
+type PublishPending = { attemptAt: number };
 type ListedSession = {
   id: string;
   file: string;
   state: SessionState | null;
   title: string | null;
+  publishPending: PublishPending | null;
   temporary?: true;
 };
 type EmptySession = { id: string; file: string; temporary?: true };
@@ -152,34 +154,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return 0;
     }
     if (operation.kind === "state") {
-      let config: TmuxConfig | undefined;
+      const config = tmuxConfiguration();
+      prepareDirectory(config.stateDirectory);
       try {
-        const activeConfig = tmuxConfiguration();
-        config = activeConfig;
-        prepareDirectory(activeConfig.stateDirectory);
-        return await withLock(
-          activeConfig,
-          async () => {
-            await notifyState(activeConfig, operation.id, operation.source, operation.notification);
-            return 0;
-          },
-          "try",
-        );
+        return await notifyState(config, operation.id, operation.source, operation.notification);
       } catch (error) {
-        if (
-          error instanceof LockBusyError &&
-          config &&
-          !operation.notification.clear &&
-          operation.notification.state !== "waiting-user"
-        ) {
-          try {
-            await deferRestartBlockingState(config, operation.id, operation.source);
-          } catch (deferredError) {
-            console.error(`pi-mux: state ${operation.id}: ${errorMessage(deferredError)}`);
-          }
-        }
         console.error(`pi-mux: state ${operation.id}: ${errorMessage(error)}`);
-        return error instanceof LockBusyError ? 75 : 1;
+        return 1;
       }
     }
     if (operation.kind === "list") {
@@ -321,7 +302,12 @@ export function parseOperation(argv: string[]): Operation {
         continue;
       }
       const cwdValue = argv[index + 1];
-      if (argv[index] === "--cwd" && cwd === undefined && cwdValue !== undefined && isAbsolute(cwdValue)) {
+      if (
+        argv[index] === "--cwd" &&
+        cwd === undefined &&
+        cwdValue !== undefined &&
+        isAbsolute(cwdValue)
+      ) {
         cwd = cwdValue;
         index += 2;
         continue;
@@ -499,21 +485,43 @@ async function verifyStateSource(
   return { session, panePid: target.panePid };
 }
 
-async function deferRestartBlockingState(
+async function deferUnfinishedPublish(
   config: TmuxConfig,
   id: string,
   source: StateSource,
+  panePid: number,
 ): Promise<void> {
-  const { panePid } = await verifyStateSource(config, id, source);
+  const attemptAt = Date.now();
   const pending = guardedTmuxLine(
     source.pane,
     paneEntityGuard(source.serverPid, source.pane, panePid),
     [
       ["set-option", "-p", "-t", source.pane, "@pi-mux-pending-restart-blocker", "1"],
       ["set-option", "-g", "@pi-mux-restart-veto", randomUUID()],
+      [
+        "set-option",
+        "-p",
+        "-t",
+        source.pane,
+        "@pi_session_state_pending",
+        JSON.stringify({ version: 1, sessionId: id, attemptAt }),
+      ],
     ],
   );
   await tmux(config, ["source-file", "-"], false, `${pending}\n`);
+}
+
+async function clearPendingPublication(
+  config: TmuxConfig,
+  source: StateSource,
+  panePid: number,
+): Promise<void> {
+  const clear = guardedTmuxLine(
+    source.pane,
+    paneEntityGuard(source.serverPid, source.pane, panePid),
+    [["set-option", "-pu", "-t", source.pane, "@pi_session_state_pending"]],
+  );
+  await tmux(config, ["source-file", "-"], false, `${clear}\n`);
 }
 
 async function notifyState(
@@ -521,7 +529,7 @@ async function notifyState(
   id: string,
   source: StateSource,
   notification: StateNotification,
-): Promise<void> {
+): Promise<number> {
   const { session, panePid } = await verifyStateSource(config, id, source);
   const owner = JSON.stringify({ id, ...source });
   if (notification.clear) {
@@ -532,7 +540,7 @@ async function notifyState(
       source.pane,
       "@pi-mux-state-source",
     ]);
-    if (currentOwner.stdout.trimEnd() !== owner) return;
+    if (currentOwner.stdout.trimEnd() !== owner) return 0;
   }
   await runGuardedStateCommands(config, source, {
     id,
@@ -541,9 +549,31 @@ async function notifyState(
     session,
     panePid,
   });
-  if (notification.clear || notification.state !== "running") return;
-  if (await serverOption(config, "@pi-mux-generation"))
-    await snapshotSessions(config, undefined, "repair");
+  if (notification.clear || notification.state !== "running") return 0;
+  const needsPromotion = await isTemporarySession(config, session, id);
+  const needsRepair = Boolean(await serverOption(config, "@pi-mux-generation"));
+  if (!needsPromotion && !needsRepair) return 0;
+  try {
+    return await withLock(
+      config,
+      async () => {
+        if (needsPromotion) await promoteSession(config, session, id);
+        if (needsRepair) await snapshotSessions(config, undefined, "repair");
+        await clearPendingPublication(config, source, panePid);
+        return 0;
+      },
+      "try",
+    );
+  } catch (error) {
+    if (!(error instanceof LockBusyError)) throw error;
+    try {
+      await deferUnfinishedPublish(config, id, source, panePid);
+    } catch (deferredError) {
+      console.error(`pi-mux: state ${id}: ${errorMessage(deferredError)}`);
+    }
+    console.error(`pi-mux: state ${id}: ${errorMessage(error)}`);
+    return 75;
+  }
 }
 
 function paneEntityGuard(serverPid: number, pane: string, panePid: number): string {
@@ -566,6 +596,23 @@ function guardedTmuxLine(
   ];
   if (elseMarker !== undefined) quoted.push(tmuxArguments(["display-message", "-p", elseMarker]));
   return tmuxArguments(quoted);
+}
+
+function waitingUserStopChain(panes: string[], action: string, waitMarker: string): string {
+  const wait = tmuxArguments(["display-message", "-p", waitMarker]);
+  let branch = action;
+  for (const pane of panes) {
+    branch = tmuxArguments([
+      "if-shell",
+      "-t",
+      pane,
+      "-F",
+      `#{&&:#{==:#{pane_id},${pane}},#{m:*"state":"waiting-user"*,#{@pi_session_state}}}`,
+      branch,
+      wait,
+    ]);
+  }
+  return branch;
 }
 async function verifyStateTarget(
   config: TmuxConfig,
@@ -656,6 +703,7 @@ async function runGuardedStateCommands(
           ["set-option", "-pu", "-t", pane, "@pi_session_state"],
           ["set-option", "-pu", "-t", pane, "@pi-mux-state-source"],
           ["set-option", "-pu", "-t", pane, "@pi-mux-pending-restart-blocker"],
+          ["set-option", "-pu", "-t", pane, "@pi_session_state_pending"],
           ["display-message", "-p", "PI_MUX_STATE_WRITTEN"],
         ],
         "PI_MUX_SOURCE_UNVERIFIED",
@@ -681,16 +729,6 @@ async function runGuardedStateCommands(
         "PI_MUX_SOURCE_UNVERIFIED",
       ),
     );
-    if (
-      plan.notification.state === "running" &&
-      (await isTemporarySession(config, plan.session, plan.id))
-    )
-      lines.push(
-        guardedTmuxLine(pane, entity, [
-          ["set-environment", "-u", "-t", plan.session, "PI_TMUX_TEMPORARY"],
-          ["display-message", "-p", "PI_MUX_PROMOTED"],
-        ]),
-      );
   }
   const result = await tmux(config, ["source-file", "-"], false, `${lines.join("\n")}\n`);
   const markers = result.stdout.trim().split("\n").filter(Boolean);
@@ -841,25 +879,31 @@ async function restartServer(config: Config, force: boolean): Promise<number> {
       await setRestoringSessions(config, saved.sessions);
       await verifyServerLifetime(config, original);
       if (!force && !(await restartIsWaiting(config))) return undefined;
-      const stopBranch = force
-        ? "kill-server"
-        : tmuxArguments([
-            "if-shell",
-            "-F",
-            "#{==:#{@pi-mux-restart-veto},}",
-            "kill-server",
-            "display-message -p PI_MUX_RESTART_WAIT",
-          ]);
-      const stopped = await tmux(config, [
-        "if-shell",
-        "-F",
-        `#{==:#{@pi-mux-generation},${original.generation}}`,
-        stopBranch,
-        "display-message -p PI_MUX_RESTART_SERVER_CHANGED",
-      ]);
-      if (stopped.stdout.includes("PI_MUX_RESTART_WAIT")) return undefined;
+      const stopScript = [
+        tmuxArguments([
+          "if-shell",
+          "-F",
+          `#{==:#{@pi-mux-generation},${original.generation}}`,
+          force
+            ? tmuxArguments(["kill-server"])
+            : tmuxArguments([
+                "if-shell",
+                "-F",
+                "#{==:#{@pi-mux-restart-veto},}",
+                waitingUserStopChain(
+                  panes.map((pane) => pane.pane),
+                  "kill-server",
+                  "PI_MUX_STOP_CHECKED",
+                ),
+                tmuxArguments(["display-message", "-p", "PI_MUX_STOP_CHECKED"]),
+              ]),
+          tmuxArguments(["display-message", "-p", "PI_MUX_RESTART_SERVER_CHANGED"]),
+        ]),
+      ].join("\n");
+      const stopped = await tmux(config, ["source-file", "-"], false, `${stopScript}\n`);
       if (stopped.stdout.includes("PI_MUX_RESTART_SERVER_CHANGED"))
         throw new Error("Dedicated server changed before restart stop");
+      if (stopped.stdout.includes("PI_MUX_STOP_CHECKED")) return undefined;
       const targets = [...panes, ...initializing].map((pane) => ({ pid: pane.pid }));
       for (const target of targets) {
         if (!platform.processIsAlive(target.pid)) continue;
@@ -896,14 +940,12 @@ async function reloadPanes(config: Config, onlyId?: string): Promise<number> {
   const original = await withLock(config, () => serverLifetime(config));
   if (!original) {
     return await withLock(config, async () => {
-      if (await serverLifetime(config))
-        throw new Error("Dedicated server changed during reload");
+      if (await serverLifetime(config)) throw new Error("Dedicated server changed during reload");
       prepareDirectory(config.directory);
       return (await startAndRestore(config, true)) > 0 ? 2 : 0;
     });
   }
-  if (!original.generation)
-    throw new Error("Dedicated server has not been initialized by pi-mux");
+  if (!original.generation) throw new Error("Dedicated server has not been initialized by pi-mux");
   await withLock(config, async () => {
     await verifyServerLifetime(config, original, "reload");
     readSnapshot(config);
@@ -978,8 +1020,7 @@ async function scanReloadTarget(
     ]),
   );
   const rows = pending.map((session, index) =>
-    rowsOfSession[index]!
-      .stdout.trimEnd()
+    rowsOfSession[index]!.stdout.trimEnd()
       .split("\n")
       .filter(Boolean)
       .map((line) => {
@@ -996,9 +1037,7 @@ async function scanReloadTarget(
       })),
   );
   const unpublished = rows.flatMap((sessionRows, index) =>
-    sessionRows
-      .filter((row) => !row.published)
-      .map((row) => ({ session: pending[index]!, row })),
+    sessionRows.filter((row) => !row.published).map((row) => ({ session: pending[index]!, row })),
   );
   const launches = await tmuxQueries(
     config,
@@ -1111,17 +1150,17 @@ async function reloadTarget(
   const removed = [...assignments.matchAll(/; export ([^;\n]+);/g)]
     .map((match) => match[1]!)
     .filter((key) => !Object.hasOwn(desired, key) && !GENERATED_ENV_KEYS.has(key));
-  const selection = existsSync(pane.file)
-    ? ["--session", pane.file]
-    : ["--session-id", pane.id];
+  const selection = existsSync(pane.file) ? ["--session", pane.file] : ["--session-id", pane.id];
   const paneCommand = platform.paneCommand(
     [config.pi, ...selection, "-e", config.extension, "--", `/${startupCommand}`],
     removed,
   );
   const reloadBranch = tmuxArguments([
     "if-shell",
+    "-t",
+    pane.pane,
     "-F",
-    "#{==:#{@pi-mux-restart-veto},}",
+    `#{&&:#{==:#{@pi-mux-restart-veto},},#{==:#{pane_id},${pane.pane}},#{m:*"state":"waiting-user"*,#{@pi_session_state}}}`,
     [
       tmuxArguments(["set-option", "-pu", "-t", pane.pane, "@pi-tmux-session"]),
       tmuxArguments(["respawn-pane", "-k", "-t", pane.pane, "--", paneCommand]),
@@ -1176,8 +1215,7 @@ async function reloadTarget(
         console.log(`reloaded ${pane.id}`);
         return;
       }
-      if (Date.now() >= deadline)
-        throw new Error(`pi startup timed out during reload: ${pane.id}`);
+      if (Date.now() >= deadline) throw new Error(`pi startup timed out during reload: ${pane.id}`);
       await Bun.sleep(POLL_INTERVAL_MS);
     }
   } catch (error) {
@@ -1713,12 +1751,9 @@ async function collectWorkspaceList(
   const unsaved = panes.filter((pane) => !existsSync(pane.file));
   const sessions = await Promise.all(
     saved.map(async ({ id, cwd, file, pane, session }) => {
-      const metadata = await tmux(config, [
-        "show-options",
-        "-pqv",
-        "-t",
-        pane,
-        "@pi_session_state",
+      const [metadata, pending] = await Promise.all([
+        tmux(config, ["show-options", "-pqv", "-t", pane, "@pi_session_state"]),
+        tmux(config, ["show-options", "-pqv", "-t", pane, "@pi_session_state_pending"]),
       ]);
       const temporary = await isTemporarySession(config, session, id, true);
       return {
@@ -1727,6 +1762,7 @@ async function collectWorkspaceList(
           id,
           file,
           ...parseSessionMetadata(metadata.stdout, id, file),
+          publishPending: parsePublishPending(pending.stdout, id),
           ...(temporary ? { temporary: true as const } : {}),
         } satisfies ListedSession,
       };
@@ -2196,6 +2232,26 @@ function parseSessionState(encoded: string | undefined, id: string): SessionStat
 function parsePublishedTitle(encoded: string | undefined, id: string): string | null {
   const metadata = parseSessionOption(encoded, id);
   return metadata && typeof metadata.title === "string" ? metadata.title : null;
+}
+
+function parsePublishPending(encoded: string | undefined, id: string): PublishPending | null {
+  if (!encoded) return null;
+  let pending: { version?: unknown; sessionId?: unknown; attemptAt?: unknown } | null;
+  try {
+    pending = JSON.parse(encoded);
+  } catch {
+    return null;
+  }
+  const attemptAt = isRecord(pending) ? pending.attemptAt : undefined;
+  if (
+    pending?.version !== 1 ||
+    pending.sessionId !== id ||
+    typeof attemptAt !== "number" ||
+    !Number.isSafeInteger(attemptAt) ||
+    attemptAt <= 0
+  )
+    return null;
+  return { attemptAt };
 }
 
 function parseSessionOption(
