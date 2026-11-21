@@ -27,7 +27,7 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function put(baseDir: string, path: string, content: string): Promise<void> {
+async function put(baseDir: string, path: string, content: string | Uint8Array): Promise<void> {
   const absolute = join(baseDir, path);
   await mkdir(join(absolute, ".."), { recursive: true });
   await writeFile(absolute, content);
@@ -2089,3 +2089,78 @@ describe("manager CLI", () => {
     }
   });
 });
+
+describe("lnk adoption", () => {
+  it("adopts matching home link bytes into dist during build", async () => {
+    await put(join(root, "dotfiles"), "Main.ahk.lnk", lnkBytes("pwsh.exe", "-Command main", 1000n));
+    await put(homeRoot, "Main.ahk.lnk", lnkBytes("pwsh.exe", "-Command main", 2000n));
+
+    await main(root, "windows", homeRoot);
+
+    const homeBytes = new Uint8Array(await readFile(join(homeRoot, "Main.ahk.lnk")));
+    assert.deepEqual(new Uint8Array(await readFile(join(distRoot, "Main.ahk.lnk"))), homeBytes);
+  });
+
+  it("adopts a link under an .exact directory through the mapped home path", async () => {
+    await put(
+      join(root, "dotfiles"),
+      "conf.exact/Menu.lnk",
+      lnkBytes("pwsh.exe", "-Command menu", 1000n),
+    );
+    await put(homeRoot, "conf/Menu.lnk", lnkBytes("pwsh.exe", "-Command menu", 2000n));
+
+    await main(root, "windows", homeRoot);
+
+    const homeBytes = new Uint8Array(await readFile(join(homeRoot, "conf/Menu.lnk")));
+    assert.deepEqual(
+      new Uint8Array(await readFile(join(distRoot, "conf.exact/Menu.lnk"))),
+      homeBytes,
+    );
+  });
+
+  it("keeps generated link bytes when the readable text differs", async () => {
+    const distBytes = lnkBytes("pwsh.exe", "-Command new");
+    await put(join(root, "dotfiles"), "Main.ahk.lnk", distBytes);
+    await put(homeRoot, "Main.ahk.lnk", lnkBytes("pwsh.exe", "-Command old"));
+
+    await main(root, "linux", homeRoot);
+
+    assert.deepEqual(new Uint8Array(await readFile(join(distRoot, "Main.ahk.lnk"))), distBytes);
+  });
+
+  it("keeps generated link bytes when a side has no readable strings", async () => {
+    const distBytes = new Uint8Array([0x00, 0x01, 0x02]);
+    await put(join(root, "dotfiles"), "tool.lnk", distBytes);
+    await put(homeRoot, "tool.lnk", new Uint8Array([0x00, 0x01, 0x03]));
+
+    await main(root, "linux", homeRoot);
+
+    assert.deepEqual(new Uint8Array(await readFile(join(distRoot, "tool.lnk"))), distBytes);
+  });
+});
+
+function lnkBytes(relativePath: string, commandLineArguments: string, timeValue = 0n): Uint8Array {
+  const header = new Uint8Array(0x4c);
+  const headerView = new DataView(header.buffer);
+  headerView.setUint32(0x14, 0xa8, true);
+  headerView.setBigInt64(0x1c, timeValue, true);
+  headerView.setBigInt64(0x24, timeValue, true);
+  headerView.setBigInt64(0x2c, timeValue, true);
+  const strings = [relativePath, commandLineArguments].map((text) => {
+    const bytes = new Uint8Array(2 + text.length * 2 + 2);
+    const view = new DataView(bytes.buffer);
+    view.setUint16(0, text.length + 1, true);
+    for (let index = 0; index < text.length; index++) {
+      view.setUint16(2 + index * 2, text.charCodeAt(index), true);
+    }
+    return bytes;
+  });
+  const total = 0x4c + strings.reduce((sum, bytes) => sum + bytes.length, 0);
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of [header, ...strings]) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return bytes;
+}
