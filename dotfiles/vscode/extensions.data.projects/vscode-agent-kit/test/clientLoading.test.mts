@@ -111,6 +111,22 @@ describe("session list loading in the mounted client", () => {
     );
   }
 
+  async function archiveRequests(): Promise<
+    { type: string; sessionId: string; requestId: string }[]
+  > {
+    return page.evaluate(() =>
+      (
+        Reflect.get(window, "__requests") as {
+          type: string;
+          sessionId: string;
+          requestId: string;
+        }[]
+      ).filter(
+        (request) => request.type === "archiveSession" || request.type === "unarchiveSession",
+      ),
+    );
+  }
+
   async function connectionRequest(): Promise<string> {
     return page.evaluate(() => {
       const requests = Reflect.get(window, "__requests") as { type: string; requestId: string }[];
@@ -443,6 +459,90 @@ describe("session list loading in the mounted client", () => {
     expect(await button.locator("path").getAttribute("d")).toBe("M21 12a9 9 0 1 1-6.219-8.56");
   });
 
+  it.each([
+    { action: "archive", rowSessionId: sessionId, done: "archiveFinished" },
+    { action: "unarchive", rowSessionId: "archived-1", done: "unarchiveFinished" },
+  ] as const)(
+    "shows the $action spinner immediately on click and clears only on completion",
+    async ({ action, rowSessionId, done }) => {
+      await receive({ type: "sessions", state });
+      await expectLoaded();
+      if (action === "unarchive") {
+        await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
+        await expect.poll(() => page.locator(".session-row.archived").count()).toBe(1);
+      }
+      const button = page.locator(`[data-${action}="${rowSessionId}"]`);
+      const before = await button.boundingBox();
+      await button.click();
+      await expect.poll(() => button.getAttribute("aria-busy")).toBe("true");
+      expect(await button.isEnabled()).toBe(true);
+      expect(await button.locator("path").getAttribute("d")).toBe("M21 12a9 9 0 1 1-6.219-8.56");
+      expect(await button.boundingBox()).toEqual(before);
+      const animation = await button.locator("svg").evaluate((svg) => {
+        const style = getComputedStyle(svg);
+        return {
+          name: style.animationName,
+          duration: style.animationDuration,
+          timing: style.animationTimingFunction,
+        };
+      });
+      expect(animation).toEqual({ name: "session-spin", duration: "1s", timing: "linear" });
+      await receive({ type: "loading", manual: false });
+      await receive({ type: "sessions", state });
+      await receive({ type: "error", message: "Unrelated operation failed" });
+      expect(await button.getAttribute("aria-busy")).toBe("true");
+      const [request] = await archiveRequests();
+      await receive({ type: done, requestId: request.requestId });
+      await expect.poll(() => button.getAttribute("aria-busy")).toBe("false");
+      expect(await button.boundingBox()).toEqual(before);
+    },
+  );
+
+  it("keeps all same-row archive requests pending and treats other rows independently", async () => {
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+    await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
+    await expect.poll(() => page.locator(".session-row.archived").count()).toBe(1);
+    const archive = page.locator(`[data-archive="${sessionId}"]`);
+    const unarchive = page.locator('[data-unarchive="archived-1"]');
+    await archive.click();
+    await archive.click();
+    await unarchive.click();
+    const requests = await archiveRequests();
+    expect(
+      requests.map(({ type, sessionId: rowSessionId }) => ({ type, sessionId: rowSessionId })),
+    ).toEqual([
+      { type: "archiveSession", sessionId },
+      { type: "archiveSession", sessionId },
+      { type: "unarchiveSession", sessionId: "archived-1" },
+    ]);
+    expect(new Set(requests.map(({ requestId }) => requestId)).size).toBe(3);
+    await receive({ type: "archiveFinished", requestId: requests[0].requestId });
+    expect(await archive.getAttribute("aria-busy")).toBe("true");
+    await receive({ type: "unarchiveFinished", requestId: requests[2].requestId });
+    await expect.poll(() => unarchive.getAttribute("aria-busy")).toBe("false");
+    expect(await archive.getAttribute("aria-busy")).toBe("true");
+    await receive({ type: "archiveFinished", requestId: requests[0].requestId });
+    await receive({ type: "unarchiveFinished", requestId: "old-view-request" });
+    expect(await archive.getAttribute("aria-busy")).toBe("true");
+    await receive({ type: "archiveFinished", requestId: requests[1].requestId });
+    await expect.poll(() => archive.getAttribute("aria-busy")).toBe("false");
+  });
+
+  it("keeps the archive spinner static under reduced motion", async () => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+    const button = page.locator(`[data-archive="${sessionId}"]`);
+    await button.click();
+    await expect.poll(() => button.getAttribute("aria-busy")).toBe("true");
+    const animation = await button
+      .locator("svg")
+      .evaluate((svg) => getComputedStyle(svg).animationName);
+    expect(animation).toBe("none");
+    expect(await button.locator("path").getAttribute("d")).toBe("M21 12a9 9 0 1 1-6.219-8.56");
+  });
+
   it("keeps workspace input across automatic snapshots until the add acknowledgement", async () => {
     await receive({ type: "sessions", state });
     await expectLoaded();
@@ -718,6 +818,7 @@ describe("session list loading in the mounted client", () => {
     ).toEqual({
       type: "unarchiveSession",
       sessionId: session.sessionId,
+      requestId: expect.any(String),
     });
     await row.locator(".session-button").click();
     expect(

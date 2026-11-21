@@ -5,8 +5,8 @@ export type WebviewRequest =
   | { type: "addWorkspace"; path: string }
   | { type: "unregisterWorkspace"; cwd: string }
   | { type: "openSession"; sessionId: string }
-  | { type: "archiveSession"; sessionId: string }
-  | { type: "unarchiveSession"; sessionId: string };
+  | { type: "archiveSession"; sessionId: string; requestId?: string }
+  | { type: "unarchiveSession"; sessionId: string; requestId?: string };
 
 /** Live execution phase of a session, mirrored from the session state store. */
 export type SessionPhase = "running" | "waiting-approval" | "waiting-user";
@@ -38,6 +38,8 @@ export type ExtensionMessage =
   | { type: "sessions"; state: WebviewState; requestId?: string }
   | { type: "workspaceAdded" }
   | { type: "newSessionFinished"; requestId: string }
+  | { type: "archiveFinished"; requestId: string }
+  | { type: "unarchiveFinished"; requestId: string }
   | { type: "sessionsError"; requestId?: string }
   | { type: "error"; message: string };
 
@@ -71,7 +73,13 @@ export function parseWebviewRequest(value: unknown): WebviewRequest | undefined 
       value.type === "unarchiveSession") &&
     isSessionId(value.sessionId)
   ) {
-    return { type: value.type, sessionId: value.sessionId };
+    if (value.type === "openSession") return { type: value.type, sessionId: value.sessionId };
+    if (value.requestId !== undefined && !isNonEmptyPath(value.requestId)) return undefined;
+    return {
+      type: value.type,
+      sessionId: value.sessionId,
+      ...(value.requestId === undefined ? {} : { requestId: value.requestId }),
+    };
   }
   return undefined;
 }

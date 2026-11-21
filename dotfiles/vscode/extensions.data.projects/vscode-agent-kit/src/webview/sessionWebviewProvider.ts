@@ -558,11 +558,21 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (request.type === "archiveSession") {
-      await this.deps.registry.run(() => this.archiveSession(request.sessionId));
+      try {
+        await this.deps.registry.run(() => this.archiveSession(request.sessionId));
+      } finally {
+        if (request.requestId !== undefined)
+          this.post({ type: "archiveFinished", requestId: request.requestId });
+      }
       return;
     }
     if (request.type === "unarchiveSession") {
-      await this.queueOpenSession(request.sessionId, "unarchive");
+      try {
+        await this.queueOpenSession(request.sessionId, "unarchive");
+      } finally {
+        if (request.requestId !== undefined)
+          this.post({ type: "unarchiveFinished", requestId: request.requestId });
+      }
       return;
     }
   }

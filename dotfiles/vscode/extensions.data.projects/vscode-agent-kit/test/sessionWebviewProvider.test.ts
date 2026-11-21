@@ -2675,6 +2675,113 @@ describe("SessionWebviewProvider", () => {
     );
   });
 
+  it("sends the archive finish message with the request id after the archive completes", async () => {
+    const { webview } = await archiveFixture();
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    webview.postMessage.mockClear();
+    await webview.receive({
+      type: "archiveSession",
+      sessionId: activeSessionId,
+      requestId: "archive-1",
+    });
+    const completions = webview.postMessage.mock.calls.filter(
+      ([message]) => message.type === "archiveFinished",
+    );
+    expect(completions.map(([message]) => message)).toEqual([
+      { type: "archiveFinished", requestId: "archive-1" },
+    ]);
+  });
+
+  it("sends the archive finish message when the close fails", async () => {
+    const { webview, mocks } = await archiveFixture();
+    mocks.closeSession.mockRejectedValueOnce(new Error("stop denied"));
+    await webview.receive({
+      type: "archiveSession",
+      sessionId: activeSessionId,
+      requestId: "failed-archive",
+    });
+    const completions = webview.postMessage.mock.calls.filter(
+      ([message]) => message.type === "archiveFinished",
+    );
+    expect(completions.map(([message]) => message)).toEqual([
+      { type: "archiveFinished", requestId: "failed-archive" },
+    ]);
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalled();
+  });
+
+  it("sends the archive finish message when the session is unknown", async () => {
+    await seedSavedSession(activeSessionId);
+    const { provider } = createProvider();
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    await webview.receive({
+      type: "archiveSession",
+      sessionId: unknownSessionId,
+      requestId: "unknown-archive",
+    });
+    const completions = webview.postMessage.mock.calls.filter(
+      ([message]) => message.type === "archiveFinished",
+    );
+    expect(completions.map(([message]) => message)).toEqual([
+      { type: "archiveFinished", requestId: "unknown-archive" },
+    ]);
+  });
+
+  it("sends the unarchive finish message with the request id after the display opens", async () => {
+    const { webview, mocks } = await archiveFixture();
+    const starts = mocks.open.mock.calls.length;
+    await webview.receive({
+      type: "unarchiveSession",
+      sessionId: activeSessionId,
+      requestId: "unarchive-1",
+    });
+    expect(mocks.open).toHaveBeenCalledTimes(starts + 1);
+    const completions = webview.postMessage.mock.calls.filter(
+      ([message]) => message.type === "unarchiveFinished",
+    );
+    expect(completions.map(([message]) => message)).toEqual([
+      { type: "unarchiveFinished", requestId: "unarchive-1" },
+    ]);
+  });
+
+  it("sends the unarchive finish message when the open fails", async () => {
+    const { webview, mocks } = await archiveFixture();
+    mocks.list.mockRejectedValueOnce(new Error("list failed"));
+    await webview.receive({
+      type: "unarchiveSession",
+      sessionId: activeSessionId,
+      requestId: "failed-unarchive",
+    });
+    const completions = webview.postMessage.mock.calls.filter(
+      ([message]) => message.type === "unarchiveFinished",
+    );
+    expect(completions.map(([message]) => message)).toEqual([
+      { type: "unarchiveFinished", requestId: "failed-unarchive" },
+    ]);
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalled();
+  });
+
+  it("sends the unarchive finish message when the session is unknown", async () => {
+    await seedSavedSession(activeSessionId);
+    const { registry, mocks } = createRuntimeRegistry();
+    const { provider } = createProvider({ registry });
+    const webview = createView();
+    provider.resolveWebviewView(webview.view as never);
+    await provider.refresh();
+    await webview.receive({
+      type: "unarchiveSession",
+      sessionId: unknownSessionId,
+      requestId: "unknown-unarchive",
+    });
+    const completions = webview.postMessage.mock.calls.filter(
+      ([message]) => message.type === "unarchiveFinished",
+    );
+    expect(completions.map(([message]) => message)).toEqual([
+      { type: "unarchiveFinished", requestId: "unknown-unarchive" },
+    ]);
+  });
+
   it("does not restart Pi or change membership and selection when close fails after Pi exits", async () => {
     const { webview, statePath, mocks, live, terminal, registry } = await archiveFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
@@ -3328,7 +3435,11 @@ describe("SessionWebviewProvider", () => {
         mocks.list.mockReturnValueOnce(held.promise);
         const opening = webview.receive({ type, sessionId: activeSessionId });
         await vi.waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(2));
-        const queued = webview.receive({ type: "unarchiveSession", sessionId: inactiveSessionId });
+        const queued = webview.receive({
+          type: "unarchiveSession",
+          sessionId: inactiveSessionId,
+          requestId: "cancelled-unarchive",
+        });
         const removing = webview.receive({ type: "unregisterWorkspace", cwd: root });
         held.resolve([]);
         await Promise.all([opening, queued, removing]);
@@ -3337,6 +3448,12 @@ describe("SessionWebviewProvider", () => {
         expect(webview.postMessage.mock.calls.some(([message]) => message.type === "error")).toBe(
           false,
         );
+        const completions = webview.postMessage.mock.calls.filter(
+          ([message]) => message.type === "unarchiveFinished",
+        );
+        expect(completions.map(([message]) => message)).toEqual([
+          { type: "unarchiveFinished", requestId: "cancelled-unarchive" },
+        ]);
         expect(terminal.show).not.toHaveBeenCalled();
         expect(registry.displayedSessionId).toBeUndefined();
         expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();

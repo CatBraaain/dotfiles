@@ -773,7 +773,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         await page.evaluate(
           () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
         ),
-      ).toEqual([{ type: "archiveSession", sessionId: atlasCurrentId }]);
+      ).toEqual([
+        { type: "archiveSession", sessionId: atlasCurrentId, requestId: expect.any(String) },
+      ]);
       expect(await page.locator(".session-row.selected").count()).toBe(0);
       expect(await openSessionMessages(page)).toEqual([]);
       await page.close();

@@ -108,6 +108,8 @@ export function sessionListView(
   loadStatus: SessionLoadStatus = "loaded",
   workspaceMenuCwd?: string,
   pendingNewSessionCwds: ReadonlySet<string> = new Set(),
+  pendingArchiveIds: ReadonlySet<string> = new Set(),
+  pendingUnarchiveIds: ReadonlySet<string> = new Set(),
 ): SessionListView {
   const groups = state.groups.map((group) =>
     groupDescriptor(
@@ -117,6 +119,8 @@ export function sessionListView(
       collapsedCwds,
       workspaceMenuCwd,
       pendingNewSessionCwds.has(group.cwd),
+      pendingArchiveIds,
+      pendingUnarchiveIds,
     ),
   );
   if (groups.length > 0) return { sessions: groups };
@@ -134,6 +138,8 @@ function groupDescriptor(
   collapsedCwds: ReadonlySet<string>,
   workspaceMenuCwd: string | undefined,
   isStartingSession: boolean,
+  pendingArchiveIds: ReadonlySet<string> = new Set(),
+  pendingUnarchiveIds: ReadonlySet<string> = new Set(),
 ): ElementDescriptor {
   const isExpanded = !collapsedCwds.has(group.cwd);
   const sessions = visibleGroupSessions(group, mode, collapsedCwds);
@@ -210,7 +216,14 @@ function groupDescriptor(
           },
         ],
       },
-      ...sessions.map((session) => sessionDescriptor(session, displayedSessionId)),
+      ...sessions.map((session) =>
+        sessionDescriptor(
+          session,
+          displayedSessionId,
+          pendingArchiveIds.has(session.sessionId),
+          pendingUnarchiveIds.has(session.sessionId),
+        ),
+      ),
     ],
   };
 }
@@ -255,6 +268,8 @@ function visibilityIcon(mode: ViewMode): ElementDescriptor {
 function sessionDescriptor(
   session: ClientSession,
   displayedSessionId: string | undefined,
+  isArchiving = false,
+  isUnarchiving = false,
 ): ElementDescriptor {
   const rowClass = [
     "session-row",
@@ -307,8 +322,8 @@ function sessionDescriptor(
         children: [formatSessionTimestamp(session.updatedAtMs)],
       },
       session.isArchived
-        ? unarchiveDescriptor(session.sessionId)
-        : archiveDescriptor(session.sessionId),
+        ? unarchiveDescriptor(session.sessionId, isUnarchiving)
+        : archiveDescriptor(session.sessionId, isArchiving),
     ],
   };
 }
@@ -361,7 +376,7 @@ export function formatSessionTimestamp(updatedAtMs: number | null, now = new Dat
 }
 
 /** Overlay button at the row's right edge that archives the session. */
-function archiveDescriptor(sessionId: string): ElementDescriptor {
+function archiveDescriptor(sessionId: string, isPending = false): ElementDescriptor {
   return {
     tag: "button",
     attrs: {
@@ -370,13 +385,14 @@ function archiveDescriptor(sessionId: string): ElementDescriptor {
       "data-archive": sessionId,
       title: "Archive",
       "aria-label": "Archive",
+      "aria-busy": String(isPending),
     },
-    children: [archiveIcon()],
+    children: [isPending ? spinnerIcon() : archiveIcon()],
   };
 }
 
 /** Overlay button at the row's right edge that restores the archived session to the default list. */
-function unarchiveDescriptor(sessionId: string): ElementDescriptor {
+function unarchiveDescriptor(sessionId: string, isPending = false): ElementDescriptor {
   return {
     tag: "button",
     attrs: {
@@ -385,8 +401,9 @@ function unarchiveDescriptor(sessionId: string): ElementDescriptor {
       "data-unarchive": sessionId,
       title: "Unarchive",
       "aria-label": "Unarchive",
+      "aria-busy": String(isPending),
     },
-    children: [unarchiveIcon()],
+    children: [isPending ? spinnerIcon() : unarchiveIcon()],
   };
 }
 
@@ -657,6 +674,10 @@ interface ClientSnapshot {
   errorMessage: string;
   connectionError: boolean;
   pendingNewSessions: ReadonlyMap<string, string>;
+  /** Archive requests in flight, keyed by request id (value: session id). */
+  pendingArchives: ReadonlyMap<string, string>;
+  /** Unarchive requests in flight, keyed by request id (value: session id). */
+  pendingUnarchives: ReadonlyMap<string, string>;
 }
 
 /** Latest-value store fed by the bridge; registered synchronously by
@@ -671,6 +692,10 @@ function createClientStore(): {
   setSessionsError(): void;
   startNewSession(cwd: string): string;
   finishNewSession(requestId: string): void;
+  startArchive(sessionId: string): string;
+  finishArchive(requestId: string): void;
+  startUnarchive(sessionId: string): string;
+  finishUnarchive(requestId: string): void;
 } {
   let snapshot: ClientSnapshot = {
     state: { groups: [] },
@@ -679,6 +704,8 @@ function createClientStore(): {
     errorMessage: "",
     connectionError: false,
     pendingNewSessions: new Map(),
+    pendingArchives: new Map(),
+    pendingUnarchives: new Map(),
   };
   const listeners = new Set<() => void>();
   const publish = (next: ClientSnapshot): void => {
@@ -719,18 +746,51 @@ function createClientStore(): {
       pendingNewSessions.delete(requestId);
       publish({ ...snapshot, pendingNewSessions });
     },
+    startArchive: (sessionId) => {
+      const requestId = crypto.randomUUID();
+      const pendingArchives = new Map(snapshot.pendingArchives);
+      pendingArchives.set(requestId, sessionId);
+      publish({ ...snapshot, pendingArchives });
+      return requestId;
+    },
+    finishArchive: (requestId) => {
+      if (!snapshot.pendingArchives.has(requestId)) return;
+      const pendingArchives = new Map(snapshot.pendingArchives);
+      pendingArchives.delete(requestId);
+      publish({ ...snapshot, pendingArchives });
+    },
+    startUnarchive: (sessionId) => {
+      const requestId = crypto.randomUUID();
+      const pendingUnarchives = new Map(snapshot.pendingUnarchives);
+      pendingUnarchives.set(requestId, sessionId);
+      publish({ ...snapshot, pendingUnarchives });
+      return requestId;
+    },
+    finishUnarchive: (requestId) => {
+      if (!snapshot.pendingUnarchives.has(requestId)) return;
+      const pendingUnarchives = new Map(snapshot.pendingUnarchives);
+      pendingUnarchives.delete(requestId);
+      publish({ ...snapshot, pendingUnarchives });
+    },
   };
 }
 
 const SessionRow = memo(function SessionRow(
   props: ClientSession & {
     isDisplayed: boolean;
+    isArchiving: boolean;
+    isUnarchiving: boolean;
     currentDay: string;
     actions: DescriptorActions;
   },
 ): ReactElement {
   return descriptorToElement(
-    sessionDescriptor(props, props.isDisplayed ? props.sessionId : undefined),
+    sessionDescriptor(
+      props,
+      props.isDisplayed ? props.sessionId : undefined,
+      props.isArchiving,
+      props.isUnarchiving,
+    ),
     props.actions,
   );
 });
@@ -795,13 +855,21 @@ function SessionsApp({
       onWorkspaceMenuToggle: (menu) =>
         setWorkspaceMenu((previous) => (previous?.cwd === menu.cwd ? null : menu)),
       onSessionClick: (sessionId) => bridge.postMessage({ type: "openSession", sessionId }),
-      onArchiveClick: (sessionId) => bridge.postMessage({ type: "archiveSession", sessionId }),
-      onUnarchiveClick: (sessionId) => bridge.postMessage({ type: "unarchiveSession", sessionId }),
+      onArchiveClick: (sessionId) => {
+        const requestId = store.startArchive(sessionId);
+        bridge.postMessage({ type: "archiveSession", sessionId, requestId });
+      },
+      onUnarchiveClick: (sessionId) => {
+        const requestId = store.startUnarchive(sessionId);
+        bridge.postMessage({ type: "unarchiveSession", sessionId, requestId });
+      },
     }),
     [bridge, store],
   );
 
   const pendingNewSessionCwds = new Set(snapshot.pendingNewSessions.values());
+  const pendingArchiveIds = new Set(snapshot.pendingArchives.values());
+  const pendingUnarchiveIds = new Set(snapshot.pendingUnarchives.values());
   const currentDay = new Date().toDateString();
   return (
     <>
@@ -833,6 +901,8 @@ function SessionsApp({
               key={session.sessionId}
               {...session}
               isDisplayed={session.sessionId === snapshot.state.displayedSessionId}
+              isArchiving={pendingArchiveIds.has(session.sessionId)}
+              isUnarchiving={pendingUnarchiveIds.has(session.sessionId)}
               currentDay={currentDay}
               actions={actions}
             />
@@ -950,6 +1020,12 @@ export function initClient(bridge: ClientBridge): () => void {
     }
     if (message.type === "newSessionFinished" && typeof message.requestId === "string") {
       store.finishNewSession(message.requestId);
+    }
+    if (message.type === "archiveFinished" && typeof message.requestId === "string") {
+      store.finishArchive(message.requestId);
+    }
+    if (message.type === "unarchiveFinished" && typeof message.requestId === "string") {
+      store.finishUnarchive(message.requestId);
     }
     if (message.type === "workspaceAdded" && pendingAddWorkspace) {
       closeWorkspaceForm();

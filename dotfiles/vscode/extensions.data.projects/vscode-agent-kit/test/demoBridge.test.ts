@@ -99,6 +99,32 @@ describe("createDemoBridge", () => {
     expect(untouched?.isArchived).toBe(false);
   });
 
+  it("finishes archive and unarchive requests with their request ids", () => {
+    const demo = createDemoBridge();
+    const finished: { type?: string; requestId?: string }[] = [];
+    demo.bridge.onMessage((message) => {
+      const completion = message as { type?: string; requestId?: string };
+      if (completion.type === "archiveFinished" || completion.type === "unarchiveFinished")
+        finished.push(completion);
+    });
+    demo.bridge.postMessage({
+      type: "archiveSession",
+      sessionId: projectCurrentId,
+      requestId: "archive-request",
+    });
+    demo.bridge.postMessage({
+      type: "unarchiveSession",
+      sessionId: projectArchivedId,
+      requestId: "unarchive-request",
+    });
+    expect(finished).toEqual([
+      { type: "archiveFinished", requestId: "archive-request" },
+      { type: "unarchiveFinished", requestId: "unarchive-request" },
+    ]);
+    demo.bridge.postMessage({ type: "archiveSession", sessionId: piToolsCurrentId });
+    expect(finished).toHaveLength(2);
+  });
+
   it("clears selection when archiving the displayed session even with an unarchived same-cwd row", () => {
     const { bridge, last } = setup();
     bridge.postMessage({ type: "unarchiveSession", sessionId: projectArchivedId });

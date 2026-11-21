@@ -158,11 +158,15 @@ export function createDemoBridge(): {
     if (request.type === "archiveSession" && typeof request.sessionId === "string") {
       metadata.set(request.sessionId, { archived: true });
       if (displayedSessionId === request.sessionId) displayedSessionId = undefined;
+      if (request.requestId !== undefined)
+        listener({ type: "archiveFinished", requestId: request.requestId });
       postSessions();
       return;
     }
     if (request.type === "unarchiveSession" && typeof request.sessionId === "string") {
       metadata.set(request.sessionId, { ...entryOf(request.sessionId), archived: false });
+      if (request.requestId !== undefined)
+        listener({ type: "unarchiveFinished", requestId: request.requestId });
       postSessions();
       return;
     }

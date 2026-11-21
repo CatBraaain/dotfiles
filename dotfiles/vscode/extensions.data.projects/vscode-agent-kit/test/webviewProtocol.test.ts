@@ -51,12 +51,20 @@ describe("parseWebviewRequest", () => {
       { type: "archiveSession", sessionId },
     ],
     [
+      { type: "archiveSession", sessionId, requestId: "request-1" },
+      { type: "archiveSession", sessionId, requestId: "request-1" },
+    ],
+    [
       { type: "unarchiveSession", sessionId },
       { type: "unarchiveSession", sessionId },
     ],
     [
       { type: "unarchiveSession", sessionId: otherSessionId },
       { type: "unarchiveSession", sessionId: otherSessionId },
+    ],
+    [
+      { type: "unarchiveSession", sessionId, requestId: "request-1" },
+      { type: "unarchiveSession", sessionId, requestId: "request-1" },
     ],
   ])("accepts supported request %#", (value, expected) => {
     expect(parseWebviewRequest(value)).toEqual(expected);
@@ -84,12 +92,16 @@ describe("parseWebviewRequest", () => {
     { type: "archiveSession", sessionId: 3 },
     { type: "archiveSession", sessionId: "trailing_dot." },
     { type: "archiveSession", sessionIds: [sessionId] },
+    { type: "archiveSession", sessionId, requestId: "" },
+    { type: "archiveSession", sessionId, requestId: 1 },
     { type: "unarchiveSessions" },
     { type: "unarchiveSessions", sessionIds: [sessionId] },
     { type: "unarchiveSession" },
     { type: "unarchiveSession", sessionId: 3 },
     { type: "unarchiveSession", sessionId: "session 1" },
     { type: "unarchiveSession", sessionIds: [sessionId] },
+    { type: "unarchiveSession", sessionId, requestId: "" },
+    { type: "unarchiveSession", sessionId, requestId: 2 },
     { type: "copySessionId", sessionId },
     { type: "setSessionLock", sessionId, locked: true },
     { type: "setSessionLock", sessionId, locked: false },

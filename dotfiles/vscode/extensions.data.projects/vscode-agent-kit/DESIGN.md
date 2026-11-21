@@ -73,7 +73,7 @@ New workspace フッターの主操作はワークスペースの登録。情報
 | spinner・ベル・一時停止マーク | 既存の行内操作と同じ12px SVG、`viewBox="0 0 24 24"`、塗りなし・`currentColor` の線幅2・丸い線端と線結合。spinner は開いた円弧（`M21 12a9 9 0 1 1-6.219-8.56`）。ベルは本体（`M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9`）と下端（`M10 21a2 2 0 0 0 4 0`）の輪郭線。一時停止マークは2本の縦線（`M9 4v16`・`M15 4v16`）。色は状態アイコントークンに従う |
 | 表示名 | 13px・20px 行・省略表示 |
 | 日時 | 等幅（`editor-font-family` 代替 `ui-monospace`）、10px・tabular-nums、右端から36pxの位置に右寄せし、文字間隔を広げても全文を収める自然幅とする。行内では右側に `36px + 5ch + 8px` を予約する |
-| 行の操作（Archive・Unarchive） | 24px 四方の ghost 操作。12px の `currentColor` SVG、補助文字色、hover は本文色と hover 面。右端から4pxの位置に重ねる。Archive と Unarchive は同じ位置を占有率で切り替え、アーカイブ済みの行では Archive の代わりに Unarchive（アーカイブから取り出す矢印付きの SVG）を出す |
+| 行の操作（Archive・Unarchive） | 24px 四方の ghost 操作。12px の `currentColor` SVG、補助文字色、hover は本文色と hover 面。右端から4pxの位置に重ねる。Archive と Unarchive は同じ位置を占有率で切り替え、アーカイブ済みの行では Archive の代わりに Unarchive（アーカイブから取り出す矢印付きの SVG）を出す。SPEC「アーカイブ・未アーカイブアクション」の待機表示中は同じ位置・寸法・色で既存の spinner SVG に置き換え、操作領域と周囲の配置は保つ |
 
 セッション一覧の主操作はセッションを開くこと。情報の優先順はグループ、セッション名と状態、更新日時と行操作。標準ビュータイトルの Sessions・Refresh と、Webview のグループ見出し・モード切替・行操作・New workspace・フォームを保持する。スクロール位置の操作は補助操作とし、装飾や追加のツールバーは設けない。
 
@@ -85,7 +85,7 @@ New workspace フッターの主操作はワークスペースの登録。情報
 
 ワークスペースのメニューは [beui.dev の context-menu](https://beui.dev/r/context-menu/raw) の起動元・viewport 内への位置調整を参照する。開閉と位置調整は即時とし、アニメーションは加えない。
 
-spinner は中心を軸に1秒・linear・無限反復で1回転する。回転は `transform` のみで行い、行やスロットの寸法を変えない。`prefers-reduced-motion` での表示は、セッション行では SPEC「実行フェーズの表示」に従い、New session では `reduce` のとき静止表示する。
+spinner は中心を軸に1秒・linear・無限反復で1回転する。回転は `transform` のみで行い、行やスロットの寸法を変えない。`prefers-reduced-motion` での表示は、セッション行では SPEC「実行フェーズの表示」に従い、New session と行の操作では `reduce` のとき静止表示する。
 
 ## 状態
 
