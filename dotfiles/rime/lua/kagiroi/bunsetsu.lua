@@ -368,6 +368,19 @@ local function matrix_cost(env, right_id, left_id)
     return cost
 end
 
+local function bind_matrix_cost(env)
+    local viterbi = env.viterbi
+    local get = viterbi and viterbi._get_matrix_cost
+    if not get then
+        return function() return nil end
+    end
+    return function(right_id, left_id)
+        local cost = get(viterbi, right_id, left_id)
+        if cost == math.huge then return nil end
+        return cost
+    end
+end
+
 local function viterbi_supports_context(env)
     return type(env.viterbi) == "table"
         and type(env.viterbi._get_matrix_cost) == "function"
@@ -863,58 +876,80 @@ local function quality_text_route_pairs(starting, length, text, matrix_cost)
     local states = { [0] = { { { offset = 0, own = 0, risk = 0 } } } }
     local pairs_by_key = {}
     local sequence = 0
+    local text_len = #text
     for position = 1, length do
-        for _, node in ipairs(starting[position] or {}) do
-            local node_states = {}
-            if type(node.candidate) == "string" and node.candidate ~= "" then
-                local intrinsic = inner_risk(node)
-                if intrinsic then
-                    for _, group in ipairs(states[position - 1] or {}) do
-                        for _, incoming in ipairs(group) do
-                            local from = incoming.offset + 1
-                            if text:sub(from, from + #node.candidate - 1) == node.candidate then
-                                local connection = 0
-                                if incoming.first_left then
-                                    connection = matrix_cost(incoming.node.right_id, node.left_id)
-                                end
-                                if connection then
-                                    local own = incoming.own + connection + node.wcost
-                                    local risk = incoming.risk + intrinsic
-                                        + (has_whole_word and math.max(0, connection) or 0)
-                                    local first_left = incoming.first_left or node.left_id
-                                    local next_offset = from + #node.candidate - 1
-                                    local progress, pattern_key = advance_route_patterns(incoming.pattern_progress,
-                                        node, starting.route_patterns)
-                                    if node._end == length then
-                                        if next_offset == #text then
-                                            local key = first_left .. " " .. node.right_id .. " " .. pattern_key
-                                            local frontier = pairs_by_key[key] or {}
-                                            pairs_by_key[key] = frontier
-                                            sequence = sequence + 1
-                                            frontier[#frontier + 1] = { left_id = first_left, right_id = node.right_id,
-                                                own = own, risk = risk,
-                                                words = route_words_of(incoming, node), order = sequence }
+        local incoming_groups = states[position - 1]
+        if incoming_groups then
+            local incoming_by_byte = {}
+            for _, group in ipairs(incoming_groups) do
+                for _, incoming in ipairs(group) do
+                    local first = text:byte(incoming.offset + 1)
+                    if first then
+                        local list = incoming_by_byte[first]
+                        if not list then
+                            list = {}
+                            incoming_by_byte[first] = list
+                        end
+                        list[#list + 1] = incoming
+                    end
+                end
+            end
+            for _, node in ipairs(starting[position] or {}) do
+                local node_states = {}
+                local candidate = node.candidate
+                if type(candidate) == "string" and candidate ~= "" then
+                    local candidate_len = #candidate
+                    local intrinsic = inner_risk(node)
+                    if intrinsic then
+                        local matched_incoming = incoming_by_byte[candidate:byte(1)]
+                        if matched_incoming then
+                            for _, incoming in ipairs(matched_incoming) do
+                                local from = incoming.offset + 1
+                                if from + candidate_len - 1 <= text_len
+                                    and text:sub(from, from + candidate_len - 1) == candidate then
+                                    local connection = 0
+                                    if incoming.first_left then
+                                        connection = matrix_cost(incoming.node.right_id, node.left_id)
+                                    end
+                                    if connection then
+                                        local own = incoming.own + connection + node.wcost
+                                        local risk = incoming.risk + intrinsic
+                                            + (has_whole_word and math.max(0, connection) or 0)
+                                        local first_left = incoming.first_left or node.left_id
+                                        local next_offset = from + candidate_len - 1
+                                        local progress, pattern_key = advance_route_patterns(incoming.pattern_progress,
+                                            node, starting.route_patterns)
+                                        if node._end == length then
+                                            if next_offset == #text then
+                                                local key = first_left .. " " .. node.right_id .. " " .. pattern_key
+                                                local frontier = pairs_by_key[key] or {}
+                                                pairs_by_key[key] = frontier
+                                                sequence = sequence + 1
+                                                frontier[#frontier + 1] = { left_id = first_left, right_id = node.right_id,
+                                                    own = own, risk = risk,
+                                                    words = route_words_of(incoming, node), order = sequence }
+                                            end
+                                        else
+                                            local key = first_left .. " " .. next_offset .. " " .. pattern_key
+                                            local frontier = node_states[key]
+                                            if not frontier then
+                                                frontier = {}
+                                                node_states[key] = frontier
+                                                states[node._end] = states[node._end] or {}
+                                                states[node._end][#states[node._end] + 1] = frontier
+                                            end
+                                            frontier[#frontier + 1] = { node = node, first_left = first_left,
+                                                offset = next_offset, own = own, risk = risk,
+                                                prev = incoming, pattern_progress = progress }
                                         end
-                                    else
-                                        local key = first_left .. " " .. next_offset .. " " .. pattern_key
-                                        local frontier = node_states[key]
-                                        if not frontier then
-                                            frontier = {}
-                                            node_states[key] = frontier
-                                            states[node._end] = states[node._end] or {}
-                                            states[node._end][#states[node._end] + 1] = frontier
-                                        end
-                                        frontier[#frontier + 1] = { node = node, first_left = first_left,
-                                            offset = next_offset, own = own, risk = risk,
-                                            prev = incoming, pattern_progress = progress }
                                     end
                                 end
                             end
                         end
                     end
                 end
+                for _, frontier in pairs(node_states) do prune_frontier(frontier) end
             end
-            for _, frontier in pairs(node_states) do prune_frontier(frontier) end
         end
         states[position - 1] = nil
     end
@@ -948,7 +983,7 @@ local function attach_histories(starting, env)
             end
             span[position - history.first + 1] = nodes
         end
-        local connection = function(right_id, left_id) return matrix_cost(env, right_id, left_id) end
+        local connection = bind_matrix_cost(env)
         local routes
         if history.route then
             local words, own = exact_history_route(span, history, connection)
@@ -1115,7 +1150,7 @@ local function quality_attach_pair_routes(candidates, reading, env, starting, ro
         local route_pairs = route_cache[text]
         if not route_pairs then
             route_pairs = quality_text_route_pairs(starting, length, text,
-                function(right_id, left_id) return matrix_cost(env, right_id, left_id) end)
+                bind_matrix_cost(env))
             route_cache[text] = route_pairs
         end
         for _, route in ipairs(route_pairs) do
@@ -1171,57 +1206,79 @@ local function plain_text_route_pairs(starting, length, text, matrix_cost)
     local states = { [0] = { { offset = 0 } } }
     local pairs_by_key, states_by_node = {}, {}
     local sequence = 0
+    local text_len = #text
     for position = 1, length do
-        for _, node in ipairs(starting[position] or {}) do
-            if type(node.candidate) == "string" and node.candidate ~= "" then
-                for _, incoming in ipairs(states[position - 1] or {}) do
-                    local from = incoming.offset + 1
-                    if text:sub(from, from + #node.candidate - 1) == node.candidate then
-                        local own, first_left
-                        if incoming.first_left then
-                            local conn = matrix_cost(incoming.node.right_id, node.left_id)
-                            if conn then
-                                own, first_left = incoming.own + conn
-                                    + node.wcost, incoming.first_left
-                            end
-                        else
-                            own, first_left = node.wcost, node.left_id
-                        end
-                        if own then
-                            local next_offset = from + #node.candidate - 1
-                            local progress, pattern_key = advance_route_patterns(incoming.pattern_progress,
-                                node, starting.route_patterns)
-                            if node._end == length then
-                                if next_offset == #text then
-                                    local key = first_left .. " " .. node.right_id .. " " .. pattern_key
-                                    local current = pairs_by_key[key]
-                                    if not current or own < current.own then
-                                        sequence = sequence + 1
-                                        pairs_by_key[key] = { left_id = first_left, right_id = node.right_id,
-                                            own = own, words = route_words_of(incoming, node), order = sequence }
-                                    end
-                                end
-                            else
-                                local bucket = states[node._end] or {}
-                                local node_states = states_by_node[node] or {}
-                                states_by_node[node] = node_states
-                                local key = first_left .. " " .. next_offset .. " " .. pattern_key
-                                local existing = node_states[key]
-                                if existing then
-                                    if own < existing.own then
-                                        existing.own, existing.prev = own, incoming
+        local incoming_states = states[position - 1]
+        if incoming_states then
+            local incoming_by_byte = {}
+            for _, incoming in ipairs(incoming_states) do
+                local first = text:byte(incoming.offset + 1)
+                if first then
+                    local list = incoming_by_byte[first]
+                    if not list then
+                        list = {}
+                        incoming_by_byte[first] = list
+                    end
+                    list[#list + 1] = incoming
+                end
+            end
+            for _, node in ipairs(starting[position] or {}) do
+                local candidate = node.candidate
+                if type(candidate) == "string" and candidate ~= "" then
+                    local candidate_len = #candidate
+                    local matched_incoming = incoming_by_byte[candidate:byte(1)]
+                    if matched_incoming then
+                        for _, incoming in ipairs(matched_incoming) do
+                            local from = incoming.offset + 1
+                            if from + candidate_len - 1 <= text_len
+                                and text:sub(from, from + candidate_len - 1) == candidate then
+                                local own, first_left
+                                if incoming.first_left then
+                                    local conn = matrix_cost(incoming.node.right_id, node.left_id)
+                                    if conn then
+                                        own, first_left = incoming.own + conn
+                                            + node.wcost, incoming.first_left
                                     end
                                 else
-                                    local state = {
-                                        node = node,
-                                        first_left = first_left,
-                                        offset = next_offset,
-                                        own = own, prev = incoming, pattern_progress = progress,
-                                    }
-                                    bucket[#bucket + 1] = state
-                                    node_states[key] = state
+                                    own, first_left = node.wcost, node.left_id
                                 end
-                                states[node._end] = bucket
+                                if own then
+                                    local next_offset = from + candidate_len - 1
+                                    local progress, pattern_key = advance_route_patterns(incoming.pattern_progress,
+                                        node, starting.route_patterns)
+                                    if node._end == length then
+                                        if next_offset == #text then
+                                            local key = first_left .. " " .. node.right_id .. " " .. pattern_key
+                                            local current = pairs_by_key[key]
+                                            if not current or own < current.own then
+                                                sequence = sequence + 1
+                                                pairs_by_key[key] = { left_id = first_left, right_id = node.right_id,
+                                                    own = own, words = route_words_of(incoming, node), order = sequence }
+                                            end
+                                        end
+                                    else
+                                        local bucket = states[node._end] or {}
+                                        local node_states = states_by_node[node] or {}
+                                        states_by_node[node] = node_states
+                                        local key = first_left .. " " .. next_offset .. " " .. pattern_key
+                                        local existing = node_states[key]
+                                        if existing then
+                                            if own < existing.own then
+                                                existing.own, existing.prev = own, incoming
+                                            end
+                                        else
+                                            local state = {
+                                                node = node,
+                                                first_left = first_left,
+                                                offset = next_offset,
+                                                own = own, prev = incoming, pattern_progress = progress,
+                                            }
+                                            bucket[#bucket + 1] = state
+                                            node_states[key] = state
+                                        end
+                                        states[node._end] = bucket
+                                    end
+                                end
                             end
                         end
                     end
@@ -1247,7 +1304,7 @@ local function plain_attach_pair_routes(candidates, reading, env, starting, rout
         local route_pairs = route_cache[text]
         if not route_pairs then
             route_pairs = plain_text_route_pairs(starting, length, text,
-                function(right_id, left_id) return matrix_cost(env, right_id, left_id) end)
+                bind_matrix_cost(env))
             route_cache[text] = route_pairs
         end
         for _, route in ipairs(route_pairs) do
@@ -1821,7 +1878,12 @@ local function prepare_route_patterns(state, env)
         end
         if clause.starting then
             clause.starting.route_patterns = #patterns > 0 and patterns or nil
-            clause.route_cache = {}
+            -- Route pairs cached during split already match a clause without
+            -- route patterns, so only clauses that gained patterns recompute
+            -- their DP.
+            if clause.starting.route_patterns then
+                clause.route_cache = {}
+            end
             if clause.quality then quality_attach_pair_routes(clause.unfiltered, clause.reading, env, clause.starting, clause.route_cache)
             else plain_attach_pair_routes(clause.unfiltered, clause.reading, env, clause.starting, clause.route_cache) end
             clause.filtered, clause.ranked_context = nil, nil

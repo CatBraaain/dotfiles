@@ -719,7 +719,7 @@ function Module.new(env)
         bos = nil,
         eos = nil,
         matrix_cache = nil,
-        matrix_cache_size = 1000,
+        matrix_cache_size = 50000,
         surface = "",
         surface_len = 0,
         query_userdict = function(input)
