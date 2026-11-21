@@ -6,6 +6,7 @@ import providerUsageExtension, {
   formatRelativeTime,
   formatUsageLine,
   parseUsageJson,
+  refreshUsageWidget,
   type UsageEntry,
 } from "./index";
 
@@ -235,6 +236,61 @@ describe("parseUsageJson", () => {
 
   it("returns no entries when the root is not an array", () => {
     assert.deepEqual(parseUsageJson("{}"), []);
+  });
+});
+
+function staleUICtx(): ExtensionContext {
+  return {
+    get hasUI(): boolean {
+      throw new Error("This extension ctx is stale after session replacement or reload.");
+    },
+  } as unknown as ExtensionContext;
+}
+
+function recordingUICtx(calls: unknown[][]): ExtensionContext {
+  return {
+    hasUI: true,
+    ui: {
+      setWidget: (...args: unknown[]) => {
+        calls.push(args);
+      },
+    },
+  } as unknown as ExtensionContext;
+}
+
+describe("refreshUsageWidget", () => {
+  it("does not throw when the ctx is stale after a successful fetch", async () => {
+    await assert.doesNotThrow(() =>
+      refreshUsageWidget(staleUICtx(), async () => [entryWith({})], new AbortController().signal),
+    );
+  });
+
+  it("does not throw when the ctx is stale in the fetch-failure fallback", async () => {
+    await assert.doesNotThrow(() =>
+      refreshUsageWidget(
+        staleUICtx(),
+        async () => {
+          throw new Error("usage-cli unavailable");
+        },
+        new AbortController().signal,
+      ),
+    );
+  });
+
+  it("does not throw when removing the widget on a stale ctx", async () => {
+    await assert.doesNotThrow(() =>
+      refreshUsageWidget(staleUICtx(), async () => [], new AbortController().signal),
+    );
+  });
+
+  it("still updates the widget when the ctx is active", async () => {
+    const calls: unknown[][] = [];
+    await refreshUsageWidget(
+      recordingUICtx(calls),
+      async () => [entryWith({})],
+      new AbortController().signal,
+    );
+    assert.equal(calls.length, 1);
   });
 });
 

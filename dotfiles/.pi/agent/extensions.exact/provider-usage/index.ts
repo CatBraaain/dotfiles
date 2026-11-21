@@ -152,7 +152,21 @@ function removeUsageWidget(ctx: ExtensionContext): void {
   ctx.ui.setWidget(USAGE_WIDGET_KEY, undefined, { placement: USAGE_WIDGET_PLACEMENT });
 }
 
-async function refreshUsageWidget(
+// The extension ctx becomes stale after session replacement or reload, and any
+// later UI update through the old ctx throws. A widget update is cosmetic, so
+// swallow the error and wait for the next refresh tick. Throwing here would
+// escape the `void refreshUsageWidget(...)` call in `session_start` and crash
+// the process (for example a short-lived subagent child process) with an
+// unhandled rejection.
+function updateUsageWidget(ctx: ExtensionContext, update: () => void): void {
+  try {
+    update();
+  } catch {
+    // Ignore: the ctx may be stale after session replacement or reload.
+  }
+}
+
+export async function refreshUsageWidget(
   ctx: ExtensionContext,
   fetchEntries: () => Promise<UsageEntry[]>,
   signal: AbortSignal,
@@ -163,13 +177,13 @@ async function refreshUsageWidget(
     if (signal.aborted) return;
     const lines = buildUsageWidgetLines(entries, Date.now());
     if (lines === undefined) {
-      removeUsageWidget(ctx);
+      updateUsageWidget(ctx, () => removeUsageWidget(ctx));
       return;
     }
-    setUsageWidget(ctx, lines);
+    updateUsageWidget(ctx, () => setUsageWidget(ctx, lines));
   } catch {
     if (signal.aborted) return;
-    setUsageWidget(ctx, [UNAVAILABLE_MESSAGE]);
+    updateUsageWidget(ctx, () => setUsageWidget(ctx, [UNAVAILABLE_MESSAGE]));
   }
 }
 
