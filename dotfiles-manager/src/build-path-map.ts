@@ -1,8 +1,8 @@
 // Build runtime path map: apply remap tables at copy time and again before
 // collecting local hooks.
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { Platform } from "./build.ts";
 
 // remap.data.md lists one source path per row and a destination or removal per platform.
@@ -121,6 +121,33 @@ async function removeMappedEntries(
   }
 }
 
+// Destinations must stay inside dist: the whole dist tree is generated
+// output, and a destination that escapes it would modify unmanaged files.
+// The path form check catches destinations that resolve outside dist; the
+// lstat walk catches destinations that resolve inside dist but traverse an
+// in-dist symlink whose target sits outside dist.
+async function assertDestinationInsideDist(
+  distDir: string,
+  destinationPath: string,
+  key: string,
+  destination: string,
+): Promise<void> {
+  const relativePath = relative(distDir, destinationPath);
+  if (isAbsolute(relativePath) || relativePath === ".." || relativePath.startsWith(`..${sep}`))
+    throw new Error(`${mapFileName} has a destination outside dist for ${key}: ${destination}`);
+  const parentSegments = relativePath.split(sep).slice(0, -1);
+  let current = distDir;
+  for (const segment of parentSegments) {
+    current = join(current, segment);
+    const info = await lstat(current).catch(() => undefined);
+    if (!info) break;
+    if (info.isSymbolicLink())
+      throw new Error(
+        `${mapFileName} has a destination reaching outside dist via a symlink for ${key}: ${destination}`,
+      );
+  }
+}
+
 async function moveMappedEntries(
   distDir: string,
   moves: Array<{ source: string; destination: string }>,
@@ -130,6 +157,7 @@ async function moveMappedEntries(
     if (!existsSync(sourcePath)) continue;
 
     const destinationPath = join(distDir, destination);
+    await assertDestinationInsideDist(distDir, destinationPath, source, destination);
     await mkdir(dirname(destinationPath), { recursive: true });
     await rm(destinationPath, { recursive: true, force: true });
     await rename(sourcePath, destinationPath);
@@ -158,7 +186,7 @@ type CopyMapContext = {
   moves: Array<{ source: string; destination: string }>;
 };
 
-export async function createCopyRouter(platform: Platform): Promise<CopyRouter> {
+export async function createCopyRouter(platform: Platform, distRoot: string): Promise<CopyRouter> {
   const sourceDirs: string[] = [];
   const contexts: Array<CopyMapContext | undefined> = [];
   return {
@@ -186,8 +214,11 @@ export async function createCopyRouter(platform: Platform): Promise<CopyRouter> 
         const relativePath = relative(context.sourceDir, sourcePath).replaceAll("\\", "/");
         if (isIgnoredTarget(relativePath, context.removals, isFile)) return { kind: "skip" };
         const move = context.moves.find(({ source }) => source === relativePath);
-        if (move)
-          return { kind: "copy-to", destination: join(context.destinationDir, move.destination) };
+        if (move) {
+          const destination = join(context.destinationDir, move.destination);
+          await assertDestinationInsideDist(distRoot, destination, relativePath, move.destination);
+          return { kind: "copy-to", destination };
+        }
       }
       return { kind: "copy" };
     },

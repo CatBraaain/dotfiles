@@ -41,7 +41,7 @@ export async function main(
     await copyDir(sourceDir, distDir, {
       sourceRoot: sourceDir,
       distRoot: distDir,
-      router: await createCopyRouter(platform),
+      router: await createCopyRouter(platform, distDir),
       platform,
     });
   });

@@ -1,12 +1,13 @@
 import { describe, it, beforeEach, afterEach } from "bun:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { parse as parseIni } from "js-ini";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
+import { applyPathMap } from "./build-path-map.ts";
 import { applyReplacements, applyReplaceSidecars, parseReplaceSidecar } from "./build-replace.ts";
 import { runHooks } from "./build-hooks.ts";
 import { main } from "./build.ts";
@@ -105,6 +106,55 @@ describe("run", () => {
     assert.equal(existsSync(join(distRoot, "legacy.txt")), false);
     assert.equal(await readFile(join(distRoot, "mapped.txt"), "utf8"), "mapped\n");
     assert.equal(existsSync(join(distRoot, "remap.data.md")), true);
+  });
+
+  it("rejects a copy-time remap destination that leaves dist", async () => {
+    await put(root, "dotfiles/plain.txt", "plain\n");
+    await put(
+      root,
+      "dotfiles/remap.data.md",
+      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| plain.txt | ../escaped.txt |  |  |\n",
+    );
+
+    await assert.rejects(
+      main(root, "linux", homeRoot),
+      /remap\.data\.md has a destination outside dist for plain\.txt:/,
+    );
+    assert.equal(existsSync(join(root, "escaped.txt")), false);
+  });
+
+  it("rejects a second-application remap destination that leaves dist", async () => {
+    await put(root, "dotfiles/plain.txt", "plain\n");
+    await put(
+      root,
+      "dotfiles/remap.data.md",
+      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| plain.txt | nested/plain.txt |  |  |\n| nested/plain.txt | ../escaped.txt |  |  |\n",
+    );
+    const phases: string[] = [];
+
+    await assert.rejects(
+      main(root, "linux", homeRoot, { onPhase: (phase) => phases.push(phase) }),
+      /remap\.data\.md has a destination outside dist for nested\/plain\.txt:/,
+    );
+    assert.deepEqual(phases, ["rebuild dist"]);
+    assert.equal(existsSync(join(root, "escaped.txt")), false);
+  });
+
+  it("rejects a remap destination that reaches outside dist through a symlink", async () => {
+    await put(
+      distRoot,
+      "remap.data.md",
+      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| plain.txt | escape-link/plain.txt |  |  |\n",
+    );
+    await put(distRoot, "plain.txt", "plain\n");
+    await mkdir(join(root, "outside-dir"));
+    await symlink(join(root, "outside-dir"), join(distRoot, "escape-link"), "dir");
+
+    await assert.rejects(
+      applyPathMap(distRoot, "linux"),
+      /remap\.data\.md has a destination reaching outside dist via a symlink for plain\.txt:/,
+    );
+    assert.equal(existsSync(join(root, "outside-dir", "plain.txt")), false);
   });
 
   it("merges a sidecar at its mapped Windows destination", async () => {
