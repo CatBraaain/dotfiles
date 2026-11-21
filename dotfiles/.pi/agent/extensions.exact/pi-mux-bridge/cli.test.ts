@@ -2040,11 +2040,13 @@ describe("pi-mux new argument contract", () => {
       kind: "new",
       detached: false,
       clientPid: undefined,
+      cwd: undefined,
     });
     assert.deepEqual(parseOperation(["new", "--detached"]), {
       kind: "new",
       detached: true,
       clientPid: undefined,
+      cwd: undefined,
     });
   });
 
@@ -2054,6 +2056,7 @@ describe("pi-mux new argument contract", () => {
       detached: true,
       clientPid: undefined,
       request: "--detached",
+      cwd: undefined,
     });
   });
 
@@ -2075,6 +2078,7 @@ describe("pi-mux new argument contract", () => {
           detached,
           clientPid: undefined,
           request,
+          cwd: undefined,
         });
       });
     }
