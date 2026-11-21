@@ -1,0 +1,17 @@
+{
+  "name": "vscode-custom-patch",
+  "displayName": "VSCode Custom Patch",
+  "description": "Guarantees custom script injection into the VS Code workbench at every startup, and enables or disables scripts via the plugins folder.",
+  "version": "1.0.0",
+  "publisher": "catbraaain",
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "extensionKind": [
+    "ui"
+  ],
+  "engines": {
+    "vscode": "^1.90.0"
+  }
+}

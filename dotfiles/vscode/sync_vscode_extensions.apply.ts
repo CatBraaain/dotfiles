@@ -3,16 +3,11 @@ import { $ } from "bun";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-const extensionsForWindows = [
-  "be5invis.vscode-custom-css",
-  "ms-vscode-remote.remote-wsl",
-  "tomoki1207.pdf",
-];
+const extensionsForWindows = ["ms-vscode-remote.remote-wsl", "tomoki1207.pdf"];
 
 const extensionsForLinux = [
   "alefragnani.bookmarks",
   "apaya.webm-player",
-  "be5invis.vscode-custom-css",
   "bierner.markdown-yaml-preamble",
   "bpruitt-goddard.mermaid-markdown-syntax-highlighting",
   "catbraaain.auto-fix-venv",
@@ -59,7 +54,7 @@ const extensionsForLinux = [
 const localVscodeExtensions: { id: string; targets: Label[] }[] = [
   { id: "todo-lsp.todo", targets: ["linux"] },
   { id: "agent-kit.agent-kit", targets: ["linux"] },
-  { id: "catbraaain.custom-css-reapply", targets: ["linux", "windows"] },
+  { id: "catbraaain.vscode-custom-patch", targets: ["linux", "windows"] },
 ];
 const localExtensionIds = localVscodeExtensions.map((extension) => extension.id);
 
@@ -67,7 +62,7 @@ const localExtensionIds = localVscodeExtensions.map((extension) => extension.id)
 // VSIX file name prefix ("name-version.data.vsix"; the reserved .data. marker
 // keeps the file out of the home deployment).
 const workspaceVsixPrefixes: Record<string, string> = {
-  "catbraaain.custom-css-reapply": "custom-css-reapply-",
+  "catbraaain.vscode-custom-patch": "vscode-custom-patch-",
 };
 
 const home = process.env.HOME;
@@ -170,9 +165,7 @@ async function syncExtensions(label: Label) {
   const desired = label === "linux" ? extensionsForLinux : extensionsForWindows;
   const installed = await installedExtensionIds(label);
   const marketplace = (extensions: string[]) =>
-    [
-      ...new Set(extensions.filter((extension) => !localExtensionIds.includes(extension))),
-    ].sort();
+    [...new Set(extensions.filter((extension) => !localExtensionIds.includes(extension)))].sort();
   const installedMarketplace = marketplace(installed);
   const desiredMarketplace = marketplace(desired);
 
@@ -250,7 +243,9 @@ const extensionIdPattern = /^([a-z0-9-]+\.[a-z0-9-]+)@/;
 async function readExtensionEntries(label: Label): Promise<[string, string][]> {
   if (label === "linux" && linuxExtensionEntries !== undefined) return linuxExtensionEntries;
   const codeCommand = codeExecutable(label);
-  const { stdout, exitCode } = await $`${codeCommand} --list-extensions --show-versions`.quiet().nothrow();
+  const { stdout, exitCode } = await $`${codeCommand} --list-extensions --show-versions`
+    .quiet()
+    .nothrow();
   if (exitCode !== 0) return [];
   const entries = stdout
     .toString()
@@ -270,7 +265,10 @@ async function installedExtensionIds(label: Label): Promise<string[]> {
   return entries.map(([id]) => id);
 }
 
-async function installedExtensionVersion(label: Label, extension: string): Promise<string | undefined> {
+async function installedExtensionVersion(
+  label: Label,
+  extension: string,
+): Promise<string | undefined> {
   const entries = await readExtensionEntries(label);
   return entries.find(([id]) => id === extension)?.[1];
 }

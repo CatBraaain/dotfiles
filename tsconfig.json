@@ -21,6 +21,8 @@
     "dotfiles/**/*.build.ts",
     "dotfiles/**/*.postbuild.ts",
     "dotfiles/**/*.postbuild-machine.ts",
+    "dotfiles/vscode/**/*.apply.ts",
+    "dotfiles/vscode/vscode-custom-patch/cli.data.ts",
     "dotfiles/**/*.postapply.ts",
     "dotfiles/**/*.postapply-machine.ts",
     "dotfiles/.agents/**/*.postbuild.ts",
