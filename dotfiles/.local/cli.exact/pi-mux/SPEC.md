@@ -35,6 +35,7 @@ CLIのsession-dirs記録と、稼働piの保存先を探索に使わない。
 | `pi-mux open [--temporary] <session-id>` | 完全一致する会話IDのpi実体へ接続する。稼働していなければ、保存会話を元のcwdで再開する。`--temporary` は一時再開を指定する |
 | `pi-mux state <session-id> <state> --source <JSON> --title <JSON>` | 通知元を照合して実行フェーズとタイトルを公開する。`running` は一時再開を通常へ昇格させる |
 | `pi-mux state <session-id> --clear --source <JSON>` | 通知元が公開した実行フェーズとタイトルを除去する |
+| `pi-mux send [--wait <seconds>] <session-id> <text...>` | 稼働している対象会話へ短いメッセージを1件届ける。稼働はpi実体の生存を指し、エージェントの実行状態は送信の可否に影響しない。`--wait` は対象の受信拡張が消費するまで待つ |
 | `pi-mux close <session-id>` | 完全一致する会話IDのpiを非対話で終了し、その会話を復元対象から除く。保存会話・workspace登録を保持する |
 | `pi-mux close --if-temporary <session-id>` | 一時再開中のpiだけを `close` と同じ手順で終了し、復元対象から除く。通常状態のpiと稼働対象がないIDは、変更せず成功する |
 | `pi-mux list` | 登録済みworkspaceを、空workspaceも含めたJSON配列で返す。専用tmuxの稼働piがあるworkspaceを自動登録する |
@@ -215,6 +216,60 @@ pane-local user option `@pi_session_state` に、次のJSON文字列を公開す
 | `attemptAt` | 競合した昇格・修復の試行時刻を表す正の整数（epoch ms） |
 
 ロック部分が成功したときと `--clear` 成功時に、`@pi_session_state_pending` を除去する。`waiting-user`・`waiting-approval` は `@pi_session_state_pending` を変えない。通常openによる昇格やpaneの置換でも、`@pi_session_state_pending` を変えない。公開値はworkspace登録と復元候補とは別に扱う。pane終了でpane-localの値も消滅する。
+
+### send
+
+`send [--wait <seconds>] <session-id> <text...>` は、稼働している対象会話のpi実体へ短いメッセージを1件届ける。稼働はpi実体の生存を指し、エージェントループの実行状態は送信の可否に影響しない。実行中・アイドル・承認やユーザー回答の待機中のいずれの状態にも送信でき、届くタイミングは受信側の状態で決まる(後述の表)。稼働していない会話へは、`open` で復元してから `send` する。`open` の完了時点で実体は稼働しているため、復元直後のセッションにも届く。並行する会話間で、重複作業の発見や引き継ぎの交渉を、対象のエージェントループへ直接通知するために使う。
+
+会話IDは `open` と同じ形式の完全一致で指定し、`switch` と同じ稼働実体の解決を使う。serverの起動・復元、piの起動・接続、workspace登録は行わない。稼働実体がないIDと同じIDの実体が複数のときは、エラーにする。
+
+`--wait` は `send` の直後に1回だけ指定でき、正の整数の秒数を受け付ける。それ以外の位置の `--wait` はテキストの一部として扱う。`<text...>` は会話ID以降の引数を単一スペースで連結した文字列とし、空白・引用符・改行・先頭の `-` を保持する。空文字列・空白のみ・NULを含むテキスト、および2800 code pointsを超えるテキストは、エラーにする。
+
+送信側の識別はCLIが `PI_SESSION_ID` 環境変数から埋め、未設定のときは `external` とする。呼び出し元が送信者を指定する引数は持たない。
+
+#### メッセージoptionの契約
+
+メッセージは pane-local user option で届ける。option名はメッセージごとに `@pi-mux-msg-<uuid>` とし、値は次のUTF-8 JSONエンベロープをbase64エンコードした文字列とする。1メッセージ1optionとし、複数送信の読み書き競合を避ける。
+
+```json
+{
+  "v": 1,
+  "id": "<uuid>",
+  "from": "<session-id or \"external\">",
+  "at": "<ISO-8601>",
+  "text": "<message>"
+}
+```
+
+| 項目 | 値 |
+| --- | --- |
+| `v` | `1` |
+| `id` | メッセージのUUID。option名のUUIDと同じ値 |
+| `from` | 送信したCLIプロセスの `PI_SESSION_ID`。未設定のとき `external` |
+| `at` | 送信時刻のISO-8601文字列 |
+| `text` | メッセージ本文。2800 code points以下 |
+
+テキスト上限の2800 code pointsは、tmux optionの計測容量（約4KBのbase64値は格納可能、16KBは失敗）から設定した運用上限である。
+
+optionの書き込みは、対象paneのserver PID・pane ID・pane PIDの一致を条件とした `source-file` 上の `if-shell` で行い、書き込み後にoption値の読み戻しで確認する。確認が取れないとき、および対象のpaneが書き込み時点で消滅・置換しているときは、エラーにする。
+
+受信側(pi-mux-bridge拡張)は、専用tmux内のTUIセッションで自身のpane optionを約2秒間隔で確認し、`@pi-mux-msg-` 接頭辞のoptionを処理する。有効なエンベロープのメッセージは、送信側の識別と時刻を本文に付した attributed custom message(`customType: "agent-message"`)として `deliverAs: "steer"`・`triggerTurn: true` で会話へ注入し、注入後に同一条件の `if-shell` でoptionを除去する。不正な値のoptionは注入せず、除去して記録する。
+
+| 受信側の状態 | 配信 |
+| --- | --- |
+| ストリーミング中(エージェントループ実行中) | 現在のassistantターンのtool実行後・次のLLM呼び出し前にsteerとして届く |
+| アイドル | ただちにターンを開始して届く |
+| 承認・ユーザー回答待ち | メッセージは次のターン境界まで待機する。保留中の承認は自身のUIで先に解決する |
+
+消費の信号はoptionの除去とする。`--wait <seconds>` 指定時は、CLIがoptionの消失をポーリングして確認する。消失を確認したら `delivered` をstdoutへ出力して終了コード0で終了する。対象paneの消滅によりoptionが失われたときは配信失敗として扱う。`--wait` 省略時はoptionの書き込み確認後に、stdout・stderrへ出力せず終了コード0で終了する。
+
+| 失敗 | 結果 |
+| --- | --- |
+| 稼働実体がない、同じIDの実体が複数 | optionを書かずエラーにする |
+| 対象paneが書き込み前に消滅・置換 | optionを書かずエラーにする |
+| テキストが上限を超える、空・不正 | 理由をstderrへ表示して終了コード1 |
+| `--wait` 中にoptionが消費されない | option名とともにstderrへ表示して終了コード1 |
+| `--wait` 中に対象paneが消滅 | 配信失敗としてoption名とともにstderrへ表示して終了コード1 |
 
 ### close
 

@@ -4983,3 +4983,50 @@ describe("pi-mux conditional close edge paths", () => {
     TIMEOUT_MS,
   );
 });
+
+describe("pi-mux session messaging", () => {
+  it(
+    "delivers a sent message into a running session and reports consumption",
+    async () => {
+      await fixture(async (f) => {
+        const sender = randomUUID();
+        const created = await f.run(
+          ["new", "--detached", "fixture-initial message for messaging"],
+          f.cwdA,
+        );
+        assert.equal(created.code, 0, created.err);
+        const pane = await firstPane(f);
+        const result = await f.run(
+          ["send", "--wait", "30", pane.id, "handover from another session"],
+          f.cwdB,
+          { PI_SESSION_ID: sender },
+        );
+        assert.equal(result.code, 0, result.err);
+        assert.equal(result.out.trim(), "delivered");
+        const transcript = await waitFor(() => {
+          const content = existsSync(pane.file) ? readFileSync(pane.file, "utf8") : "";
+          return content.includes("agent-message") &&
+            content.includes("handover from another session")
+            ? content
+            : undefined;
+        });
+        assert.match(transcript, new RegExp(`Message from pi session ${sender} at `));
+        const remaining = await f.tmux(["show-options", "-p", "-t", pane.pane]);
+        assert.equal(remaining.out.includes("@pi-mux-msg-"), false);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "fails loudly when the target conversation is not running",
+    async () => {
+      await fixture(async (f) => {
+        const result = await f.run(["send", randomUUID(), "anyone there"]);
+        assert.equal(result.code, 1);
+        assert.match(result.err, /Session not found/);
+      });
+    },
+    TIMEOUT_MS,
+  );
+});

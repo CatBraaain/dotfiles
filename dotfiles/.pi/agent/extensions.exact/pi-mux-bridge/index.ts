@@ -1,9 +1,19 @@
 import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { quote } from "shell-quote";
-import { getTmuxPaths, inspectManagedPane, launchToken, tmuxArgs, type Execute } from "./shared.ts";
+import { partitionMessageOptions, messageOptions, type AgentMessage } from "./messages.ts";
+import {
+  getTmuxPaths,
+  inspectManagedPane,
+  launchToken,
+  tmuxArgs,
+  type Execute,
+  type ManagedPaneIdentity,
+  type TmuxPaths,
+} from "./shared.ts";
 
 const TMUX_TIMEOUT_MS = 1_000;
+const MESSAGE_POLL_INTERVAL_MS = 2_000;
 
 export function rejectSessionChange(ctx: ExtensionContext): { cancel: true } | undefined {
   if (ctx.mode !== "tui") return;
@@ -11,9 +21,113 @@ export function rejectSessionChange(ctx: ExtensionContext): { cancel: true } | u
   return { cancel: true };
 }
 
+let messageTimer: ReturnType<typeof setInterval> | undefined;
+let messageIdentity: ManagedPaneIdentity | undefined;
+const injectedMessageNames = new Set<string>();
+let lastMessageFailure: string | undefined;
+
+export function stopMessageWatcher(): void {
+  if (messageTimer !== undefined) {
+    clearInterval(messageTimer);
+    messageTimer = undefined;
+  }
+  messageIdentity = undefined;
+  injectedMessageNames.clear();
+  lastMessageFailure = undefined;
+}
+
+function startMessageWatcher(
+  pi: Pick<ExtensionAPI, "exec" | "sendMessage">,
+  ctx: ExtensionContext,
+): void {
+  stopMessageWatcher();
+  if (ctx.mode !== "tui") return;
+  if ((process.env.TMUX ?? "").split(",")[0] !== getTmuxPaths().socketPath) return;
+  messageTimer = setInterval(() => {
+    drainAgentMessages(pi, ctx).catch((error) => reportMessagePollFailure(error));
+  }, MESSAGE_POLL_INTERVAL_MS);
+}
+
+function reportMessagePollFailure(error: unknown): void {
+  const reason = error instanceof Error ? error.message : String(error);
+  if (
+    /can't find pane|no such pane|no server running|error connecting to|no sessions/.test(reason)
+  ) {
+    stopMessageWatcher();
+    return;
+  }
+  if (reason === lastMessageFailure) return;
+  lastMessageFailure = reason;
+  process.stderr.write(`pi-mux: message polling failed: ${reason}\n`);
+}
+
+export async function drainAgentMessages(
+  pi: Pick<ExtensionAPI, "exec" | "sendMessage">,
+  ctx: ExtensionContext,
+): Promise<void> {
+  const paths = getTmuxPaths();
+  const execute = messageExecutor(pi, ctx);
+  messageIdentity ??= await inspectManagedPane(execute, paths);
+  if (!messageIdentity) {
+    stopMessageWatcher();
+    return;
+  }
+  const identity = messageIdentity;
+  const listing = await execute(
+    "tmux",
+    tmuxArgs(paths, ["show-options", "-p", "-t", identity.pane]),
+  );
+  const { valid, invalid } = partitionMessageOptions(messageOptions(listing.stdout));
+  for (const name of invalid) await unsetMessageOption(execute, paths, identity, name);
+  for (const { name, message } of valid) {
+    if (!injectedMessageNames.has(name)) {
+      deliverAgentMessage(pi, name, message);
+      injectedMessageNames.add(name);
+    }
+    await unsetMessageOption(execute, paths, identity, name);
+  }
+}
+
+function deliverAgentMessage(
+  pi: Pick<ExtensionAPI, "sendMessage">,
+  optionName: string,
+  message: AgentMessage,
+): void {
+  pi.sendMessage(
+    {
+      customType: "agent-message",
+      content: `Message from pi session ${message.from} at ${message.at}:\n${message.text}`,
+      display: true,
+      details: { from: message.from, at: message.at, optionName },
+    },
+    { deliverAs: "steer", triggerTurn: true },
+  );
+}
+
+async function unsetMessageOption(
+  execute: Execute,
+  paths: TmuxPaths,
+  identity: ManagedPaneIdentity,
+  name: string,
+): Promise<void> {
+  await execute(
+    "tmux",
+    tmuxArgs(paths, [
+      "if-shell",
+      "-F",
+      "-t",
+      identity.pane,
+      `#{&&:#{==:#{pid},${identity.serverPid}},#{==:#{pane_pid},${identity.pid}}}`,
+      quote(["set-option", "-pu", "-t", identity.pane, name]),
+    ]),
+  );
+}
+
 export default function fixedSessionExtension(pi: ExtensionAPI): void {
   pi.on("session_before_switch", (_event, ctx) => rejectSessionChange(ctx));
   pi.on("session_before_fork", (_event, ctx) => rejectSessionChange(ctx));
+  pi.on("session_start", (_event, ctx) => startMessageWatcher(pi, ctx));
+  pi.on("session_shutdown", () => stopMessageWatcher());
   const startupCommand = process.env.PI_TMUX_STARTUP_COMMAND;
   let startupPending = true;
   let ready: { id: string; pane: string; serverPid: number; panePid: number } | undefined;
@@ -140,6 +254,18 @@ function backgroundExecutor(pi: Pick<ExtensionAPI, "exec">, ctx: ExtensionContex
     });
     if (result.killed || ("truncated" in result && result.truncated === true) || result.code !== 0)
       throw new Error(`pi-mux startup failed: ${result.stderr || result.stdout || result.code}`);
+    return result;
+  };
+}
+
+function messageExecutor(pi: Pick<ExtensionAPI, "exec">, ctx: ExtensionContext): Execute {
+  return async function execute(command, args, options) {
+    const result = await pi.exec(command, args, {
+      cwd: ctx.cwd,
+      timeout: options?.timeout ?? TMUX_TIMEOUT_MS,
+    });
+    if (result.killed || ("truncated" in result && result.truncated === true) || result.code !== 0)
+      throw new Error(`tmux failed: ${result.stderr || result.stdout || result.code}`);
     return result;
   };
 }

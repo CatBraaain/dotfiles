@@ -7,19 +7,31 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { parse } from "shell-quote";
-import extension, { rejectSessionChange } from "./index.ts";
+import extension, { drainAgentMessages, rejectSessionChange, stopMessageWatcher } from "./index.ts";
 
 type Handler = (event: any, ctx: any) => unknown;
 let modelRegistry = {} as ExtensionContext["modelRegistry"];
 
-function captureHandlers(execute?: ExtensionAPI["exec"]) {
+function captureHandlers(
+  execute?: ExtensionAPI["exec"],
+  sendMessage?: ExtensionAPI["sendMessage"],
+) {
   const handlers = new Map<string, Handler>();
   const events = createEventBus();
   modelRegistry = {} as ExtensionContext["modelRegistry"];
   extension({
     events,
     on(event: string, handler: Handler) {
-      handlers.set(event, handler);
+      const previous = handlers.get(event);
+      handlers.set(
+        event,
+        previous
+          ? async (eventData: any, ctxData: any) => {
+              await previous(eventData, ctxData);
+              await handler(eventData, ctxData);
+            }
+          : handler,
+      );
     },
     registerCommand(name: string, definition: { handler: Handler }) {
       assert.equal(name, process.env.PI_TMUX_STARTUP_COMMAND);
@@ -29,6 +41,11 @@ function captureHandlers(execute?: ExtensionAPI["exec"]) {
       execute ??
       (async () => {
         throw new Error("No process fixture");
+      }),
+    sendMessage:
+      sendMessage ??
+      (() => {
+        throw new Error("No message fixture");
       }),
   } as unknown as ExtensionAPI);
   return handlers;
@@ -114,11 +131,13 @@ describe("startup notification timeouts", () => {
 describe("fixed conversation identity", () => {
   it("does not publish managed readiness from an initialization hook", async () => {
     await withManagedEnvironment(async () => {
-      const handlers = captureHandlers();
-      assert.equal(handlers.has("session_start"), false);
+      const handlers = captureHandlers(async () => {
+        throw new Error("No tmux command may run from an initialization hook");
+      });
+      const { ctx } = context();
+      await handlers.get("session_start")!({}, ctx);
       assert.equal(handlers.has("resources_discover"), false);
-      assert.equal(handlers.has("session_before_tree"), false);
-      assert.equal(handlers.has("session_before_compact"), false);
+      stopMessageWatcher();
     });
   });
 
@@ -430,10 +449,158 @@ describe("fixed conversation identity", () => {
     try {
       assert.deepEqual(
         [...captureHandlers().keys()],
-        ["session_before_switch", "session_before_fork", "resources_discover"],
+        [
+          "session_before_switch",
+          "session_before_fork",
+          "session_start",
+          "session_shutdown",
+          "resources_discover",
+        ],
       );
     } finally {
       if (previous !== undefined) process.env.PI_TMUX_STARTUP_COMMAND = previous;
     }
+  });
+});
+
+describe("agent message reception", () => {
+  const EARLY_ID = "00000000-0000-4000-8000-000000000001";
+  const LATE_ID = "00000000-0000-4000-8000-000000000002";
+
+  function messageOptionValue(
+    id: string,
+    at: string,
+    text: string,
+    from = "sender-session-id",
+  ): string {
+    return Buffer.from(JSON.stringify({ v: 1, id, from, at, text })).toString("base64");
+  }
+
+  function paneListing(options: { name: string; value: string }[]): string {
+    return [
+      ...options.map(({ name, value }) => `${name} ${value}`),
+      "@pi-tmux-session eyJpZCI6IngifQ==",
+    ].join("\n");
+  }
+
+  it("injects valid messages in send order, unsets every option, and ignores foreign options", async () => {
+    await withManagedEnvironment(async () => {
+      stopMessageWatcher();
+      const commands: string[][] = [];
+      const delivered: { message: any; options: any }[] = [];
+      const pi = {
+        exec: async (_command: string, args: string[]) => {
+          commands.push(args);
+          if (args.includes("display-message"))
+            return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
+          if (args.includes("show-options"))
+            return {
+              stdout: paneListing([
+                {
+                  name: `@pi-mux-msg-${LATE_ID}`,
+                  value: messageOptionValue(LATE_ID, "2026-11-21T00:00:02.000Z", "late text"),
+                },
+                { name: "@pi-mux-msg-broken", value: "!!not-base64!!" },
+                {
+                  name: `@pi-mux-msg-${EARLY_ID}`,
+                  value: messageOptionValue(EARLY_ID, "2026-11-21T00:00:01.000Z", "early text"),
+                },
+              ]),
+              stderr: "",
+              code: 0,
+              killed: false,
+            };
+          return { stdout: "", stderr: "", code: 0, killed: false };
+        },
+        sendMessage: (message: unknown, options: unknown) => {
+          delivered.push({ message, options });
+        },
+      };
+      await drainAgentMessages(pi as unknown as ExtensionAPI, context().ctx);
+      assert.deepEqual(
+        delivered.map((entry) => entry.message.content),
+        [
+          `Message from pi session sender-session-id at 2026-11-21T00:00:01.000Z:\nearly text`,
+          `Message from pi session sender-session-id at 2026-11-21T00:00:02.000Z:\nlate text`,
+        ],
+      );
+      assert.equal(delivered[0]!.message.customType, "agent-message");
+      assert.equal(delivered[0]!.message.display, true);
+      assert.deepEqual(delivered[0]!.message.details, {
+        from: "sender-session-id",
+        at: "2026-11-21T00:00:01.000Z",
+        optionName: `@pi-mux-msg-${EARLY_ID}`,
+      });
+      assert.deepEqual(delivered[0]!.options, { deliverAs: "steer", triggerTurn: true });
+      const unsets = commands.filter((args) => args.includes("if-shell"));
+      assert.equal(unsets.length, 3);
+      assert.deepEqual(
+        unsets.map((args) => parse(args.at(-1)!)),
+        [
+          ["set-option", "-pu", "-t", "%3", "@pi-mux-msg-broken"],
+          ["set-option", "-pu", "-t", "%3", `@pi-mux-msg-${EARLY_ID}`],
+          ["set-option", "-pu", "-t", "%3", `@pi-mux-msg-${LATE_ID}`],
+        ],
+      );
+      assert.deepEqual(
+        [...new Set(unsets.map((args) => args.at(-2)))],
+        [`#{&&:#{==:#{pid},123},#{==:#{pane_pid},${process.pid}}}`],
+      );
+      stopMessageWatcher();
+    });
+  });
+
+  it("does not inspect or deliver outside the dedicated tmux", async () => {
+    await withManagedEnvironment(async () => {
+      stopMessageWatcher();
+      process.env.TMUX = "/tmp/other-server.sock,123,0";
+      const pi = {
+        exec: async () => assert.fail("An unrelated server must not be inspected"),
+        sendMessage: () => assert.fail("No message may be delivered"),
+      };
+      await drainAgentMessages(pi as unknown as ExtensionAPI, context().ctx);
+    });
+  });
+
+  it("injects a message once while its unset keeps failing", async () => {
+    await withManagedEnvironment(async () => {
+      stopMessageWatcher();
+      const delivered: unknown[] = [];
+      let unsetAttempts = 0;
+      const pi = {
+        exec: async (_command: string, args: string[]) => {
+          if (args.includes("display-message"))
+            return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
+          if (args.includes("show-options"))
+            return {
+              stdout: paneListing([
+                {
+                  name: `@pi-mux-msg-${EARLY_ID}`,
+                  value: messageOptionValue(EARLY_ID, "2026-11-21T00:00:01.000Z", "text"),
+                },
+              ]),
+              stderr: "",
+              code: 0,
+              killed: false,
+            };
+          unsetAttempts++;
+          return { stdout: "", stderr: "pane option unset denied", code: 1, killed: false };
+        },
+        sendMessage: (message: unknown) => {
+          delivered.push(message);
+        },
+      };
+      await assert.rejects(
+        () => drainAgentMessages(pi as unknown as ExtensionAPI, context().ctx),
+        /pane option unset denied/,
+      );
+      await assert.rejects(
+        () => drainAgentMessages(pi as unknown as ExtensionAPI, context().ctx),
+        /pane option unset denied/,
+      );
+      assert.equal(delivered.length, 1);
+      assert.equal(unsetAttempts, 2);
+      stopMessageWatcher();
+    });
   });
 });

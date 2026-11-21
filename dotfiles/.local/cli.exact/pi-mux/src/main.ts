@@ -26,6 +26,7 @@ type Operation =
   | { kind: "new"; detached: boolean; clientPid?: number; request?: string; cwd?: string }
   | { kind: "open"; id: string; temporary: boolean }
   | { kind: "state"; id: string; source: StateSource; notification: StateNotification }
+  | { kind: "send"; id: string; waitSeconds: number | undefined; text: string }
   | { kind: "close"; id: string; ifTemporary: boolean }
   | { kind: "list" }
   | { kind: "switch"; id: string; clientPid: number | undefined }
@@ -100,6 +101,8 @@ type TmuxConfig = ReturnType<typeof tmuxConfiguration>;
 const SESSION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
 const STARTUP_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 50;
+const SEND_WAIT_POLL_INTERVAL_MS = 100;
+const MESSAGE_TEXT_MAX_CODE_POINTS = 2800;
 const SESSION_HEADER_MAX_BYTES = 64 * 1024;
 const GENERATED_ENV_KEYS = new Set([
   "TMUX",
@@ -140,6 +143,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux open [--temporary] <session-id>
   pi-mux state <session-id> <state> --source <JSON> --title <JSON>
   pi-mux state <session-id> --clear --source <JSON>
+  pi-mux send [--wait <seconds>] <session-id> <text...>
   pi-mux close [--if-temporary] <session-id>
   pi-mux list
   pi-mux switch <session-id> [--client-pid <pid>]
@@ -162,6 +166,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         console.error(`pi-mux: state ${operation.id}: ${errorMessage(error)}`);
         return 1;
       }
+    }
+    if (operation.kind === "send") {
+      return await sendSessionMessage(
+        tmuxConfiguration(),
+        operation.id,
+        operation.text,
+        operation.waitSeconds,
+      );
     }
     if (operation.kind === "list") {
       console.log(JSON.stringify(await listWorkspaces(tmuxConfiguration())));
@@ -323,6 +335,28 @@ export function parseOperation(argv: string[]): Operation {
     }
   }
   if (argv[0] === "state") return parseStateOperation(argv);
+  if (argv[0] === "send") {
+    if (argv.length === 2 && (argv[1] === "-h" || argv[1] === "--help")) return { kind: "help" };
+    let index = 1;
+    let waitSeconds: number | undefined;
+    if (argv[index] === "--wait" && /^[1-9]\d*$/.test(argv[index + 1] ?? "")) {
+      waitSeconds = Number(argv[index + 1]);
+      index += 2;
+    }
+    const id = argv[index];
+    const textParts = argv.slice(index + 1);
+    if (id && SESSION_ID_PATTERN.test(id) && textParts.length > 0) {
+      const text = textParts.join(" ");
+      if (text.trim() && !text.includes("\0")) {
+        const length = [...text].length;
+        if (length > MESSAGE_TEXT_MAX_CODE_POINTS)
+          throw new Error(
+            `Message text is ${length} code points; the limit is ${MESSAGE_TEXT_MAX_CODE_POINTS}`,
+          );
+        return { kind: "send", id, waitSeconds, text };
+      }
+    }
+  }
   if (argv[0] === "open") {
     const temporary = argv[1] === "--temporary";
     const id = argv[temporary ? 2 : 1];
@@ -376,7 +410,7 @@ export function parseOperation(argv: string[]): Operation {
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | close [--if-temporary] <session-id> | list | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] | history [--cwd <absolute-cwd>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | reload [<session-id>] | restart [--force]]",
+    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] | history [--cwd <absolute-cwd>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | reload [<session-id>] | restart [--force]]",
   );
 }
 
@@ -1860,6 +1894,82 @@ async function currentSession(
   if (!pane)
     throw new Error(`The tmux client ${client.name} does not show a pi pane: ${client.session}`);
   return { id: pane.id, cwd: pane.cwd, file: pane.file, target: pane.name };
+}
+
+async function sendSessionMessage(
+  config: TmuxConfig,
+  id: string,
+  text: string,
+  waitSeconds: number | undefined,
+): Promise<number> {
+  try {
+    const targets = (await livePanes(config, "list")).filter((pane) => pane.id === id);
+    if (targets.length === 0) throw new Error(`Session not found (use the complete ID): ${id}`);
+    if (targets.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
+    const target = targets[0]!;
+    const server = await serverLifetime(config);
+    if (!server) throw new Error("Dedicated server is not running");
+    const messageId = randomUUID();
+    const optionName = `@pi-mux-msg-${messageId}`;
+    const from = process.env.PI_SESSION_ID?.trim() || "external";
+    const envelope = Buffer.from(
+      JSON.stringify({ v: 1, id: messageId, from, at: new Date().toISOString(), text }),
+      "utf8",
+    ).toString("base64");
+    const line = guardedTmuxLine(
+      target.pane,
+      paneEntityGuard(server.pid, target.pane, target.panePid),
+      [["set-option", "-p", "-t", target.pane, optionName, envelope]],
+      "PI_MUX_MESSAGE_TARGET_LOST",
+    );
+    const result = await tmux(config, ["source-file", "-"], false, `${line}\n`);
+    if (result.stdout.includes("PI_MUX_MESSAGE_TARGET_LOST"))
+      throw new Error("Target pane no longer matches the conversation");
+    const stored = await tmux(
+      config,
+      ["show-options", "-pqv", "-t", target.pane, optionName],
+      true,
+    );
+    if (stored.exitCode !== 0 || stored.stdout.trim() !== envelope)
+      throw new Error("Cannot confirm the message option write");
+    if (waitSeconds === undefined) return 0;
+    const outcome = await waitForMessageConsumption(config, target.pane, optionName, waitSeconds);
+    if (outcome === "consumed") {
+      console.log("delivered");
+      return 0;
+    }
+    if (outcome === "lost") throw new Error(`Target pane disappeared before consuming ${optionName}`);
+    throw new Error(`Message option ${optionName} was not consumed within ${waitSeconds} seconds`);
+  } catch (error) {
+    throw new Error(`Cannot send message to session ${id}: ${errorMessage(error)}`);
+  }
+}
+
+async function waitForMessageConsumption(
+  config: TmuxConfig,
+  pane: string,
+  optionName: string,
+  waitSeconds: number,
+): Promise<"consumed" | "lost" | "timeout"> {
+  const deadline = Date.now() + waitSeconds * 1000;
+  while (Date.now() < deadline) {
+    const result = await tmux(config, ["show-options", "-pqv", "-t", pane, optionName], true);
+    if (result.exitCode !== 0)
+      throw new Error(`Cannot inspect message option: ${result.stderr.trim()}`);
+    if (!result.stdout.trim()) return (await paneExists(config, pane)) ? "consumed" : "lost";
+    await Bun.sleep(SEND_WAIT_POLL_INTERVAL_MS);
+  }
+  return "timeout";
+}
+
+async function paneExists(config: TmuxConfig, pane: string): Promise<boolean> {
+  const result = await tmux(config, ["list-panes", "-a", "-F", "#{pane_id}"], true);
+  if (result.exitCode !== 0) {
+    if (serverIsAbsent(config, result.stderr) || result.stderr.includes("no sessions"))
+      return false;
+    throw new Error(`Cannot inspect panes: ${result.stderr.trim()}`);
+  }
+  return result.stdout.trimEnd().split("\n").includes(pane);
 }
 
 function sessionGroupName(cwd: string): string {

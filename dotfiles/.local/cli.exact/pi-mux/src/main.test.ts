@@ -1161,6 +1161,174 @@ describe("switch", () => {
   }, 20_000);
 });
 
+describe("send", () => {
+  function sessionPane(fixture: SessionFixture, id: string): string {
+    const panes = fixture
+      .tmux(["list-panes", "-a", "-F", "#{pane_id}\t#{@pi-tmux-session}"])
+      .split("\n")
+      .filter(Boolean);
+    for (const line of panes) {
+      const [pane, encoded] = line.split("\t");
+      const metadata = JSON.parse(Buffer.from(encoded!, "base64").toString("utf8"));
+      if (metadata.id === id) return pane!;
+    }
+    assert.fail(`No pane is running for conversation ${id}`);
+  }
+
+  function messageOptions(fixture: SessionFixture, pane: string): Map<string, string> {
+    const options = new Map<string, string>();
+    for (const line of fixture.tmux(["show-options", "-p", "-t", pane]).split("\n")) {
+      if (!line.startsWith("@pi-mux-msg-")) continue;
+      const separator = line.indexOf(" ");
+      options.set(line.slice(0, separator), line.slice(separator + 1));
+    }
+    return options;
+  }
+
+  function decodeEnvelope(value: string): Record<string, unknown> {
+    return JSON.parse(Buffer.from(value, "base64").toString("utf8"));
+  }
+
+  it("writes one attributed message option for the target conversation", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      fixture.piSession("pi", {
+        id,
+        file: join(fixture.directory, "conversations", `${id}.jsonl`),
+      });
+      const pane = sessionPane(fixture, id);
+      const result = fixture.run(["send", id, "duplicate work detected; please wrap up"]);
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, "");
+      assert.equal(result.stderr, "");
+      const options = messageOptions(fixture, pane);
+      assert.equal(options.size, 1);
+      const [[optionName, value]] = [...options.entries()];
+      assert.match(optionName!, /^@pi-mux-msg-[0-9a-f-]{36}$/);
+      const envelope = decodeEnvelope(value!);
+      assert.equal(envelope.v, 1);
+      assert.equal(envelope.id, optionName!.slice("@pi-mux-msg-".length));
+      assert.equal(envelope.from, "external");
+      assert.equal(envelope.text, "duplicate work detected; please wrap up");
+      assert.ok(!Number.isNaN(Date.parse(envelope.at as string)));
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("attributes the sender from PI_SESSION_ID and joins multi-argument text", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      const sender = randomUUID();
+      fixture.piSession("pi", {
+        id,
+        file: join(fixture.directory, "conversations", `${id}.jsonl`),
+      });
+      const pane = sessionPane(fixture, id);
+      const result = spawnSync(process.execPath, ["run", source, "send", id, "stop", "now"], {
+        cwd: fixture.cwd,
+        env: { ...fixture.env, PI_SESSION_ID: sender },
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 0, result.stderr);
+      const [[, value]] = [...messageOptions(fixture, pane).entries()];
+      assert.equal(decodeEnvelope(value!).from, sender);
+      assert.equal(decodeEnvelope(value!).text, "stop now");
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("rejects oversized text without writing an option", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      fixture.piSession("pi", {
+        id,
+        file: join(fixture.directory, "conversations", `${id}.jsonl`),
+      });
+      const pane = sessionPane(fixture, id);
+      const result = fixture.run(["send", id, "x".repeat(2801)]);
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 1);
+      assert.ok(result.stderr.includes("the limit is 2800"));
+      assert.equal(messageOptions(fixture, pane).size, 0);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("fails for an unknown conversation and for duplicate running conversations", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const unknown = fixture.run(["send", randomUUID(), "hello"]);
+      assert.equal(unknown.status, 1);
+      assert.ok(unknown.stderr.includes("Session not found"));
+      const id = randomUUID();
+      const file = join(fixture.directory, "conversations", `${id}.jsonl`);
+      fixture.piSession("first", { id, file });
+      fixture.piSession("second", { id, file });
+      const duplicate = fixture.run(["send", id, "hello"]);
+      assert.equal(duplicate.status, 1);
+      assert.ok(duplicate.stderr.includes("Multiple pi processes are running"));
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("reports delivered when the receiving pane consumes the option", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      fixture.piSession("pi", {
+        id,
+        file: join(fixture.directory, "conversations", `${id}.jsonl`),
+      });
+      const pane = sessionPane(fixture, id);
+      const child = Bun.spawn(
+        [process.execPath, "run", source, "send", "--wait", "10", id, "handover please"],
+        { cwd: fixture.cwd, env: fixture.env, stdout: "pipe", stderr: "pipe" },
+      );
+      let optionName: string | undefined;
+      await waitUntil(() => {
+        optionName = [...messageOptions(fixture, pane).keys()][0];
+        return optionName !== undefined;
+      });
+      fixture.tmux(["set-option", "-pu", "-t", pane, optionName!]);
+      const [stdout, exitCode] = await Promise.all([
+        new Response(child.stdout).text(),
+        child.exited,
+      ]);
+      assert.equal(exitCode, 0);
+      assert.equal(stdout.trim(), "delivered");
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("reports the option name when --wait times out without consumption", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      fixture.piSession("pi", {
+        id,
+        file: join(fixture.directory, "conversations", `${id}.jsonl`),
+      });
+      const result = fixture.run(["send", "--wait", "1", id, "anybody there"]);
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /@pi-mux-msg-[0-9a-f-]{36} was not consumed within 1 seconds/);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+});
+
 describe("current", () => {
   it("prints the metadata of the pi pane the client displays", async () => {
     const fixture = new SessionFixture();
@@ -2437,6 +2605,73 @@ describe("new with a cwd option", () => {
       await fixture.cleanup();
     }
   }, 20_000);
+});
+
+describe("send parsing", () => {
+  it("parses the target and the joined text without a wait", () => {
+    assert.deepEqual(parseOperation(["send", "abc123", "hello"]), {
+      kind: "send",
+      id: "abc123",
+      waitSeconds: undefined,
+      text: "hello",
+    });
+    assert.deepEqual(parseOperation(["send", "abc123", "two", "words"]), {
+      kind: "send",
+      id: "abc123",
+      waitSeconds: undefined,
+      text: "two words",
+    });
+  });
+
+  it("parses a single leading --wait with positive integer seconds", () => {
+    assert.deepEqual(parseOperation(["send", "--wait", "5", "abc123", "hello"]), {
+      kind: "send",
+      id: "abc123",
+      waitSeconds: 5,
+      text: "hello",
+    });
+    assert.deepEqual(parseOperation(["send", "abc123", "--wait", "not-a-flag"]), {
+      kind: "send",
+      id: "abc123",
+      waitSeconds: undefined,
+      text: "--wait not-a-flag",
+    });
+    for (const args of [["0"], ["-1"], ["1.5"], ["x"]])
+      assert.throws(
+        () => parseOperation(["send", "--wait", ...args, "abc123", "hello"]),
+        /usage/,
+        `args: ${JSON.stringify(args)}`,
+      );
+  });
+
+  it("shows help for send -h and keeps option-like text otherwise", () => {
+    assert.deepEqual(parseOperation(["send", "-h"]), { kind: "help" });
+    assert.deepEqual(parseOperation(["send", "--help"]), { kind: "help" });
+    assert.deepEqual(parseOperation(["send", "abc123", "-h"]), {
+      kind: "send",
+      id: "abc123",
+      waitSeconds: undefined,
+      text: "-h",
+    });
+  });
+
+  it("rejects blank text, NUL, and oversized text", () => {
+    for (const args of [[""], ["  "], ["a\0b"]])
+      assert.throws(
+        () => parseOperation(["send", "abc123", ...args]),
+        /usage/,
+        `args: ${JSON.stringify(args)}`,
+      );
+    assert.equal([..."x".repeat(2800)].length, 2800);
+    assert.deepEqual(parseOperation(["send", "abc123", "x".repeat(2800)]), {
+      kind: "send",
+      id: "abc123",
+      waitSeconds: undefined,
+      text: "x".repeat(2800),
+    });
+    assert.throws(() => parseOperation(["send", "abc123", "x".repeat(2801)]), /limit is 2800/);
+    assert.throws(() => parseOperation(["send", "abc123", "あ".repeat(2801)]), /limit is 2800/);
+  });
 });
 
 describe("restart", () => {
