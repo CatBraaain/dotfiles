@@ -724,6 +724,8 @@ describe("ticket stats", () => {
       ["alpha  ", "    1", "   2", "      3", "     4", "     5", "        6"],
       ["empty  ", "    0", "   0", "      0", "     0", "     0", "        0"],
       ["zeta   ", "    2", "   4", "      6", "     8", "    10", "       12"],
+      ["───────", "─────", "────", "───────", "──────", "──────", "─────────"],
+      ["total  ", "    3", "   6", "      9", "    12", "    15", "       18"],
     ].map((cells) => cells.join("  "));
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.stdout, `${expectedRows.join("\n")}\n`);
@@ -758,6 +760,16 @@ describe("ticket stats", () => {
           "dotfiles" + " ".repeat(columnWidth - 8),
           project + " ".repeat(columnWidth - displayWidth),
         ].map((cell) => [cell, "    0", "   1", "      0", "     0", "     0", "        0"]),
+        ["─".repeat(columnWidth), "─────", "────", "───────", "──────", "──────", "─────────"],
+        [
+          "total" + " ".repeat(columnWidth - 5),
+          "    0",
+          "   3",
+          "      0",
+          "     0",
+          "     0",
+          "        0",
+        ],
       ].map((cells) => cells.join("  "));
       assert.equal(result.code, 0, result.stderr);
       assert.equal(result.stdout, `${expectedRows.join("\n")}\n`);
@@ -790,6 +802,8 @@ describe("ticket stats", () => {
     const expectedRows = [
       ["project", "draft", " open", "blocked", "locked", "closed", "cancelled"],
       ["large  ", "    0", "10000", "      0", "     0", "     0", "        0"],
+      ["───────", "─────", "─────", "───────", "──────", "──────", "─────────"],
+      ["total  ", "    0", "10000", "      0", "     0", "     0", "        0"],
     ].map((cells) => cells.join("  "));
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.stdout, `${expectedRows.join("\n")}\n`);

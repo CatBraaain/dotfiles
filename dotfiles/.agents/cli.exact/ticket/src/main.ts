@@ -502,14 +502,19 @@ async function statsCommand(positional: string[], flags: Flags): Promise<void> {
   if (flags.json) return output(rows);
   if (rows.length === 0) return console.log("no tickets");
   const headers = ["project", ...STATUSES];
+  const totals = STATUSES.map((status) => rows.reduce((sum, row) => sum + row[status], 0));
   const table = [
     headers,
     ...rows.map((row) => [row.project, ...STATUSES.map((status) => String(row[status]))]),
+    ["total", ...totals.map(String)],
   ];
   const widths = headers.map((_, column) =>
     table.reduce((width, cells) => Math.max(width, Bun.stringWidth(cells[column]!)), 0),
   );
-  for (const cells of table) {
+  for (const [index, cells] of table.entries()) {
+    if (index === table.length - 1) {
+      console.log(widths.map((width) => "─".repeat(width)).join("  "));
+    }
     const line = cells
       .map((cell, column) => {
         const padding = " ".repeat(widths[column]! - Bun.stringWidth(cell));

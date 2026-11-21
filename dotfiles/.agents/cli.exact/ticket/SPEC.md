@@ -52,12 +52,12 @@
 
 全project の ticket を、project別・status別に集計する。project名の辞書順に出力し、status は `draft`、`open`、`blocked`、`locked`、`closed`、`cancelled` の順とする。ticket がないproject も各件数を0として出す。
 
-テキスト出力は先頭行を列見出し、以降を1 project 1行とする。先頭列の見出しは `project`、件数列の見出しは各status名である。列間は半角スペース2個とし、各列を次の規則で整列する。幅は文字数ではなく端末上の表示幅で求め、日本語の全角文字は半角文字2個分として扱う。
+テキスト出力は先頭行を列見出し、以降を1 project 1行とし、全project行の後に区切り行、さらに total 行を続ける。total 行は先頭列に `total`、各status列に全projectのそのstatusの件数の合計を出す。区切り行は total 行の直前に出し、各列にその列の表示幅と同数の `─` を出す。先頭列の見出しは `project`、件数列の見出しは各status名である。列間は半角スペース2個とし、各列を次の規則で整列する。幅は文字数ではなく端末上の表示幅で求め、日本語の全角文字は半角文字2個分として扱う。
 
 | 列 | 幅 | 揃え |
 | --- | --- | --- |
-| project名 | 見出しと全project名の最大表示幅 | 見出し・名前とも左揃え |
-| 各statusの件数 | 見出しと全projectの件数の十進表記の最大表示幅 | 見出し・件数とも右揃え |
+| project名・total | 見出し、全project名、`total`の最大表示幅 | 見出し・名前とも左揃え |
+| 各statusの件数 | 見出し、全projectの件数の十進表記、total行の合計の十進表記の最大表示幅 | 見出し・件数とも右揃え |
 
 JSON は `project` と各status名をkeyとする件数を持つオブジェクトの配列である。project が0件なら、テキストは `no tickets`、JSON は空配列を返す。ストアルートの不存在と不正なticket は終了コード1とし、部分的な集計結果を返さない。
 
