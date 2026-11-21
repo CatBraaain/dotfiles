@@ -6,5 +6,7 @@
   "app.model.cycleBackward": [],
   "app.thinking.cycle": [],
   "tui.altScreen.top": [],
-  "tui.altScreen.bottom": []
+  "tui.altScreen.bottom": [],
+  "tui.altScreen.previousPrompt": ["alt+up", "ctrl+shift+up"],
+  "tui.altScreen.nextPrompt": ["alt+down", "ctrl+shift+down"]
 }

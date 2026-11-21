@@ -30,7 +30,8 @@
 | --- | --- | --- |
 | 入力エディタが入力を受け付ける状態 | `ctrl+up` を押す | `/back` を実行した場合と同じ結果になる。連打すると 1押下 = 1発言ずつ順に遡る |
 | 同上 | `ctrl+down` を押す | `/forward` を実行した場合と同じ結果になる |
-| fullscreen の transcript 表示 | `ctrl+up` / `ctrl+down` を押す | 本拡張は動かず、組み込みの発言ジャンプ(`tui.altScreen.previousPrompt` / `tui.altScreen.nextPrompt`)が優先される |
+| fullscreen の transcript 表示 | `ctrl+up` / `ctrl+down` を押す | 本拡張は動かない。transcript 側にこのキーの割り当てはないため、表示は変化しない |
+| fullscreen の transcript 表示 | `alt+up` / `alt+down` を押す | 組み込みの発言ジャンプ(`tui.altScreen.previousPrompt` / `tui.altScreen.nextPrompt`)が動く。本拡張のショートカットではない |
 
 ## エディタの復元
 
