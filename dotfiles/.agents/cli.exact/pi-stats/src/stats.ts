@@ -4,6 +4,8 @@ export interface SessionEntry {
   type?: unknown;
   timestamp?: unknown;
   message?: unknown;
+  version?: unknown;
+  cwd?: unknown;
 }
 
 export interface AssistantCandidate {
@@ -167,7 +169,10 @@ export function aggregate(
       hitRatesByKey.set(key, buckets);
       pairCountByKey.set(key, 0);
     }
-    buckets[bisectRight(binEdgesMin, pair.gapMinutes)].push(pair.hitRate);
+    const bucketIndex = bisectRight(binEdgesMin, pair.gapMinutes);
+    const bucket = buckets[bucketIndex];
+    if (bucket === undefined) throw new Error(`no bucket at index ${bucketIndex}`);
+    bucket.push(pair.hitRate);
     pairCountByKey.set(key, (pairCountByKey.get(key) ?? 0) + 1);
   }
   return { hitRatesByKey, pairCountByKey };
@@ -216,10 +221,13 @@ export function keysByCountDesc(pairCountByKey: ReadonlyMap<string, number>): st
 export function parseBinEdgesMin(raw: string | undefined): number[] {
   if (raw === undefined) return [...DEFAULT_BIN_EDGES_MIN];
   const edges = raw.split(",").map((part) => Number(part));
-  const hasNonPositiveEdge = edges.some((edge) => !(edge > 0));
-  const isNonAscending = edges.some((edge, index) => index > 0 && edge <= edges[index - 1]);
-  if (hasNonPositiveEdge || isNonAscending)
-    throw new Error(`--bins must be positive and ascending: ${raw}`);
+  let previousEdge = 0;
+  for (const edge of edges) {
+    if (!(edge > previousEdge)) {
+      throw new Error(`--bins must be positive and ascending: ${raw}`);
+    }
+    previousEdge = edge;
+  }
   return edges;
 }
 
@@ -235,7 +243,8 @@ function bisectRight(sortedValues: readonly number[], value: number): number {
   let high = sortedValues.length;
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    if (value < sortedValues[middle]) high = middle;
+    const middleValue = sortedValues[middle];
+    if (middleValue === undefined || value < middleValue) high = middle;
     else low = middle + 1;
   }
   return low;

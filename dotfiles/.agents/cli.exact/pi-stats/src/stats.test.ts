@@ -35,9 +35,9 @@ describe("collectSessionPairs", () => {
     ];
     const { pairs, compactionSkips } = collectSessionPairs(entries, "session-a", undefined);
     assert.equal(pairs.length, 1);
-    assert.equal(pairs[0].gapMinutes, 2);
-    assert.equal(pairs[0].hitRate, 0.7);
-    assert.equal(pairs[0].session, "session-a");
+    assert.equal(pairs[0]?.gapMinutes, 2);
+    assert.equal(pairs[0]?.hitRate, 0.7);
+    assert.equal(pairs[0]?.session, "session-a");
     assert.equal(compactionSkips, 0);
   });
 
@@ -95,7 +95,7 @@ describe("collectSessionPairs", () => {
     ];
     const { pairs } = collectSessionPairs(entries, "s", "zai");
     assert.equal(pairs.length, 1);
-    assert.equal(pairs[0].gapMinutes, 4);
+    assert.equal(pairs[0]?.gapMinutes, 4);
   });
 
   it("counts a same-model pair split by compaction as skipped", () => {
@@ -147,7 +147,7 @@ describe("collectSessionPairs", () => {
     ];
     const { pairs } = collectSessionPairs(entries, "s", undefined);
     assert.equal(pairs.length, 1);
-    assert.equal(pairs[0].gapMinutes, 10);
+    assert.equal(pairs[0]?.gapMinutes, 10);
   });
 
   it("excludes pairs whose gap is negative", () => {
@@ -218,7 +218,7 @@ describe("collectSessionPairs", () => {
     ];
     const { pairs } = collectSessionPairs(entries, "s", undefined);
     assert.equal(pairs.length, 1);
-    assert.equal(pairs[0].gapMinutes, 2);
+    assert.equal(pairs[0]?.gapMinutes, 2);
   });
 });
 

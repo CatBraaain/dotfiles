@@ -1,0 +1,8 @@
+{
+  "name": "pi-stats-cli",
+  "private": true,
+  "main": "./src/main.ts",
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
