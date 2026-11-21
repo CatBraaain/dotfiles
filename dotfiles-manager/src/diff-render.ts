@@ -383,7 +383,15 @@ function pairBody(oldContent: LeafContent | null, newContent: LeafContent | null
   if (containsNul(oldContent) || containsNul(newContent)) {
     return [...modeBody, binaryNotice(oldContent, newContent)];
   }
-  return [...modeBody, ...textDiffLines(oldContent, newContent)];
+  return truncateBodyLines([...modeBody, ...textDiffLines(oldContent, newContent)]);
+}
+
+const MAX_BODY_LINES = 100;
+
+function truncateBodyLines(body: string[]): string[] {
+  if (body.length <= MAX_BODY_LINES) return body;
+  const omitted = body.length - MAX_BODY_LINES;
+  return [...body.slice(0, MAX_BODY_LINES), `… ${omitted} more lines omitted`];
 }
 
 function pairContentDiffers(
@@ -794,6 +802,7 @@ function renderHeading(label: string, paths: string[]): string {
 function colorizeBodyLine(line: string, tty: boolean): string {
   if (!tty) return line;
   if (line.startsWith("@@")) return gray(line);
+  if (line.startsWith("… ")) return gray(line);
   if (line.startsWith("+")) return green(line);
   if (line.startsWith("-")) return red(line);
   return line;

@@ -1661,4 +1661,22 @@ describe("diff display contract", () => {
     assert.match(stdout, /^-old-target$/m);
     assert.equal(stdout.includes(root), false);
   });
+
+  it("omits Added body lines beyond the display limit and reports the omitted count", async () => {
+    const text = `${Array.from({ length: 200 }, (_, index) => `line-${index + 1}`).join("\n")}\n`;
+    await put(distRoot, "big.txt", text);
+    const { stdout, stderr, exitCode, gitTrace } = await runGitOnlyDiff();
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr, "");
+    assert.equal(gitTrace, "");
+    const heading = "Added: big.txt";
+    const fence = "─".repeat(heading.length);
+    const shown = Array.from({ length: 99 }, (_, index) => `+line-${index + 1}`);
+    assert.equal(
+      stdout,
+      `${fence}\n${heading}\n${fence}\n\n` +
+        `@@ -0,0 +1,200 @@\n${shown.join("\n")}\n… 101 more lines omitted\n`,
+    );
+  });
 });
