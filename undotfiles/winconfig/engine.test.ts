@@ -300,8 +300,9 @@ Actions:
 });
 
 describe("PowerShell quoting", () => {
-  it("escapes a wildcard asterisk with a literal backtick in registry paths", () => {
-    assert.equal(psQuotedRegistryPath("HKCR\\*\\shell"), '"Registry::HKCR\\``*\\shell"');
+  it("keeps wildcard characters literal in registry paths", () => {
+    assert.equal(psQuotedRegistryPath("HKCR\\*\\shell"), '"Registry::HKCR\\*\\shell"');
+    assert.equal(psQuotedRegistryPath("HKCU\\a?b[1]"), '"Registry::HKCU\\a?b[1]"');
   });
 
   it("doubles literal backticks in registry paths", () => {
@@ -476,6 +477,24 @@ describe("repository config", () => {
         candidate.groupName === "FileExplorer" && candidate.name === "EnableRestoreLastSession",
     );
     assert.equal(task?.mode, "apply");
+  });
+
+  it("emits existing asterisk paths unescaped as literal targets", () => {
+    const script = generateScript(selection.runnables);
+    assert.ok(script.includes('"Registry::HKCR\\*\\shell\\pintohomefile"'));
+    assert.ok(script.includes('"Registry::HKCR\\*\\shell\\VSCode"'));
+    assert.ok(script.includes('"Registry::HKCU\\Software\\Classes\\*\\shell\\ShareX"'));
+    assert.ok(!script.includes("``*"));
+  });
+
+  it("resolves and creates registry paths without wildcard interpretation", () => {
+    const script = generateScript(selection.runnables);
+    assert.ok(script.includes("Test-Path -LiteralPath $Path"));
+    assert.ok(script.includes("Remove-Item -LiteralPath $Path"));
+    assert.ok(script.includes("Set-ItemProperty -LiteralPath $Path"));
+    assert.ok(script.includes("Remove-ItemProperty -LiteralPath $Path"));
+    assert.ok(script.includes("New-Item -Path $Path"));
+    assert.ok(!script.includes("Replace('`*', '*')"));
   });
 });
 

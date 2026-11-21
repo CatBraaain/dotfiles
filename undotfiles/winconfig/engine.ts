@@ -299,7 +299,7 @@ export function psDoubleQuoted(value: string): string {
 }
 
 export function psQuotedRegistryPath(path: string): string {
-  const escaped = path.replaceAll("`", "``").replaceAll("*", "``*");
+  const escaped = path.replaceAll("`", "``");
   return `"Registry::${escaped}"`;
 }
 
@@ -466,11 +466,11 @@ function New-RegistryPath {
     param([string] $Path)
     if ($script:WinconfigTask.failed) { return }
     try {
-        if (Test-Path -Path $Path) {
+        if (Test-Path -LiteralPath $Path) {
             Add-WinconfigSuccess 'key already present'
             return
         }
-        New-Item -Path ($Path.Replace('\`*', '*')) -Force -ErrorAction Stop | Out-Null
+        New-Item -Path $Path -Force -ErrorAction Stop | Out-Null
         Add-WinconfigSuccess 'key created'
     } catch {
         Add-WinconfigFailure (Get-WinconfigFailureReason $_)
@@ -481,11 +481,11 @@ function Remove-RegistryPath {
     param([string] $Path)
     if ($script:WinconfigTask.failed) { return }
     try {
-        if (-not (Test-Path -Path $Path)) {
+        if (-not (Test-Path -LiteralPath $Path)) {
             Add-WinconfigSuccess 'already absent'
             return
         }
-        Remove-Item -Path $Path -Force -Recurse -ErrorAction Stop | Out-Null
+        Remove-Item -LiteralPath $Path -Force -Recurse -ErrorAction Stop | Out-Null
         Add-WinconfigSuccess 'key removed'
     } catch {
         Add-WinconfigFailure (Get-WinconfigFailureReason $_)
@@ -504,7 +504,7 @@ function Set-RegistryEntry {
         if ($Type -eq "Binary") {
             $Value = "$Value".Split(" ") | ForEach-Object { [byte]$_ }
         }
-        Set-ItemProperty -Path $Path -Name $Name -Type $Type -Value $Value -Force -ErrorAction Stop | Out-Null
+        Set-ItemProperty -LiteralPath $Path -Name $Name -Type $Type -Value $Value -Force -ErrorAction Stop | Out-Null
         Add-WinconfigSuccess 'value set'
     } catch [System.Management.Automation.ItemNotFoundException], [System.Management.Automation.PSArgumentException] {
         Add-WinconfigFailure "target not found: registry value $Path $Name"
@@ -520,7 +520,7 @@ function Remove-RegistryEntry {
     )
     if ($script:WinconfigTask.failed) { return }
     try {
-        Remove-ItemProperty -Path $Path -Name $Name -Force -ErrorAction Stop | Out-Null
+        Remove-ItemProperty -LiteralPath $Path -Name $Name -Force -ErrorAction Stop | Out-Null
         Add-WinconfigSuccess 'value removed'
     } catch [System.Management.Automation.ItemNotFoundException], [System.Management.Automation.PSArgumentException] {
         Add-WinconfigSuccess 'already absent'
