@@ -3,6 +3,7 @@
 // Consumes the classification produced by diff.ts, writes the home tree,
 // and runs apply scripts. The build stage (dist generation) is a separate
 // stage and not part of this file.
+import { existsSync } from "node:fs";
 import * as fsPromises from "node:fs/promises";
 const { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm, symlink } = fsPromises;
 import { dirname, join, resolve } from "node:path";
@@ -190,18 +191,7 @@ async function executePrepared(
   const errors: string[] = [];
   writeLine(`  [${script.distPath}] Started`);
   try {
-    await spawnChild(
-      [process.execPath, resolve(entry.snapshotPath!)],
-      entry.cwd,
-      {
-        ...process.env,
-        DOTFILES_DIST_DIR: resolve(distRoot),
-        DOTFILES_HOME_ROOT: resolve(homeRoot),
-        DOTFILES_MANAGER_SRC: import.meta.dir,
-      },
-      label,
-      script.distPath,
-    );
+    await spawnCollectedScript(entry, distRoot, homeRoot, label);
   } catch (error) {
     errors.push(messageOf(error));
   } finally {
@@ -222,6 +212,59 @@ async function executePrepared(
   if (errors.length === 0) return null;
   const diagnostic = errors.join("; ");
   return diagnostic.startsWith(label) ? diagnostic : `${label}: ${diagnostic}`;
+}
+
+// Runs a collected script from its snapshot in the original dist folder. A
+// concurrently running script may delete or move the snapshot before the
+// child process opens it; restore the snapshot from the collected contents
+// before spawning and once more after a failed spawn without it, so the
+// script still runs (SPEC.md §applyスクリプト).
+async function spawnCollectedScript(
+  entry: PreparedScript,
+  distRoot: string,
+  homeRoot: string,
+  label: string,
+): Promise<void> {
+  await restoreSnapshot(entry, distRoot);
+  try {
+    await spawnSnapshotProcess(entry, distRoot, homeRoot, label);
+    return;
+  } catch (error) {
+    if (existsSync(entry.snapshotPath!)) throw error;
+  }
+  await restoreSnapshot(entry, distRoot);
+  await spawnSnapshotProcess(entry, distRoot, homeRoot, label);
+}
+
+async function spawnSnapshotProcess(
+  entry: PreparedScript,
+  distRoot: string,
+  homeRoot: string,
+  label: string,
+): Promise<void> {
+  await spawnChild(
+    [process.execPath, resolve(entry.snapshotPath!)],
+    entry.cwd,
+    {
+      ...process.env,
+      DOTFILES_DIST_DIR: resolve(distRoot),
+      DOTFILES_HOME_ROOT: resolve(homeRoot),
+      DOTFILES_MANAGER_SRC: import.meta.dir,
+    },
+    label,
+    entry.script.distPath,
+  );
+}
+
+async function restoreSnapshot(entry: PreparedScript, distRoot: string): Promise<void> {
+  if (existsSync(entry.snapshotPath!)) return;
+  const scriptDirectory = dirname(join(distRoot, entry.script.distPath));
+  entry.createdDirectories.push(...(await ensureHookDirectory(scriptDirectory, distRoot)));
+  entry.snapshotPath = await writeHookSnapshot(
+    scriptDirectory,
+    entry.script.fileName,
+    entry.script.contents,
+  );
 }
 
 export function parseArgs(argv: readonly string[]): {
@@ -419,7 +462,9 @@ async function walkDeclarations(
   for (const entry of entries) {
     if (!entry.isDirectory() || mapSegment(entry.name, true).isExcluded) continue;
     const childRel = dirRel === "" ? entry.name : `${dirRel}/${entry.name}`;
-    postScripts.push(...(await walkDeclarations(join(dirAbs, entry.name), childRel, out, platform)));
+    postScripts.push(
+      ...(await walkDeclarations(join(dirAbs, entry.name), childRel, out, platform)),
+    );
   }
   for (const entry of entries) {
     if (!entry.isFile() || !isApplyScriptName(entry.name)) continue;

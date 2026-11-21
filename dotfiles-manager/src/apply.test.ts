@@ -502,6 +502,29 @@ describe("apply scripts", () => {
     assert.equal(existsSync(join(distRoot, "pkg/sub")), false);
   });
 
+  it("runs a collected post script after a normal script removes its directory", async () => {
+    const orderFile = join(root, "apply-order.txt");
+    await putApplyScript(
+      distRoot,
+      "a-remove.apply.ts",
+      `import { appendFile, rm } from "node:fs/promises";\nawait rm(${JSON.stringify(join(distRoot, "pkg/sub"))}, { recursive: true, force: true });\nawait appendFile(${JSON.stringify(orderFile)}, "remove\\n");`,
+    );
+    await putApplyScript(
+      distRoot,
+      "pkg/sub/z-late.postapply.ts",
+      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(orderFile)}, "collected\\n");`,
+    );
+    const declarations = await collectDeclarations(distRoot);
+
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    assert.deepEqual(failures, []);
+    assert.deepEqual((await readFile(orderFile, "utf8")).trim().split("\n").sort(), [
+      "collected",
+      "remove",
+    ]);
+  });
+
   it("removes a script snapshot after its hook moves its directory", async () => {
     const sourceDirectory = join(distRoot, "self");
     const movedDirectory = join(distRoot, "moved");
