@@ -98,6 +98,34 @@ int main(void) {
     assert(g_line_count == before_unnamed + 1);
     assert(strcmp(g_lines[g_line_count - 1], "  - input: kyouhashoukou{RIGHT}{RIGHT}{LEFT}{LEFT}") == 0);
     free_lines();
+
+    long event_values[] = {5, 1, 10, 2, 3};
+    long max_us = 0;
+    long p95_us = 0;
+    event_stats(event_values, 5, &max_us, &p95_us);
+    assert(max_us == 10 && p95_us == 10);
+    long ranks[20];
+    for (int i = 0; i < 20; ++i) ranks[i] = i + 1;
+    event_stats(ranks, 20, &max_us, &p95_us);
+    assert(max_us == 20 && p95_us == 19);
+    event_stats(NULL, 0, &max_us, &p95_us);
+    assert(max_us == 0 && p95_us == 0);
+
+    struct BaselineTiming timing_row;
+    assert(parse_timing_row("scenario 123 4500 700", &timing_row));
+    assert(strcmp(timing_row.name, "scenario") == 0);
+    assert(timing_row.wall_ms == 123);
+    assert(timing_row.has_events);
+    assert(timing_row.max_event_us == 4500 && timing_row.p95_event_us == 700);
+    assert(parse_timing_row("scenario 123", &timing_row));
+    assert(!timing_row.has_events);
+    assert(parse_timing_row("_deploy 42000", &timing_row));
+    assert(strcmp(timing_row.name, "_deploy") == 0 && timing_row.wall_ms == 42000);
+    assert(!parse_timing_row("scenario", &timing_row));
+    assert(!parse_timing_row("", &timing_row));
+    assert(!parse_timing_row("scenario 100 200", &timing_row));
+    assert(!parse_timing_row("scenario 100 200 300 junk", &timing_row));
+
     puts("snapshot format tests passed");
     return 0;
 }

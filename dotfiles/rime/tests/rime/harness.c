@@ -21,9 +21,13 @@
  * rewrites the listed scenarios, --update=all records every scenario.
  * Snapshot files are YAML tables: one row per input and key prefix, with the
  * observed state as fields. The harness compares files line by line.
- * Scenario timings always go to
- * _timings.txt for every scenario and a run fails when a scenario takes
- * significantly longer than its recorded baseline.
+ * Every run also records latency into _timings.txt: one
+ * `name wall_ms max_event_us p95_event_us` row per scenario and a
+ * `_deploy wall_ms` row for the initial deployment. A run fails when a metric
+ * significantly exceeds its recorded baseline, or when any single keystroke
+ * exceeds the absolute ceiling. --update=<names> merges only the named
+ * scenario rows into the baseline; --update and --update=all rewrite every
+ * row.
  */
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
@@ -377,8 +381,32 @@ static void check(Bool condition, const char* description) {
     }
 }
 
+/* ---- keystroke timing ---- */
+static long* g_event_us = NULL;
+static size_t g_event_count = 0;
+static size_t g_event_capacity = 0;
+
+static Bool timed_process_key(int keycode, int modifier) {
+    struct timespec start, end;
+    timespec_get(&start, TIME_UTC);
+    Bool consumed = rime->process_key(session, keycode, modifier);
+    timespec_get(&end, TIME_UTC);
+    long us = (end.tv_sec - start.tv_sec) * 1000000L +
+              (end.tv_nsec - start.tv_nsec) / 1000L;
+    if (g_event_count == g_event_capacity) {
+        g_event_capacity = g_event_capacity ? g_event_capacity * 2 : 1024;
+        g_event_us = realloc(g_event_us, g_event_capacity * sizeof(long));
+        if (!g_event_us) {
+            fprintf(stderr, "FAIL: out of memory\n");
+            exit(2);
+        }
+    }
+    g_event_us[g_event_count++] = us;
+    return consumed;
+}
+
 static void process_key_silent(int keycode, int modifier) {
-    rime->process_key(session, keycode, modifier);
+    timed_process_key(keycode, modifier);
 }
 
 static void press_named(int keycode, const char* name) {
@@ -936,19 +964,19 @@ static void test_zenkaku_hankaku_toggles_ascii(void) {
         press_modifier(kZenkakuHankaku, ignored_toggles[i].modifier);
         check(option("ascii_mode"), ignored_toggles[i].description);
     }
-    check(!rime->process_key(session, kMuhenkan, 0),
+    check(!timed_process_key(kMuhenkan, 0),
           "Muhenkan in IME OFF must pass through to the frontend");
     check(option("ascii_mode"), "Muhenkan in IME OFF must keep IME OFF");
     const char* off_text = "a1. ";
     for (const char* p = off_text; *p; ++p) {
-        check(!rime->process_key(session, *p, 0),
+        check(!timed_process_key(*p, 0),
               "ordinary text in IME OFF must pass through to the frontend");
         check(option("ascii_mode"), "ordinary text must keep IME OFF");
     }
     char commit[256];
     check(!composing(), "other key events in IME OFF must not create a composition");
     check(!take_commit(commit, sizeof(commit)), "other key events in IME OFF must not commit");
-    check(rime->process_key(session, kZenkakuHankaku, 0),
+    check(timed_process_key(kZenkakuHankaku, 0),
           "a second idle Zenkaku_Hankaku must be handled");
     check(!option("ascii_mode"), "a second idle Zenkaku_Hankaku must restore Japanese input");
     check(!option("_kagiroi_ascii_input"), "the idle round trip must not enter the ascii input mode");
@@ -1050,7 +1078,7 @@ static void test_kana_muhenkan_one_way_switches(void) {
     check(option("ascii_mode"), "idle Muhenkan must switch IME OFF");
     check(!option("_kagiroi_ascii_input"),
           "idle Muhenkan must not enter the ascii input mode");
-    check(rime->process_key(session, kZenkakuHankaku, 0),
+    check(timed_process_key(kZenkakuHankaku, 0),
           "Zenkaku_Hankaku must handle the return from Muhenkan's IME OFF");
     check(!option("ascii_mode"), "Zenkaku_Hankaku must restore Japanese input after idle Muhenkan");
 
@@ -1750,7 +1778,7 @@ static void test_tab_expands_candidates(void) {
     press(kSpace);
     press(kTab);
     check(!option("_kagiroi_expand_candidates"), "Tab after the first Space must not expand");
-    rime->process_key(session, kTab, 1);
+    timed_process_key(kTab, 1);
     check(!option("_kagiroi_expand_candidates"), "Shift+Tab before the reveal must do nothing");
     press(kSpace);
     RIME_STRUCT(RimeContext, context);
@@ -1762,7 +1790,7 @@ static void test_tab_expands_candidates(void) {
     check(context.menu.highlighted_candidate_index == 1,
           "the reveal must select the second candidate before Tab");
     rime->free_context(&context);
-    rime->process_key(session, kTab, 1);
+    timed_process_key(kTab, 1);
     check(!option("_kagiroi_expand_candidates"), "Shift+Tab before the expand must do nothing");
     if (!current_menu(&context)) {
         check(False, "the menu must survive the pre-expand Shift+Tab");
@@ -1793,7 +1821,7 @@ static void test_tab_expands_candidates(void) {
     check(context.menu.num_candidates > 0 && context.menu.num_candidates <= 30,
           "the second Tab must keep the expansion");
     rime->free_context(&context);
-    rime->process_key(session, kTab, 1);
+    timed_process_key(kTab, 1);
     if (!current_menu(&context)) {
         check(False, "the menu must survive Shift+Tab");
         return;
@@ -1802,7 +1830,7 @@ static void test_tab_expands_candidates(void) {
     check(context.menu.highlighted_candidate_index == 1,
           "Shift+Tab must keep the selection while collapsing");
     rime->free_context(&context);
-    rime->process_key(session, kTab, 1);
+    timed_process_key(kTab, 1);
     if (!current_menu(&context)) {
         check(False, "the menu must survive the collapsed Shift+Tab");
         return;
@@ -2382,7 +2410,7 @@ static void test_ascii_mode_passes_half_width_keys(void) {
     const int keys[] = {'a', '1', '$', kSpace, kKeypad1, kKeypadDecimal,
                         0xffaa, 0xffab, 0xffad, 0xffaf, 0xffbd};
     for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
-        check(rime->process_key(session, keys[i], 0),
+        check(timed_process_key(keys[i], 0),
               "the ascii input mode must consume half-width typing");
         char commit[256];
         check(!take_commit(commit, sizeof(commit)),
@@ -3500,7 +3528,7 @@ static void test_listed_shortcuts_pass_through(void) {
             int before_page = before.menu.page_no;
             int before_highlight = before.menu.highlighted_candidate_index;
             rime->free_context(&before);
-            Bool consumed = rime->process_key(session, shortcuts[i].key, shortcuts[i].modifier);
+            Bool consumed = timed_process_key(shortcuts[i].key, shortcuts[i].modifier);
             char description[160];
             snprintf(description, sizeof(description),
                      "%s in state %d must pass through unconsumed", shortcuts[i].name, state);
@@ -3531,7 +3559,7 @@ static void test_listed_shortcuts_pass_through(void) {
      * schema patch; only the listed Control+q was removed. */
     fresh_session();
     type_text("kyou");
-    check(rime->process_key(session, 'u', 4),
+    check(timed_process_key('u', 4),
           "the unlisted Control+u switch must remain bound by the stock schema");
     check(option("hiragana"), "Control+u must still set the hiragana option");
 }
@@ -5208,11 +5236,89 @@ static void on_message(void* context_object, RimeSessionId session_id, const cha
 struct ScenarioTiming {
     const char* name;
     long ms;
+    size_t events;
+    long max_event_us;
+    long p95_event_us;
 };
 
 /* Scenarios faster than this are too noisy for the relative threshold. */
 static const long kPerfNoiseFloorMs = 10;
 static const double kPerfRegressionFactor = 5.0;
+/* Keystroke guards apply only when the sample is big and slow enough to be
+   stable: scheduler spikes would otherwise fail light scenarios at random. */
+static const size_t kEventP95MinEvents = 50;
+static const long kEventP95FloorUs = 5000;
+static const double kEventP95Factor = 3.0;
+static const long kEventMaxFloorUs = 100000;
+static const double kEventMaxFactor = 5.0;
+/* Any single keystroke slower than this fails regardless of the baseline. */
+static const long kEventAbsoluteCeilingUs = 10000000;
+/* The deployment is measured once per run and compared like the other metrics. */
+static const long kDeployNoiseFloorMs = 10000;
+static const double kDeployRegressionFactor = 3.0;
+static long g_deploy_ms = 0;
+
+static int compare_long(const void* left, const void* right) {
+    long a = *(const long*)left;
+    long b = *(const long*)right;
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/* Nearest-rank p95 and maximum over values[0..count). */
+static void event_stats(const long* values, size_t count, long* max_us, long* p95_us) {
+    *max_us = 0;
+    *p95_us = 0;
+    if (count == 0) return;
+    long worst = values[0];
+    for (size_t i = 1; i < count; ++i) {
+        if (values[i] > worst) worst = values[i];
+    }
+    *max_us = worst;
+    long* sorted = malloc(count * sizeof(long));
+    if (!sorted) {
+        fprintf(stderr, "FAIL: out of memory\n");
+        exit(2);
+    }
+    memcpy(sorted, values, count * sizeof(long));
+    qsort(sorted, count, sizeof(long), &compare_long);
+    size_t rank = (count * 95 + 99) / 100;
+    if (rank == 0) rank = 1;
+    *p95_us = sorted[rank - 1];
+    free(sorted);
+}
+
+struct BaselineTiming {
+    char name[128];
+    long wall_ms;
+    long max_event_us;
+    long p95_event_us;
+    int has_events;
+};
+
+/* Parses `name wall_ms [max_event_us p95_event_us]`; returns 0 on a bad row. */
+static int parse_timing_row(const char* line, struct BaselineTiming* row) {
+    memset(row, 0, sizeof(*row));
+    const char* space = strchr(line, ' ');
+    if (!space) return 0;
+    size_t name_length = (size_t)(space - line);
+    if (name_length == 0 || name_length >= sizeof(row->name)) return 0;
+    memcpy(row->name, line, name_length);
+    row->name[name_length] = '\0';
+    char* end = NULL;
+    row->wall_ms = strtol(space + 1, &end, 10);
+    if (end == space + 1 || (*end != '\0' && *end != ' ')) return 0;
+    const char* cursor = end;
+    if (*cursor == '\0') return 1;
+    while (*cursor == ' ') ++cursor;
+    row->max_event_us = strtol(cursor, &end, 10);
+    if (end == cursor || *end != ' ') return 0;
+    cursor = end;
+    while (*cursor == ' ') ++cursor;
+    row->p95_event_us = strtol(cursor, &end, 10);
+    if (end == cursor || *end != '\0') return 0;
+    row->has_events = 1;
+    return 1;
+}
 
 static long now_ms(void) {
     struct timespec ts;
@@ -5425,10 +5531,12 @@ int main(int argc, char* argv[]) {
     rime->setup(&traits);
     rime->set_notification_handler(&on_message, NULL);
     rime->initialize(NULL);
+    long deploy_started = now_ms();
     if (!rime->start_maintenance(True)) {
         fprintf(stderr, "FAIL: maintenance did not run\n");
     }
     rime->join_maintenance_thread();
+    g_deploy_ms = now_ms() - deploy_started;
 
     static const struct {
         const char* name;
@@ -5529,10 +5637,23 @@ int main(int argc, char* argv[]) {
             fprintf(stderr, "scenario %zu/%zu %s\n", i + 1, test_count, tests[i].name);
         size_t start = g_line_count;
         begin_scenario(tests[i].name);
+        g_event_count = 0;
         long t0 = now_ms();
         tests[i].fn();
         timings[i].name = tests[i].name;
         timings[i].ms = now_ms() - t0;
+        timings[i].events = g_event_count;
+        event_stats(g_event_us, g_event_count, &timings[i].max_event_us,
+                    &timings[i].p95_event_us);
+        if (timings[i].max_event_us > kEventAbsoluteCeilingUs) {
+            ++g_failures;
+            fprintf(stderr, "PERF: %s keystroke took %ldus (absolute ceiling %ldus)\n",
+                    timings[i].name, timings[i].max_event_us, kEventAbsoluteCeilingUs);
+        }
+        if (g_verbose)
+            fprintf(stderr, "  %s wall=%ldms events=%zu max=%ldus p95=%ldus\n",
+                    tests[i].name, timings[i].ms, timings[i].events,
+                    timings[i].max_event_us, timings[i].p95_event_us);
 
         char* path = snapshot_path(g_snapshot_dir, tests[i].name, ".yaml");
         if (g_snapshot_update) {
@@ -5566,15 +5687,102 @@ int main(int argc, char* argv[]) {
 
     char* timings_path = snapshot_path(g_snapshot_dir, "_timings", ".txt");
     if (g_snapshot_update) {
-        char** rows = malloc(test_count * sizeof(char*));
-        if (rows) {
-            for (size_t i = 0; i < test_count; ++i) {
-                char row[256];
-                snprintf(row, sizeof(row), "%s %ld", tests[i].name, timings[i].ms);
-                rows[i] = strdup(row);
+        int full_record = g_snapshot_update_target[0] == '\0' ||
+                          strcmp(g_snapshot_update_target, "all") == 0;
+        if (full_record) {
+            char** rows = malloc((test_count + 1) * sizeof(char*));
+            if (rows) {
+                for (size_t i = 0; i < test_count; ++i) {
+                    char row[256];
+                    snprintf(row, sizeof(row), "%s %ld %ld %ld", timings[i].name,
+                             timings[i].ms, timings[i].max_event_us,
+                             timings[i].p95_event_us);
+                    rows[i] = strdup(row);
+                }
+                char deploy_row[64];
+                snprintf(deploy_row, sizeof(deploy_row), "_deploy %ld", g_deploy_ms);
+                rows[test_count] = strdup(deploy_row);
+                write_lines(timings_path, rows, test_count + 1);
+                free_string_array(rows, test_count + 1);
             }
-            write_lines(timings_path, rows, test_count);
-            free_string_array(rows, test_count);
+        } else {
+            /* A targeted update rewrites only the named scenario rows, so an
+               incidental run cannot ratchet the untouched baselines. */
+            const char** targets = malloc(test_count * sizeof(char*));
+            size_t* target_slots = malloc(test_count * sizeof(size_t));
+            int* target_written = malloc(test_count * sizeof(int));
+            if (!targets || !target_slots || !target_written) {
+                fprintf(stderr, "FAIL: out of memory\n");
+                exit(2);
+            }
+            size_t targets_size = 0;
+            for (size_t i = 0; i < test_count; ++i) {
+                int known = 0;
+                for (size_t j = 0; j < targets_size && !known; ++j) {
+                    known = strcmp(targets[j], timings[i].name) == 0;
+                }
+                if (known || !update_target_matches(timings[i].name)) continue;
+                targets[targets_size] = timings[i].name;
+                target_slots[targets_size] = i;
+                target_written[targets_size] = 0;
+                ++targets_size;
+            }
+            char** rows = NULL;
+            size_t count = 0;
+            int baseline_missing = read_lines(timings_path, &rows, &count) != 0;
+            if (baseline_missing) {
+                rows = NULL;
+                count = 0;
+            }
+            char** merged = malloc((count + targets_size + 1) * sizeof(char*));
+            if (!merged) {
+                fprintf(stderr, "FAIL: out of memory\n");
+                exit(2);
+            }
+            size_t merged_count = 0;
+            for (size_t i = 0; i < count; ++i) {
+                struct BaselineTiming row;
+                int replaced = 0;
+                if (parse_timing_row(rows[i], &row)) {
+                    for (size_t t = 0; t < targets_size && !replaced; ++t) {
+                        if (strcmp(row.name, targets[t]) != 0) continue;
+                        if (!target_written[t]) {
+                            struct ScenarioTiming* timing = &timings[target_slots[t]];
+                            char buffer[256];
+                            snprintf(buffer, sizeof(buffer), "%s %ld %ld %ld",
+                                     timing->name, timing->ms, timing->max_event_us,
+                                     timing->p95_event_us);
+                            merged[merged_count++] = strdup(buffer);
+                            target_written[t] = 1;
+                        }
+                        replaced = 1;
+                    }
+                }
+                if (!replaced) merged[merged_count++] = strdup(rows[i]);
+            }
+            for (size_t t = 0; t < targets_size; ++t) {
+                if (target_written[t]) continue;
+                struct ScenarioTiming* timing = &timings[target_slots[t]];
+                char buffer[256];
+                snprintf(buffer, sizeof(buffer), "%s %ld %ld %ld", timing->name,
+                         timing->ms, timing->max_event_us, timing->p95_event_us);
+                merged[merged_count++] = strdup(buffer);
+            }
+            int deploy_present = 0;
+            for (size_t i = 0; i < merged_count && !deploy_present; ++i) {
+                deploy_present = strncmp(merged[i], "_deploy ", 8) == 0;
+            }
+            if (!deploy_present) {
+                char deploy_row[64];
+                snprintf(deploy_row, sizeof(deploy_row), "_deploy %ld", g_deploy_ms);
+                merged[merged_count++] = strdup(deploy_row);
+            }
+            write_lines(timings_path, merged, merged_count);
+            free_string_array(merged, merged_count);
+            if (rows) free_string_array(rows, count);
+            free(targets);
+            free(target_slots);
+            free(target_written);
         }
     } else {
         char** rows = NULL;
@@ -5582,23 +5790,51 @@ int main(int argc, char* argv[]) {
         if (read_lines(timings_path, &rows, &count) != 0) {
             fprintf(stderr, "note: no timing baseline (_timings.txt); run with --update=all to record it\n");
         } else {
-            for (size_t i = 0; i < test_count; ++i) {
-                for (size_t j = 0; j < count; ++j) {
-                    const char* space = strchr(rows[j], ' ');
-                    if (!space) continue;
-                    size_t name_length = (size_t)(space - rows[j]);
-                    if (strlen(timings[i].name) == name_length &&
-                        strncmp(rows[j], timings[i].name, name_length) == 0) {
-                        long baseline = atol(space + 1);
-                        if (baseline >= kPerfNoiseFloorMs &&
-                            timings[i].ms > (long)(baseline * kPerfRegressionFactor)) {
-                            ++g_failures;
-                            fprintf(stderr, "PERF: %s took %ldms (baseline %ldms, threshold %.0fms)\n",
-                                    timings[i].name, timings[i].ms, baseline,
-                                    baseline * kPerfRegressionFactor);
-                        }
-                        break;
+            for (size_t j = 0; j < count; ++j) {
+                struct BaselineTiming row;
+                if (!parse_timing_row(rows[j], &row)) continue;
+                if (strcmp(row.name, "_deploy") == 0) {
+                    if (row.wall_ms >= kDeployNoiseFloorMs &&
+                        g_deploy_ms > (long)(row.wall_ms * kDeployRegressionFactor)) {
+                        ++g_failures;
+                        fprintf(stderr,
+                                "PERF: deployment took %ldms (baseline %ldms, threshold %.0fms)\n",
+                                g_deploy_ms, row.wall_ms,
+                                row.wall_ms * kDeployRegressionFactor);
                     }
+                    continue;
+                }
+                for (size_t i = 0; i < test_count; ++i) {
+                    if (strcmp(timings[i].name, row.name) != 0) continue;
+                    if (row.wall_ms >= kPerfNoiseFloorMs &&
+                        timings[i].ms > (long)(row.wall_ms * kPerfRegressionFactor)) {
+                        ++g_failures;
+                        fprintf(stderr, "PERF: %s took %ldms (baseline %ldms, threshold %.0fms)\n",
+                                timings[i].name, timings[i].ms, row.wall_ms,
+                                row.wall_ms * kPerfRegressionFactor);
+                    }
+                    if (row.has_events) {
+                        if (timings[i].events >= kEventP95MinEvents &&
+                            row.p95_event_us >= kEventP95FloorUs &&
+                            timings[i].p95_event_us >
+                                (long)(row.p95_event_us * kEventP95Factor)) {
+                            ++g_failures;
+                            fprintf(stderr,
+                                    "PERF: %s p95 keystroke took %ldus (baseline %ldus, threshold %.0fus)\n",
+                                    timings[i].name, timings[i].p95_event_us,
+                                    row.p95_event_us, row.p95_event_us * kEventP95Factor);
+                        }
+                        if (row.max_event_us >= kEventMaxFloorUs &&
+                            timings[i].max_event_us >
+                                (long)(row.max_event_us * kEventMaxFactor)) {
+                            ++g_failures;
+                            fprintf(stderr,
+                                    "PERF: %s max keystroke took %ldus (baseline %ldus, threshold %.0fus)\n",
+                                    timings[i].name, timings[i].max_event_us,
+                                    row.max_event_us, row.max_event_us * kEventMaxFactor);
+                        }
+                    }
+                    break;
                 }
             }
             free_string_array(rows, count);
