@@ -80,6 +80,8 @@ New workspace フッターの主操作はワークスペースの登録。情報
 
 ## Motion & Interaction
 
+Archive・Unarchive 待機中の一覧更新では、動いた行は実要素が前後の位置を滑らかに移動する。移動中も行の当たり位置は見た目と一致する。移動は700ms・`cubic-bezier(0.45, 0, 0.25, 1)` とし、行の詰まり全体を視線で追える速度にする。`prefers-reduced-motion: reduce` では SPEC「アーカイブ・未アーカイブアクション」に従い即時に切り替える。
+
 セッションを正常に開いた後の既読化では、表示中のベルを200ms・ease-outで不透明度1から0へフェードアウトして消す。変化させるのは `opacity` のみとし、行・スロット・表示名の位置と寸法を保つ。`prefers-reduced-motion: reduce` では即時に消す。
 
 ワークスペース見出しは [beui.dev の shared-layout-bg](https://beui.dev/r/shared-layout-bg/raw) の共通背景を参照し、chevron と名前で1つの hover 面を共有する。背景の切替は即時とし、アニメーションは加えない。hover・focus で文字位置・余白・寸法を変えない。

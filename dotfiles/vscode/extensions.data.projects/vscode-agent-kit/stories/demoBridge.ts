@@ -170,16 +170,18 @@ export function createDemoBridge(): {
     if (request.type === "archiveSession" && typeof request.sessionId === "string") {
       metadata.set(request.sessionId, { archived: true });
       if (displayedSessionId === request.sessionId) displayedSessionId = undefined;
+      // Send the sessions update while the request is still pending, like the
+      // extension host does, so the client animates the list change.
+      postSessions();
       if (request.requestId !== undefined)
         listener({ type: "archiveFinished", requestId: request.requestId });
-      postSessions();
       return;
     }
     if (request.type === "unarchiveSession" && typeof request.sessionId === "string") {
       metadata.set(request.sessionId, { ...entryOf(request.sessionId), archived: false });
+      postSessions();
       if (request.requestId !== undefined)
         listener({ type: "unarchiveFinished", requestId: request.requestId });
-      postSessions();
       return;
     }
     if (request.type === "newSession" && typeof request.cwd === "string") {

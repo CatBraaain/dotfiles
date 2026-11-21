@@ -125,6 +125,27 @@ describe("createDemoBridge", () => {
     expect(finished).toHaveLength(2);
   });
 
+  it("sends the sessions update before the request completion like the extension host", () => {
+    const demo = createDemoBridge();
+    const types: string[] = [];
+    demo.bridge.onMessage((message) => {
+      const { type } = message as { type: string };
+      if (type === "archiveSession" || type === "unarchiveSession") return;
+      types.push(type);
+    });
+    demo.bridge.postMessage({
+      type: "archiveSession",
+      sessionId: projectCurrentId,
+      requestId: "archive-request",
+    });
+    demo.bridge.postMessage({
+      type: "unarchiveSession",
+      sessionId: projectArchivedId,
+      requestId: "unarchive-request",
+    });
+    expect(types).toEqual(["sessions", "archiveFinished", "sessions", "unarchiveFinished"]);
+  });
+
   it("clears selection when archiving the displayed session even with an unarchived same-cwd row", () => {
     const { bridge, last } = setup();
     bridge.postMessage({ type: "unarchiveSession", sessionId: projectArchivedId });

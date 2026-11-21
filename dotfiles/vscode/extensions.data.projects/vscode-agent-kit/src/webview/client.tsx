@@ -148,7 +148,7 @@ function groupDescriptor(
   return {
     tag: "section",
     key: group.cwd,
-    attrs: { class: "group" },
+    attrs: { class: "group", "data-group-cwd": group.cwd },
     children: [
       {
         tag: "div",
@@ -294,7 +294,7 @@ function sessionDescriptor(
   return {
     tag: "div",
     key: session.sessionId,
-    attrs: { class: rowClass },
+    attrs: { class: rowClass, "data-row-session": session.sessionId },
     children: [
       {
         tag: "button",
@@ -693,6 +693,9 @@ interface ClientSnapshot {
   pendingArchives: ReadonlyMap<string, string>;
   /** Unarchive requests in flight, keyed by request id (value: session id). */
   pendingUnarchives: ReadonlyMap<string, string>;
+  /** Whether the latest sessions update came from an in-flight archive/unarchive,
+   * so the row movement slides instead of snapping. */
+  animated: boolean;
 }
 
 /** Latest-value store fed by the bridge; registered synchronously by
@@ -701,7 +704,7 @@ function createClientStore(): {
   subscribe(listener: () => void): () => void;
   getSnapshot(): ClientSnapshot;
   setLoading(manualRefresh: boolean, displayedSessionId?: string | null): void;
-  setSessions(state: ClientState): void;
+  setSessions(state: ClientState, animate?: boolean): void;
   setConnectionError(connectionError: boolean): void;
   setError(message: string): void;
   setSessionsError(): void;
@@ -721,6 +724,7 @@ function createClientStore(): {
     pendingNewSessions: new Map(),
     pendingArchives: new Map(),
     pendingUnarchives: new Map(),
+    animated: false,
   };
   const listeners = new Set<() => void>();
   const publish = (next: ClientSnapshot): void => {
@@ -740,11 +744,18 @@ function createClientStore(): {
           displayedSessionId === undefined
             ? snapshot.state
             : { ...snapshot.state, displayedSessionId: displayedSessionId ?? undefined },
+        animated: false,
         loadStatus: "loading",
         manualRefresh,
       }),
-    setSessions: (state) =>
-      publish({ ...snapshot, state, loadStatus: "loaded", manualRefresh: false }),
+    setSessions: (state, animate = false) =>
+      publish({
+        ...snapshot,
+        state,
+        animated: animate,
+        loadStatus: "loaded",
+        manualRefresh: false,
+      }),
     setConnectionError: (connectionError) => publish({ ...snapshot, connectionError }),
     setError: (message) => publish({ ...snapshot, errorMessage: message }),
     setSessionsError: () => publish({ ...snapshot, loadStatus: "error", manualRefresh: false }),
@@ -817,6 +828,11 @@ interface SessionsAppProps {
   connectionStatusElement: HTMLElement;
 }
 
+/** Slide duration and easing of the archive list transition (DESIGN.md). */
+const LIST_SLIDE_TRANSITION = "transform 700ms cubic-bezier(0.45, 0, 0.25, 1)";
+/** Safety cleanup after the slide; some pauses skip transitionend. */
+const LIST_SLIDE_CLEANUP_MS = 900;
+
 function SessionsApp({
   bridge,
   store,
@@ -827,7 +843,68 @@ function SessionsApp({
   const [modes, setModes] = useState<ReadonlyMap<string, ViewMode>>(() => new Map());
   const [collapsedCwds, setCollapsedCwds] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [workspaceMenu, setWorkspaceMenu] = useState<WorkspaceMenuState | null>(null);
+  const topPositionsRef = useRef<Map<string, number>>(new Map());
   const hasMenuWorkspace = snapshot.state.groups.some((group) => group.cwd === workspaceMenu?.cwd);
+
+  // Slide the list parts that moved during an in-flight archive/unarchive
+  // update. Groups and rows are real elements moving with FLIP, so hit
+  // targets stay under the visible list while the whole list slides.
+  useLayoutEffect(() => {
+    const docTop = (element: HTMLElement): number =>
+      element.getBoundingClientRect().top + window.scrollY;
+    const measureKey = (element: HTMLElement): string =>
+      element.getAttribute("data-group-cwd") ?? element.getAttribute("data-row-session") ?? "";
+    const elements = Array.from(document.querySelectorAll<HTMLElement>(".group, .session-row"));
+    const previous = topPositionsRef.current;
+    const current = new Map<string, number>();
+    for (const element of elements) {
+      current.set(measureKey(element), docTop(element));
+    }
+    topPositionsRef.current = current;
+
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!snapshot.animated || reduceMotion) return;
+
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const moved: HTMLElement[] = [];
+    // Invert the group sections first so the rows inside them keep their
+    // visual place; each row then only animates its own extra movement.
+    for (const element of elements) {
+      if (!element.classList.contains("group")) continue;
+      const before = previous.get(measureKey(element));
+      if (before === undefined) continue;
+      const delta = before - docTop(element);
+      if (delta === 0) continue;
+      element.style.transition = "none";
+      element.style.transform = `translateY(${delta}px)`;
+      moved.push(element);
+    }
+    for (const row of elements) {
+      if (row.classList.contains("group")) continue;
+      const before = previous.get(measureKey(row));
+      if (before === undefined) continue;
+      const delta = before - docTop(row);
+      if (delta === 0) continue;
+      row.style.transition = "none";
+      row.style.transform = `translateY(${delta}px)`;
+      moved.push(row);
+    }
+    for (const element of moved) {
+      element.getBoundingClientRect();
+      element.style.transition = LIST_SLIDE_TRANSITION;
+      element.style.transform = "translateY(0)";
+      const clear = () => {
+        element.style.transition = "";
+        element.style.transform = "";
+      };
+      element.addEventListener("transitionend", clear, { once: true });
+      timers.push(setTimeout(clear, LIST_SLIDE_CLEANUP_MS));
+    }
+    return () => {
+      for (const timer of timers) clearTimeout(timer);
+    };
+  }, [snapshot.state, snapshot.animated]);
+
   useEffect(() => {
     if (!hasMenuWorkspace) setWorkspaceMenu(null);
   }, [hasMenuWorkspace]);
@@ -1031,7 +1108,10 @@ export function initClient(bridge: ClientBridge): () => void {
       );
     }
     if (message.type === "sessions" && isClientState(message.state)) {
-      store.setSessions(message.state);
+      const { pendingArchives, pendingUnarchives } = store.getSnapshot();
+      // Animate while an archive or unarchive is in flight so the rows
+      // below slide instead of jumping. Other updates stay immediate.
+      store.setSessions(message.state, pendingArchives.size > 0 || pendingUnarchives.size > 0);
     }
     if (message.type === "newSessionFinished" && typeof message.requestId === "string") {
       store.finishNewSession(message.requestId);

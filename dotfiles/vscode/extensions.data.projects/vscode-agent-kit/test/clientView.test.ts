@@ -462,6 +462,17 @@ describe("sessionListView", () => {
     }
   });
 
+  it("labels each session row with its id for the slide animation", () => {
+    const elements = elementsIn(viewFor("all"));
+    const rows = byClass(elements, "session-row");
+    expect(rows.map((row) => row.attrs?.["data-row-session"])).toEqual([
+      atlasUnarchived.sessionId,
+      atlasArchived.sessionId,
+      betaOther.sessionId,
+      betaPlain.sessionId,
+    ]);
+  });
+
   it("keeps an unknown-date session visible with a blank timestamp", () => {
     const view = viewFor("all", [
       {

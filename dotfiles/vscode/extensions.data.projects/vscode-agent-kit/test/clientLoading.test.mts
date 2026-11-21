@@ -543,6 +543,81 @@ describe("session list loading in the mounted client", () => {
     expect(await button.locator("path").getAttribute("d")).toBe("M21 12a9 9 0 1 1-6.219-8.56");
   });
 
+  const slideState: WebviewState = {
+    groups: [
+      {
+        cwd: "/workspace/atlas",
+        label: "atlas",
+        sessions: [
+          { sessionId, displayName: "Atlas current", updatedAtMs: null, isArchived: false },
+          {
+            sessionId: "slide-2",
+            displayName: "Atlas second",
+            updatedAtMs: null,
+            isArchived: false,
+          },
+          {
+            sessionId: "archived-1",
+            displayName: "Atlas archived",
+            updatedAtMs: null,
+            isArchived: true,
+          },
+        ],
+      },
+    ],
+    displayedSessionId: sessionId,
+  };
+
+  const afterSlideState: WebviewState = {
+    groups: [
+      {
+        cwd: "/workspace/atlas",
+        label: "atlas",
+        sessions: [
+          {
+            sessionId: "slide-2",
+            displayName: "Atlas second",
+            updatedAtMs: null,
+            isArchived: false,
+          },
+          {
+            sessionId: "archived-1",
+            displayName: "Atlas archived",
+            updatedAtMs: null,
+            isArchived: true,
+          },
+        ],
+      },
+    ],
+    displayedSessionId: sessionId,
+  };
+
+  it("slides the moved rows of a pending archive update and snaps otherwise", async () => {
+    await receive({ type: "sessions", state: slideState });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(2);
+    await page.locator(`[data-archive="${sessionId}"]`).click();
+    const [request] = await archiveRequests();
+    await receive({ type: "sessions", state: afterSlideState });
+    const moving = page.locator('[data-row-session="slide-2"]');
+    await expect.poll(() => moving.getAttribute("style")).toContain("transform");
+    expect(await moving.getAttribute("style")).toContain("transition");
+    await receive({ type: "archiveFinished", requestId: request.requestId });
+    await receive({ type: "sessions", state: afterSlideState });
+    await page.waitForTimeout(1000);
+    await expect.poll(() => moving.getAttribute("style")).not.toContain("transform");
+  });
+
+  it("skips the pending-archive slide under reduced motion", async () => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await receive({ type: "sessions", state: slideState });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(2);
+    await page.locator(`[data-archive="${sessionId}"]`).click();
+    await receive({ type: "sessions", state: afterSlideState });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(1);
+    const moving = page.locator('[data-row-session="slide-2"]');
+    expect(await moving.getAttribute("style")).toBeNull();
+  });
+
   it("keeps workspace input across automatic snapshots until the add acknowledgement", async () => {
     await receive({ type: "sessions", state });
     await expectLoaded();
