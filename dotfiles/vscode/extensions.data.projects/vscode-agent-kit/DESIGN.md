@@ -10,7 +10,7 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 | --- | --- |
 | 背景・本文 | `sideBar-background`・`foreground` |
 | 補助文字（日時・行の操作・アーカイブ済みの表示名） | `descriptionForeground` |
-| 状態アイコン | spinner は `testing-iconPassed`、ベル・一時停止マークは `editorWarning-foreground`（いずれも代替 `descriptionForeground`） |
+| 状態アイコン | spinner は `testing-iconPassed`、ベル・一時停止マーク・公開遅延ドットは `editorWarning-foreground`（いずれも代替 `descriptionForeground`） |
 | hover 面 | `list-hoverBackground` |
 | 選択面・選択文字（表示中セッションの行） | `list-inactiveSelectionBackground` / `Foreground`（行へのキーボードフォーカス中は `list-activeSelectionBackground` / `Foreground`） |
 | 境界（フォーム・フッターの区切り） | `widget-border` の 50% 混色 |
@@ -56,7 +56,7 @@ Layout: ワークスペースのメニュー — 一覧を押し下げず起動�
 
 New workspace フッターの主操作はワークスペースの登録。情報の優先順は一覧、取得状態・操作エラー、登録操作。New workspace とフルパス入力欄は同じ領域を使い、左側の folder-plus アイコン、状態・エラー表示と入力のヒントを保持する。操作とキー入力は SPEC「New Workspace アクション」に従う。
 
-セッション一覧の主操作は会話の選択・再開。情報の優先順は表示名、実行フェーズ、更新日時。表示名・日時・フェーズのヒント・選択表示・右端の Archive / Unarchive を保持する。左端の状態アイコンは既存の線画 SVG を使い、状態との対応は SPEC「実行フェーズの表示」に従う。追加のバッジや説明行は設けない。
+セッション一覧の主操作は会話の選択・再開。情報の優先順は表示名、実行フェーズ、更新日時。表示名・日時・フェーズのヒント・選択表示・右端の Archive / Unarchive を保持する。左端の状態アイコンは既存の線画 SVG を使い、状態との対応は SPEC「実行フェーズの表示」に従う。公開遅延ドット（SPEC「実行フェーズの表示」）のほかに、追加のバッジや説明行は設けない。
 
 | 部品 | 定義 |
 | --- | --- |
@@ -70,6 +70,7 @@ New workspace フッターの主操作はワークスペースの登録。情報
 | ワークスペース フォーム | New workspace の文字部分を置き換える入力欄1つ。入力は境界を含め高さ32px・角丸9.6px・入力トークン・13px 文字、左内側余白32px・右内側余白8px、placeholder は `/absolute/path`、focus は `focusBorder` の 2px ring。構造の参照元は agent-open-ui の `SidebarWorkspaceForm` |
 | グループ見出しのモード切替 | 見出し名の右、New session の左に常時表示する。New session と同じ24px 四方の ghost 操作。16px の既存の目の SVG、補助文字色、hover は本文色と hover 面。未アーカイブ表示では斜線付きの目、All 表示では目を示す。focus は focus トークンの ring。ヒントと操作は SPEC「表示モード」に従う |
 | 状態アイコンのスロット | 全行で12px 四方の固定領域。アイコンを中央に置き、表示名との間隔は8px。空の場合も幅を保持する |
+| 公開遅延ドット | スロットの12px 四方の内側の右下へ重ねる6px の塗り円（角丸は直径の半分）。フェーズアイコンの有無によらず同じ位置に置き、スロット・表示名の開始位置と寸法は変えない。色は状態アイコントークンの `editorWarning-foreground`。点滅などの動きは加えない。表示条件は SPEC「実行フェーズの表示」に従う |
 | spinner・ベル・一時停止マーク | 既存の行内操作と同じ12px SVG、`viewBox="0 0 24 24"`、塗りなし・`currentColor` の線幅2・丸い線端と線結合。spinner は開いた円弧（`M21 12a9 9 0 1 1-6.219-8.56`）。ベルは本体（`M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9`）と下端（`M10 21a2 2 0 0 0 4 0`）の輪郭線。一時停止マークは2本の縦線（`M9 4v16`・`M15 4v16`）。色は状態アイコントークンに従う |
 | 表示名 | 13px・20px 行・省略表示 |
 | 日時 | 等幅（`editor-font-family` 代替 `ui-monospace`）、10px・tabular-nums、右端から36pxの位置に右寄せし、文字間隔を広げても全文を収める自然幅とする。行内では右側に `36px + 5ch + 8px` を予約する |

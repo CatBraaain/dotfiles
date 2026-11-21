@@ -20,6 +20,8 @@ import { webviewHtml } from "./webviewHtml";
 
 export const VIEW_ID = "agentKit.sessions";
 export const LIST_REFRESH_INTERVAL_MS = 250;
+/** A publication attempt older than this is no longer shown as delayed (retries refresh it about every second). */
+export const PUBLISH_DELAY_FRESH_MS = 10_000;
 const INITIAL_HISTORY_RETRY_MS = 1_000;
 const MAX_HISTORY_RETRY_MS = 30_000;
 
@@ -51,6 +53,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         history: PiMuxHistoryEntry[];
         addedCwds: ReadonlySet<string>;
         unreadIds: ReadonlySet<string>;
+        delayedIds: ReadonlySet<string>;
         state: WebviewState;
       }
     | undefined;
@@ -382,6 +385,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     const workspaces = this.latestWorkspaces;
     const history = this.historySnapshot;
     const published = this.publishedSessions;
+    const delayedIds = delayedSessionIdsFromWorkspaces(workspaces, Date.now());
     if (
       published !== undefined &&
       this.postedStateJson !== undefined &&
@@ -390,7 +394,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       this.deps.registry.displayedSessionId === published.state.displayedSessionId &&
       isDeepStrictEqual(workspaces, published.workspaces) &&
       isDeepStrictEqual(this.addedCwds, published.addedCwds) &&
-      isDeepStrictEqual(this.unreadSessionIds, published.unreadIds)
+      isDeepStrictEqual(this.unreadSessionIds, published.unreadIds) &&
+      isDeepStrictEqual(delayedIds, published.delayedIds)
     )
       return;
     const version = this.refreshVersion;
@@ -413,6 +418,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         archivedIds,
         phases: phasesFromWorkspaces(workspaces),
         unreadIds: this.unreadSessionIds,
+        delayedIds,
       }),
       displayedSessionId: this.deps.registry.displayedSessionId,
     };
@@ -422,6 +428,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       history,
       addedCwds,
       unreadIds: new Set(this.unreadSessionIds),
+      delayedIds,
       state,
     };
   }
@@ -816,4 +823,22 @@ function phasesFromWorkspaces(workspaces: readonly PiMuxWorkspace[]): Map<string
       phases.set(id, state);
   }
   return phases;
+}
+
+/** Sessions whose `publishPending` marks an unresolved publication attempt at `nowMs`.
+ * Unlike phases, delayed rows include archived (temporary) sessions. */
+function delayedSessionIdsFromWorkspaces(
+  workspaces: readonly PiMuxWorkspace[],
+  nowMs: number,
+): Set<string> {
+  const delayedIds = new Set<string>();
+  for (const { id, publishPending } of flattenPiMuxSessions(workspaces)) {
+    if (
+      publishPending !== null &&
+      publishPending !== undefined &&
+      nowMs - publishPending.attemptAt <= PUBLISH_DELAY_FRESH_MS
+    )
+      delayedIds.add(id);
+  }
+  return delayedIds;
 }

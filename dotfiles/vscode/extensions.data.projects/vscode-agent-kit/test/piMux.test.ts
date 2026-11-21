@@ -106,6 +106,33 @@ describe("PiMux", () => {
     },
   );
 
+  it.each([{ publishPending: { attemptAt: 1_700_000_000_000 } }, { publishPending: null }, {}])(
+    "accepts a valid publishPending attribute: %j",
+    async (attributes) => {
+      const workspaces = [
+        { cwd: "/project", sessions: [{ ...liveSession, ...attributes }], empty: [] },
+      ];
+      const mux = new PiMux(vi.fn().mockResolvedValue(JSON.stringify(workspaces)));
+      expect(await mux.list()).toEqual(workspaces);
+    },
+  );
+
+  it.each([
+    { publishPending: {} },
+    { publishPending: { attemptAt: 0 } },
+    { publishPending: { attemptAt: -1 } },
+    { publishPending: { attemptAt: 1.5 } },
+    { publishPending: { attemptAt: "1" } },
+    { publishPending: "pending" },
+    { publishPending: 1 },
+  ])("rejects an invalid publishPending attribute: %j", async (attributes) => {
+    const workspaces = [
+      { cwd: "/project", sessions: [{ ...liveSession, ...attributes }], empty: [] },
+    ];
+    const mux = new PiMux(vi.fn().mockResolvedValue(JSON.stringify(workspaces)));
+    await expect(mux.list()).rejects.toThrow("Invalid pi-mux list response");
+  });
+
   it.each([false, null, "true", 1, {}, []])(
     "rejects an invalid temporary attribute: %j",
     async (temporary) => {

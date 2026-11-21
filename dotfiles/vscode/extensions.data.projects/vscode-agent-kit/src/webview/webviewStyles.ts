@@ -55,11 +55,12 @@ export const webviewStyles = `
     .session-button:focus-visible::before { outline: 2px solid var(--vscode-focusBorder); outline-offset: -2px; }
     .session-row.selected .session-button::before, .session-row.selected .session-button:hover::before { background: var(--vscode-list-inactiveSelectionBackground); }
     .session-row.selected:focus-within .session-button::before { background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-inactiveSelectionBackground)); }
-    .session-status { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 12px; height: 12px; color: var(--vscode-descriptionForeground); }
+    .session-status { position: relative; display: inline-flex; flex: none; align-items: center; justify-content: center; width: 12px; height: 12px; color: var(--vscode-descriptionForeground); }
     .session-status[data-state="running"] { color: var(--vscode-testing-iconPassed, var(--vscode-descriptionForeground)); }
     .session-status[data-state="waiting-approval"], .session-status[data-unread="true"], .session-status[data-fading="true"] { color: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)); }
     .session-status[data-state="running"] svg, .group-new-session[aria-busy="true"] svg, .archive[aria-busy="true"] svg, .unarchive[aria-busy="true"] svg { animation: session-spin 1s linear infinite; }
     .session-status[data-fading="true"] svg { animation: session-unread-fade 200ms ease-out forwards; }
+    .session-delay-dot { position: absolute; right: 0; bottom: 0; width: 6px; height: 6px; border-radius: 3px; background: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)); }
     @keyframes session-unread-fade { from { opacity: 1; } to { opacity: 0; } }
     @keyframes session-spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) { .session-status[data-state="running"] svg, .group-new-session[aria-busy="true"] svg, .archive[aria-busy="true"] svg, .unarchive[aria-busy="true"] svg { animation: none; } .session-status[data-fading="true"] svg { display: none; } }

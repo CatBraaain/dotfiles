@@ -7,12 +7,13 @@ import type { SessionPhase } from "../src/webview/protocol";
 import { sessionViewGroups } from "../src/webview/sessionViewData";
 
 /** Demo state a story starts from (SPEC.md「静的プレビュー」表 1 行目). */
-export type DemoState = "sample" | "empty";
+export type DemoState = "sample" | "empty" | "delayed";
 
-/** Per-session demo metadata: explicit archive and live phase. */
+/** Per-session demo metadata: explicit archive, live phase, and publish delay. */
 interface DemoEntry {
   archived: boolean;
   state?: SessionPhase;
+  delayed?: boolean;
 }
 
 /** Request from the webview client, same protocol as the extension host side. */
@@ -80,6 +81,13 @@ const sampleSessions: SessionSummary[] = [
 
 const UNARCHIVED: DemoEntry = { archived: false };
 
+/** Sessions the publish-delay story marks as delayed: the running row and the
+ * archived row, so the dot shows beside a phase icon and without one. */
+const DELAYED_SAMPLE_IDS = new Set([
+  "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10",
+  "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61",
+]);
+
 /** Demo displayed session: the catalog marks this row as the one the shared
  * terminal shows (openSession is ignored, so the mark never moves). */
 const DISPLAYED_SESSION_ID = "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10";
@@ -128,6 +136,9 @@ export function createDemoBridge(): {
         .filter(([, entry]) => entry.state !== undefined)
         .map(([sessionId, entry]) => [sessionId, entry.state as SessionPhase]),
     );
+    const delayedIds = new Set(
+      [...metadata].filter(([, entry]) => entry.delayed).map(([sessionId]) => sessionId),
+    );
     listener({
       type: "sessions",
       ...(requestId === undefined ? {} : { requestId }),
@@ -136,6 +147,7 @@ export function createDemoBridge(): {
           registeredCwds,
           archivedIds,
           phases,
+          delayedIds,
         }),
         displayedSessionId,
       },
@@ -210,9 +222,16 @@ export function createDemoBridge(): {
     metadata = new Map(
       [...SAMPLE_METADATA].map(([sessionId, entry]) => [
         sessionId,
-        demoState === "sample" ? { ...entry } : { ...entry, archived: true },
+        demoState === "empty" ? { ...entry, archived: true } : { ...entry },
       ]),
     );
+    if (demoState === "delayed") {
+      // The delayed preset keeps the sample archive states and only adds the
+      // publish-delay mark to the running row and the archived row.
+      for (const sessionId of DELAYED_SAMPLE_IDS) {
+        metadata.set(sessionId, { ...entryOf(sessionId), delayed: true });
+      }
+    }
     registeredCwds = [PROJECT_CWD, PI_TOOLS_CWD, PROJECT_WORKTREE_CWD, REGISTERED_ONLY_CWD];
     postSessions();
   }

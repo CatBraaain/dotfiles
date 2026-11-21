@@ -628,9 +628,36 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       "sessions-sidebar--sample-sessions",
       "sessions-sidebar--all-mode",
       "sessions-sidebar--empty-sessions",
+      "sessions-sidebar--publish-delay",
     ]) {
       expect(ids, `story ${id} missing from index.json`).toContain(id);
     }
+  });
+
+  it("renders the publish-delay dot beside the phase icon and on archived rows", async () => {
+    const page = await openStory("sessions-sidebar--publish-delay");
+    await page.waitForSelector(".session-row");
+
+    // Default view: only the running row is visible, delayed and still spinning.
+    expect(await page.locator('.session-status[data-delayed="true"]').count()).toBe(1);
+    expect(
+      await page.locator('.session-status[data-state="running"][data-delayed="true"] svg').count(),
+    ).toBe(1);
+    expect(await page.locator(".session-delay-dot").count()).toBe(1);
+    expect(
+      await page.locator(`[data-session="${atlasCurrentId}"]`).getAttribute("title"),
+    ).toContain("State update delayed");
+
+    // All mode: the archived row shows the dot without a phase icon.
+    await page.click(projectModeSelector);
+    await page.waitForFunction(
+      () => document.querySelectorAll('.session-status[data-delayed="true"]').length === 2,
+    );
+    expect(await page.locator(".session-delay-dot").count()).toBe(2);
+    expect(
+      await page.locator('.session-row.archived .session-status[data-delayed="true"]').count(),
+    ).toBe(1);
+    await page.close();
   });
 
   it("renders the sample story and operates the workspace mode toggle and archive", async () => {

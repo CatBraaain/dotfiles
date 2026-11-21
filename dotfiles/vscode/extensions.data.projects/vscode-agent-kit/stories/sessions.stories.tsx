@@ -91,3 +91,5 @@ export const EmptySessions: SessionsStory = storyFromDemoState(
   "Sample — no unarchived sessions",
   "empty",
 );
+
+export const PublishDelay: SessionsStory = storyFromDemoState("Sample — publish delay", "delayed");

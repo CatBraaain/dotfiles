@@ -4895,3 +4895,91 @@ describe("SessionWebviewProvider", () => {
     expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();
   });
 });
+
+describe("publish delay display", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+
+  function sentState(webview: { postMessage: Mock }): WebviewState {
+    const message = webview.postMessage.mock.calls
+      .map((call) => call[0])
+      .reverse()
+      .find((message) => message.type === "sessions") as { state: WebviewState } | undefined;
+    if (message === undefined) throw new Error("no session state was sent");
+    return message.state;
+  }
+
+  function row(webview: { postMessage: Mock }, sessionId = activeSessionId) {
+    const session = sentState(webview)
+      .groups.flatMap((group) => group.sessions)
+      .find((item) => item.sessionId === sessionId);
+    if (session === undefined) throw new Error(`session row missing: ${sessionId}`);
+    return session;
+  }
+
+  /** Overlays `publishPending` on the active session of the base list mock.
+   * `undefined` removes the mark to simulate a resolved publication. */
+  function overlayPublishPending(
+    runtimes: ReturnType<typeof fakeRuntimes>,
+    attemptAt: () => number | undefined,
+  ): void {
+    const baseList = runtimes.mocks.list.getMockImplementation()!;
+    runtimes.mocks.list.mockImplementation(async () => {
+      const workspaces = await baseList();
+      const pendingAt = attemptAt();
+      return workspaces.map((workspace) => ({
+        ...workspace,
+        sessions: workspace.sessions.map((session) =>
+          session.id === activeSessionId
+            ? pendingAt === undefined
+              ? { ...session, publishPending: null }
+              : { ...session, publishPending: { attemptAt: pendingAt } }
+            : session,
+        ),
+      }));
+    });
+  }
+
+  it("shows a row as delayed while publishPending is fresh and clears it when it resolves", async () => {
+    const fixture = await archiveFixture();
+    overlayPublishPending(fixture, () => Date.now() - 1_000);
+    await fixture.provider.refresh();
+    expect(row(fixture.webview)).toMatchObject({ publishDelayed: true });
+
+    overlayPublishPending(fixture, () => undefined);
+    await fixture.provider.refresh();
+    expect(row(fixture.webview)).toMatchObject({ publishDelayed: false });
+  });
+
+  it("hides the mark for an attempt older than the freshness window", async () => {
+    const fixture = await archiveFixture();
+    overlayPublishPending(fixture, () => Date.now() - 11_000);
+    await fixture.provider.refresh();
+    expect(row(fixture.webview)).toMatchObject({ publishDelayed: false });
+  });
+
+  it("keeps an archived row delayed like an unarchived row", async () => {
+    const fixture = await archiveFixture();
+    fixture.temporary.add(activeSessionId);
+    overlayPublishPending(fixture, () => Date.now() - 1_000);
+    await fixture.provider.refresh();
+    expect(row(fixture.webview)).toMatchObject({ isArchived: true, publishDelayed: true });
+  });
+
+  it("re-evaluates a stale attempt without any list change", async () => {
+    const fixture = await archiveFixture();
+    const attemptAt = Date.now() - 500;
+    overlayPublishPending(fixture, () => attemptAt);
+    await fixture.provider.refresh();
+    expect(row(fixture.webview)).toMatchObject({ publishDelayed: true });
+
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(attemptAt + 11_000);
+    try {
+      await tick(fixture.provider);
+      expect(row(fixture.webview)).toMatchObject({ publishDelayed: false });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+});

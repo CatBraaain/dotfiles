@@ -37,6 +37,8 @@ export interface ClientSession {
   /** Live execution phase; undefined when the phase is unknown. */
   state?: SessionPhase;
   hasUnread?: boolean;
+  /** True while a state publication is known to be incomplete for the session. */
+  publishDelayed?: boolean;
 }
 
 export interface ClientSessionGroup {
@@ -282,6 +284,7 @@ function sessionDescriptor(
     session.displayName,
     session.sessionId,
     phaseLabel(session.state),
+    session.publishDelayed ? PUBLISH_DELAYED_HINT : undefined,
     session.state === "waiting-user" && session.hasUnread && !session.isArchived
       ? "Unread"
       : undefined,
@@ -309,9 +312,13 @@ function sessionDescriptor(
               "data-archived": String(session.isArchived),
               "data-unread": String(session.hasUnread === true && !session.isArchived),
               ...(session.state === undefined ? {} : { "data-state": session.state }),
+              ...(session.publishDelayed ? { "data-delayed": "true" } : {}),
               "aria-hidden": "true",
             },
-            children: sessionStatusIcons(session),
+            children: [
+              ...sessionStatusIcons(session),
+              ...(session.publishDelayed ? [publishDelayDot()] : []),
+            ],
           },
           { tag: "span", attrs: { class: "session-name" }, children: [session.displayName] },
         ],
@@ -360,6 +367,14 @@ function phaseLabel(state: SessionPhase | undefined): string | undefined {
   if (state === "waiting-approval") return "Waiting for approval";
   if (state === "waiting-user") return "Waiting for user";
   return undefined;
+}
+
+/** Tooltip line for a session whose state publication is incomplete. */
+const PUBLISH_DELAYED_HINT = "State update delayed";
+
+/** Warning dot in the status slot marking a session whose state publication is incomplete. */
+function publishDelayDot(): ElementDescriptor {
+  return { tag: "span", attrs: { class: "session-delay-dot" } };
 }
 
 export function formatSessionTimestamp(updatedAtMs: number | null, now = new Date()): string {

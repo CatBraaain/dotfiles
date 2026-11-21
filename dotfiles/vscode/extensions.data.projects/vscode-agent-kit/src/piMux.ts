@@ -20,7 +20,14 @@ export interface PiMuxSession {
   file: string;
   state: string | null;
   title: string | null;
+  /** Last state publication attempt that pi-mux has not applied yet; null when none. */
+  publishPending?: PiMuxPublishPending | null;
   temporary?: true;
+}
+
+/** `publishPending` item: the publication was attempted at `attemptAt` (Unix epoch ms). */
+export interface PiMuxPublishPending {
+  attemptAt: number;
 }
 
 /** A running Pi whose conversation file is not created yet (list `empty` section). */
@@ -207,7 +214,18 @@ function isPiMuxSession(session: unknown): session is PiMuxSession {
     isAbsolute(session.file) &&
     (session.state === null || typeof session.state === "string") &&
     (session.title === null || typeof session.title === "string") &&
+    (!Object.hasOwn(session, "publishPending") || isPiMuxPublishPending(session.publishPending)) &&
     (!Object.hasOwn(session, "temporary") || session.temporary === true)
+  );
+}
+
+function isPiMuxPublishPending(value: unknown): value is PiMuxPublishPending | null {
+  if (value === null) return true;
+  return (
+    isRecord(value) &&
+    typeof value.attemptAt === "number" &&
+    Number.isSafeInteger(value.attemptAt) &&
+    value.attemptAt > 0
   );
 }
 

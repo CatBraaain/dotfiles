@@ -10,6 +10,8 @@ export interface SessionViewInput {
   archivedIds: ReadonlySet<string>;
   phases: ReadonlyMap<string, SessionPhase>;
   unreadIds?: ReadonlySet<string>;
+  /** Sessions whose state publication is known to be incomplete. */
+  delayedIds?: ReadonlySet<string>;
 }
 
 /** Convert scanned sessions into display-only data: only groups of registered
@@ -32,6 +34,7 @@ export function sessionViewGroups(
         isArchived: view.archivedIds.has(session.sessionId),
         state: view.phases.get(session.sessionId),
         hasUnread: view.unreadIds?.has(session.sessionId) ?? false,
+        publishDelayed: view.delayedIds?.has(session.sessionId) ?? false,
       })),
     }));
 }

@@ -117,6 +117,20 @@ describe("sessionViewGroups", () => {
     ]);
   });
 
+  it("carries the publish-delayed flag independently from the phase", () => {
+    const groups = sessionViewGroups(sessions, view({ delayedIds: new Set(["active", "newest"]) }));
+
+    expect(
+      groups
+        .flatMap((group) => group.sessions)
+        .map((item) => [item.sessionId, item.publishDelayed]),
+    ).toEqual([
+      ["active", true],
+      ["older", false],
+      ["newest", true],
+    ]);
+  });
+
   it("carries unread independently from the execution phase", () => {
     const groups = sessionViewGroups(
       sessions,

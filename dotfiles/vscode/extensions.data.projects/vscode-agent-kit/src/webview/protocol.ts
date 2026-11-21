@@ -19,6 +19,8 @@ export interface WebviewSession {
   /** Live execution phase; undefined when the phase is unknown. */
   state?: SessionPhase;
   hasUnread?: boolean;
+  /** True while a state publication is known to be incomplete for the session. */
+  publishDelayed?: boolean;
 }
 
 export interface WebviewSessionGroup {

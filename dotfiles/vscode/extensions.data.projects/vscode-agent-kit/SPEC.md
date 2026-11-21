@@ -68,7 +68,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 
 ## データソース
 
-拡張機能は `pi-mux list` を pi-mux の workspace 登録と稼働 Pi の正本とする。応答は `[{cwd,sessions:[{id,file,state,title,temporary?:true}],empty:[{id,file,temporary?:true}]}]` の JSON 配列であり、cwd と file は絶対パス、state と title は文字列または null である。`temporary` は一時 Pi にだけ `true` で存在し、省略は通常 Pi を表す。`false` やその他の値は不正応答として扱う。`sessions` には会話ファイルが存在する pane だけが載り、未作成分は `empty` に載る。空 workspace は `sessions: []`・`empty: []` として含まれる。独自のセッション所属集合や復元集合を保存しない。
+拡張機能は `pi-mux list` を pi-mux の workspace 登録と稼働 Pi の正本とする。応答は `[{cwd,sessions:[{id,file,state,title,publishPending?:{attemptAt:number}|null,temporary?:true}],empty:[{id,file,temporary?:true}]}]` の JSON 配列であり、cwd と file は絶対パス、state と title は文字列または null である。`publishPending` は実行フェーズ公開の未完了を示す pi-mux の中継値であり、`{attemptAt}`（最後の公開試行の Unix epoch ミリ秒）または null を取る。省略と null は遅延なしとして扱い、`attemptAt` が正の整数でないオブジェクトやその他の値は不正応答として扱う。値の利用は「実行フェーズの表示」に従う。`temporary` は一時 Pi にだけ `true` で存在し、省略は通常 Pi を表す。`false` やその他の値は不正応答として扱う。`sessions` には会話ファイルが存在する pane だけが載り、未作成分は `empty` に載る。空 workspace は `sessions: []`・`empty: []` として含まれる。独自のセッション所属集合や復元集合を保存しない。
 
 保存済み会話は `pi-mux history` から得る。応答は `[{id,cwd,file,title,btime,mtime,size}]` の JSON 配列（`mtime` 降順、`mtime` が `null` の要素は後方、同値は `file` 昇順）であり、pi-mux が登録済み workspace の保存会話の `*.jsonl` を列挙し（既定の保存先では group ディレクトリ直下、`PI_CODING_AGENT_SESSION_DIR` 指定時はその直下）、各ファイルのヘッダー id・cwd を正とする。`btime` は初回 user メッセージの送信日時（Unix epoch ミリ秒）で、初回 user メッセージが未保存なら `null` になる。有限の `number` と `null` のみを受け入れ、それ以外は不正応答として扱う。`mtime` はファイル内で物理的に最後の `message`/`compaction` エントリの `timestamp`（ミリ秒、該当エントリが無いとき `null`）である。title はセッション名（最後の `session_info` の `name`）で解決し、解決できないとき最初の user メッセージ（80 code points で丸め）を使い、いずれも無いとき `null` になる。
 
@@ -232,6 +232,15 @@ Webview 全体を document の標準スクロールで移動する。スクロ�
 | 未アーカイブ・フェーズ情報なし | なし | なし |
 
 アイコンがない行も左端のスロットを保持し、表示名の開始位置を揃える。`prefers-reduced-motion: reduce` では spinner を静止表示する。アイコンの寸法・色・線と回転の詳細は `DESIGN.md` に従う。右端のアーカイブ操作は左端のアイコンと独立して表示する。
+
+実行フェーズの表示とは独立に、各セッション行へ公開遅延標識を付ける。判定には list 応答の `publishPending` を使い、基準時刻はその list 応答に基づいて一覧を更新する時刻とする。
+
+| 条件 | 表示 |
+| --- | --- |
+| `publishPending` が `attemptAt` を持ち、`attemptAt` が基準時刻から10秒以内 | 状態アイコンのスロットへ公開遅延ドットを置き、ヒントへ `State update delayed` を追加する |
+| `publishPending` が省略・`null`・不正な値、または `attemptAt` が基準時刻から10秒を超える | 公開遅延ドットもヒント行も追加しない |
+
+公開遅延標識の判定は、アーカイブ済み・フェーズ情報なしの行でもフェーズの表示から独立に行う。フェーズの表示と公開遅延標識は同時に成立する。ヒントの行順は、表示名、セッション ID、フェーズの追加行、`State update delayed`、`Unread` とする。公開遅延ドットの見た目は `DESIGN.md` に従う。
 
 拡張機能の起動から終了まで、直前の list 取得が成功または失敗してから約250ミリ秒後に list の次の取得を開始する。同時に list 取得を重ねず、古い応答で新しい状態を上書きしない。表示中は稼働 Pi の集合・workspace・title・実行フェーズを更新する。非表示中も補充対象を検出するため list を取得し、UI 配信は停止する。初回失敗後も list の定期取得を続ける。保存済み会話の取得と再表示時の更新は「保存履歴の更新」に従う。
 
@@ -399,7 +408,7 @@ Storybook のカタログで、VS Code API と実セッションファイルを�
 
 | ストーリーの軸 | 値 |
 | --- | --- |
-| データ | 複数の cwd グループ、セッションの無い登録済みワークスペース、アーカイブ済みを含むセッション / あるワークスペースを `All` に切り替えた状態 / 全ワークスペースに未アーカイブが 0 件で履歴を開ける状態 |
+| データ | 複数の cwd グループ、セッションの無い登録済みワークスペース、アーカイブ済みを含むセッション / あるワークスペースを `All` に切り替えた状態 / 全ワークスペースに未アーカイブが 0 件で履歴を開ける状態 / 公開遅延中のセッションを含む状態 |
 | 幅 | narrow（320px・既定）/ wide（720px） |
 
 カタログ上でグループ見出しのモード切替、表示中セッションの行の選択表示、`Archive`、`Unarchive`、グループ見出しの `New session`、`New workspace` のフォーム操作、登録済みグループ見出しの省略メニューとコンテキストメニューからの `Unregister workspace` をサンプルデータに対して実行できる。グループ見出しの New session はそのグループのサンプルデータへ未アーカイブの行を追加し、New workspace は入力した cwd をサンプルデータへ登録し、Unregister workspace はサンプルデータから登録を外す（Terminal は起動しない）。カタログの操作は実セッションファイル、pi-mux の管理情報、VS Code Terminal に影響しない。静的出力は拡張機能を起動せずにスクリーンショットを撮影できる。

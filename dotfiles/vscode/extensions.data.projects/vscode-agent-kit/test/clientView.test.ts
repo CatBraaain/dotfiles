@@ -574,6 +574,61 @@ describe("sessionListView", () => {
     },
   );
 
+  it("marks a delayed publication with a dot in the slot and a tooltip line", () => {
+    const elements = elementsIn(
+      viewFor("all", [{ ...groups[0], sessions: [{ ...atlasUnarchived, publishDelayed: true }] }]),
+    );
+    const slot = byClass(elements, "session-status")[0];
+
+    expect(slot.attrs?.["data-delayed"]).toBe("true");
+    expect(slot.children).toEqual([
+      expect.objectContaining({ attrs: { class: "session-delay-dot" } }),
+    ]);
+    expect(byClass(elements, "session-button")[0].attrs?.title).toBe(
+      `${atlasUnarchived.displayName}\n${atlasUnarchived.sessionId}\nState update delayed`,
+    );
+  });
+
+  it("keeps the phase icon beside the publish-delay dot when both apply", () => {
+    const elements = elementsIn(
+      viewFor("all", [
+        {
+          ...groups[0],
+          sessions: [{ ...atlasUnarchived, state: "running", publishDelayed: true }],
+        },
+      ]),
+    );
+    const slot = byClass(elements, "session-status")[0];
+
+    expect(slot.attrs?.["data-state"]).toBe("running");
+    expect(slot.attrs?.["data-delayed"]).toBe("true");
+    expect(slot.children).toHaveLength(2);
+    expect(byClass(elements, "session-delay-dot")).toHaveLength(1);
+    expect(byClass(elements, "session-button")[0].attrs?.title).toBe(
+      `${atlasUnarchived.displayName}\n${atlasUnarchived.sessionId}\nRunning\nState update delayed`,
+    );
+  });
+
+  it("omits the publish-delay mark for rows without a fresh delay", () => {
+    const elements = elementsIn(
+      viewFor("all", [
+        { ...groups[0], sessions: [{ ...atlasUnarchived, publishDelayed: false }] },
+        { ...groups[0], sessions: [{ ...atlasArchived, publishDelayed: true }] },
+      ]),
+    );
+    const [notDelayed, archivedDelayed] = byClass(elements, "session-status");
+
+    expect(notDelayed.attrs?.["data-delayed"]).toBeUndefined();
+    expect(notDelayed.children).toEqual([]);
+    expect(archivedDelayed.attrs?.["data-delayed"]).toBe("true");
+    expect(archivedDelayed.children).toEqual([
+      expect.objectContaining({ attrs: { class: "session-delay-dot" } }),
+    ]);
+    expect(
+      byClass(elements, "session-button")[0].attrs?.title?.includes("State update delayed"),
+    ).toBe(false);
+  });
+
   it("uses 12px currentColor stroke icons for the row controls and chevrons", () => {
     const icons = elementsIn(viewFor("all")).filter(
       (element) => element.tag === "svg" && element.attrs?.["data-mode-icon"] === undefined,
