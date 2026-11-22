@@ -590,6 +590,8 @@ Pi は pi-mux が管理する専用 tmux 内でセッションごとに保持し
 
 VS Code の Terminal は修飾キー付き Enter を報告しないため、tmux を介した Pi では Shift+Enter が通常の Enter と区別できない。そこでこの拡張機能は、Terminal へフォーカスがあるときの `Shift+Enter` を `sendSequence` で CSI-u 形式（`ESC [ 13 ; 2 u`）の送信に束ねる。pi-mux の専用 tmux はこのシーケンスを `S-Enter` キーイベントとして受け、同じ CSI-u シーケンスで pane へ転送する。tmux を介さない環境でも、Pi TUI は CSI-u シーケンスを Shift+Enter として認識する。
 
+Agent Kit の表示用 Terminal にキーボードフォーカスがある間だけ、`Ctrl+Up` / `Ctrl+Down`、`Alt+Up` / `Alt+Down`、`Ctrl+Shift+Up` / `Ctrl+Shift+Down` を Terminal 入力として Pi TUI に渡す。それ以外では VS Code の既存のキー割り当てに従う。
+
 | 条件・操作 | 動作 |
 | --- | --- |
 | 一覧で確認済みのセッション ID でない対象を選択する | 対象のセッション ID を含むエラーメッセージを表示し、Pi・表示先・一覧を保持する |

@@ -84,6 +84,54 @@
         },
         "key": "shift+enter",
         "when": "terminalFocus"
+      },
+      {
+        "command": "workbench.action.terminal.sendSequence",
+        "args": {
+          "text": "\u001b[1;5A"
+        },
+        "key": "ctrl+up",
+        "when": "terminalFocus && agentKit.piTerminalActive"
+      },
+      {
+        "command": "workbench.action.terminal.sendSequence",
+        "args": {
+          "text": "\u001b[1;5B"
+        },
+        "key": "ctrl+down",
+        "when": "terminalFocus && agentKit.piTerminalActive"
+      },
+      {
+        "command": "workbench.action.terminal.sendSequence",
+        "args": {
+          "text": "\u001b[1;3A"
+        },
+        "key": "alt+up",
+        "when": "terminalFocus && agentKit.piTerminalActive"
+      },
+      {
+        "command": "workbench.action.terminal.sendSequence",
+        "args": {
+          "text": "\u001b[1;3B"
+        },
+        "key": "alt+down",
+        "when": "terminalFocus && agentKit.piTerminalActive"
+      },
+      {
+        "command": "workbench.action.terminal.sendSequence",
+        "args": {
+          "text": "\u001b[1;6A"
+        },
+        "key": "ctrl+shift+up",
+        "when": "terminalFocus && agentKit.piTerminalActive"
+      },
+      {
+        "command": "workbench.action.terminal.sendSequence",
+        "args": {
+          "text": "\u001b[1;6B"
+        },
+        "key": "ctrl+shift+down",
+        "when": "terminalFocus && agentKit.piTerminalActive"
       }
     ]
   },

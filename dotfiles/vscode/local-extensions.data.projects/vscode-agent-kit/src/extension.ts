@@ -8,7 +8,7 @@ import { FolderSyncEngine, type VscodeLike } from "./folder-sync";
 import type { ExecFile } from "./git-worktrees";
 import { resolveConfiguredSessionRoot } from "./paths";
 import { TerminalRegistry } from "./terminal-registry";
-import { editorTerminals } from "./terminals";
+import { editorTerminals, isDisplayTerminal } from "./terminals";
 import { WorkspaceStore } from "./workspace-store";
 import { SessionWebviewProvider, VIEW_ID } from "./webview/session-webview-provider";
 
@@ -69,10 +69,22 @@ export function activate(context: vscode.ExtensionContext): void {
   const registry = new TerminalRegistry(editorTerminals());
   const log = vscode.window.createOutputChannel("Agent Kit", { log: true });
 
+  function updateActiveTerminalContext(terminal: vscode.Terminal | undefined): void {
+    void Promise.resolve(
+      vscode.commands.executeCommand(
+        "setContext",
+        "agentKit.piTerminalActive",
+        isDisplayTerminal(terminal),
+      ),
+    ).catch((error: unknown) => log.error("Could not update the Pi terminal context", error));
+  }
+
   context.subscriptions.push(
     vscode.window.onDidCloseTerminal((closed) => registry.onTerminalClosed(closed)),
+    vscode.window.onDidChangeActiveTerminal(updateActiveTerminalContext),
     log,
   );
+  updateActiveTerminalContext(vscode.window.activeTerminal);
 
   const folderSync = new FolderSyncEngine({
     vscode: folderSyncApi(),

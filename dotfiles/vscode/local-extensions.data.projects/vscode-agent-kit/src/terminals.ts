@@ -12,6 +12,16 @@ export interface DisplayTerminals {
   canFocus(terminal: vscode.Terminal): boolean;
 }
 
+export function isDisplayTerminal(terminal: vscode.Terminal | undefined): boolean {
+  const options = terminal?.creationOptions;
+  return (
+    options !== undefined &&
+    "env" in options &&
+    options.env?.[OWNER_KEY] === OWNER_VALUE &&
+    terminal?.exitStatus === undefined
+  );
+}
+
 export function editorTerminals(): DisplayTerminals {
   return {
     canFocus(terminal) {
@@ -22,14 +32,7 @@ export function editorTerminals(): DisplayTerminals {
       );
     },
     find() {
-      return vscode.window.terminals.find((terminal) => {
-        const options = terminal.creationOptions;
-        return (
-          "env" in options &&
-          options.env?.[OWNER_KEY] === OWNER_VALUE &&
-          terminal.exitStatus === undefined
-        );
-      });
+      return vscode.window.terminals.find(isDisplayTerminal);
     },
     create(session) {
       return vscode.window.createTerminal({

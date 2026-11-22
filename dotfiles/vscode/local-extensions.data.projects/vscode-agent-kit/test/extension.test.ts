@@ -24,6 +24,13 @@ const api = vi.hoisted(() => ({
   showInformationMessage: vi.fn(),
   showErrorMessage: vi.fn(),
   onDidCloseTerminal: vi.fn(),
+  onDidChangeActiveTerminal: vi.fn(
+    (_listener: (terminal: vscode.Terminal | undefined) => void) => ({
+      dispose: vi.fn(),
+    }),
+  ),
+  activeTerminal: undefined as vscode.Terminal | undefined,
+  executeCommand: vi.fn(),
   registerWebviewViewProvider: vi.fn(),
   createFileSystemWatcher: vi.fn(),
   createOutputChannel: vi.fn(),
@@ -79,7 +86,7 @@ const api = vi.hoisted(() => ({
 vi.mock("node:os", { spy: true });
 
 vi.mock("vscode", () => ({
-  commands: { registerCommand: api.registerCommand },
+  commands: { registerCommand: api.registerCommand, executeCommand: api.executeCommand },
   window: api,
   workspace: {
     createFileSystemWatcher: api.createFileSystemWatcher,
@@ -114,6 +121,7 @@ describe("extension commands", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     api.watchers = [];
+    api.activeTerminal = undefined;
     api.folders = [];
     api.workspaceFile = undefined;
     api.added = [];
@@ -192,6 +200,59 @@ describe("extension commands", () => {
         ({ command }) => command === "agentKit.reapplyTmuxSettings",
       ),
     ).toBe(false);
+  });
+
+  it("initializes the Pi terminal context for an already active Agent Kit terminal", () => {
+    api.activeTerminal = {
+      creationOptions: { env: { PI_SESSIONS_DISPLAY: "1" } },
+    } as unknown as vscode.Terminal;
+
+    register();
+
+    expect(api.executeCommand).toHaveBeenCalledWith(
+      "setContext",
+      "agentKit.piTerminalActive",
+      true,
+    );
+  });
+
+  it("keeps the Pi terminal context in sync when the active terminal changes", () => {
+    register();
+    const [onChange] = api.onDidChangeActiveTerminal.mock.calls[0];
+    onChange({
+      creationOptions: { env: { PI_SESSIONS_DISPLAY: "1" } },
+    } as unknown as vscode.Terminal);
+    onChange({ creationOptions: { env: {} } } as vscode.Terminal);
+    onChange(undefined);
+
+    const terminalContextUpdates = api.executeCommand.mock.calls.filter(
+      ([command, key]) => command === "setContext" && key === "agentKit.piTerminalActive",
+    );
+    expect(terminalContextUpdates.map(([, , value]) => value)).toEqual([false, true, false, false]);
+  });
+
+  it("forwards only the six arrow shortcuts while the Agent Kit terminal has focus", () => {
+    const forwardArrowBindings = manifest.contributes.keybindings.filter(
+      ({ key }) => key.endsWith("+up") || key.endsWith("+down"),
+    );
+
+    expect(forwardArrowBindings).toHaveLength(6);
+    expect(
+      Object.fromEntries(forwardArrowBindings.map(({ key, args }) => [key, args.text])),
+    ).toEqual({
+      "ctrl+up": "\u001b[1;5A",
+      "ctrl+down": "\u001b[1;5B",
+      "alt+up": "\u001b[1;3A",
+      "alt+down": "\u001b[1;3B",
+      "ctrl+shift+up": "\u001b[1;6A",
+      "ctrl+shift+down": "\u001b[1;6B",
+    });
+    for (const binding of forwardArrowBindings) {
+      expect(binding).toMatchObject({
+        command: "workbench.action.terminal.sendSequence",
+        when: "terminalFocus && agentKit.piTerminalActive",
+      });
+    }
   });
 
   it("starts list acquisition without a webview and watches only conversation files", async () => {
