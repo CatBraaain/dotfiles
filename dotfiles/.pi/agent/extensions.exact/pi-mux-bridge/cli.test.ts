@@ -4406,7 +4406,7 @@ describe("pi-mux state identity and persistence boundaries", () => {
   );
 
   it(
-    "returns 75 without modification when another operation holds the shared lock",
+    "publishes running under the shared lock when promotion and repair are unnecessary",
     async () => {
       await fixture(async (f) => {
         const { pane, metadata } = await publishedIdlePane(f);
@@ -4420,19 +4420,14 @@ describe("pi-mux state identity and persistence boundaries", () => {
           lock.listen(`\0pi-mux-${process.getuid!()}-${key}`, resolve);
         });
         try {
-          const result = await f.run([
-            "state",
-            metadata.id,
-            "running",
-            "--source",
-            JSON.stringify(source),
-            "--title",
-            "null",
-          ]);
-          assert.equal(result.code, 75);
-          assert.equal(result.out, "");
-          assert.match(result.err, /live-id.*lock/);
-          assert.equal(await paneState(f, pane), undefined);
+          const result = await stateFor(f, metadata.id, source, "running");
+          assert.deepEqual(result, { code: 0, out: "", err: "" });
+          assert.deepEqual(await paneState(f, pane), {
+            version: 1,
+            sessionId: metadata.id,
+            state: "running",
+            title: null,
+          });
           assert.equal(existsSync(join(stateDirectory, "pi-mux-restore.json")), false);
         } finally {
           await new Promise<void>((resolve) => lock.close(() => resolve()));
