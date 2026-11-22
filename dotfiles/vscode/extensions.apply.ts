@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
 import { $ } from "bun";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdir, readdir, readFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 const extensionsForWindows = ["ms-vscode-remote.remote-wsl", "tomoki1207.pdf"];
 
@@ -49,14 +51,14 @@ const extensionsForLinux = [
   "yzhang.markdown-all-in-one",
 ];
 
-const mirrorExtensionIds = ["todo-lsp.todo", "agent-kit.agent-kit"];
-const workspaceExtensionId = "catbraaain.vscode-custom-patch";
-const localExtensionIds = [...mirrorExtensionIds, workspaceExtensionId];
+const todoLspId = "todo-lsp.todo";
+const agentKitId = "agent-kit.agent-kit";
+const localExtensionIds = [todoLspId, agentKitId, "catbraaain.vscode-custom-patch"];
 
 const home = process.env.HOME;
 if (home === undefined) throw new Error("HOME: unbound variable");
 const todoLspRepo = join(home, "mirrors/github.com/CatBraaain/todo-lsp");
-const agentKitRepo = join(home, "mirrors/github.com/CatBraaain/vscode-agent-kit");
+const todoLspUrl = "https://github.com/CatBraaain/todo-lsp.git";
 const defaultBranch = "main";
 
 type Label = "linux" | "windows";
@@ -65,8 +67,12 @@ let linuxExtensionEntries: [string, string][] | undefined;
 
 async function main() {
   if (await hasCommand("code")) {
-    for (const id of mirrorExtensionIds) {
-      await installMirrorExtension(id);
+    await installTodoLsp();
+    try {
+      await installAgentKit();
+    } catch (error) {
+      console.error(`[linux] ${agentKitId}: ${error}`);
+      process.exitCode = 1;
     }
     await syncExtensions("linux");
   } else {
@@ -84,26 +90,100 @@ async function main() {
   }
 }
 
-async function installMirrorExtension(extension: string) {
-  const { url, repo } = localExtensionSource(extension);
-  if (isDirectory(join(repo, ".git"))) {
-    const localHead = (await $`git -C ${repo} rev-parse HEAD`.text()).trimEnd();
+async function installTodoLsp() {
+  if (isDirectory(join(todoLspRepo, ".git"))) {
+    const localHead = (await $`git -C ${todoLspRepo} rev-parse HEAD`.text()).trimEnd();
     const remoteHead = (
-      await $`git -C ${repo} ls-remote origin refs/heads/${defaultBranch}`.text()
+      await $`git -C ${todoLspRepo} ls-remote origin refs/heads/${defaultBranch}`.text()
     ).split(/\s+/)[0];
     if (remoteHead && localHead === remoteHead) {
-      const trackedChanges = await $`git -C ${repo} status --porcelain --untracked-files=no`.text();
-      if (!trackedChanges && (await isExtensionInstalled("linux", extension))) {
-        return;
-      }
+      const trackedChanges =
+        await $`git -C ${todoLspRepo} status --porcelain --untracked-files=no`.text();
+      if (!trackedChanges && (await isExtensionInstalled("linux", todoLspId))) return;
     }
   }
 
-  await ensureRepo(url, repo);
-  const vsixPath = await buildLocalExtensionVsix(extension);
-  console.log(`[linux] install ${vsixPath}`);
-  await $`code --install-extension ${vsixPath} --force`;
-  linuxExtensionEntries = undefined;
+  await ensureRepo(todoLspUrl, todoLspRepo);
+  const project = join(todoLspRepo, "vscode-todo");
+  const version = (
+    await $`node -p "require('./package.json').version"`.cwd(project).text()
+  ).trimEnd();
+  const vsixPath = join(project, "dist", `todo-${version}.vsix`);
+  rmSync(vsixPath, { force: true });
+  await $`bun install --frozen-lockfile 1>&2`.cwd(todoLspRepo);
+  await $`just package 1>&2`.cwd(todoLspRepo);
+  await installVsix(vsixPath);
+}
+
+async function installAgentKit() {
+  const { DOTFILES_HOME_ROOT: homeRoot, DOTFILES_DIST_DIR: distRoot } = process.env;
+  if (!homeRoot || !distRoot) throw new Error("apply hook paths are not set");
+  const vscodeRelativeDir = relative(homeRoot, import.meta.dir);
+  if (
+    isAbsolute(vscodeRelativeDir) ||
+    vscodeRelativeDir === ".." ||
+    vscodeRelativeDir.startsWith(`..${sep}`)
+  ) {
+    throw new Error("apply hook must run from inside the home root");
+  }
+  const project = join(distRoot, vscodeRelativeDir, "extensions.data.projects/vscode-agent-kit");
+  const manifest = await Bun.file(join(project, "package.json")).json();
+  const vsixName = "agent-kit.vsix";
+  const contentHash = await hashAgentKitBuildInputs(project, vsixName);
+  const receipt = join(homeRoot, ".cache/dotfiles/vscode-extensions/linux", `${agentKitId}.sha256`);
+  const installed = (await readExtensionEntries("linux", { requireSuccess: true })).some(
+    ([id, version]) => id === agentKitId && version === manifest.version,
+  );
+  if (installed && (await readReceipt(receipt)) === contentHash) return;
+
+  const vsixPath = join(project, vsixName);
+  rmSync(vsixPath, { force: true });
+  await $`bun install --frozen-lockfile 1>&2`.cwd(project);
+  await $`bun run build 1>&2`.cwd(project);
+  await $`bunx @vscode/vsce package --allow-missing-repository --skip-license --no-dependencies --out ${vsixPath} 1>&2`.cwd(
+    project,
+  );
+  await installVsix(vsixPath);
+  await mkdir(dirname(receipt), { recursive: true });
+  await Bun.write(receipt, `${contentHash}\n`);
+}
+
+async function hashAgentKitBuildInputs(project: string, vsixName: string): Promise<string> {
+  const generatedEntries = new Set([
+    "node_modules",
+    "dist",
+    "dist-webview",
+    "storybook-static",
+    vsixName,
+  ]);
+  const paths: string[] = [];
+  const childFiles = new Bun.Glob("**/*");
+  for (const entry of await readdir(project, { withFileTypes: true })) {
+    if (generatedEntries.has(entry.name)) continue;
+    if (entry.isDirectory()) {
+      const cwd = join(project, entry.name);
+      for await (const path of childFiles.scan({ cwd, dot: true })) {
+        paths.push(join(entry.name, path));
+      }
+    } else {
+      paths.push(entry.name);
+    }
+  }
+  const hash = createHash("sha256");
+  for (const path of paths.sort()) {
+    const contents = await readFile(join(project, path));
+    const fileHash = createHash("sha256").update(contents).digest("hex");
+    hash.update(`${path}\0${fileHash}\n`);
+  }
+  return hash.digest("hex");
+}
+
+async function readReceipt(path: string): Promise<string | undefined> {
+  try {
+    return (await readFile(path, "utf8")).trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 }
 
 async function syncExtensions(label: Label) {
@@ -128,17 +208,6 @@ async function syncExtensions(label: Label) {
   }
 }
 
-function localExtensionSource(extension: string) {
-  switch (extension) {
-    case "todo-lsp.todo":
-      return { url: "https://github.com/CatBraaain/todo-lsp.git", repo: todoLspRepo };
-    case "agent-kit.agent-kit":
-      return { url: "https://github.com/CatBraaain/vscode-agent-kit.git", repo: agentKitRepo };
-    default:
-      throw new Error(`error: unknown local extension '${extension}'`);
-  }
-}
-
 async function ensureRepo(url: string, repo: string) {
   if (isDirectory(join(repo, ".git"))) {
     await $`git -C ${repo} pull --ff-only origin ${defaultBranch} 1>&2`;
@@ -150,48 +219,31 @@ async function ensureRepo(url: string, repo: string) {
   }
 }
 
-async function buildLocalExtensionVsix(extension: string) {
-  let vsixPath: string;
-  if (extension === "todo-lsp.todo") {
-    const version = (
-      await $`node -p "require('./package.json').version"`
-        .cwd(join(todoLspRepo, "vscode-todo"))
-        .text()
-    ).replace(/\n+$/, "");
-    vsixPath = join(todoLspRepo, "vscode-todo/dist", `todo-${version}.vsix`);
-    rmSync(vsixPath, { force: true });
-    await $`bun install --frozen-lockfile 1>&2`.cwd(todoLspRepo);
-    await $`just package 1>&2`.cwd(todoLspRepo);
-  } else if (extension === "agent-kit.agent-kit") {
-    const version = (
-      await $`node -p "require('./package.json').version"`.cwd(agentKitRepo).text()
-    ).replace(/\n+$/, "");
-    vsixPath = join(agentKitRepo, `agent-kit-${version}.vsix`);
-    rmSync(vsixPath, { force: true });
-    await $`bun install --frozen-lockfile 1>&2`.cwd(agentKitRepo);
-    await $`bun run build 1>&2`.cwd(agentKitRepo);
-    await $`bunx @vscode/vsce package --allow-missing-repository --skip-license --no-dependencies 1>&2`.cwd(
-      agentKitRepo,
-    );
-  } else {
-    throw new Error(`error: unknown local extension '${extension}'`);
-  }
-
-  if (!isFile(vsixPath)) {
-    throw new Error(`error: VSIX was not created: ${vsixPath}`);
-  }
-  return vsixPath;
+async function installVsix(vsixPath: string) {
+  if (!isFile(vsixPath)) throw new Error(`error: VSIX was not created: ${vsixPath}`);
+  console.log(`[linux] install ${vsixPath}`);
+  await runCode("linux", ["--install-extension", vsixPath, "--force"]);
 }
 
 const extensionIdPattern = /^([a-z0-9-]+\.[a-z0-9-]+)@/;
 
-async function readExtensionEntries(label: Label): Promise<[string, string][]> {
+async function readExtensionEntries(
+  label: Label,
+  options?: { requireSuccess: boolean },
+): Promise<[string, string][]> {
   if (label === "linux" && linuxExtensionEntries !== undefined) return linuxExtensionEntries;
   const codeCommand = codeExecutable(label);
-  const { stdout, exitCode } = await $`${codeCommand} --list-extensions --show-versions`
+  const { stdout, stderr, exitCode } = await $`${codeCommand} --list-extensions --show-versions`
     .quiet()
     .nothrow();
-  if (exitCode !== 0) return [];
+  if (exitCode !== 0) {
+    if (options?.requireSuccess) {
+      throw new Error(
+        `could not list ${label} extensions (exit ${exitCode}): ${stderr.toString().trim()}`,
+      );
+    }
+    return [];
+  }
   const entries = stdout
     .toString()
     .replace(/\r/g, "")
