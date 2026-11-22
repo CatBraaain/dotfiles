@@ -24,7 +24,7 @@ import {
   restoreOriginalFromBackup,
   segmentFromPlugins,
   workbenchSearchDirs,
-} from "./patch.data.ts";
+} from "./patch.ts";
 
 const tempRoots: string[] = [];
 

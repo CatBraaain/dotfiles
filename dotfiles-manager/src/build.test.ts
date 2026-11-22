@@ -1286,11 +1286,11 @@ if (import.meta.main) {
   it.skipIf(process.platform === "win32")(
     "matches separator-bearing remap keys regardless of platform path separators",
     async () => {
-      const scriptName = "vscode\\sync_vscode_extensions.apply.ts";
+      const scriptName = "vscode\\extensions.apply.ts";
       await put(
         root,
         "dotfiles/remap.data.md",
-        "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| vscode/sync_vscode_extensions.apply.ts |  | - |  |\n",
+        "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| vscode/extensions.apply.ts |  | - |  |\n",
       );
       await put(root, `dotfiles/${scriptName}`, "await main();\n");
 

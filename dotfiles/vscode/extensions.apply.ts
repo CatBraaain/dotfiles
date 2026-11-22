@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { $ } from "bun";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const extensionsForWindows = ["ms-vscode-remote.remote-wsl", "tomoki1207.pdf"];
@@ -54,8 +53,6 @@ const mirrorExtensionIds = ["todo-lsp.todo", "agent-kit.agent-kit"];
 const workspaceExtensionId = "catbraaain.vscode-custom-patch";
 const localExtensionIds = [...mirrorExtensionIds, workspaceExtensionId];
 
-declare const EMBEDDED_WORKSPACE_VSIX: { fileName: string; version: string; base64: string };
-
 const home = process.env.HOME;
 if (home === undefined) throw new Error("HOME: unbound variable");
 const todoLspRepo = join(home, "mirrors/github.com/CatBraaain/todo-lsp");
@@ -71,7 +68,6 @@ async function main() {
     for (const id of mirrorExtensionIds) {
       await installMirrorExtension(id);
     }
-    await installWorkspaceExtension("linux");
     await syncExtensions("linux");
   } else {
     console.error("warn: 'code' not found; skipping linux extensions");
@@ -84,7 +80,6 @@ async function main() {
     // Missing or unreadable /proc/version does not indicate WSL.
   }
   if (isWsl && (await hasCommand("powershell.exe"))) {
-    await installWorkspaceExtension("windows");
     await syncExtensions("windows");
   }
 }
@@ -109,27 +104,6 @@ async function installMirrorExtension(extension: string) {
   console.log(`[linux] install ${vsixPath}`);
   await $`code --install-extension ${vsixPath} --force`;
   linuxExtensionEntries = undefined;
-}
-
-async function installWorkspaceExtension(label: Label) {
-  const { fileName, version, base64 } = EMBEDDED_WORKSPACE_VSIX;
-  if ((await installedExtensionVersion(label, workspaceExtensionId)) === version) return;
-
-  const assetDir = mkdtempSync(join(tmpdir(), "vscode-custom-patch-"));
-  try {
-    const vsixPath = join(assetDir, fileName);
-    await Bun.write(vsixPath, Buffer.from(base64, "base64"));
-    const installerPath = label === "windows" ? await windowsInstallerPath(vsixPath) : vsixPath;
-    console.log(`[${label}] install ${vsixPath}`);
-    await runCode(label, ["--install-extension", installerPath, "--force"]);
-  } finally {
-    rmSync(assetDir, { force: true, recursive: true });
-  }
-}
-
-async function windowsInstallerPath(vsixPath: string): Promise<string> {
-  const windowsPath = (await $`wslpath -w ${vsixPath}`.text()).trimEnd();
-  return `'${windowsPath.replace(/['‘’‚‛]/g, "$&$&")}'`;
 }
 
 async function syncExtensions(label: Label) {
@@ -234,14 +208,6 @@ async function readExtensionEntries(label: Label): Promise<[string, string][]> {
 async function installedExtensionIds(label: Label): Promise<string[]> {
   const entries = await readExtensionEntries(label);
   return entries.map(([id]) => id);
-}
-
-async function installedExtensionVersion(
-  label: Label,
-  extension: string,
-): Promise<string | undefined> {
-  const entries = await readExtensionEntries(label);
-  return entries.find(([id]) => id === extension)?.[1];
 }
 
 async function isExtensionInstalled(label: Label, extension: string): Promise<boolean> {

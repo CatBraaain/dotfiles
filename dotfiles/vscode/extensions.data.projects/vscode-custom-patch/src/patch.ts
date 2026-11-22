@@ -1,7 +1,3 @@
-// Shared patch engine for baking and reapplying custom scripts into the VS
-// Code workbench. The plugins folder is the single source of truth: an
-// application guarantees injection at apply time, the extension re-guarantees
-// it at every startup, and removing plugins removes the patch.
 // Marker format, backup naming, and CSP removal follow the layout that
 // previous be5invis/vscode-custom-css patches used, so installs patched by
 // the Loader migrate without a manual reset.
@@ -141,16 +137,19 @@ export function extractPatchSegment(html: string): string | null {
 // Makes the workbench patch match the plugins folder: bakes missing or stale
 // scripts, and removes the patch when the folder holds no plugins. Throws on
 // plugin read errors so callers can report them.
-export function ensurePatched({
-  searchDirs,
-  pluginsDir,
-  mode = "ensure",
-}: {
-  searchDirs: string[];
-  pluginsDir: string;
-  mode?: EnsureMode;
-}): EnsureResult {
-  const entries = mode === "remove" ? [] : (pluginEntries(pluginsDir) ?? []);
+export function ensurePatched(
+  options: {
+    searchDirs: string[];
+    mode?: EnsureMode;
+  } & ({ pluginsDir: string } | { plugins: PluginEntry[] }),
+): EnsureResult {
+  const { searchDirs, mode = "ensure" } = options;
+  const entries =
+    mode === "remove"
+      ? []
+      : "plugins" in options
+        ? options.plugins
+        : (pluginEntries(options.pluginsDir) ?? []);
   const htmlPath = findWorkbenchHtml(searchDirs);
   if (htmlPath === null) return "no-workbench";
   const workbenchDir = dirname(htmlPath);

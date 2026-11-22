@@ -1,9 +1,8 @@
-#!/usr/bin/env bun
-import {
-  ensurePatched,
-  installRoots,
-  workbenchSearchDirs,
-} from "../vscode-custom-patch/patch.data.ts";
+import { readFileSync } from "node:fs";
+import { ensurePatched, installRoots, workbenchSearchDirs } from "./patch.ts";
+
+const pluginPath = process.argv[2];
+if (!pluginPath) throw new Error("usage: bun run inject <plugin.js>");
 
 const failures: Record<string, string> = {
   "no-workbench": "workbench.html not found; skipping",
@@ -13,7 +12,12 @@ const failures: Record<string, string> = {
 
 const result = ensurePatched({
   searchDirs: workbenchSearchDirs({ extraRoots: installRoots() }),
-  pluginsDir: process.cwd(),
+  plugins: [
+    {
+      name: "scm-collapse.js",
+      content: readFileSync(pluginPath, "utf8"),
+    },
+  ],
 });
 
 if (result in failures) {

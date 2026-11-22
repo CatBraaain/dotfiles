@@ -1,23 +1,18 @@
-// Standalone CLI for the custom patch engine, deployed beside the plugins
-// folder so it can also be run manually outside apply.
-// Usage: cli.js [ensure|remove] [pluginsDir]
-import { dirname, join, resolve } from "node:path";
-import { ensurePatched, installRoots, workbenchSearchDirs } from "./patch.data.ts";
+import { ensurePatched, installRoots, workbenchSearchDirs } from "./src/patch.ts";
+
+declare const BUNDLED_SCM_COLLAPSE: string;
 
 const command = process.argv[2] ?? "ensure";
 if (command !== "ensure" && command !== "remove") {
   console.error(`unknown command: ${command} (expected ensure or remove)`);
   process.exit(1);
 }
-// import.meta.url is statically inlined by the bundler, so argv[1] is the
-// reliable script location. The plugins folder is the CLI's sibling folder.
-const scriptPath = process.argv[1] ? resolve(process.argv[1]) : "cli.js";
-const pluginsDir =
-  process.argv[3] ?? join(dirname(scriptPath), "..", "vscode-custom-patch-plugins");
+const pluginsDir = process.argv[3];
+const plugins = [{ name: "scm-collapse.js", content: BUNDLED_SCM_COLLAPSE }];
 
 const result = ensurePatched({
   searchDirs: workbenchSearchDirs({ extraRoots: installRoots() }),
-  pluginsDir,
+  ...(pluginsDir === undefined ? { plugins } : { pluginsDir }),
   mode: command,
 });
 
