@@ -887,6 +887,7 @@ describe("pi-mux workspace list", () => {
             file: metadata.file,
             state: null,
             title: null,
+            publishPending: null,
           }))
           .sort((a, b) => a.id.localeCompare(b.id));
         assert.deepEqual(actual, expected);
@@ -898,7 +899,7 @@ describe("pi-mux workspace list", () => {
 
   for (const state of ["running", "waiting-approval", "waiting-user"] as const) {
     it(
-      "returns only the four session fields with state " + state,
+      "returns the session fields including null publishPending with state " + state,
       async () => {
         await fixture(async (f) => {
           const { pane, metadata } = await publishedIdlePane(f);
@@ -926,7 +927,9 @@ describe("pi-mux workspace list", () => {
           assert.deepEqual(JSON.parse(result.out), [
             {
               cwd: metadata.cwd,
-              sessions: [{ id: metadata.id, file: metadata.file, state, title: null }],
+              sessions: [
+                { id: metadata.id, file: metadata.file, state, title: null, publishPending: null },
+              ],
               empty: [],
             },
           ]);
@@ -992,7 +995,9 @@ describe("pi-mux workspace list", () => {
             [
               {
                 cwd: metadata.cwd,
-                sessions: [{ id: metadata.id, file: metadata.file, state, title }],
+                sessions: [
+                  { id: metadata.id, file: metadata.file, state, title, publishPending: null },
+                ],
                 empty: [],
               },
             ],
@@ -1050,7 +1055,15 @@ describe("pi-mux workspace list", () => {
           assert.deepEqual(JSON.parse(result.out), [
             {
               cwd: metadata.cwd,
-              sessions: [{ id: metadata.id, file: metadata.file, state: null, title: null }],
+              sessions: [
+                {
+                  id: metadata.id,
+                  file: metadata.file,
+                  state: null,
+                  title: null,
+                  publishPending: null,
+                },
+              ],
               empty: [],
             },
           ]);
@@ -1071,7 +1084,15 @@ describe("pi-mux workspace list", () => {
           assert.deepEqual(JSON.parse(result.out), [
             {
               cwd: metadata.cwd,
-              sessions: [{ id: metadata.id, file: metadata.file, state: null, title: null }],
+              sessions: [
+                {
+                  id: metadata.id,
+                  file: metadata.file,
+                  state: null,
+                  title: null,
+                  publishPending: null,
+                },
+              ],
               empty: [],
             },
           ]);
@@ -1496,7 +1517,15 @@ export default function (pi) {
           { cwd: f.cwdB, sessions: [], empty: [] },
           {
             cwd: f.cwdA,
-            sessions: [{ id: metadata.id, file: metadata.file, state: null, title: null }],
+            sessions: [
+              {
+                id: metadata.id,
+                file: metadata.file,
+                state: null,
+                title: null,
+                publishPending: null,
+              },
+            ],
             empty: [],
           },
         ]);
@@ -1556,7 +1585,13 @@ export default function (pi) {
           {
             cwd: f.cwdB,
             sessions: [
-              { id: otherMetadata.id, file: otherMetadata.file, state: null, title: null },
+              {
+                id: otherMetadata.id,
+                file: otherMetadata.file,
+                state: null,
+                title: null,
+                publishPending: null,
+              },
             ],
             empty: [],
           },
@@ -4830,6 +4865,7 @@ describe("pi-mux list title fallback", () => {
           file: metadata.file,
           state: "running",
           title: "Published name",
+          publishPending: null,
         });
       });
     },
