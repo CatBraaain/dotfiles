@@ -4431,6 +4431,134 @@ describe("reload", () => {
   }, 20000);
 });
 
+describe("restore saved conversation resolution", () => {
+  function recordCandidate(fixture: SessionFixture, id: string): void {
+    writeFileSync(
+      restoreFile(fixture),
+      JSON.stringify({
+        version: 1,
+        generation: "previous",
+        workspaces: [{ cwd: fixture.cwd, sessions: [id] }],
+      }),
+    );
+  }
+
+  for (const location of ["normal", "archive"] as const) {
+    it(`restores from ${location} when it has priority`, async () => {
+      const fixture = new SessionFixture();
+      try {
+        prepareManagedPi(fixture);
+        const id = randomUUID();
+        const file = conversationFile(fixture.agentDir, fixture.cwd, id);
+        const archive = join(dirname(file), "archive");
+        const archivedFile = join(archive, basename(file));
+        mkdirSync(archive);
+        writeFileSync(archivedFile, readFileSync(file));
+        if (location === "archive") rmSync(file);
+        recordCandidate(fixture, id);
+
+        const result = fixture.run(["restore"]);
+        assert.equal(result.status, 0, result.stderr);
+        const metadata = fixture.tmux(["list-panes", "-a", "-F", "#{@pi-tmux-session}"]);
+        const restored = JSON.parse(Buffer.from(metadata, "base64").toString("utf8"));
+        const expectedFile = location === "normal" ? file : archivedFile;
+        assert.equal(restored.file, expectedFile);
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  }
+
+  for (const failure of ["Invalid session header", "Ambiguous session ID"] as const) {
+    it(`reports ${failure} without removing the restore candidate`, async () => {
+      const fixture = new SessionFixture();
+      try {
+        prepareManagedPi(fixture);
+        const id = randomUUID();
+        const file = conversationFile(fixture.agentDir, fixture.cwd, id);
+        const otherFile = join(dirname(file), "other.jsonl");
+        writeFileSync(
+          otherFile,
+          failure === "Invalid session header" ? "{}\n" : readFileSync(file),
+        );
+        recordCandidate(fixture, id);
+
+        const result = fixture.run(["restore"]);
+        assert.equal(result.status, 2, result.stderr);
+        assert.ok(result.stderr.includes(`restore ${id}: ${failure}`), result.stderr);
+        assert.deepEqual(restoreDocument(fixture).workspaces, [
+          { cwd: fixture.cwd, sessions: [id] },
+        ]);
+        assert.equal(existsSync(join(fixture.directory, "launches.jsonl")), false);
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  }
+
+  for (const session of ["missing", "present"] as const) {
+    it(`handles a ${session} saved conversation when pane inspection fails`, async () => {
+      const fixture = new SessionFixture();
+      try {
+        prepareManagedPi(fixture);
+        const id = randomUUID();
+        if (session === "present") conversationFile(fixture.agentDir, fixture.cwd, id);
+        recordCandidate(fixture, id);
+        fixture.beforeCliTmux(`if [ "$5" = list-panes ]; then
+  printf '%s\\n' 'pane inspection failed' >&2
+  exit 1
+fi`);
+
+        const result = fixture.run(["restore"]);
+        if (session === "missing") {
+          assert.equal(result.status, 0, result.stderr);
+          assert.match(result.stderr, /saved conversation not found; removed/);
+          assert.deepEqual(restoreDocument(fixture).workspaces, [
+            { cwd: fixture.cwd, sessions: [] },
+          ]);
+        } else {
+          assert.equal(result.status, 2, result.stderr);
+          assert.match(result.stderr, /Cannot inspect pi sessions: pane inspection failed/);
+          assert.deepEqual(restoreDocument(fixture).workspaces, [
+            { cwd: fixture.cwd, sessions: [id] },
+          ]);
+        }
+      } finally {
+        await fixture.cleanup();
+      }
+    });
+  }
+
+  it("checks the saved cwd after inspecting live panes before restoring", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      const id = randomUUID();
+      const file = conversationFile(fixture.agentDir, fixture.cwd, id);
+      const otherCwd = join(fixture.directory, "other-workspace");
+      mkdirSync(otherCwd);
+      const replacement = conversationFile(fixture.agentDir, otherCwd, id);
+      const stagedFile = join(fixture.directory, "replacement.jsonl");
+      writeFileSync(stagedFile, readFileSync(replacement));
+      rmSync(replacement);
+      recordCandidate(fixture, id);
+      fixture.beforeCliTmux(`if [ "$5" = list-panes ] && [ -f ${JSON.stringify(stagedFile)} ]; then
+  mv -- ${JSON.stringify(stagedFile)} ${JSON.stringify(file)} || exit 1
+fi`);
+
+      const result = fixture.run(["restore"]);
+      assert.equal(result.status, 2, result.stderr);
+      assert.ok(
+        result.stderr.includes(`restore ${id}: Saved working directory differs from snapshot`),
+      );
+      assert.deepEqual(restoreDocument(fixture).workspaces, [{ cwd: fixture.cwd, sessions: [id] }]);
+      assert.equal(existsSync(join(fixture.directory, "launches.jsonl")), false);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+});
+
 describe("restore failure exit codes", () => {
   for (const contents of ["{broken", '{"version":1,"generation":"saved","workspaces":{}}']) {
     it(`returns 2 without changing an invalid restore record: ${contents}`, async () => {

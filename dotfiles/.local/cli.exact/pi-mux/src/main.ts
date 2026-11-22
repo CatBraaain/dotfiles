@@ -1404,18 +1404,15 @@ async function restoreSessions(
   let failures = 0;
   for (const candidate of candidates) {
     try {
-      const saved = await findSaved(config, candidate.id, "restore");
-      if (!saved) {
-        console.error(`pi-mux: restore ${candidate.id}: saved conversation not found; removed`);
-      } else {
-        if (saved.cwd !== candidate.cwd)
-          throw new Error(`Saved working directory differs from snapshot: ${saved.cwd}`);
-        const restored = await openSaved(config, candidate.id);
+      const resolution = await resolveSaved(config, candidate.id, candidate.cwd);
+      if (resolution.saved) {
+        const restored = await openResolvedSession(config, candidate.id, resolution);
         if (restored.startup !== "ready")
           throw new Error("Running pi has not confirmed initialization completion");
-      }
-      if (!saved)
+      } else {
+        console.error(`pi-mux: restore ${candidate.id}: saved conversation not found; removed`);
         state = { ...state, sessions: state.sessions.filter((entry) => entry.id !== candidate.id) };
+      }
       writeSnapshot(config, state);
       await tmux(config, ["set-option", "-gu", `@pi-mux-restoring-${candidate.id}`]);
     } catch (error) {
@@ -1835,20 +1832,47 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function resolveSaved(config: Config, id: string) {
-  const managed = (await managedSessions(config)).filter((session) => session.id === id);
-  if (managed.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
-  const running = (await livePanes(config, "list")).filter((pane) => pane.id === id);
-  if (running.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
-  const saved = await findSaved(config, id);
-  const recovery = !saved && !running[0] && !managed[0] ? findFirstInput(config, id) : undefined;
-  if (!running[0] && !managed[0]) {
+type SavedSessionResolution = {
+  running?: Pane;
+  managed?: ManagedSession;
+  saved?: Session;
+  recovery?: Candidate;
+};
+
+async function resolveSaved(
+  config: Config,
+  id: string,
+  restoreCwd?: string,
+): Promise<SavedSessionResolution> {
+  const inspection = await inspectRunningSession(config, id).catch((error: unknown) => {
+    if (restoreCwd === undefined) throw error;
+    return { error };
+  });
+  const saved = await findSaved(config, id, restoreCwd === undefined ? "open" : "restore");
+  if (restoreCwd !== undefined) {
+    if (!saved) return {};
+    if (saved.cwd !== restoreCwd)
+      throw new Error(`Saved working directory differs from snapshot: ${saved.cwd}`);
+  }
+  if ("error" in inspection) throw inspection.error;
+
+  const { running, managed } = inspection;
+  const recovery = !saved && !running && !managed ? findFirstInput(config, id) : undefined;
+  if (!running && !managed) {
     const candidate = saved ?? recovery;
     if (!candidate) throw new Error(`Session not found (use the complete ID): ${id}`);
     if (!existsSync(candidate.cwd) || !statSync(candidate.cwd).isDirectory())
       throw new Error(`Session working directory does not exist: ${candidate.cwd}`);
   }
-  return { running: running[0], managed: managed[0], saved, recovery };
+  return { running, managed, saved, recovery };
+}
+
+async function inspectRunningSession(config: Config, id: string) {
+  const managed = (await managedSessions(config)).filter((session) => session.id === id);
+  if (managed.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
+  const running = (await livePanes(config, "list")).filter((pane) => pane.id === id);
+  if (running.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
+  return { running: running[0], managed: managed[0] };
 }
 
 async function openSaved(
@@ -1856,7 +1880,16 @@ async function openSaved(
   id: string,
   mode: "normal" | "temporary" = "normal",
 ): Promise<Pane> {
-  const { running, managed, saved, recovery } = await resolveSaved(config, id);
+  const resolution = await resolveSaved(config, id);
+  return await openResolvedSession(config, id, resolution, mode);
+}
+
+async function openResolvedSession(
+  config: Config,
+  id: string,
+  { running, managed, saved, recovery }: SavedSessionResolution,
+  mode: "normal" | "temporary" = "normal",
+): Promise<Pane> {
   if (running) return running;
   if (managed) return await waitForSession(config, managed.session, id);
   const candidate = saved ?? recovery;
