@@ -153,6 +153,9 @@ test(
     testInfo.setTimeout(150_000);
     const firstPids = new Map<string, number>();
     const selections = ["A", "B", "A", "B"];
+    const terminalInput = host.page
+      .getByRole("textbox", { name: /^Terminal [0-9]+/ })
+      .describe("Shared Pi command input");
     await host.activateSession("A");
     await host.activateSession("B");
     for (const [index, key] of selections.entries()) {
@@ -178,9 +181,7 @@ test(
       await test.step(`Check ${key} saved session identity and normal Pi TUI`, async () => {
         const title = await host.expectNativeDisplay(key);
         const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
-        const terminalInput = host.page
-          .getByRole("textbox", { name: /^Terminal [0-9]+/ })
-          .describe("Shared Pi command input");
+        await expect(terminalInput).toBeFocused();
         const runtime = host.sessionRuntime(key)!;
         const startCommand = host
           .tmux(["display-message", "-p", "-t", runtime.target, "#{pane_start_command}"])
@@ -260,7 +261,6 @@ test(
                 .map(({ label, active }) => ({ label, active })),
             )
             .toEqual([{ label: title, active: true }]);
-          await expect(terminalInput).not.toBeFocused();
           await expect(terminalScreen).toContainText(host.sessions[key].cwd);
           await expect(terminalScreen).toContainText(`• Fixture ${key}`);
           expect(host.tmux(["list-clients", "-F", "#{session_name}"]).trim()).toBe(displayTarget);
@@ -313,6 +313,7 @@ test(
       ).toEqual([...firstPids.values()].sort());
       await host.selectSession("A");
       await host.expectNativeDisplay("A");
+      await expect(terminalInput).toBeFocused();
       expect(host.sessionRuntime("A")?.pid).toBe(firstPids.get("A"));
       await host.selectSession("B");
       await host.expectNativeDisplay("B");
@@ -642,8 +643,12 @@ test.describe("First assistant response through a loopback fixture provider", ()
           .locator(".group-new-session")
           .describe("New session button")
           .click({ steps: 15 });
-        await host.page.locator(".terminal.xterm").describe("Focus the Pi Terminal").click();
         await host.expectPiVisible(folder);
+        await expect(
+          host.page
+            .getByRole("textbox", { name: /^Terminal [0-9]+/ })
+            .describe("New Pi command input"),
+        ).toBeFocused();
         displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
         await expect.poll(() => mux.current(displayPid)).toMatchObject({ cwd: folder });
         session = (await mux.current(displayPid))!;
@@ -1349,6 +1354,11 @@ test(
       await expect(status).toHaveCSS("height", "12px");
       expect(aIsListed()).toBe(true);
       await host.expectNativeDisplay("A");
+      await expect(
+        host.page
+          .getByRole("textbox", { name: /^Terminal [0-9]+/ })
+          .describe("Unarchived Pi command input"),
+      ).toBeFocused();
       unarchivedA = host.piProcesses().find((entry) => entry.target === initialA.target)!;
       expect(unarchivedA.pid).toBe(temporaryA.pid);
       expect(unarchivedA.pid).not.toBe(initialA.pid);

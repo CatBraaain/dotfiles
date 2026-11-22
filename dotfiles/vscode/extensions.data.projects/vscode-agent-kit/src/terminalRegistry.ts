@@ -54,32 +54,35 @@ export class TerminalRegistry implements vscode.Disposable {
     return next;
   }
 
-  preparePresentation(): (terminal: vscode.Terminal) => void {
+  preparePresentation(mode: "reveal" | "focus" = "reveal"): (terminal: vscode.Terminal) => void {
     const version = ++this.presentationVersion;
-    return (terminal) => {
-      if (this.disposed || this.closed.has(terminal)) return;
-      terminal.show(true);
-      void terminal.processId.then(
-        (pid) => {
-          if (
-            pid !== undefined &&
-            !this.disposed &&
-            version === this.presentationVersion &&
-            !this.closed.has(terminal) &&
-            terminal.exitStatus === undefined &&
-            this.currentDisplay() === terminal &&
-            this.terminals.canFocus(terminal)
-          )
-            terminal.show(true);
-        },
-        () => {},
-      );
-    };
+    return (terminal) => this.present(terminal, mode, version);
   }
 
-  presentExisting(present = this.preparePresentation()): void {
+  private present(terminal: vscode.Terminal, mode: "reveal" | "focus", version: number): void {
+    if (this.disposed || this.closed.has(terminal)) return;
+    const preserveFocus = mode === "reveal" || version !== this.presentationVersion;
+    terminal.show(preserveFocus);
+    void terminal.processId.then(
+      (pid) => {
+        const canPresent =
+          pid !== undefined &&
+          !this.disposed &&
+          version === this.presentationVersion &&
+          !this.closed.has(terminal) &&
+          terminal.exitStatus === undefined &&
+          this.currentDisplay() === terminal &&
+          this.terminals.canFocus(terminal);
+        if (canPresent) terminal.show(preserveFocus);
+      },
+      () => {},
+    );
+  }
+
+  presentExisting(): void {
     const display = this.currentDisplay();
-    if (display !== undefined && !this.closeWaiters.has(display)) present(display);
+    if (display !== undefined && !this.closeWaiters.has(display))
+      this.present(display, "reveal", this.presentationVersion);
   }
 
   async prepareNew(
@@ -292,7 +295,7 @@ export class TerminalRegistry implements vscode.Disposable {
         this.requireRecoveryActive(recovery, signal);
         if (restored !== undefined) {
           if (this.closed.has(restored)) throw new Error("Pi display closed during restoration");
-          this.preparePresentation()(restored);
+          this.present(restored, "reveal", this.presentationVersion);
         }
       } catch (recoveryError) {
         if (restored !== undefined && !this.closed.has(restored)) {

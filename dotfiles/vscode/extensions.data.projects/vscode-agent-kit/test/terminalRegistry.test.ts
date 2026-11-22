@@ -135,23 +135,30 @@ describe("TerminalRegistry", () => {
     expect(existing.show).not.toHaveBeenCalled();
   });
 
-  it("shows immediately and focuses the same display once its process starts", async () => {
-    const { registry, displays } = setup();
-    const { terminal } = await registry.open(session("A"));
-    let ready!: (pid: number | undefined) => void;
-    Object.defineProperty(terminal, "processId", {
-      value: new Promise<number | undefined>((resolve) => {
-        ready = resolve;
-      }),
-    });
-    displays.canFocus.mockReturnValue(true);
-    registry.preparePresentation()(terminal);
-    expect(terminal.show).toHaveBeenCalledOnce();
-    ready(123);
-    await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledTimes(2));
-    expect(displays.canFocus).toHaveBeenCalledWith(terminal);
-    expect(displays.create).toHaveBeenCalledOnce();
-  });
+  it.each([
+    { mode: "focus", preserveFocus: false },
+    { mode: "reveal", preserveFocus: true },
+  ] as const)(
+    "honors $mode mode before and after the display process starts",
+    async ({ mode, preserveFocus }) => {
+      const { registry, displays } = setup();
+      const { terminal } = await registry.open(session("A"));
+      let ready!: (pid: number | undefined) => void;
+      Object.defineProperty(terminal, "processId", {
+        value: new Promise<number | undefined>((resolve) => {
+          ready = resolve;
+        }),
+      });
+      displays.canFocus.mockReturnValue(true);
+      const show = vi.spyOn(terminal, "show");
+      registry.preparePresentation(mode)(terminal);
+      expect(show).toHaveBeenCalledExactlyOnceWith(preserveFocus);
+      ready(123);
+      await vi.waitFor(() => expect(show).toHaveBeenNthCalledWith(2, preserveFocus));
+      expect(displays.canFocus).toHaveBeenCalledWith(terminal);
+      expect(displays.create).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(["newer request", "another input", "closed", "disposed", "missing process"])(
     "does not reclaim focus after %s",
@@ -165,7 +172,7 @@ describe("TerminalRegistry", () => {
         }),
       });
       displays.canFocus.mockReturnValue(true);
-      registry.preparePresentation()(terminal);
+      registry.preparePresentation("focus")(terminal);
       if (change === "newer request") registry.preparePresentation();
       if (change === "another input") displays.canFocus.mockReturnValue(false);
       if (change === "closed") registry.onTerminalClosed(terminal);
@@ -177,13 +184,14 @@ describe("TerminalRegistry", () => {
   );
 
   it("does not refocus an obsolete request that finishes after the latest request", async () => {
-    const { registry } = setup();
+    const { registry, displays } = setup();
     const { terminal } = await registry.open(session("A"));
-    const older = registry.preparePresentation();
-    registry.preparePresentation();
+    displays.canFocus.mockReturnValue(true);
+    const older = registry.preparePresentation("focus");
+    registry.preparePresentation("focus");
     older(terminal);
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(terminal.show).toHaveBeenCalledOnce();
+    expect(terminal.show).toHaveBeenCalledExactlyOnceWith(true);
   });
   it("opens with a request signal when static AbortSignal helpers are unavailable", async () => {
     const { registry } = setup();
@@ -664,6 +672,25 @@ describe("TerminalRegistry", () => {
       expect(mocks.closeTemporarySession).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps the next selection's focus request when an earlier display is restored", async () => {
+    const { registry, displays, live } = setup();
+    await registry.open(session("A"));
+    live.delete("B");
+    const presentNext = registry.preparePresentation("focus");
+    displays.create.mockImplementationOnce(() => {
+      throw new Error("creation failed");
+    });
+    await expect(registry.open(session("B"))).rejects.toThrow(
+      "creation failed; showing previous Pi session A",
+    );
+
+    const { terminal } = await registry.open(session("A"));
+    const show = vi.spyOn(terminal, "show");
+    expect(show).toHaveBeenCalledExactlyOnceWith(true);
+    presentNext(terminal);
+    expect(show).toHaveBeenLastCalledWith(false);
+  });
 
   it("does not restart a previous Pi that exited before restoration", async () => {
     const { registry, displays, live } = setup();

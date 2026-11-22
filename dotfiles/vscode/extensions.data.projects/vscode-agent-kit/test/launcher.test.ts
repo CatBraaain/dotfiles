@@ -123,13 +123,13 @@ describe("SessionLauncher", () => {
     expect(api.createTerminal).not.toHaveBeenCalled();
   });
 
-  it("shows the new-session display before its process starts and adopts the captured session", async () => {
+  it("shows and focuses the new-session display before its process starts and adopts the captured session", async () => {
     const pid = deferred<number>();
     processId = pid.promise;
     const launching = launcher.start(root);
     await vi.waitFor(() => expect(api.createTerminal).toHaveBeenCalledOnce());
     const terminal = api.createTerminal.mock.results[0].value;
-    expect(terminal.show).toHaveBeenCalledOnce();
+    expect(terminal.show).toHaveBeenCalledExactlyOnceWith(false);
     expect(runtimes.mocks.current).not.toHaveBeenCalled();
     expect(runtimes.mocks.list).not.toHaveBeenCalled();
     pid.resolve(123);
@@ -150,14 +150,14 @@ describe("SessionLauncher", () => {
   });
 
   it.each(["newSession", "list", "current"] as const)(
-    "shows an existing Terminal before unresolved %s and refreshes only after attachment",
+    "shows an existing Terminal without focusing before unresolved %s",
     async (method) => {
       const terminal = await existingDisplay();
       const gate = deferred<never>();
       void gate.promise.catch(() => {});
       runtimes.mocks[method].mockReturnValueOnce(gate.promise);
       const launching = launcher.start(root).catch((error: Error) => error);
-      await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledExactlyOnceWith(true));
       expect(registry.displayedSessionId).toBe("old");
       expect(startedIds()).toEqual(new Set());
       gate.reject(new Error("gate released"));
@@ -192,18 +192,19 @@ describe("SessionLauncher", () => {
     },
   );
 
-  it("shows another click immediately while an earlier switch is unresolved", async () => {
+  it("reveals each click immediately and focuses only after the latest switch", async () => {
     const terminal = await existingDisplay();
     const switching = deferred<boolean>();
     runtimes.mocks.switch.mockReturnValueOnce(switching.promise);
     const first = launcher.start(root);
     await vi.waitFor(() => expect(runtimes.mocks.switch).toHaveBeenCalledOnce());
     const second = launcher.start(root);
-    await vi.waitFor(() => expect(terminal.show).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(terminal.show.mock.calls).toEqual([[true], [true]]));
     expect(registry.displayedSessionId).toBe("old");
     expect(startedIds()).toEqual(new Set());
     switching.resolve(true);
     await Promise.all([first, second]);
+    expect(terminal.show.mock.calls).toEqual([[true], [true], [true], [false]]);
     expect(onSessionStarted.mock.calls.map(([id]) => id)).toEqual(["new-1", "new-2"]);
   });
 

@@ -666,7 +666,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     selection?: symbol,
   ): Promise<void> {
     const controller = new AbortController();
-    const present = this.deps.registry.preparePresentation();
+    const present = this.deps.registry.preparePresentation("focus");
     const cwd = this.sessionsById.get(sessionId)?.cwd;
     if (cwd !== undefined) this.pendingOpens.set(controller, cwd);
     try {

@@ -16,8 +16,8 @@ export class SessionLauncher implements vscode.Disposable {
   async start(cwd: string, onPresented?: () => void): Promise<string | undefined> {
     const workDir = await requireWorkDirectory(cwd);
     if (this.disposed) return;
-    const present = this.deps.registry.preparePresentation();
-    this.deps.registry.presentExisting(present);
+    const present = this.deps.registry.preparePresentation("focus");
+    this.deps.registry.presentExisting();
     const early = await this.deps.registry.prepareNew(workDir, present);
     if (early !== undefined) onPresented?.();
     return this.deps.registry.run(async () => {
