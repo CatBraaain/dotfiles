@@ -400,7 +400,7 @@ try {
   assert.equal(manager.getSessionName(), title);
   assert.match(readFileSync(identity.file, "utf8"), /"type":"session_info".*"name":"Delayed SDK title"/);
   const cliPath = resolve(moduleDir, "../../../../.local/cli.exact/pi-mux/src/main.ts");
-  const listed = JSON.parse(execFileSync(process.execPath, [cliPath, "list"], { encoding: "utf8" }));
+  const listed = JSON.parse(execFileSync(process.execPath, [cliPath, "list", "--active", "--json"], { encoding: "utf8" }));
   assert.deepEqual(listed, [{ cwd: identity.cwd, sessions: [{ id: identity.id, file: identity.file, state: "waiting-user", title, publishPending: null }], empty: [] }]);
   assert.equal(cli("show-options", "-pqv", "-t", pane, "@pi-tmux-session"), beforeIdentity);
   await session.prompt("Continue the same conversation");

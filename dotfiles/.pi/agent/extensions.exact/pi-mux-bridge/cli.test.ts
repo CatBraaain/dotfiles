@@ -535,7 +535,7 @@ async function notificationSource(f: MuxFixture, pane: Pick<Pane, "pane" | "pid"
 }
 
 async function listedSession(f: MuxFixture, id: string) {
-  const result = await f.run(["list", "--json"]);
+  const result = await f.run(["list", "--active", "--json"]);
   assert.equal(result.code, 0, result.err);
   const workspaces = JSON.parse(result.out) as {
     cwd: string;
@@ -807,7 +807,7 @@ describe("pi-mux workspace list", () => {
     async () => {
       await fixture(async (f) => {
         const before = fixtureEntries(f.root);
-        const result = await f.run(["list", "--json"], f.cwdB, {
+        const result = await f.run(["list", "--active", "--json"], f.cwdB, {
           PI_CODING_AGENT_DIR: join(f.root, "absent-agent"),
         });
         assert.equal(result.code, 0, result.err);
@@ -829,7 +829,7 @@ describe("pi-mux workspace list", () => {
         f.seed([{ id: "snapshot-only-id", cwd: f.cwdA }]);
         const path = join(f.agent, "pi-tmux/pi-mux-restore.json");
         const before = readFileSync(path, "utf8");
-        const result = await f.run(["list", "--json"]);
+        const result = await f.run(["list", "--active", "--json"]);
         assert.equal(result.code, 0, result.err);
         assert.deepEqual(JSON.parse(result.out), [{ cwd: f.cwdA, sessions: [], empty: [] }]);
         assert.equal(readFileSync(path, "utf8"), before);
@@ -849,7 +849,7 @@ describe("pi-mux workspace list", () => {
         const path = join(f.agent, "pi-tmux/pi-mux-restore.json");
         const invalid = "{invalid restore file\n";
         writeFileSync(path, invalid);
-        const result = await f.run(["list", "--json"]);
+        const result = await f.run(["list", "--active", "--json"]);
         assert.equal(result.code, 1, result.err);
         assert.equal(result.out, "");
         assert.match(result.err, /Cannot read snapshot/);
@@ -867,7 +867,7 @@ describe("pi-mux workspace list", () => {
         mkdirSync(dirname(f.socket), { recursive: true, mode: 0o700 });
         const started = await f.tmux(["-f", join(f.root, "outer.conf"), "start-server"]);
         assert.equal(started.code, 0, started.err);
-        const result = await f.run(["list", "--json"]);
+        const result = await f.run(["list", "--active", "--json"]);
         assert.equal(result.code, 0, result.err);
         assert.equal(result.out, "[]\n");
         assert.equal(existsSync(join(f.agent, "pi-tmux")), false);
@@ -884,7 +884,7 @@ describe("pi-mux workspace list", () => {
           publishedIdlePane(f, "ready", "first-id"),
           publishedIdlePane(f, "accepted", "second-id"),
         ]);
-        const result = await f.run(["list", "--json"]);
+        const result = await f.run(["list", "--active", "--json"]);
         assert.equal(result.code, 0, result.err);
         const actual = JSON.parse(result.out)[0].sessions.sort(
           (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id),
@@ -925,11 +925,11 @@ describe("pi-mux workspace list", () => {
             value,
           ]);
           assert.equal(published.code, 0, published.err);
-          const imported = await f.run(["list", "--json"]);
+          const imported = await f.run(["list", "--active", "--json"]);
           assert.equal(imported.code, 0, imported.err);
           const before = fixtureEntries(f.root);
           const options = await f.tmux(["show-options", "-g"]);
-          const result = await f.run(["list", "--json"]);
+          const result = await f.run(["list", "--active", "--json"]);
           assert.equal(result.code, 0, result.err);
           assert.equal(result.err, "");
           assert.deepEqual(JSON.parse(result.out), [
@@ -996,7 +996,7 @@ describe("pi-mux workspace list", () => {
             value,
           ]);
           assert.equal(published.code, 0, published.err);
-          const result = await f.run(["list", "--json"]);
+          const result = await f.run(["list", "--active", "--json"]);
           assert.equal(result.code, 0, result.err);
           assert.deepEqual(
             JSON.parse(result.out),
@@ -1058,7 +1058,7 @@ describe("pi-mux workspace list", () => {
             ]);
             assert.equal(published.code, 0, published.err);
           }
-          const result = await f.run(["list", "--json"]);
+          const result = await f.run(["list", "--active", "--json"]);
           assert.equal(result.code, 0, result.err);
           assert.deepEqual(JSON.parse(result.out), [
             {
@@ -1087,7 +1087,7 @@ describe("pi-mux workspace list", () => {
       async () => {
         await fixture(async (f) => {
           const { metadata } = await publishedIdlePane(f, startup);
-          const result = await f.run(["list", "--json"]);
+          const result = await f.run(["list", "--active", "--json"]);
           assert.equal(result.code, 0, result.err);
           assert.deepEqual(JSON.parse(result.out), [
             {
@@ -1127,7 +1127,7 @@ describe("pi-mux workspace list", () => {
         );
         const path = join(f.agent, "pi-tmux/pi-mux-restore.json");
         const before = readFileSync(path, "utf8");
-        const result = await f.run(["list", "--json"]);
+        const result = await f.run(["list", "--active", "--json"]);
         assert.equal(result.code, 0, result.err);
         assert.deepEqual(JSON.parse(result.out), [
           {
@@ -1173,7 +1173,7 @@ describe("pi-mux workspace list", () => {
                 : undefined,
             );
           }
-          const result = await f.run(["list", "--json"]);
+          const result = await f.run(["list", "--active", "--json"]);
           assert.equal(result.code, 0, result.err);
           assert.equal(result.out, "[]\n");
         });
@@ -1202,7 +1202,7 @@ describe("pi-mux workspace list", () => {
           ).code,
           0,
         );
-        const result = await f.run(["list", "--json"]);
+        const result = await f.run(["list", "--active", "--json"]);
         assert.equal(result.code, 0, result.err);
         assert.deepEqual(JSON.parse(result.out), []);
         assert.equal(existsSync(join(f.agent, "pi-tmux/pi-mux-restore.json")), false);
@@ -1232,7 +1232,7 @@ describe("pi-mux workspace list", () => {
             (await f.tmux(["set-option", "-p", "-t", pane, "@pi-tmux-session", encoded])).code,
             0,
           );
-          const result = await f.run(["list", "--json"]);
+          const result = await f.run(["list", "--active", "--json"]);
           assert.equal(result.code, 1);
           assert.equal(result.out, "");
           assert.match(result.err, /Invalid pi session metadata/);
@@ -1255,7 +1255,7 @@ describe("pi-mux workspace list", () => {
             'case "$*" in\n  *"list-panes -a"*) echo "access refused" >&2; exit 1 ;;',
           ),
         );
-        const result = await f.run(["list", "--json"]);
+        const result = await f.run(["list", "--active", "--json"]);
         assert.equal(result.code, 1);
         assert.equal(result.out, "");
         assert.match(result.err, /Cannot inspect pi sessions: access refused/);
@@ -1281,7 +1281,7 @@ describe("pi-mux workspace list", () => {
             'case "$*" in\n  *"show-options -pqv"*) echo "state access refused" >&2; exit 1 ;;',
           ),
         );
-        const result = await f.run(["list", "--json"]);
+        const result = await f.run(["list", "--active", "--json"]);
         assert.equal(result.code, 1);
         assert.equal(result.out, "");
         assert.match(result.err, /state access refused/);
@@ -1494,7 +1494,9 @@ export default function (pi) {
 `,
           ),
         );
-        const listing = f.run(["list", "--json"], f.cwdB, { TEST_PAUSE_LIST_STATE: "1" });
+        const listing = f.run(["list", "--active", "--json"], f.cwdB, {
+          TEST_PAUSE_LIST_STATE: "1",
+        });
         try {
           await waitFor(() => (existsSync(ready) ? true : undefined));
           const removed = await f.run(["workspace", "unregister", f.cwdA]);
@@ -1504,7 +1506,7 @@ export default function (pi) {
         }
         const stale = await listing;
         assert.equal(stale.code, 0, stale.err);
-        const after = await f.run(["list", "--json"]);
+        const after = await f.run(["list", "--active", "--json"]);
         assert.equal(after.code, 0, after.err);
         assert.deepEqual(JSON.parse(after.out), []);
         assert.deepEqual(f.snapshot().workspaces, []);
@@ -1519,7 +1521,7 @@ export default function (pi) {
       await fixture(async (f) => {
         assert.equal((await f.run(["workspace", "register", f.cwdB])).code, 0);
         const { metadata } = await publishedIdlePane(f);
-        const result = await f.run(["list", "--json"]);
+        const result = await f.run(["list", "--active", "--json"]);
         assert.equal(result.code, 0, result.err);
         assert.deepEqual(JSON.parse(result.out), [
           { cwd: f.cwdB, sessions: [], empty: [] },
@@ -1588,7 +1590,7 @@ export default function (pi) {
           [otherMetadata.id],
         );
         assert.equal((await firstPane(f)).pid, Number(otherPid));
-        const listed = await f.run(["list", "--json"]);
+        const listed = await f.run(["list", "--active", "--json"]);
         assert.deepEqual(JSON.parse(listed.out), [
           {
             cwd: f.cwdB,
@@ -1724,7 +1726,7 @@ export default function (pi) {
         const extra = { PI_CODING_AGENT_DIR: join(f.root, "uninstalled-agent") };
         const registered = await f.run(["workspace", "register", "."], f.cwdA, extra);
         assert.equal(registered.code, 0, registered.err);
-        const listed = await f.run(["list", "--json"], f.cwdB, extra);
+        const listed = await f.run(["list", "--active", "--json"], f.cwdB, extra);
         assert.equal(listed.code, 0, listed.err);
         assert.deepEqual(JSON.parse(listed.out), [{ cwd: f.cwdA, sessions: [], empty: [] }]);
         assert.equal(existsSync(f.socket), false);
@@ -1758,7 +1760,7 @@ export default function (pi) {
         mkdirSync(dirname(storePath), { recursive: true, mode: 0o700 });
         writeFileSync(storePath, original);
         assert.equal((await f.run(["workspace", "register", f.cwdA])).code, 0);
-        const listed = await f.run(["list", "--json"]);
+        const listed = await f.run(["list", "--active", "--json"]);
         assert.deepEqual(JSON.parse(listed.out), [
           { cwd: f.cwdA, sessions: [], empty: [] },
           { cwd: f.cwdB, sessions: [], empty: [] },
@@ -1791,7 +1793,7 @@ export default function (pi) {
         assert.equal(created.code, 0, created.err);
         const pane = await firstPane(f);
         assert.equal((await f.tmux(["kill-session", "-t", pane.session])).code, 0);
-        const listed = await f.run(["list", "--json"]);
+        const listed = await f.run(["list", "--active", "--json"]);
         assert.deepEqual(JSON.parse(listed.out), [{ cwd: f.cwdA, sessions: [], empty: [] }]);
       });
     },
@@ -1821,7 +1823,7 @@ export default function (pi) {
         const processPid = (pane as Pane & { processPid: number }).processPid;
         assert.ok(Number.isSafeInteger(processPid));
         assert.notEqual(processPid, pane.pid);
-        const listed = await f.run(["list", "--json"]);
+        const listed = await f.run(["list", "--active", "--json"]);
         assert.equal(listed.code, 0, listed.err);
         assert.deepEqual(JSON.parse(listed.out), [
           { cwd: f.cwdA, sessions: [], empty: [{ id, file: pane.file }] },
@@ -1830,7 +1832,7 @@ export default function (pi) {
         assert.equal(removed.code, 0, removed.err);
         assert.equal(existsSync(`/proc/${processPid}`), false);
         assert.equal(existsSync(`/proc/${pane.pid}`), true);
-        const after = await f.run(["list", "--json"]);
+        const after = await f.run(["list", "--active", "--json"]);
         assert.equal(after.code, 0, after.err);
         assert.deepEqual(JSON.parse(after.out), []);
       });
@@ -1863,13 +1865,13 @@ export default function (pi) {
           f.snapshot().workspaces.some(({ cwd }) => cwd === f.cwdA),
           false,
         );
-        const listed = await f.run(["list", "--json"]);
+        const listed = await f.run(["list", "--active", "--json"]);
         assert.equal(listed.code, 0, listed.err);
         assert.deepEqual(JSON.parse(listed.out), [
           { cwd: f.cwdA, sessions: [], empty: [{ id, file: pane.file }] },
         ]);
         assert.equal((await f.tmux(["kill-session", "-t", pane.session])).code, 0);
-        assert.deepEqual(JSON.parse((await f.run(["list", "--json"])).out), [
+        assert.deepEqual(JSON.parse((await f.run(["list", "--active", "--json"])).out), [
           { cwd: f.cwdA, sessions: [], empty: [] },
         ]);
       });
@@ -1905,7 +1907,7 @@ export default function (pi) {
             ? true
             : undefined,
         );
-        const listed = await f.run(["list", "--json"]);
+        const listed = await f.run(["list", "--active", "--json"]);
         assert.equal(listed.code, 0, listed.err);
         assert.deepEqual(JSON.parse(listed.out), []);
         assert.equal(existsSync(join(f.agent, "pi-tmux/pi-mux-restore.json")), false);
@@ -1927,7 +1929,7 @@ export default function (pi) {
         f.seed(candidates);
         const restored = await f.run(["restore"]);
         assert.equal(restored.code, 0, restored.err);
-        assert.equal((await f.run(["list", "--json"])).code, 0);
+        assert.equal((await f.run(["list", "--active", "--json"])).code, 0);
         const saved = files.map((file) => ({ file, content: readFileSync(file, "utf8") }));
         const other = (await f.panes()).find((pane) => pane.cwd === f.cwdB)!;
         const removed = await f.run(["workspace", "unregister", f.cwdA]);
@@ -2060,7 +2062,7 @@ export default function (pi) {
           mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
           writeFileSync(path, original);
           for (const args of [
-            ["list", "--json"],
+            ["list", "--active", "--json"],
             ["workspace", "register", f.cwdA],
             ["workspace", "unregister", f.cwdA],
           ]) {
@@ -2857,7 +2859,7 @@ describe("pi-mux CLI boundaries", () => {
           f.snapshot().workspaces.sort((a, b) => a.cwd.localeCompare(b.cwd)),
           expectedWorkspaces,
         );
-        const listed = await f.run(["list", "--json"]);
+        const listed = await f.run(["list", "--active", "--json"]);
         assert.equal(listed.code, 0, listed.err);
         const listedWorkspaces = JSON.parse(listed.out) as {
           cwd: string;
@@ -3498,7 +3500,7 @@ describe("pi-mux snapshot and restoration", () => {
             assert.equal(await f.exitCode("deferred"), 0);
             if (record === "unreadable") rmSync(path, { recursive: true });
             writeFileSync(path, previous);
-            const listed = await f.run(["list", "--json"]);
+            const listed = await f.run(["list", "--active", "--json"]);
             assert.equal(listed.code, 0, listed.err);
             assert.deepEqual(
               f.snapshot().workspaces.map(({ cwd }) => cwd),
@@ -4292,7 +4294,7 @@ describe("pi-mux temporary lifecycle", () => {
         assert.equal(before.length, 2);
         const initialCandidates = f.snapshotCandidates();
         assert.deepEqual(initialCandidates, [{ id: "other-id", cwd: f.cwdB }]);
-        const listed = await f.run(["list", "--json"]);
+        const listed = await f.run(["list", "--active", "--json"]);
         assert.equal(listed.code, 0, listed.err);
         const workspaces = JSON.parse(listed.out) as {
           sessions: { id: string; temporary?: true }[];
@@ -4336,7 +4338,7 @@ describe("pi-mux temporary lifecycle", () => {
           after.map(({ id, pid, pane }) => ({ id, pid, pane })),
           before.map(({ id, pid, pane }) => ({ id, pid, pane })),
         );
-        const normalList = JSON.parse((await f.run(["list", "--json"])).out) as {
+        const normalList = JSON.parse((await f.run(["list", "--active", "--json"])).out) as {
           sessions: object[];
         }[];
         assert.equal(
@@ -5072,7 +5074,7 @@ describe("pi-mux list title fallback", () => {
             JSON.stringify({ type: "session_info", name: "Latest name" }),
           ].join("\n") + "\n",
         );
-        const listed = JSON.parse((await f.run(["list", "--json"])).out) as {
+        const listed = JSON.parse((await f.run(["list", "--active", "--json"])).out) as {
           sessions: { id: string; state: string | null; title: string | null }[];
         }[];
         const session = listed
@@ -5114,7 +5116,7 @@ describe("pi-mux list title fallback", () => {
             }),
           ].join("\n") + "\n",
         );
-        const listed = JSON.parse((await f.run(["list", "--json"])).out) as {
+        const listed = JSON.parse((await f.run(["list", "--active", "--json"])).out) as {
           sessions: { id: string; state: string | null; title: string | null }[];
         }[];
         const session = listed
@@ -5152,7 +5154,7 @@ describe("pi-mux list title fallback", () => {
             title: "Published name",
           }),
         ]);
-        const listed = JSON.parse((await f.run(["list", "--json"])).out) as {
+        const listed = JSON.parse((await f.run(["list", "--active", "--json"])).out) as {
           sessions: { id: string; state: string | null; title: string | null }[];
         }[];
         const session = listed
@@ -5188,7 +5190,7 @@ describe("pi-mux list title fallback", () => {
             JSON.stringify({ type: "session_info", name: "" }),
           ].join("\n") + "\n",
         );
-        const listed = JSON.parse((await f.run(["list", "--json"])).out) as {
+        const listed = JSON.parse((await f.run(["list", "--active", "--json"])).out) as {
           sessions: { id: string; title: string | null }[];
         }[];
         const session = listed
@@ -5217,7 +5219,7 @@ describe("pi-mux list title fallback", () => {
           plainFile,
           JSON.stringify({ type: "session", version: 3, id: "plain-id" }) + "\n",
         );
-        const listed = JSON.parse((await f.run(["list", "--json"])).out) as {
+        const listed = JSON.parse((await f.run(["list", "--active", "--json"])).out) as {
           sessions: { id: string; title: string | null }[];
           empty: { id: string; file: string }[];
         }[];

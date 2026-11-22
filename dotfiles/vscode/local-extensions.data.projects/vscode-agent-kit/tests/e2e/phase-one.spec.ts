@@ -1209,7 +1209,7 @@ test(
     testInfo.setTimeout(150_000);
     const aIsListed = (): boolean => {
       const workspaces = JSON.parse(
-        execFileSync(join(host.directory, "bin/pi-mux"), ["list", "--json"], {
+        execFileSync(join(host.directory, "bin/pi-mux"), ["list", "--active", "--json"], {
           env: host.env,
           encoding: "utf8",
         }),
@@ -1322,7 +1322,7 @@ test(
       const frame = await host.sessionFrame();
       await expect(rowIn(frame, aId)).toHaveClass(/archived/);
       const workspaces = JSON.parse(
-        execFileSync(join(host.directory, "bin/pi-mux"), ["list", "--json"], {
+        execFileSync(join(host.directory, "bin/pi-mux"), ["list", "--active", "--json"], {
           env: host.env,
           encoding: "utf8",
         }),

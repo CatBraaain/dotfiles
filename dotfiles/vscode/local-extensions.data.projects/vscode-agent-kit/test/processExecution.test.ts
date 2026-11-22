@@ -107,7 +107,7 @@ describe("external command environment", () => {
   it("keeps query commands bounded without applying their timeout to lifecycle operations", async () => {
     succeedWithStdout("[]\n");
     expect(await new PiMux().list()).toEqual([]);
-    expect(spawnMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["list", "--json"], {
+    expect(spawnMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["list", "--active", "--json"], {
       cwd: undefined,
       timeout: 10_000,
       env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
@@ -129,7 +129,7 @@ describe("external command environment", () => {
     spawnMock.mockClear();
     succeedWithStdout("[]\n");
     await new PiMux().history();
-    expect(spawnMock).toHaveBeenLastCalledWith("pi-mux", ["history", "--json"], {
+    expect(spawnMock).toHaveBeenLastCalledWith("pi-mux", ["list", "--saved", "--json"], {
       cwd: undefined,
       timeout: 10_000,
       env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),

@@ -156,7 +156,11 @@ describe("PiMux", () => {
     ];
     const execute = vi.fn().mockResolvedValue(JSON.stringify(workspaces));
     expect(await new PiMux(execute).list()).toEqual(workspaces);
-    expect(execute).toHaveBeenCalledExactlyOnceWith("pi-mux", ["list", "--json"], undefined);
+    expect(execute).toHaveBeenCalledExactlyOnceWith(
+      "pi-mux",
+      ["list", "--active", "--json"],
+      undefined,
+    );
   });
 
   it("rejects a legacy response without the empty section", async () => {
@@ -306,11 +310,11 @@ describe("PiMux", () => {
     const mux = new PiMux(execute);
     expect(await mux.history()).toEqual(entries);
     expect(await mux.history("/project")).toEqual(entries);
-    expect(execute).toHaveBeenNthCalledWith(1, "pi-mux", ["history", "--json"], undefined);
+    expect(execute).toHaveBeenNthCalledWith(1, "pi-mux", ["list", "--saved", "--json"], undefined);
     expect(execute).toHaveBeenNthCalledWith(
       2,
       "pi-mux",
-      ["history", "--json", "--cwd", "/project"],
+      ["list", "--saved", "--json", "--cwd", "/project"],
       undefined,
     );
   });
@@ -365,7 +369,7 @@ describe("PiMux", () => {
   it("propagates history failures instead of returning an empty list", async () => {
     const execute = vi.fn().mockRejectedValue(new Error("history denied"));
     await expect(new PiMux(execute).history()).rejects.toThrow(
-      "pi-mux history --json: history denied",
+      "pi-mux list --saved --json: history denied",
     );
   });
 

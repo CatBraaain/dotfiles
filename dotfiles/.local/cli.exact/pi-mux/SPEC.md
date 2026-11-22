@@ -38,7 +38,9 @@ CLIのsession-dirs記録と、稼働piの保存先を探索に使わない。
 | `pi-mux send [--wait <seconds>] <session-id> <text...>` | 稼働している対象会話へ短いメッセージを1件届ける。稼働はpi実体の生存を指し、エージェントの実行状態は送信の可否に影響しない。`--wait` は対象の受信拡張が消費するまで待つ |
 | `pi-mux close <session-id>` | 完全一致する会話IDのpiを非対話で終了し、その会話を復元対象から除く。保存会話・workspace登録を保持する |
 | `pi-mux close --if-temporary <session-id>` | 一時再開中のpiだけを `close` と同じ手順で終了し、復元対象から除く。通常状態のpiと稼働対象がないIDは、変更せず成功する |
-| `pi-mux list [--json]` | 稼働中のpiを列挙する。JSON出力には空workspaceの登録も含める |
+| `pi-mux list [--json]` | 稼働中のpiと保存済み会話を統合して列挙する |
+| `pi-mux list --active [--json]` | 稼働中のpiを列挙する。JSONには空workspaceの登録も含める |
+| `pi-mux list --saved [--cwd <absolute-cwd>] [--json]` | 保存済み会話を列挙する |
 | `pi-mux switch <session-id> [--client-pid <pid>]` | 接続クライアントが表示するtmuxセッションを、会話IDのpi実体のtmuxセッションへ切り替える |
 | `pi-mux current [--client-pid <pid>] [--json]` | 接続クライアントが表示中のpi実体のmetadataを返す |
 | `pi-mux history [--cwd <absolute-cwd>] [--json]` | 登録済みworkspaceの保存会話を列挙する |
@@ -331,9 +333,39 @@ register・unregisterの成功時はstdout・stderrへ出力せず終了コー�
 
 `list`・`current`・`history` は既定でstdoutへ見出し付きのプレーンテキスト表を出力する。データが0件の表は見出しだけを表示する。欠損値は `-` とし、セル中の制御文字（Unicodeの `Cc` と `Bidi_Control`）と行・段落区切り文字は `\uXXXX` 表記にする。
 
-`--json` を付けると、表の代わりに各コマンドで定めるJSONと末尾改行をstdoutへ出力する。`current` の `--client-pid` や `history` の `--cwd` と併用するとき、オプションの順序は問わない。
+`--json` を付けると、表の代わりに各コマンドで定めるJSONと末尾改行をstdoutへ出力する。`list`・`current`・`history` のオプションの順序は問わない。
 
 ### list
+
+既定では登録済みworkspace・稼働pi・保存済み会話を1つの一覧にする。保存済み会話の探索範囲と抽出条件は [history](#history) と同じで、通常側とarchive側を含む。
+
+| オプション | 対象と出力 |
+| --- | --- |
+| 指定なし | 稼働中と保存済みを1つの一覧にする |
+| `--active` | [稼働一覧](#稼働一覧)：履歴の列挙を行わない |
+| `--saved` | [history](#history) と同じ対象・並び・表・JSON。専用tmuxを参照しない。任意で `--cwd <absolute-cwd>` を指定できる |
+
+`list` の各オプションは1回まで指定できる。`--active` と `--saved` は同時指定できない。`--cwd` は `--saved` と組み合わせる。
+
+#### 統合一覧
+
+JSONは `[{cwd,sessions:[{id,file,active,saved,state,title,publishPending,btime,mtime,size,temporary?}]}]` の配列。セッション0件の登録済みworkspaceも含める。workspaceは稼働一覧の順とし、履歴だけに現れるcwdはその後に並べる。同じ会話IDはcwdが異なっても1件にまとめる。IDごとに稼働一覧と履歴の各先頭を採用し、所属cwdは稼働一覧の値を優先する。各workspaceでは稼働一覧の順に稼働中の会話を並べた後、保存済みだけの会話を `history` の順に並べる。
+
+| 項目 | 値 |
+| --- | --- |
+| `active` | 稼働一覧にある会話は `true`、それ以外は `false` |
+| `saved` | 会話ファイルの存在が稼働一覧で確認できるか、履歴で取得できる場合は `true`、それ以外は `false` |
+| `id`・`file` | 会話IDとファイルパス。履歴があれば履歴のパス、それ以外はpaneが公開するパス |
+| `state`・`publishPending` | 稼働一覧の値。値がないときは `null` |
+| `temporary` | 稼働一覧で一時再開中の場合にだけ `true` |
+| `title` | 稼働一覧のタイトル、なければ履歴のタイトル。どちらもなければ `null` |
+| `btime`・`mtime`・`size` | 履歴の値。値がないときは `null` |
+
+表は `WORKSPACE`・`SESSION ID`・`STATE`・`UPDATED (UTC)`・`TITLE` の順で同じ会話を列挙する。時刻の表記は `history` と同じとする。`STATE` は稼働していなければ `inactive`、稼働中でまだ保存されていなければ `unsaved`、保存済みで稼働中なら `state` の値（なければ `active`）を表示する。
+
+稼働一覧の自動登録の結果を保存済み会話の探索対象に反映する。取得に失敗した場合は部分結果を出力せず、stderrへ理由を出して非0で終了する。
+
+#### 稼働一覧
 
 登録済みcwdと専用tmuxの稼働piを統合する。表は `WORKSPACE`・`SESSION ID`・`STATE`・`TITLE` の順で、稼働piごとに1行を表示する。workspaceはJSONと同じ順で、各workspaceでは `sessions`、`empty` の順に表示する。`empty` の行は状態を `unsaved` とし、稼働piがないworkspaceは表に行を作らない。
 
@@ -596,7 +628,7 @@ CLIは対象の状態を繰り返し確認し、置き換えの条件を満た�
 - `pi-mux -h` と `pi-mux --help`
 - `history` と `history --cwd <absolute-cwd>`（登録済みcwdと未登録cwdの両方）
 - `current` と `current --client-pid <pid>`
-- `list`
+- `list`・`list --active`・`list --saved`・`list --saved --cwd <absolute-cwd>`
 
 `history`・`current`・`list` は表とJSONの両形式を対象とする。
 

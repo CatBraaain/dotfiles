@@ -20,6 +20,10 @@ import { fileURLToPath } from "node:url";
 import { HistorySummaryCache, readSessionHeader } from "./history-summary";
 import { platform } from "./platform";
 
+type ListOperation =
+  | { kind: "list"; scope: "all" | "active"; json: boolean }
+  | { kind: "list"; scope: "saved"; cwd: string | undefined; json: boolean };
+
 type Operation =
   | { kind: "help" }
   | { kind: "new"; detached: boolean; clientPid?: number; request?: string; cwd?: string }
@@ -27,7 +31,7 @@ type Operation =
   | { kind: "state"; id: string; source: StateSource; notification: StateNotification }
   | { kind: "send"; id: string; waitSeconds: number | undefined; text: string }
   | { kind: "close"; id: string; ifTemporary: boolean }
-  | { kind: "list"; json: boolean }
+  | ListOperation
   | { kind: "switch"; id: string; clientPid: number | undefined }
   | { kind: "current"; clientPid: number | undefined; json: boolean }
   | { kind: "history"; cwd: string | undefined; json: boolean }
@@ -96,6 +100,14 @@ type HistoryEntry = {
   mtime: number | null;
   size: number;
 };
+type UnifiedSession = ListedSession & {
+  active: boolean;
+  saved: boolean;
+  btime: number | null;
+  mtime: number | null;
+  size: number | null;
+};
+type UnifiedWorkspace = { cwd: string; sessions: UnifiedSession[] };
 type Config = ReturnType<typeof configuration>;
 type TmuxConfig = ReturnType<typeof tmuxConfiguration>;
 
@@ -148,6 +160,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux send [--wait <seconds>] <session-id> <text...>
   pi-mux close [--if-temporary] <session-id>
   pi-mux list [--json]
+  pi-mux list --active [--json]
+  pi-mux list --saved [--cwd <absolute-cwd>] [--json]
   pi-mux switch <session-id> [--client-pid <pid>]
   pi-mux current [--client-pid <pid>] [--json]
   pi-mux history [--cwd <absolute-cwd>] [--json]
@@ -177,9 +191,24 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         operation.waitSeconds,
       );
     }
+    if (
+      operation.kind === "history" ||
+      (operation.kind === "list" && operation.scope === "saved")
+    ) {
+      const history = await historySessions(tmuxConfiguration(), operation.cwd);
+      console.log(operation.json ? JSON.stringify(history) : renderHistoryTable(history));
+      return 0;
+    }
     if (operation.kind === "list") {
-      const workspaces = await listWorkspaces(tmuxConfiguration());
-      console.log(operation.json ? JSON.stringify(workspaces) : renderWorkspaceTable(workspaces));
+      const config = tmuxConfiguration();
+      const active = await listWorkspaces(config);
+      if (operation.scope === "active") {
+        console.log(operation.json ? JSON.stringify(active) : renderActiveTable(active));
+      } else {
+        const history = await historySessions(config, undefined);
+        const unified = mergeSessionLists(active, history);
+        console.log(operation.json ? JSON.stringify(unified) : renderUnifiedTable(unified));
+      }
       return 0;
     }
     if (operation.kind === "switch") {
@@ -202,11 +231,6 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
               [[session.cwd, session.id, session.target, session.file]],
             ),
       );
-      return 0;
-    }
-    if (operation.kind === "history") {
-      const history = await historySessions(tmuxConfiguration(), operation.cwd);
-      console.log(operation.json ? JSON.stringify(history) : renderHistoryTable(history));
       return 0;
     }
     if (operation.kind === "close") {
@@ -308,7 +332,70 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
 }
 
-function renderWorkspaceTable(workspaces: ListedWorkspace[]): string {
+function mergeSessionLists(active: ListedWorkspace[], history: HistoryEntry[]): UnifiedWorkspace[] {
+  const workspaces = new Map<string, UnifiedWorkspace>(
+    active.map(({ cwd }) => [cwd, { cwd, sessions: [] }]),
+  );
+  const savedById = new Map<string, HistoryEntry>();
+  for (const entry of history) {
+    if (!savedById.has(entry.id)) savedById.set(entry.id, entry);
+  }
+
+  const seenActive = new Set<string>();
+  for (const { cwd, sessions, empty } of active) {
+    const workspace = workspaces.get(cwd)!;
+    const entries: (EmptySession & Partial<ListedSession>)[] = [...sessions, ...empty];
+    for (const entry of entries) {
+      if (seenActive.has(entry.id)) continue;
+      seenActive.add(entry.id);
+      const saved = savedById.get(entry.id);
+      const hasLiveFile = "state" in entry;
+      workspace.sessions.push({
+        id: entry.id,
+        file: saved?.file ?? entry.file,
+        active: true,
+        saved: hasLiveFile || saved !== undefined,
+        state: entry.state ?? null,
+        title: entry.title ?? saved?.title ?? null,
+        publishPending: entry.publishPending ?? null,
+        btime: saved?.btime ?? null,
+        mtime: saved?.mtime ?? null,
+        size: saved?.size ?? null,
+        ...(entry.temporary ? { temporary: true } : {}),
+      });
+      savedById.delete(entry.id);
+    }
+  }
+
+  for (const { cwd, ...entry } of savedById.values()) {
+    let workspace = workspaces.get(cwd);
+    if (!workspace) {
+      workspace = { cwd, sessions: [] };
+      workspaces.set(cwd, workspace);
+    }
+    workspace.sessions.push({
+      ...entry,
+      active: false,
+      saved: true,
+      state: null,
+      publishPending: null,
+    });
+  }
+
+  return [...workspaces.values()];
+}
+
+function renderUnifiedTable(workspaces: UnifiedWorkspace[]): string {
+  const rows = workspaces.flatMap(({ cwd, sessions }) =>
+    sessions.map(({ id, active, saved, state, mtime, title }) => {
+      const status = !active ? "inactive" : !saved ? "unsaved" : (state ?? "active");
+      return [cwd, id, status, formatUpdatedAt(mtime), title];
+    }),
+  );
+  return renderTable(["WORKSPACE", "SESSION ID", "STATE", "UPDATED (UTC)", "TITLE"], rows);
+}
+
+function renderActiveTable(workspaces: ListedWorkspace[]): string {
   const rows = workspaces.flatMap(({ cwd, sessions, empty }) => [
     ...sessions.map(({ id, state, title }) => [cwd, id, state, title]),
     ...empty.map(({ id }) => [cwd, id, "unsaved", null]),
@@ -317,13 +404,12 @@ function renderWorkspaceTable(workspaces: ListedWorkspace[]): string {
 }
 
 function renderHistoryTable(history: HistoryEntry[]): string {
-  const rows = history.map(({ cwd, id, mtime, title }) => [
-    cwd,
-    id,
-    mtime === null ? null : new Date(mtime).toJSON(),
-    title,
-  ]);
+  const rows = history.map(({ cwd, id, mtime, title }) => [cwd, id, formatUpdatedAt(mtime), title]);
   return renderTable(["WORKSPACE", "SESSION ID", "UPDATED (UTC)", "TITLE"], rows);
+}
+
+function formatUpdatedAt(mtime: number | null): string | null {
+  return mtime === null ? null : new Date(mtime).toJSON();
 }
 
 function renderTable(headers: string[], rows: (string | null)[][]): string {
@@ -466,20 +552,42 @@ export function parseOperation(argv: string[]): Operation {
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] [--json] | history [--cwd <absolute-cwd>] [--json] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | reload [<session-id>] | restart [--force]]",
+    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | list --active [--json] | list --saved [--cwd <absolute-cwd>] [--json] | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] [--json] | history [--cwd <absolute-cwd>] [--json] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | reload [<session-id>] | restart [--force]]",
   );
+}
+
+function parseListOperation(args: string[]): ListOperation | undefined {
+  let scope: "all" | "active" | "saved" = "all";
+  let cwd: string | undefined;
+  let json = false;
+  for (let index = 0; index < args.length; index++) {
+    const flag = args[index];
+    if (flag === "--json" && !json) {
+      json = true;
+    } else if ((flag === "--active" || flag === "--saved") && scope === "all") {
+      scope = flag === "--active" ? "active" : "saved";
+    } else if (flag === "--cwd" && cwd === undefined) {
+      const value = args[++index];
+      if (!value || !isAbsolute(value)) return;
+      cwd = value;
+    } else {
+      return;
+    }
+  }
+  if (scope === "saved") return { kind: "list", scope, cwd, json };
+  if (cwd === undefined) return { kind: "list", scope, json };
 }
 
 function parseListingOperation(argv: string[]): Operation | undefined {
   const kind = argv[0];
-  if (kind !== "list" && kind !== "current" && kind !== "history") return;
+  if (kind === "list") return parseListOperation(argv.slice(1));
+  if (kind !== "current" && kind !== "history") return;
 
   const jsonFirst = argv[1] === "--json";
   const jsonLast = argv.at(-1) === "--json";
   const json = jsonFirst || jsonLast;
   const args = jsonFirst ? argv.slice(2) : argv.slice(1, jsonLast ? -1 : undefined);
 
-  if (kind === "list" && args.length === 0) return { kind, json };
   if (kind === "current") {
     if (args.length === 0) return { kind, clientPid: undefined, json };
     const [flag, pid] = args;

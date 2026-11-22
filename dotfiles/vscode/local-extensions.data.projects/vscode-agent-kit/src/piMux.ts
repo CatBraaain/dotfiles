@@ -113,7 +113,7 @@ export class PiMux {
   }
 
   async list(): Promise<PiMuxWorkspace[]> {
-    const output = await this.command(["list", "--json"]);
+    const output = await this.command(["list", "--active", "--json"]);
     const workspaces: unknown = JSON.parse(output);
     if (!Array.isArray(workspaces) || !workspaces.every(isPiMuxWorkspace)) {
       throw new Error("Invalid pi-mux list response");
@@ -166,7 +166,8 @@ export class PiMux {
   /** List saved conversations, newest first. Throws when the CLI fails. */
   async history(cwd?: string): Promise<PiMuxHistoryEntry[]> {
     const output = await this.command([
-      "history",
+      "list",
+      "--saved",
       "--json",
       ...(cwd === undefined ? [] : ["--cwd", cwd]),
     ]);

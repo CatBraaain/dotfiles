@@ -1011,7 +1011,7 @@ describe("SessionWebviewProvider", () => {
         })),
       ];
       const execute = vi.fn(async (_executable: string, args: string[]) => {
-        if (args[0] === "history") return JSON.stringify(entries);
+        if (args[0] === "list" && args[1] === "--saved") return JSON.stringify(entries);
         return JSON.stringify([
           {
             cwd: root,
@@ -1065,7 +1065,7 @@ describe("SessionWebviewProvider", () => {
         "empty-b",
       ]);
       expect(sentState().groups[0].sessions[1].updatedAtMs).toBe(400);
-      expect(execute).toHaveBeenCalledWith("pi-mux", ["history", "--json"], undefined);
+      expect(execute).toHaveBeenCalledWith("pi-mux", ["list", "--saved", "--json"], undefined);
     });
 
     it("polls the list every 250 milliseconds", () => {
@@ -1646,7 +1646,7 @@ describe("SessionWebviewProvider", () => {
     const filePath = await seedSavedSession(activeSessionId);
     let phase: SessionPhase = "running";
     const execute = vi.fn(async (_executable: string, args: string[]) => {
-      if (args[0] === "history")
+      if (args[0] === "list" && args[1] === "--saved")
         return JSON.stringify([sharedRuntimes.history.get(activeSessionId)]);
       return JSON.stringify([
         {
@@ -1678,7 +1678,7 @@ describe("SessionWebviewProvider", () => {
       expect(state.groups[0].sessions[0].state).toBe(phase);
       expect(JSON.stringify(sessionListView(state))).toContain(`"data-state":"${phase}"`);
     }
-    expect(execute).toHaveBeenCalledWith("pi-mux", ["list", "--json"], undefined);
+    expect(execute).toHaveBeenCalledWith("pi-mux", ["list", "--active", "--json"], undefined);
     expect(await readFile(statePath, "utf8")).toBe(savedState);
   });
 
@@ -3604,7 +3604,7 @@ describe("SessionWebviewProvider", () => {
         mocks.open({ sessionId: activeSessionId, cwd: root });
         return `Pi session ${activeSessionId}\nAttach with: pi-mux open ${activeSessionId}\n`;
       }
-      if (args.join(" ") === "list --json") {
+      if (args.join(" ") === "list --active --json") {
         return JSON.stringify([
           {
             cwd: root,
@@ -3625,7 +3625,7 @@ describe("SessionWebviewProvider", () => {
           },
         ]);
       }
-      if (args[0] === "history") return JSON.stringify(historyEntries);
+      if (args[0] === "list" && args[1] === "--saved") return JSON.stringify(historyEntries);
       if (args[0] === "current") {
         const runtime = client.attachedId === undefined ? undefined : live.get(client.attachedId);
         if (runtime === undefined) throw new Error("cannot resolve the client");

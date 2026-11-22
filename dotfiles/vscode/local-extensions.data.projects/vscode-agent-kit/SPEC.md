@@ -7,15 +7,15 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 - セッション: Pi での会話を識別・再開する単位。tmux の管理単位は「tmux セッション」と区別する。
 - 会話: セッション内のやりとりの内容。
 - セッションファイル: Pi が会話を保存する JSONL ファイル。場所と形式は Pi のドキュメント（[sessions](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/docs/sessions.md) / [session format](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/docs/session-format.md)）に従う。
-- セッション ID: 稼働セッションでは `pi-mux list --json`、保存済み会話ではセッションファイルのヘッダーが持つ ID。既定は UUID で、Pi の SDK や `--session-id` によるカスタム ID もある（Pi のドキュメントに従う）。ファイル名は `<timestamp>_<session-id>.jsonl` で、ファイル名の末尾セグメントと一致する。
-- 一時 Pi（temporary）: pi-mux により一時再開され、通常の保持・復元対象になっていない稼働 Pi。`pi-mux list --json` のセッション要素に `temporary: true` があることで識別する。
+- セッション ID: 稼働セッションでは `pi-mux list --active --json`、保存済み会話ではセッションファイルのヘッダーが持つ ID。既定は UUID で、Pi の SDK や `--session-id` によるカスタム ID もある（Pi のドキュメントに従う）。ファイル名は `<timestamp>_<session-id>.jsonl` で、ファイル名の末尾セグメントと一致する。
+- 一時 Pi（temporary）: pi-mux により一時再開され、通常の保持・復元対象になっていない稼働 Pi。`pi-mux list --active --json` のセッション要素に `temporary: true` があることで識別する。
 - 未アーカイブセッション: 「データソース」で定める通常 Pi の集合。既定の表示対象になる。
 - アーカイブ済みセッション: 「データソース」で定める一時 Pi と、通常 Pi の一覧に無い保存済み会話。`All` 表示で現れる。
 - 実行フェーズ: agent ターン実行中（`running`）・承認待ち（`waiting-approval`）・user のターン待ち（`waiting-user`）の区別。取得元と表示は「実行フェーズの表示」節に従う。
-- 登録済みワークスペース: `pi-mux list --json` が返す workspace の `cwd`。セッションが0件でもグループとして表示する。
+- 登録済みワークスペース: `pi-mux list --active --json` が返す workspace の `cwd`。セッションが0件でもグループとして表示する。
 - 追加済みワークスペース: Session List に追加された cwd。「workspace 登録と永続情報」に従って保持する。
-- pi-mux: Pi を専用 tmux 内で起動・再接続する CLI。専用 tmux の管理と設定適用、セッション ID の採番と固定、保存済みセッションの再開を担う。拡張は pi-mux を通じて Pi を起動・再開し、pi-mux の稼働一覧（`pi-mux list --json`）で稼働中のセッションを確認する。仕様は dotfiles リポジトリの `pi-mux` SPEC に従う。
-- 本体リポジトリ: worktree でないリポジトリ本体。`pi-mux list --json` に載る workspace であり、worktree の検出起点になる。
+- pi-mux: Pi を専用 tmux 内で起動・再接続する CLI。専用 tmux の管理と設定適用、セッション ID の採番と固定、保存済みセッションの再開を担う。拡張は pi-mux を通じて Pi を起動・再開し、pi-mux の稼働一覧（`pi-mux list --active --json`）で稼働中のセッションを確認する。仕様は dotfiles リポジトリの `pi-mux` SPEC に従う。
+- 本体リポジトリ: worktree でないリポジトリ本体。`pi-mux list --active --json` に載る workspace であり、worktree の検出起点になる。
 - worktree: `git worktree` で作った作業用 worktree。追加・削除と表示名は「workspaceFolders 同期」に従う。
 - フォルダ0: ワークスペースの最初のフォルダ。起動時の付け替え後は `~/.agents/workspace` を固定で使い、同期対象から除く。
 - 管理フォルダ: 拡張機能が「workspaceFolders 同期」に従って追加・削除・並べ替えするフォルダ。folder 1 以降。
@@ -68,9 +68,9 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 
 ## データソース
 
-拡張機能は `pi-mux list --json` を pi-mux の workspace 登録と稼働 Pi の正本とする。応答は `[{cwd,sessions:[{id,file,state,title,publishPending?:{attemptAt:number}|null,temporary?:true}],empty:[{id,file,temporary?:true}]}]` の JSON 配列であり、cwd と file は絶対パス、state と title は文字列または null である。`publishPending` は実行フェーズ公開の未完了を示す pi-mux の中継値であり、`{attemptAt}`（最後の公開試行の Unix epoch ミリ秒）または null を取る。省略と null は遅延なしとして扱い、`attemptAt` が正の整数でないオブジェクトやその他の値は不正応答として扱う。値の利用は「実行フェーズの表示」に従う。`temporary` は一時 Pi にだけ `true` で存在し、省略は通常 Pi を表す。`false` やその他の値は不正応答として扱う。`sessions` には会話ファイルが存在する pane だけが載り、未作成分は `empty` に載る。空 workspace は `sessions: []`・`empty: []` として含まれる。独自のセッション所属集合や復元集合を保存しない。
+拡張機能は `pi-mux list --active --json` を pi-mux の workspace 登録と稼働 Pi の正本とする。応答は `[{cwd,sessions:[{id,file,state,title,publishPending?:{attemptAt:number}|null,temporary?:true}],empty:[{id,file,temporary?:true}]}]` の JSON 配列であり、cwd と file は絶対パス、state と title は文字列または null である。`publishPending` は実行フェーズ公開の未完了を示す pi-mux の中継値であり、`{attemptAt}`（最後の公開試行の Unix epoch ミリ秒）または null を取る。省略と null は遅延なしとして扱い、`attemptAt` が正の整数でないオブジェクトやその他の値は不正応答として扱う。値の利用は「実行フェーズの表示」に従う。`temporary` は一時 Pi にだけ `true` で存在し、省略は通常 Pi を表す。`false` やその他の値は不正応答として扱う。`sessions` には会話ファイルが存在する pane だけが載り、未作成分は `empty` に載る。空 workspace は `sessions: []`・`empty: []` として含まれる。独自のセッション所属集合や復元集合を保存しない。
 
-保存済み会話は `pi-mux history --json` から得る。応答は `[{id,cwd,file,title,btime,mtime,size}]` の JSON 配列（`mtime` 降順、`mtime` が `null` の要素は後方、同値は `file` 昇順）であり、pi-mux が登録済み workspace の保存会話の `*.jsonl` を列挙し（既定の保存先では group ディレクトリ直下、`PI_CODING_AGENT_SESSION_DIR` 指定時はその直下）、各ファイルのヘッダー id・cwd を正とする。`btime` は初回 user メッセージの送信日時（Unix epoch ミリ秒）で、初回 user メッセージが未保存なら `null` になる。有限の `number` と `null` のみを受け入れ、それ以外は不正応答として扱う。`mtime` はファイル内で物理的に最後の `message`/`compaction` エントリの `timestamp`（ミリ秒、該当エントリが無いとき `null`）である。title はセッション名（最後の `session_info` の `name`）で解決し、解決できないとき最初の user メッセージ（80 code points で丸め）を使い、いずれも無いとき `null` になる。
+保存済み会話は `pi-mux list --saved --json` から得る。応答は `[{id,cwd,file,title,btime,mtime,size}]` の JSON 配列（`mtime` 降順、`mtime` が `null` の要素は後方、同値は `file` 昇順）であり、pi-mux が登録済み workspace の保存会話の `*.jsonl` を列挙し（既定の保存先では group ディレクトリとその `archive/` の各直下、`PI_CODING_AGENT_SESSION_DIR` 指定時はその直下）、各ファイルのヘッダー id・cwd を正とする。`btime` は初回 user メッセージの送信日時（Unix epoch ミリ秒）で、初回 user メッセージが未保存なら `null` になる。有限の `number` と `null` のみを受け入れ、それ以外は不正応答として扱う。`mtime` はファイル内で物理的に最後の `message`/`compaction` エントリの `timestamp`（ミリ秒、該当エントリが無いとき `null`）である。title はセッション名（最後の `session_info` の `name`）で解決し、解決できないとき最初の user メッセージ（80 code points で丸め）を使い、いずれも無いとき `null` になる。
 
 | 項目 | 値 |
 | --- | --- |
@@ -80,7 +80,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 | アーカイブ済み一覧 | list の一時 Pi と、下記の保存済み会話のうち通常 Pi の一覧に同じ ID が無いもの |
 | All 一覧 | 未アーカイブ一覧とアーカイブ済み一覧の和集合。同じ ID は1行にまとめる |
 | 稼働 Pi の保持 | `sessions` の行を state/title が null でも残す。`empty`（会話ファイル未作成分）は一覧に表示せず、生存判定と保存履歴の更新に使う |
-| 保存済み会話 | `pi-mux history --json` のエントリのうち、cwd が list の登録済み workspace に含まれるもの |
+| 保存済み会話 | `pi-mux list --saved --json` のエントリのうち、cwd が list の登録済み workspace に含まれるもの |
 | セッション ID・cwd・file | 稼働 Pi は list の id・workspace.cwd・file を正とする。保存済み会話は history の id・cwd・file を使う。同じ ID は list を優先する |
 | 開始日時・更新日時 | 下記「開始日時・更新日時」の規則に従う |
 
@@ -92,7 +92,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 
 ### 保存履歴の更新
 
-保存履歴は次の契機で `pi-mux history --json` から全登録 workspace 分を一括取得し、成功応答の全体を一覧へ反映する。次の更新までは、表示用の最後の正常取得結果を使う。稼働 Pi の集合・title・実行フェーズ・未読の自動更新は「実行フェーズの表示」に従う。
+保存履歴は次の契機で `pi-mux list --saved --json` から全登録 workspace 分を一括取得し、成功応答の全体を一覧へ反映する。次の更新までは、表示用の最後の正常取得結果を使う。稼働 Pi の集合・title・実行フェーズ・未読の自動更新は「実行フェーズの表示」に従う。
 
 | 条件・変化 | 保存履歴の取得と一覧への反映 |
 | --- | --- |
@@ -136,7 +136,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 
 ### workspace 登録と永続情報
 
-pi-mux の workspace 登録と復元候補の永続管理は pi-mux が担う。拡張機能は `pi-mux list --json` の cwd を登録判定の正とし、登録の追加・解除は各アクションに定める公開 CLI で行う。セッションの所属も pi-mux の起動・再接続と一覧に従う。
+pi-mux の workspace 登録と復元候補の永続管理は pi-mux が担う。拡張機能は `pi-mux list --active --json` の cwd を登録判定の正とし、登録の追加・解除は各アクションに定める公開 CLI で行う。セッションの所属も pi-mux の起動・再接続と一覧に従う。
 
 Session List は list の cwd を重複なく自動追加する。追加済み workspace は同じ VS Codeプロファイル内で共有し、拡張機能の再起動後も保持する。list から消えても見出しを保持し、削除は「ワークスペース登録解除」の成功時だけ行う。削除後に list へ再び現れた cwd は自動追加する。Session List への追加・保持は `workspaceFolders` を変更せず、`workspaceFolders` への反映は「workspaceFolders 同期」に従う。
 
@@ -212,7 +212,7 @@ Webview 全体を document の標準スクロールで移動する。スクロ�
 
 ### 実行フェーズの表示
 
-実行フェーズは `pi-mux list --json` の応答でセッション ID が一致する項目の `state` から取得する。拡張機能はフェーズの取得・表示を理由に、workspace 登録や復元候補の更新操作を行わない。
+実行フェーズは `pi-mux list --active --json` の応答でセッション ID が一致する項目の `state` から取得する。拡張機能はフェーズの取得・表示を理由に、workspace 登録や復元候補の更新操作を行わない。
 
 | 条件 | 表示 |
 | --- | --- |
@@ -499,7 +499,7 @@ Sessions の標準ビュータイトルにある更新操作の名前とツー�
 
 ## workspaceFolders 同期
 
-拡張機能は `pi-mux list --json` の workspace と本体リポジトリの worktree を、VS Code の `workspaceFolders` へ反映する。フォルダ0は `~/.agents/workspace` に固定し、同期対象は folder 1 以降の管理フォルダに限る。`workspaceFolders` は、フォルダ0、`pi-mux list --json` の順に並ぶ workspace、各 workspace の直後に続くその本体リポジトリの worktree フォルダだけを持つ。
+拡張機能は `pi-mux list --active --json` の workspace と本体リポジトリの worktree を、VS Code の `workspaceFolders` へ反映する。フォルダ0は `~/.agents/workspace` に固定し、同期対象は folder 1 以降の管理フォルダに限る。`workspaceFolders` は、フォルダ0、`pi-mux list --active --json` の順に並ぶ workspace、各 workspace の直後に続くその本体リポジトリの worktree フォルダだけを持つ。
 
 ### 起動時のワークスペース遷移
 
@@ -519,7 +519,7 @@ Sessions の標準ビュータイトルにある更新操作の名前とツー�
 
 | 条件 | 動作 |
 | --- | --- |
-| `pi-mux list --json` に載る cwd | 本体リポジトリ候補にする |
+| `pi-mux list --active --json` に載る cwd | 本体リポジトリ候補にする |
 | 管理フォルダのうち `.git` ファイルを持ち、その `gitdir:` から本体リポジトリの `.git` ディレクトリを解決できるフォルダ | その本体リポジトリを候補にする |
 | bare リポジトリ、不完全な porcelain ブロック | 管理対象に含めない |
 | git コマンドが利用できない、実行が失敗する | worktree の検出を保留し、list に基づく同期は続ける |
@@ -533,25 +533,25 @@ Sessions の標準ビュータイトルにある更新操作の名前とツー�
 | 対象 | 位置 |
 | --- | --- |
 | フォルダ0（`~/.agents/workspace`） | 先頭 |
-| `pi-mux list --json` の各 workspace | フォルダ0の直後から `pi-mux list --json` の並び順 |
+| `pi-mux list --active --json` の各 workspace | フォルダ0の直後から `pi-mux list --active --json` の並び順 |
 | 本体リポジトリの worktree | その本体リポジトリのフォルダの直後に、表示名のアルファベット順 |
 | 本体リポジトリのフォルダが無い worktree | ほかのグループの末尾に、表示名のアルファベット順 |
-| `pi-mux list --json` の cwd と worktree の両方に該当するフォルダ | `pi-mux list --json` の位置を優先し、既存のフォルダ名を維持する |
+| `pi-mux list --active --json` の cwd と worktree の両方に該当するフォルダ | `pi-mux list --active --json` の位置を優先し、既存のフォルダ名を維持する |
 
 ### 管理フォルダの同期
 
-`pi-mux list --json` の取得結果と worktree の検出結果を現在の `workspaceFolders` と突き合わせ、差分と並び順を適用する。適用の契機は、list の取得完了ごとに list に基づく差分、worktree の検出完了ごとに worktree に基づく差分とする。folder 1 以降のフォルダはすべて管理フォルダとして扱い、最初の適用は起動後の list の初回取得成功後に限る。この拡張機能が担うのはフォルダの追加・削除・並べ替えまでであり、SCM への反映は VS Code 内蔵 Git がフォルダの追加・削除に反応して行う。
+`pi-mux list --active --json` の取得結果と worktree の検出結果を現在の `workspaceFolders` と突き合わせ、差分と並び順を適用する。適用の契機は、list の取得完了ごとに list に基づく差分、worktree の検出完了ごとに worktree に基づく差分とする。folder 1 以降のフォルダはすべて管理フォルダとして扱い、最初の適用は起動後の list の初回取得成功後に限る。この拡張機能が担うのはフォルダの追加・削除・並べ替えまでであり、SCM への反映は VS Code 内蔵 Git がフォルダの追加・削除に反応して行う。
 
 | 条件・変化 | 動作 |
 | --- | --- |
-| `pi-mux list --json` に載る cwd が `workspaceFolders` に無い | その cwd を「フォルダの並び」の位置に管理フォルダとして追加する |
-| 管理フォルダの cwd が `pi-mux list --json` から消える | そのフォルダを削除する。削除前にそのフォルダ配下のエディタタブを閉じる。未保存の変更があるタブは VS Code の確認ダイアログに従う |
+| `pi-mux list --active --json` に載る cwd が `workspaceFolders` に無い | その cwd を「フォルダの並び」の位置に管理フォルダとして追加する |
+| 管理フォルダの cwd が `pi-mux list --active --json` から消える | そのフォルダを削除する。削除前にそのフォルダ配下のエディタタブを閉じる。未保存の変更があるタブは VS Code の確認ダイアログに従う |
 | worktree が検出結果に現れる | その worktree を管理フォルダとして追加する。pi-mux へは登録しない |
-| worktree が検出結果から消える、または prunable になる | そのフォルダを削除する。ただし `pi-mux list --json` に載る cwd と同じ実体のフォルダは保持する。削除前にそのフォルダ配下のエディタタブを閉じる。未保存の変更があるタブは VS Code の確認ダイアログに従う |
-| フォルダ0と同じ実体の cwd が `pi-mux list --json` に載る | 重複追加せず、フォルダ0をその workspace として扱う |
-| folder 1 以降に、`pi-mux list --json` の cwd と検出済み worktree のどちらとも一致しないフォルダがある | そのフォルダを削除する。削除前のタブの扱いは上の削除と同じ |
+| worktree が検出結果から消える、または prunable になる | そのフォルダを削除する。ただし `pi-mux list --active --json` に載る cwd と同じ実体のフォルダは保持する。削除前にそのフォルダ配下のエディタタブを閉じる。未保存の変更があるタブは VS Code の確認ダイアログに従う |
+| フォルダ0と同じ実体の cwd が `pi-mux list --active --json` に載る | 重複追加せず、フォルダ0をその workspace として扱う |
+| folder 1 以降に、`pi-mux list --active --json` の cwd と検出済み worktree のどちらとも一致しないフォルダがある | そのフォルダを削除する。削除前のタブの扱いは上の削除と同じ |
 | フォルダ0以外に `~/.agents/workspace` と同じ実体のフォルダがある | そのフォルダを削除する。削除前のタブの扱いは上の削除と同じ |
-| ユーザーが管理フォルダを `workspaceFolders` から外す | `pi-mux list --json` に載り続ける、または worktree が生存する限り、次の同期で再追加する |
+| ユーザーが管理フォルダを `workspaceFolders` から外す | `pi-mux list --active --json` に載り続ける、または worktree が生存する限り、次の同期で再追加する |
 | エディタタブの確認ダイアログがキャンセルされる、フォルダの追加・削除・並べ替えの適用が拒否される、git の実行が失敗する | 通知せず同期状態を維持し、次の同期で再試行する。キャンセル・拒否された削除対象は管理フォルダに残す |
 
 ### タイトルバー
@@ -567,7 +567,7 @@ Sessions の標準ビュータイトルにある更新操作の名前とツー�
 
 Terminal のタイトルは、Pi TUI が通知するタイトルをそのまま表示する。拡張は通知されたタイトルを変更せず、独自のタイトルを付けない。`terminal.integrated.tabs.title` 設定が通知タイトルを採用しない環境（既定の `${process}` など）では、代わりにプロセス名 `tmux` が表示される。表示用 Terminal の起動 cwd は利用者のホームディレクトリとし、セッションの cwd に依存しない。タブの cwd 補助ラベルは起動 cwd のみを示し、セッションの切り替えで変化しない。
 
-Pi は pi-mux が管理する専用 tmux 内でセッションごとに保持し、表示用 Terminal の開閉と稼働を切り離す。実行環境には、切替先の不在とクライアントの未接続を終了コードで区別し、`list`・`current`・`history` の `--json` に対応する版の `pi-mux` が必要である。tmux 側の一覧は表示せず、セッションの選択は拡張の一覧から行う。pi-mux の専用環境は利用者の通常の tmux 環境と分離し、拡張は利用者の他のターミナル・tmux セッション・設定を変更しない。
+Pi は pi-mux が管理する専用 tmux 内でセッションごとに保持し、表示用 Terminal の開閉と稼働を切り離す。実行環境には、切替先の不在とクライアントの未接続を終了コードで区別し、`list --active --json`・`list --saved --json`・`current --json` に対応する版の `pi-mux` が必要である。tmux 側の一覧は表示せず、セッションの選択は拡張の一覧から行う。pi-mux の専用環境は利用者の通常の tmux 環境と分離し、拡張は利用者の他のターミナル・tmux セッション・設定を変更しない。
 
 表示用 Terminal は、セッションの選択・未アーカイブでは `pi-mux open` を、新規セッションでは `pi-mux new --cwd <セッションの cwd>` を起動する設定で作成し、作成後すぐに前面表示を要求する。選択・未アーカイブでは、拡張はプロセス ID の取得や接続確認を待たず、作成・表示要求をもって正常に開いたものとして表示先・選択表示・既読化を更新する。新規セッションでは、表示先・選択表示は接続先セッション ID の確定後に更新する。Terminal 内の tmux への接続とその失敗処理は pi-mux CLI が担う。
 
@@ -656,5 +656,5 @@ e2e テストが拡張機能の読み込み先として使う固定バージョ�
 - Pi がセッションとエージェントの source of truth である。拡張機能は Pi を再実装せず、Pi セッション形式の独自変換も行わない
 - Pi の保持先は pi-mux が管理する専用 tmux である。拡張は専用 tmux への socket 接続や tmux コマンドを直接使わず、表示の切替と表示中セッションの確認は pi-mux CLI（`switch` / `current`）、Pi の停止は公開操作 `pi-mux close` を使う。pi-mux の設定・管理対象を変更しない
 - workspace 登録と復元候補の共有は pi-mux の公開 CLI を通じて行う。拡張機能による永続情報の扱いは「workspace 登録と永続情報」に従う
-- `workspaceFolders` の同期は `pi-mux list --json` と `git worktree list` を正とする。フォルダ0 (`~/.agents/workspace`) を固定で使い、同期は folder 1 以降の管理フォルダに限る
+- `workspaceFolders` の同期は `pi-mux list --active --json` と `git worktree list` を正とする。フォルダ0 (`~/.agents/workspace`) を固定で使い、同期は folder 1 以降の管理フォルダに限る
 - セッションファイルは read-only として扱い、セッションの作成・更新は Pi CLI に行わせる

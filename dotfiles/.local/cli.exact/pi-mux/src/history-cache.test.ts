@@ -251,7 +251,10 @@ switch (args[0]) {
     );
   }
 
-  traceReads(forbidArchive = false): void {
+  traceReads({
+    forbidArchive = false,
+    forbidHistory = false,
+  }: { forbidArchive?: boolean; forbidHistory?: boolean } = {}): void {
     const preload = join(this.directory, "trace-reads.ts");
     const trace = join(this.directory, "reads.jsonl");
     writeFileSync(trace, "");
@@ -269,7 +272,9 @@ spyOn(fs, "readSync").mockImplementation((...args) => {
 });
 const originalReaddir = promises.readdir;
 spyOn(promises, "readdir").mockImplementation((...args) => {
-  if (${forbidArchive} && String(args[0]).endsWith("/archive")) throw new Error("Archive inspection forbidden");
+  const directory = String(args[0]);
+  if (${forbidHistory} && directory.startsWith(${JSON.stringify(this.sessionsDirectory)})) throw new Error("History inspection forbidden");
+  if (${forbidArchive} && directory.endsWith("/archive")) throw new Error("Archive inspection forbidden");
   return Reflect.apply(originalReaddir, promises, args);
 });
 `,
@@ -1385,7 +1390,7 @@ describe("standard session lookup", () => {
           file: join(dirname(file), "archive", `${id}.jsonl`),
         });
         fixture.mockTmux(id, file);
-        fixture.traceReads(true);
+        fixture.traceReads({ forbidArchive: true });
         if (operation === "restore")
           writeFileSync(
             join(fixture.agentDir, "pi-tmux", "pi-mux-restore.json"),
@@ -1476,7 +1481,7 @@ describe("standard session lookup", () => {
         fixture.userMessage(),
       ]);
       fixture.mockTmux(id, file);
-      fixture.traceReads(true);
+      fixture.traceReads({ forbidArchive: true });
       const result = fixture.run(["open", "--temporary", id]);
       assert.equal(result.status, 1);
       assert.ok(result.stderr.includes("Archive inspection forbidden"));
@@ -1499,7 +1504,7 @@ describe("standard session lookup", () => {
         fixture.userMessage(),
       ]);
       fixture.mockTmux(id, file);
-      fixture.traceReads(true);
+      fixture.traceReads({ forbidArchive: true });
       const result = fixture.run(["open", "--temporary", id]);
       assert.equal(result.status, 1);
       assert.ok(result.stderr.includes(`Ambiguous session ID: ${id} (2 files)`));
@@ -1850,8 +1855,11 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
   });
 });
 
-describe("shared list and history cache", () => {
-  for (const initial of ["history", "list"] as const) {
+describe("shared active list and history cache", () => {
+  for (const initial of ["history", "list --active"] as const) {
+    const isHistoryFirst = initial === "history";
+    const historyArgs = ["history", "--json"];
+    const activeArgs = ["list", "--active", "--json"];
     it(`reuses a title cached by ${initial} in the other command without reading the title again`, () => {
       const fixture = new HistoryCacheFixture();
       try {
@@ -1863,17 +1871,16 @@ describe("shared list and history cache", () => {
         ]);
         fixture.mockTmux(id, file, true);
         fixture.traceReads();
-        const first = fixture.run([initial, "--json"]);
+        const first = fixture.run(isHistoryFirst ? historyArgs : activeArgs);
         assert.equal(first.status, 0, first.stderr);
         const cacheFile = fixture.cacheFileFor(file);
         assert.ok(cacheFile);
         const cacheBefore = statSync(cacheFile, { bigint: true });
         assert.ok(fixture.reads().length > 0);
-        const second = initial === "history" ? "list" : "history";
-        const result = fixture.run([second, "--json"]);
+        const result = fixture.run(isHistoryFirst ? activeArgs : historyArgs);
         assert.equal(result.status, 0, result.stderr);
         const output = JSON.parse(result.stdout);
-        const title = second === "list" ? output[0].sessions[0].title : output[0].title;
+        const title = isHistoryFirst ? output[0].sessions[0].title : output[0].title;
         assert.equal(title, "Shared title");
         assert.deepEqual(fixture.reads(), []);
         assert.equal(statSync(cacheFile, { bigint: true }).mtimeNs, cacheBefore.mtimeNs);
@@ -1883,7 +1890,7 @@ describe("shared list and history cache", () => {
     });
   }
 
-  it("keeps published titles ahead of the saved title without creating a cache", () => {
+  it("lists active panes with published titles without scanning history or creating a cache", () => {
     const fixture = new HistoryCacheFixture();
     try {
       const id = randomUUID();
@@ -1892,8 +1899,13 @@ describe("shared list and history cache", () => {
         fixture.userMessage(),
         fixture.sessionInfo("Saved title"),
       ]);
+      const otherId = randomUUID();
+      fixture.writeSession(fixture.otherCwd, otherId, [
+        fixture.header(otherId, fixture.otherCwd),
+        fixture.userMessage(),
+      ]);
       fixture.mockTmux(id, file, true);
-      fixture.traceReads();
+      fixture.traceReads({ forbidHistory: true });
       writeFileSync(
         join(fixture.directory, "published.json"),
         JSON.stringify({
@@ -1903,13 +1915,24 @@ describe("shared list and history cache", () => {
           title: "Published title",
         }),
       );
-      const result = fixture.run(["list", "--json"]);
+      const result = fixture.run(["list", "--json", "--active"]);
       assert.equal(result.status, 0, result.stderr);
-      assert.deepEqual(JSON.parse(result.stdout)[0].sessions, [
-        { id, file, state: "waiting-user", title: "Published title", publishPending: null },
+      assert.deepEqual(JSON.parse(result.stdout), [
+        {
+          cwd: fixture.cwd,
+          sessions: [
+            { id, file, state: "waiting-user", title: "Published title", publishPending: null },
+          ],
+          empty: [],
+        },
+        { cwd: fixture.otherCwd, sessions: [], empty: [] },
       ]);
       assert.deepEqual(fixture.reads(), []);
       assert.deepEqual(fixture.cacheFiles(), []);
+
+      const history = fixture.run(["history", "--json"]);
+      assert.equal(history.status, 1);
+      assert.match(history.stderr, /History inspection forbidden/);
     } finally {
       fixture.cleanup();
     }
@@ -1934,7 +1957,7 @@ describe("shared list and history cache", () => {
             readFileSync(file, "utf8") + JSON.stringify(fixture.sessionInfo(title)) + "\n",
           );
         const expected = title?.trim() || null;
-        const listed = fixture.run(["list", "--json"]);
+        const listed = fixture.run(["list", "--active", "--json"]);
         assert.equal(listed.status, 0, listed.stderr);
         assert.equal(JSON.parse(listed.stdout)[0].sessions[0].title, expected);
         const history = fixture.history();
@@ -1978,7 +2001,7 @@ describe("shared list and history cache", () => {
       assert.equal(after.size, before.size);
       assert.equal(after.mtimeNs, before.mtimeNs);
       assert.notEqual(after.ctimeNs, before.ctimeNs);
-      const listed = fixture.run(["list", "--json"]);
+      const listed = fixture.run(["list", "--active", "--json"]);
       assert.equal(listed.status, 0, listed.stderr);
       assert.equal(JSON.parse(listed.stdout)[0].sessions[0].title, "Other title");
       const history = fixture.history();
@@ -2010,7 +2033,7 @@ describe("shared list and history cache", () => {
           rmSync(cacheFile);
           mkdirSync(cacheFile);
         }
-        const listed = fixture.run(["list", "--json"]);
+        const listed = fixture.run(["list", "--active", "--json"]);
         assert.equal(listed.status, 0, listed.stderr);
         assert.equal(JSON.parse(listed.stdout)[0].sessions[0].title, "Available title");
       }
