@@ -57,6 +57,21 @@ it("installs a same-version VSIX on first apply and injects only after installat
   ]);
 });
 
+it("reports the extension ID without echoing the installer success output", async () => {
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  const stdout = spyOn(process.stdout, "write").mockImplementation(() => true);
+  try {
+    await applyCustomPatch(vscodeDir, root, linux, async (argv) =>
+      argv.includes("--install-extension") ? "Extension was successfully installed.\n" : "",
+    );
+    assert.deepEqual(log.mock.calls, [["[linux] install catbraaain.vscode-custom-patch"]]);
+    assert.deepEqual(stdout.mock.calls, []);
+  } finally {
+    stdout.mockRestore();
+    log.mockRestore();
+  }
+});
+
 it("skips only the VSIX installation on a content hit, and reinstalls if absent", async () => {
   await applyCustomPatch(vscodeDir, root, linux, async () => "");
   const calls: string[] = [];

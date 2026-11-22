@@ -124,12 +124,12 @@ function listExtensions(target: Target, run: Run): Promise<string> {
 }
 
 async function installExtension(target: Target, vsixPath: string, run: Run): Promise<void> {
-  console.log(`[${target.platform}] install ${vsixPath}`);
-  const output =
-    target.platform === "linux"
-      ? await run([...target.codeCommand, "--install-extension", vsixPath, "--force"])
-      : await runWindows(target, windowsInstallCommand(powerShellLiteral(vsixPath)), run);
-  if (output.length > 0) process.stdout.write(output);
+  console.log(`[${target.platform}] install ${extensionId}`);
+  if (target.platform === "linux") {
+    await run([...target.codeCommand, "--install-extension", vsixPath, "--force"]);
+  } else {
+    await runWindows(target, windowsInstallCommand(powerShellLiteral(vsixPath)), run);
+  }
 }
 
 async function inject(target: Target, vscodeDir: string, run: Run): Promise<void> {

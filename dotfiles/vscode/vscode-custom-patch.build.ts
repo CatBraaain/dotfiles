@@ -92,11 +92,19 @@ async function runProjectBuild(sourceDir: string, artifacts: string): Promise<vo
   const processBuild = Bun.spawn([process.execPath, "run", "build", artifacts], {
     cwd: sourceDir,
     stdin: "ignore",
-    stdout: "inherit",
-    stderr: "inherit",
+    stdout: "pipe",
+    stderr: "pipe",
   });
-  const exitCode = await processBuild.exited;
-  if (exitCode !== 0) throw new Error(`vscode-custom-patch build failed (exit code ${exitCode})`);
+  const [exitCode, stdout, stderr] = await Promise.all([
+    processBuild.exited,
+    new Response(processBuild.stdout).text(),
+    new Response(processBuild.stderr).text(),
+  ]);
+  if (exitCode !== 0) {
+    if (stdout.length > 0) process.stdout.write(stdout);
+    if (stderr.length > 0) process.stderr.write(stderr);
+    throw new Error(`vscode-custom-patch build failed (exit code ${exitCode})`);
+  }
 }
 
 async function hasArtifacts(directory: string): Promise<boolean> {

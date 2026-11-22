@@ -239,7 +239,10 @@ async function installTodoLsp(target: Target) {
   rmSync(vsixPath, { force: true });
   await $`bun install --frozen-lockfile 1>&2`.cwd(todoLspRepo);
   await $`just package 1>&2`.cwd(todoLspRepo);
-  await installVsix(target, vsixPath);
+  await installVsix(target, vsixPath, (argv) => {
+    console.log(`[${target.label}] install ${vsixPath}`);
+    return runCommand(argv);
+  });
 }
 
 async function installAgentKit(target: Target) {
@@ -267,14 +270,26 @@ async function installAgentKit(target: Target) {
   );
   if (installed && (await readReceipt(receipt)) === contentHash) return;
 
+  console.log(`[${target.label}] build and install ${agentKitId}`);
   const vsixPath = join(project, vsixName);
   rmSync(vsixPath, { force: true });
-  await $`bun install --frozen-lockfile 1>&2`.cwd(project);
-  await $`bun run build 1>&2`.cwd(project);
-  await $`bunx @vscode/vsce package --allow-missing-repository --skip-license --no-dependencies --out ${vsixPath} 1>&2`.cwd(
+  await runAgentKitStep("Install dependencies", ["bun", "install", "--frozen-lockfile"], project);
+  await runAgentKitStep("Build extension", ["bun", "run", "build"], project);
+  await runAgentKitStep(
+    "Package VSIX",
+    [
+      "bunx",
+      "@vscode/vsce",
+      "package",
+      "--allow-missing-repository",
+      "--skip-license",
+      "--no-dependencies",
+      "--out",
+      vsixPath,
+    ],
     project,
   );
-  await installVsix(target, vsixPath);
+  await installVsix(target, vsixPath, (argv) => runAgentKitStep("Install VSIX", argv));
   await mkdir(dirname(receipt), { recursive: true });
   await Bun.write(receipt, `${contentHash}\n`);
 }
@@ -352,10 +367,20 @@ async function ensureRepo(url: string, repo: string) {
   }
 }
 
-async function installVsix(target: Target, vsixPath: string) {
+async function installVsix(target: Target, vsixPath: string, run: Run) {
   if (!isFile(vsixPath)) throw new Error(`error: VSIX was not created: ${vsixPath}`);
-  console.log(`[${target.label}] install ${vsixPath}`);
-  await runCode(target, ["--install-extension", vsixPath, "--force"], runCommand);
+  await runCode(target, ["--install-extension", vsixPath, "--force"], run);
+}
+
+async function runAgentKitStep(step: string, argv: string[], cwd?: string): Promise<string> {
+  const command = $`${argv}`.quiet().nothrow();
+  if (cwd) command.cwd(cwd);
+  const { stdout, stderr, exitCode } = await command;
+  if (exitCode !== 0) {
+    const details = [stdout.toString().trimEnd(), stderr.toString().trimEnd()].filter(Boolean);
+    throw new Error([`${step} failed (exit code ${exitCode})`, ...details].join("\n"));
+  }
+  return stdout.toString();
 }
 
 const extensionIdPattern = /^([a-z0-9-]+\.[a-z0-9-]+)@/i;
