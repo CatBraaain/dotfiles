@@ -1916,21 +1916,19 @@ async function sendSessionMessage(
       JSON.stringify({ v: 1, id: messageId, from, at: new Date().toISOString(), text }),
       "utf8",
     ).toString("base64");
-    const line = guardedTmuxLine(
+    const writeAndReadBack = guardedTmuxLine(
       target.pane,
       paneEntityGuard(server.pid, target.pane, target.panePid),
-      [["set-option", "-p", "-t", target.pane, optionName, envelope]],
+      [
+        ["set-option", "-p", "-t", target.pane, optionName, envelope],
+        ["show-options", "-pqv", "-t", target.pane, optionName],
+      ],
       "PI_MUX_MESSAGE_TARGET_LOST",
     );
-    const result = await tmux(config, ["source-file", "-"], false, `${line}\n`);
+    const result = await tmux(config, ["source-file", "-"], false, `${writeAndReadBack}\n`);
     if (result.stdout.includes("PI_MUX_MESSAGE_TARGET_LOST"))
       throw new Error("Target pane no longer matches the conversation");
-    const stored = await tmux(
-      config,
-      ["show-options", "-pqv", "-t", target.pane, optionName],
-      true,
-    );
-    if (stored.exitCode !== 0 || stored.stdout.trim() !== envelope)
+    if (result.stdout.trim() !== envelope)
       throw new Error("Cannot confirm the message option write");
     if (waitSeconds === undefined) return 0;
     const outcome = await waitForMessageConsumption(config, target.pane, optionName, waitSeconds);

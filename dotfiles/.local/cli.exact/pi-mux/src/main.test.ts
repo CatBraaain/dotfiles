@@ -1528,7 +1528,7 @@ describe("send", () => {
     }
   }, 20_000);
 
-  it("reports delivered when the receiving pane consumes the option", async () => {
+  it("reports delivered when the receiving pane consumes the option before the write call returns", async () => {
     const fixture = new SessionFixture();
     try {
       const id = randomUUID();
@@ -1537,6 +1537,19 @@ describe("send", () => {
         file: join(fixture.directory, "conversations", `${id}.jsonl`),
       });
       const pane = sessionPane(fixture, id);
+      const wrapper = join(fixture.directory, "bin/tmux");
+      const execTmux = `exec ${JSON.stringify(realTmux)} "$@"`;
+      writeFileSync(
+        wrapper,
+        readFileSync(wrapper, "utf8").replace(
+          execTmux,
+          `if [ "$5" = source-file ] && [ "$6" = - ]; then
+  ${JSON.stringify(realTmux)} "$@" || exit $?
+  exec ${JSON.stringify(realTmux)} -S "$2" wait-for message-consumed
+fi
+${execTmux}`,
+        ),
+      );
       const child = Bun.spawn(
         [process.execPath, "run", source, "send", "--wait", "10", id, "handover please"],
         { cwd: fixture.cwd, env: fixture.env, stdout: "pipe", stderr: "pipe" },
@@ -1547,11 +1560,13 @@ describe("send", () => {
         return optionName !== undefined;
       });
       fixture.tmux(["set-option", "-pu", "-t", pane, optionName!]);
-      const [stdout, exitCode] = await Promise.all([
+      fixture.tmux(["wait-for", "-S", "message-consumed"]);
+      const [stdout, stderr, exitCode] = await Promise.all([
         new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
         child.exited,
       ]);
-      assert.equal(exitCode, 0);
+      assert.equal(exitCode, 0, stderr);
       assert.equal(stdout.trim(), "delivered");
     } finally {
       await fixture.cleanup();
