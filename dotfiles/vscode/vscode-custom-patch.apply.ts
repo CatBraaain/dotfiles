@@ -4,7 +4,12 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 
 const extensionId = "catbraaain.vscode-custom-patch";
 const vsixPattern = /^vscode-custom-patch-(\d+\.\d+\.\d+)\.data\.vsix$/;
-const windowsCode = ["powershell.exe", "-NoProfile", "-Command", "code"];
+const windowsCode = [
+  "powershell.exe",
+  "-NoProfile",
+  "-Command",
+  "Set-Location -LiteralPath $env:SystemRoot -ErrorAction Stop; code",
+];
 type Target = "linux" | "windows";
 type Run = (argv: string[], cwd?: string) => Promise<string>;
 

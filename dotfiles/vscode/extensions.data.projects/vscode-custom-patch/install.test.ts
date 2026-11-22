@@ -90,18 +90,28 @@ it("skips injection on a failed same-version update, then retries it before inje
 
 it("uses a separate receipt for Windows and leaves Windows injection to startup", async () => {
   await applyCustomPatch(vscodeDir, root, ["linux"], async () => "");
-  const windowsVsix = "C:\\dot files\\O'Brien\\patch.vsix";
+  const windowsVsix = "\\\\wsl.localhost\\Ubuntu\\dot files\\O'Brien\\patch.vsix";
   const calls: string[][] = [];
   await applyCustomPatch(vscodeDir, root, ["windows"], async (argv) => {
     calls.push(argv);
     if (argv[0] === "wslpath") return windowsVsix + "\n";
     return argv.includes("--list-extensions") ? installed : "";
   });
-  const code = ["powershell.exe", "-NoProfile", "-Command", "code"];
+  const code = [
+    "powershell.exe",
+    "-NoProfile",
+    "-Command",
+    "Set-Location -LiteralPath $env:SystemRoot -ErrorAction Stop; code",
+  ];
   assert.deepEqual(calls, [
     [...code, "--list-extensions", "--show-versions"],
     ["wslpath", "-w", vsix],
-    [...code, "--install-extension", "'C:\\dot files\\O''Brien\\patch.vsix'", "--force"],
+    [
+      ...code,
+      "--install-extension",
+      "'\\\\wsl.localhost\\Ubuntu\\dot files\\O''Brien\\patch.vsix'",
+      "--force",
+    ],
   ]);
   assert.equal((await readFile(receipt("windows"), "utf8")).trim(), first);
 });
