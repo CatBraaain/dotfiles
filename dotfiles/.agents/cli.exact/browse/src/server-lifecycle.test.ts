@@ -112,6 +112,35 @@ describe("server restart contract", () => {
     assert.equal(report.now, 500);
   });
 
+  it("does not signal a live recycled PID on Windows", () => {
+    const report = runServer("windows-recycled", { SystemRoot: "C:\\Windows" });
+    assert.equal(report.error, undefined);
+    assert.deepEqual(
+      report.events.find(([name]) => name === "windowsStopCheck"),
+      ["windowsStopCheck", "41003"],
+    );
+    assert.deepEqual(
+      report.events.filter(([name, , signal]) => name === "kill" && signal !== 0),
+      [],
+    );
+    assert.equal(report.events.filter(([name]) => name === "spawn").length, 1);
+  });
+
+  for (const [scenario, error] of [
+    ["windows-stop-failed", "Could not stop the verified Camoufox server"],
+    ["windows-stop-timeout", "Could not determine the Camoufox server stop result"],
+  ] as const) {
+    it(`aborts Windows restart after ${scenario}`, () => {
+      const report = runServer(scenario, { SystemRoot: "C:\\Windows" });
+      assert.ok(report.error?.includes(error), report.error ?? "Restart did not report an error");
+      assert.equal(report.probes, 0);
+      assert.equal(
+        report.events.some(([name]) => name === "spawn"),
+        false,
+      );
+    });
+  }
+
   for (const scenario of ["none", "recycled"]) {
     it(`skips stopping ${scenario === "none" ? "absent servers" : "a recycled non-server PID"} and starts a server`, () => {
       const report = runServer(scenario);

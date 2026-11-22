@@ -39,6 +39,7 @@ import {
 } from "./config";
 import { ensureDisplay, ensureX11vnc, DISPLAY_NUMBER, resolveHeadless } from "./display";
 import { delay, selfRunArgv, selfRunPath } from "./util";
+import { stopWindowsServer } from "./windows-server";
 
 const CAMOUFOX_EXECUTABLE_PATH =
   process.env.CAMOUFOX_EXECUTABLE_PATH ?? join(homedir(), ".cache", "camoufox", "camoufox-bin");
@@ -230,7 +231,6 @@ function spawnBrowseDetached(args: readonly string[]): void {
     spawnDetachedServer(selfRunArgv[0]!, [...selfRunArgv.slice(1), ...args], {
       detached: true,
       stdio: ["ignore", logFd, logFd],
-      shell: process.platform === "win32",
     });
   } finally {
     if (typeof logFd === "number") closeSync(logFd);
@@ -425,6 +425,14 @@ function clearServerPidFile(): void {
 }
 
 async function stopCamoufoxServers(): Promise<void> {
+  if (process.platform === "win32") {
+    const pid = readServerPidFile();
+    if (pid !== undefined && pid !== process.pid) {
+      stopWindowsServer(pid, [...selfRunArgv, SERVER_SUBCOMMAND]);
+    }
+    return;
+  }
+
   const pids = camoufoxServerPids();
   if (pids.length === 0) return;
   for (const pid of pids) {
@@ -491,9 +499,7 @@ function camoufoxServerPids(): number[] {
   return [...pids];
 }
 
-// A recycled pid must never be killed: on Linux verify the command line still
-// names this browse script and the server mode; elsewhere fall back to the
-// alive check alone.
+// Linux verifies that a candidate still runs this browse script in server mode.
 function looksLikeCamoufoxServer(pid: number): boolean {
   if (process.platform !== "linux") return processAlive(pid);
   try {

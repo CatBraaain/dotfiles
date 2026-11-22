@@ -4,10 +4,9 @@ import { execFile } from "node:child_process";
 import { dirname } from "node:path";
 import { CONVERT_TIMEOUT_MS } from "./config";
 
-// Inside a compiled single-file executable, bun serves the bundled sources
-// from the /$bunfs/root/ virtual filesystem and process.execPath is the
-// executable itself.
-export const isCompiledBinary = import.meta.path.startsWith("/$bunfs/root/");
+const bundledSourceRoots = ["/$bunfs/root/", "B:/~BUN/root/"];
+const modulePath = import.meta.path.replaceAll("\\", "/");
+export const isCompiledBinary = bundledSourceRoots.some((root) => modulePath.startsWith(root));
 
 // The path naming this CLI in child command lines and process sweeps: the
 // project directory that bun re-runs from source, or the executable itself
@@ -16,7 +15,9 @@ export const selfRunPath = isCompiledBinary ? process.execPath : dirname(import.
 
 // Spawn argv to run this CLI again: `bun <selfRunPath>` from source, or the
 // compiled executable alone when compiled.
-export const selfRunArgv = isCompiledBinary ? [process.execPath] : [process.execPath, selfRunPath];
+export const selfRunArgv: readonly [string, ...string[]] = isCompiledBinary
+  ? [process.execPath]
+  : [process.execPath, selfRunPath];
 
 export function fail(message: string): never {
   console.error(message);

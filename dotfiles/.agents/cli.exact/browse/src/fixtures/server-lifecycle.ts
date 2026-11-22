@@ -6,6 +6,8 @@ import { join } from "node:path";
 import * as util from "../util";
 
 const scenario = process.argv[2]!;
+const windows = scenario.startsWith("windows-");
+Object.defineProperty(process, "platform", { value: windows ? "win32" : "linux" });
 const events: unknown[][] = [];
 const signals: { deadline: number; controller: AbortController }[] = [];
 const pidFile = join(process.env.XDG_CACHE_HOME!, "pi/web-search/camoufox-server.pid");
@@ -14,7 +16,8 @@ let probes = 0;
 let pidFilePid: number | undefined =
   scenario === "restart" || scenario === "term-exit" ? 41001 : undefined;
 const alive = new Set(pidFilePid ? [41001, 41002] : []);
-if (scenario === "recycled") pidFilePid = 41003;
+if (scenario === "recycled" || windows) pidFilePid = 41003;
+if (windows) alive.add(41003);
 const nativeRead = fs.readFileSync;
 const nativeStat = fs.statSync;
 const nativeSetTimeout = setTimeout;
@@ -79,11 +82,22 @@ mock.module("node:child_process", () => ({
       },
     };
   },
-  spawnSync: (command: string, args: string[]) => {
+  spawnSync: (command: string, args: string[], options?: childProcess.SpawnSyncOptions) => {
+    if (command.endsWith("\\powershell.exe")) {
+      events.push(["windowsStopCheck", options?.env?.BROWSE_SERVER_PID]);
+      if (scenario === "windows-stop-timeout") {
+        return {
+          status: null,
+          error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
+        };
+      }
+      return { status: scenario === "windows-stop-failed" ? 2 : 0 };
+    }
     events.push(["spawnSync", command, args]);
     if (command === "flock" && scenario === "recover-lost") return { status: 192 };
     if (command === "flock" && scenario === "recover-no-flock")
       return { error: new Error("ENOENT") };
+    if (command === "pgrep" && windows) return { error: new Error("ENOENT") };
     if (command === "pgrep")
       return {
         status: 0,
@@ -196,7 +210,7 @@ try {
     await ensureOpenserpServer(AbortSignal.timeout(15000));
   } else if (scenario.startsWith("recover-")) {
     await recoverCamoufoxServer();
-  } else if (["restart", "none", "term-exit", "recycled"].includes(scenario)) {
+  } else if (windows || ["restart", "none", "term-exit", "recycled"].includes(scenario)) {
     await restartCamoufoxServer();
   } else if (scenario === "ensure") {
     await ensureCamoufoxServer(AbortSignal.timeout(15000));

@@ -58,7 +58,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | --- | --- |
 | server起動待ち・セッションclose・restartロック競合時の再起動完了待ち | 15秒 |
 | server起動からの render復旧再起動の申請抑制期間 | 30秒 |
-| `browse server restart` の停止待ち（SIGTERM を送ってから SIGKILL に上げるまで） | 10秒 |
+| `browse server restart` の最初の停止要求から終了までの待ち | 10秒 |
 | ページopen・ナビゲーション・DOM取得 | 30秒 |
 | render中に他の実行の server再起動が始まったとき | 実行中の render は再起動を待たず実行を継続する（再起動側が renderスロットの解放を待つため、実行中render が再起動の完了を待つ循環待ちは起きない） |
 | openserpパース・trafilatura変換・Reddit の各要求・StackOverflow の各要求・GitHub API の各要求・Hacker News / Wikipedia / arXiv / RSS / fxtwitter の各要求 | 15秒 |
@@ -117,9 +117,13 @@ hangしたcamoufox server の復旧用に、実行中の server を停止して�
 | 条件・状態 | 操作 | 結果 |
 | --- | --- | --- |
 | 実行 | 排他 | restartロックと 4つすべての renderスロットを `flock(1)` で獲得してから再起動する。`flock(1)` が無い環境では獲得せずに再起動する |
-| 実行 | 停止 | 停止対象は常に「PIDファイルの対象（Linux では `/proc/<pid>/cmdline` で実行中のbrowseスクリプトと `__server` 引数を検証する）」と「`pgrep -f <browse スクリプト> __server` 掃引」の和集合である。対象へ SIGTERM を送り、10秒以内に終了しなければ SIGKILLする |
+| Windows ネイティブで実行 | 停止対象の特定 | PIDファイルが指すプロセスの実行ファイルまたは起動されたスクリプトが、この `browse` と一致し、`__server` がそのサブコマンドであると確認できた場合のみ、そのプロセスを対象にする。確認できない場合や、停止する時点で PID が別プロセスを指す場合は対象にしない |
+| Windows ネイティブ以外で実行 | 停止対象の特定 | 停止対象は「PIDファイルの対象（Linux では `/proc/<pid>/cmdline` で実行中のbrowseスクリプトと `__server` 引数を検証する）」と「`pgrep -f <browse スクリプト> __server` 掃引」の和集合である |
+| Windows ネイティブで停止対象がある | 停止 | 強制終了要求を送り、10秒以内に終了しなければ同じプロセスに再送する |
+| Windows ネイティブで停止に失敗、または停止処理の結果が不明 | 実行 | エラーを返し、起動手順へ進まない |
+| Windows ネイティブ以外で停止対象がある | 停止 | 対象へ SIGTERM を送り、10秒以内に終了しなければ SIGKILLする |
 | 停止後 | 実行 | `browse server start` と同じ手順で起動し直し、ready を待つ |
-| 実行中の server が無い | 実行 | 停止を飛ばして `browse server start` の手順で起動する |
+| 停止対象が無い | 実行 | 停止を飛ばして `browse server start` と同じ手順に進む |
 
 ## `browse login twitter`
 
