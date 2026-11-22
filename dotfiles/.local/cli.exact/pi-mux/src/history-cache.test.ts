@@ -1884,7 +1884,7 @@ describe("shared list and history cache", () => {
       const result = fixture.run(["list"]);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout)[0].sessions, [
-        { id, file, state: "waiting-user", title: "Published title" },
+        { id, file, state: "waiting-user", title: "Published title", publishPending: null },
       ]);
       assert.deepEqual(fixture.reads(), []);
       assert.deepEqual(fixture.cacheFiles(), []);
