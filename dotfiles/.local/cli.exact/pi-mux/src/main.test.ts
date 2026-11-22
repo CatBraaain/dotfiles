@@ -3783,6 +3783,16 @@ describe("reload", () => {
       );
       assert.equal(launch.id, id);
       assert.equal(launch.pid, Number(newPid));
+      const metadata = JSON.parse(
+        Buffer.from(
+          fixture.tmux(["show-options", "-pqv", "-t", pane, "@pi-tmux-session"]),
+          "base64",
+        ).toString("utf8"),
+      );
+      assert.equal(metadata.id, launch.id);
+      assert.equal(metadata.pid, launch.pid);
+      assert.equal(metadata.token, launch.token);
+      assert.notEqual(launch.token, fixture.launchTokenOf("target"));
       const hook = fixture.tmux(["show-options", "-gqv", "@pi-mux-snapshot"]);
       assert.ok(hook.includes(source), hook);
       assert.ok(hook.includes("snapshot"), hook);
@@ -3805,6 +3815,35 @@ describe("reload", () => {
           sessions: [id],
         },
       ]);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("reports a failed respawn without announcing a reload", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      const id = addManagedSession(fixture, "target", "waiting-user");
+      const oldPid = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]);
+      const wrapper = join(fixture.directory, "bin/tmux");
+      writeFileSync(
+        wrapper,
+        readFileSync(wrapper, "utf8").replace(
+          "exec ",
+          `case "$*" in
+  *PI_MUX_RELOAD_SERVER_CHANGED*) echo "respawn-pane: fixture refusal" >&2; exit 1 ;;
+esac
+exec `,
+        ),
+      );
+
+      const result = await finishReload(startReload(fixture, [id]));
+      assert.equal(result.status, 2, result.stderr);
+      assert.equal(result.stdout, "");
+      assert.ok(result.stderr.includes(`reload ${id}:`), result.stderr);
+      assert.match(result.stderr, /respawn-pane: fixture refusal/);
+      assert.equal(fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]), oldPid);
     } finally {
       await fixture.cleanup();
     }

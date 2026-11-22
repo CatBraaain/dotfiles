@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { quote } from "shell-quote";
 import { partitionMessageOptions, messageOptions, type AgentMessage } from "./messages.ts";
-import { registerFirstInputHandoff } from "./first-input-handoff.ts";
+import { registerLegacyDraftRecovery } from "./first-input-handoff.ts";
 import { registerSessionState } from "./session-state.ts";
 import {
   getTmuxPaths,
@@ -136,11 +136,11 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
   if (process.env.PI_TMUX_STARTUP_MODE === "create")
     pi.on("resources_discover", async (_event, ctx) => publish(ctx, "accepted"));
   else if (startupCommand) {
-    const firstInput = registerFirstInputHandoff(pi, currentReady);
+    const recoverDraft = registerLegacyDraftRecovery(pi);
     pi.registerCommand(startupCommand, {
       handler: async (_args, ctx) => {
         await publish(ctx, "ready");
-        if (ready?.id === ctx.sessionManager.getSessionId()) firstInput.ready(ctx);
+        if (ready?.id === ctx.sessionManager.getSessionId()) recoverDraft(ctx);
       },
     });
     pi.on("session_shutdown", async (_event, ctx) => confirmReady(ctx));

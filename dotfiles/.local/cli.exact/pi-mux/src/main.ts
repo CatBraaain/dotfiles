@@ -25,7 +25,6 @@ type Operation =
   | { kind: "new"; detached: boolean; clientPid?: number; request?: string; cwd?: string }
   | { kind: "open"; id: string; temporary: boolean }
   | { kind: "state"; id: string; source: StateSource; notification: StateNotification }
-  | { kind: "first-input"; id: string; request: string; source: StateSource }
   | { kind: "send"; id: string; waitSeconds: number | undefined; text: string }
   | { kind: "close"; id: string; ifTemporary: boolean }
   | { kind: "list" }
@@ -229,10 +228,6 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     prepareDirectory(config.stateDirectory);
     if (operation.kind === "restart") return await restartServer(config, operation.force);
     if (operation.kind === "reload") return await reloadPanes(config, operation.id);
-    if (operation.kind === "first-input") {
-      await withLock(config, () => replaceForFirstInput(config, operation));
-      return 0;
-    }
     if (operation.kind === "new" && operation.cwd !== undefined) {
       if (!statSync(operation.cwd).isDirectory())
         throw new Error(`Workspace is not a directory: ${operation.cwd}`);
@@ -348,19 +343,6 @@ export function parseOperation(argv: string[]): Operation {
     }
   }
   if (argv[0] === "state") return parseStateOperation(argv);
-  if (argv[0] === "first-input") {
-    const [, id, request, descriptor] = argv;
-    if (
-      argv.length !== 4 ||
-      !id ||
-      !UUID.test(id) ||
-      !request ||
-      !UUID.test(request) ||
-      !descriptor
-    )
-      throw new Error("Invalid first input handoff");
-    return { kind: "first-input", id, request, source: parseSource(JSON.parse(descriptor)) };
-  }
   if (argv[0] === "send") {
     if (argv.length === 2 && (argv[1] === "-h" || argv[1] === "--help")) return { kind: "help" };
     let index = 1;
@@ -1217,16 +1199,19 @@ async function reloadTarget(
   await verifyServerLifetime(config, original, "reload");
   const launchToken = randomUUID();
   const startupCommand = `pi-mux-startup-${randomUUID()}`;
+  const hasSavedFile = existsSync(pane.file);
+  const preserveWarm = pane.warm && !hasSavedFile;
   const desired: Record<string, string> = {
     ...config.env,
     PI_TMUX_SESSION_ID: pane.id,
     PI_TMUX_LAUNCH_TOKEN: launchToken,
     PI_TMUX_STARTUP_COMMAND: startupCommand,
     ...(session.temporary ? { PI_TMUX_TEMPORARY: pane.id } : {}),
+    ...(preserveWarm ? { PI_TMUX_STARTUP_MODE: "warm" } : {}),
   };
   await refreshSessionEnvironment(config, session.session, desired);
   const removed = await excludedGlobalEnvironment(config, desired);
-  const selection = existsSync(pane.file) ? ["--session", pane.file] : ["--session-id", pane.id];
+  const selection = hasSavedFile ? ["--session", pane.file] : ["--session-id", pane.id];
   const paneCommand = platform.paneCommand(
     [config.pi, ...selection, "-e", config.extension, "--", `/${startupCommand}`],
     removed,
@@ -1240,53 +1225,47 @@ async function reloadTarget(
     [
       tmuxArguments(["set-option", "-pu", "-t", pane.pane, "@pi-tmux-session"]),
       tmuxArguments(["respawn-pane", "-k", "-t", pane.pane, "--", paneCommand]),
+      tmuxArguments([
+        "set-option",
+        "-pF",
+        "-t",
+        pane.pane,
+        "@pi-mux-launch",
+        `{"id":"${pane.id}","pid":#{pane_pid},"token":"${launchToken}"}`,
+      ]),
     ].join(" ; "),
     "display-message -p PI_MUX_RELOAD_WAIT",
   ]);
   try {
-    const respawned = await tmux(
-      config,
-      [
-        "if-shell",
-        "-F",
-        `#{==:#{@pi-mux-generation},${original.generation}}`,
-        reloadBranch,
-        "display-message -p PI_MUX_RELOAD_SERVER_CHANGED",
-      ],
-      true,
-    );
+    const respawned = await tmux(config, [
+      "if-shell",
+      "-F",
+      `#{==:#{@pi-mux-generation},${original.generation}}`,
+      reloadBranch,
+      "display-message -p PI_MUX_RELOAD_SERVER_CHANGED",
+    ]);
     if (respawned.stdout.includes("PI_MUX_RELOAD_SERVER_CHANGED")) throw new ServerChangedError();
     if (respawned.stdout.includes("PI_MUX_RELOAD_WAIT")) return;
     const deadline = Date.now() + STARTUP_TIMEOUT_MS;
     while (true) {
-      const list = await tmux(
-        config,
-        ["list-panes", "-t", session.session, "-F", "#{pane_id}\t#{pane_pid}"],
-        true,
-      );
+      const list = await tmux(config, [
+        "list-panes",
+        "-t",
+        session.session,
+        "-F",
+        "#{pane_id}\t#{pane_pid}\t#{pane_dead}\t#{@pi-tmux-session}\t#{@pi-mux-launch}",
+      ]);
       const row = list.stdout
         .trimEnd()
         .split("\n")
-        .filter(Boolean)
         .map((line) => line.split("\t"))
         .find(([paneId]) => paneId === pane.pane);
-      if (!row) throw new Error(`pi exited before reload was recorded: ${pane.id}`);
-      const metadata = await tmux(config, [
-        "show-options",
-        "-pqv",
-        "-t",
-        pane.pane,
-        "@pi-tmux-session",
-      ]);
-      if (metadata.exitCode === 0 && metadata.stdout.trim()) {
-        await tmux(config, [
-          "set-option",
-          "-p",
-          "-t",
-          pane.pane,
-          "@pi-mux-launch",
-          JSON.stringify({ id: pane.id, pid: Number(row[1]), token: launchToken }),
-        ]);
+      if (!row || row[2] === "1")
+        throw new Error(`pi exited before reload was recorded: ${pane.id}`);
+      const [, pid, , metadata, launch] = row;
+      if (
+        matchesReloadPublication(pane, Number(pid), launchToken, preserveWarm, metadata, launch)
+      ) {
         reloaded.add(pane.id);
         console.log(`reloaded ${pane.id}`);
         return;
@@ -1299,6 +1278,37 @@ async function reloadTarget(
       throw new Error("Dedicated server changed during reload");
     failed.set(pane.id, errorMessage(error));
     console.error(`pi-mux: reload ${pane.id}: ${errorMessage(error)}`);
+  }
+}
+
+function matchesReloadPublication(
+  original: Pane,
+  panePid: number,
+  token: string,
+  preserveWarm: boolean,
+  encodedMetadata?: string,
+  launch?: string,
+): boolean {
+  if (
+    !Number.isSafeInteger(panePid) ||
+    panePid <= 0 ||
+    panePid === original.panePid ||
+    !encodedMetadata ||
+    !launch ||
+    !matchesLaunch(launch, original.id, panePid, token)
+  )
+    return false;
+
+  try {
+    const metadata = JSON.parse(Buffer.from(encodedMetadata, "base64").toString("utf8"));
+    return (
+      metadata?.id === original.id &&
+      metadata.pid === panePid &&
+      metadata.token === token &&
+      (!preserveWarm || (metadata.startup === "ready" && metadata.warm === true))
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -1707,10 +1717,7 @@ export function firstInputDirectory(
   return join(stateDirectory, "first-input", id);
 }
 
-function findFirstInput(
-  config: TmuxConfig,
-  id: string,
-): (Candidate & { request: string }) | undefined {
+function findFirstInput(config: TmuxConfig, id: string): Candidate | undefined {
   const directory = firstInputDirectory(config.stateDirectory, id);
   if (!directory) return;
   const payload = lstatSync(join(directory, "text"), { throwIfNoEntry: false });
@@ -1734,7 +1741,7 @@ function findFirstInput(
     !UUID.test(record.request)
   )
     throw new Error("Invalid first input context");
-  return { id, cwd: record.cwd, request: record.request };
+  return { id, cwd: record.cwd };
 }
 
 function matchesLaunch(encoded: string, id: string, panePid: number, token: unknown): boolean {
@@ -1745,83 +1752,6 @@ function matchesLaunch(encoded: string, id: string, panePid: number, token: unkn
   } catch {
     return false;
   }
-}
-
-async function replaceForFirstInput(
-  config: Config,
-  { id, request, source }: Extract<Operation, { kind: "first-input" }>,
-): Promise<void> {
-  const { session, panePid } = await verifyStateSource(config, id, source);
-  const draft = findFirstInput(config, id);
-  const pane = (await livePanes(config, "list")).find((entry) => entry.pane === source.pane);
-  const managed = (await managedSessions(config)).find((entry) => entry.session === session);
-  if (
-    !draft ||
-    draft.request !== request ||
-    !pane?.warm ||
-    pane.startup !== "ready" ||
-    pane.id !== id ||
-    pane.session !== session ||
-    pane.pid !== source.pid ||
-    pane.panePid !== panePid ||
-    managed?.id !== id ||
-    managed.cwd !== pane.cwd ||
-    draft.cwd !== pane.cwd ||
-    existsSync(pane.file)
-  )
-    throw new Error("First input does not match a ready warm session");
-  const launch = await tmux(config, ["show-options", "-pqv", "-t", pane.pane, "@pi-mux-launch"]);
-  const metadata = JSON.parse(Buffer.from(pane.metadata, "base64").toString("utf8"));
-  if (metadata.token !== source.token || !matchesLaunch(launch.stdout, id, panePid, source.token))
-    throw new Error("Warm session launch no longer matches");
-
-  const token = randomUUID();
-  const startup = `pi-mux-startup-${randomUUID()}`;
-  const environment = {
-    PI_TMUX_SESSION_ID: id,
-    PI_TMUX_LAUNCH_TOKEN: token,
-    PI_TMUX_STARTUP_COMMAND: startup,
-    PI_TMUX_STARTUP_MODE: "handoff",
-    PI_TMUX_FIRST_INPUT: request,
-  };
-  const removed = await excludedGlobalEnvironment(config, { ...config.env, ...environment });
-  const paneCommand = platform.paneCommand(
-    [config.pi, "--session-id", id, "-e", config.extension, "--", `/${startup}`],
-    removed,
-  );
-  const entity = paneEntityGuard(source.serverPid, pane.pane, panePid);
-  const sameMetadata = `#{==:#{@pi-tmux-session},${pane.metadata}}`;
-  const sameLaunch = `#{m:*${source.token}*,#{@pi-mux-launch}}`;
-  const guard = `#{&&:${entity},#{&&:${sameMetadata},${sameLaunch}}}`;
-  const action = guardedTmuxLine(
-    pane.pane,
-    guard,
-    [
-      [
-        "respawn-pane",
-        "-k",
-        "-t",
-        pane.pane,
-        ...Object.entries(environment).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
-        "--",
-        paneCommand,
-      ],
-      ["set-option", "-pu", "-t", pane.pane, "@pi-tmux-session"],
-      ...clearStateOptions(pane.pane),
-      [
-        "set-option",
-        "-pF",
-        "-t",
-        pane.pane,
-        "@pi-mux-launch",
-        `{"id":"${id}","pid":#{pane_pid},"token":"${token}"}`,
-      ],
-    ],
-    "PI_MUX_FIRST_INPUT_STALE",
-  );
-  const result = await tmux(config, ["source-file", "-"], false, `${action}\n`);
-  if (result.stdout.includes("PI_MUX_FIRST_INPUT_STALE"))
-    throw new Error("Warm session changed before first input handoff");
 }
 
 function compiledEntry(): boolean {
