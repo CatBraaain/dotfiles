@@ -8,7 +8,7 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | .agents |  |  | - |
 | .agents/SYSTEM_PROMPT.yaml |  | - | - |
 | .agents/config |  |  | - |
-| .agents/scripts |  | - | - |
+| .agents/scripts |  |  | - |
 | .config |  |  | - |
 | .gitconfig.local.sample | - | - | - |
 | .local/cli |  |  | - |

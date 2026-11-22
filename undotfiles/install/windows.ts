@@ -88,6 +88,7 @@ const managedDevPackages: readonly string[] = [
   "RussellBanks.Komac",
   "OpenJS.NodeJS.LTS",
   "Microsoft.PowerShell", // windows
+  "marlocarlo.psmux",
   "Canonical.Ubuntu", // windows
   "GitHub.cli",
   "Microsoft.coreutils",

@@ -102,6 +102,20 @@ function launchRender(root: string, scenario: string, slot?: number, gated = fal
   return { ready, exited, child };
 }
 
+describe("Windows npm Playwright CLI", () => {
+  it("renders through the package bin entry with the URL passed literally", async () => {
+    const root = mkdtempSync(join(tmpdir(), "browse-windows-cli-"));
+    try {
+      const { code, messages } = await launchRender(root, "windows-npm").exited;
+      assert.equal(code, 0, messages[0]?.error ?? "Fixture did not render");
+      assert.equal(messages[0]?.html, "<html>Windows npm fixture</html>");
+      assert.deepEqual(messages[0]?.commands, ["close", "open", "run-code", "close"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("camoufoxRender deadline lifecycle", () => {
   for (const scenario of [
     "success",

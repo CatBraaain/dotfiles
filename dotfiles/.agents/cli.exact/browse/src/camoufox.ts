@@ -17,6 +17,7 @@ import {
   SERVER_WAIT_TIMEOUT_MS,
   stateDir,
 } from "./config";
+import { resolveWindowsNode, resolveWindowsPlaywrightCli } from "./playwright-cli";
 import { ensureCamoufoxServer, camoufoxServerHealthy, recoverCamoufoxServer } from "./server";
 
 export async function camoufoxRender(url: string, sessionKey: string): Promise<string> {
@@ -71,9 +72,10 @@ export function runPlaywrightCli(
   signal: AbortSignal,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    const [executable, ...prefixArgs] = playwrightCliCommand();
     execFile(
-      "playwright-cli",
-      buildPlaywrightCliArgs(sessionKey, args),
+      executable,
+      [...prefixArgs, ...buildPlaywrightCliArgs(sessionKey, args)],
       {
         signal,
         maxBuffer: 64 * 1024 * 1024,
@@ -85,6 +87,13 @@ export function runPlaywrightCli(
       },
     );
   });
+}
+
+function playwrightCliCommand(): [string, ...string[]] {
+  if (process.platform !== "win32") return ["playwright-cli"];
+
+  const { entry, prefix } = resolveWindowsPlaywrightCli();
+  return [resolveWindowsNode(prefix), entry];
 }
 
 function playwrightCliConfigPath(): string {

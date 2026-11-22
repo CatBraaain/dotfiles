@@ -1,11 +1,49 @@
 import { mock, spyOn } from "bun:test";
 import * as childProcess from "node:child_process";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { tryRecoveryBackends } from "../backends";
 import { RENDER_TIMEOUT_MS, stateDir } from "../config";
+import { writeNpmPlaywrightFixture } from "./npm-playwright";
 
 const scenario = process.argv[2] ?? "success";
+const isWindowsNpmScenario = scenario === "windows-npm";
+const isNativeWindows = process.platform === "win32";
+const fixtureUrl = isWindowsNpmScenario
+  ? "https://fixture.invalid/?query=a&literal=%PATH%"
+  : "https://fixture.invalid/";
+const nativeExecFile = childProcess.execFile;
+const windowsCli = isNativeWindows || isWindowsNpmScenario ? setupWindowsCli() : undefined;
+
+function setupWindowsCli(): string {
+  const prefix = join(stateDir(), "npm prefix");
+  const { entry, shim } = writeNpmPlaywrightFixture(
+    prefix,
+    `const assert = require("node:assert/strict");
+     const args = process.argv.slice(2);
+     assert.deepEqual(args, JSON.parse(process.env.FIXTURE_PLAYWRIGHT_ARGS));
+     const [session, command, argument] = args;
+     assert.equal(session, "-s=fixture-session");
+     assert.ok(process.env.PLAYWRIGHT_MCP_CONFIG.endsWith("playwright-cli.config.json"));
+     if (command === "open") assert.equal(argument, ${JSON.stringify(fixtureUrl)});
+     if (command === "run-code") console.log("### Result\\n" + JSON.stringify(require("playwright-core")));
+    `,
+    'module.exports = { mode: "settled", html: "<html>Windows npm fixture</html>" };',
+  );
+
+  if (isNativeWindows) {
+    process.env.PATH = prefix + delimiter + process.env.PATH;
+  } else {
+    const nativeWhich = Bun.which;
+    spyOn(Bun, "which").mockImplementation((command, options) => {
+      if (command === "playwright-cli.cmd") return shim;
+      if (command === "node.exe") return process.execPath;
+      return nativeWhich(command, options);
+    });
+    Object.defineProperty(process, "platform", { value: "win32" });
+  }
+  return entry;
+}
 const timers = new Set<ReturnType<typeof setTimeout>>();
 const signals: AbortSignal[] = [];
 const commands: string[] = [];
@@ -69,7 +107,7 @@ const nativeSignalTimeout = AbortSignal.timeout;
 }
 
 globalThis.setTimeout = ((callback: () => void, delay?: number) => {
-  if (delay !== RENDER_TIMEOUT_MS) return nativeSetTimeout(callback, delay);
+  if (isWindowsNpmScenario || delay !== RENDER_TIMEOUT_MS) return nativeSetTimeout(callback, delay);
   renderBudgets.push(delay);
   const timer = nativeSetTimeout(
     () => {
@@ -98,13 +136,30 @@ mock.module(join(import.meta.dir, "../server.ts"), () => ({
 mock.module("node:child_process", () => ({
   ...childProcess,
   execFile: (
-    _command: string,
-    args: string[],
-    options: { signal: AbortSignal },
+    executable: string,
+    argv: string[],
+    options: { signal: AbortSignal; env?: NodeJS.ProcessEnv },
     callback: (error: Error | null, stdout: string) => void,
   ) => {
+    if (windowsCli && argv[0] !== windowsCli) {
+      queueMicrotask(() => callback(new Error("Expected the npm package bin entry"), ""));
+      return;
+    }
+    const args = windowsCli ? argv.slice(1) : argv;
     const command = args[1]!;
     commands.push(command);
+    if (isWindowsNpmScenario) {
+      nativeExecFile(
+        executable,
+        argv,
+        {
+          ...options,
+          env: { ...options.env, FIXTURE_PLAYWRIGHT_ARGS: JSON.stringify(args) },
+        },
+        callback,
+      );
+      return;
+    }
     if (virtualHealth && command === "close") {
       const isInitialClose = commands.length === 1;
       const duration = isInitialClose ? 1000 : scenario === "health-budget-success" ? 400 : 0;
@@ -223,7 +278,7 @@ const {
 const render = async () => {
   renders += 1;
   try {
-    return await camoufoxRender("https://fixture.invalid/", "fixture-session");
+    return await camoufoxRender(fixtureUrl, "fixture-session");
   } finally {
     pendingAfterRender.push(timers.size);
   }

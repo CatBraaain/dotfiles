@@ -3,10 +3,13 @@ import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as nodeModule from "node:module";
 import { openLinuxProcess } from "../linux-process";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import * as util from "../util";
+import { writeNpmPlaywrightFixture } from "./npm-playwright";
 
 const scenario = process.argv[2]!;
+const isNativeWindows = process.platform === "win32";
+const isInternal = scenario.startsWith("internal") || scenario === "windows-internal";
 if (scenario.startsWith("windows-")) {
   Object.defineProperty(process, "platform", { value: "win32" });
 }
@@ -43,6 +46,23 @@ if (scenario === "websocket-timeout") {
   }) as typeof setTimeout;
 }
 const nativeRequire = nodeModule.createRequire(import.meta.url);
+if (isInternal && process.platform === "win32") {
+  const prefix = join(process.cwd(), "npm prefix");
+  const { shim } = writeNpmPlaywrightFixture(
+    prefix,
+    "",
+    `
+    module.exports.firefox = {
+      launchServer: (options) => globalThis.fixtureLaunchServer(options),
+    };
+  `,
+  );
+  if (isNativeWindows) {
+    process.env.PATH = prefix + delimiter + process.env.PATH;
+  } else {
+    spyOn(Bun, "which").mockReturnValue(shim);
+  }
+}
 
 spyOn(Date, "now").mockImplementation(() => now);
 spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
@@ -169,10 +189,7 @@ class FixtureWebSocket extends EventTarget {
     super();
     probes++;
     events.push(["probe", now]);
-    const healthy =
-      scenario === "ready" ||
-      scenario.startsWith("internal") ||
-      (scenario !== "timeout" && probes >= 3);
+    const healthy = scenario === "ready" || isInternal || (scenario !== "timeout" && probes >= 3);
     if (scenario === "websocket-timeout") return;
     queueMicrotask(() => this.dispatchEvent(new Event(healthy ? "open" : "error")));
   }
@@ -199,22 +216,21 @@ mock.module(fixtureCamoufoxPath, () => ({
     return { executablePath: options.executable_path, env: { DISPLAY: ":99", EXISTING: "kept" } };
   },
 }));
+async function fixtureLaunchServer(options: unknown) {
+  events.push(["launchServer", options]);
+  if (scenario === "internal-collision") throw new Error("EADDRINUSE");
+  return {
+    close: async () => {
+      events.push(["closeServer"]);
+    },
+  };
+}
+Object.assign(globalThis, { fixtureLaunchServer });
+
 function fixtureRequire(path: string) {
   events.push(["require", path]);
   if (path === process.env.CAMOUFOX_PLAYWRIGHT_CORE || path === "fixture-playwright") {
-    return {
-      firefox: {
-        launchServer: async (options: unknown) => {
-          events.push(["launchServer", options]);
-          if (scenario === "internal-collision") throw new Error("EADDRINUSE");
-          return {
-            close: async () => {
-              events.push(["closeServer"]);
-            },
-          };
-        },
-      },
-    };
+    return { firefox: { launchServer: fixtureLaunchServer } };
   }
   return nativeRequire(path);
 }
@@ -222,7 +238,12 @@ fixtureRequire.resolve = (name: string) => {
   events.push(["resolve", name]);
   return name.startsWith("camoufox-js") ? fixtureCamoufoxPath : "fixture-playwright";
 };
-mock.module("node:module", () => ({ ...nodeModule, createRequire: () => fixtureRequire }));
+const nativeCreateRequire = nodeModule.createRequire;
+mock.module("node:module", () => ({
+  ...nodeModule,
+  createRequire: (path: string) =>
+    path.endsWith("fixture.cjs") ? nativeCreateRequire(path) : fixtureRequire,
+}));
 
 const {
   startCamoufoxServer,
@@ -244,7 +265,7 @@ if (scenario.startsWith("openserp")) {
   }) as typeof fetch;
 }
 try {
-  if (scenario.startsWith("internal")) {
+  if (isInternal) {
     await runCamoufoxServer();
     process.emit(process.env.FIXTURE_SIGNAL === "SIGINT" ? "SIGINT" : "SIGTERM");
     await Promise.resolve();

@@ -23,6 +23,7 @@ function runServer(
     const childEnv: Record<string, string | undefined> = {
       ...process.env,
       XDG_CACHE_HOME: root,
+      LOCALAPPDATA: join(root, "Local AppData"),
       CAMOUFOX_HEADLESS: "1",
       CAMOUFOX_BASE_URL: "ws://127.0.0.1:9378/camoufox",
     };
@@ -247,27 +248,40 @@ describe.skipIf(process.platform !== "linux")("server stop contract", () => {
 });
 
 describe("internal server contract", () => {
-  it("resolves default executable, playwright-cli's protocol library, and runtime directory", () => {
-    const report = runServer("internal-headless", {}, "unset");
+  it.skipIf(process.platform === "win32")(
+    "resolves default executable, playwright-cli's protocol library, and runtime directory",
+    () => {
+      const report = runServer("internal-headless", {}, "unset");
+      assert.equal(report.error, undefined);
+      const launch = report.events.find(([name]) => name === "launchServer")?.[1];
+      assert.equal(launch.executablePath, join(homedir(), ".cache/camoufox/camoufox-bin"));
+      assert.equal(launch.env.XDG_RUNTIME_DIR, `/run/user/${process.getuid?.() ?? 1000}`);
+      assert.ok(
+        report.events.some(
+          ([name, command, args]) =>
+            name === "spawnSync" && command === "which" && args[0] === "playwright-cli",
+        ),
+      );
+      assert.ok(
+        report.events.some(([name, module]) => name === "resolve" && module === "playwright-core"),
+      );
+      assert.ok(
+        report.events.some(
+          ([name, module]) => name === "resolve" && module === "camoufox-js/dist/utils.js",
+        ),
+      );
+    },
+  );
+
+  it("starts with the Windows install path and the npm CLI package's protocol library", () => {
+    const localAppData = join(tmpdir(), "Fixture Local AppData");
+    const report = runServer("windows-internal", { LOCALAPPDATA: localAppData });
     assert.equal(report.error, undefined);
     const launch = report.events.find(([name]) => name === "launchServer")?.[1];
-    assert.equal(launch.executablePath, join(homedir(), ".cache/camoufox/camoufox-bin"));
-    assert.equal(launch.env.XDG_RUNTIME_DIR, `/run/user/${process.getuid?.() ?? 1000}`);
+    assert.equal(launch.executablePath, join(localAppData, "Programs", "Camoufox", "camoufox.exe"));
+    assert.equal(launch.port, 9378);
     assert.ok(
-      report.events.some(
-        ([name, command, args]) =>
-          name === "spawnSync" &&
-          ["which", "where"].includes(command) &&
-          args[0] === "playwright-cli",
-      ),
-    );
-    assert.ok(
-      report.events.some(([name, module]) => name === "resolve" && module === "playwright-core"),
-    );
-    assert.ok(
-      report.events.some(
-        ([name, module]) => name === "resolve" && module === "camoufox-js/dist/utils.js",
-      ),
+      !report.events.some(([name, path]) => name === "require" && path === "fixture-playwright"),
     );
   });
 

@@ -32,11 +32,20 @@ import {
 } from "./config";
 import { ensureDisplay, ensureX11vnc, DISPLAY_NUMBER, resolveHeadless } from "./display";
 import { openLinuxProcess } from "./linux-process";
+import { resolveWindowsPlaywrightCli } from "./playwright-cli";
 import { delay, selfRunArgv, selfRunPath } from "./util";
 import { findWindowsServerProcesses, stopWindowsProcess } from "./windows-process";
 
-const CAMOUFOX_EXECUTABLE_PATH =
-  process.env.CAMOUFOX_EXECUTABLE_PATH ?? join(homedir(), ".cache", "camoufox", "camoufox-bin");
+function camoufoxExecutablePath(): string {
+  if (process.env.CAMOUFOX_EXECUTABLE_PATH !== undefined) {
+    return process.env.CAMOUFOX_EXECUTABLE_PATH;
+  }
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local");
+    return join(localAppData, "Programs", "Camoufox", "camoufox.exe");
+  }
+  return join(homedir(), ".cache", "camoufox", "camoufox-bin");
+}
 
 // Spec: camoufox server のヘルスチェックは websocket 接続が成功するかで判定。
 // 1 接続試行は 1 秒で打ち切り（half-open socket 対策）。
@@ -360,8 +369,11 @@ interface PlaywrightCoreModule {
 function resolvePlaywrightCore(): PlaywrightCoreModule {
   const override = process.env.CAMOUFOX_PLAYWRIGHT_CORE;
   if (override) return nodeRequire(override) as PlaywrightCoreModule;
-  const finder = process.platform === "win32" ? "where" : "which";
-  const output = spawnSync(finder, ["playwright-cli"], { encoding: "utf8" });
+  if (process.platform === "win32") {
+    const { entry } = resolveWindowsPlaywrightCli();
+    return createRequire(entry)("playwright-core") as PlaywrightCoreModule;
+  }
+  const output = spawnSync("which", ["playwright-cli"], { encoding: "utf8" });
   const binary = output.stdout?.trim().split(/\r?\n/)[0];
   if (!binary) throw new Error("playwright-cli not found on PATH");
   const packageDir = dirname(realpathSync(binary));
@@ -396,7 +408,7 @@ export async function runCamoufoxServer(): Promise<void> {
   const launch = await launchOptions({
     headless,
     os: ["windows"],
-    executable_path: CAMOUFOX_EXECUTABLE_PATH,
+    executable_path: camoufoxExecutablePath(),
     i_know_what_im_doing: true,
     block_webgl: true,
     // Headed 起動では camoufox-js の virtual_display で DISPLAY を Xvfb の :99
