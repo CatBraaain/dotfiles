@@ -142,7 +142,8 @@ mock.module("../display", () => ({
     events.push(["vnc"]);
   },
 }));
-mock.module(join(import.meta.dir, "fixture-camoufox.js"), () => ({
+const fixtureCamoufoxPath = join(import.meta.dir, "fixture-camoufox.ts");
+mock.module(fixtureCamoufoxPath, () => ({
   launchOptions: async (options: Record<string, unknown>) => {
     events.push(["launchOptions", options]);
     return { executablePath: options.executable_path, env: { DISPLAY: ":99", EXISTING: "kept" } };
@@ -169,9 +170,7 @@ function fixtureRequire(path: string) {
 }
 fixtureRequire.resolve = (name: string) => {
   events.push(["resolve", name]);
-  return name.startsWith("camoufox-js")
-    ? join(import.meta.dir, "fixture-camoufox.js")
-    : "fixture-playwright";
+  return name.startsWith("camoufox-js") ? fixtureCamoufoxPath : "fixture-playwright";
 };
 mock.module("node:module", () => ({ ...nodeModule, createRequire: () => fixtureRequire }));
 

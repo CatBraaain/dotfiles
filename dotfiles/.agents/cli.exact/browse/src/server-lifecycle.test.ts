@@ -2,7 +2,7 @@ import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 interface Report {
   events: any[][];
@@ -312,7 +312,7 @@ describe("bootstrap and recovery timing", () => {
     assert.ok(lock[2][3].endsWith("browse-restart.lock"));
     const slotFiles = (lock[2] as string[])
       .filter((arg) => /browse-slot-/.test(arg))
-      .map((arg) => arg.split("/").at(-1));
+      .map((arg) => basename(arg));
     assert.deepEqual(slotFiles, ["browse-slot-0.lock", "browse-slot-1.lock", "browse-slot-3.lock"]);
     assert.deepEqual(lock[2].slice(-3), ["__locked", "server", "restart"]);
     assert.equal(report.events.filter(([name]) => name === "probe").length, 0);
