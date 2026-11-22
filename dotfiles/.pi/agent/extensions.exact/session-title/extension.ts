@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { stripVTControlCharacters } from "node:util";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
@@ -95,6 +96,21 @@ export function registerSessionTitle(
     schedulePendingTitle(ctx);
   });
 
+  pi.registerCommand("title", {
+    description: "Set the session title manually: /title <title>.",
+    async handler(args, ctx) {
+      const title = normalizeManualTitle(args);
+      if (!title) {
+        warn(ctx, "Usage: /title <title>");
+        return;
+      }
+      invalidate();
+      pi.setSessionName(title);
+      const state = restoreState(ctx);
+      if (!state.firstHandled) pi.appendEntry(TITLE_STATE, { ...state, firstHandled: true });
+    },
+  });
+
   pi.registerCommand("retitle", {
     description: "Generate and set a title for this conversation.",
     async handler(args, ctx) {
@@ -149,6 +165,9 @@ export function registerSessionTitle(
       sessionId: ctx.sessionManager.getSessionId(),
       leafId: ctx.sessionManager.getLeafId(),
     };
+    const initialTitleEntryId = latestTitleEntryId(ctx);
+    const canApply = () =>
+      isCurrentTarget(ctx, target) && latestTitleEntryId(ctx) === initialTitleEntryId;
     try {
       const previous = restoreState(ctx);
       const replacements = completedReplacementIds(
@@ -177,11 +196,12 @@ export function registerSessionTitle(
           if (controller.signal.aborted) throw error;
         }
       }
-      if (!isCurrentTarget(ctx, target)) return;
+      if (!canApply()) return;
       if (!model) throw new Error("No available model for class low");
+      const overlongCandidates = new Map<string, string>();
       let lengthCorrection = "";
       for (let attempt = 0; attempt < MAX_TITLE_ATTEMPTS; attempt++) {
-        if (!isCurrentTarget(ctx, target)) return;
+        if (!canApply()) return;
         controller.signal.throwIfAborted();
         const response = await ctx.modelRegistry.complete(
           model,
@@ -197,17 +217,19 @@ export function registerSessionTitle(
           },
           { signal: controller.signal, cacheRetention: "none", sessionId: randomUUID() },
         );
-        if (!isCurrentTarget(ctx, target)) return;
+        if (!canApply()) return;
         controller.signal.throwIfAborted();
         if (response.stopReason !== "stop")
           throw new Error(
             response.errorMessage || `Title generation ended with ${response.stopReason}`,
           );
-        const title = response.content
+        const text = response.content
           .filter((part) => part.type === "text")
           .map((part) => part.text)
-          .join(" ")
+          .join(" ");
+        const title = stripVTControlCharacters(text)
           .replace(/\s+/g, " ")
+          .replace(/\p{Cc}/gu, "")
           .trim();
         if (!title) throw new Error("Title generation returned an empty title");
         const characterCount = [...title].length;
@@ -215,20 +237,54 @@ export function registerSessionTitle(
           pi.setSessionName(title);
           return;
         }
-        if (attempt === MAX_TITLE_ATTEMPTS - 1)
-          throw new Error(
-            `Title has ${characterCount} characters; the limit is ${MAX_TITLE_CHARACTERS}: "${title}"`,
+        overlongCandidates.set(
+          `Attempt ${attempt + 1} (${characterCount} characters): ${title}`,
+          title,
+        );
+        if (attempt === MAX_TITLE_ATTEMPTS - 1) {
+          const summary = `Both titles exceed ${MAX_TITLE_CHARACTERS} characters.`;
+          const candidates = [...overlongCandidates.keys()];
+          if (!ctx.hasUI) throw new Error([summary, ...candidates].join("\n"));
+          const customOption = "Enter a custom title";
+          const dialogOptions = { signal: controller.signal };
+          const choice = await ctx.ui.select(
+            summary,
+            ["Keep current title", ...candidates, customOption],
+            dialogOptions,
           );
+          if (choice === undefined || !canApply()) return;
+          const approvedTitle =
+            choice === customOption
+              ? normalizeManualTitle(
+                  (await ctx.ui.input("Session title", undefined, dialogOptions)) ?? "",
+                )
+              : overlongCandidates.get(choice);
+          if (approvedTitle && canApply()) pi.setSessionName(approvedTitle);
+          return;
+        }
         lengthCorrection = `前のタイトルは${characterCount}文字だった。${TARGET_TITLE_CHARACTERS}文字以内のタイトルだけを返す。`;
       }
     } catch (error) {
-      if (!isCurrentTarget(ctx, target)) return;
+      if (!canApply()) return;
       const reason = error instanceof Error ? error.message : String(error);
-      const message = `Session title was not changed: ${reason}`;
-      if (ctx.hasUI) ctx.ui.notify(message, "warning");
-      else process.stderr.write(`${message}\n`);
+      warn(ctx, `Session title was not changed: ${reason}`);
     }
   }
+}
+
+function normalizeManualTitle(input: string): string {
+  return stripVTControlCharacters(input)
+    .replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, " ")
+    .trim();
+}
+
+function latestTitleEntryId(ctx: ExtensionContext): string | undefined {
+  return ctx.sessionManager.getEntries().findLast((entry) => entry.type === "session_info")?.id;
+}
+
+function warn(ctx: ExtensionContext, message: string): void {
+  if (ctx.hasUI) ctx.ui.notify(message, "warning");
+  else process.stderr.write(`${message}\n`);
 }
 
 function restoreState(ctx: ExtensionContext): TitleState {

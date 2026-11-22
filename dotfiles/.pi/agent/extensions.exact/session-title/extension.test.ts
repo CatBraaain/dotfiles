@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { describe, it } from "bun:test";
+import { describe, it, spyOn } from "bun:test";
 import {
   SessionManager,
   DefaultResourceLoader,
@@ -53,11 +53,15 @@ function harness(
   options: {
     complete?: () => Promise<AssistantMessage>;
     resolve?: ResolveClassModels;
+    hasUI?: boolean;
+    select?: ExtensionCommandContext["ui"]["select"];
+    input?: ExtensionCommandContext["ui"]["input"];
   } = {},
 ) {
   let manager = SessionManager.inMemory("/tmp");
   const handlers = new Map<string, (event: never, ctx: ExtensionCommandContext) => unknown>();
-  let command!: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+  const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>();
+  const selections: Array<{ prompt: string; choices: string[] }> = [];
   const queued: string[] = [];
   const notifications: string[] = [];
   const notificationLevels: Array<string | undefined> = [];
@@ -72,12 +76,21 @@ function harness(
     get sessionManager() {
       return manager;
     },
-    hasUI: true,
+    hasUI: options.hasUI ?? true,
     cwd: "/tmp",
     model: parentModel,
     thinkingLevel: "high",
     isIdle: () => idle,
     ui: {
+      async select(
+        prompt: string,
+        choices: string[],
+        opts: Parameters<ExtensionCommandContext["ui"]["select"]>[2],
+      ) {
+        selections.push({ prompt, choices });
+        return options.select?.(prompt, choices, opts);
+      },
+      input: options.input,
       notify(message: string, level?: string) {
         notifications.push(message);
         notificationLevels.push(level);
@@ -97,8 +110,8 @@ function harness(
     on(name: string, handler: (event: never, ctx: ExtensionCommandContext) => unknown) {
       handlers.set(name, handler);
     },
-    registerCommand(_name: string, definition: { handler: typeof command }) {
-      command = definition.handler;
+    registerCommand(name: string, definition: Parameters<ExtensionAPI["registerCommand"]>[1]) {
+      commands.set(name, definition.handler);
     },
     sendUserMessage(text: string, messageOptions: unknown) {
       assert.deepEqual(messageOptions, { expandPromptTemplates: true });
@@ -136,7 +149,8 @@ function harness(
     await emit("agent_settled", { aborted });
   }
   async function flush() {
-    while (queued.length) await command(queued.shift()!.slice("/retitle ".length), context);
+    while (queued.length)
+      await commands.get("retitle")!(queued.shift()!.slice("/retitle ".length), context);
   }
   async function finish() {
     await respond();
@@ -163,7 +177,9 @@ function harness(
     settle,
     flush,
     finish,
-    retitle: () => command("", context),
+    selections,
+    retitle: () => commands.get("retitle")!("", context),
+    title: (name: string) => commands.get("title")!(name, context),
     user(text = "Discuss session titles") {
       return manager.appendMessage({ role: "user", content: text, timestamp: Date.now() });
     },
@@ -630,21 +646,13 @@ describe("title length boundaries and retry failures", () => {
     assert.equal(h.calls.length, 1);
   });
 
-  for (const failure of [
-    "overlong",
-    "empty",
-    "error",
-    "aborted",
-    "length",
-    "toolUse",
-    "throw",
-  ] as const) {
+  for (const failure of ["empty", "error", "aborted", "length", "toolUse", "throw"] as const) {
     it(`keeps the existing name and warns once after an ${failure} retry`, async () => {
       let attempts = 0;
       const h = harness({
         complete: async () => {
           attempts++;
-          if (attempts === 1 || failure === "overlong") return assistant("stop", "a".repeat(31));
+          if (attempts === 1) return assistant("stop", "a".repeat(31));
           if (failure === "empty") return assistant("stop", " \n\t ");
           if (failure === "throw") throw new Error("Network unavailable");
           return assistant(failure, "Do not save");
@@ -659,11 +667,7 @@ describe("title length boundaries and retry failures", () => {
       assert.equal(h.notifications.length, 1);
       assert.deepEqual(h.notificationLevels, ["warning"]);
       assert.match(h.notifications[0]!, /Session title was not changed/);
-      if (failure === "overlong") {
-        const warning = h.notifications[0]!;
-        assert.match(warning, /31 characters; the limit is 30/);
-        assert.ok(warning.includes(`"${"a".repeat(31)}"`));
-      }
+      assert.deepEqual(h.selections, []);
     });
   }
 
@@ -702,6 +706,197 @@ describe("title length boundaries and retry failures", () => {
       assert.equal(h.notifications.length, 0);
     });
   }
+});
+
+describe("approval after two overlong titles", () => {
+  const firstTitle = "あ".repeat(33);
+  const secondTitle = "😀".repeat(31);
+
+  function approvalHarness(options: Parameters<typeof harness>[0] = {}) {
+    let attempts = 0;
+    return harness({
+      complete: async () =>
+        assistant("stop", attempts++ === 0 ? `\x1b[31m${firstTitle}\x1b[0m` : secondTitle),
+      ...options,
+    });
+  }
+
+  for (const { decision, option, saved } of [
+    { decision: "selecting the first title", option: 1, saved: [firstTitle] },
+    { decision: "selecting the second title", option: 2, saved: [secondTitle] },
+    { decision: "keeping the current title", option: 0, saved: [] },
+    { decision: "cancelling", option: undefined, saved: [] },
+  ]) {
+    it(`shows both candidates and handles ${decision}`, async () => {
+      const h = approvalHarness({
+        select: async (_prompt, choices) => (option === undefined ? undefined : choices[option]),
+      });
+      h.user();
+      h.manager.appendSessionInfo("Original title");
+      await h.retitle();
+      assert.equal(h.calls.length, 2);
+      assert.deepEqual(h.selections, [
+        {
+          prompt: "Both titles exceed 30 characters.",
+          choices: [
+            "Keep current title",
+            `Attempt 1 (33 characters): ${firstTitle}`,
+            `Attempt 2 (31 characters): ${secondTitle}`,
+            "Enter a custom title",
+          ],
+        },
+      ]);
+      assert.equal(h.manager.getSessionName(), saved[0] ?? "Original title");
+      assert.deepEqual(h.names, saved);
+    });
+  }
+
+  const customTitle = "保存済み Pi セッションのタイトルを手入力で自由に設定する 😀😀😀";
+  for (const { action, input, saved } of [
+    { action: "a long custom title", input: `  ${customTitle}  `, saved: [customTitle] },
+    {
+      action: "pasted line and paragraph separators",
+      input: "One\u2028two\u2029three",
+      saved: ["One two three"],
+    },
+    { action: "blank input", input: "  \t ", saved: [] },
+    { action: "a cancelled dialog", input: undefined, saved: [] },
+  ]) {
+    it(`handles ${action} without generating again`, async () => {
+      const prompts: string[] = [];
+      const h = approvalHarness({
+        select: async (_prompt, choices) => choices[3],
+        input: async (prompt, placeholder) => {
+          prompts.push(prompt);
+          assert.equal(placeholder, undefined);
+          return input;
+        },
+      });
+      h.user();
+      h.manager.appendSessionInfo("Original title");
+      await h.retitle();
+      assert.deepEqual(prompts, ["Session title"]);
+      assert.equal(h.calls.length, 2);
+      assert.equal(h.manager.getSessionName(), saved[0] ?? "Original title");
+      assert.deepEqual(h.names, saved);
+    });
+  }
+
+  for (const change of ["session switch", "external rename"] as const) {
+    it(`discards custom input after a ${change}`, async () => {
+      const input = deferred<string>();
+      const prompted = deferred<AbortSignal | undefined>();
+      const h = approvalHarness({
+        select: async (_prompt, choices) => choices[3],
+        input: (_prompt, _placeholder, opts) => {
+          prompted.resolve(opts?.signal);
+          return input.promise;
+        },
+      });
+      h.user();
+      h.manager.appendSessionInfo("Original title");
+      const operation = h.retitle();
+      const signal = await prompted.promise;
+      assert.ok(signal);
+      if (change === "session switch") await h.switchSession();
+      else h.manager.appendSessionInfo("New title");
+      assert.equal(signal.aborted, change === "session switch");
+      const currentTitle = h.manager.getSessionName();
+      input.resolve(customTitle);
+      await operation;
+      assert.equal(h.manager.getSessionName(), currentTitle);
+      assert.deepEqual(h.names, []);
+    });
+  }
+
+  it("warns with both candidates and does not save when no UI is available", async () => {
+    const stderr = spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      const h = approvalHarness({ hasUI: false });
+      h.user();
+      await h.retitle();
+      assert.deepEqual(h.selections, []);
+      assert.deepEqual(h.names, []);
+      assert.equal(stderr.mock.calls.length, 1);
+      const warning = String(stderr.mock.calls[0]?.[0]);
+      assert.ok(warning.includes(`Attempt 1 (33 characters): ${firstTitle}`));
+      assert.ok(warning.includes(`Attempt 2 (31 characters): ${secondTitle}`));
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  for (const change of [
+    "session switch",
+    "external rename",
+    "restored name",
+    "same-name /title",
+  ] as const) {
+    it(`discards approval after a ${change}`, async () => {
+      const approval = deferred<string | undefined>();
+      const prompted = deferred<void>();
+      let dialogSignal: AbortSignal | undefined;
+      const h = approvalHarness({
+        select: (_prompt, _choices, opts) => {
+          dialogSignal = opts?.signal;
+          prompted.resolve();
+          return approval.promise;
+        },
+      });
+      h.user();
+      h.manager.appendSessionInfo("Original title");
+      const operation = h.retitle();
+      await prompted.promise;
+      if (change === "session switch") await h.switchSession();
+      if (change === "same-name /title") await h.title("Original title");
+      if (change === "external rename" || change === "restored name")
+        h.manager.appendSessionInfo("New title");
+      if (change === "restored name") h.manager.appendSessionInfo("Original title");
+      assert.equal(
+        dialogSignal?.aborted,
+        change === "session switch" || change === "same-name /title",
+      );
+      const expected = h.manager.getSessionName();
+      approval.resolve(h.selections[0]!.choices[1]);
+      await operation;
+      assert.equal(h.manager.getSessionName(), expected);
+    });
+  }
+});
+
+describe("manual /title", () => {
+  it("sets a long title without generation or approval and keeps it on first response after reload", async () => {
+    const h = harness();
+    const name = "Manually chosen title longer than the automatic limit";
+    await h.title(`  ${name}  `);
+    await h.reinstall("reload");
+    h.user();
+    await h.finish();
+    assert.equal(h.manager.getSessionName(), name);
+    assert.deepEqual(h.calls, []);
+    assert.deepEqual(h.selections, []);
+  });
+
+  it("keeps the current name on empty input", async () => {
+    const h = harness();
+    h.manager.appendSessionInfo("Original title");
+    await h.title(" \t ");
+    assert.equal(h.manager.getSessionName(), "Original title");
+    assert.deepEqual(h.names, []);
+    assert.deepEqual(h.notifications, ["Usage: /title <title>"]);
+  });
+
+  it("reports usage on empty input without UI", async () => {
+    const stderr = spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      const h = harness({ hasUI: false });
+      await h.title("");
+      assert.deepEqual(h.names, []);
+      assert.deepEqual(stderr.mock.calls, [["Usage: /title <title>\n"]]);
+    } finally {
+      stderr.mockRestore();
+    }
+  });
 });
 
 describe("title input and failures", () => {
@@ -937,6 +1132,10 @@ describe("real SDK title command dispatch", () => {
           (entry) => entry.type === "message" && ["user", "assistant"].includes(entry.message.role),
         );
       assert.equal(history.length, 6);
+      const requestCount = fake.state.requests.length;
+      await session.prompt("/title A manually chosen session title");
+      assert.equal(manager.getSessionName(), "A manually chosen session title");
+      assert.equal(fake.state.requests.length, requestCount);
       assert.deepEqual(errors, []);
     } finally {
       session.dispose();

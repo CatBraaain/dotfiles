@@ -2127,6 +2127,7 @@ describe("configured slash commands", () => {
         "mode:custom",
         "mode:nightly",
         "retitle",
+        "title",
       ]);
       assert.ok(
         [...extension.commandDefinitions.values()].every(
