@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { it } from "bun:test";
-import { selectExtensionTarget, syncMarketplaceExtensions } from "../extensions.apply.ts";
+import {
+  applyExtensions,
+  selectExtensionTarget,
+  syncMarketplaceExtensions,
+} from "../extensions.apply.ts";
 
 it.skipIf(process.platform !== "linux")(
   "uses the WSL Server CLI even if the Windows launcher is first",
@@ -85,6 +89,105 @@ it("uses only the native Windows CLI to sync the Windows allowlist", async () =>
     [code, "--install-extension", "tomoki1207.pdf"],
     [code, "--uninstall-extension", "some.other"],
   ]);
+});
+
+const powershell = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe";
+
+function bridgeCommand(argv: string[]) {
+  assert.deepEqual(argv.slice(0, -1), [
+    powershell,
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+  ]);
+  const encoded = argv.at(-1);
+  assert.ok(encoded);
+  const script = Buffer.from(encoded, "base64").toString("utf16le");
+  assert.match(script, /Get-Command code\.cmd -CommandType Application/);
+  const invocation = script.match(/& \$code\.Source ([^;]+); exit \$LASTEXITCODE$/);
+  assert.ok(invocation?.[1]);
+  return invocation[1];
+}
+
+it("syncs each WSL and Windows extension list with its own CLI and policy", async () => {
+  const server = "/vscode-server/bin/code-server";
+  const wslCalls: string[][] = [];
+  const windowsCalls: string[] = [];
+  const localInstalls: string[] = [];
+  await applyExtensions("linux", true, {
+    selectTarget: async () => ({ label: "wsl", code: server }),
+    findPowerShell: () => powershell,
+    installLocal: async (target) => {
+      localInstalls.push(target.code);
+    },
+    run: async (argv) => {
+      if (argv[0] === server) {
+        wslCalls.push(argv.slice(1));
+        return "tomoki1207.pdf@1.0.0";
+      }
+      const command = bridgeCommand(argv);
+      windowsCalls.push(command);
+      return "ms-vscode-remote.remote-wsl@1.0.0\r\ncatbraaain.vscode-custom-patch@1.0.0\r\nsome.other@1.0.0";
+    },
+  });
+  assert.deepEqual(localInstalls, [server]);
+  assert.deepEqual(wslCalls[0], ["--list-extensions", "--show-versions"]);
+  assert.deepEqual(wslCalls.at(-1), ["--uninstall-extension", "tomoki1207.pdf"]);
+  assert.deepEqual(windowsCalls, [
+    "'--list-extensions' '--show-versions'",
+    "'--install-extension' 'tomoki1207.pdf'",
+    "'--uninstall-extension' 'some.other'",
+  ]);
+});
+
+it("syncs Windows even when no WSL Server CLI was found", async () => {
+  const windowsCalls: string[] = [];
+  await applyExtensions("linux", true, {
+    selectTarget: async () => undefined,
+    findPowerShell: () => powershell,
+    run: async (argv) => {
+      windowsCalls.push(bridgeCommand(argv));
+      return "ms-vscode-remote.remote-wsl@1.0.0\ntomoki1207.pdf@1.0.0";
+    },
+  });
+  assert.deepEqual(windowsCalls, ["'--list-extensions' '--show-versions'"]);
+});
+
+it("finishes WSL sync without mutating Windows when Windows listing fails", async () => {
+  const server = "/vscode-server/bin/code-server";
+  const wslCalls: string[][] = [];
+  const windowsCalls: string[] = [];
+  await assert.rejects(
+    applyExtensions("linux", true, {
+      selectTarget: async () => ({ label: "wsl", code: server }),
+      installLocal: async () => {},
+      findPowerShell: () => powershell,
+      run: async (argv) => {
+        if (argv[0] === server) {
+          wslCalls.push(argv.slice(1));
+          return "some.other@1.0.0";
+        }
+        windowsCalls.push(bridgeCommand(argv));
+        throw new Error("listing failed");
+      },
+    }),
+    (error: unknown) =>
+      error instanceof AggregateError &&
+      /could not list windows extensions: Error: listing failed/.test(String(error.errors[0])),
+  );
+  assert.deepEqual(wslCalls.at(-1), ["--uninstall-extension", "some.other"]);
+  assert.deepEqual(windowsCalls, ["'--list-extensions' '--show-versions'"]);
+});
+
+it("does not try Windows interop outside WSL", async () => {
+  await applyExtensions("win32", false, {
+    selectTarget: async () => ({ label: "windows", code: "code.cmd" }),
+    findPowerShell: () => assert.fail("Windows interop should not run"),
+    run: async (argv) => {
+      assert.deepEqual(argv, ["code.cmd", "--list-extensions", "--show-versions"]);
+      return "ms-vscode-remote.remote-wsl@1.0.0\ntomoki1207.pdf@1.0.0";
+    },
+  });
 });
 
 it("does not change Windows or WSL extensions if listing fails", async () => {

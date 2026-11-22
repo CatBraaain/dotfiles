@@ -73,17 +73,80 @@ async function main() {
   const isWsl =
     platform === "linux" &&
     Boolean(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP || /microsoft/i.test(kernel));
-  const target = await selectExtensionTarget(platform, isWsl);
-  if (!target) {
-    console.warn(
-      isWsl
-        ? "[wsl] Could not select a VS Code Server CLI; skipping"
-        : "VS Code CLI not found; skipping",
-    );
+  await applyExtensions(platform, isWsl);
+}
+
+export async function applyExtensions(
+  platform: NodeJS.Platform,
+  isWsl: boolean,
+  {
+    selectTarget = selectExtensionTarget,
+    installLocal = installLocalExtensions,
+    run = runCommand,
+    findPowerShell = findWindowsPowerShell,
+  } = {},
+) {
+  async function syncPrimaryTarget() {
+    const target = await selectTarget(platform, isWsl);
+    if (!target) {
+      console.warn(
+        isWsl
+          ? "[wsl] Could not select a VS Code Server CLI; skipping"
+          : "VS Code CLI not found; skipping",
+      );
+      return;
+    }
+    if (target.label !== "windows") await installLocal(target);
+    await syncMarketplaceExtensions(target, run);
+  }
+
+  if (!isWsl) return syncPrimaryTarget();
+
+  const results = await Promise.allSettled([
+    syncPrimaryTarget(),
+    syncWindowsExtensionsFromWsl(findPowerShell(), run),
+  ]);
+  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length > 0) throw new AggregateError(errors, "Could not sync VS Code extensions");
+}
+
+function findWindowsPowerShell() {
+  const onPath = Bun.which("powershell.exe");
+  if (onPath) return onPath;
+  const standardPath = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe";
+  if (isFile(standardPath)) return standardPath;
+}
+
+async function syncWindowsExtensionsFromWsl(powershell: string | undefined, run: Run) {
+  if (!powershell) {
+    console.warn("[windows] Windows PowerShell not found; skipping");
     return;
   }
-  if (target.label !== "windows") await installLocalExtensions(target);
-  await syncMarketplaceExtensions(target);
+  await syncMarketplaceExtensions({ label: "windows", code: powershell }, (argv, quiet) =>
+    runWindowsCode(argv, quiet, run),
+  );
+}
+
+export function runWindowsCode(
+  [powershell, ...args]: string[],
+  quiet = false,
+  run: Run = runCommand,
+) {
+  if (!powershell || args.some((arg) => arg.length === 0 || /[^a-z0-9.-]/i.test(arg))) {
+    throw new Error("Invalid Windows VS Code CLI arguments");
+  }
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()",
+    "Set-Location -LiteralPath $env:SystemRoot",
+    "Remove-Item Env:VSCODE_IPC_HOOK_CLI -ErrorAction SilentlyContinue",
+    "$code = Get-Command code.cmd -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1",
+    "if (-not $code) { throw 'Windows VS Code CLI not found on PATH' }",
+    `& $code.Source ${args.map((arg) => `'${arg}'`).join(" ")}`,
+    "exit $LASTEXITCODE",
+  ].join("; ");
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  return run([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], quiet);
 }
 
 export async function selectExtensionTarget(
