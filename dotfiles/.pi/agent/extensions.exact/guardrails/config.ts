@@ -120,7 +120,12 @@ export function parseGuardrailConfig(source: string): GuardrailConfig {
   const config = parsed as Static<typeof GuardrailConfigSchema>;
   return {
     read: config.read?.map(toPathEntry),
-    write: config.write?.map(toPathEntry),
+    write: config.write?.map((entry) => {
+      const rule = toPathEntry(entry);
+      if (rule.action === "allow")
+        rule.patterns = rule.patterns.flatMap(expandWriteAllowEnvironment);
+      return rule;
+    }),
     credentials: config.credentials,
     commands: config.commands?.flatMap(toCommandEntries),
   };
@@ -206,51 +211,46 @@ export function resolveGitMainWorktreePath(cwd: string): string | undefined {
   }
 }
 
-/**
- * Expand the single-valued ${GIT_MAIN_WORKTREE_PATH} into the main worktree
- * path, falling back to the session cwd outside a Git repository (§3).
- */
-function expandGitMainWorktreePath(
-  pattern: string,
-  mainWorktree: string | undefined,
-  cwd: string,
-): string[] {
-  if (!pattern.includes(GIT_MAIN_WORKTREE_PATH)) return [pattern];
-  return [pattern.replaceAll(GIT_MAIN_WORKTREE_PATH, mainWorktree ?? resolve(cwd))];
+const XDG_RUNTIME_DIR = "${XDG_RUNTIME_DIR}";
+const LITERAL_REPOSITORY_NAME = "\0repo;";
+const PATH_VARIABLE_REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+
+function expandWriteAllowEnvironment(pattern: string): string[] {
+  let hasMissingEnvironmentVariable = false;
+  const expanded = pattern.replace(PATH_VARIABLE_REFERENCE, (reference, name: string) => {
+    if (reference === REPOSITORY_NAME || reference === GIT_MAIN_WORKTREE_PATH) return reference;
+    const pathValue = Object.hasOwn(process.env, name) ? process.env[name] : undefined;
+    if (!pathValue) {
+      hasMissingEnvironmentVariable = true;
+      return "";
+    }
+    return pathValue.replace(/[^/~.:]/g, maskPatternCharacter);
+  });
+  return hasMissingEnvironmentVariable ? [] : [expanded];
 }
 
-export const XDG_RUNTIME_DIR = "${XDG_RUNTIME_DIR}";
-
-/**
- * Absolute path of the user's runtime directory (systemd-logind tmpfs):
- * $XDG_RUNTIME_DIR when set, falling back to the /run/user/<uid> convention.
- */
-export function resolveXdgRuntimeDir(): string {
-  // getuid is optional in @types for cross-platform compat, but this
-  // extension requires bwrap (Linux); "unknown" names a path that never
-  // exists, so --bind-try safely skips it on platforms without getuid.
-  const uid = process.getuid?.();
-  return process.env.XDG_RUNTIME_DIR ?? `/run/user/${uid ?? "unknown"}`;
-}
-
-/**
- * Expand every single-valued runtime variable in a pattern.
- * ${GIT_MAIN_WORKTREE_PATH} falls back to the session cwd outside a Git
- * repository (§3); ${XDG_RUNTIME_DIR} resolves everywhere.
- */
 export function expandRuntimeVariables(
   pattern: string,
   mainWorktree: string | undefined,
   cwd: string,
 ): string[] {
+  const runtimeDir = process.env.XDG_RUNTIME_DIR;
+  if (!runtimeDir && pattern.includes(XDG_RUNTIME_DIR)) return [];
   if (pattern.includes(REPOSITORY_NAME) && repositoryName(cwd, mainWorktree) === "") return [];
-  const repositoryMasked = pattern.replaceAll(REPOSITORY_NAME, LITERAL_REPOSITORY_NAME);
-  return expandGitMainWorktreePath(repositoryMasked, mainWorktree, cwd).map((expanded) =>
-    expanded.replaceAll(XDG_RUNTIME_DIR, resolveXdgRuntimeDir()),
-  );
+
+  return [
+    pattern.replace(PATH_VARIABLE_REFERENCE, (reference) => {
+      if (reference === REPOSITORY_NAME) return LITERAL_REPOSITORY_NAME;
+      if (reference === GIT_MAIN_WORKTREE_PATH) return mainWorktree ?? resolve(cwd);
+      if (reference === XDG_RUNTIME_DIR && runtimeDir) return runtimeDir;
+      return reference;
+    }),
+  ];
 }
 
-const LITERAL_REPOSITORY_NAME = "\0repo;";
+function maskPatternCharacter(character: string): string {
+  return character === sep ? character : `\0${character.charCodeAt(0).toString(16)};`;
+}
 
 export function repositoryName(cwd: string, mainWorktree: string | undefined): string {
   return basename(mainWorktree ?? resolve(cwd));
@@ -263,16 +263,18 @@ export function restoreRepositoryName(pattern: string, name: string): string {
 }
 
 export function resolvePattern(pattern: string, cwd: string): string {
+  const globCharacters = /[*?[\]{}]/g;
   const homeExpanded =
-    pattern === "~"
-      ? homedir()
-      : pattern.startsWith("~/")
-        ? join(homedir(), pattern.slice(2))
-        : pattern;
-  const literalCwd = pattern.includes(LITERAL_REPOSITORY_NAME)
-    ? cwd.replace(/[*?[\]{}]/g, (character) => `\0${character.charCodeAt(0).toString(16)};`)
-    : cwd;
-  return isAbsolute(homeExpanded) ? resolve(homeExpanded) : resolve(literalCwd, homeExpanded);
+    pattern === "~" || pattern.startsWith("~/")
+      ? join(homedir().replace(globCharacters, maskPatternCharacter), pattern.slice(2))
+      : pattern;
+  const withDrivePrefix =
+    sep === "\\"
+      ? homeExpanded.replace(/^\0[0-9a-f]+;(?=:)/, (token) => restoreRepositoryName(token, ""))
+      : homeExpanded;
+  return isAbsolute(withDrivePrefix)
+    ? resolve(withDrivePrefix)
+    : resolve(cwd.replace(globCharacters, maskPatternCharacter), withDrivePrefix);
 }
 
 export function splitCommandSegments(command: string): string[][] {
@@ -364,7 +366,6 @@ export function actionPatterns(entries: PathRuleEntry[] | undefined, action: Pat
     .flatMap((entry) => entry.patterns);
 }
 
-// "/**" is the `read.allow` sentinel for all paths (§3).
 // bun's globSync silently drops dotfiles, so expand by walking the static prefix
 // and testing each path with globToRegExp (same semantics as command matching).
 // Walks the whole prefix subtree; add per-segment matching if large trees get slow.
@@ -410,11 +411,9 @@ export function expandPathPatterns(
 ): string[] {
   const name = repositoryName(cwd, gitMainWorktreePath);
   return (patterns ?? []).flatMap((pattern) =>
-    // The single-valued runtime variables must fan out before the
-    // brace expansion below.
     expandRuntimeVariables(pattern, gitMainWorktreePath, cwd).flatMap((variableExpanded) =>
       expandBraces(variableExpanded).flatMap((expandedPattern) => {
-        if (allowAllPaths && expandedPattern === "*") return ["/**"];
+        if (allowAllPaths && expandedPattern === "*") return ["/"];
         const resolvedPattern = resolvePattern(expandedPattern, cwd);
         if (!hasGlob(resolvedPattern)) return [restoreRepositoryName(resolvedPattern, name)];
         const cacheKey = JSON.stringify([resolvedPattern, name]);
@@ -438,8 +437,6 @@ export function expandPathSection(
   gitMainWorktreePath = resolveGitMainWorktreePath(cwd),
   globCache?: Map<string, string[]>,
 ): ExpandedPathSection {
-  // `allowAllPaths` (read section) turns the `"*"` sentinel into "/**" only
-  // for allow entries, preserving the read-only-whole-filesystem semantics.
   return (entries ?? []).map((entry) => ({
     action: entry.action,
     paths: expandPathPatterns(
@@ -455,7 +452,6 @@ export function expandPathSection(
 export function pathCovers(grantedPath: string, candidatePath: string): boolean {
   const normalizedCandidate = resolve(candidatePath);
   return (
-    grantedPath === "/**" ||
     grantedPath === "/" ||
     normalizedCandidate === grantedPath ||
     normalizedCandidate.startsWith(`${grantedPath}${sep}`)

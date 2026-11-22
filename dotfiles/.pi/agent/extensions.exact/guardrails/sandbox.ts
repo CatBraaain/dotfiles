@@ -16,7 +16,7 @@ import {
   resolveGitMainWorktreePath,
   resolvePathActionMatch,
   resolvePattern,
-  resolveXdgRuntimeDir,
+  restoreRepositoryName,
 } from "./config.ts";
 
 export type DynamicPaths = Map<string, Set<"read" | "write">>;
@@ -207,9 +207,12 @@ export function prepareWriteDirectories(
   cwd: string,
   globCache: Map<string, string[]>,
 ): void {
-  const runtimeDir = resolveXdgRuntimeDir();
+  const runtimeDir = process.env.XDG_RUNTIME_DIR;
+  const runtimePath = runtimeDir
+    ? restoreRepositoryName(resolvePattern(runtimeDir, cwd), "")
+    : undefined;
   for (const path of writePathsByFinalAction(config, cwd, globCache).allow) {
-    if (path === runtimeDir || path.startsWith(`${runtimeDir}${sep}`)) continue;
+    if (runtimePath && pathCovers(runtimePath, path)) continue;
     if (!existsSync(path)) mkdirSync(path, { recursive: true });
   }
 }

@@ -49,6 +49,7 @@ import {
 } from "./config.ts";
 import { startStderrTeeReceiver } from "./run-tools";
 import { realBwrapTest } from "./bwrap-test-support.ts";
+import { writePaths } from "./sandbox.ts";
 
 function sourcePathFromSymlink(symlinkPath: URL): URL {
   const target = readFileSync(symlinkPath, "utf8").trim();
@@ -1098,25 +1099,34 @@ describe("§3.a パス文字列の解決", () => {
     }),
   );
 
-  it("${XDG_RUNTIME_DIR} は未設定なら /run/user/<uid> へフォールバックする", () => {
-    const uid = process.getuid?.();
-    assert.notEqual(uid, undefined, "test requires POSIX process.getuid");
-    const previousRuntimeDir = process.env.XDG_RUNTIME_DIR;
-    delete process.env.XDG_RUNTIME_DIR;
-    try {
-      const section = expandPathSection(
-        [{ action: "allow", patterns: ["${XDG_RUNTIME_DIR}/app"] }],
-        "/cwd",
-      );
+  it.each([undefined, ""])(
+    "skips XDG_RUNTIME_DIR path entries when its value is %p",
+    (runtimeDir) => {
+      const previousRuntimeDir = process.env.XDG_RUNTIME_DIR;
+      if (runtimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
+      else process.env.XDG_RUNTIME_DIR = runtimeDir;
+      try {
+        const cwd = process.cwd();
+        const section = expandPathSection(
+          [
+            {
+              action: "allow",
+              patterns: ["${XDG_RUNTIME_DIR}", "${XDG_RUNTIME_DIR}/app", "./cache"],
+            },
+          ],
+          cwd,
+        );
 
-      assert.deepEqual(
-        section.flatMap((entry) => entry.paths),
-        [`/run/user/${uid}/app`],
-      );
-    } finally {
-      if (previousRuntimeDir !== undefined) process.env.XDG_RUNTIME_DIR = previousRuntimeDir;
-    }
-  });
+        assert.deepEqual(
+          section.flatMap((entry) => entry.paths),
+          [join(cwd, "cache")],
+        );
+      } finally {
+        if (previousRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
+        else process.env.XDG_RUNTIME_DIR = previousRuntimeDir;
+      }
+    },
+  );
 
   it(
     "${XDG_RUNTIME_DIR} は書き込みを許可し bind に含める",
@@ -1142,10 +1152,13 @@ describe("§3.a パス文字列の解決", () => {
     withTempDirectory((directory) => {
       const absentRuntimeDir = join(directory, "runtime");
       const previousRuntimeDir = process.env.XDG_RUNTIME_DIR;
-      process.env.XDG_RUNTIME_DIR = absentRuntimeDir;
+      process.env.XDG_RUNTIME_DIR = `${absentRuntimeDir}/`;
       try {
         const configPath = join(directory, "config.yaml");
-        writeFileSync(configPath, 'write:\n  - {allow: "${XDG_RUNTIME_DIR}"}\n');
+        writeFileSync(
+          configPath,
+          'write:\n  - {allow: ["${XDG_RUNTIME_DIR}", "${XDG_RUNTIME_DIR}/app"]}\n',
+        );
         const args = new Guardrail(directory, configPath).buildArgs("fs");
 
         assert.equal(existsSync(absentRuntimeDir), false);
@@ -1155,6 +1168,172 @@ describe("§3.a パス文字列の解決", () => {
         if (previousRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
         else process.env.XDG_RUNTIME_DIR = previousRuntimeDir;
       }
+    }),
+  );
+});
+
+describe("write.allow environment variables", () => {
+  const variableName = "GUARDRAILS_TEST_WRITE_DIRECTORY";
+  let previousDirectory: string | undefined;
+
+  beforeEach(() => {
+    previousDirectory = process.env[variableName];
+    delete process.env[variableName];
+  });
+
+  afterEach(() => {
+    if (previousDirectory === undefined) delete process.env[variableName];
+    else process.env[variableName] = previousDirectory;
+  });
+
+  it.each([undefined, ""])(
+    "skips a path with an environment value of %p without skipping its neighbors",
+    (directoryValue) =>
+      withTempDirectory((directory) => {
+        if (directoryValue !== undefined) process.env[variableName] = directoryValue;
+        const configPath = join(directory, "config.yaml");
+        writeFileSync(
+          configPath,
+          'write:\n  - {allow: ["./nested/${GUARDRAILS_TEST_WRITE_DIRECTORY}/app", "./fixed"]}\n',
+        );
+
+        const guardrail = new Guardrail(directory, configPath);
+        assert.deepEqual(guardrail.getWritePathsByFinalAction().allow, [join(directory, "fixed")]);
+        assert.deepEqual(readdirSync(directory).sort(), ["config.yaml", "fixed"]);
+      })(),
+  );
+
+  it(
+    "creates, authorizes and binds the path named by a nonempty environment variable",
+    withTempDirectory(async (directory) => {
+      process.env[variableName] = join(directory, "cache");
+      const configPath = join(directory, "config.yaml");
+      writeFileSync(configPath, 'write:\n  - {allow: "${GUARDRAILS_TEST_WRITE_DIRECTORY}/app"}\n');
+      const allowedDirectory = join(directory, "cache", "app");
+      const guardrail = new Guardrail(directory, configPath);
+
+      assert.deepEqual(guardrail.getWritePathsByFinalAction().allow, [allowedDirectory]);
+      assert.equal(existsSync(allowedDirectory), true);
+      await guardrail.authorizePath("write", join(allowedDirectory, "file"), { cwd: directory });
+      assert.equal(guardrail.buildArgs("fs").includes(allowedDirectory), true);
+    }),
+  );
+
+  it(
+    "uses the startup environment value for later write decisions and binds",
+    withTempDirectory(async (directory) => {
+      const originalDirectory = join(directory, "original");
+      const laterDirectory = join(directory, "later");
+      process.env[variableName] = originalDirectory;
+      const configPath = join(directory, "config.yaml");
+      writeFileSync(configPath, 'write:\n  - {allow: "${GUARDRAILS_TEST_WRITE_DIRECTORY}"}\n');
+      const guardrail = new Guardrail(directory, configPath);
+      process.env[variableName] = laterDirectory;
+
+      assert.deepEqual(guardrail.getWritePathsByFinalAction().allow, [originalDirectory]);
+      await guardrail.authorizePath("write", join(originalDirectory, "file"), { cwd: directory });
+      assert.equal(guardrail.buildArgs("fs").includes(originalDirectory), true);
+    }),
+  );
+
+  it(
+    "keeps environment values literal inside configured brace choices",
+    withTempDirectory((directory) => {
+      process.env[variableName] = "chosen,${GUARDRAILS_TEST_WRITE_DIRECTORY}";
+      const configPath = join(directory, "config.yaml");
+      writeFileSync(
+        configPath,
+        'write:\n  - {allow: "./{${GUARDRAILS_TEST_WRITE_DIRECTORY},fixed}"}\n',
+      );
+      const guardrail = new Guardrail(directory, configPath);
+
+      assert.deepEqual(guardrail.getWritePathsByFinalAction().allow, [
+        join(directory, "chosen,${GUARDRAILS_TEST_WRITE_DIRECTORY}"),
+        join(directory, "fixed"),
+      ]);
+    }),
+  );
+
+  it(
+    "keeps environment values literal after a backslash inside a character class",
+    withTempDirectory((directory) => {
+      process.env[variableName] = "d";
+      const literalMatch = join(directory, "d");
+      mkdirSync(literalMatch);
+      mkdirSync(join(directory, "1"));
+      const config = parseGuardrailConfig(
+        JSON.stringify({ write: [{ allow: "./[\\${GUARDRAILS_TEST_WRITE_DIRECTORY}]" }] }),
+      );
+      const section = writePaths(config, directory, new Map());
+
+      assert.deepEqual(section[0]?.paths, [literalMatch]);
+    }),
+  );
+
+  it(
+    "does not form a variable reference from a value and neighboring config text",
+    withTempDirectory((directory) => {
+      process.env[variableName] = "$";
+      const config = parseGuardrailConfig(
+        'write:\n  - {allow: "./${GUARDRAILS_TEST_WRITE_DIRECTORY}{REPOSITORY_NAME}"}\n',
+      );
+      const section = writePaths(config, directory, new Map());
+
+      assert.deepEqual(section[0]?.paths, [join(directory, "$REPOSITORY_NAME")]);
+    }),
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "treats the home directory as literal when a value refers to it",
+    withTempDirectory((directory) => {
+      const literalHome = join(directory, "home[12]");
+      mkdirSync(literalHome);
+      mkdirSync(join(directory, "home1"));
+      const configUrl = new URL("./config.ts", import.meta.url).href;
+      const configYaml = 'write:\n  - {allow: "${GUARDRAILS_TEST_WRITE_DIRECTORY}"}\n';
+      const script = `
+        import { expandPathSection, parseGuardrailConfig } from ${JSON.stringify(configUrl)};
+        const config = parseGuardrailConfig(${JSON.stringify(configYaml)});
+        console.log(JSON.stringify(expandPathSection(config.write, process.cwd())[0].paths));
+      `;
+      const output = execFileSync(process.execPath, ["-e", script], {
+        cwd: directory,
+        env: { ...process.env, HOME: literalHome, [variableName]: "~" },
+        encoding: "utf8",
+      });
+
+      assert.deepEqual(JSON.parse(output), [literalHome]);
+    }),
+  );
+
+  it(
+    "does not turn glob characters in a value into a broader write permission",
+    withTempDirectory((directory) => {
+      process.env[variableName] = "/**";
+      const config = parseGuardrailConfig(
+        'write:\n  - {allow: "${GUARDRAILS_TEST_WRITE_DIRECTORY}"}\n',
+      );
+      const section = writePaths(config, directory, new Map());
+
+      assert.deepEqual(section[0]?.paths, [resolve("/**")]);
+      assert.equal(resolvePathAction(section, join(directory, "unrelated")), "deny");
+    }),
+  );
+
+  it(
+    "does not expand additional environment variable names in restrictive rules",
+    withTempDirectory(async (directory) => {
+      process.env[variableName] = "ordinary";
+      const configPath = join(directory, "config.yaml");
+      writeFileSync(
+        configPath,
+        'write:\n  - {allow: "./ordinary"}\n  - {deny: "./${GUARDRAILS_TEST_WRITE_DIRECTORY}"}\ncredentials: ["./${GUARDRAILS_TEST_WRITE_DIRECTORY}/credential"]\n',
+      );
+      const guardrail = new Guardrail(directory, configPath);
+
+      await guardrail.authorizePath("write", join(directory, "ordinary", "credential"), {
+        cwd: directory,
+      });
     }),
   );
 });
