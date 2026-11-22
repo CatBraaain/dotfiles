@@ -148,6 +148,88 @@ describe("session list loading in the mounted client", () => {
     });
   }
 
+  it("routes session menu items to the clicked row without selecting it", async () => {
+    const [current, archived] = state.groups[0].sessions;
+    const temporary = {
+      sessionId: "temporary-1",
+      displayName: "Temporary",
+      updatedAtMs: null,
+      isArchived: true,
+      isLive: true,
+    };
+    await receive({
+      type: "sessions",
+      state: {
+        ...state,
+        groups: [
+          { ...state.groups[0], sessions: [{ ...current, isLive: true }, archived, temporary] },
+        ],
+      },
+    });
+    await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
+    const menu = page.getByRole("menu", { name: "Session actions" });
+    const items = menu.getByRole("menuitem");
+    const openMenu = async (id: string, labels: string[]) => {
+      await page.locator(`[data-row-session="${id}"]`).click({ button: "right" });
+      await expect.poll(() => items.allTextContents()).toEqual(labels);
+    };
+
+    await openMenu(temporary.sessionId, ["Reload Pi Session", "Unarchive", "Copy Session ID"]);
+    await menu.getByRole("menuitem", { name: "Reload Pi Session" }).click();
+    await expect.poll(() => menu.isVisible()).toBe(false);
+    expect(await page.locator(".session-row.selected").getAttribute("data-row-session")).toBe(
+      sessionId,
+    );
+
+    await openMenu("archived-1", ["Unarchive", "Copy Session ID"]);
+    await menu.getByRole("menuitem", { name: "Copy Session ID" }).click();
+    await openMenu("archived-1", ["Unarchive", "Copy Session ID"]);
+    await menu.getByRole("menuitem", { name: "Unarchive" }).click();
+    await openMenu(sessionId, ["Reload Pi Session", "Archive", "Copy Session ID"]);
+    await menu.getByRole("menuitem", { name: "Archive", exact: true }).click();
+
+    const requests = await page.evaluate(() => {
+      const requests = Reflect.get(window, "__requests") as { type: string; sessionId?: string }[];
+      return requests
+        .filter((request) => request.sessionId !== undefined)
+        .map(({ type, sessionId }) => ({ type, sessionId }));
+    });
+    expect(requests).toEqual([
+      { type: "reloadSession", sessionId: temporary.sessionId },
+      { type: "copySessionId", sessionId: "archived-1" },
+      { type: "unarchiveSession", sessionId: "archived-1" },
+      { type: "archiveSession", sessionId },
+    ]);
+  });
+
+  it("supports keyboard navigation and keeps the session menu usable in a short viewport", async () => {
+    await page.setViewportSize({ width: 320, height: 95 });
+    await receive({
+      type: "sessions",
+      state: {
+        ...state,
+        groups: [
+          { ...state.groups[0], sessions: [{ ...state.groups[0].sessions[0], isLive: true }] },
+        ],
+      },
+    });
+    const row = page.locator(`[data-session="${sessionId}"]`);
+    const menu = page.getByRole("menu", { name: "Session actions" });
+    const focus = () => page.locator(":focus").textContent();
+
+    await row.press("Shift+F10");
+    await expect.poll(focus).toBe("Reload Pi Session");
+    const bounds = await menu.boundingBox();
+    expect(bounds?.y).toBeGreaterThanOrEqual(4);
+    expect((bounds?.y ?? 0) + (bounds?.height ?? 0)).toBeLessThanOrEqual(91);
+    await page.keyboard.press("End");
+    await expect.poll(focus).toBe("Copy Session ID");
+    expect(await menu.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => menu.isVisible()).toBe(false);
+    expect(await row.evaluate((element) => document.activeElement === element)).toBe(true);
+  });
+
   it("places connection feedback above the list while retaining operation feedback in the footer", async () => {
     await receive({ type: "sessions", state });
     await expectLoaded();

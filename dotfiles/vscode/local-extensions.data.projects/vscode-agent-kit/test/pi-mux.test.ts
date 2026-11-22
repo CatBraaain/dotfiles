@@ -5,6 +5,22 @@ const liveSession = { id: "A", file: "/saved/A.jsonl", state: "running", title: 
 const emptySession = { id: "empty", file: "/saved/empty.jsonl" };
 
 describe("PiMux", () => {
+  it("runs reload with the exact ID and accepts its completion line", async () => {
+    const execute = vi.fn().mockResolvedValue("reloaded chosen-id\r\n");
+    await expect(new PiMux(execute).reloadSession("chosen-id")).resolves.toBeUndefined();
+    expect(execute).toHaveBeenCalledExactlyOnceWith("pi-mux", ["reload", "chosen-id"], undefined);
+  });
+
+  it.each(["", "reloaded other-id\n"])(
+    "rejects reload without target confirmation: %j",
+    async (output) => {
+      const execute = vi.fn().mockResolvedValue(output);
+      await expect(new PiMux(execute).reloadSession("chosen-id")).rejects.toThrow(
+        "did not report a completed reload",
+      );
+    },
+  );
+
   it.each(["registerWorkspace", "unregisterWorkspace"] as const)(
     "uses exact workspace argv and accepts empty stdout for %s",
     async (operation) => {

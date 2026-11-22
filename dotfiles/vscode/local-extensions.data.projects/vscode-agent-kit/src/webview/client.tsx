@@ -9,12 +9,14 @@ import {
   Component,
   createElement,
   memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
   type ReactNode,
@@ -36,6 +38,7 @@ export interface ClientSession {
   displayName: string;
   updatedAtMs: number | null;
   isArchived: boolean;
+  isLive?: boolean;
   /** Live execution phase; undefined when the phase is unknown. */
   state?: SessionPhase;
   hasUnread?: boolean;
@@ -483,6 +486,7 @@ interface DescriptorActions {
   onNewSessionClick(cwd: string): void;
   onWorkspaceMenuOpen(menu: WorkspaceMenuState): void;
   onWorkspaceMenuToggle(menu: WorkspaceMenuState): void;
+  onSessionMenuOpen(menu: SessionMenuState): void;
   onSessionClick(sessionId: string): void;
   onArchiveClick(sessionId: string): void;
   onUnarchiveClick(sessionId: string): void;
@@ -551,7 +555,12 @@ function descriptorToElement(
     props.onClick = (event: ReactMouseEvent<HTMLElement>) => {
       if (event.detail === 0) return;
       const rect = event.currentTarget.getBoundingClientRect();
-      actions.onWorkspaceMenuToggle({ cwd: menuTriggerCwd, x: rect.left, y: rect.bottom });
+      actions.onWorkspaceMenuToggle({
+        kind: "workspace",
+        cwd: menuTriggerCwd,
+        x: rect.left,
+        y: rect.bottom,
+      });
     };
   }
   const menuCwd = descriptor.attrs?.["data-workspace-menu"];
@@ -559,7 +568,45 @@ function descriptorToElement(
     props.onContextMenu = (event: ReactMouseEvent<HTMLElement>) => {
       event.preventDefault();
       if (event.button !== 2) return;
-      actions.onWorkspaceMenuOpen({ cwd: menuCwd, x: event.clientX, y: event.clientY });
+      actions.onWorkspaceMenuOpen({
+        kind: "workspace",
+        cwd: menuCwd,
+        x: event.clientX,
+        y: event.clientY,
+      });
+    };
+  }
+  const rowSessionId = descriptor.attrs?.["data-row-session"];
+  if (rowSessionId !== undefined) {
+    props.onContextMenu = (event: ReactMouseEvent<HTMLElement>) => {
+      if (event.button !== 2) return;
+      event.preventDefault();
+      const anchor = event.currentTarget.querySelector<HTMLElement>(".session-button");
+      if (anchor !== null)
+        actions.onSessionMenuOpen({
+          kind: "session",
+          sessionId: rowSessionId,
+          anchor,
+          x: event.clientX,
+          y: event.clientY,
+        });
+    };
+  }
+  const sessionId = descriptor.attrs?.["data-session"];
+  if (sessionId !== undefined) {
+    props["aria-haspopup"] = "menu";
+    props.onKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+      if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+      event.preventDefault();
+      const anchor = event.currentTarget;
+      const rect = anchor.getBoundingClientRect();
+      actions.onSessionMenuOpen({
+        kind: "session",
+        sessionId,
+        anchor,
+        x: rect.left,
+        y: rect.bottom,
+      });
     };
   }
   return createElement(
@@ -616,22 +663,40 @@ function SessionStatus({
   );
 }
 
-interface WorkspaceMenuState {
-  cwd: string;
+interface MenuPosition {
   x: number;
   y: number;
 }
 
-function WorkspaceMenu({
+interface WorkspaceMenuState extends MenuPosition {
+  kind: "workspace";
+  cwd: string;
+}
+
+interface SessionMenuState extends MenuPosition {
+  kind: "session";
+  sessionId: string;
+  anchor: HTMLElement;
+}
+
+type ContextMenuState = WorkspaceMenuState | SessionMenuState;
+
+interface ContextMenuItem {
+  label: string;
+  run: () => void;
+}
+
+function ContextMenu({
   menu,
+  items,
   onClose,
-  onUnregister,
 }: {
-  menu: WorkspaceMenuState;
+  menu: ContextMenuState;
+  items: ContextMenuItem[];
   onClose: () => void;
-  onUnregister: (cwd: string) => void;
 }): ReactElement {
   const menuRef = useRef<HTMLDivElement>(null);
+  const isSessionMenu = menu.kind === "session";
   useLayoutEffect(() => {
     const element = menuRef.current;
     if (element === null) return;
@@ -639,51 +704,97 @@ function WorkspaceMenu({
     const viewportPadding = 4;
     element.style.left = `${Math.max(viewportPadding, Math.min(menu.x, window.innerWidth - rect.width - viewportPadding))}px`;
     element.style.top = `${Math.max(viewportPadding, Math.min(menu.y, window.innerHeight - rect.height - viewportPadding))}px`;
-  }, [menu]);
+    if (menu.kind === "session" && !element.contains(document.activeElement))
+      element.querySelector("button")?.focus({ preventScroll: true });
+  }, [menu, items.length]);
 
   useEffect(() => {
     function onPointerDown(event: PointerEvent): void {
       if (!(event.target instanceof Node)) return;
-      if (event.target instanceof Element && event.target.closest("[data-open-workspace-menu]"))
+      if (
+        !isSessionMenu &&
+        event.target instanceof Element &&
+        event.target.closest("[data-open-workspace-menu]")
+      )
         return;
       if (!menuRef.current?.contains(event.target)) onClose();
     }
+    function onScroll(event: Event): void {
+      if (!(event.target instanceof Node) || !menuRef.current?.contains(event.target)) onClose();
+    }
     window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("scroll", onClose, true);
+    window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", onClose);
     window.addEventListener("blur", onClose);
     return () => {
       window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("scroll", onClose, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onClose);
       window.removeEventListener("blur", onClose);
     };
-  }, [onClose]);
+  }, [isSessionMenu, onClose]);
 
   return (
     <div
       ref={menuRef}
-      className="workspace-menu"
+      className={isSessionMenu ? "workspace-menu session-context-menu" : "workspace-menu"}
       role="menu"
-      aria-label="Workspace actions"
+      aria-label={isSessionMenu ? "Session actions" : "Workspace actions"}
       style={{ left: menu.x, top: menu.y }}
-    >
-      <button
-        type="button"
-        role="menuitem"
-        tabIndex={-1}
-        onClick={(event) => {
-          if (event.detail === 0) return;
+      onBlur={(event) => {
+        if (isSessionMenu && !event.currentTarget.contains(event.relatedTarget)) onClose();
+      }}
+      onKeyDown={(event) => {
+        if (menu.kind !== "session") return;
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
           onClose();
-          onUnregister(menu.cwd);
-        }}
-      >
-        Unregister workspace
-      </button>
+          menu.anchor.focus({ preventScroll: true });
+          return;
+        }
+        const buttons = Array.from(event.currentTarget.querySelectorAll("button"));
+        const focused = buttons.findIndex((button) => button === document.activeElement);
+        let next: number;
+        switch (event.key) {
+          case "ArrowDown":
+            next = (focused + 1) % buttons.length;
+            break;
+          case "ArrowUp":
+            next = (focused + buttons.length - 1) % buttons.length;
+            break;
+          case "Home":
+            next = 0;
+            break;
+          case "End":
+            next = buttons.length - 1;
+            break;
+          default:
+            return;
+        }
+        event.preventDefault();
+        buttons[next]?.focus();
+      }}
+    >
+      {items.map(({ label, run }) => (
+        <button
+          key={label}
+          type="button"
+          role="menuitem"
+          tabIndex={-1}
+          onClick={(event) => {
+            if (!isSessionMenu && event.detail === 0) return;
+            onClose();
+            if (menu.kind === "session") menu.anchor.focus({ preventScroll: true });
+            run();
+          }}
+        >
+          {label}
+        </button>
+      ))}
     </div>
   );
 }
-
 interface ClientSnapshot {
   state: ClientState;
   loadStatus: SessionLoadStatus;
@@ -989,8 +1100,9 @@ function SessionsApp({
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [modes, setModes] = useState<ReadonlyMap<string, ViewMode>>(() => new Map());
   const [collapsedCwds, setCollapsedCwds] = useState<ReadonlySet<string>>(() => new Set<string>());
-  const [workspaceMenu, setWorkspaceMenu] = useState<WorkspaceMenuState | null>(null);
-  const hasMenuWorkspace = snapshot.state.groups.some((group) => group.cwd === workspaceMenu?.cwd);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+  const workspaceMenuCwd = contextMenu?.kind === "workspace" ? contextMenu.cwd : undefined;
   const visibleGroups = useMemo(
     () =>
       snapshot.state.groups.map((group) => ({
@@ -1000,9 +1112,19 @@ function SessionsApp({
     [snapshot.state.groups, modes, collapsedCwds],
   );
 
+  const menuSession =
+    contextMenu?.kind === "session"
+      ? visibleGroups
+          .flatMap((group) => group.sessions)
+          .find((session) => session.sessionId === contextMenu.sessionId)
+      : undefined;
+  const isMenuTargetVisible =
+    contextMenu?.kind === "workspace"
+      ? visibleGroups.some((group) => group.cwd === contextMenu.cwd)
+      : menuSession !== undefined;
   useEffect(() => {
-    if (!hasMenuWorkspace) setWorkspaceMenu(null);
-  }, [hasMenuWorkspace]);
+    if (contextMenu !== null && !isMenuTargetVisible) setContextMenu(null);
+  }, [contextMenu, isMenuTargetVisible]);
   useEffect(() => {
     const loadingText =
       snapshot.loadStatus === "loading" &&
@@ -1038,9 +1160,12 @@ function SessionsApp({
         const requestId = store.startNewSession(cwd);
         bridge.postMessage({ type: "newSession", cwd, requestId });
       },
-      onWorkspaceMenuOpen: setWorkspaceMenu,
+      onWorkspaceMenuOpen: setContextMenu,
       onWorkspaceMenuToggle: (menu) =>
-        setWorkspaceMenu((previous) => (previous?.cwd === menu.cwd ? null : menu)),
+        setContextMenu((previous) =>
+          previous?.kind === "workspace" && previous.cwd === menu.cwd ? null : menu,
+        ),
+      onSessionMenuOpen: setContextMenu,
       onSessionClick: (sessionId) => bridge.postMessage({ type: "openSession", sessionId }),
       onArchiveClick: (sessionId) => {
         const requestId = store.startArchive(sessionId);
@@ -1053,6 +1178,34 @@ function SessionsApp({
     }),
     [bridge, store],
   );
+
+  const menuItems: ContextMenuItem[] = [];
+  if (contextMenu?.kind === "workspace") {
+    const { cwd } = contextMenu;
+    menuItems.push({
+      label: "Unregister workspace",
+      run: () => bridge.postMessage({ type: "unregisterWorkspace", cwd }),
+    });
+  } else if (menuSession !== undefined) {
+    const { sessionId, isArchived, isLive } = menuSession;
+    if (isLive) {
+      menuItems.push({
+        label: "Reload Pi Session",
+        run: () => bridge.postMessage({ type: "reloadSession", sessionId }),
+      });
+    }
+    menuItems.push(
+      {
+        label: isArchived ? "Unarchive" : "Archive",
+        run: () =>
+          isArchived ? actions.onUnarchiveClick(sessionId) : actions.onArchiveClick(sessionId),
+      },
+      {
+        label: "Copy Session ID",
+        run: () => bridge.postMessage({ type: "copySessionId", sessionId }),
+      },
+    );
+  }
 
   const pendingNewSessionCwds = new Set(snapshot.pendingNewSessions.values());
   const pendingArchiveIds = new Set(snapshot.pendingArchives.values());
@@ -1075,7 +1228,7 @@ function SessionsApp({
           mode,
           snapshot.state.displayedSessionId,
           collapsedCwds,
-          workspaceMenu?.cwd,
+          workspaceMenuCwd,
           pendingNewSessionCwds.has(group.cwd),
         );
         return createElement(
@@ -1101,12 +1254,8 @@ function SessionsApp({
           )),
         );
       })}
-      {workspaceMenu !== null && hasMenuWorkspace && (
-        <WorkspaceMenu
-          menu={workspaceMenu}
-          onClose={() => setWorkspaceMenu(null)}
-          onUnregister={(cwd) => bridge.postMessage({ type: "unregisterWorkspace", cwd })}
-        />
+      {contextMenu !== null && isMenuTargetVisible && (
+        <ContextMenu menu={contextMenu} items={menuItems} onClose={closeContextMenu} />
       )}
     </SessionListMotion>
   );

@@ -56,6 +56,7 @@ export function fakeRuntimes() {
       workspaces.add(cwd);
       return sessionId;
     }),
+    reloadSession: vi.fn(async (_sessionId: string) => {}),
     closeSession: vi.fn(async (sessionId: string) => {
       live.delete(sessionId);
       temporary.delete(sessionId);

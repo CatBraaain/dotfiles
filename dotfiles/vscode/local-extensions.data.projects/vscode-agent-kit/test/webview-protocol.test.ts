@@ -43,6 +43,14 @@ describe("parseWebviewRequest", () => {
       { type: "openSession", sessionId: "session-1" },
     ],
     [
+      { type: "reloadSession", sessionId },
+      { type: "reloadSession", sessionId },
+    ],
+    [
+      { type: "copySessionId", sessionId },
+      { type: "copySessionId", sessionId },
+    ],
+    [
       { type: "archiveSession", sessionId: customSessionId },
       { type: "archiveSession", sessionId: customSessionId },
     ],
@@ -102,7 +110,9 @@ describe("parseWebviewRequest", () => {
     { type: "unarchiveSession", sessionIds: [sessionId] },
     { type: "unarchiveSession", sessionId, requestId: "" },
     { type: "unarchiveSession", sessionId, requestId: 2 },
-    { type: "copySessionId", sessionId },
+    { type: "copySessionId", sessionId: "" },
+    { type: "reloadSession" },
+    { type: "reloadSession", sessionId: "--force" },
     { type: "setSessionLock", sessionId, locked: true },
     { type: "setSessionLock", sessionId, locked: false },
     { type: "setSessionLock", sessionId },

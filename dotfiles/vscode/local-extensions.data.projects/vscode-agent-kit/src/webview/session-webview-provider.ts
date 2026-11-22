@@ -418,6 +418,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       groups: sessionViewGroups(sessions, {
         registeredCwds: [...addedCwds],
         archivedIds,
+        liveIds: new Set(flattenPiMuxSessions(workspaces).map(({ id }) => id)),
         phases: phasesFromWorkspaces(workspaces),
         unreadIds: this.unreadSessionIds,
         delayedIds,
@@ -566,6 +567,31 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       await this.queueOpenSession(request.sessionId, "select", selection);
       return;
     }
+    if (request.type === "reloadSession" || request.type === "copySessionId") {
+      const { sessionId } = request;
+      if (!this.sessionsById.has(sessionId)) {
+        this.postError(`Session not found: ${sessionId}`);
+        return;
+      }
+      if (request.type === "reloadSession") {
+        try {
+          const isLive = this.state?.groups.some(({ sessions }) =>
+            sessions.some((row) => row.sessionId === sessionId && row.isLive),
+          );
+          if (!isLive) throw new Error("The session is not running");
+          await this.deps.registry.mux.reloadSession(sessionId);
+        } catch (error) {
+          this.postError(`Failed to reload Pi session ${sessionId}: ${errorMessage(error)}`);
+        }
+      } else {
+        try {
+          await vscode.env.clipboard.writeText(sessionId);
+        } catch (error) {
+          this.postError(`Failed to copy session ID ${sessionId}: ${errorMessage(error)}`);
+        }
+      }
+      return;
+    }
     if (request.type === "archiveSession") {
       try {
         await this.deps.registry.run(() => this.archiveSession(request.sessionId));
@@ -611,7 +637,9 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         groups: this.state.groups.map((group) => ({
           ...group,
           sessions: group.sessions.map((row) =>
-            row.sessionId === sessionId ? { ...row, state: undefined, hasUnread: false } : row,
+            row.sessionId === sessionId
+              ? { ...row, isLive: undefined, state: undefined, hasUnread: false }
+              : row,
           ),
         })),
         displayedSessionId: this.deps.registry.displayedSessionId,

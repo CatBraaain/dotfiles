@@ -2488,6 +2488,77 @@ describe("SessionWebviewProvider", () => {
     },
   );
 
+  it("reloads the requested live session without changing the display or blocking other requests", async () => {
+    const { webview, registry, terminal, mocks } = await archiveFixture();
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    terminal.show.mockClear();
+    const pending = deferred<void>();
+    mocks.reloadSession.mockReturnValueOnce(pending.promise);
+
+    const reload = webview.receive({ type: "reloadSession", sessionId: inactiveSessionId });
+    try {
+      await webview.receive({ type: "copySessionId", sessionId: inactiveSessionId });
+      expect(vscodeMocks.clipboardWriteText).toHaveBeenCalledExactlyOnceWith(inactiveSessionId);
+      expect(mocks.reloadSession).toHaveBeenCalledExactlyOnceWith(inactiveSessionId);
+      expect(registry.displayedSessionId).toBe(activeSessionId);
+      expect(terminal.show).not.toHaveBeenCalled();
+    } finally {
+      pending.resolve();
+      await reload;
+    }
+  });
+
+  it("does not reload saved-only sessions and reports reload and clipboard errors", async () => {
+    const { webview, provider, mocks, live } = await archiveFixture();
+    live.delete(inactiveSessionId);
+    await provider.refresh();
+    await webview.receive({ type: "reloadSession", sessionId: inactiveSessionId });
+    expect(mocks.reloadSession).not.toHaveBeenCalled();
+    expect(vscodeMocks.showErrorMessage).toHaveBeenLastCalledWith(
+      expect.stringContaining(`${inactiveSessionId}: The session is not running`),
+    );
+    await webview.receive({ type: "copySessionId", sessionId: inactiveSessionId });
+    expect(vscodeMocks.clipboardWriteText).toHaveBeenCalledExactlyOnceWith(inactiveSessionId);
+
+    mocks.reloadSession.mockRejectedValueOnce(new Error("reload failed"));
+    await webview.receive({ type: "reloadSession", sessionId: activeSessionId });
+    expect(vscodeMocks.showErrorMessage).toHaveBeenLastCalledWith(
+      expect.stringContaining(`${activeSessionId}: reload failed`),
+    );
+
+    vscodeMocks.clipboardWriteText.mockRejectedValueOnce(new Error("clipboard unavailable"));
+    await webview.receive({ type: "copySessionId", sessionId: activeSessionId });
+    expect(vscodeMocks.showErrorMessage).toHaveBeenLastCalledWith(
+      expect.stringContaining(`${activeSessionId}: clipboard unavailable`),
+    );
+  });
+
+  it("hides reload as soon as Archive stops the session, before the list refresh", async () => {
+    const { webview, mocks } = await archiveFixture();
+    const held = deferred<PiMuxWorkspace[]>();
+    mocks.list.mockReturnValueOnce(held.promise);
+    webview.postMessage.mockClear();
+
+    const archive = webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    try {
+      await vi.waitFor(() => expect(mocks.closeSession).toHaveBeenCalledWith(activeSessionId));
+      const state: WebviewState = webview.postMessage.mock.calls.find(
+        ([message]) => message.type === "sessions",
+      )?.[0].state;
+      expect(state.groups[0].sessions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ sessionId: activeSessionId, isLive: undefined }),
+          expect.objectContaining({ sessionId: inactiveSessionId, isLive: true }),
+        ]),
+      );
+      await webview.receive({ type: "reloadSession", sessionId: activeSessionId });
+      expect(mocks.reloadSession).not.toHaveBeenCalled();
+    } finally {
+      held.resolve(await mocks.list());
+      await archive;
+    }
+  });
+
   it("archives the displayed conversation without switching to a live same-cwd session", async () => {
     const { webview, registry, terminal, live, mocks, filePath } = await archiveFixture();
     const source = await readFile(filePath, "utf8");
@@ -4658,7 +4729,6 @@ describe("SessionWebviewProvider", () => {
   });
 
   it.each([
-    { type: "copySessionId", sessionId: activeSessionId },
     { type: "setSessionLock", sessionId: activeSessionId, locked: true },
     { type: "setSessionLock", sessionId: activeSessionId, locked: false },
   ])("ignores removed $type requests without effects", async (request) => {

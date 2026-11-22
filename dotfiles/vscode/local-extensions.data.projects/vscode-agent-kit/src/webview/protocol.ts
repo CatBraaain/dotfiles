@@ -4,7 +4,7 @@ export type WebviewRequest =
   | { type: "newSession"; cwd: string; requestId?: string }
   | { type: "addWorkspace"; path: string }
   | { type: "unregisterWorkspace"; cwd: string }
-  | { type: "openSession"; sessionId: string }
+  | { type: "openSession" | "reloadSession" | "copySessionId"; sessionId: string }
   | { type: "archiveSession"; sessionId: string; requestId?: string }
   | { type: "unarchiveSession"; sessionId: string; requestId?: string };
 
@@ -16,6 +16,7 @@ export interface WebviewSession {
   displayName: string;
   updatedAtMs: number | null;
   isArchived: boolean;
+  isLive?: boolean;
   /** Live execution phase; undefined when the phase is unknown. */
   state?: SessionPhase;
   hasUnread?: boolean;
@@ -69,13 +70,15 @@ export function parseWebviewRequest(value: unknown): WebviewRequest | undefined 
   if (value.type === "unregisterWorkspace" && isNonEmptyPath(value.cwd)) {
     return { type: "unregisterWorkspace", cwd: value.cwd };
   }
+  if (!isSessionId(value.sessionId)) return undefined;
   if (
-    (value.type === "openSession" ||
-      value.type === "archiveSession" ||
-      value.type === "unarchiveSession") &&
-    isSessionId(value.sessionId)
+    value.type === "openSession" ||
+    value.type === "reloadSession" ||
+    value.type === "copySessionId"
   ) {
-    if (value.type === "openSession") return { type: value.type, sessionId: value.sessionId };
+    return { type: value.type, sessionId: value.sessionId };
+  }
+  if (value.type === "archiveSession" || value.type === "unarchiveSession") {
     if (value.requestId !== undefined && !isNonEmptyPath(value.requestId)) return undefined;
     return {
       type: value.type,

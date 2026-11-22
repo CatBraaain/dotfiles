@@ -1180,6 +1180,8 @@ type ReloadScan =
 async function reloadPanes(config: Config, onlyId?: string): Promise<number> {
   const original = await withLock(config, () => serverLifetime(config));
   if (!original) {
+    if (onlyId !== undefined)
+      throw new Error(`Cannot reload session ${onlyId}: the dedicated server is not running`);
     return await withLock(config, async () => {
       if (await serverLifetime(config)) throw new Error("Dedicated server changed during reload");
       prepareDirectory(config.directory);
@@ -1191,7 +1193,7 @@ async function reloadPanes(config: Config, onlyId?: string): Promise<number> {
     await verifyServerLifetime(config, original, "reload");
     readSnapshot(config);
     if (onlyId) await validateReloadTarget(config, onlyId);
-    await bootstrapServer(config);
+    await bootstrapServer(config, onlyId === undefined ? "start" : "existing");
   });
   const reloaded = new Set<string>();
   const failed = new Map<string, string>();
@@ -1525,8 +1527,11 @@ async function refreshSessionEnvironment(
       await tmux(config, ["set-environment", "-u", "-t", session, key]);
 }
 
-async function bootstrapServer(config: Config): Promise<string> {
-  await tmux(config, ["start-server"]);
+async function bootstrapServer(
+  config: Config,
+  mode: "start" | "existing" = "start",
+): Promise<string> {
+  if (mode === "start") await tmux(config, ["start-server"]);
   await tmux(config, ["source-file", config.tmuxConfig]);
   const existing = await serverOption(config, "@pi-mux-generation");
   const generation = existing || randomUUID();

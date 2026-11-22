@@ -105,6 +105,21 @@ describe("sessionViewGroups", () => {
     expect(groups.map((group) => group.cwd)).toEqual(["/workspace/alpha"]);
   });
 
+  it("marks live sessions independently from the archived state and phase", () => {
+    const groups = sessionViewGroups(
+      sessions,
+      view({ archivedIds: new Set(["older", "newest"]), liveIds: new Set(["older", "active"]) }),
+    );
+
+    expect(
+      groups.flatMap((group) => group.sessions).map((row) => [row.sessionId, row.isLive]),
+    ).toEqual([
+      ["active", true],
+      ["older", true],
+      ["newest", undefined],
+    ]);
+  });
+
   it("carries the live phase of sessions that have one", () => {
     const groups = sessionViewGroups(sessions, view({ phases: new Map([["active", "running"]]) }));
 

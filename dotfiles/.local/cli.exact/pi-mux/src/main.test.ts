@@ -4691,6 +4691,62 @@ exec `,
     }
   }, 20000);
 
+  it("rejects a targeted reload without a server and preserves the restore record", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      const targetId = randomUUID();
+      const siblingId = randomUUID();
+      for (const id of [targetId, siblingId]) conversationFile(fixture.agentDir, fixture.cwd, id);
+      const snapshot = {
+        version: 1,
+        generation: "before-restart",
+        workspaces: [{ cwd: fixture.cwd, sessions: [targetId, siblingId] }],
+      };
+      writeFileSync(restoreFile(fixture), JSON.stringify(snapshot));
+
+      const targeted = await finishReload(startReload(fixture, [targetId]));
+      assert.equal(targeted.status, 1);
+      assert.ok(targeted.stderr.includes(targetId));
+      assert.match(targeted.stderr, /dedicated server is not running/);
+      assert.equal(targeted.stdout, "");
+      assert.equal(existsSync(fixture.socket), false);
+      assert.deepEqual(restoreDocument(fixture), snapshot);
+
+      const all = await finishReload(startReload(fixture));
+      assert.equal(all.status, 0, all.stderr);
+      assert.ok(existsSync(fixture.socket));
+      assert.deepEqual(
+        restoreDocument(fixture).workspaces[0]!.sessions.sort(),
+        [siblingId, targetId].sort(),
+      );
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("does not start a new server when the original exits after target validation", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      const id = addManagedSession(fixture, "target", "waiting-user");
+      const before = readFileSync(restoreFile(fixture), "utf8");
+      fixture.beforeCliTmux(`if [ "$5" = start-server ] || [ "$5" = source-file ]; then
+  ${JSON.stringify(realTmux)} -S "$2" kill-server || exit 1
+  rm -f "$2"
+fi`);
+
+      const result = await finishReload(startReload(fixture, [id]));
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /tmux source-file failed/);
+      assert.equal(result.stdout, "");
+      assert.equal(existsSync(fixture.socket), false);
+      assert.equal(readFileSync(restoreFile(fixture), "utf8"), before);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20000);
+
   it("rejects a targeted conversation that is not running", async () => {
     const fixture = new SessionFixture();
     try {
