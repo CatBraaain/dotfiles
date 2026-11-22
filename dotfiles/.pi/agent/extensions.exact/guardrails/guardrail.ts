@@ -28,6 +28,7 @@ import {
   credentialPaths,
   prepareWriteDirectories,
   readActionMatch,
+  readAllPaths,
   warmGlobCache,
   writePaths,
   writePathsByFinalAction,
@@ -214,6 +215,35 @@ export class Guardrail {
     this.assertWriteNotDenied(path);
   }
 
+  assertWorktreeRemovalAllowed(parent: string, adminParent: string): void {
+    if (!readAllPaths(this.config))
+      throw new Error('Worktree removal requires Bash read access configured with allow: "*"');
+    const { ask, deny } = writePathsByFinalAction(this.config, this.cwd, this.globCache);
+    const protectedPaths = [...deny, ...credentialPaths(this.config, this.cwd, this.globCache)];
+    for (const directory of [parent, adminParent]) {
+      this.assertDirectoryGrantAllowed(directory);
+      for (const protectedPath of protectedPaths) {
+        const canonical = canonicalWritePath(protectedPath);
+        if (
+          [protectedPath, canonical].some(
+            (path) => pathCovers(directory, path) || pathCovers(path, directory),
+          )
+        )
+          throw new Error(`Worktree removal overlaps a protected path: ${directory}`);
+      }
+    }
+    const writeSection = writePaths(this.config, this.cwd, this.globCache);
+    const grants = [...this.getDynamicPaths()];
+    for (const path of [adminParent, ...ask.filter((path) => pathCovers(adminParent, path))]) {
+      const { action } = resolvePathActionMatch(writeSection, path);
+      const granted = grants.some(
+        ([grant, modes]) => modes.has("write") && pathCovers(grant, path),
+      );
+      if (action !== "allow" && !granted)
+        throw new Error(`Git worktree metadata is not writable: ${path}`);
+    }
+  }
+
   grantExistingDirectory(path: string, validate?: () => boolean): () => void {
     this.assertDirectoryGrantAllowed(path);
     const identity = directoryIdentity(path);
@@ -277,7 +307,7 @@ export class Guardrail {
     });
   }
 
-  private async withUiLock<T>(showDialog: () => Promise<T>): Promise<T> {
+  async withUiLock<T>(showDialog: () => Promise<T>): Promise<T> {
     const previous = this.uiQueue;
     let release!: () => void;
     this.uiQueue = new Promise<void>((resolveRelease) => {

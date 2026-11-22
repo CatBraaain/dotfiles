@@ -19,6 +19,7 @@ import {
   loadDeclarationRepository,
   managedWorktreePath,
   pathExists,
+  planWorktreeRemoval,
   verifyDeclaredWorktree,
 } from "./declarations.ts";
 import {
@@ -64,17 +65,9 @@ export default function sessionMetadataExtension(pi: ExtensionAPI, home = homedi
     pending.clear();
     for (const name of granted.keys()) revoke(name);
   }
-  let updateQueue: Promise<void> = Promise.resolve();
+  const enqueueMetadata = serialQueue();
+  const enqueueDeclaration = serialQueue();
   const pending = new Map<string, PendingCall>();
-
-  function enqueue<T>(task: () => Promise<T>): Promise<T> {
-    const result = updateQueue.then(task);
-    updateQueue = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
-  }
 
   function isCurrent(expected: number, ctx: ExtensionContext, sessionId: string): boolean {
     return generation === expected && ctx.sessionManager.getSessionId() === sessionId;
@@ -112,7 +105,7 @@ export default function sessionMetadataExtension(pi: ExtensionAPI, home = homedi
     pending.delete(toolCallId);
     if (!call || !isCurrent(call.generation, ctx, call.sessionId)) return;
     try {
-      await enqueue(async () => {
+      await enqueueMetadata(async () => {
         if (!isCurrent(call.generation, ctx, call.sessionId)) return;
         const run = backgroundRunner(ctx);
         const after: WorktreeSnapshot[] = [];
@@ -195,17 +188,18 @@ export default function sessionMetadataExtension(pi: ExtensionAPI, home = homedi
     name: "session_worktree",
     label: "Session worktree",
     description:
-      "Declare a named worktree for this session before editing it. Reuses an existing managed worktree or creates one from the repository's main HEAD. Unregister removes only this declaration and its write grant, not Git files or branches.",
+      "Declare a named worktree for this session before editing it. Reuses an existing managed worktree or creates one from the repository's main HEAD. Unregister only clears the declaration and its write grant. Remove deletes an existing managed worktree after user confirmation, without forcing removal or deleting its branch.",
+    reachesTools: (input) => (input?.action === "remove" ? ["bash"] : []),
     parameters: Type.Object({
-      action: StringEnum(["declare", "unregister"] as const),
+      action: StringEnum(["declare", "unregister", "remove"] as const),
       name: Type.String({
         pattern: WORKTREE_NAME_PATTERN,
         description: "Managed worktree name in kebab-case",
       }),
     }),
-    async execute(_id, { action, name }, signal, _onUpdate, ctx) {
+    async execute(id, { action, name }, signal, _onUpdate, ctx) {
       if (!isWorktreeName(name)) throw new Error(`Invalid worktree name: ${name}`);
-      if (action !== "declare" && action !== "unregister")
+      if (action !== "declare" && action !== "unregister" && action !== "remove")
         throw new Error("Invalid worktree action");
       const expected = generation;
       const sessionId = ctx.sessionManager.getSessionId();
@@ -218,7 +212,7 @@ export default function sessionMetadataExtension(pi: ExtensionAPI, home = homedi
       }
 
       let target: string | undefined;
-      return enqueue(async () => {
+      return enqueueDeclaration(async () => {
         checkCurrent();
         if (action === "unregister") {
           revoke(name);
@@ -234,6 +228,75 @@ export default function sessionMetadataExtension(pi: ExtensionAPI, home = homedi
         const path = managedWorktreePath(home, repository.main, name);
         target = path;
         checkCurrent();
+        if (action === "remove") {
+          const existing = verifyDeclaredWorktree(repository, path);
+          if (!existing) throw new Error(`Not a linked worktree of this repository: ${path}`);
+          if (!(await access.confirmWorktreeRemoval(path, ctx, operationSignal)))
+            throw new Error("Worktree removal was not approved");
+          checkCurrent();
+          const removal = await planWorktreeRemoval(repository, path, existing, operationSignal);
+          function validate(): void {
+            checkCurrent();
+            if (!existing?.isCurrent()) throw new Error(`Worktree changed before removal: ${path}`);
+          }
+          let failure: { cause: unknown } | undefined;
+          const grant = access.grantWorktreeRemoval(
+            removal,
+            `${id}/1`,
+            sessionId,
+            validate,
+            operationSignal,
+          );
+          try {
+            const outcome = await grant.run(() =>
+              ctx.executeTool("bash", { command: grant.command }, { signal: operationSignal }),
+            );
+            if (outcome.isError || outcome.result.isError)
+              throw new Error(
+                outcome.result.content
+                  .map((part) => (part.type === "text" ? part.text : ""))
+                  .join("\n"),
+              );
+            if (!grant.executed) throw new Error("Guardrails did not run the scoped Bash call");
+          } catch (cause) {
+            failure = { cause };
+          } finally {
+            grant.dispose();
+          }
+          checkCurrent();
+          const remaining = await loadDeclarationRepository(repository.main, operationSignal);
+          checkCurrent();
+          const registered = remaining.subtrees.has(path);
+          const exists = pathExists(path);
+          if (remaining.common !== repository.common || remaining.main !== repository.main)
+            throw new Error(`Repository changed during removal: ${path}`);
+          if (registered !== exists)
+            throw new Error(
+              `Incomplete removal: directory ${exists ? "exists" : "is absent"}, Git registration ${registered ? "exists" : "is absent"}`,
+              failure,
+            );
+          if (failure) throw failure.cause;
+          if (exists) throw new Error(`Git did not remove the worktree: ${path}`);
+          const worktrees = previous.filter((entry) => entry.name !== name || entry.path !== path);
+          revoke(name);
+          saveDeclarations(pi, previous, worktrees);
+          await enqueueMetadata(async () => {
+            if (!isCurrent(expected, ctx, sessionId)) return;
+            try {
+              const recorded = getWorkspaces(ctx.sessionManager);
+              const update = saveWorkspaces(
+                pi,
+                ctx.sessionManager,
+                recorded.filter((workspace) => workspace !== path),
+              );
+              if (update.changed)
+                notifyUpdated(pi, recorded, update, { added: [], moved: [], removed: [path] });
+            } catch (error) {
+              notifyFailure(error);
+            }
+          });
+          return toolResult({ name, path, status: "removed", worktrees });
+        }
         access.assertDirectoryGrantAllowed(path);
         const live = previous.filter((entry) => {
           if (verifyDeclaredWorktree(repository, entry.path)) return true;
@@ -273,6 +336,18 @@ export default function sessionMetadataExtension(pi: ExtensionAPI, home = homedi
       : "Worktree metadata";
     return new Text(theme.fg("dim", options.expanded ? content : summary), options.outputPad, 0);
   });
+}
+
+function serialQueue() {
+  let tail: Promise<void> = Promise.resolve();
+  return function enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const result = tail.then(task);
+    tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
 }
 
 function notifyUpdated(

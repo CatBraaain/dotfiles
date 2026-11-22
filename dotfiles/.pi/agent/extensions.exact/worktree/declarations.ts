@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, parse, resolve } from "node:path";
 import { promisify } from "node:util";
 import { parseWorktreeRoots } from "./worktrees.ts";
+import { worktreeRemovalGit, type WorktreeRemoval } from "../guardrails/sandbox-runner.ts";
 
 const exec = promisify(execFile);
 const NO_CONFIG = process.platform === "win32" ? "NUL" : "/dev/null";
@@ -75,6 +76,56 @@ export function verifyDeclaredWorktree(
       return current?.admin === identity.admin && current.key === identity.key;
     },
   };
+}
+
+export async function planWorktreeRemoval(
+  repository: Repository,
+  path: string,
+  worktree: VerifiedWorktree,
+  signal: AbortSignal,
+): Promise<WorktreeRemoval> {
+  const { main, common } = repository;
+  const executable = worktreeRemovalGit();
+  const options = { executable };
+  const [objectFormat, reportedRefFormat] = (
+    await git(main, ["rev-parse", "--show-object-format", "--show-ref-format"], signal, options)
+  )
+    .trim()
+    .split(/\r?\n/);
+  const needsFilesFallback = reportedRefFormat === "--show-ref-format";
+  const refFormat = needsFilesFallback
+    ? (
+        await git(
+          main,
+          [
+            "config",
+            "--local",
+            "--includes",
+            "--get",
+            "--default",
+            "files",
+            "extensions.refStorage",
+          ],
+          signal,
+          options,
+        )
+      )
+        .trim()
+        .toLowerCase()
+    : reportedRefFormat;
+  if (
+    (objectFormat !== "sha1" && objectFormat !== "sha256") ||
+    (refFormat !== "files" && (needsFilesFallback || refFormat !== "reftable"))
+  )
+    throw new Error(`Unsupported Git repository format for ${main}`);
+  const refreshed = await loadDeclarationRepository(main, signal);
+  if (refreshed.main !== main || refreshed.common !== common || !refreshed.subtrees.has(path))
+    throw new Error(`Worktree registration changed: ${path}`);
+  assertDirectoryChain(common, parse(common).root);
+  assertDirectoryChain(path, parse(path).root);
+  const current = worktree.isCurrent() && gitDirectory(main) === common;
+  if (!current) throw new Error(`Worktree changed before removal: ${path}`);
+  return { git: executable, main, common, path, objectFormat, refFormat };
 }
 
 export function pathExists(path: string): boolean {
@@ -163,7 +214,7 @@ async function checkoutWithoutRepositoryConfig(
         commit,
       ],
       signal,
-      { GIT_OBJECT_DIRECTORY: join(common, "objects"), GIT_INDEX_FILE: index },
+      { env: { GIT_OBJECT_DIRECTORY: join(common, "objects"), GIT_INDEX_FILE: index } },
     );
   } finally {
     rmSync(isolated, { recursive: true, force: true });
@@ -174,12 +225,12 @@ async function git(
   cwd: string,
   args: string[],
   signal: AbortSignal,
-  overrides?: NodeJS.ProcessEnv,
+  options?: { executable?: string; env?: NodeJS.ProcessEnv },
 ): Promise<string> {
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)),
   );
-  const { stdout } = await exec("git", [...GIT_OPTIONS, ...args], {
+  const { stdout } = await exec(options?.executable ?? "git", [...GIT_OPTIONS, ...args], {
     cwd,
     signal,
     timeout: 60_000,
@@ -191,7 +242,7 @@ async function git(
       GIT_ALLOW_PROTOCOL: "",
       GIT_NO_LAZY_FETCH: "1",
       GIT_TERMINAL_PROMPT: "0",
-      ...overrides,
+      ...options?.env,
     },
   });
   signal.throwIfAborted();
@@ -246,8 +297,12 @@ function linkedWorktreeIdentity(
     )
       return undefined;
     const stats = lstatSync(admin, { bigint: true });
-    if (!stats.isDirectory()) return undefined;
-    return { admin, key: `${stats.dev}:${stats.ino}:${stats.birthtimeNs}` };
+    const target = lstatSync(path, { bigint: true });
+    if (!stats.isDirectory() || !target.isDirectory()) return undefined;
+    return {
+      admin,
+      key: `${stats.dev}:${stats.ino}:${stats.birthtimeNs}:${target.dev}:${target.ino}:${target.birthtimeNs}`,
+    };
   } catch {
     return undefined;
   }

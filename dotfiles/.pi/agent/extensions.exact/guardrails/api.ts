@@ -1,8 +1,15 @@
-import { SandboxRunner } from "./sandbox-runner.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
+import { dirname, join, resolve } from "node:path";
+import { quote } from "shell-quote";
+import { SandboxRunner, worktreeRemovalArgs, type WorktreeRemoval } from "./sandbox-runner.ts";
 import { executeGuardedTool, type GuardedToolRequest } from "./execute.ts";
-import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentToolResult,
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { resolve } from "node:path";
 import { Guardrail, writeApprovalNote } from "./guardrail.ts";
 import { withNormalizedPath } from "./normalize-path.ts";
 
@@ -16,6 +23,13 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
   const runner = new SandboxRunner(cwd, (mode, commandCwd) =>
     guardrail.buildArgs(mode, commandCwd),
   );
+
+  const removalScope = new AsyncLocalStorage<RemovalScope>();
+
+  function getRemovalScope(id: string): RemovalScope | undefined {
+    const scope = removalScope.getStore();
+    return scope?.id === id ? scope : undefined;
+  }
 
   pi.registerTool({
     name: "ask_permission",
@@ -155,7 +169,73 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
   return {
     async execute(request) {
       assertActive();
-      return executeGuardedTool(guardrail, runner, cwd, request);
+      const scope = request.toolName === "bash" ? getRemovalScope(request.id) : undefined;
+      if (!scope) return executeGuardedTool(guardrail, runner, cwd, request);
+      const { removal, command, sessionId } = scope;
+      const signal = request.signal
+        ? AbortSignal.any([scope.signal, request.signal])
+        : scope.signal;
+      if (scope.closed) throw new Error("Worktree removal grant has been revoked");
+      if (
+        scope.used ||
+        request.params.command !== command ||
+        request.context.sessionManager?.getSessionId() !== sessionId
+      )
+        throw new Error("Worktree removal does not match this Bash call");
+      scope.used = true;
+      signal.throwIfAborted();
+      await guardrail.authorizeCommand(
+        quote(["git", ...worktreeRemovalArgs(removal)]),
+        request.context,
+      );
+      assertActive();
+      signal.throwIfAborted();
+      if (scope.closed) throw new Error("Worktree removal grant has been revoked");
+      guardrail.assertWorktreeRemovalAllowed(
+        dirname(removal.path),
+        join(removal.common, "worktrees"),
+      );
+      const result = await runner.runWorktreeRemoval(removal, scope.validate, signal);
+      scope.executed = true;
+      return result;
+    },
+    async confirmWorktreeRemoval(path, ctx, signal) {
+      if (!ctx.hasUI) throw new Error("Worktree removal requires user confirmation");
+      return guardrail.withUiLock(async () => {
+        assertActive();
+        signal.throwIfAborted();
+        return ctx.ui.confirm("Remove managed worktree?", JSON.stringify(path), { signal });
+      });
+    },
+    grantWorktreeRemoval(removal, id, sessionId, validate, signal) {
+      assertActive();
+      if (!runner.sandboxed()) throw new Error("Worktree removal requires bwrap isolation");
+      signal.throwIfAborted();
+      const command = `/bin/false worktree-removal-${randomUUID()}`;
+      const scope: RemovalScope = {
+        id,
+        sessionId,
+        removal,
+        command,
+        validate,
+        signal,
+        used: false,
+        executed: false,
+        closed: false,
+      };
+      return {
+        command,
+        get executed() {
+          return scope.executed;
+        },
+        run(task) {
+          if (scope.closed) throw new Error("Worktree removal grant has been revoked");
+          return removalScope.run(scope, task);
+        },
+        dispose() {
+          scope.closed = true;
+        },
+      };
     },
     assertDirectoryGrantAllowed(path) {
       assertActive();
@@ -188,7 +268,38 @@ function writePermissionGuideline(paths: {
   ].join("\n");
 }
 
+type RemovalScope = {
+  id: string;
+  sessionId: string;
+  removal: WorktreeRemoval;
+  command: string;
+  validate: () => void;
+  signal: AbortSignal;
+  used: boolean;
+  executed: boolean;
+  closed: boolean;
+};
+
+type WorktreeRemovalGrant = {
+  command: string;
+  readonly executed: boolean;
+  run<T>(task: () => Promise<T>): Promise<T>;
+  dispose(): void;
+};
+
 export type DirectoryWriteAccess = {
+  confirmWorktreeRemoval(
+    path: string,
+    ctx: ExtensionContext,
+    signal: AbortSignal,
+  ): Promise<boolean>;
+  grantWorktreeRemoval(
+    removal: WorktreeRemoval,
+    id: string,
+    sessionId: string,
+    validate: () => void,
+    signal: AbortSignal,
+  ): WorktreeRemovalGrant;
   assertDirectoryGrantAllowed(path: string): void;
   grantExistingDirectory(path: string, validate?: () => boolean): () => void;
 };

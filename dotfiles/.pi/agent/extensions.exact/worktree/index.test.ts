@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { AsyncResource } from "node:async_hooks";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -49,16 +50,32 @@ afterEach(() =>
     .forEach((dispose) => dispose()),
 );
 
-async function createHarness(persist = true, guarded = false) {
+async function createHarness(
+  persist = true,
+  guarded = false,
+  removalProtection:
+    | "deny"
+    | "command-deny"
+    | "credentials"
+    | "metadata-ask"
+    | "restricted-read"
+    | "none"
+    | "legacy" = "legacy",
+  objectFormat: "sha1" | "sha256" = "sha1",
+) {
   mkdirSync("/tmp/work/dotfiles/session-metadata-custom-qa", { recursive: true });
   const directory = mkdtempSync("/tmp/work/dotfiles/session-metadata-custom-qa/integration-");
   cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
   const root = join(directory, "main repo");
   mkdirSync(root);
-  execFileSync("git", ["-c", "init.defaultBranch=main", "init", root], {
-    env: gitEnvironment,
-    stdio: "pipe",
-  });
+  execFileSync(
+    "git",
+    ["-c", "init.defaultBranch=main", "init", `--object-format=${objectFormat}`, root],
+    {
+      env: gitEnvironment,
+      stdio: "pipe",
+    },
+  );
   execFileSync(
     "git",
     [
@@ -194,16 +211,36 @@ async function createHarness(persist = true, guarded = false) {
   const managed = join(directory, ".agents", "worktrees", "main repo");
   if (guarded) {
     const config = join(directory, "guardrails.yaml");
+    const deny =
+      removalProtection === "legacy"
+        ? [join(managed, "denied"), join(managed, "active", "denied")]
+        : removalProtection === "deny"
+          ? [join(managed, "target", "protected")]
+          : [];
+    const credentials =
+      removalProtection === "legacy"
+        ? [join(managed, "credential"), join(managed, "active", "secret")]
+        : removalProtection === "credentials"
+          ? [join(managed, "target", "protected")]
+          : [];
     writeFileSync(
       config,
       JSON.stringify({
-        read: [{ allow: "*" }],
+        read: [{ allow: removalProtection === "restricted-read" ? [root, managed] : "*" }],
         write: [
           { allow: root },
-          { deny: [join(managed, "denied"), join(managed, "active", "denied")] },
+          ...(deny.length ? [{ deny }] : []),
+          ...(removalProtection === "metadata-ask"
+            ? [{ ask: [join(root, ".git", "worktrees", "target")] }]
+            : []),
         ],
-        credentials: [join(managed, "credential"), join(managed, "active", "secret")],
-        commands: [{ ".*": [{ allow: [] }] }],
+        credentials,
+        commands: [
+          { ".*": [{ allow: [] }] },
+          ...(removalProtection === "command-deny"
+            ? [{ git: [{ deny: ["worktree", "remove"] }] }]
+            : []),
+        ],
       }),
     );
     toolsExtension(pi, config);
@@ -251,6 +288,89 @@ async function createHarness(persist = true, guarded = false) {
     return invoke("session_worktree", { action, name }, { ...context(), cwd });
   }
 
+  async function remove(
+    name: string,
+    options: {
+      approve?: (path: string) => boolean;
+      beforeBash?: (command: string) => Promise<string>;
+      onRewrite?: (result: unknown) => void;
+      replayAfter?: Promise<void>;
+      scopeMismatch?: "id" | "async-context";
+      onReplay?: (replay: Promise<unknown>) => void;
+      runFrom?: string;
+      signal?: AbortSignal;
+    } = {},
+  ) {
+    const id = `remove-${++nestedId}`;
+    const detached =
+      options.scopeMismatch === "async-context"
+        ? new AsyncResource("fixture Bash entry")
+        : undefined;
+    const ctx = {
+      ...context(),
+      cwd: options.runFrom ?? root,
+      ui: {
+        async confirm(_title: string, path: string) {
+          return options.approve?.(JSON.parse(path)) ?? true;
+        },
+      },
+      executeTool: nestedExecutor(id),
+    } as unknown as ExtensionToolContext;
+
+    function nestedExecutor(parentId: string): ExtensionToolContext["executeTool"] {
+      let nextId = 0;
+      return async function executeTool(tool, args, callOptions) {
+        assert.equal(tool, "bash");
+        const index = ++nextId;
+        const nested = `${parentId}/${parentId === id && options.scopeMismatch === "id" ? index + 1 : index}`;
+        const input = args as { command: string };
+        const toolCall = { type: "toolCall" as const, id: nested, name: tool, arguments: input };
+        const nestedContext = { ...ctx, executeTool: nestedExecutor(nested) };
+        const signal = callOptions?.signal;
+        if (parentId === id) {
+          if (options.replayAfter && options.onReplay)
+            options.onReplay(
+              options.replayAfter.then(() =>
+                tools.get(tool)!.execute(nested, input, signal, undefined, nestedContext),
+              ),
+            );
+          if (options.beforeBash) input.command = await options.beforeBash(input.command);
+        }
+        await emit("tool_call", {
+          toolName: tool,
+          toolCallId: nested,
+          input,
+          parentToolCallId: parentId,
+        });
+        try {
+          const execute = () =>
+            tools.get(tool)!.execute(nested, input, signal, undefined, nestedContext);
+          const result = await (parentId === id && detached
+            ? detached.runInAsyncScope(execute)
+            : execute());
+          if (parentId !== id) options.onRewrite?.(result.structuredContent);
+          return { toolCall, result, isError: result.isError ?? false };
+        } catch (error) {
+          return {
+            toolCall,
+            result: { content: [{ type: "text" as const, text: String(error) }], details: {} },
+            isError: true,
+          };
+        } finally {
+          await emit("tool_result", {
+            toolName: tool,
+            toolCallId: nested,
+            parentToolCallId: parentId,
+          });
+        }
+      };
+    }
+
+    return tools
+      .get("session_worktree")!
+      .execute(id, { action: "remove", name }, options.signal, undefined, ctx);
+  }
+
   function request(path: string) {
     return invoke("ask_permission", { path, reason: "test" }, { ...context(), hasUI: false });
   }
@@ -273,6 +393,7 @@ async function createHarness(persist = true, guarded = false) {
     explicit,
     invoke,
     managed,
+    remove,
     request,
     seedWorkspace(path: string) {
       manager.appendCustomEntry(WORKSPACES_ENTRY_TYPE, {
@@ -1057,4 +1178,352 @@ describe("session metadata extension", () => {
     assert.equal(component.render(100).join("\n").trim(), "Worktree metadata updated (1 change)");
     assert.match(String(message.content), new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   });
+});
+
+const removalTest = realBwrapTest;
+
+describe("managed worktree removal", () => {
+  if (process.env.RTK_DISABLED !== "1" && spawnSync("rtk", ["--version"]).status === 0) {
+    removalTest(
+      "keeps the inert request intact through the registered RTK Bash path",
+      async () => {
+        const h = await createHarness(true, true, "none");
+        await h.explicit("declare", "target");
+        const rewrites: unknown[] = [];
+        const result = await h.remove("target", {
+          onRewrite(value) {
+            rewrites.push(value);
+          },
+        });
+        assert.partialDeepStrictEqual(rewrites, [{ output: "", exit_code: 1, truncated: false }]);
+        assert.equal(existsSync(join(h.managed, "target")), false);
+        assert.equal((result.details as { status: string }).status, "removed");
+      },
+      15_000,
+    );
+  }
+  removalTest(
+    "removes both the declared directory and the Git registration, preserving the branch",
+    async () => {
+      const h = await createHarness(true, true, "none");
+      const path = join(h.managed, "target");
+      await h.explicit("declare", "target");
+      h.seedWorkspace(path);
+      let calls = 0;
+      const result = await h.remove("target", {
+        runFrom: path,
+        approve(approvedPath) {
+          assert.equal(approvedPath, path);
+          return true;
+        },
+        async beforeBash(command) {
+          calls++;
+          return command;
+        },
+      });
+      assert.deepEqual(result.details, { name: "target", path, status: "removed", worktrees: [] });
+      assert.equal(calls, 1);
+      assert.equal(existsSync(path), false);
+      assert.doesNotMatch(
+        h.shell("git worktree list --porcelain").result.content[0]!.text,
+        /worktree .*target/,
+      );
+      assert.equal(h.shell("git show-ref --verify refs/heads/target").isError, false);
+      assert.deepEqual(getDeclarations(h.manager), []);
+      assert.deepEqual(getWorkspaces(h.manager), []);
+    },
+    15_000,
+  );
+
+  removalTest(
+    "removes a worktree from a SHA-256 repository with the files ref backend",
+    async () => {
+      const h = await createHarness(true, true, "none", "sha256");
+      const path = join(h.managed, "target");
+      await h.explicit("declare", "target");
+      const result = await h.remove("target");
+      assert.deepEqual(result.details, { name: "target", path, status: "removed", worktrees: [] });
+      assert.equal(existsSync(path), false);
+      assert.equal(h.shell("git show-ref --verify refs/heads/target").isError, false);
+    },
+  );
+
+  removalTest(
+    "preserves a dirty target without running a repository-configured fsmonitor",
+    async () => {
+      const h = await createHarness(true, true, "none");
+      const path = join(h.managed, "target");
+      await h.explicit("declare", "target");
+      const marker = join(h.root, "ran-fsmonitor");
+      const script = join(h.root, "fsmonitor");
+      writeFileSync(script, `#!/bin/sh\n${quote(["touch", marker])}\n`, { mode: 0o755 });
+      assert.equal(h.shell(quote(["git", "config", "core.fsmonitor", script])).isError, false);
+      writeFileSync(join(path, "dirty"), "unsaved");
+      await assert.rejects(h.remove("target"), /contains modified or untracked files/);
+      assert.equal(readFileSync(join(path, "dirty"), "utf8"), "unsaved");
+      assert.equal(existsSync(marker), false);
+      assert.deepEqual(getDeclarations(h.manager), [{ name: "target", path }]);
+      assert.match(
+        h.shell("git worktree list --porcelain").result.content[0]!.text,
+        /worktree .*target/,
+      );
+    },
+    15_000,
+  );
+
+  removalTest("refuses removal when Bash read access is limited to explicit paths", async () => {
+    const h = await createHarness(true, true, "restricted-read");
+    const path = join(h.managed, "target");
+    await h.explicit("declare", "target");
+    await assert.rejects(h.remove("target"), /requires Bash read access configured with allow/);
+    assert.equal(existsSync(path), true);
+    assert.match(
+      h.shell("git worktree list --porcelain").result.content[0]!.text,
+      /worktree .*target/,
+    );
+  });
+
+  removalTest(
+    "conservatively refuses a CRLF file clean only with the repository autocrlf setting",
+    async () => {
+      const h = await createHarness(true, true, "none");
+      const path = join(h.managed, "target");
+      writeFileSync(join(h.root, "tracked"), "line\n");
+      assert.equal(
+        h.shell(
+          "git add -- tracked && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -m tracked && git config core.autocrlf true",
+        ).isError,
+        false,
+      );
+      assert.equal(h.shell(quote(["git", "worktree", "add", "-b", "target", path])).isError, false);
+      const checkout = join(path, "tracked");
+      assert.equal(readFileSync(checkout, "utf8"), "line\r\n");
+      assert.equal(
+        h.shell(quote(["git", "-C", path, "status", "--porcelain"])).result.content[0]!.text,
+        "",
+      );
+      await assert.rejects(h.remove("target"), /contains modified or untracked files/);
+      assert.equal(readFileSync(checkout, "utf8"), "line\r\n");
+      assert.match(
+        h.shell("git worktree list --porcelain").result.content[0]!.text,
+        /worktree .*target/,
+      );
+    },
+  );
+
+  removalTest(
+    "does not run a repository-configured clean filter during the Git status check",
+    async () => {
+      const h = await createHarness(true, true, "none");
+      const path = join(h.managed, "target");
+      writeFileSync(join(h.root, ".gitattributes"), "tracked filter=fixture\n");
+      writeFileSync(join(h.root, "tracked"), "committed\n");
+      assert.equal(
+        h.shell(
+          "git add -- .gitattributes tracked && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -m tracked",
+        ).isError,
+        false,
+      );
+      await h.explicit("declare", "target");
+      const marker = join(h.root, "ran-filter");
+      const script = join(h.root, "clean-filter");
+      writeFileSync(script, `#!/bin/sh\n${quote(["touch", marker])}\ncat\n`, { mode: 0o755 });
+      assert.equal(
+        h.shell(quote(["git", "config", "filter.fixture.clean", quote([script])])).isError,
+        false,
+      );
+      writeFileSync(join(path, "tracked"), "unsaved changes\n");
+      await assert.rejects(h.remove("target"), /contains modified or untracked files/);
+      assert.equal(readFileSync(join(path, "tracked"), "utf8"), "unsaved changes\n");
+      assert.equal(existsSync(marker), false);
+    },
+    15_000,
+  );
+
+  it("keeps the directory and registration when the user declines before Bash", async () => {
+    const h = await createHarness(true, true, "none");
+    const path = join(h.managed, "target");
+    await h.explicit("declare", "target");
+    await assert.rejects(
+      h.remove("target", {
+        approve: () => false,
+        beforeBash: () => assert.fail("Bash must not run without approval"),
+      }),
+      /not approved/,
+    );
+    assert.equal(existsSync(path), true);
+    assert.match(
+      h.shell("git worktree list --porcelain").result.content[0]!.text,
+      /worktree .*target/,
+    );
+    assert.deepEqual(getDeclarations(h.manager), [{ name: "target", path }]);
+  });
+
+  removalTest(
+    "does not grant parent writes to other Bash calls during or after removal",
+    async () => {
+      const h = await createHarness(true, true, "none");
+      const marker = join(h.managed, "outside");
+      async function assertWriteBlocked() {
+        const result = await h.invoke("bash", { command: quote(["touch", marker]) });
+        assert.equal(result.isError, true);
+        assert.match(JSON.stringify(result.content), /Read-only file system/);
+      }
+      const started = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      await h.explicit("declare", "target");
+      const removal = h.remove("target", {
+        async beforeBash(command) {
+          started.resolve();
+          await release.promise;
+          await assertWriteBlocked();
+          return command;
+        },
+      });
+      try {
+        await Promise.race([started.promise, removal]);
+        await assertWriteBlocked();
+      } finally {
+        release.resolve();
+        await removal;
+      }
+      await assertWriteBlocked();
+      assert.equal(existsSync(marker), false);
+    },
+    20_000,
+  );
+
+  removalTest(
+    "rejects a changed nested command instead of running it with a writable parent",
+    async () => {
+      const h = await createHarness(true, true, "none");
+      const marker = join(h.managed, "outside");
+      await h.explicit("declare", "target");
+      await assert.rejects(
+        h.remove("target", {
+          beforeBash: async (command) => `${command}; ${quote(["touch", marker])}`,
+        }),
+        /does not match this Bash call/,
+      );
+      assert.equal(existsSync(join(h.managed, "target")), true);
+      assert.equal(existsSync(marker), false);
+    },
+  );
+
+  for (const scopeMismatch of ["id", "async-context"] as const) {
+    removalTest(
+      `keeps the directory and registration when Bash loses the ${scopeMismatch} match`,
+      async () => {
+        const h = await createHarness(true, true, "none");
+        const path = join(h.managed, "target");
+        await h.explicit("declare", "target");
+        await assert.rejects(h.remove("target", { scopeMismatch }), /Command exited with code 1/);
+        assert.equal(existsSync(path), true);
+        assert.match(
+          h.shell("git worktree list --porcelain").result.content[0]!.text,
+          /worktree .*target/,
+        );
+        assert.deepEqual(getDeclarations(h.manager), [{ name: "target", path }]);
+      },
+      15_000,
+    );
+  }
+
+  for (const end of ["failed", "cancelled"] as const) {
+    removalTest(
+      `revokes a ${end} grant even for work still in the same async scope`,
+      async () => {
+        const h = await createHarness(true, true, "none");
+        const path = join(h.managed, "target");
+        const release = Promise.withResolvers<void>();
+        const controller = new AbortController();
+        let replay: Promise<unknown> | undefined;
+        await h.explicit("declare", "target");
+        try {
+          await assert.rejects(
+            h.remove("target", {
+              signal: controller.signal,
+              replayAfter: release.promise,
+              onReplay(pending) {
+                replay = pending;
+              },
+              async beforeBash(command) {
+                if (end === "failed") throw new Error("Fixture Bash failure");
+                controller.abort(new Error("Fixture cancellation"));
+                return command;
+              },
+            }),
+            end === "failed" ? /Fixture Bash failure/ : /Fixture cancellation/,
+          );
+        } finally {
+          if (replay) {
+            const assertion = assert.rejects(replay, /Worktree removal grant has been revoked/);
+            release.resolve();
+            await assertion;
+          } else release.resolve();
+        }
+        assert.ok(replay);
+        assert.equal(existsSync(path), true);
+        assert.deepEqual(getDeclarations(h.manager), [{ name: "target", path }]);
+      },
+      15_000,
+    );
+  }
+
+  removalTest(
+    "reports a missing Git registration without unregistering a surviving directory",
+    async () => {
+      const h = await createHarness(true, true, "none");
+      const path = join(h.managed, "target");
+      await h.explicit("declare", "target");
+      await assert.rejects(
+        h.remove("target", {
+          async beforeBash(command) {
+            rmSync(join(h.root, ".git", "worktrees", "target"), { recursive: true });
+            return command;
+          },
+        }),
+        /Incomplete removal: directory exists, Git registration is absent/,
+      );
+      assert.equal(existsSync(path), true);
+      assert.deepEqual(getDeclarations(h.manager), [{ name: "target", path }]);
+    },
+  );
+
+  removalTest(
+    "applies existing Git command rules to the removal behind the inert request",
+    async () => {
+      const h = await createHarness(true, true, "command-deny");
+      await h.explicit("declare", "target");
+      await assert.rejects(h.remove("target"), /Command denied/);
+      assert.equal(existsSync(join(h.managed, "target")), true);
+    },
+  );
+
+  removalTest("does not use parent approval to expand write access to Git metadata", async () => {
+    const h = await createHarness(true, true, "metadata-ask");
+    const path = join(h.managed, "target");
+    await h.explicit("declare", "target");
+    await assert.rejects(h.remove("target"), /Git worktree metadata is not writable/);
+    assert.equal(existsSync(path), true);
+    assert.match(
+      h.shell("git worktree list --porcelain").result.content[0]!.text,
+      /worktree .*target/,
+    );
+  });
+
+  for (const protection of ["deny", "credentials"] as const) {
+    removalTest(`refuses to grant a parent bind overlapping ${protection}`, async () => {
+      const h = await createHarness(true, true, protection);
+      const path = join(h.managed, "target");
+      await h.explicit("declare", "target");
+      writeFileSync(join(path, "protected"), "preserve");
+      await assert.rejects(h.remove("target"), /overlaps a protected path/);
+      assert.equal(readFileSync(join(path, "protected"), "utf8"), "preserve");
+      assert.match(
+        h.shell("git worktree list --porcelain").result.content[0]!.text,
+        /worktree .*target/,
+      );
+    });
+  }
 });
