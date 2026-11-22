@@ -136,7 +136,7 @@ async function inject(target: Target, vscodeDir: string, run: Run): Promise<void
   if (target.platform === "linux") {
     const output = await run(
       [process.execPath, "run", "inject", join(vscodeDir, "scm-collapse.data.js")],
-      join(vscodeDir, "extensions.data.projects/vscode-custom-patch"),
+      join(vscodeDir, "local-extensions.data.projects/vscode-custom-patch"),
     );
     if (output.length > 0) process.stdout.write(output);
     return;

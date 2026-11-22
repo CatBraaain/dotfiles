@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { it } from "bun:test";
-import { selectExtensionTarget, syncExtensions } from "../extensions.apply.ts";
+import { selectExtensionTarget, syncMarketplaceExtensions } from "../extensions.apply.ts";
 
 it.skipIf(process.platform !== "linux")(
   "uses the WSL Server CLI even if the Windows launcher is first",
@@ -75,7 +75,7 @@ it("uses only the native Windows CLI to sync the Windows allowlist", async () =>
     "agent-kit.agent-kit@1.0.0",
     "some.other@1.0.0",
   ].join("\r\n");
-  await syncExtensions({ label: "windows", code }, async (argv) => {
+  await syncMarketplaceExtensions({ label: "windows", code }, async (argv) => {
     calls.push(argv);
     return argv.includes("--list-extensions") ? existing : "";
   });
@@ -92,7 +92,7 @@ it("does not change Windows or WSL extensions if listing fails", async () => {
     const calls: string[][] = [];
     const code = label === "windows" ? "code.cmd" : "code-server";
     await assert.rejects(
-      syncExtensions({ label, code }, async (argv) => {
+      syncMarketplaceExtensions({ label, code }, async (argv) => {
         calls.push(argv);
         throw new Error("listing failed");
       }),

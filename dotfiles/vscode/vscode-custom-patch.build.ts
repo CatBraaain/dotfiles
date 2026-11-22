@@ -18,7 +18,7 @@ export async function buildCustomPatch(
   distDir: string,
   buildProject = runProjectBuild,
 ): Promise<void> {
-  const sourceDir = join(vscodeDir, "extensions.data.projects/vscode-custom-patch");
+  const sourceDir = join(vscodeDir, "local-extensions.data.projects/vscode-custom-patch");
   const manifestText = await readFile(join(sourceDir, "package.json"), "utf8");
   const manifest = JSON.parse(manifestText);
   if (manifest.name !== "vscode-custom-patch" || !/^\d+\.\d+\.\d+$/.test(manifest.version)) {

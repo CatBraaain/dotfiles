@@ -45,7 +45,7 @@ it("installs a same-version VSIX on first apply and injects only after installat
   await applyCustomPatch(vscodeDir, root, linux, async (argv, cwd) => {
     calls.push(argv);
     if (argv.includes("inject")) {
-      assert.equal(cwd, join(vscodeDir, "extensions.data.projects/vscode-custom-patch"));
+      assert.equal(cwd, join(vscodeDir, "local-extensions.data.projects/vscode-custom-patch"));
       assert.equal((await readFile(receipt("linux"), "utf8")).trim(), first);
     }
     return argv.includes("--list-extensions") ? installed : "";

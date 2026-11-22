@@ -20,7 +20,7 @@ it("restores all outputs for unchanged build inputs and keeps two cache generati
   try {
     const dist = join(root, "dist");
     const vscode = join(dist, "vscode");
-    const project = join(vscode, "extensions.data.projects/vscode-custom-patch");
+    const project = join(vscode, "local-extensions.data.projects/vscode-custom-patch");
     const plugin = "plugins/scm-collapse/src/entry.ts";
     const vsix = "vscode-custom-patch-1.0.0.data.vsix";
     const outputNames = [

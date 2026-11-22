@@ -82,20 +82,8 @@ async function main() {
     );
     return;
   }
-  if (target.label === "windows") {
-    await syncExtensions(target);
-    return;
-  }
-  if (target.label === "wsl") await readExtensionEntries(target);
-
-  await installTodoLsp(target);
-  try {
-    await installAgentKit(target);
-  } catch (error) {
-    console.error(`[${target.label}] ${agentKitId}: ${error}`);
-    process.exitCode = 1;
-  }
-  await syncExtensions(target);
+  if (target.label !== "windows") await installLocalExtensions(target);
+  await syncMarketplaceExtensions(target);
 }
 
 export async function selectExtensionTarget(
@@ -150,6 +138,18 @@ async function findServerInDir(dir: string): Promise<string | undefined> {
   if (nodeHeader === "\x7fELF") return server;
 }
 
+async function installLocalExtensions(target: Target) {
+  if (target.label === "wsl") await readExtensionEntries(target);
+
+  await installTodoLsp(target);
+  try {
+    await installAgentKit(target);
+  } catch (error) {
+    console.error(`[${target.label}] ${agentKitId}: ${error}`);
+    process.exitCode = 1;
+  }
+}
+
 async function installTodoLsp(target: Target) {
   const home = process.env.HOME;
   if (home === undefined) throw new Error("HOME: unbound variable");
@@ -190,7 +190,11 @@ async function installAgentKit(target: Target) {
   ) {
     throw new Error("apply hook must run from inside the home root");
   }
-  const project = join(distRoot, vscodeRelativeDir, "extensions.data.projects/vscode-agent-kit");
+  const project = join(
+    distRoot,
+    vscodeRelativeDir,
+    "local-extensions.data.projects/vscode-agent-kit",
+  );
   const manifest = await Bun.file(join(project, "package.json")).json();
   const vsixName = "agent-kit.vsix";
   const contentHash = await hashAgentKitBuildInputs(project, vsixName);
@@ -250,7 +254,7 @@ async function readReceipt(path: string): Promise<string | undefined> {
   }
 }
 
-export async function syncExtensions(target: Target, run: Run = runCommand) {
+export async function syncMarketplaceExtensions(target: Target, run: Run = runCommand) {
   const { label } = target;
   const desired = label === "windows" ? extensionsForWindows : extensionsForLinux;
   const entries = await readExtensionEntries(target, label !== "linux", run);
