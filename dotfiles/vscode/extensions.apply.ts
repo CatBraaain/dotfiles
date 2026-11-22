@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 import { $ } from "bun";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { mkdir, readdir, readFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { mkdir, readdir, readFile, realpath } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, delimiter, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 const extensionsForWindows = ["ms-vscode-remote.remote-wsl", "tomoki1207.pdf"];
 
@@ -55,42 +56,104 @@ const todoLspId = "todo-lsp.todo";
 const agentKitId = "agent-kit.agent-kit";
 const localExtensionIds = [todoLspId, agentKitId, "catbraaain.vscode-custom-patch"];
 
-const home = process.env.HOME;
-if (home === undefined) throw new Error("HOME: unbound variable");
-const todoLspRepo = join(home, "mirrors/github.com/CatBraaain/todo-lsp");
 const todoLspUrl = "https://github.com/CatBraaain/todo-lsp.git";
 const defaultBranch = "main";
 
-type Label = "linux" | "windows";
-
-let linuxExtensionEntries: [string, string][] | undefined;
+type Target = {
+  label: "linux" | "windows" | "wsl";
+  code: string;
+  entries?: [string, string][];
+};
+type Run = (argv: string[], quiet?: boolean) => Promise<string>;
 
 async function main() {
-  if (await hasCommand("code")) {
-    await installTodoLsp();
-    try {
-      await installAgentKit();
-    } catch (error) {
-      console.error(`[linux] ${agentKitId}: ${error}`);
-      process.exitCode = 1;
-    }
-    await syncExtensions("linux");
-  } else {
-    console.error("warn: 'code' not found; skipping linux extensions");
+  const platform = process.platform;
+  const kernel =
+    platform === "linux" ? await readFile("/proc/version", "utf8").catch(() => "") : "";
+  const isWsl =
+    platform === "linux" &&
+    Boolean(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP || /microsoft/i.test(kernel));
+  const target = await selectExtensionTarget(platform, isWsl);
+  if (!target) {
+    console.warn(
+      isWsl
+        ? "[wsl] Could not select a VS Code Server CLI; skipping"
+        : "VS Code CLI not found; skipping",
+    );
+    return;
   }
+  if (target.label === "windows") {
+    await syncExtensions(target);
+    return;
+  }
+  if (target.label === "wsl") await readExtensionEntries(target);
 
-  let isWsl = false;
+  await installTodoLsp(target);
   try {
-    isWsl = /microsoft/i.test(readFileSync("/proc/version", "utf8"));
-  } catch {
-    // Missing or unreadable /proc/version does not indicate WSL.
+    await installAgentKit(target);
+  } catch (error) {
+    console.error(`[${target.label}] ${agentKitId}: ${error}`);
+    process.exitCode = 1;
   }
-  if (isWsl && (await hasCommand("powershell.exe"))) {
-    await syncExtensions("windows");
-  }
+  await syncExtensions(target);
 }
 
-async function installTodoLsp() {
+export async function selectExtensionTarget(
+  platform: NodeJS.Platform,
+  isWsl: boolean,
+  path = process.env.PATH ?? "",
+  serverHome = process.env.VSCODE_AGENT_FOLDER || join(homedir(), ".vscode-server"),
+): Promise<Target | undefined> {
+  if (platform !== "linux" && platform !== "win32") return;
+  if (platform === "linux" && isWsl) {
+    const code = await findWslServerCli(path, serverHome);
+    if (code) return { label: "wsl", code };
+    return;
+  }
+  const code = Bun.which("code", { PATH: path });
+  if (code) return { label: platform === "win32" ? "windows" : "linux", code };
+}
+
+async function findWslServerCli(path: string, serverHome: string): Promise<string | undefined> {
+  for (const dir of path.split(delimiter)) {
+    if (!dir) continue;
+    const candidate = Bun.which("code", { PATH: dir });
+    if (!candidate) continue;
+    const cliDir = dirname(await realpath(candidate).catch(() => ""));
+    if (basename(cliDir) !== "remote-cli") continue;
+    const server = await findServerInDir(dirname(cliDir));
+    if (server) return server;
+  }
+
+  const root = await realpath(serverHome).catch(() => "");
+  if (!root) return;
+  let server: string | undefined;
+  for (const pattern of ["bin/*/bin/code-server", "cli/servers/Stable-*/server/bin/code-server"]) {
+    const glob = new Bun.Glob(pattern);
+    for await (const candidate of glob.scan({ cwd: root, absolute: true })) {
+      const confirmed = await findServerInDir(dirname(candidate));
+      if (!confirmed) continue;
+      if (server) return;
+      server = confirmed;
+    }
+  }
+  return server;
+}
+
+async function findServerInDir(dir: string): Promise<string | undefined> {
+  const server = Bun.which("code-server", { PATH: dir });
+  if (!server || (await realpath(server).catch(() => "")) !== join(dir, "code-server")) return;
+  const nodeHeader = await Bun.file(join(dir, "..", "node"))
+    .slice(0, 4)
+    .text()
+    .catch(() => "");
+  if (nodeHeader === "\x7fELF") return server;
+}
+
+async function installTodoLsp(target: Target) {
+  const home = process.env.HOME;
+  if (home === undefined) throw new Error("HOME: unbound variable");
+  const todoLspRepo = join(home, "mirrors/github.com/CatBraaain/todo-lsp");
   if (isDirectory(join(todoLspRepo, ".git"))) {
     const localHead = (await $`git -C ${todoLspRepo} rev-parse HEAD`.text()).trimEnd();
     const remoteHead = (
@@ -99,7 +162,8 @@ async function installTodoLsp() {
     if (remoteHead && localHead === remoteHead) {
       const trackedChanges =
         await $`git -C ${todoLspRepo} status --porcelain --untracked-files=no`.text();
-      if (!trackedChanges && (await isExtensionInstalled("linux", todoLspId))) return;
+      if (!trackedChanges && (await readExtensionEntries(target)).some(([id]) => id === todoLspId))
+        return;
     }
   }
 
@@ -112,10 +176,10 @@ async function installTodoLsp() {
   rmSync(vsixPath, { force: true });
   await $`bun install --frozen-lockfile 1>&2`.cwd(todoLspRepo);
   await $`just package 1>&2`.cwd(todoLspRepo);
-  await installVsix(vsixPath);
+  await installVsix(target, vsixPath);
 }
 
-async function installAgentKit() {
+async function installAgentKit(target: Target) {
   const { DOTFILES_HOME_ROOT: homeRoot, DOTFILES_DIST_DIR: distRoot } = process.env;
   if (!homeRoot || !distRoot) throw new Error("apply hook paths are not set");
   const vscodeRelativeDir = relative(homeRoot, import.meta.dir);
@@ -131,7 +195,7 @@ async function installAgentKit() {
   const vsixName = "agent-kit.vsix";
   const contentHash = await hashAgentKitBuildInputs(project, vsixName);
   const receipt = join(homeRoot, ".cache/dotfiles/vscode-extensions/linux", `${agentKitId}.sha256`);
-  const installed = (await readExtensionEntries("linux", { requireSuccess: true })).some(
+  const installed = (await readExtensionEntries(target, true)).some(
     ([id, version]) => id === agentKitId && version === manifest.version,
   );
   if (installed && (await readReceipt(receipt)) === contentHash) return;
@@ -143,7 +207,7 @@ async function installAgentKit() {
   await $`bunx @vscode/vsce package --allow-missing-repository --skip-license --no-dependencies --out ${vsixPath} 1>&2`.cwd(
     project,
   );
-  await installVsix(vsixPath);
+  await installVsix(target, vsixPath);
   await mkdir(dirname(receipt), { recursive: true });
   await Bun.write(receipt, `${contentHash}\n`);
 }
@@ -186,9 +250,11 @@ async function readReceipt(path: string): Promise<string | undefined> {
   }
 }
 
-async function syncExtensions(label: Label) {
-  const desired = label === "linux" ? extensionsForLinux : extensionsForWindows;
-  const installed = await installedExtensionIds(label);
+export async function syncExtensions(target: Target, run: Run = runCommand) {
+  const { label } = target;
+  const desired = label === "windows" ? extensionsForWindows : extensionsForLinux;
+  const entries = await readExtensionEntries(target, label !== "linux", run);
+  const installed = entries.map(([id]) => id);
   const marketplace = (extensions: string[]) =>
     [...new Set(extensions.filter((extension) => !localExtensionIds.includes(extension)))].sort();
   const installedMarketplace = marketplace(installed);
@@ -197,13 +263,13 @@ async function syncExtensions(label: Label) {
   for (const extension of desiredMarketplace) {
     if (!installedMarketplace.includes(extension)) {
       console.log(`[${label}] install  ${extension}`);
-      await runCode(label, ["--install-extension", extension]);
+      await runCode(target, ["--install-extension", extension], run);
     }
   }
   for (const extension of installedMarketplace) {
     if (!desiredMarketplace.includes(extension)) {
       console.log(`[${label}] uninstall ${extension}`);
-      await runCode(label, ["--uninstall-extension", extension]);
+      await runCode(target, ["--uninstall-extension", extension], run);
     }
   }
 }
@@ -219,66 +285,51 @@ async function ensureRepo(url: string, repo: string) {
   }
 }
 
-async function installVsix(vsixPath: string) {
+async function installVsix(target: Target, vsixPath: string) {
   if (!isFile(vsixPath)) throw new Error(`error: VSIX was not created: ${vsixPath}`);
-  console.log(`[linux] install ${vsixPath}`);
-  await runCode("linux", ["--install-extension", vsixPath, "--force"]);
+  console.log(`[${target.label}] install ${vsixPath}`);
+  await runCode(target, ["--install-extension", vsixPath, "--force"], runCommand);
 }
 
-const extensionIdPattern = /^([a-z0-9-]+\.[a-z0-9-]+)@/;
+const extensionIdPattern = /^([a-z0-9-]+\.[a-z0-9-]+)@/i;
 
 async function readExtensionEntries(
-  label: Label,
-  options?: { requireSuccess: boolean },
+  target: Target,
+  requireSuccess = target.label !== "linux",
+  run: Run = runCommand,
 ): Promise<[string, string][]> {
-  if (label === "linux" && linuxExtensionEntries !== undefined) return linuxExtensionEntries;
-  const codeCommand = codeExecutable(label);
-  const { stdout, stderr, exitCode } = await $`${codeCommand} --list-extensions --show-versions`
-    .quiet()
-    .nothrow();
-  if (exitCode !== 0) {
-    if (options?.requireSuccess) {
-      throw new Error(
-        `could not list ${label} extensions (exit ${exitCode}): ${stderr.toString().trim()}`,
-      );
-    }
-    return [];
+  if (target.entries !== undefined) return target.entries;
+  const argv = [target.code, "--list-extensions", "--show-versions"];
+  let listing: string;
+  try {
+    listing = await run(argv, true);
+  } catch (error) {
+    if (!requireSuccess) return [];
+    throw new Error(`could not list ${target.label} extensions: ${error}`, { cause: error });
   }
-  const entries = stdout
-    .toString()
-    .replace(/\r/g, "")
-    .split("\n")
+  const entries = listing
+    .split(/\r?\n/)
     .filter((line) => extensionIdPattern.test(line))
     .map((line): [string, string] => {
       const at = line.indexOf("@");
-      return [line.slice(0, at), line.slice(at + 1)];
+      return [line.slice(0, at).toLowerCase(), line.slice(at + 1)];
     });
-  if (label === "linux") linuxExtensionEntries = entries;
+  target.entries = entries;
   return entries;
 }
 
-async function installedExtensionIds(label: Label): Promise<string[]> {
-  const entries = await readExtensionEntries(label);
-  return entries.map(([id]) => id);
+async function runCode(target: Target, args: string[], run: Run) {
+  await run([target.code, ...args]);
+  delete target.entries;
 }
 
-async function isExtensionInstalled(label: Label, extension: string): Promise<boolean> {
-  const entries = await readExtensionEntries(label);
-  return entries.some(([id]) => id === extension);
-}
-
-async function runCode(label: Label, args: string[]) {
-  const codeCommand = codeExecutable(label);
-  await $`${codeCommand} ${args}`;
-  if (label === "linux") linuxExtensionEntries = undefined;
-}
-
-async function hasCommand(command: string) {
-  return (await $`which ${command}`.quiet().nothrow()).exitCode === 0;
-}
-
-function codeExecutable(label: Label) {
-  return label === "linux" ? ["code"] : ["powershell.exe", "-NoProfile", "-Command", "code"];
+async function runCommand(argv: string[], quiet = false): Promise<string> {
+  const command = $`${argv}`.nothrow();
+  if (quiet) command.quiet();
+  const { exitCode, stdout, stderr } = await command;
+  if (exitCode !== 0)
+    throw new Error(`${argv[0]} exited with code ${exitCode}: ${stderr.toString().trim()}`);
+  return stdout.toString();
 }
 
 function isDirectory(path: string) {
@@ -297,4 +348,4 @@ function isFile(path: string) {
   }
 }
 
-await main();
+if (import.meta.main) await main();

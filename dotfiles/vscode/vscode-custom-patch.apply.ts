@@ -1,14 +1,23 @@
 import { $ } from "bun";
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { delimiter, dirname, isAbsolute, join, relative, sep, win32 } from "node:path";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { basename, delimiter, dirname, isAbsolute, join, relative, sep, win32 } from "node:path";
 
 const extensionId = "catbraaain.vscode-custom-patch";
 const vsixPattern = /^vscode-custom-patch-(\d+\.\d+\.\d+)\.data\.vsix$/;
 const windowsCodeNotFound = "VS Code CLI not found; skipping";
 const shellIntegrationPathSuffix =
   "\\vs\\workbench\\contrib\\terminal\\common\\scripts\\shellIntegration.ps1";
-type WindowsTarget = { platform: "windows"; powershell: string; viaWsl: boolean };
-type Target = { platform: "linux"; code: string } | WindowsTarget;
+type WindowsTarget = { platform: "windows"; powershell: string };
+type Target = { platform: "linux"; codeCommand: string[] } | WindowsTarget;
 type Run = (argv: string[], cwd?: string) => Promise<string>;
 
 async function main(): Promise<void> {
@@ -24,52 +33,52 @@ async function main(): Promise<void> {
   ) {
     throw new Error("apply hook must run from inside the home root");
   }
-  await applyCustomPatch(join(distRoot, homeRelativeDir), homeRoot, await localTargets());
+  const kernel =
+    process.platform === "linux" ? await readFile("/proc/version", "utf8").catch(() => "") : "";
+  const isWsl =
+    process.platform === "linux" &&
+    Boolean(process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP || /microsoft/i.test(kernel));
+  const target = await selectPatchTarget(process.platform, isWsl);
+  if (target) await applyCustomPatch(join(distRoot, homeRelativeDir), homeRoot, target);
 }
 
-async function localTargets(): Promise<Target[]> {
-  if (process.platform === "win32") {
-    return [{ platform: "windows", powershell: "powershell.exe", viaWsl: false }];
-  }
-
-  const kernel = await readFile("/proc/version", "utf8").catch(() => "");
-  const isWsl = /microsoft/i.test(kernel);
-  const targets: Target[] = [];
-  const code = isWsl ? await findWslLinuxDesktopCli() : Bun.which("code");
-  if (code) targets.push({ platform: "linux", code });
-  if (isWsl) {
-    const powershell = await wslPowerShell();
-    if (powershell) targets.push({ platform: "windows", powershell, viaWsl: true });
-    else console.warn("[windows] PowerShell not found; skipping VS Code patch");
-  }
-  return targets;
+export async function selectPatchTarget(
+  platform: NodeJS.Platform,
+  isWsl: boolean,
+  path = process.env.PATH ?? "",
+): Promise<Target | undefined> {
+  if (platform === "win32") return { platform: "windows", powershell: "powershell.exe" };
+  if (platform !== "linux") return;
+  const code = isWsl ? await findWslLinuxDesktopCli(path) : Bun.which("code", { PATH: path });
+  if (!code) return;
+  const codeCommand = isWsl ? ["env", "-u", "VSCODE_IPC_HOOK_CLI", code] : [code];
+  return { platform: "linux", codeCommand };
 }
 
-async function findWslLinuxDesktopCli(): Promise<string | undefined> {
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+async function findWslLinuxDesktopCli(path: string): Promise<string | undefined> {
+  for (const dir of path.split(delimiter)) {
     if (!dir) continue;
     const candidate = Bun.which("code", { PATH: dir });
-    if (!candidate || candidate.split(sep).includes("remote-cli")) continue;
-    if (!(await Bun.file(join(dirname(candidate), "..", "Code.exe")).exists())) return candidate;
+    if (!candidate) continue;
+    const launcher =
+      candidate === "/snap/bin/code" ? "/snap/code/current/usr/share/code/bin/code" : candidate;
+    const code = await realpath(launcher).catch(() => "");
+    const binDir = dirname(code);
+    if (basename(code) !== "code" || basename(binDir) !== "bin") continue;
+    const appHeader = await Bun.file(join(binDir, "..", "code"))
+      .slice(0, 4)
+      .text()
+      .catch(() => "");
+    if (appHeader === "\x7fELF") return candidate;
   }
-}
-
-async function wslPowerShell(): Promise<string | undefined> {
-  const fromPath = Bun.which("powershell.exe");
-  if (fromPath) return fromPath;
-  const defaultWindowsPath = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
-  const translatedPath = await runCommand(["wslpath", "-u", defaultWindowsPath]).catch(() => "");
-  const mountedPath = translatedPath.trimEnd();
-  if (mountedPath && (await Bun.file(mountedPath).exists())) return mountedPath;
 }
 
 export async function applyCustomPatch(
   vscodeDir: string,
   homeRoot: string,
-  targets: Target[],
+  target: Target,
   run: Run = runCommand,
 ): Promise<void> {
-  if (targets.length === 0) return;
   const packages = (await readdir(vscodeDir)).filter((name) => vsixPattern.test(name));
   const [fileName] = packages;
   if (!fileName || packages.length !== 1) {
@@ -83,38 +92,30 @@ export async function applyCustomPatch(
   if (!/^[a-f0-9]{64}$/.test(contentHash))
     throw new Error(`invalid VSIX content hash: ${vsixPath}`);
 
-  const results = await Promise.allSettled(
-    targets.map(async (target) => {
-      const receipt = join(
-        homeRoot,
-        ".cache/dotfiles/vscode-extensions",
-        target.platform,
-        `${extensionId}.sha256`,
-      );
-      const extensions = await listExtensions(target, run);
-      if (extensions.trim() === windowsCodeNotFound) {
-        console.warn(`[windows] ${windowsCodeNotFound}`);
-        return;
-      }
-      const installed = extensions
-        .split(/\r?\n/)
-        .some((entry) => entry.trim().toLowerCase() === `${extensionId}@${version}`);
-      if (!installed || (await readReceipt(receipt)) !== contentHash) {
-        await installExtension(target, vsixPath, run);
-        await writeReceipt(receipt, contentHash);
-      }
-      await inject(target, vscodeDir, run);
-    }),
+  const receipt = join(
+    homeRoot,
+    ".cache/dotfiles/vscode-extensions",
+    target.platform,
+    `${extensionId}.sha256`,
   );
-  const failures = results.flatMap((result, index) =>
-    result.status === "rejected" ? [`[${targets[index]?.platform}] ${result.reason}`] : [],
-  );
-  if (failures.length > 0) throw new Error(failures.join("\n"));
+  const extensions = await listExtensions(target, run);
+  if (extensions.trim() === windowsCodeNotFound) {
+    console.warn(`[windows] ${windowsCodeNotFound}`);
+    return;
+  }
+  const installed = extensions
+    .split(/\r?\n/)
+    .some((entry) => entry.trim().toLowerCase() === `${extensionId}@${version}`);
+  if (!installed || (await readReceipt(receipt)) !== contentHash) {
+    await installExtension(target, vsixPath, run);
+    await writeReceipt(receipt, contentHash);
+  }
+  await inject(target, vscodeDir, run);
 }
 
 function listExtensions(target: Target, run: Run): Promise<string> {
   if (target.platform === "linux")
-    return run([target.code, "--list-extensions", "--show-versions"]);
+    return run([...target.codeCommand, "--list-extensions", "--show-versions"]);
   return runWindows(
     target,
     `if (!(Get-Command code -ErrorAction SilentlyContinue)) { '${windowsCodeNotFound}'; exit 0 }; code --list-extensions --show-versions`,
@@ -126,12 +127,8 @@ async function installExtension(target: Target, vsixPath: string, run: Run): Pro
   console.log(`[${target.platform}] install ${vsixPath}`);
   const output =
     target.platform === "linux"
-      ? await run([target.code, "--install-extension", vsixPath, "--force"])
-      : await runWindows(
-          target,
-          windowsInstallCommand(await windowsPathLiteral(target, vsixPath, run)),
-          run,
-        );
+      ? await run([...target.codeCommand, "--install-extension", vsixPath, "--force"])
+      : await runWindows(target, windowsInstallCommand(powerShellLiteral(vsixPath)), run);
   if (output.length > 0) process.stdout.write(output);
 }
 
@@ -148,13 +145,7 @@ async function inject(target: Target, vscodeDir: string, run: Run): Promise<void
   const cliPath = join(vscodeDir, "vscode-custom-patch", "cli.js");
   try {
     const appOut = await locateWindowsAppOut(target, run);
-    const output = target.viaWsl
-      ? await runWindows(
-          target,
-          `node.exe -- ${await windowsPathLiteral(target, cliPath, run)} ensure --app-out ${powerShellLiteral(appOut)}`,
-          run,
-        )
-      : await run([process.execPath, cliPath, "ensure", "--app-out", appOut]);
+    const output = await run([process.execPath, cliPath, "ensure", "--app-out", appOut]);
     if (output.length > 0) process.stdout.write(output);
   } catch (error) {
     console.warn(
@@ -177,12 +168,6 @@ async function locateWindowsAppOut(target: WindowsTarget, run: Run): Promise<str
     throw new Error("could not locate the VS Code app output directory");
   }
   return appOut;
-}
-
-async function windowsPathLiteral(target: WindowsTarget, path: string, run: Run): Promise<string> {
-  const windowsPath = target.viaWsl ? (await run(["wslpath", "-w", path])).trimEnd() : path;
-  if (!windowsPath) throw new Error(`could not resolve Windows path for ${path}`);
-  return powerShellLiteral(windowsPath);
 }
 
 function powerShellLiteral(path: string): string {

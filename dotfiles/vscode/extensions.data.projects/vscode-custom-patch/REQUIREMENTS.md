@@ -8,7 +8,7 @@
 
 ## 目的
 
-同梱する `scm-collapse` を VS Code の workbench.html に注入する。WSL と Windows ネイティブのどちらから apply しても、Windows 版には次の起動またはリロードまでに注入する。Linux デスクトップ版も apply 時に注入する。内容を変えずに apply したときは、パッケージの再ビルドと拡張の再インストールを省く。
+同梱する `scm-collapse` を VS Code の workbench.html に注入する。Windows 版は Windows ネイティブの apply で、Linux デスクトップ版は Linux の apply で注入する。内容を変えずに apply したときは、パッケージの再ビルドと拡張の再インストールを省く。
 
 ## 構成
 
@@ -39,7 +39,8 @@
 
 ## 受け入れ条件
 
-- Linux デスクトップ版と Windows 版は、apply 時に注入できた場合、最初の起動またはリロードで同梱スクリプトが有効になり、パッチによる再リロード通知が出ない
+- Linux デスクトップ版と Windows 版は、それぞれの OS の apply で注入できた場合、最初の起動またはリロードで同梱スクリプトが有効になり、パッチによる再リロード通知が出ない
+- WSL の apply は Windows 版に対して VSIX の同期も注入も実行しない
 - VS Code を更新して起動すると、通知の再起動によりパッチが復活する
 - 変更なしの apply は再ビルド・再インストールなしで完了する。インストールに失敗した更新は次回再試行する
 - `node vscode-custom-patch/cli.js remove` で、現在の workbench HTML からパッチが外れる

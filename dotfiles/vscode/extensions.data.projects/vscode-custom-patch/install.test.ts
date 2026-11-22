@@ -1,17 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, it, spyOn } from "bun:test";
-import { applyCustomPatch } from "../../vscode-custom-patch.apply.ts";
+import { applyCustomPatch, selectPatchTarget } from "../../vscode-custom-patch.apply.ts";
 import { buildProject } from "./scripts/build.ts";
 
 const first = "a".repeat(64);
 const second = "b".repeat(64);
 const installed = "catbraaain.vscode-custom-patch@1.0.0";
-const linux = { platform: "linux", code: "code" } as const;
-const windows = { platform: "windows", powershell: "powershell.exe", viaWsl: false } as const;
-const wslWindows = { ...windows, viaWsl: true } as const;
+const linux = { platform: "linux" as const, codeCommand: ["code"] };
+const windows = { platform: "windows", powershell: "powershell.exe" } as const;
 const activeAppOut = "C:\\Program Files\\VS Code\\O’Brien\\8a14f0cc1b\\resources\\app\\out";
 const locateApp = "code --locate-shell-integration-path pwsh";
 const shellIntegrationPath = `${activeAppOut}\\vs\\workbench\\contrib\\terminal\\common\\scripts\\shellIntegration.ps1`;
@@ -43,7 +42,7 @@ function receipt(target: "linux" | "windows") {
 
 it("installs a same-version VSIX on first apply and injects only after installation succeeds", async () => {
   const calls: string[][] = [];
-  await applyCustomPatch(vscodeDir, root, [linux], async (argv, cwd) => {
+  await applyCustomPatch(vscodeDir, root, linux, async (argv, cwd) => {
     calls.push(argv);
     if (argv.includes("inject")) {
       assert.equal(cwd, join(vscodeDir, "extensions.data.projects/vscode-custom-patch"));
@@ -59,15 +58,15 @@ it("installs a same-version VSIX on first apply and injects only after installat
 });
 
 it("skips only the VSIX installation on a content hit, and reinstalls if absent", async () => {
-  await applyCustomPatch(vscodeDir, root, [linux], async () => "");
+  await applyCustomPatch(vscodeDir, root, linux, async () => "");
   const calls: string[] = [];
-  await applyCustomPatch(vscodeDir, root, [linux], async (argv) => {
+  await applyCustomPatch(vscodeDir, root, linux, async (argv) => {
     calls.push(argv[1]!);
     return argv.includes("--list-extensions") ? installed : "";
   });
   assert.deepEqual(calls, ["--list-extensions", "run"]);
   calls.length = 0;
-  await applyCustomPatch(vscodeDir, root, [linux], async (argv) => {
+  await applyCustomPatch(vscodeDir, root, linux, async (argv) => {
     calls.push(argv[1]!);
     return "";
   });
@@ -75,10 +74,10 @@ it("skips only the VSIX installation on a content hit, and reinstalls if absent"
 });
 
 it("skips injection on a failed same-version update, then retries it before injecting", async () => {
-  await applyCustomPatch(vscodeDir, root, [linux], async () => "");
+  await applyCustomPatch(vscodeDir, root, linux, async () => "");
   await writeFile(vsix + ".sha256", second);
   await assert.rejects(
-    applyCustomPatch(vscodeDir, root, [linux], async (argv) => {
+    applyCustomPatch(vscodeDir, root, linux, async (argv) => {
       if (argv.includes("--install-extension")) throw new Error("install failed");
       if (argv.includes("inject")) assert.fail("injection must not run");
       return installed;
@@ -87,7 +86,7 @@ it("skips injection on a failed same-version update, then retries it before inje
   );
   assert.equal((await readFile(receipt("linux"), "utf8")).trim(), first);
   const calls: string[] = [];
-  await applyCustomPatch(vscodeDir, root, [linux], async (argv) => {
+  await applyCustomPatch(vscodeDir, root, linux, async (argv) => {
     calls.push(argv[1]!);
     return argv.includes("--list-extensions") ? installed : "";
   });
@@ -95,48 +94,53 @@ it("skips injection on a failed same-version update, then retries it before inje
   assert.equal((await readFile(receipt("linux"), "utf8")).trim(), second);
 });
 
-it("installs and injects on Windows from WSL even when the Linux receipt matches", async () => {
-  await applyCustomPatch(vscodeDir, root, [linux], async () => "");
-  const windowsDir = "\\\\wsl.localhost\\Ubuntu\\dot files %TEMP% & notes\\O'Brien";
-  const convertedPaths: string[][] = [];
-  const commands: string[] = [];
-  await applyCustomPatch(vscodeDir, root, [wslWindows], async (argv) => {
-    if (argv[0] === "wslpath") {
-      convertedPaths.push(argv);
-      return argv[2] === vsix ? `${windowsDir}\\patch.vsix\n` : `${windowsDir}\\cli.js\n`;
-    }
-    const command = windowsCommand(argv);
-    commands.push(command);
-    if (command === locateApp) return `${shellIntegrationPath}\r\n`;
-    return command.includes("--list-extensions") ? installed : "";
-  });
-  assert.deepEqual(convertedPaths, [
-    ["wslpath", "-w", vsix],
-    ["wslpath", "-w", join(vscodeDir, "vscode-custom-patch", "cli.js")],
-  ]);
-  assert.equal(commands.length, 4);
-  assert.match(commands[0]!, /code --list-extensions --show-versions$/);
-  assert.ok(
-    commands[1]!.includes(
-      "$env:DOTFILES_VSCODE_VSIX = '\\\\wsl.localhost\\Ubuntu\\dot files %TEMP% & notes\\O''Brien\\patch.vsix'",
-    ),
-  );
-  assert.ok(
-    commands[1]!.includes(
-      '/d /v:off /s /c \'""%DOTFILES_VSCODE_CODE%" --install-extension "%DOTFILES_VSCODE_VSIX%" --force"\'',
-    ),
-  );
-  assert.equal(commands[2], locateApp);
-  assert.equal(
-    commands[3],
-    "node.exe -- '\\\\wsl.localhost\\Ubuntu\\dot files %TEMP% & notes\\O''Brien\\cli.js' ensure --app-out 'C:\\Program Files\\VS Code\\O’’Brien\\8a14f0cc1b\\resources\\app\\out'",
-  );
-  assert.equal((await readFile(receipt("windows"), "utf8")).trim(), first);
-});
+it.skipIf(process.platform !== "linux")(
+  "never selects the Windows launcher or remote CLI for a WSL patch",
+  async () => {
+    const windowsBin = join(root, "windows", "bin");
+    const remoteBin = join(root, "server", "bin", "remote-cli");
+    const aliases = join(root, "aliases");
+    const wrappers = join(root, "wrapper", "bin");
+    for (const bin of [windowsBin, remoteBin, aliases, wrappers])
+      await mkdir(bin, { recursive: true });
+    await writeFile(join(windowsBin, "code"), "#!/bin/sh\n", { mode: 0o755 });
+    await writeFile(join(windowsBin, "..", "Code.exe"), "");
+    await symlink(join(windowsBin, "code"), join(aliases, "code"));
+    await writeFile(join(remoteBin, "code"), "#!/bin/sh\n", { mode: 0o755 });
+    await writeFile(
+      join(wrappers, "code"),
+      `#!/bin/sh\nexec "${join(windowsBin, "code")}" "$@"\n`,
+      { mode: 0o755 },
+    );
+    const path = [aliases, windowsBin, remoteBin, wrappers].join(delimiter);
 
-it("installs and injects from native Windows without WSL path conversion", async () => {
+    assert.equal(await selectPatchTarget("linux", true, path), undefined);
+    assert.deepEqual(await selectPatchTarget("win32", false, path), windows);
+
+    const desktopBin = join(root, "linux", "bin");
+    await mkdir(desktopBin, { recursive: true });
+    const desktopCode = join(desktopBin, "code");
+    await writeFile(desktopCode, "#!/bin/sh\n", { mode: 0o755 });
+    await writeFile(join(desktopBin, "..", "code"), "\x7fELF");
+    const target = await selectPatchTarget("linux", true, [path, desktopBin].join(delimiter));
+    assert.ok(target);
+    const calls: string[][] = [];
+    await applyCustomPatch(vscodeDir, root, target, async (argv) => {
+      calls.push(argv);
+      return "";
+    });
+    const command = ["env", "-u", "VSCODE_IPC_HOOK_CLI", desktopCode];
+    assert.deepEqual(calls, [
+      [...command, "--list-extensions", "--show-versions"],
+      [...command, "--install-extension", vsix, "--force"],
+      [process.execPath, "run", "inject", join(vscodeDir, "scm-collapse.data.js")],
+    ]);
+  },
+);
+
+it("installs and injects from native Windows", async () => {
   const calls: string[][] = [];
-  await applyCustomPatch(vscodeDir, root, [windows], async (argv) => {
+  await applyCustomPatch(vscodeDir, root, windows, async (argv) => {
     calls.push(argv);
     return argv[0] === windows.powershell && windowsCommand(argv) === locateApp
       ? shellIntegrationPath
@@ -156,13 +160,13 @@ it("installs and injects from native Windows without WSL path conversion", async
 });
 
 it("still injects on Windows when the installed VSIX already matches", async () => {
-  await applyCustomPatch(vscodeDir, root, [windows], async (argv) =>
+  await applyCustomPatch(vscodeDir, root, windows, async (argv) =>
     argv[0] === windows.powershell && windowsCommand(argv) === locateApp
       ? shellIntegrationPath
       : "",
   );
   const calls: string[][] = [];
-  await applyCustomPatch(vscodeDir, root, [windows], async (argv) => {
+  await applyCustomPatch(vscodeDir, root, windows, async (argv) => {
     calls.push(argv);
     if (argv[0] !== windows.powershell) return "";
     return windowsCommand(argv) === locateApp ? shellIntegrationPath : installed;
@@ -182,7 +186,7 @@ it("still injects on Windows when the installed VSIX already matches", async () 
 it("warns and leaves startup to retry when Windows injection fails", async () => {
   const warning = spyOn(console, "warn").mockImplementation(() => {});
   try {
-    await applyCustomPatch(vscodeDir, root, [windows], async (argv) => {
+    await applyCustomPatch(vscodeDir, root, windows, async (argv) => {
       if (argv[0] === process.execPath) throw new Error("not writable");
       return windowsCommand(argv) === locateApp ? shellIntegrationPath : "";
     });
@@ -197,7 +201,7 @@ it("skips Windows injection when code does not identify an app output directory"
   const warning = spyOn(console, "warn").mockImplementation(() => {});
   const calls: string[][] = [];
   try {
-    await applyCustomPatch(vscodeDir, root, [windows], async (argv) => {
+    await applyCustomPatch(vscodeDir, root, windows, async (argv) => {
       calls.push(argv);
       return windowsCommand(argv) === locateApp ? shellIntegrationPath.slice(2) : "";
     });
