@@ -26,6 +26,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 - camoufox server は `browse` 自身の内部サーバーモード（`browse __server <ポート番号>`。usage には出ない）として起動し、machine の shutdown かプロセスの kill まで動き続ける。server が未接続のときは `browse server start` をバックグラウンド起動し、websocket接続（1接続1秒上限）で healthy を判定し、250ms間隔で再プローブして15秒で断念する
 - camoufox server と `browse server start` のログは `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/` 配下の `camoufox-server.log` へ、Xvfb と x11vnc の出力は同じディレクトリの `xvfb.log`・`x11vnc.log` へ追記する
 - camoufox server は起動引数に待受ポート番号を持つ。`CAMOUFOX_BASE_URL` のポートを使い、省略時は `ws:` が80、`wss:` が443とする。ポート0は拒否する。PID ファイルの読み書きは行わない。新規起動の判定・停止・再起動・自動復旧では、同じ OS 上で同じユーザー・同じ実行ファイル・同じポート番号のローカルサーバーを探す。ホストやパスが異なっても、同じポート番号で複数台を管理することはできない。Windows は PowerShell のプロセス情報、Linux は `pgrep` と `/proc` を使う
+- Windows の camoufox server は、選択したインストール先の `version.json` から対応バージョンを確認し、実行ファイルが存在することを確認してから起動する。メタデータや実行ファイルが欠落している場合、またはバージョンが未対応の場合は、理由をサーバーログに出して異常終了する。Camoufox 本体の自動ダウンロードやインストール先の削除は行わない。
 - Windows では、PATH 上の `playwright-cli.cmd` と同じ npm インストール先にある `@playwright/cli` を Node.js で直接起動する。Windows 以外では PATH 上の `playwright-cli` を起動する。
 - playwright-cli のブラウザは firefox で、remote endpoint に camoufox を使う。セッションキーは検索が `web-search-<n>`、フェッチが `web-fetch-<n>`、server の機能ヘルスチェックが `web-health-<n>`（`<n>` は renderスロット番号。`flock(1)` が無い環境ではプロセスの PID）で、同時に走るrender と機能ヘルスチェックが同じセッションを共有しない。各実行の冒頭と終了時にセッションを閉じる
 - server の機能ヘルスチェックは、websocket接続と、ローカルHTTP（127.0.0.1）へのページopen の完了で判定する。ページopen がタイムアウトまでに完了しなければ応答不能とする（websocket応答だけでは、ページopen は成功するが HTTPナビゲーションが一切完了しないbrowser のハングを検知できない）
@@ -182,7 +183,8 @@ server の実行環境は環境変数で上書きできる:
 
 | 変数 | 上書き対象 | 未指定時の解決 |
 | --- | --- | --- |
-| `CAMOUFOX_EXECUTABLE_PATH` | camoufoxブラウザの実行ファイル | Windows: `%LOCALAPPDATA%\Programs\Camoufox\camoufox.exe`。Windows 以外: `~/.cache/camoufox/camoufox-bin` |
+| `CAMOUFOX_INSTALL_DIR` | Windows で使う camoufox のインストール先 | 未設定・空の場合は `%LOCALAPPDATA%\Programs\Camoufox`。`LOCALAPPDATA` が未設定なら `~/AppData/Local/Programs/Camoufox` |
+| `CAMOUFOX_EXECUTABLE_PATH` | camoufoxブラウザの実行ファイル | Windows: 選択したインストール先の `camoufox.exe`。Windows 以外: `~/.cache/camoufox/camoufox-bin` |
 | `CAMOUFOX_PLAYWRIGHT_CORE` | server が使うplaywright-core | browse が起動する playwright-cli と同じパッケージから解決した playwright-core |
 
 fingerprint生成に使うcamoufox-js は、`~/.pi/agent` 配下から解決する。

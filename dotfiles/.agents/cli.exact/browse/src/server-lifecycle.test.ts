@@ -1,8 +1,8 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 interface Report {
   events: any[][];
@@ -11,6 +11,7 @@ interface Report {
   now: number;
   probes: number;
   pid: number;
+  root: string;
 }
 
 function runServer(
@@ -27,8 +28,36 @@ function runServer(
       CAMOUFOX_HEADLESS: "1",
       CAMOUFOX_BASE_URL: "ws://127.0.0.1:9378/camoufox",
     };
-    for (const name of ["CAMOUFOX_EXECUTABLE_PATH", "CAMOUFOX_PLAYWRIGHT_CORE", "XDG_RUNTIME_DIR"])
+    for (const name of [
+      "CAMOUFOX_INSTALL_DIR",
+      "CAMOUFOX_EXECUTABLE_PATH",
+      "CAMOUFOX_PLAYWRIGHT_CORE",
+      "XDG_RUNTIME_DIR",
+    ])
       delete childEnv[name];
+    const usesWindowsInstall =
+      scenario.startsWith("windows-internal") ||
+      (process.platform === "win32" && scenario.startsWith("internal"));
+    if (usesWindowsInstall) {
+      const defaultInstallDir = join(childEnv.LOCALAPPDATA!, "Programs", "Camoufox");
+      const installDir = resolve(root, env.CAMOUFOX_INSTALL_DIR || defaultInstallDir);
+      mkdirSync(installDir, { recursive: true });
+      if (scenario !== "windows-internal-no-metadata") {
+        const release = scenario === "windows-internal-unsupported" ? "1" : "beta.24";
+        writeFileSync(
+          join(installDir, "version.json"),
+          JSON.stringify({ release, version: "135.0" }),
+        );
+      }
+      if (scenario !== "windows-internal-no-executable") {
+        const executable = resolve(
+          root,
+          env.CAMOUFOX_EXECUTABLE_PATH ?? join(installDir, "camoufox.exe"),
+        );
+        mkdirSync(dirname(executable), { recursive: true });
+        writeFileSync(executable, "");
+      }
+    }
     const runtimeHome = join(root, "runtime-dir");
     if (runtimeDir === "absolute") childEnv.XDG_RUNTIME_DIR = runtimeHome;
     if (runtimeDir === "relative") childEnv.XDG_RUNTIME_DIR = "relative-runtime-dir";
@@ -43,7 +72,7 @@ function runServer(
     );
     assert.equal(child.exitCode, 0, child.stderr.toString());
     const lastLine = child.stdout.toString().trim().split("\n").at(-1)!;
-    return JSON.parse(lastLine);
+    return { ...JSON.parse(lastLine), root };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -251,7 +280,7 @@ describe("internal server contract", () => {
   it.skipIf(process.platform === "win32")(
     "resolves default executable, playwright-cli's protocol library, and runtime directory",
     () => {
-      const report = runServer("internal-headless", {}, "unset");
+      const report = runServer("internal-headless", { CAMOUFOX_INSTALL_DIR: "unused" }, "unset");
       assert.equal(report.error, undefined);
       const launch = report.events.find(([name]) => name === "launchServer")?.[1];
       assert.equal(launch.executablePath, join(homedir(), ".cache/camoufox/camoufox-bin"));
@@ -270,20 +299,74 @@ describe("internal server contract", () => {
           ([name, module]) => name === "resolve" && module === "camoufox-js/dist/utils.js",
         ),
       );
+      assert.ok(!report.events.some(([name]) => name === "pkgmanImport"));
     },
   );
 
-  it("starts with the Windows install path and the npm CLI package's protocol library", () => {
-    const localAppData = join(tmpdir(), "Fixture Local AppData");
-    const report = runServer("windows-internal", { LOCALAPPDATA: localAppData });
+  it("validates the default Windows install before launching with the npm CLI's protocol library", () => {
+    const report = runServer("windows-internal");
+    const installDir = join(report.root, "Local AppData", "Programs", "Camoufox");
     assert.equal(report.error, undefined);
+    assert.deepEqual(
+      report.events.filter(([name]) => name === "pkgmanImport" || name === "camoufoxPath"),
+      [
+        ["pkgmanImport", installDir],
+        ["camoufoxPath", false],
+      ],
+    );
+    const launchSteps = ["pkgmanImport", "camoufoxPath", "launchOptions", "launchServer"];
+    assert.deepEqual(
+      report.events.map(([name]) => name).filter((name) => launchSteps.includes(name)),
+      launchSteps,
+    );
     const launch = report.events.find(([name]) => name === "launchServer")?.[1];
-    assert.equal(launch.executablePath, join(localAppData, "Programs", "Camoufox", "camoufox.exe"));
+    assert.equal(launch.executablePath, join(installDir, "camoufox.exe"));
     assert.equal(launch.port, 9378);
     assert.ok(
       !report.events.some(([name, path]) => name === "require" && path === "fixture-playwright"),
     );
   });
+
+  it("uses the Windows install override to resolve both metadata and the default executable", () => {
+    const installDirOverride = "custom install";
+    const report = runServer("windows-internal", { CAMOUFOX_INSTALL_DIR: installDirOverride });
+    assert.equal(report.error, undefined);
+    assert.deepEqual(
+      report.events.find(([name]) => name === "pkgmanImport"),
+      ["pkgmanImport", installDirOverride],
+    );
+    const launch = report.events.find(([name]) => name === "launchServer")?.[1];
+    assert.equal(launch.executablePath, join(report.root, installDirOverride, "camoufox.exe"));
+  });
+
+  it("keeps the Windows executable override separate from the metadata directory", () => {
+    const executablePathOverride = "custom-camoufox.exe";
+    const report = runServer("windows-internal", {
+      CAMOUFOX_INSTALL_DIR: "custom install",
+      CAMOUFOX_EXECUTABLE_PATH: executablePathOverride,
+    });
+    assert.equal(report.error, undefined);
+    const launch = report.events.find(([name]) => name === "launchServer")?.[1];
+    assert.equal(launch.executablePath, executablePathOverride);
+  });
+
+  for (const [scenario, error] of [
+    ["windows-internal-no-metadata", /version\.json/],
+    ["windows-internal-unsupported", /Camoufox executable is outdated/],
+    ["windows-internal-no-executable", /Camoufox executable not found at .*camoufox\.exe/],
+  ] as const) {
+    it(`does not prepare launch options or launch for ${scenario}`, () => {
+      const report = runServer(scenario);
+      assert.match(report.error!, error);
+      assert.deepEqual(
+        report.events.find(([name]) => name === "camoufoxPath"),
+        ["camoufoxPath", false],
+      );
+      assert.ok(
+        !report.events.some(([name]) => name === "launchOptions" || name === "launchServer"),
+      );
+    });
+  }
 
   for (const signal of ["SIGINT", "SIGTERM"]) {
     it(`closes the browser and exits on ${signal}`, () => {
@@ -310,7 +393,7 @@ describe("internal server contract", () => {
     const report = runServer(
       "internal-headless",
       {
-        CAMOUFOX_EXECUTABLE_PATH: "/fixture/camoufox",
+        CAMOUFOX_EXECUTABLE_PATH: "custom-camoufox",
         CAMOUFOX_PLAYWRIGHT_CORE: "/fixture/playwright",
         CAMOUFOX_BASE_URL: "ws://127.0.0.2:9991/custom",
       },
@@ -318,7 +401,7 @@ describe("internal server contract", () => {
     );
     const launch = report.events.find(([name]) => name === "launchServer")?.[1];
     assert.equal(report.error, undefined);
-    assert.equal(launch.executablePath, "/fixture/camoufox");
+    assert.equal(launch.executablePath, "custom-camoufox");
     assert.equal(launch.host, "127.0.0.2");
     assert.equal(launch.port, 9991);
     assert.equal(launch.wsPath, "/custom");

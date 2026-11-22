@@ -14,12 +14,16 @@ import {
   constants,
   copyFileSync,
   existsSync,
+  linkSync,
+  mkdtempSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   renameSync,
   rmSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -168,11 +172,14 @@ function refreshProcessPath(): void {
   if (combined) process.env.Path = combined;
 }
 
-async function installCamoufox(): Promise<void> {
-  const programsDir = join(localAppData(), "Programs");
+export async function installCamoufox(appDataDir: string = localAppData()): Promise<void> {
+  const programsDir = join(appDataDir, "Programs");
   const installDir = join(programsDir, "Camoufox");
   const executable = "camoufox.exe";
-  if (statSync(join(installDir, executable), { throwIfNoEntry: false })?.isFile()) return;
+  if (statSync(join(installDir, executable), { throwIfNoEntry: false })?.isFile()) {
+    ensureCamoufoxVersionFile(installDir);
+    return;
+  }
   if (existsSync(installDir))
     throw new Error(`installation directory already exists: ${installDir}`);
 
@@ -197,10 +204,31 @@ async function installCamoufox(): Promise<void> {
     if (!statSync(join(browserDir, executable), { throwIfNoEntry: false })?.isFile()) {
       throw new Error(`release archive is missing ${executable}`);
     }
+    ensureCamoufoxVersionFile(browserDir);
     renameSync(browserDir, installDir);
     console.log(`Camoufox installed at ${join(installDir, executable)}`);
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function ensureCamoufoxVersionFile(browserDir: string): void {
+  const versionPath = join(browserDir, "version.json");
+  if (existsSync(versionPath)) return;
+
+  const applicationPath = join(browserDir, "application.ini");
+  const application = readFileSync(applicationPath, "utf8");
+  const versionPattern =
+    /^[\t ]*Version[\t ]*=[\t ]*(\d+(?:\.\d+)+)-([a-z0-9]+(?:\.[a-z0-9]+)*)[\t ]*\r?$/im;
+  const [, version, release] = versionPattern.exec(application) ?? [];
+  if (!version || !release) throw new Error(`Invalid Camoufox version in ${applicationPath}`);
+  const stagingDir = mkdtempSync(join(browserDir, ".version-"));
+  try {
+    const stagedVersion = join(stagingDir, "version.json");
+    writeFileSync(stagedVersion, `${JSON.stringify({ version, release })}\n`);
+    linkSync(stagedVersion, versionPath);
+  } finally {
+    rmSync(stagingDir, { recursive: true, force: true });
   }
 }
 

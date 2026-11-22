@@ -9,7 +9,7 @@ import { writeNpmPlaywrightFixture } from "./npm-playwright";
 
 const scenario = process.argv[2]!;
 const isNativeWindows = process.platform === "win32";
-const isInternal = scenario.startsWith("internal") || scenario === "windows-internal";
+const isInternal = scenario.startsWith("internal") || scenario.startsWith("windows-internal");
 if (scenario.startsWith("windows-")) {
   Object.defineProperty(process, "platform", { value: "win32" });
 }
@@ -124,8 +124,8 @@ mock.module("../util", () => ({
 }));
 mock.module("node:fs", () => ({
   ...fs,
-  statSync: (path: string) =>
-    path.startsWith("/proc/") ? { uid: process.geteuid?.() } : nativeStat(path),
+  statSync: (path: string, options?: fs.StatOptions) =>
+    path.startsWith("/proc/") ? { uid: process.geteuid?.() } : nativeStat(path, options),
   readlinkSync: (path: string) => {
     if (!path.startsWith("/proc/")) return nativeReadlink(path);
     return scenario === "stop-other-executable"
@@ -225,7 +225,7 @@ async function fixtureLaunchServer(options: unknown) {
     },
   };
 }
-Object.assign(globalThis, { fixtureLaunchServer });
+Object.assign(globalThis, { fixtureLaunchServer, fixtureEvents: events });
 
 function fixtureRequire(path: string) {
   events.push(["require", path]);

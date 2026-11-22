@@ -74,6 +74,7 @@ describe.skipIf(process.platform !== "win32")("Windows Camoufox restart", () => 
     const isolatedProject = join(root, "browse cli");
     const command = [process.execPath, isolatedProject];
     const camoufoxModuleDir = join(root, ".pi", "agent", "node_modules", "camoufox-js", "dist");
+    const installDir = join(root, "Camoufox");
     const playwrightModule = join(root, "playwright.cjs");
 
     function reserveEndpoint() {
@@ -87,7 +88,7 @@ describe.skipIf(process.platform !== "win32")("Windows Camoufox restart", () => 
     const otherEndpoint = reserveEndpoint();
     const port = new URL(endpoint).port;
     const otherPort = new URL(otherEndpoint).port;
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       USERPROFILE: root,
       HOME: root,
@@ -95,8 +96,10 @@ describe.skipIf(process.platform !== "win32")("Windows Camoufox restart", () => 
       XDG_RUNTIME_DIR: "",
       CAMOUFOX_HEADLESS: "1",
       CAMOUFOX_BASE_URL: endpoint,
+      CAMOUFOX_INSTALL_DIR: installDir,
       CAMOUFOX_PLAYWRIGHT_CORE: playwrightModule,
     };
+    delete env.CAMOUFOX_EXECUTABLE_PATH;
 
     mkdirSync(isolatedProject);
     for (const entry of ["src", "scripts", "package.json"]) {
@@ -104,6 +107,12 @@ describe.skipIf(process.platform !== "win32")("Windows Camoufox restart", () => 
     }
     mkdirSync(camoufoxModuleDir, { recursive: true });
     writeFileSync(join(camoufoxModuleDir, "utils.js"), "export const launchOptions = () => ({});");
+    writeFileSync(
+      join(camoufoxModuleDir, "pkgman.js"),
+      "export const camoufoxPath = () => process.env.CAMOUFOX_INSTALL_DIR;",
+    );
+    mkdirSync(installDir);
+    writeFileSync(join(installDir, "camoufox.exe"), "");
     writeFileSync(
       playwrightModule,
       [

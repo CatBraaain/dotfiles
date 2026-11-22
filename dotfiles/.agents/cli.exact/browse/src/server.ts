@@ -36,17 +36,6 @@ import { resolveWindowsPlaywrightCli } from "./playwright-cli";
 import { delay, selfRunArgv, selfRunPath } from "./util";
 import { findWindowsServerProcesses, stopWindowsProcess } from "./windows-process";
 
-function camoufoxExecutablePath(): string {
-  if (process.env.CAMOUFOX_EXECUTABLE_PATH !== undefined) {
-    return process.env.CAMOUFOX_EXECUTABLE_PATH;
-  }
-  if (process.platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local");
-    return join(localAppData, "Programs", "Camoufox", "camoufox.exe");
-  }
-  return join(homedir(), ".cache", "camoufox", "camoufox-bin");
-}
-
 // Spec: camoufox server のヘルスチェックは websocket 接続が成功するかで判定。
 // 1 接続試行は 1 秒で打ち切り（half-open socket 対策）。
 export function camoufoxServerHealthy(baseUrl: string, signal: AbortSignal): Promise<boolean> {
@@ -342,6 +331,35 @@ function resolveCamoufoxJsUrl(): string {
   throw new Error(`camoufox-js not found under ${candidates.join(", ")}`);
 }
 
+async function validateWindowsCamoufoxInstall(camoufoxJsUrl: string): Promise<string> {
+  if (!process.env.CAMOUFOX_INSTALL_DIR) {
+    const localAppData = process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local");
+    process.env.CAMOUFOX_INSTALL_DIR = join(localAppData, "Programs", "Camoufox");
+  }
+  const pkgmanUrl = new URL("./pkgman.js", camoufoxJsUrl);
+  const { camoufoxPath } = (await import(pkgmanUrl.href)) as {
+    camoufoxPath(downloadIfMissing: boolean): string;
+  };
+
+  let installDir: string;
+  try {
+    installDir = camoufoxPath(false);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Invalid Camoufox installation at ${process.env.CAMOUFOX_INSTALL_DIR}: ${reason}`,
+      {
+        cause: error,
+      },
+    );
+  }
+  const executablePath = process.env.CAMOUFOX_EXECUTABLE_PATH ?? join(installDir, "camoufox.exe");
+  if (!statSync(executablePath, { throwIfNoEntry: false })?.isFile()) {
+    throw new Error(`Camoufox executable not found at ${executablePath}`);
+  }
+  return executablePath;
+}
+
 // Fingerprint generation borrows camoufox-js; the browser itself is launched
 // by the same playwright-core that playwright-cli embeds, so the server
 // always speaks the client's protocol version (no HTTP 428 on connect).
@@ -391,7 +409,10 @@ export async function runCamoufoxServer(): Promise<void> {
   // hangs.
   console.log(`[camoufox-server] starting on ${baseUrl} at ${new Date().toISOString()}`);
 
-  const { launchOptions } = (await import(resolveCamoufoxJsUrl())) as CamoufoxJsModule;
+  const camoufoxJsUrl = resolveCamoufoxJsUrl();
+  const windowsExecutablePath =
+    process.platform === "win32" ? await validateWindowsCamoufoxInstall(camoufoxJsUrl) : undefined;
+  const { launchOptions } = (await import(camoufoxJsUrl)) as CamoufoxJsModule;
   const { firefox } = resolvePlaywrightCore();
 
   // Linux では既定で headed（Xvfb 上）。CAMOUFOX_HEADLESS=1 で従来の headless。
@@ -408,7 +429,10 @@ export async function runCamoufoxServer(): Promise<void> {
   const launch = await launchOptions({
     headless,
     os: ["windows"],
-    executable_path: camoufoxExecutablePath(),
+    executable_path:
+      windowsExecutablePath ??
+      process.env.CAMOUFOX_EXECUTABLE_PATH ??
+      join(homedir(), ".cache", "camoufox", "camoufox-bin"),
     i_know_what_im_doing: true,
     block_webgl: true,
     // Headed 起動では camoufox-js の virtual_display で DISPLAY を Xvfb の :99
