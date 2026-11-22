@@ -2103,40 +2103,65 @@ describe("pi-mux new argument contract", () => {
 
 describe("pi-mux new connection selection", () => {
   it(
-    "reuses one empty session across concurrent detached calls and an attached call in the same cwd",
+    "creates independent sessions across concurrent detached calls and an attached call in the same cwd",
     async () => {
       await fixture(async (f) => {
         const results = await Promise.all([
           f.run(["new", "--detached"], f.cwdA),
           f.run(["new", "--detached"], f.cwdA),
         ]);
-        const pane = await firstPane(f);
-        assert.equal(pane.startup, "ready");
+        const started = await waitFor(async () => {
+          const panes = await f.panes();
+          return panes.length === 2 ? panes : undefined;
+        });
+        for (const result of results) assert.equal(result.code, 0, result.err);
+        for (const pane of started) {
+          assert.equal(pane.cwd, f.cwdA);
+          assert.equal(pane.startup, "ready");
+          assert.equal(existsSync(pane.file), false);
+        }
+        assert.notEqual(started[0]!.id, started[1]!.id);
+        assert.notEqual(started[0]!.session, started[1]!.session);
+        assert.notEqual(started[0]!.pid, started[1]!.pid);
+        assert.notEqual(started[0]!.pane, started[1]!.pane);
         for (const result of results) {
-          assert.equal(result.code, 0, result.err);
+          const pane = started.find((entry) => result.out.includes(entry.id));
+          assert.ok(pane);
           assert.match(result.out, new RegExp(`Pi session ${pane.id}\\nAttach with:`));
           assert.ok(result.out.includes(pane.session));
         }
-        assert.equal((await f.panes()).length, 1);
-        assert.equal(existsSync(pane.file), false);
         assert.equal((await f.tmux(["list-clients"])).out.trim(), "");
-        assert.equal(pane.cwd, f.cwdA);
-        await f.client("reuse", ["new"], f.cwdA);
+        const startedSessions = new Set(started.map((pane) => pane.session));
+        await f.client("independent", ["new"], f.cwdA);
+        const attachedSession = await waitFor(async () => {
+          const panes = await f.panes();
+          return panes.length === 3
+            ? panes.find((pane) => !startedSessions.has(pane.session))?.session
+            : undefined;
+        });
+        assert.ok(attachedSession);
+        for (const pane of await f.panes()) {
+          assert.equal(pane.cwd, f.cwdA);
+          assert.equal(existsSync(pane.file), false);
+        }
+        assert.equal(new Set((await f.panes()).map((pane) => pane.session)).size, 3);
         await waitFor(async () =>
-          (await f.tmux(["list-clients", "-F", "#{session_id}"])).out.trim() === pane.session
+          (await f.tmux(["list-clients", "-F", "#{session_id}"])).out
+            .trim()
+            .split("\n")
+            .includes(attachedSession)
             ? true
             : undefined,
         );
-        assert.deepEqual(await f.panes(), [pane]);
         await f.detachAll();
-        assert.equal(await f.exitCode("reuse"), 0);
+        assert.equal(await f.exitCode("independent"), 0);
       });
     },
     TIMEOUT_MS,
   );
 
   it(
-    "keeps concurrent empty reservations separate for different cwds",
+    "creates independent sessions for concurrent detached calls in different cwds",
     async () => {
       await fixture(async (f) => {
         const cwds = [f.cwdA, f.cwdB];
@@ -2154,18 +2179,34 @@ describe("pi-mux new connection selection", () => {
           assert.ok(result.out.includes(pane.id));
           assert.ok(result.out.includes(pane.session));
           assert.equal(existsSync(pane.file), false);
-          const reused = await f.run(["new", "--detached"], cwd);
-          assert.equal(reused.code, 0, reused.err);
-          assert.ok(reused.out.includes(pane.id));
-          await f.client("reuse-" + index, ["new"], cwd);
+          const another = await f.run(["new", "--detached"], cwd);
+          assert.equal(another.code, 0, another.err);
+          const created = await waitFor(async () =>
+            (await f.panes()).find((entry) => entry.cwd === cwd && entry.id !== pane.id),
+          );
+          assert.ok(another.out.includes(created.id));
+          assert.notEqual(created.session, pane.session);
+          assert.equal(existsSync(created.file), false);
+          const before = new Set(
+            (await f.panes()).filter((entry) => entry.cwd === cwd).map((entry) => entry.session),
+          );
+          await f.client("independent-" + index, ["new"], cwd);
+          const attachedSession = await waitFor(async () => {
+            const sessions = (await f.panes())
+              .filter((entry) => entry.cwd === cwd)
+              .map((entry) => entry.session);
+            return sessions.find((session) => !before.has(session));
+          });
           await waitFor(async () =>
-            (await f.tmux(["list-clients", "-F", "#{session_id}"])).out.trim() === pane.session
+            (await f.tmux(["list-clients", "-F", "#{session_id}"])).out
+              .trim()
+              .split("\n")
+              .includes(attachedSession)
               ? true
               : undefined,
           );
-          assert.deepEqual(await f.panes(), original);
           await f.detachAll();
-          assert.equal(await f.exitCode("reuse-" + index), 0);
+          assert.equal(await f.exitCode("independent-" + index), 0);
         }
       });
     },
@@ -2194,10 +2235,14 @@ describe("pi-mux new connection selection", () => {
           assert.notEqual(created.pane, original.pane);
           assert.equal(existsSync(created.file), false);
           assert.equal(existsSync(original.file), false);
-          const reused = await f.run(["new", "--detached"], f.cwdA);
-          assert.equal(reused.code, 0, reused.err);
-          assert.ok(reused.out.includes(original.id));
-          assert.equal((await f.panes()).length, 2);
+          const another = await f.run(["new", "--detached"], f.cwdA);
+          assert.equal(another.code, 0, another.err);
+          const fresh = await waitFor(async () =>
+            (await f.panes()).find((pane) => pane.cwd === f.cwdA && pane.id !== original.id),
+          );
+          assert.ok(another.out.includes(fresh.id));
+          assert.notEqual(fresh.session, original.session);
+          assert.equal(existsSync(fresh.file), false);
           assert.deepEqual(
             (await f.panes()).find((pane) => pane.id === original.id),
             original,
@@ -2217,45 +2262,41 @@ describe("pi-mux new connection selection", () => {
     );
   }
 
-  for (const sameCwd of [true, false]) {
-    it(
-      `reuses a legacy pi-empty session only in the same cwd: sameCwd=${sameCwd}`,
-      async () => {
-        await fixture(async (f) => {
-          const opened = await f.run(["new", "--detached"], f.cwdA);
-          assert.equal(opened.code, 0, opened.err);
-          const original = await firstPane(f);
-          const renamed = await f.tmux(["rename-session", "-t", original.session, "pi-empty"]);
-          assert.equal(renamed.code, 0, renamed.err);
-          const cwd = sameCwd ? f.cwdA : f.cwdB;
-          const result = await f.run(["new", "--detached"], cwd);
-          assert.equal(result.code, 0, result.err);
-          const panes = await f.panes();
-          assert.equal(panes.length, sameCwd ? 1 : 2);
-          assert.equal(result.out.includes(original.id), sameCwd);
-          assert.deepEqual(
-            panes.find((pane) => pane.id === original.id),
-            original,
-          );
-          assert.ok(panes.some((pane) => pane.cwd === cwd));
-          for (const pane of panes) assert.equal(existsSync(pane.file), false);
-          const name = await f.tmux([
-            "display-message",
-            "-p",
-            "-t",
-            original.pane,
-            "#{session_name}",
-          ]);
-          assert.equal(name.out.trim(), "pi-empty");
-        });
-      },
-      TIMEOUT_MS,
-    );
-  }
+  it(
+    "starts an independent session even when a legacy pi-empty session is running",
+    async () => {
+      await fixture(async (f) => {
+        const opened = await f.run(["new", "--detached"], f.cwdA);
+        assert.equal(opened.code, 0, opened.err);
+        const original = await firstPane(f);
+        const renamed = await f.tmux(["rename-session", "-t", original.session, "pi-empty"]);
+        assert.equal(renamed.code, 0, renamed.err);
+        const result = await f.run(["new", "--detached"], f.cwdA);
+        assert.equal(result.code, 0, result.err);
+        const panes = await f.panes();
+        assert.equal(panes.length, 2);
+        const created = panes.find((pane) => pane.id !== original.id);
+        assert.ok(created);
+        assert.ok(result.out.includes(created.id));
+        assert.notEqual(created.session, original.session);
+        assert.equal(created.cwd, f.cwdA);
+        for (const pane of panes) assert.equal(existsSync(pane.file), false);
+        const name = await f.tmux([
+          "display-message",
+          "-p",
+          "-t",
+          original.pane,
+          "#{session_name}",
+        ]);
+        assert.equal(name.out.trim(), "pi-empty");
+      });
+    },
+    TIMEOUT_MS,
+  );
 
   for (const detached of [false, true]) {
     it(
-      `starts an independent requested session with detached=${detached} without consuming an empty session`,
+      `starts an independent requested session with detached=${detached} in a cwd with a running empty session`,
       async () => {
         await fixture(async (f) => {
           const opened = await f.run(["new", "--detached"], f.cwdA);
@@ -2300,10 +2341,15 @@ describe("pi-mux new connection selection", () => {
                 : undefined,
             );
           }
-          const reused = await f.run(["new", "--detached"], f.cwdA);
-          assert.equal(reused.code, 0, reused.err);
-          assert.ok(reused.out.includes(empty.id));
-          assert.equal((await f.panes()).length, 2);
+          const another = await f.run(["new", "--detached"], f.cwdA);
+          assert.equal(another.code, 0, another.err);
+          const fresh = await waitFor(async () =>
+            (await f.panes()).find((pane) => pane.id !== empty.id && pane.id !== requested.id),
+          );
+          assert.ok(another.out.includes(fresh.id));
+          assert.notEqual(fresh.session, empty.session);
+          assert.notEqual(fresh.session, requested.session);
+          assert.equal(existsSync(fresh.file), false);
           assert.equal((await f.panes()).find((pane) => pane.id === empty.id)?.pid, empty.pid);
           if (!detached) {
             await f.detachAll();
@@ -2318,7 +2364,7 @@ describe("pi-mux new connection selection", () => {
 
 describe("pi-mux CLI boundaries", () => {
   it(
-    "keeps concurrent new and open attached across a saved reservation rename",
+    "keeps concurrent new calls and an open of a saved session attached",
     async () => {
       await fixture(async (f) => {
         await f.client("initial", ["new"], f.cwdA);
@@ -2338,11 +2384,14 @@ describe("pi-mux CLI boundaries", () => {
         });
         const panes = await f.panes();
         const empty = panes.filter((pane) => !existsSync(pane.file));
-        assert.equal(empty.length, 1);
-        assert.equal(empty[0]!.cwd, f.cwdA);
-        assert.notEqual(empty[0]!.id, first.id);
-        assert.notEqual(empty[0]!.pid, first.pid);
-        assert.notEqual(empty[0]!.pane, first.pane);
+        assert.equal(empty.length, 2);
+        for (const pane of empty) {
+          assert.equal(pane.cwd, f.cwdA);
+          assert.notEqual(pane.id, first.id);
+          assert.notEqual(pane.pid, first.pid);
+          assert.notEqual(pane.pane, first.pane);
+        }
+        assert.notEqual(empty[0]!.id, empty[1]!.id);
         assert.deepEqual(
           panes.find((pane) => pane.id === first.id),
           first,
