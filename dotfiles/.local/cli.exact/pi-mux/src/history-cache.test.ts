@@ -1377,7 +1377,7 @@ describe("standard session lookup", () => {
         const id = randomUUID();
         const original = fixture.writeSession(fixture.cwd, id, [
           fixture.header(id),
-          fixture.userMessage(),
+          fixture.userMessage(undefined, "x".repeat(64 * 1024)),
         ]);
         const file = join(dirname(original), "unrelated-filename.jsonl");
         renameSync(original, file);
@@ -1400,7 +1400,9 @@ describe("standard session lookup", () => {
         assert.equal(result.status, 0, result.stderr);
         const launch = readFileSync(join(fixture.directory, "launch.log"), "utf8");
         assert.ok(launch.includes(`"--session" ${JSON.stringify(file)}`));
-        assert.ok(fixture.reads().every((read) => !read.file.includes("/archive/")));
+        const reads = fixture.reads();
+        assert.ok(reads.length > 0);
+        for (const read of reads) assert.deepEqual(read, { file, length: 1024 });
       } finally {
         fixture.cleanup();
       }
@@ -1448,6 +1450,22 @@ describe("standard session lookup", () => {
       }
     });
   }
+
+  it("opens a header longer than the initial read without requiring a timestamp", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const header = { type: "session", padding: "é".repeat(1024), id, cwd: fixture.cwd };
+      const file = fixture.writeSession(fixture.cwd, id, [header, fixture.userMessage()]);
+      fixture.mockTmux(id, file);
+      const result = fixture.run(["open", id]);
+      assert.equal(result.status, 0, result.stderr);
+      const launch = readFileSync(join(fixture.directory, "launch.log"), "utf8");
+      assert.ok(launch.includes(`"--session" ${JSON.stringify(file)}`));
+    } finally {
+      fixture.cleanup();
+    }
+  });
 
   it("inspects archive after normal storage has no header ID match", () => {
     const fixture = new HistoryCacheFixture();

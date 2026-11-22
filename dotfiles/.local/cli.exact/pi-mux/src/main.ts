@@ -7,7 +7,6 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  readSync,
   realpathSync,
   renameSync,
   statSync,
@@ -18,7 +17,7 @@ import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HistorySummaryCache } from "./history-summary";
+import { HistorySummaryCache, readSessionHeader } from "./history-summary";
 import { platform } from "./platform";
 
 type Operation =
@@ -107,7 +106,6 @@ const STARTUP_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 50;
 const SEND_WAIT_POLL_INTERVAL_MS = 100;
 const MESSAGE_TEXT_MAX_CODE_POINTS = 2800;
-const SESSION_HEADER_MAX_BYTES = 64 * 1024;
 const GENERATED_ENV_KEYS = new Set([
   "TMUX",
   "TMUX_PANE",
@@ -2769,20 +2767,10 @@ async function sessionDirectoryEntries(directory: string) {
   });
 }
 
-function readHeader(
-  path: string,
-): { type?: unknown; id?: unknown; cwd?: unknown; timestamp?: unknown } | undefined {
+function readHeader(path: string): Record<string, unknown> | undefined {
   const fd = openSync(path, "r");
   try {
-    const buffer = Buffer.alloc(SESSION_HEADER_MAX_BYTES);
-    const length = readSync(fd, buffer, 0, buffer.length, 0);
-    const firstLine = buffer.subarray(0, length).toString("utf8").split("\n")[0]!;
-    try {
-      const header = JSON.parse(firstLine);
-      return header && typeof header === "object" && !Array.isArray(header) ? header : undefined;
-    } catch {
-      return undefined;
-    }
+    return readSessionHeader(fd);
   } finally {
     closeSync(fd);
   }

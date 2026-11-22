@@ -184,6 +184,13 @@ function isValidHeader(value: unknown): value is SavedSessionHeader {
 }
 
 function readSavedSessionHeader(fd: number): SavedSessionHeader | null {
+  const header = readSessionHeader(fd);
+  if (!header || header.type !== "session") return null;
+  const parsed = { id: header.id, cwd: header.cwd, btime: parseEpochMs(header.timestamp) };
+  return isValidHeader(parsed) ? parsed : null;
+}
+
+export function readSessionHeader(fd: number): Record<string, unknown> | undefined {
   let buffer = Buffer.allocUnsafe(SESSION_HEADER_PREFIX_BYTES);
   let length = 0;
   while (length < SESSION_HEADER_MAX_BYTES) {
@@ -204,11 +211,9 @@ function readSavedSessionHeader(fd: number): SavedSessionHeader | null {
   const firstLine = buffer.subarray(0, length).toString("utf8");
   try {
     const header = JSON.parse(firstLine);
-    if (!header || typeof header !== "object" || Array.isArray(header)) return null;
-    const parsed = { id: header.id, cwd: header.cwd, btime: parseEpochMs(header.timestamp) };
-    return header.type === "session" && isValidHeader(parsed) ? parsed : null;
+    return header && typeof header === "object" && !Array.isArray(header) ? header : undefined;
   } catch {
-    return null;
+    return undefined;
   }
 }
 
