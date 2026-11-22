@@ -38,10 +38,10 @@ CLIのsession-dirs記録と、稼働piの保存先を探索に使わない。
 | `pi-mux send [--wait <seconds>] <session-id> <text...>` | 稼働している対象会話へ短いメッセージを1件届ける。稼働はpi実体の生存を指し、エージェントの実行状態は送信の可否に影響しない。`--wait` は対象の受信拡張が消費するまで待つ |
 | `pi-mux close <session-id>` | 完全一致する会話IDのpiを非対話で終了し、その会話を復元対象から除く。保存会話・workspace登録を保持する |
 | `pi-mux close --if-temporary <session-id>` | 一時再開中のpiだけを `close` と同じ手順で終了し、復元対象から除く。通常状態のpiと稼働対象がないIDは、変更せず成功する |
-| `pi-mux list` | 登録済みworkspaceを、空workspaceも含めたJSON配列で返す。専用tmuxの稼働piがあるworkspaceを自動登録する |
+| `pi-mux list [--json]` | 稼働中のpiを列挙する。JSON出力には空workspaceの登録も含める |
 | `pi-mux switch <session-id> [--client-pid <pid>]` | 接続クライアントが表示するtmuxセッションを、会話IDのpi実体のtmuxセッションへ切り替える |
-| `pi-mux current [--client-pid <pid>]` | 接続クライアントが表示中のpi実体のmetadataをJSONで返す |
-| `pi-mux history [--cwd <absolute-cwd>]` | 登録済みworkspaceの保存会話をJSON配列で列挙する |
+| `pi-mux current [--client-pid <pid>] [--json]` | 接続クライアントが表示中のpi実体のmetadataを返す |
+| `pi-mux history [--cwd <absolute-cwd>] [--json]` | 登録済みworkspaceの保存会話を列挙する |
 | `pi-mux workspace register <cwd>` | piを起動せずworkspaceを登録する |
 | `pi-mux workspace unregister <cwd>` | 対象workspaceの稼働piを終了し、登録と復元対象を除く。保存会話ファイルは保持する |
 | `pi-mux snapshot [server-generation]` | 稼働中の専用serverから通常の管理会話を採取して保存する。serverを起動せず、指定世代と異なるserverの記録は変更しない |
@@ -327,9 +327,17 @@ optionの書き込みは、対象paneのserver PID・pane ID・pane PIDの一致
 
 register・unregisterの成功時はstdout・stderrへ出力せず終了コード0、失敗時はstderrへ理由を表示して終了コード1で終了する。
 
+### 一覧系コマンドの出力形式
+
+`list`・`current`・`history` は既定でstdoutへ見出し付きのプレーンテキスト表を出力する。データが0件の表は見出しだけを表示する。欠損値は `-` とし、セル中の制御文字（Unicodeの `Cc` と `Bidi_Control`）と行・段落区切り文字は `\uXXXX` 表記にする。
+
+`--json` を付けると、表の代わりに各コマンドで定めるJSONと末尾改行をstdoutへ出力する。`current` の `--client-pid` や `history` の `--cwd` と併用するとき、オプションの順序は問わない。
+
 ### list
 
-`list` は復元記録の登録済みcwdと専用tmuxの稼働piを統合し、stdoutへ `[{"cwd":"/path/to/workspace","sessions":[{"id":"session-id","file":"/path/to/session.jsonl","state":null,"title":null,"publishPending":null}],"empty":[{"id":"empty-session-id","file":"/path/to/session.jsonl"}]}]` 形式のJSON配列と末尾改行を返す。workspaceの `cwd` は絶対パス、`sessions` は会話ファイルが存在する稼働piだけの配列であり、該当がなければ空配列になる。復元候補を稼働piとして代用しない。PID・tmux targetは内部検証に使う。
+登録済みcwdと専用tmuxの稼働piを統合する。表は `WORKSPACE`・`SESSION ID`・`STATE`・`TITLE` の順で、稼働piごとに1行を表示する。workspaceはJSONと同じ順で、各workspaceでは `sessions`、`empty` の順に表示する。`empty` の行は状態を `unsaved` とし、稼働piがないworkspaceは表に行を作らない。
+
+JSONでは `[{"cwd":"/path/to/workspace","sessions":[{"id":"session-id","file":"/path/to/session.jsonl","state":null,"title":null,"publishPending":null}],"empty":[{"id":"empty-session-id","file":"/path/to/session.jsonl"}]}]` 形式のJSON配列と末尾改行を返す。workspaceの `cwd` は絶対パス、`sessions` は会話ファイルが存在する稼働piだけの配列であり、該当がなければ空配列になる。復元候補を稼働piとして代用しない。PID・tmux targetは内部検証に使う。
 
 各sessionは次の5項目を持ち、一時再開中だけ `temporary: true` を追加する。通常状態では `temporary` 属性を省略する。一時再開中も `sessions` に掲載し、`id`・`file`・`state`・`title`・`publishPending` の意味は維持する。
 
@@ -360,7 +368,7 @@ metadataは会話ID・絶対パスのcwdとfileを検証する。paneを直接�
 
 | 状態 | 結果 |
 | --- | --- |
-| 専用serverが未起動、または稼働piがない | 登録済みworkspaceを空の `sessions`・`empty` とともに返す。登録もなければ終了コード0で `[]` を返す |
+| 専用serverが未起動、または稼働piがない | 表は見出しだけを表示する。JSONは登録済みworkspaceを空の `sessions`・`empty` とともに返し、登録もなければ `[]` を返す。どちらも終了コード0とする |
 | tmuxからの取得に失敗 | 理由をstderrへ表示し、非0で終了する |
 
 `list` は未登録の稼働cwdがある場合だけworkspace登録を書き込む。workspace登録と「再取得とキャッシュ」で定めるタイトルキャッシュ以外のディレクトリ作成・JSON書込みを行わない。server起動・復元は行わない。登録の追加時は既存の復元候補とserver世代を保持する。
@@ -389,11 +397,13 @@ metadataは会話ID・絶対パスのcwdとfileを検証する。paneを直接�
 
 ### current
 
-`current [--client-pid <pid>]` は、クライアントが表示中のpaneのpi実体のmetadataを読み、stdoutへ `{"id":"session-id","cwd":"/path/to/workspace","file":"/path/to/session.jsonl","target":"tmux-session-name"}` 形式のJSONオブジェクト1件と末尾改行を返す。表示中のpaneは、クライアントが表示するwindowのactive paneとする。`target` は表示中のpaneが属するtmuxセッション名、`id`・`cwd`・`file` はmetadataの値とする。クライアントの特定は `switch` と同じ `--client-pid` の照合と省略時の唯一クライアント判定を使う。
+`current` は、クライアントが表示中のpaneのpi実体のmetadataを読む。表は `WORKSPACE`・`SESSION ID`・`TMUX TARGET`・`FILE` の順で1件を表示する。
+
+JSONでは `{"id":"session-id","cwd":"/path/to/workspace","file":"/path/to/session.jsonl","target":"tmux-session-name"}` 形式のJSONオブジェクト1件と末尾改行を返す。表示中のpaneは、クライアントが表示するwindowのactive paneとする。`target` は表示中のpaneが属するtmuxセッション名、`id`・`cwd`・`file` はmetadataの値とする。クライアントの特定は `switch` と同じ `--client-pid` の照合と省略時の唯一クライアント判定を使う。
 
 | 状態 | 結果 |
 | --- | --- |
-| 表示中のpaneがpi実体のmetadataを持つ | metadataの `id`・`cwd`・`file` と表示中のpaneが属するtmuxセッション名をJSONで返し、終了コード0で終了する |
+| 表示中のpaneがpi実体のmetadataを持つ | metadataの `id`・`cwd`・`file` と表示中のpaneが属するtmuxセッション名を指定の形式で返し、終了コード0で終了する |
 | 表示中のpaneがpi実体のmetadataを持たない、または表示中のpaneを特定できない | 何も出力せず理由をstderrへ表示し、非0で終了する |
 
 同一tmuxセッション内の複数のpaneでpi実体が稼働していても、表示中のpaneのpi実体を返す。
@@ -402,7 +412,11 @@ serverの起動・復元、piの起動・接続、workspace登録は行わない
 
 ### history
 
-`history [--cwd <absolute-cwd>]` は、復元記録の `workspaces` に登録されたcwdごとの保存会話を列挙し、stdoutへ `[{"id":"session-id","cwd":"/path/to/workspace","file":"/path/to/session.jsonl","title":"name","btime":1735689600000,"mtime":1735693200000,"size":1024}]` 形式のJSON配列と末尾改行を返す。`--cwd` に絶対パスを指定したときはそのcwdのみを対象にし、登録されていないcwdなら `[]` を返す。
+`history` は、復元記録の `workspaces` に登録されたcwdごとの保存会話を列挙する。`--cwd` を指定した場合はその絶対パスだけを対象とし、未登録なら結果は0件となる。
+
+表は `WORKSPACE`・`SESSION ID`・`UPDATED (UTC)`・`TITLE` の順で、JSONと同じ並びで1会話につき1行を表示する。更新日時は `mtime` をUTCのISO 8601形式で表示する。日時として表現できない値は欠損値と同じ `-` で表示する。
+
+JSONでは `[{"id":"session-id","cwd":"/path/to/workspace","file":"/path/to/session.jsonl","title":"name","btime":1735689600000,"mtime":1735693200000,"size":1024}]` 形式のJSON配列と末尾改行を返す。
 
 「保存会話の探索範囲」のうち、対象cwdに対応するグループの通常側とarchive側を列挙する。保存先が環境変数・settings のときは、保存先直下の `*.jsonl` のうちヘッダーのcwdが対象cwdに一致する会話を列挙する。同じ会話IDが通常側とarchive側にある場合は通常側を返し、そのIDのarchive側を結果から除く。
 
@@ -583,6 +597,8 @@ CLIは対象の状態を繰り返し確認し、置き換えの条件を満た�
 - `history` と `history --cwd <absolute-cwd>`（登録済みcwdと未登録cwdの両方）
 - `current` と `current --client-pid <pid>`
 - `list`
+
+`history`・`current`・`list` は表とJSONの両形式を対象とする。
 
 応答時間は、コマンドの起動から結果の受信完了までの時間とする。保存会話1500件・登録workspace 3件・稼働pane 3枚の状態では、1回の呼び出しの応答時間は、次のとおりとする。
 

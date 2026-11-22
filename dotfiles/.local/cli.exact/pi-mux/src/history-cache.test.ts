@@ -135,7 +135,7 @@ class HistoryCacheFixture {
   }
 
   history(cwd = this.cwd) {
-    return this.run(["history", "--cwd", cwd]);
+    return this.run(["history", "--cwd", cwd, "--json"]);
   }
 
   mockTmux(id: string, file: string, running = false): void {
@@ -285,7 +285,7 @@ spyOn(promises, "readdir").mockImplementation((...args) => {
   }
 
   async historyAsync(cwd = this.cwd) {
-    const child = Bun.spawn([bunExecutable, "run", source, "history", "--cwd", cwd], {
+    const child = Bun.spawn([bunExecutable, "run", source, "history", "--cwd", cwd, "--json"], {
       cwd: this.cwd,
       env: this.env,
       stdout: "pipe",
@@ -1863,14 +1863,14 @@ describe("shared list and history cache", () => {
         ]);
         fixture.mockTmux(id, file, true);
         fixture.traceReads();
-        const first = fixture.run([initial]);
+        const first = fixture.run([initial, "--json"]);
         assert.equal(first.status, 0, first.stderr);
         const cacheFile = fixture.cacheFileFor(file);
         assert.ok(cacheFile);
         const cacheBefore = statSync(cacheFile, { bigint: true });
         assert.ok(fixture.reads().length > 0);
         const second = initial === "history" ? "list" : "history";
-        const result = fixture.run([second]);
+        const result = fixture.run([second, "--json"]);
         assert.equal(result.status, 0, result.stderr);
         const output = JSON.parse(result.stdout);
         const title = second === "list" ? output[0].sessions[0].title : output[0].title;
@@ -1903,7 +1903,7 @@ describe("shared list and history cache", () => {
           title: "Published title",
         }),
       );
-      const result = fixture.run(["list"]);
+      const result = fixture.run(["list", "--json"]);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout)[0].sessions, [
         { id, file, state: "waiting-user", title: "Published title", publishPending: null },
@@ -1934,7 +1934,7 @@ describe("shared list and history cache", () => {
             readFileSync(file, "utf8") + JSON.stringify(fixture.sessionInfo(title)) + "\n",
           );
         const expected = title?.trim() || null;
-        const listed = fixture.run(["list"]);
+        const listed = fixture.run(["list", "--json"]);
         assert.equal(listed.status, 0, listed.stderr);
         assert.equal(JSON.parse(listed.stdout)[0].sessions[0].title, expected);
         const history = fixture.history();
@@ -1978,7 +1978,7 @@ describe("shared list and history cache", () => {
       assert.equal(after.size, before.size);
       assert.equal(after.mtimeNs, before.mtimeNs);
       assert.notEqual(after.ctimeNs, before.ctimeNs);
-      const listed = fixture.run(["list"]);
+      const listed = fixture.run(["list", "--json"]);
       assert.equal(listed.status, 0, listed.stderr);
       assert.equal(JSON.parse(listed.stdout)[0].sessions[0].title, "Other title");
       const history = fixture.history();
@@ -2010,7 +2010,7 @@ describe("shared list and history cache", () => {
           rmSync(cacheFile);
           mkdirSync(cacheFile);
         }
-        const listed = fixture.run(["list"]);
+        const listed = fixture.run(["list", "--json"]);
         assert.equal(listed.status, 0, listed.stderr);
         assert.equal(JSON.parse(listed.stdout)[0].sessions[0].title, "Available title");
       }

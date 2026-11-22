@@ -1065,7 +1065,7 @@ describe("SessionWebviewProvider", () => {
         "empty-b",
       ]);
       expect(sentState().groups[0].sessions[1].updatedAtMs).toBe(400);
-      expect(execute).toHaveBeenCalledWith("pi-mux", ["history"], undefined);
+      expect(execute).toHaveBeenCalledWith("pi-mux", ["history", "--json"], undefined);
     });
 
     it("polls the list every 250 milliseconds", () => {
@@ -1678,7 +1678,7 @@ describe("SessionWebviewProvider", () => {
       expect(state.groups[0].sessions[0].state).toBe(phase);
       expect(JSON.stringify(sessionListView(state))).toContain(`"data-state":"${phase}"`);
     }
-    expect(execute).toHaveBeenCalledWith("pi-mux", ["list"], undefined);
+    expect(execute).toHaveBeenCalledWith("pi-mux", ["list", "--json"], undefined);
     expect(await readFile(statePath, "utf8")).toBe(savedState);
   });
 
@@ -3604,7 +3604,7 @@ describe("SessionWebviewProvider", () => {
         mocks.open({ sessionId: activeSessionId, cwd: root });
         return `Pi session ${activeSessionId}\nAttach with: pi-mux open ${activeSessionId}\n`;
       }
-      if (args.join(" ") === "list") {
+      if (args.join(" ") === "list --json") {
         return JSON.stringify([
           {
             cwd: root,

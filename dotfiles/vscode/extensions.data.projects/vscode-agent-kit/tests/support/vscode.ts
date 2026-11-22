@@ -144,7 +144,7 @@ export class VSCodeFixture {
   }
 
   listWorkspaces(): PiMuxWorkspace[] {
-    return JSON.parse(this.piMux(["list"])) as PiMuxWorkspace[];
+    return JSON.parse(this.piMux(["list", "--json"])) as PiMuxWorkspace[];
   }
 
   async launch(): Promise<void> {

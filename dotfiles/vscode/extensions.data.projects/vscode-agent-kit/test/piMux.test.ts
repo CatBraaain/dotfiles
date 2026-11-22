@@ -156,7 +156,7 @@ describe("PiMux", () => {
     ];
     const execute = vi.fn().mockResolvedValue(JSON.stringify(workspaces));
     expect(await new PiMux(execute).list()).toEqual(workspaces);
-    expect(execute).toHaveBeenCalledExactlyOnceWith("pi-mux", ["list"], undefined);
+    expect(execute).toHaveBeenCalledExactlyOnceWith("pi-mux", ["list", "--json"], undefined);
   });
 
   it("rejects a legacy response without the empty section", async () => {
@@ -258,7 +258,7 @@ describe("PiMux", () => {
     expect(await mux.current(456)).toEqual(current);
     expect(execute).toHaveBeenCalledExactlyOnceWith(
       "pi-mux",
-      ["current", "--client-pid", "456"],
+      ["current", "--json", "--client-pid", "456"],
       undefined,
     );
   });
@@ -266,7 +266,7 @@ describe("PiMux", () => {
   it("returns undefined when current cannot resolve the client", async () => {
     const execute = vi.fn().mockRejectedValue(Object.assign(new Error("no client"), { code: 1 }));
     expect(await new PiMux(execute).current()).toBeUndefined();
-    expect(execute).toHaveBeenCalledExactlyOnceWith("pi-mux", ["current"], undefined);
+    expect(execute).toHaveBeenCalledExactlyOnceWith("pi-mux", ["current", "--json"], undefined);
   });
 
   it.each([
@@ -306,11 +306,11 @@ describe("PiMux", () => {
     const mux = new PiMux(execute);
     expect(await mux.history()).toEqual(entries);
     expect(await mux.history("/project")).toEqual(entries);
-    expect(execute).toHaveBeenNthCalledWith(1, "pi-mux", ["history"], undefined);
+    expect(execute).toHaveBeenNthCalledWith(1, "pi-mux", ["history", "--json"], undefined);
     expect(execute).toHaveBeenNthCalledWith(
       2,
       "pi-mux",
-      ["history", "--cwd", "/project"],
+      ["history", "--json", "--cwd", "/project"],
       undefined,
     );
   });
@@ -364,7 +364,9 @@ describe("PiMux", () => {
 
   it("propagates history failures instead of returning an empty list", async () => {
     const execute = vi.fn().mockRejectedValue(new Error("history denied"));
-    await expect(new PiMux(execute).history()).rejects.toThrow("pi-mux history: history denied");
+    await expect(new PiMux(execute).history()).rejects.toThrow(
+      "pi-mux history --json: history denied",
+    );
   });
 
   it("reports a CLI failure with operation and cwd and does not retry", async () => {

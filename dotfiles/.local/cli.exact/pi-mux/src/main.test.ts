@@ -275,7 +275,7 @@ function pendingState(fixture: CloseFixture): string {
 }
 
 function runList(fixture: CloseFixture) {
-  return spawnSync(process.execPath, ["run", source, "list"], {
+  return spawnSync(process.execPath, ["run", source, "list", "--json"], {
     cwd: fixture.cwd,
     env: fixture.env,
     encoding: "utf8",
@@ -1035,7 +1035,49 @@ function historyEntry(
   };
 }
 
+function tableRows(stdout: string): string[][] {
+  return stdout
+    .trimEnd()
+    .split("\n")
+    .map((line) => line.split(/ {2,}/));
+}
+
 describe("list workspace panes", () => {
+  it("shows saved and unsaved panes without a row for an empty workspace", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const savedCwd = join(fixture.directory, "with-panes");
+      mkdirSync(savedCwd);
+      const savedId = randomUUID();
+      const unsavedId = randomUUID();
+      const savedFile = conversationFile(fixture.agentDir, savedCwd, savedId);
+      fixture.piSessionIn("saved", savedCwd, { id: savedId, file: savedFile });
+      fixture.piSessionIn("unsaved", savedCwd, {
+        id: unsavedId,
+        file: join(fixture.directory, `${unsavedId}.jsonl`),
+      });
+      const pane = fixture.tmux(["display-message", "-p", "-t", "saved", "#{pane_id}"]);
+      fixture.tmux([
+        "set-option",
+        "-p",
+        "-t",
+        pane,
+        "@pi_session_state",
+        JSON.stringify({ version: 1, sessionId: savedId, state: "running", title: "Live title" }),
+      ]);
+
+      const table = fixture.run(["list"]);
+      assert.equal(table.status, 0, table.stderr);
+      assert.deepEqual(tableRows(table.stdout), [
+        ["WORKSPACE", "SESSION ID", "STATE", "TITLE"],
+        [savedCwd, savedId, "running", "Live title"],
+        [savedCwd, unsavedId, "unsaved", "-"],
+      ]);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
   it("separates panes with a saved conversation file from unsaved empty panes", async () => {
     const fixture = new SessionFixture();
     try {
@@ -1087,7 +1129,7 @@ describe("list workspace panes", () => {
       const invocations = join(fixture.directory, "list-tmux-commands");
       fixture.beforeCliTmux(`printf '%s\\n' "$5" >> ${JSON.stringify(invocations)}`);
 
-      const result = fixture.run(["list"]);
+      const result = fixture.run(["list", "--json"]);
       assert.equal(result.error, undefined);
       assert.equal(result.status, 0, result.stderr);
       assert.equal(readFileSync(invocations, "utf8"), "list-panes\n-C\n");
@@ -1122,7 +1164,7 @@ describe("list workspace panes", () => {
   ${JSON.stringify(realTmux)} -S "$2" kill-session -t leaving || exit 1
 fi`);
 
-      const result = fixture.run(["list"]);
+      const result = fixture.run(["list", "--json"]);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), [
         {
@@ -1150,7 +1192,7 @@ fi`);
   rm -f "$2"
 fi`);
 
-        const result = fixture.run(["list"]);
+        const result = fixture.run(["list", "--json"]);
         if (saved) {
           assert.equal(result.status, 1, result.stderr);
           assert.equal(result.stdout, "");
@@ -1224,7 +1266,7 @@ fi`);
         }),
       ]) {
         fixture.tmux(["set-option", "-p", "-t", pane, "@pi_session_state", value]);
-        const result = fixture.run(["list"]);
+        const result = fixture.run(["list", "--json"]);
         assert.equal(result.status, 0, result.stderr);
         assert.deepEqual(
           entryOf(result.stdout),
@@ -1260,12 +1302,12 @@ fi`);
         ],
       ] as const) {
         fixture.tmux(["set-option", "-p", "-t", pane, "@pi_session_state", value]);
-        const result = fixture.run(["list"]);
+        const result = fixture.run(["list", "--json"]);
         assert.equal(result.status, 0, result.stderr);
         assert.deepEqual(entryOf(result.stdout), expected, `value: ${value}`);
       }
       fixture.tmux(["set-option", "-pu", "-t", pane, "@pi_session_state"]);
-      const cleared = fixture.run(["list"]);
+      const cleared = fixture.run(["list", "--json"]);
       assert.equal(cleared.status, 0, cleared.stderr);
       assert.deepEqual(entryOf(cleared.stdout), savedEntry);
     } finally {
@@ -1278,13 +1320,7 @@ fi`);
     try {
       const shell = fixture.shellSession("shellhost");
       const pidFile = join(fixture.directory, "child.pid");
-      fixture.tmux([
-        "send-keys",
-        "-t",
-        shell.pane,
-        `sleep 300 & echo $! > ${pidFile}`,
-        "Enter",
-      ]);
+      fixture.tmux(["send-keys", "-t", shell.pane, `sleep 300 & echo $! > ${pidFile}`, "Enter"]);
       await waitUntil(() => existsSync(pidFile));
       const childPid = Number(readFileSync(pidFile, "utf8").trim());
       assert.ok(Number.isSafeInteger(childPid) && childPid > 0, `child pid: ${childPid}`);
@@ -1307,7 +1343,7 @@ fi`);
           }),
         ).toString("base64"),
       ]);
-      const listed = fixture.run(["list"]);
+      const listed = fixture.run(["list", "--json"]);
       assert.equal(listed.status, 0, listed.stderr);
       assert.deepEqual(JSON.parse(listed.stdout), [
         { cwd: fixture.cwd, sessions: [], empty: [{ id, file }] },
@@ -1315,7 +1351,7 @@ fi`);
       process.kill(childPid, "SIGKILL");
       fixture.tmux(["send-keys", "-t", shell.pane, "Enter"]);
       await waitUntil(() => !existsSync(`/proc/${childPid}`));
-      const after = fixture.run(["list"]);
+      const after = fixture.run(["list", "--json"]);
       assert.equal(after.status, 0, after.stderr);
       assert.deepEqual(JSON.parse(after.stdout), [{ cwd: fixture.cwd, sessions: [], empty: [] }]);
     } finally {
@@ -1391,7 +1427,7 @@ exec ${JSON.stringify(realTmux)} "$@"
 fi`);
 
       const snapshotBefore = readFileSync(restoreFile(fixture), "utf8");
-      const result = fixture.run(["list"]);
+      const result = fixture.run(["list", "--json"]);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), [{ cwd: fixture.cwd, sessions: [], empty: [] }]);
       assert.equal(readFileSync(restoreFile(fixture), "utf8"), snapshotBefore);
@@ -1408,7 +1444,7 @@ fi`);
       const id = randomUUID();
       const file = join(fixture.directory, "conversations", `${id}.jsonl`);
       fixture.piSessionIn("other", otherCwd, { id, file });
-      const result = fixture.run(["list"]);
+      const result = fixture.run(["list", "--json"]);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), [
         { cwd: fixture.cwd, sessions: [], empty: [] },
@@ -1703,7 +1739,7 @@ ${execTmux}`,
 });
 
 describe("current", () => {
-  it("prints the metadata of the pi pane the client displays", async () => {
+  it("prints a table for the visible pi pane and JSON for the selected client", async () => {
     const fixture = new SessionFixture();
     try {
       const id = randomUUID();
@@ -1711,12 +1747,27 @@ describe("current", () => {
       fixture.piSession("pi", { id, file });
       await fixture.attach("pi");
       const expected = { id, cwd: fixture.cwd, file, target: "pi" };
-      assert.deepEqual(JSON.parse(fixture.run(["current"]).stdout), expected);
-      const clientPid = fixture.clients()[0]!.pid;
-      assert.deepEqual(
-        JSON.parse(fixture.run(["current", "--client-pid", String(clientPid)]).stdout),
-        expected,
-      );
+
+      const table = fixture.run(["current"]);
+      assert.equal(table.status, 0, table.stderr);
+      assert.deepEqual(tableRows(table.stdout), [
+        ["WORKSPACE", "SESSION ID", "TMUX TARGET", "FILE"],
+        [fixture.cwd, id, "pi", file],
+      ]);
+      assert.deepEqual(JSON.parse(fixture.run(["current", "--json"]).stdout), expected);
+
+      const clientPid = String(fixture.clients()[0]!.pid);
+      fixture.plainSession("other");
+      await fixture.attach("other");
+      for (const options of [
+        ["--client-pid", clientPid, "--json"],
+        ["--json", "--client-pid", clientPid],
+      ]) {
+        const result = fixture.run(["current", ...options]);
+        assert.equal(result.status, 0, result.stderr);
+        assert.ok(result.stdout.endsWith("\n"));
+        assert.deepEqual(JSON.parse(result.stdout), expected);
+      }
     } finally {
       await fixture.cleanup();
     }
@@ -1768,7 +1819,7 @@ describe("current", () => {
       });
       await fixture.attach("dual");
       const expected = { id: displayedId, cwd: fixture.cwd, file: displayedFile, target: "dual" };
-      assert.deepEqual(JSON.parse(fixture.run(["current"]).stdout), expected);
+      assert.deepEqual(JSON.parse(fixture.run(["current", "--json"]).stdout), expected);
     } finally {
       await fixture.cleanup();
     }
@@ -1853,8 +1904,9 @@ describe("history", () => {
     const fixture = new HistoryFixture();
     try {
       const titledId = randomUUID();
+      const title = "Named\tsession\nwith\u001bcontrol\u202e";
       const titledFile = conversationFile(fixture.agentDir, fixture.cwd, titledId, {
-        title: "Named session",
+        title,
         mtime: new Date("2026-01-02T00:00:00.000Z"),
         activity: "2026-01-02T00:00:01.000Z",
       });
@@ -1870,14 +1922,29 @@ describe("history", () => {
         mtime: new Date("2026-01-03T00:00:00.000Z"),
         activity: "2026-01-03T00:00:01.000Z",
       });
-      const result = fixture.run(["history"]);
+      const table = fixture.run(["history"]);
+      assert.equal(table.status, 0, table.stderr);
+      assert.deepEqual(tableRows(table.stdout), [
+        ["WORKSPACE", "SESSION ID", "UPDATED (UTC)", "TITLE"],
+        [fixture.otherCwd, otherId, "2026-01-03T00:00:01.000Z", "review the diff"],
+        [
+          fixture.cwd,
+          titledId,
+          "2026-01-02T00:00:01.000Z",
+          "Named\\u0009session\\u000awith\\u001bcontrol\\u202e",
+        ],
+        [fixture.cwd, untitledId, "2026-01-01T00:00:02.000Z", "fix the build now"],
+      ]);
+
+      const result = fixture.run(["history", "--json"]);
       assert.equal(result.error, undefined);
       assert.equal(result.status, 0, result.stderr);
+      assert.ok(result.stdout.endsWith("\n"));
       assert.deepEqual(JSON.parse(result.stdout), [
         historyEntry(otherFile, otherId, fixture.otherCwd, "review the diff", {
           mtime: Date.parse("2026-01-03T00:00:01.000Z"),
         }),
-        historyEntry(titledFile, titledId, fixture.cwd, "Named session", {
+        historyEntry(titledFile, titledId, fixture.cwd, title, {
           mtime: Date.parse("2026-01-02T00:00:01.000Z"),
         }),
         historyEntry(untitledFile, untitledId, fixture.cwd, "fix the build now", {
@@ -1889,16 +1956,36 @@ describe("history", () => {
     }
   });
 
-  it("restricts to the requested cwd and returns an empty array for unregistered cwds", async () => {
+  it("restricts both formats to the requested cwd and returns no rows for unregistered cwds", async () => {
     const fixture = new HistoryFixture();
     try {
       const id = randomUUID();
       const file = conversationFile(fixture.agentDir, fixture.cwd, id, {});
       conversationFile(fixture.agentDir, fixture.otherCwd, randomUUID(), {});
-      const restricted = fixture.run(["history", "--cwd", fixture.cwd]);
-      assert.equal(restricted.status, 0, restricted.stderr);
-      assert.deepEqual(JSON.parse(restricted.stdout), [historyEntry(file, id, fixture.cwd, null)]);
-      const unregistered = fixture.run(["history", "--cwd", join(fixture.directory, "away")]);
+      const headers = ["WORKSPACE", "SESSION ID", "UPDATED (UTC)", "TITLE"];
+      const table = fixture.run(["history", "--cwd", fixture.cwd]);
+      assert.equal(table.status, 0, table.stderr);
+      assert.deepEqual(tableRows(table.stdout), [
+        headers,
+        [fixture.cwd, id, "2026-01-01T00:00:02.000Z", "-"],
+      ]);
+
+      for (const options of [
+        ["--json", "--cwd", fixture.cwd],
+        ["--cwd", fixture.cwd, "--json"],
+      ]) {
+        const restricted = fixture.run(["history", ...options]);
+        assert.equal(restricted.status, 0, restricted.stderr);
+        assert.deepEqual(JSON.parse(restricted.stdout), [
+          historyEntry(file, id, fixture.cwd, null),
+        ]);
+      }
+
+      const away = join(fixture.directory, "away");
+      const emptyTable = fixture.run(["history", "--cwd", away]);
+      assert.equal(emptyTable.status, 0, emptyTable.stderr);
+      assert.deepEqual(tableRows(emptyTable.stdout), [headers]);
+      const unregistered = fixture.run(["history", "--json", "--cwd", away]);
       assert.equal(unregistered.status, 0, unregistered.stderr);
       assert.deepEqual(JSON.parse(unregistered.stdout), []);
     } finally {
@@ -1939,7 +2026,7 @@ describe("history", () => {
         invalidFile,
         JSON.stringify({ type: "session", version: 1, id: invalidId, cwd: fixture.cwd }) + "\n",
       );
-      const result = fixture.run(["history"]);
+      const result = fixture.run(["history", "--json"]);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), [
         historyEntry(activeFile, activeId, fixture.cwd, "Late name", {
@@ -1974,7 +2061,7 @@ describe("history", () => {
         }) + "\n",
       );
       fixture.recordSessionRoot(root);
-      const result = fixture.run(["history", "--cwd", fixture.cwd]);
+      const result = fixture.run(["history", "--json", "--cwd", fixture.cwd]);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), []);
       assert.ok(existsSync(file));
@@ -2004,7 +2091,7 @@ spyOn(fs, "statSync").mockImplementation((...args) => {
 `,
       );
       fixture.preloads.push("--preload", failStat);
-      const result = fixture.run(["history"]);
+      const result = fixture.run(["history", "--json"]);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), [
         historyEntry(healthyFile, healthyId, fixture.cwd, null),
@@ -2012,6 +2099,29 @@ spyOn(fs, "statSync").mockImplementation((...args) => {
     } finally {
       fixture.cleanup();
     }
+  });
+});
+
+describe("listing arguments", () => {
+  it("rejects unsupported and repeated options", () => {
+    for (const args of [
+      ["list", "--cwd", "/tmp"],
+      ["list", "--json", "--json"],
+      ["current", "--client-pid", "0", "--json"],
+      ["current", "--json", "--client-pid", "123", "--json"],
+      ["history", "--json", "--cwd", "relative"],
+      ["history", "--cwd", "/tmp", "--json", "--json"],
+    ]) {
+      assert.throws(() => parseOperation(args), /usage: pi-mux/, args.join(" "));
+    }
+  });
+
+  it("shows the listing options in top-level help", () => {
+    const result = spawnSync(process.execPath, ["run", source, "--help"], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /pi-mux list \[--json\]/);
+    assert.match(result.stdout, /pi-mux current \[--client-pid <pid>\] \[--json\]/);
+    assert.match(result.stdout, /pi-mux history \[--cwd <absolute-cwd>\] \[--json\]/);
   });
 });
 
@@ -2047,8 +2157,12 @@ describe("unified workspace persistence", () => {
       };
       const bytes = JSON.stringify(previous);
       writeFileSync(restoreFile(fixture), bytes);
-      const result = fixture.run(["list"]);
+      const table = fixture.run(["list"]);
+      assert.equal(table.status, 0, table.stderr);
+      assert.deepEqual(tableRows(table.stdout), [["WORKSPACE", "SESSION ID", "STATE", "TITLE"]]);
+      const result = fixture.run(["list", "--json"]);
       assert.equal(result.status, 0, result.stderr);
+      assert.ok(result.stdout.endsWith("\n"));
       assert.deepEqual(
         JSON.parse(result.stdout),
         previous.workspaces.map(({ cwd }) => ({ cwd, sessions: [], empty: [] })),
@@ -2068,8 +2182,8 @@ describe("unified workspace persistence", () => {
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout, "");
       assert.deepEqual(restoreDocument(fixture).workspaces, []);
-      assert.deepEqual(JSON.parse(fixture.run(["list"]).stdout), []);
-      assert.deepEqual(JSON.parse(fixture.run(["history"]).stdout), []);
+      assert.deepEqual(JSON.parse(fixture.run(["list", "--json"]).stdout), []);
+      assert.deepEqual(JSON.parse(fixture.run(["history", "--json"]).stdout), []);
       const registered = fixture.run(["workspace", "register", fixture.cwd]);
       assert.equal(registered.status, 0, registered.stderr);
       assert.deepEqual(restoreDocument(fixture).workspaces, [{ cwd: fixture.cwd, sessions: [] }]);
@@ -2092,7 +2206,7 @@ describe("unified workspace persistence", () => {
         workspaces: [{ cwd: fixture.cwd, sessions: [] }],
       });
       assert.equal(existsSync(fixture.socket), false);
-      assert.deepEqual(JSON.parse(fixture.run(["list"]).stdout), [
+      assert.deepEqual(JSON.parse(fixture.run(["list", "--json"]).stdout), [
         { cwd: fixture.cwd, sessions: [], empty: [] },
       ]);
     } finally {
@@ -2624,7 +2738,7 @@ exec ${JSON.stringify(realTmux)} "$@"
       const secondId = /^Pi session (\S+)\n/.exec(secondNew.stdout)?.[1];
       assert.ok(firstId && secondId);
       assert.notEqual(secondId, firstId);
-      const list = fixture.run(["list"]);
+      const list = fixture.run(["list", "--json"]);
       assert.equal(list.status, 0, list.stderr);
       const listed = JSON.parse(list.stdout);
       assert.equal(listed.length, 1);
@@ -3545,7 +3659,7 @@ describe("restart safety", () => {
         oldPids.some((pid) => existsSync(`/proc/${pid}`)),
         false,
       );
-      const listed = JSON.parse(fixture.run(["list"]).stdout);
+      const listed = JSON.parse(fixture.run(["list", "--json"]).stdout);
       assert.deepEqual(
         listed[0].sessions.map((entry: { id: string }) => entry.id),
         [id],
@@ -4228,7 +4342,7 @@ exec `,
       assert.ok(
         launched.find(({ id: launchedId }) => launchedId === emptyId).args.includes("--session-id"),
       );
-      const listed = JSON.parse(fixture.run(["list"]).stdout);
+      const listed = JSON.parse(fixture.run(["list", "--json"]).stdout);
       assert.equal(listed.length, 1);
       assert.deepEqual(
         listed[0].sessions.map((entry: { id: string }) => entry.id).sort(),

@@ -27,10 +27,10 @@ type Operation =
   | { kind: "state"; id: string; source: StateSource; notification: StateNotification }
   | { kind: "send"; id: string; waitSeconds: number | undefined; text: string }
   | { kind: "close"; id: string; ifTemporary: boolean }
-  | { kind: "list" }
+  | { kind: "list"; json: boolean }
   | { kind: "switch"; id: string; clientPid: number | undefined }
-  | { kind: "current"; clientPid: number | undefined }
-  | { kind: "history"; cwd: string | undefined }
+  | { kind: "current"; clientPid: number | undefined; json: boolean }
+  | { kind: "history"; cwd: string | undefined; json: boolean }
   | { kind: "workspace"; action: "register" | "unregister"; cwd: string }
   | { kind: "snapshot"; generation?: string }
   | { kind: "restore" }
@@ -147,10 +147,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux state <session-id> --clear --source <JSON>
   pi-mux send [--wait <seconds>] <session-id> <text...>
   pi-mux close [--if-temporary] <session-id>
-  pi-mux list
+  pi-mux list [--json]
   pi-mux switch <session-id> [--client-pid <pid>]
-  pi-mux current [--client-pid <pid>]
-  pi-mux history [--cwd <absolute-cwd>]
+  pi-mux current [--client-pid <pid>] [--json]
+  pi-mux history [--cwd <absolute-cwd>] [--json]
   pi-mux workspace register <cwd>
   pi-mux workspace unregister <cwd>
   pi-mux snapshot [server-generation]
@@ -178,7 +178,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       );
     }
     if (operation.kind === "list") {
-      console.log(JSON.stringify(await listWorkspaces(tmuxConfiguration())));
+      const workspaces = await listWorkspaces(tmuxConfiguration());
+      console.log(operation.json ? JSON.stringify(workspaces) : renderWorkspaceTable(workspaces));
       return 0;
     }
     if (operation.kind === "switch") {
@@ -192,11 +193,20 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       }
     }
     if (operation.kind === "current") {
-      console.log(JSON.stringify(await currentSession(tmuxConfiguration(), operation.clientPid)));
+      const session = await currentSession(tmuxConfiguration(), operation.clientPid);
+      console.log(
+        operation.json
+          ? JSON.stringify(session)
+          : renderTable(
+              ["WORKSPACE", "SESSION ID", "TMUX TARGET", "FILE"],
+              [[session.cwd, session.id, session.target, session.file]],
+            ),
+      );
       return 0;
     }
     if (operation.kind === "history") {
-      console.log(JSON.stringify(await historySessions(tmuxConfiguration(), operation.cwd)));
+      const history = await historySessions(tmuxConfiguration(), operation.cwd);
+      console.log(operation.json ? JSON.stringify(history) : renderHistoryTable(history));
       return 0;
     }
     if (operation.kind === "close") {
@@ -298,6 +308,53 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
 }
 
+function renderWorkspaceTable(workspaces: ListedWorkspace[]): string {
+  const rows = workspaces.flatMap(({ cwd, sessions, empty }) => [
+    ...sessions.map(({ id, state, title }) => [cwd, id, state, title]),
+    ...empty.map(({ id }) => [cwd, id, "unsaved", null]),
+  ]);
+  return renderTable(["WORKSPACE", "SESSION ID", "STATE", "TITLE"], rows);
+}
+
+function renderHistoryTable(history: HistoryEntry[]): string {
+  const rows = history.map(({ cwd, id, mtime, title }) => [
+    cwd,
+    id,
+    mtime === null ? null : new Date(mtime).toJSON(),
+    title,
+  ]);
+  return renderTable(["WORKSPACE", "SESSION ID", "UPDATED (UTC)", "TITLE"], rows);
+}
+
+function renderTable(headers: string[], rows: (string | null)[][]): string {
+  const table = [
+    headers,
+    ...rows.map((row) =>
+      row.map((value) =>
+        (value ?? "-").replace(/[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/gu, (character) => {
+          const hex = character.charCodeAt(0).toString(16).padStart(4, "0");
+          return "\\u" + hex;
+        }),
+      ),
+    ),
+  ];
+  const lastColumn = headers.length - 1;
+  const widths = headers
+    .slice(0, lastColumn)
+    .map((_, column) =>
+      table.reduce((width, row) => Math.max(width, Bun.stringWidth(row[column]!)), 0),
+    );
+  return table
+    .map((row) =>
+      row
+        .map((cell, column) =>
+          column === lastColumn ? cell : cell + " ".repeat(widths[column]! - Bun.stringWidth(cell)),
+        )
+        .join("  "),
+    )
+    .join("\n");
+}
+
 export function parseOperation(argv: string[]): Operation {
   if (argv.length === 1 && (argv[0] === "-h" || argv[0] === "--help")) return { kind: "help" };
   if (argv.length === 0) return { kind: "new", detached: false, clientPid: undefined };
@@ -385,7 +442,8 @@ export function parseOperation(argv: string[]): Operation {
     !argv[2].includes("\0")
   )
     return { kind: "workspace", action: argv[1], cwd: resolve(argv[2]) };
-  if (argv.length === 1 && argv[0] === "list") return { kind: "list" };
+  const listing = parseListingOperation(argv);
+  if (listing) return listing;
   if (argv[0] === "switch") {
     const id = argv[1];
     const pid = argv[2] === "--client-pid" ? argv[3] : undefined;
@@ -396,16 +454,6 @@ export function parseOperation(argv: string[]): Operation {
         (argv.length === 4 && pid !== undefined && /^[1-9]\d*$/.test(pid)))
     )
       return { kind: "switch", id, clientPid: pid === undefined ? undefined : Number(pid) };
-  }
-  if (argv[0] === "current") {
-    const pid = argv[1] === "--client-pid" ? argv[2] : undefined;
-    if (argv.length === 1 || (argv.length === 3 && pid !== undefined && /^[1-9]\d*$/.test(pid)))
-      return { kind: "current", clientPid: pid === undefined ? undefined : Number(pid) };
-  }
-  if (argv[0] === "history") {
-    const cwd = argv[1] === "--cwd" ? argv[2] : undefined;
-    if (argv.length === 1 || (argv.length === 3 && cwd !== undefined && isAbsolute(cwd)))
-      return { kind: "history", cwd };
   }
   if (argv[0] === "reload") {
     if (argv.length === 1) return { kind: "reload", id: undefined };
@@ -418,8 +466,31 @@ export function parseOperation(argv: string[]): Operation {
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] | history [--cwd <absolute-cwd>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | reload [<session-id>] | restart [--force]]",
+    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] [--json] | history [--cwd <absolute-cwd>] [--json] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | reload [<session-id>] | restart [--force]]",
   );
+}
+
+function parseListingOperation(argv: string[]): Operation | undefined {
+  const kind = argv[0];
+  if (kind !== "list" && kind !== "current" && kind !== "history") return;
+
+  const jsonFirst = argv[1] === "--json";
+  const jsonLast = argv.at(-1) === "--json";
+  const json = jsonFirst || jsonLast;
+  const args = jsonFirst ? argv.slice(2) : argv.slice(1, jsonLast ? -1 : undefined);
+
+  if (kind === "list" && args.length === 0) return { kind, json };
+  if (kind === "current") {
+    if (args.length === 0) return { kind, clientPid: undefined, json };
+    const [flag, pid] = args;
+    if (args.length === 2 && flag === "--client-pid" && pid && /^[1-9]\d*$/.test(pid))
+      return { kind, clientPid: Number(pid), json };
+  }
+  if (kind === "history") {
+    if (args.length === 0) return { kind, cwd: undefined, json };
+    const [flag, cwd] = args;
+    if (args.length === 2 && flag === "--cwd" && cwd && isAbsolute(cwd)) return { kind, cwd, json };
+  }
 }
 
 function parseStateOperation(argv: string[]): Operation {
