@@ -8,4 +8,3 @@ Keys use the expanded (`.exact`-stripped) home-relative paths.
 | --- | --- | --- | --- |
 | extensions/pi-mux-bridge |  |  | - |
 | extensions/openui-preview |  | - |  |
-| extensions/session-state |  |  | - |

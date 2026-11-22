@@ -59,6 +59,9 @@ function context(mode = "tui") {
     hasUI: true,
     cwd: "/original cwd",
     sessionManager: {
+      getCwd: () => "/original cwd",
+      getSessionDir: () => "/top-level sessions",
+      getSessionName: () => undefined,
       getSessionId() {
         return "fixed-id";
       },
@@ -131,13 +134,22 @@ describe("startup notification timeouts", () => {
 describe("fixed conversation identity", () => {
   it("does not publish managed readiness from an initialization hook", async () => {
     await withManagedEnvironment(async () => {
-      const handlers = captureHandlers(async () => {
-        throw new Error("No tmux command may run from an initialization hook");
+      const commands: string[][] = [];
+      const handlers = captureHandlers(async (_command, args) => {
+        commands.push(args);
+        return { stdout: "", stderr: "", code: 0, killed: false };
       });
       const { ctx } = context();
-      await handlers.get("session_start")!({}, ctx);
-      assert.equal(handlers.has("resources_discover"), false);
-      stopMessageWatcher();
+      try {
+        await handlers.get("session_start")!({}, ctx);
+        await handlers.get("resources_discover")!({}, ctx);
+        assert.equal(
+          commands.some((args) => args.includes("@pi-tmux-session")),
+          false,
+        );
+      } finally {
+        await handlers.get("session_shutdown")!({}, ctx);
+      }
     });
   });
 
@@ -192,10 +204,8 @@ describe("fixed conversation identity", () => {
         assert.equal(commands.length, 0);
         const { ctx } = context();
         const boundary = startup === "accepted" ? "resources_discover" : "startup";
-        assert.equal(
-          handlers.has(startup === "accepted" ? "startup" : "resources_discover"),
-          false,
-        );
+        if (startup === "accepted") assert.equal(handlers.has("startup"), false);
+        else await handlers.get("resources_discover")!({}, ctx);
         await handlers.get(boundary)!({}, ctx);
         await handlers.get(boundary)!({}, ctx);
         assert.equal(commands.length, 2);
@@ -438,28 +448,41 @@ describe("fixed conversation identity", () => {
         assert.fail("Unrelated tmux must not be inspected"),
       );
       const { ctx, notifications } = context();
+      await handlers.get("session_start")!({}, ctx);
       await handlers.get("resources_discover")!({}, ctx);
+      await handlers.get("session_shutdown")!({}, ctx);
       assert.deepEqual(notifications, []);
     });
   });
 
-  it("does not add a startup command to an unmanaged TUI", () => {
-    const previous = process.env.PI_TMUX_STARTUP_COMMAND;
-    delete process.env.PI_TMUX_STARTUP_COMMAND;
-    try {
-      assert.deepEqual(
-        [...captureHandlers().keys()],
-        [
-          "session_before_switch",
-          "session_before_fork",
-          "session_start",
-          "session_shutdown",
-          "resources_discover",
-        ],
-      );
-    } finally {
-      if (previous !== undefined) process.env.PI_TMUX_STARTUP_COMMAND = previous;
-    }
+  it("registers the state lifecycle once without adding a startup command to ordinary Pi", async () => {
+    await withManagedEnvironment(async () => {
+      delete process.env.PI_TMUX_STARTUP_COMMAND;
+      const registrations: string[] = [];
+      extension({
+        on(event: string) {
+          registrations.push(event);
+        },
+        registerCommand() {
+          assert.fail("Ordinary Pi must not register a pi-mux startup command");
+        },
+      } as unknown as ExtensionAPI);
+      assert.deepEqual(registrations, [
+        "session_before_switch",
+        "session_before_fork",
+        "session_start",
+        "session_shutdown",
+        "resources_discover",
+        "session_start",
+        "resources_discover",
+        "session_info_changed",
+        "agent_start",
+        "ui_prompt_start",
+        "ui_prompt_end",
+        "agent_settled",
+        "session_shutdown",
+      ]);
+    });
   });
 });
 

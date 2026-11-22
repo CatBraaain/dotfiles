@@ -23,8 +23,8 @@ import { join } from "node:path";
 const directory = process.env.PI_TEST_DIRECTORY;
 const moduleDir = process.env.PI_TEST_MODULE_DIR;
 const { createEventBus } = await import(process.env.PI_TEST_SDK_URL);
-const { default: sessionStateExtension } = await import(pathToFileURL(join(moduleDir, "index.ts")));
-const { detectManagedPane, stateOptionValue, PANE_OPTION_NAME } = await import(pathToFileURL(join(moduleDir, "tmux.ts")));
+const { registerSessionState } = await import(pathToFileURL(join(moduleDir, "session-state.ts")));
+const { detectManagedPane, stateOptionValue, PANE_OPTION_NAME } = await import(pathToFileURL(join(moduleDir, "session-state-tmux.ts")));
 
 const socket = join(process.env.XDG_RUNTIME_DIR, "pi-tmux", "server.sock");
 const pane = process.env.TMUX_PANE;
@@ -144,7 +144,7 @@ if (!sessionFirst) {
   writeFileSync(invalidConfig, "read: invalid\n");
   toolsExtension(pi, invalidConfig);
 }
-sessionStateExtension(pi);
+registerSessionState(pi);
 assert.deepEqual(commandNames, []);
 const restorePath = join(directory, "pi-tmux", "pi-mux-restore.json");
 const before = existsSync(restorePath) ? statSync(restorePath, { bigint: true }) : undefined;
@@ -296,7 +296,7 @@ const moduleDir = process.env.PI_TEST_MODULE_DIR;
 const { createAgentSession, SessionManager, SettingsManager, DefaultResourceLoader } = await import(process.env.PI_TEST_SDK_URL);
 const { fakeProvider, fakeModel, memoryRuntime } = await import(pathToFileURL(join(moduleDir, "../recontext/test-fixture.ts")));
 const { registerSessionTitle } = await import(pathToFileURL(join(moduleDir, "../session-title/extension.ts")));
-const { default: sessionStateExtension } = await import(pathToFileURL(join(moduleDir, "index.ts")));
+const { registerSessionState } = await import(pathToFileURL(join(moduleDir, "session-state.ts")));
 const socket = join(process.env.XDG_RUNTIME_DIR, "pi-tmux/server.sock");
 const pane = process.env.TMUX_PANE;
 const title = "Delayed SDK title";
@@ -360,7 +360,7 @@ const loader = new DefaultResourceLoader({
           execution.finished = Date.now();
         }
       };
-      sessionStateExtension(pi);
+      registerSessionState(pi);
       registerSessionTitle(pi, async () => [runtime.getModel("title-share", "title")]);
       pi.on("agent_settled", () => { settled.resolve(); });
     },

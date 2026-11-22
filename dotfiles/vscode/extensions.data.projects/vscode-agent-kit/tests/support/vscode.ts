@@ -676,6 +676,7 @@ export class VSCodeFixture {
       "runtime",
       "home/.config/tmux",
       "agent/extensions/pi-mux-bridge",
+      "agent/extensions/agents",
       "agent/extensions/tools",
     ]) {
       mkdirSync(join(this.directory, directory), { recursive: true, mode: 0o700 });
@@ -720,6 +721,10 @@ exec '${realTmux}' -N "$@"
         join(bridgeSource, name),
         join(this.directory, "agent/extensions/pi-mux-bridge", name),
       );
+    copyFileSync(
+      join(agentSource, "extensions.exact/agents/session-path.ts"),
+      join(this.directory, "agent/extensions/agents/session-path.ts"),
+    );
     const sourceModules = join(agentSource, "node_modules");
     const installedModules = join(homedir(), ".pi/agent/node_modules");
     symlinkSync(

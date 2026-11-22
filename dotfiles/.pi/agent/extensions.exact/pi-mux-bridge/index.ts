@@ -2,6 +2,8 @@ import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { quote } from "shell-quote";
 import { partitionMessageOptions, messageOptions, type AgentMessage } from "./messages.ts";
+import { registerFirstInputHandoff } from "./first-input-handoff.ts";
+import { registerSessionState } from "./session-state.ts";
 import {
   getTmuxPaths,
   inspectManagedPane,
@@ -134,7 +136,13 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
   if (process.env.PI_TMUX_STARTUP_MODE === "create")
     pi.on("resources_discover", async (_event, ctx) => publish(ctx, "accepted"));
   else if (startupCommand) {
-    pi.registerCommand(startupCommand, { handler: async (_args, ctx) => publish(ctx, "ready") });
+    const firstInput = registerFirstInputHandoff(pi, currentReady);
+    pi.registerCommand(startupCommand, {
+      handler: async (_args, ctx) => {
+        await publish(ctx, "ready");
+        if (ready?.id === ctx.sessionManager.getSessionId()) firstInput.ready(ctx);
+      },
+    });
     pi.on("session_shutdown", async (_event, ctx) => confirmReady(ctx));
   } else {
     pi.on("resources_discover", async (_event, ctx) => {
@@ -143,35 +151,42 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
     });
   }
 
-  async function confirmReady(ctx: ExtensionContext): Promise<void> {
+  registerSessionState(pi);
+
+  async function currentReady(ctx: ExtensionContext): Promise<typeof ready> {
     if (ctx.mode !== "tui") return;
+    if (ready) return ready;
     const execute = backgroundExecutor(pi, ctx);
     const paths = getTmuxPaths();
-    if (!ready) {
-      const identity = await inspectManagedPane(execute, paths);
-      if (!identity) return;
-      const { pane, pid } = identity;
-      const published = await execute(
-        "tmux",
-        tmuxArgs(paths, ["display-message", "-p", "-t", pane, "#{@pi-tmux-session}"]),
-      );
-      if (!published.stdout.trim()) return;
-      const metadata = JSON.parse(Buffer.from(published.stdout.trim(), "base64").toString("utf8"));
-      const id = ctx.sessionManager.getSessionId();
-      if (
-        metadata?.id !== id ||
-        metadata.pid !== pid ||
-        metadata.token !== launchToken() ||
-        (metadata.processPid !== undefined && metadata.processPid !== process.pid) ||
-        metadata.startup !== "ready"
-      )
-        return;
-      ready = { id, pane, serverPid: identity.serverPid, panePid: pid };
-    }
-    const { id, pane, serverPid, panePid } = ready;
-    await execute(
+    const identity = await inspectManagedPane(execute, paths);
+    if (!identity) return;
+    const { pane, pid } = identity;
+    const published = await execute(
       "tmux",
-      tmuxArgs(paths, [
+      tmuxArgs(paths, ["display-message", "-p", "-t", pane, "#{@pi-tmux-session}"]),
+    );
+    if (!published.stdout.trim()) return;
+    const metadata = JSON.parse(Buffer.from(published.stdout.trim(), "base64").toString("utf8"));
+    const id = ctx.sessionManager.getSessionId();
+    if (
+      metadata?.id !== id ||
+      metadata.pid !== pid ||
+      metadata.token !== launchToken() ||
+      (metadata.processPid !== undefined && metadata.processPid !== process.pid) ||
+      metadata.startup !== "ready"
+    )
+      return;
+    ready = { id, pane, serverPid: identity.serverPid, panePid: pid };
+    return ready;
+  }
+
+  async function confirmReady(ctx: ExtensionContext): Promise<void> {
+    const identity = await currentReady(ctx);
+    if (!identity) return;
+    const { id, pane, serverPid, panePid } = identity;
+    await backgroundExecutor(pi, ctx)(
+      "tmux",
+      tmuxArgs(getTmuxPaths(), [
         "if-shell",
         "-F",
         "-t",
@@ -205,6 +220,7 @@ export default function fixedSessionExtension(pi: ExtensionAPI): void {
           pid,
           startup,
           token: launchToken(),
+          ...(process.env.PI_TMUX_STARTUP_MODE === "warm" ? { warm: true } : {}),
           ...(pid === process.pid ? {} : { processPid: process.pid }),
         }),
       ).toString("base64");

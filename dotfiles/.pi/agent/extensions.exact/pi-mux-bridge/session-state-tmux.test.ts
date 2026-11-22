@@ -15,7 +15,7 @@ import {
   stateCommandArgs,
   type CommandRunner,
   type ManagedPaneBinding,
-} from "./tmux.ts";
+} from "./session-state-tmux.ts";
 
 interface CommandCall {
   file: string;

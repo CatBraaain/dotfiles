@@ -1,12 +1,12 @@
-# session-state の実行フェーズ・タイトル仕様
+# pi-mux-bridge の実行フェーズ・タイトル公開仕様
 
-この文書は、pi拡張 session-state の専用tmux paneへの実行フェーズ・タイトル公開を定める。読者は、この拡張と外部の読み書き手を保守する user と coding agent である。課題・目的・重要な制約の正本は [REQUIREMENTS.md](REQUIREMENTS.md) とする。
+この文書は、pi拡張 `pi-mux-bridge` による専用tmux paneへの実行フェーズ・タイトル公開を定める。読者は、この拡張と外部の読み書き手を保守する user と coding agent である。課題・目的・重要な制約の正本は [公開要件](session-state.requirements.md) とする。
 
 ## 適用対象
 
 実行フェーズの公開はトップレベルセッションに適用する。現在の session directory が、そのcwdの subagent用directory と一致する子セッションでは、pane公開を行わない。この判定は新規・resume・fork・画像入力の自動vision委譲に共通し、agent名・役割・親ヘッダーの有無では変わらない。
 
-公開はライフサイクルイベントに従い、この拡張が提供するスラッシュコマンドはない。自セッションは、この拡張が動作しているpiの現在のセッションを指す。
+公開にはスラッシュコマンドではなくライフサイクルイベントを使う。自セッションは、この拡張が動作しているpiの現在のセッションを指す。
 
 | 入力・状態 | pane公開 |
 | --- | --- |
@@ -19,7 +19,7 @@
 
 ## workspace登録・復元との境界
 
-セッション一覧の正本は `pi-mux list` とし、復元用JSONの読込み・更新はpi-muxが担う。session-stateは、自セッションの実行フェーズと保存済みタイトルを [pi-muxのstate操作](../../../../.local/cli.exact/pi-mux/SPEC.md#state) へ通知し、pane optionに公開する。状態metadataを直接書き換えず、終了時の除去も同じ公開CLIへ依頼する。
+セッション一覧の正本は `pi-mux list` とし、復元用JSONの読込み・更新はpi-muxが担う。拡張は、自セッションの実行フェーズと保存済みタイトルを [pi-muxのstate操作](../../../../.local/cli.exact/pi-mux/SPEC.md#state) へ通知し、pane optionに公開する。状態metadataを直接書き換えず、終了時の除去も同じ公開CLIへ依頼する。
 
 起動・入力・実行フェーズ遷移・終了の全期間で、workspace登録と復元記録の取得・更新はpi-muxが担う。拡張自身は保存storeを直接読み書きせず、会話JSONLも変更・削除しない。`running` 通知に伴う一時再開からの昇格と復元記録更新はpi-muxが行う。
 

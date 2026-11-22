@@ -10,8 +10,10 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -98,19 +100,31 @@ export default function (pi) {
     appendFileSync(${JSON.stringify(join(root, "events.jsonl"))}, JSON.stringify({ kind, payload }) + "\\n");
   }
   pi.registerFlag("agent", { type: "string", description: "Fixture agent" });
-  pi.on("input", (event, ctx) => {
+  pi.on("input", async (event, ctx) => {
     record("input", event.text);
+    if (event.source === "extension" && event.text === "delayed preflight sentinel") {
+      const released = ${JSON.stringify(join(root, "command-released"))};
+      while (!existsSync(released)) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     appendFileSync(${JSON.stringify(join(root, "inputs.jsonl"))}, JSON.stringify({ id: ctx.sessionManager.getSessionId(), text: event.text, source: event.source, images: event.images }) + "\\n");
     if (!event.text.startsWith("/skill:") && event.text.includes("fixture-initial")) return { action: "handled" };
     return { action: "continue" };
   });
   pi.on("before_agent_start", (event, ctx) => {
     appendFileSync(${JSON.stringify(join(root, "prompts.jsonl"))}, JSON.stringify({ id: ctx.sessionManager.getSessionId(), prompt: event.prompt, images: event.images }) + "\\n");
+    appendFileSync(${JSON.stringify(join(root, "prompt-processes.jsonl"))}, JSON.stringify({ id: ctx.sessionManager.getSessionId(), pid: process.pid }) + "\\n");
   });
   pi.registerCommand("fixture-initial-command", { async handler(args, ctx) {
     appendFileSync(${JSON.stringify(join(root, "commands.jsonl"))}, JSON.stringify({ id: ctx.sessionManager.getSessionId(), args }) + "\\n");
     if (args === "blocked") while (!existsSync(${JSON.stringify(join(root, "command-released"))})) await new Promise((resolve) => setTimeout(resolve, 25));
   }});
+  pi.on("session_start", (_event, ctx) => {
+    ctx.ui.onTerminalInput((data) => {
+      if (data !== "\\x1d") return;
+      appendFileSync(${JSON.stringify(join(root, "editor.jsonl"))}, JSON.stringify({ text: ctx.ui.getEditorText() }) + "\\n");
+      return { consume: true };
+    });
+  });
   pi.on("resources_discover", (_event, ctx) => {
     appendFileSync(${JSON.stringify(join(root, "discovered.jsonl"))}, JSON.stringify({ id: ctx.sessionManager.getSessionId() }) + "\\n");
   });
@@ -133,6 +147,13 @@ exec ${quote([realPi])} "$@" 2>>${quote([join(root, "pi-stderr.log")])}
 `,
   );
   chmodSync(join(bin, "pi"), 0o700);
+  writeFileSync(
+    join(bin, "pi-mux"),
+    '#!/bin/sh\nif test "$1" = first-input; then exec ' +
+      quote(CLI_COMMAND) +
+      ' "$@"; fi\ntest "$1" = state\n',
+    { mode: 0o700 },
+  );
   writeFileSync(
     join(agent, "settings.json"),
     JSON.stringify({
@@ -435,10 +456,13 @@ exec ${quote([realTmux])} "$@"
   async function persist(pane: Pane) {
     await tmux(["send-keys", "-t", pane.pane, "-l", "regression user message"]);
     await tmux(["send-keys", "-t", pane.pane, "Enter"]);
-    await waitFor(() =>
-      existsSync(pane.file) && readFileSync(pane.file, "utf8").includes("regression user message")
-        ? true
-        : undefined,
+    return await waitFor(async () =>
+      (await panes()).find(
+        (current) =>
+          current.id === pane.id &&
+          existsSync(current.file) &&
+          readFileSync(current.file, "utf8").includes("regression user message"),
+      ),
     );
   }
 
@@ -498,11 +522,7 @@ async function waitFor<T>(check: () => T | undefined | Promise<T | undefined>): 
 
 type MuxFixture = Awaited<ReturnType<typeof createFixture>>;
 
-function enableStatePublisher(f: MuxFixture): void {
-  writeFileSync(
-    join(f.agent, "extensions/session-state.ts"),
-    `export { default } from ${JSON.stringify(resolve(EXTENSION_DIR, "../session-state/index.ts"))};\n`,
-  );
+function useRealStateCommand(f: MuxFixture): void {
   writeFileSync(join(f.bin, "pi-mux"), "#!/bin/sh\nexec " + quote(CLI_COMMAND) + ' "$@"\n', {
     mode: 0o700,
   });
@@ -2136,50 +2156,510 @@ describe("pi-mux new argument contract", () => {
   }
 });
 
+function recoveryDirectory(f: MuxFixture, pane: Pane): string {
+  return join(f.agent, "pi-tmux", "first-input", pane.id);
+}
+
+async function enter(f: MuxFixture, pane: Pane, text: string): Promise<void> {
+  assert.equal((await f.tmux(["send-keys", "-t", pane.pane, "-l", text])).code, 0);
+  assert.equal((await f.tmux(["send-keys", "-t", pane.pane, "Enter"])).code, 0);
+}
+
+async function waitForEditor(f: MuxFixture, pane: Pane, text: string): Promise<void> {
+  await waitFor(async () => {
+    const screen = await f.tmux(["capture-pane", "-p", "-t", pane.pane]);
+    return screen.out.includes(text) ? true : undefined;
+  });
+}
+
+describe("pi-mux first input handoff", () => {
+  it(
+    "reuses the draft and submits once in a fresh process in the same conversation and pane",
+    async () => {
+      await fixture(async (f) => {
+        useRealStateCommand(f);
+        assert.equal((await f.run(["new", "--detached"])).code, 0);
+        const old = await firstPane(f);
+        const text = 'handoff sentinel: $HOME "quotes" # no argument';
+        await enter(f, old, "/fixture-initial-command slash-stays");
+        await waitFor(() =>
+          f.records<{ args: string }>("commands")[0]?.args === "slash-stays" ? true : undefined,
+        );
+        await enter(f, old, "/reload");
+        await waitForEditor(f, old, "Reloaded keybindings, extensions, skills");
+        assert.deepEqual(await firstPane(f), old);
+        await f.tmux(["send-keys", "-t", old.pane, "-l", text]);
+        await waitForEditor(f, old, text);
+        const reused = await f.run(["new", "--detached"]);
+        assert.equal(reused.code, 0, reused.err);
+        assert.ok(reused.out.includes(old.id));
+        assert.deepEqual(await firstPane(f), old);
+        await waitForEditor(f, old, text);
+        const piPath = join(f.bin, "pi");
+        const updateMarker = join(f.root, "updated-pi");
+        const updated = readFileSync(piPath, "utf8").replace(
+          "#!/bin/sh\n",
+          () => `#!/bin/sh\nprintf '%s' "$$" > ${quote([updateMarker])}\n`,
+        );
+        writeFileSync(piPath + ".next", updated, { mode: 0o700 });
+        renameSync(piPath + ".next", piPath);
+        assert.equal(existsSync(updateMarker), false);
+        assert.equal((await f.tmux(["send-keys", "-t", old.pane, "Enter"])).code, 0);
+        const replacement = await waitFor(async () =>
+          (await f.panes()).find(
+            (pane) => pane.id === old.id && pane.pid !== old.pid && pane.startup === "ready",
+          ),
+        );
+        assert.equal(replacement.pane, old.pane);
+        assert.equal(replacement.cwd, old.cwd);
+        assert.equal(replacement.session, old.session);
+        assert.equal(Number(readFileSync(updateMarker, "utf8")), replacement.pid);
+        await waitFor(() =>
+          existsSync(replacement.file) && !existsSync(recoveryDirectory(f, old)) ? true : undefined,
+        );
+        const processes = () => f.records<{ id: string; pid: number }>("prompt-processes");
+        assert.deepEqual(
+          processes().map(({ id }) => id),
+          [old.id],
+        );
+        assert.equal(
+          processes()[0]?.pid,
+          (replacement as Pane & { processPid?: number }).processPid ?? replacement.pid,
+        );
+        assert.deepEqual(
+          f.records<Prompt>("prompts").map(({ prompt }) => prompt),
+          [text],
+        );
+        const argvFiles = readdirSync(f.root).filter((name) => name.startsWith("argv-"));
+        for (const file of argvFiles)
+          assert.ok(!readFileSync(join(f.root, file), "utf8").includes(text));
+        const environment = await f.tmux(["show-environment", "-t", replacement.session]);
+        assert.ok(!environment.out.includes(text));
+        assert.ok(!readFileSync(join(f.root, "pi-stderr.log"), "utf8").includes(text));
+        await waitFor(async () =>
+          (await listedSession(f, old.id))?.state === "waiting-user" ? true : undefined,
+        );
+        await enter(f, replacement, "second input sentinel");
+        await waitFor(() => (processes().length === 2 ? true : undefined));
+        assert.equal(processes()[1]?.pid, processes()[0]?.pid);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "leaves ordinary Pi interactive and does not replace its process",
+    async () => {
+      await fixture(async (f) => {
+        const id = randomUUID();
+        const launched = await f.tmux(
+          [
+            "-f",
+            join(f.root, "outer.conf"),
+            "new-session",
+            "-d",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-c",
+            f.cwdA,
+            "--",
+            "/usr/bin/env",
+            "-i",
+            ...Object.entries(f.env).map(([key, value]) => `${key}=${value}`),
+            join(f.bin, "pi"),
+            "--session-id",
+            id,
+            "--",
+            "/fixture-initial-command normal-ready",
+          ],
+          f.outer,
+        );
+        assert.equal(launched.code, 0, launched.err);
+        const pane = launched.out.trim();
+        const originalPid = (
+          await f.tmux(["display-message", "-p", "-t", pane, "#{pane_pid}"], f.outer)
+        ).out;
+        await waitFor(() =>
+          f.records<{ args: string }>("commands")[0]?.args === "normal-ready" ? true : undefined,
+        );
+        const input = "ordinary interactive sentinel";
+        assert.equal((await f.tmux(["send-keys", "-t", pane, "-l", input], f.outer)).code, 0);
+        assert.equal((await f.tmux(["send-keys", "-t", pane, "Enter"], f.outer)).code, 0);
+        await waitFor(() =>
+          f.records<Input>("inputs").find((entry) => entry.id === id && entry.text === input),
+        );
+        assert.deepEqual(f.records<Input>("inputs"), [{ id, text: input, source: "interactive" }]);
+        assert.equal(
+          (await f.tmux(["display-message", "-p", "-t", pane, "#{pane_pid}"], f.outer)).out,
+          originalPid,
+        );
+        assert.equal(existsSync(join(f.agent, "pi-tmux/first-input")), false);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "keeps the old process and text in its editor when saving fails",
+    async () => {
+      await fixture(async (f) => {
+        useRealStateCommand(f);
+        assert.equal((await f.run(["new", "--detached"])).code, 0);
+        const old = await firstPane(f);
+        const text = "first input blocked by unsafe directory";
+        writeFileSync(join(f.agent, "pi-tmux", "first-input"), "not a directory", { mode: 0o600 });
+        await enter(f, old, text);
+        await waitForEditor(f, old, "First input handoff failed.");
+        await waitForEditor(f, old, text);
+        assert.deepEqual(await firstPane(f), old);
+        assert.deepEqual(f.records<Prompt>("prompts"), []);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "keeps the draft and does not replace a pane whose launch token changed",
+    async () => {
+      await fixture(async (f) => {
+        useRealStateCommand(f);
+        assert.equal((await f.run(["new", "--detached"])).code, 0);
+        const old = await firstPane(f);
+        const launch = await f.tmux(["show-options", "-pqv", "-t", old.pane, "@pi-mux-launch"]);
+        const token = randomUUID();
+        assert.equal(
+          (
+            await f.tmux([
+              "set-option",
+              "-p",
+              "-t",
+              old.pane,
+              "@pi-mux-launch",
+              JSON.stringify({ ...JSON.parse(launch.out), token }),
+            ])
+          ).code,
+          0,
+        );
+        const text = "draft after unexpected launch token";
+        await enter(f, old, text);
+        await waitForEditor(f, old, "First input handoff failed.");
+        await waitForEditor(f, old, text);
+        assert.deepEqual(await firstPane(f), old);
+        assert.equal(readFileSync(join(recoveryDirectory(f, old), "text"), "utf8"), text);
+        assert.deepEqual(f.records<Prompt>("prompts"), []);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "blocks old TUI keystrokes while replacement is pending and unlocks on failure",
+    async () => {
+      await fixture(async (f) => {
+        assert.equal((await f.run(["new", "--detached"])).code, 0);
+        const old = await firstPane(f);
+        const requested = join(f.root, "handoff-requested");
+        const release = join(f.root, "handoff-release");
+        writeFileSync(
+          join(f.bin, "pi-mux"),
+          `#!/bin/sh
+test "$1" = first-input || exit 0
+touch ${quote([requested])}
+while ! test -f ${quote([release])}; do sleep 0.02; done
+exit 1
+`,
+          { mode: 0o700 },
+        );
+        const text = "first input awaiting replacement";
+        await enter(f, old, text);
+        try {
+          await waitFor(() => (existsSync(requested) ? true : undefined));
+          await waitForEditor(f, old, "Wait before typing");
+          await enter(f, old, "/fixture-initial-command should-not-run");
+        } finally {
+          writeFileSync(release, "");
+        }
+        await waitForEditor(f, old, "First input handoff failed.");
+        await waitForEditor(f, old, text);
+        assert.deepEqual(f.records("commands"), []);
+        assert.deepEqual(await firstPane(f), old);
+        await f.tmux(["send-keys", "-t", old.pane, "C-u"]);
+        await enter(f, old, "/fixture-initial-command editor-unlocked");
+        await waitFor(() =>
+          f.records<{ args: string }>("commands")[0]?.args === "editor-unlocked" ? true : undefined,
+        );
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "keeps unsaved shell context in the old process when the first prompt is sent",
+    async () => {
+      await fixture(async (f) => {
+        useRealStateCommand(f);
+        assert.equal((await f.run(["new", "--detached"])).code, 0);
+        const old = await firstPane(f);
+        await enter(f, old, "!printf '%s%s' shell-context- sentinel");
+        await waitForEditor(f, old, "shell-context-sentinel");
+        assert.equal(existsSync(old.file), false);
+        const text = "prompt after a shell command";
+        await enter(f, old, text);
+        await waitFor(() =>
+          existsSync(old.file) && readFileSync(old.file, "utf8").includes(text) ? true : undefined,
+        );
+        assert.equal((await firstPane(f)).pid, old.pid);
+        assert.match(readFileSync(old.file, "utf8"), /"role":"bashExecution"/);
+        assert.equal(existsSync(recoveryDirectory(f, old)), false);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "drops unrelated global environment and clears old state before publishing replacement readiness",
+    async () => {
+      await fixture(async (f) => {
+        assert.equal(
+          (await f.run(["new", "--detached"], f.cwdB, { FIRST_INPUT_KEEP: "session-value" })).code,
+          0,
+        );
+        const old = await firstPane(f);
+        const env = await f.tmux([
+          "set-environment",
+          "-g",
+          "FIRST_INPUT_GLOBAL",
+          "should-not-inherit",
+        ]);
+        assert.equal(env.code, 0, env.err);
+        const oldOptions = [
+          "@pi_session_state",
+          "@pi-mux-state-source",
+          "@pi-mux-pending-restart-blocker",
+          "@pi_session_state_pending",
+        ];
+        for (const option of oldOptions)
+          assert.equal(
+            (await f.tmux(["set-option", "-p", "-t", old.pane, option, "old-value"])).code,
+            0,
+          );
+        await enter(f, old, "clean replacement sentinel");
+        const replacement = await waitFor(async () =>
+          (await f.panes()).find(
+            (pane) => pane.id === old.id && pane.pid !== old.pid && pane.startup === "ready",
+          ),
+        );
+        const environment = processEnvironment(replacement.pid);
+        assert.ok(environment.includes("FIRST_INPUT_KEEP=session-value"));
+        assert.ok(!environment.some((entry) => entry.startsWith("FIRST_INPUT_GLOBAL=")));
+        for (const option of oldOptions)
+          assert.equal(
+            (await f.tmux(["show-options", "-pqv", "-t", old.pane, option])).out,
+            "",
+            option,
+          );
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "reopens a draft-only conversation after replacement fails to start, without resending",
+    async () => {
+      await fixture(async (f) => {
+        useRealStateCommand(f);
+        assert.equal((await f.run(["new", "--detached"])).code, 0);
+        const old = await firstPane(f);
+        const text = "untouched draft after failed startup";
+        const failure = join(f.root, "fail-startup");
+        writeFileSync(failure, old.id);
+        await enter(f, old, text);
+        const body = join(recoveryDirectory(f, old), "text");
+        await waitFor(async () => {
+          const panes = await f.tmux(["list-panes", "-a", "-F", "#{pane_id}"]);
+          return existsSync(body) && !panes.out.trim().split("\n").includes(old.pane)
+            ? true
+            : undefined;
+        });
+        assert.equal(statSync(body).mode & 0o777, 0o600);
+        assert.equal(readFileSync(body, "utf8"), text);
+        assert.deepEqual(f.records<Prompt>("prompts"), []);
+        rmSync(failure);
+        await f.client("recover", ["open", old.id]);
+        const reopened = await firstPane(f);
+        await waitForEditor(f, reopened, text);
+        assert.equal(reopened.id, old.id);
+        assert.equal(reopened.cwd, old.cwd);
+        assert.deepEqual(f.records<Prompt>("prompts"), []);
+        assert.equal(existsSync(join(recoveryDirectory(f, old), "attempted")), false);
+        await f.detachAll();
+        assert.equal(await f.exitCode("recover"), 0);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "does not restore text during a slow preflight that ultimately accepts it",
+    async () => {
+      await fixture(async (f) => {
+        useRealStateCommand(f);
+        assert.equal((await f.run(["new", "--detached"])).code, 0);
+        const old = await firstPane(f);
+        const text = "delayed preflight sentinel";
+        await enter(f, old, text);
+        const replacement = await waitFor(async () =>
+          (await f.panes()).find(
+            (pane) => pane.id === old.id && pane.pid !== old.pid && pane.startup === "ready",
+          ),
+        );
+        await waitFor(() =>
+          f.events().some((entry) => entry.kind === "input" && entry.payload === text)
+            ? true
+            : undefined,
+        );
+        await Bun.sleep(3_200);
+        const screen = await f.tmux(["capture-pane", "-p", "-t", replacement.pane]);
+        assert.ok(!screen.out.includes(text));
+        assert.equal(readFileSync(join(recoveryDirectory(f, old), "text"), "utf8"), text);
+        writeFileSync(join(f.root, "command-released"), "");
+        await waitFor(() => (!existsSync(recoveryDirectory(f, old)) ? true : undefined));
+        assert.deepEqual(
+          f.records<Prompt>("prompts").map((entry) => entry.prompt),
+          [text],
+        );
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "does not restore the accepted first input when a later input was saved first",
+    async () => {
+      await fixture(async (f) => {
+        useRealStateCommand(f);
+        assert.equal((await f.run(["new", "--detached"])).code, 0);
+        const old = await firstPane(f);
+        const first = "delayed preflight sentinel";
+        const later = "later input saved first";
+        await enter(f, old, first);
+        const replacement = await waitFor(async () =>
+          (await f.panes()).find(
+            (pane) => pane.id === old.id && pane.pid !== old.pid && pane.startup === "ready",
+          ),
+        );
+        await waitFor(() =>
+          f.events().find((entry) => entry.kind === "input" && entry.payload === first),
+        );
+        await enter(f, replacement, later);
+        function savedInputs() {
+          return existsSync(replacement.file)
+            ? readFileSync(replacement.file, "utf8")
+                .trim()
+                .split("\n")
+                .map((line) => JSON.parse(line))
+                .filter((entry) => entry.type === "message" && entry.message.role === "user")
+                .map((entry) => entry.message.content[0].text)
+            : [];
+        }
+        await waitFor(async () =>
+          savedInputs().length === 1 && (await listedSession(f, old.id))?.state === "waiting-user"
+            ? true
+            : undefined,
+        );
+        assert.deepEqual(savedInputs(), [later]);
+        writeFileSync(join(f.root, "command-released"), "");
+        await waitFor(async () =>
+          savedInputs().length === 2 && (await listedSession(f, old.id))?.state === "waiting-user"
+            ? true
+            : undefined,
+        );
+        assert.deepEqual(savedInputs(), [later, first]);
+        const draftBeforeClose = existsSync(recoveryDirectory(f, old));
+        const closed = await f.run(["close", old.id]);
+        assert.equal(closed.code, 0, closed.err);
+        await f.client("reopen-accepted", ["open", old.id]);
+        const reopened = await firstPane(f);
+        assert.equal(reopened.id, old.id);
+        assert.equal((await f.tmux(["send-keys", "-t", reopened.pane, "-H", "1d"])).code, 0);
+        const editor = await waitFor(() => f.records<{ text: string }>("editor")[0]);
+        assert.equal(editor.text, "");
+        assert.equal(draftBeforeClose, false);
+        assert.deepEqual(savedInputs(), [later, first]);
+        await f.detachAll();
+        assert.equal(await f.exitCode("reopen-accepted"), 0);
+      });
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "retains an unconfirmed attempt and does not try it again on reopen",
+    async () => {
+      await fixture(async (f) => {
+        useRealStateCommand(f);
+        assert.equal((await f.run(["new", "--detached"])).code, 0);
+        const old = await firstPane(f);
+        const text = "unconfirmed attempt sentinel";
+        const settings = join(f.agent, "models.json");
+        writeFileSync(settings, JSON.stringify({ providers: {} }));
+        await enter(f, old, text);
+        const replacement = await waitFor(async () =>
+          (await f.panes()).find(
+            (pane) => pane.id === old.id && pane.pid !== old.pid && pane.startup === "ready",
+          ),
+        );
+        const dir = recoveryDirectory(f, old);
+        await waitFor(() => (existsSync(join(dir, "attempted")) ? true : undefined));
+        await waitFor(async () => {
+          const screen = await f.tmux(["capture-pane", "-p", "-t", replacement.pane]);
+          return /No model|No API key found/.test(screen.out) ? true : undefined;
+        });
+        await Bun.sleep(3_200);
+        const screen = await f.tmux(["capture-pane", "-p", "-t", replacement.pane]);
+        assert.ok(screen.out.includes("pi-mux close"));
+        assert.ok(screen.out.includes("pi-mux open"));
+        assert.ok(!screen.out.includes(text));
+        assert.equal(readFileSync(join(dir, "text"), "utf8"), text);
+        const attempts = () =>
+          f.records<Input>("inputs").filter((x) => x.text === text && x.source === "extension");
+        assert.equal(attempts().length, 1);
+        assert.equal((await f.run(["close", old.id])).code, 0);
+        await f.client("recover-attempt", ["open", old.id]);
+        const reopened = await firstPane(f);
+        await waitForEditor(f, reopened, text);
+        assert.equal(attempts().length, 1);
+        assert.equal(existsSync(join(dir, "attempted")), true);
+        await f.detachAll();
+        assert.equal(await f.exitCode("recover-attempt"), 0);
+      });
+    },
+    TIMEOUT_MS,
+  );
+});
+
 describe("pi-mux new connection selection", () => {
   it(
-    "creates independent sessions across concurrent detached calls and an attached call in the same cwd",
+    "reuses one warm session across concurrent detached calls and an attached call in the same cwd",
     async () => {
       await fixture(async (f) => {
         const results = await Promise.all([
           f.run(["new", "--detached"], f.cwdA),
           f.run(["new", "--detached"], f.cwdA),
         ]);
-        const started = await waitFor(async () => {
-          const panes = await f.panes();
-          return panes.length === 2 ? panes : undefined;
-        });
-        for (const result of results) assert.equal(result.code, 0, result.err);
-        for (const pane of started) {
-          assert.equal(pane.cwd, f.cwdA);
-          assert.equal(pane.startup, "ready");
-          assert.equal(existsSync(pane.file), false);
-        }
-        assert.notEqual(started[0]!.id, started[1]!.id);
-        assert.notEqual(started[0]!.session, started[1]!.session);
-        assert.notEqual(started[0]!.pid, started[1]!.pid);
-        assert.notEqual(started[0]!.pane, started[1]!.pane);
+        const started = await firstPane(f);
+        assert.equal(started.cwd, f.cwdA);
+        assert.equal(started.startup, "ready");
+        assert.equal(existsSync(started.file), false);
         for (const result of results) {
-          const pane = started.find((entry) => result.out.includes(entry.id));
-          assert.ok(pane);
-          assert.match(result.out, new RegExp(`Pi session ${pane.id}\\nAttach with:`));
-          assert.ok(result.out.includes(pane.session));
+          assert.equal(result.code, 0, result.err);
+          assert.match(result.out, new RegExp(`Pi session ${started.id}\\nAttach with:`));
+          assert.ok(result.out.includes(started.session));
         }
         assert.equal((await f.tmux(["list-clients"])).out.trim(), "");
-        const startedSessions = new Set(started.map((pane) => pane.session));
-        await f.client("independent", ["new"], f.cwdA);
-        const attachedSession = await waitFor(async () => {
-          const panes = await f.panes();
-          return panes.length === 3
-            ? panes.find((pane) => !startedSessions.has(pane.session))?.session
-            : undefined;
-        });
-        assert.ok(attachedSession);
-        for (const pane of await f.panes()) {
-          assert.equal(pane.cwd, f.cwdA);
-          assert.equal(existsSync(pane.file), false);
-        }
-        assert.equal(new Set((await f.panes()).map((pane) => pane.session)).size, 3);
+        await f.client("reused", ["new"], f.cwdA);
+        const attachedSession = started.session;
         await waitFor(async () =>
           (await f.tmux(["list-clients", "-F", "#{session_id}"])).out
             .trim()
@@ -2188,8 +2668,9 @@ describe("pi-mux new connection selection", () => {
             ? true
             : undefined,
         );
+        assert.deepEqual(await f.panes(), [started]);
         await f.detachAll();
-        assert.equal(await f.exitCode("independent"), 0);
+        assert.equal(await f.exitCode("reused"), 0);
       });
     },
     TIMEOUT_MS,
@@ -2216,22 +2697,10 @@ describe("pi-mux new connection selection", () => {
           assert.equal(existsSync(pane.file), false);
           const another = await f.run(["new", "--detached"], cwd);
           assert.equal(another.code, 0, another.err);
-          const created = await waitFor(async () =>
-            (await f.panes()).find((entry) => entry.cwd === cwd && entry.id !== pane.id),
-          );
-          assert.ok(another.out.includes(created.id));
-          assert.notEqual(created.session, pane.session);
-          assert.equal(existsSync(created.file), false);
-          const before = new Set(
-            (await f.panes()).filter((entry) => entry.cwd === cwd).map((entry) => entry.session),
-          );
+          assert.ok(another.out.includes(pane.id));
+          assert.deepEqual(await f.panes(), original);
           await f.client("independent-" + index, ["new"], cwd);
-          const attachedSession = await waitFor(async () => {
-            const sessions = (await f.panes())
-              .filter((entry) => entry.cwd === cwd)
-              .map((entry) => entry.session);
-            return sessions.find((session) => !before.has(session));
-          });
+          const attachedSession = pane.session;
           await waitFor(async () =>
             (await f.tmux(["list-clients", "-F", "#{session_id}"])).out
               .trim()
@@ -2272,12 +2741,8 @@ describe("pi-mux new connection selection", () => {
           assert.equal(existsSync(original.file), false);
           const another = await f.run(["new", "--detached"], f.cwdA);
           assert.equal(another.code, 0, another.err);
-          const fresh = await waitFor(async () =>
-            (await f.panes()).find((pane) => pane.cwd === f.cwdA && pane.id !== original.id),
-          );
-          assert.ok(another.out.includes(fresh.id));
-          assert.notEqual(fresh.session, original.session);
-          assert.equal(existsSync(fresh.file), false);
+          assert.ok(another.out.includes(original.id));
+          assert.equal((await f.panes()).length, 2);
           assert.deepEqual(
             (await f.panes()).find((pane) => pane.id === original.id),
             original,
@@ -2306,6 +2771,23 @@ describe("pi-mux new connection selection", () => {
         const original = await firstPane(f);
         const renamed = await f.tmux(["rename-session", "-t", original.session, "pi-empty"]);
         assert.equal(renamed.code, 0, renamed.err);
+        const published = await f.tmux([
+          "show-options",
+          "-pqv",
+          "-t",
+          original.pane,
+          "@pi-tmux-session",
+        ]);
+        const metadata = JSON.parse(Buffer.from(published.out.trim(), "base64").toString());
+        delete metadata.warm;
+        await f.tmux([
+          "set-option",
+          "-p",
+          "-t",
+          original.pane,
+          "@pi-tmux-session",
+          Buffer.from(JSON.stringify(metadata)).toString("base64"),
+        ]);
         const result = await f.run(["new", "--detached"], f.cwdA);
         assert.equal(result.code, 0, result.err);
         const panes = await f.panes();
@@ -2378,13 +2860,8 @@ describe("pi-mux new connection selection", () => {
           }
           const another = await f.run(["new", "--detached"], f.cwdA);
           assert.equal(another.code, 0, another.err);
-          const fresh = await waitFor(async () =>
-            (await f.panes()).find((pane) => pane.id !== empty.id && pane.id !== requested.id),
-          );
-          assert.ok(another.out.includes(fresh.id));
-          assert.notEqual(fresh.session, empty.session);
-          assert.notEqual(fresh.session, requested.session);
-          assert.equal(existsSync(fresh.file), false);
+          assert.ok(another.out.includes(empty.id));
+          assert.equal((await f.panes()).length, 2);
           assert.equal((await f.panes()).find((pane) => pane.id === empty.id)?.pid, empty.pid);
           if (!detached) {
             await f.detachAll();
@@ -2403,8 +2880,7 @@ describe("pi-mux CLI boundaries", () => {
     async () => {
       await fixture(async (f) => {
         await f.client("initial", ["new"], f.cwdA);
-        const first = await firstPane(f);
-        await f.persist(first);
+        const first = await f.persist(await firstPane(f));
         await f.detachAll();
         assert.equal(await f.exitCode("initial"), 0);
 
@@ -2419,14 +2895,11 @@ describe("pi-mux CLI boundaries", () => {
         });
         const panes = await f.panes();
         const empty = panes.filter((pane) => !existsSync(pane.file));
-        assert.equal(empty.length, 2);
-        for (const pane of empty) {
-          assert.equal(pane.cwd, f.cwdA);
-          assert.notEqual(pane.id, first.id);
-          assert.notEqual(pane.pid, first.pid);
-          assert.notEqual(pane.pane, first.pane);
-        }
-        assert.notEqual(empty[0]!.id, empty[1]!.id);
+        assert.equal(empty.length, 1);
+        assert.equal(empty[0]!.cwd, f.cwdA);
+        assert.notEqual(empty[0]!.id, first.id);
+        assert.notEqual(empty[0]!.pid, first.pid);
+        assert.notEqual(empty[0]!.pane, first.pane);
         assert.deepEqual(
           panes.find((pane) => pane.id === first.id),
           first,
@@ -2452,9 +2925,9 @@ describe("pi-mux CLI boundaries", () => {
             }),
           );
           await f.client("initial", ["new"], f.cwdA);
-          const first = await firstPane(f);
-          assert.equal(dirname(first.file), store);
-          await f.persist(first);
+          const empty = await firstPane(f);
+          assert.equal(dirname(empty.file), store);
+          const first = await f.persist(empty);
           await f.detachAll();
           assert.equal(await f.exitCode("initial"), 0);
           await f.tmux(["kill-server"]);
@@ -2499,9 +2972,9 @@ describe("pi-mux CLI boundaries", () => {
           mkdirSync(join(f.cwdA, ".pi"));
           writeFileSync(join(f.cwdA, ".pi/settings.json"), JSON.stringify({ sessionDir: store }));
           await f.client("initial", ["new"], f.cwdA);
-          const first = await firstPane(f);
-          assert.equal(dirname(first.file), store);
-          await f.persist(first);
+          const empty = await firstPane(f);
+          assert.equal(dirname(empty.file), store);
+          const first = await f.persist(empty);
           await f.detachAll();
           assert.equal(await f.exitCode("initial"), 0);
           const registry = join(f.agent, "pi-tmux/session-dirs");
@@ -2576,8 +3049,7 @@ describe("pi-mux CLI boundaries", () => {
     async () => {
       await fixture(async (f) => {
         await f.client("initial", ["new"], f.cwdA);
-        const first = await firstPane(f);
-        await f.persist(first);
+        const first = await f.persist(await firstPane(f));
         await f.detachAll();
         const duplicate = join(dirname(first.file), "duplicate.jsonl");
         copyFileSync(first.file, duplicate);
@@ -2613,9 +3085,9 @@ describe("pi-mux CLI boundaries", () => {
         const token =
           'caller-A-dummy-token\nDECOY=secret-fragment; export DECOY;\nquote\\" dollar$';
         await f.client("initial", ["new"], f.cwdA, { REVIEW_ONLY_TOKEN: token });
-        const first = await firstPane(f);
-        assert.ok(processEnvironment(first.pid).includes("REVIEW_ONLY_TOKEN=" + token));
-        await f.persist(first);
+        const empty = await firstPane(f);
+        assert.ok(processEnvironment(empty.pid).includes("REVIEW_ONLY_TOKEN=" + token));
+        const first = await f.persist(empty);
         await f.detachAll();
         await f.client("second", ["new"], f.cwdB);
         const second = await waitFor(async () =>
@@ -3974,7 +4446,7 @@ describe("pi-mux temporary lifecycle", () => {
     "excludes temporary open before startup restoration and all later snapshots, then promotes on running",
     async () => {
       await fixture(async (f) => {
-        enableStatePublisher(f);
+        useRealStateCommand(f);
         f.saved("temporary-id");
         f.saved("other-id", f.cwdB);
         f.seed([
@@ -4489,7 +4961,7 @@ describe("pi-mux temporary conversations", () => {
     "excludes a temporary target before restoring other candidates and normally opens the same Pi without downgrade",
     async () => {
       await fixture(async (f) => {
-        enableStatePublisher(f);
+        useRealStateCommand(f);
         f.saved("temporary-target");
         f.saved("other-retained", f.cwdB);
         f.seed([
@@ -4564,7 +5036,7 @@ describe("pi-mux temporary conversations", () => {
     "promotes the existing Pi from the real publisher's running event and retains it after settling",
     async () => {
       await fixture(async (f) => {
-        enableStatePublisher(f);
+        useRealStateCommand(f);
         f.saved("execute-temporary");
         await f.client("execute", ["open", "--temporary", "execute-temporary"]);
         const target = await firstPane(f);

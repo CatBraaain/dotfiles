@@ -15,8 +15,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { childInvocationArgs, subagentSessionDir } from "../agents/index.ts";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
-import sessionStateExtension from "./index.ts";
-import { stateOptionValue } from "./tmux.ts";
+import { registerSessionState } from "./session-state.ts";
+import { stateOptionValue } from "./session-state-tmux.ts";
 
 type EventHandler = (event: ExtensionEvent, ctx: ExtensionContext) => unknown;
 type KeywordResponse = (file: string, args: string[]) => ExecResult | Promise<ExecResult>;
@@ -211,7 +211,7 @@ async function createExtensionHarness(
     },
   } as unknown as ExtensionAPI;
 
-  sessionStateExtension(pi);
+  registerSessionState(pi);
   const restorePath = join(agentDir, "pi-tmux", "pi-mux-restore.json");
   await mkdir(dirname(restorePath), { recursive: true });
   const harness: ExtensionHarness = {
@@ -248,7 +248,7 @@ async function createExtensionHarness(
     restartRuntime() {
       handlers.clear();
       commands.clear();
-      sessionStateExtension(pi);
+      registerSessionState(pi);
     },
     abortRun() {
       runController.abort(new Error("run aborted"));

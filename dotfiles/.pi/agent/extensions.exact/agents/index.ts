@@ -40,6 +40,7 @@ import {
   type SettingsRule,
 } from "./routing.ts";
 import { parseCronExpression } from "./cron.ts";
+import { subagentSessionDir } from "./session-path.ts";
 import { registerAgentTool } from "./agent.ts";
 import { registerSessionTitle } from "../session-title/extension.ts";
 import {
@@ -52,6 +53,8 @@ import {
 import { truncateErrorOutput } from "../shared/tool-text.ts";
 import { isZaiConcurrencyLimited, isZaiProvider } from "../shared/zai-concurrency.ts";
 import { parseUsageFacts, runUsage, scoreCandidates, type ProviderUsageFacts } from "./usage.ts";
+
+export { subagentSessionDir } from "./session-path.ts";
 
 export type Agent = string;
 
@@ -665,13 +668,6 @@ interface ChildSessionRecorder {
   invocationId: string;
   source: "subagent" | "image";
   appendEntry: ExtensionAPI["appendEntry"];
-}
-
-export function subagentSessionDir(cwd: string): string {
-  const cwdKey = `--${resolve(cwd)
-    .replace(/^[/\\]/, "")
-    .replace(/[/\\:]/g, "-")}--`;
-  return join(getAgentDir(), "sessions", cwdKey, "subagents");
 }
 
 export interface ChildSessionStart {

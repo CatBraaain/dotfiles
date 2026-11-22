@@ -16,7 +16,7 @@ import {
 import { readdir, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HistorySummaryCache } from "./history-summary";
 import { platform } from "./platform";
@@ -26,6 +26,7 @@ type Operation =
   | { kind: "new"; detached: boolean; clientPid?: number; request?: string; cwd?: string }
   | { kind: "open"; id: string; temporary: boolean }
   | { kind: "state"; id: string; source: StateSource; notification: StateNotification }
+  | { kind: "first-input"; id: string; request: string; source: StateSource }
   | { kind: "send"; id: string; waitSeconds: number | undefined; text: string }
   | { kind: "close"; id: string; ifTemporary: boolean }
   | { kind: "list" }
@@ -71,6 +72,8 @@ type Pane = Session & {
   pid: number;
   panePid: number;
   startup?: "accepted" | "ready";
+  warm: boolean;
+  metadata: string;
 };
 type StopTarget = Pick<Pane, "pane" | "pid" | "panePid">;
 type PublishPending = { attemptAt: number };
@@ -99,6 +102,7 @@ type Config = ReturnType<typeof configuration>;
 type TmuxConfig = ReturnType<typeof tmuxConfiguration>;
 
 const SESSION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const STARTUP_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 50;
 const SEND_WAIT_POLL_INTERVAL_MS = 100;
@@ -127,6 +131,7 @@ const PARENT_ENV_KEYS = new Set([
   "PI_TMUX_STARTUP_COMMAND",
   "PI_TMUX_STARTUP_MODE",
   "PI_TMUX_LAUNCH_TOKEN",
+  "PI_TMUX_FIRST_INPUT",
 ]);
 const PANE_FORMAT =
   "#{pane_id}\t#{session_id}\t#{session_name}\t#{@pi-tmux-session}\t#{pane_pid}\t#{pane_dead}\t#{window_active}\t#{pane_active}";
@@ -226,6 +231,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     prepareDirectory(config.stateDirectory);
     if (operation.kind === "restart") return await restartServer(config, operation.force);
     if (operation.kind === "reload") return await reloadPanes(config, operation.id);
+    if (operation.kind === "first-input") {
+      await withLock(config, () => replaceForFirstInput(config, operation));
+      return 0;
+    }
     if (operation.kind === "new" && operation.cwd !== undefined) {
       if (!statSync(operation.cwd).isDirectory())
         throw new Error(`Workspace is not a directory: ${operation.cwd}`);
@@ -251,7 +260,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       const target =
         operation.kind === "open"
           ? await openSaved(config, operation.id, operation.temporary ? "temporary" : "normal")
-          : await createIndependent(config, operation.request);
+          : await createNew(config, operation.request);
       if (operation.kind === "open") {
         try {
           if (!operation.temporary) await promoteSession(config, target.session, target.id);
@@ -341,6 +350,19 @@ export function parseOperation(argv: string[]): Operation {
     }
   }
   if (argv[0] === "state") return parseStateOperation(argv);
+  if (argv[0] === "first-input") {
+    const [, id, request, descriptor] = argv;
+    if (
+      argv.length !== 4 ||
+      !id ||
+      !UUID.test(id) ||
+      !request ||
+      !UUID.test(request) ||
+      !descriptor
+    )
+      throw new Error("Invalid first input handoff");
+    return { kind: "first-input", id, request, source: parseSource(JSON.parse(descriptor)) };
+  }
   if (argv[0] === "send") {
     if (argv.length === 2 && (argv[1] === "-h" || argv[1] === "--help")) return { kind: "help" };
     let index = 1;
@@ -438,33 +460,13 @@ function parseStateOperation(argv: string[]): Operation {
     }
     if (!options.has("--source") || (clear ? options.has("--title") : !options.has("--title")))
       throw new Error("State requires source and title; clear requires only source");
-    const source = options.get("--source");
-    if (
-      !isRecord(source) ||
-      typeof source.socket !== "string" ||
-      !isAbsolute(source.socket) ||
-      !Number.isSafeInteger(source.serverPid) ||
-      Number(source.serverPid) <= 0 ||
-      typeof source.pane !== "string" ||
-      !/^%\d+$/.test(source.pane) ||
-      !Number.isSafeInteger(source.pid) ||
-      Number(source.pid) <= 0 ||
-      typeof source.token !== "string" ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(source.token)
-    )
-      throw new Error("Invalid source");
+    const source = parseSource(options.get("--source"));
     const title = options.get("--title");
     if (!clear && title !== null && typeof title !== "string") throw new Error("Invalid title");
     return {
       kind: "state",
       id,
-      source: {
-        socket: source.socket,
-        serverPid: Number(source.serverPid),
-        pane: source.pane,
-        pid: Number(source.pid),
-        token: source.token,
-      },
+      source,
       notification: clear
         ? { clear: true }
         : { clear: false, state: state as SessionState, title: title as string | null },
@@ -472,6 +474,30 @@ function parseStateOperation(argv: string[]): Operation {
   } catch (error) {
     throw new Error(`state ${id ?? "<missing>"}: ${errorMessage(error)}`);
   }
+}
+
+function parseSource(source: unknown): StateSource {
+  if (
+    !isRecord(source) ||
+    typeof source.socket !== "string" ||
+    !isAbsolute(source.socket) ||
+    !Number.isSafeInteger(source.serverPid) ||
+    Number(source.serverPid) <= 0 ||
+    typeof source.pane !== "string" ||
+    !/^%\d+$/.test(source.pane) ||
+    !Number.isSafeInteger(source.pid) ||
+    Number(source.pid) <= 0 ||
+    typeof source.token !== "string" ||
+    !UUID.test(source.token)
+  )
+    throw new Error("Invalid source");
+  return {
+    socket: source.socket,
+    serverPid: Number(source.serverPid),
+    pane: source.pane,
+    pid: Number(source.pid),
+    token: source.token,
+  };
 }
 
 async function isTemporarySession(
@@ -616,6 +642,15 @@ async function notifyState(
   }
 }
 
+function clearStateOptions(pane: string): string[][] {
+  return [
+    "@pi_session_state",
+    "@pi-mux-state-source",
+    "@pi-mux-pending-restart-blocker",
+    "@pi_session_state_pending",
+  ].map((option) => ["set-option", "-pu", "-t", pane, option]);
+}
+
 function paneEntityGuard(serverPid: number, pane: string, panePid: number): string {
   return `#{&&:#{==:#{pid},${serverPid}},#{&&:#{==:#{pane_id},${pane}},#{==:#{pane_pid},${panePid}}}}`;
 }
@@ -739,13 +774,7 @@ async function runGuardedStateCommands(
       guardedTmuxLine(
         pane,
         entity,
-        [
-          ["set-option", "-pu", "-t", pane, "@pi_session_state"],
-          ["set-option", "-pu", "-t", pane, "@pi-mux-state-source"],
-          ["set-option", "-pu", "-t", pane, "@pi-mux-pending-restart-blocker"],
-          ["set-option", "-pu", "-t", pane, "@pi_session_state_pending"],
-          ["display-message", "-p", "PI_MUX_STATE_WRITTEN"],
-        ],
+        [...clearStateOptions(pane), ["display-message", "-p", "PI_MUX_STATE_WRITTEN"]],
         "PI_MUX_SOURCE_UNVERIFIED",
       ),
     );
@@ -1185,11 +1214,7 @@ async function reloadTarget(
     ...(session.temporary ? { PI_TMUX_TEMPORARY: pane.id } : {}),
   };
   await refreshSessionEnvironment(config, session.session, desired);
-  const global = await tmux(config, ["show-environment", "-gs"]);
-  const assignments = global.stdout.replace(/"(?:\\.|[^"\\])*"/gs, "");
-  const removed = [...assignments.matchAll(/; export ([^;\n]+);/g)]
-    .map((match) => match[1]!)
-    .filter((key) => !Object.hasOwn(desired, key) && !GENERATED_ENV_KEYS.has(key));
+  const removed = await excludedGlobalEnvironment(config, desired);
   const selection = existsSync(pane.file) ? ["--session", pane.file] : ["--session-id", pane.id];
   const paneCommand = platform.paneCommand(
     [config.pi, ...selection, "-e", config.extension, "--", `/${startupCommand}`],
@@ -1264,6 +1289,17 @@ async function reloadTarget(
     failed.set(pane.id, errorMessage(error));
     console.error(`pi-mux: reload ${pane.id}: ${errorMessage(error)}`);
   }
+}
+
+async function excludedGlobalEnvironment(
+  config: TmuxConfig,
+  desired: Record<string, string>,
+): Promise<string[]> {
+  const global = await tmux(config, ["show-environment", "-gs"]);
+  const assignments = global.stdout.replace(/"(?:\\.|[^"\\])*"/gs, "");
+  return [...assignments.matchAll(/; export ([^;\n]+);/g)]
+    .map((match) => match[1]!)
+    .filter((key) => !Object.hasOwn(desired, key) && !GENERATED_ENV_KEYS.has(key));
 }
 
 async function refreshSessionEnvironment(
@@ -1608,20 +1644,176 @@ function writeSnapshot(config: TmuxConfig, state: RestoreState): void {
   }
 }
 
-async function createIndependent(config: Config, request?: string): Promise<Pane> {
+async function createNew(config: Config, request?: string): Promise<Pane> {
+  const cwd = process.cwd();
+  if (request === undefined) {
+    const candidates = (await livePanes(config, "list")).filter(
+      (pane) => pane.warm && pane.cwd === cwd && pane.startup === "ready" && !existsSync(pane.file),
+    );
+    const managed = candidates.length > 0 ? await managedSessions(config) : [];
+    for (const pane of candidates) {
+      if (
+        !managed.some(
+          (session) =>
+            session.session === pane.session && session.id === pane.id && session.cwd === cwd,
+        )
+      )
+        continue;
+      const launch = await tmux(config, [
+        "show-options",
+        "-pqv",
+        "-t",
+        pane.pane,
+        "@pi-mux-launch",
+      ]);
+      const metadata = JSON.parse(Buffer.from(pane.metadata, "base64").toString("utf8"));
+      if (matchesLaunch(launch.stdout, pane.id, pane.panePid, metadata.token)) return pane;
+    }
+  }
   const id = randomUUID();
   const name = sessionName(id);
   const created = await createSession(
     config,
     {
       id,
-      cwd: process.cwd(),
-      ...(request !== undefined ? { request } : {}),
+      cwd,
+      ...(request === undefined ? { warm: true } : { request }),
     },
     name,
   );
   if (request !== undefined) return await waitForSession(config, created ?? name, id, "accepted");
   return await waitForSession(config, created ?? name, id);
+}
+
+export function firstInputDirectory(
+  stateDirectory: string,
+  id: string,
+  platformName: NodeJS.Platform = process.platform,
+  localAppData = process.env.LOCALAPPDATA,
+): string | undefined {
+  if (!UUID.test(id)) return;
+  if (platformName === "win32") {
+    if (!localAppData || !/^[a-z]:[\\/]/i.test(localAppData)) return;
+    return win32.join(localAppData, "pi-mux-first-input", id);
+  }
+  return join(stateDirectory, "first-input", id);
+}
+
+function findFirstInput(
+  config: TmuxConfig,
+  id: string,
+): (Candidate & { request: string }) | undefined {
+  const directory = firstInputDirectory(config.stateDirectory, id);
+  if (!directory) return;
+  const payload = lstatSync(join(directory, "text"), { throwIfNoEntry: false });
+  if (!payload) return;
+  if (!payload.isFile() || !platform.ownedFileEntry(payload))
+    throw new Error("Unsafe first input file");
+  for (const path of [dirname(directory), directory])
+    platform.assertDirectorySafety(lstatSync(path), path);
+  if (!platform.windows)
+    platform.assertDirectorySafety(lstatSync(config.stateDirectory), config.stateDirectory);
+  const context = join(directory, "context.json");
+  const stat = lstatSync(context);
+  if (!stat.isFile() || !platform.ownedFileEntry(stat))
+    throw new Error("Unsafe first input context");
+  const record = JSON.parse(readFileSync(context, "utf8"));
+  if (
+    record?.id !== id ||
+    typeof record?.cwd !== "string" ||
+    !isAbsolute(record.cwd) ||
+    typeof record?.request !== "string" ||
+    !UUID.test(record.request)
+  )
+    throw new Error("Invalid first input context");
+  return { id, cwd: record.cwd, request: record.request };
+}
+
+function matchesLaunch(encoded: string, id: string, panePid: number, token: unknown): boolean {
+  if (typeof token !== "string" || !UUID.test(token)) return false;
+  try {
+    const launch = JSON.parse(encoded);
+    return launch?.id === id && launch.pid === panePid && launch.token === token;
+  } catch {
+    return false;
+  }
+}
+
+async function replaceForFirstInput(
+  config: Config,
+  { id, request, source }: Extract<Operation, { kind: "first-input" }>,
+): Promise<void> {
+  const { session, panePid } = await verifyStateSource(config, id, source);
+  const draft = findFirstInput(config, id);
+  const pane = (await livePanes(config, "list")).find((entry) => entry.pane === source.pane);
+  const managed = (await managedSessions(config)).find((entry) => entry.session === session);
+  if (
+    !draft ||
+    draft.request !== request ||
+    !pane?.warm ||
+    pane.startup !== "ready" ||
+    pane.id !== id ||
+    pane.session !== session ||
+    pane.pid !== source.pid ||
+    pane.panePid !== panePid ||
+    managed?.id !== id ||
+    managed.cwd !== pane.cwd ||
+    draft.cwd !== pane.cwd ||
+    existsSync(pane.file)
+  )
+    throw new Error("First input does not match a ready warm session");
+  const launch = await tmux(config, ["show-options", "-pqv", "-t", pane.pane, "@pi-mux-launch"]);
+  const metadata = JSON.parse(Buffer.from(pane.metadata, "base64").toString("utf8"));
+  if (metadata.token !== source.token || !matchesLaunch(launch.stdout, id, panePid, source.token))
+    throw new Error("Warm session launch no longer matches");
+
+  const token = randomUUID();
+  const startup = `pi-mux-startup-${randomUUID()}`;
+  const environment = {
+    PI_TMUX_SESSION_ID: id,
+    PI_TMUX_LAUNCH_TOKEN: token,
+    PI_TMUX_STARTUP_COMMAND: startup,
+    PI_TMUX_STARTUP_MODE: "handoff",
+    PI_TMUX_FIRST_INPUT: request,
+  };
+  const removed = await excludedGlobalEnvironment(config, { ...config.env, ...environment });
+  const paneCommand = platform.paneCommand(
+    [config.pi, "--session-id", id, "-e", config.extension, "--", `/${startup}`],
+    removed,
+  );
+  const entity = paneEntityGuard(source.serverPid, pane.pane, panePid);
+  const sameMetadata = `#{==:#{@pi-tmux-session},${pane.metadata}}`;
+  const sameLaunch = `#{m:*${source.token}*,#{@pi-mux-launch}}`;
+  const guard = `#{&&:${entity},#{&&:${sameMetadata},${sameLaunch}}}`;
+  const action = guardedTmuxLine(
+    pane.pane,
+    guard,
+    [
+      [
+        "respawn-pane",
+        "-k",
+        "-t",
+        pane.pane,
+        ...Object.entries(environment).flatMap(([key, value]) => ["-e", `${key}=${value}`]),
+        "--",
+        paneCommand,
+      ],
+      ["set-option", "-pu", "-t", pane.pane, "@pi-tmux-session"],
+      ...clearStateOptions(pane.pane),
+      [
+        "set-option",
+        "-pF",
+        "-t",
+        pane.pane,
+        "@pi-mux-launch",
+        `{"id":"${id}","pid":#{pane_pid},"token":"${token}"}`,
+      ],
+    ],
+    "PI_MUX_FIRST_INPUT_STALE",
+  );
+  const result = await tmux(config, ["source-file", "-"], false, `${action}\n`);
+  if (result.stdout.includes("PI_MUX_FIRST_INPUT_STALE"))
+    throw new Error("Warm session changed before first input handoff");
 }
 
 function compiledEntry(): boolean {
@@ -1638,12 +1830,14 @@ async function resolveSaved(config: Config, id: string) {
   const running = (await livePanes(config, "list")).filter((pane) => pane.id === id);
   if (running.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
   const saved = await findSaved(config, id);
+  const recovery = !saved && !running[0] && !managed[0] ? findFirstInput(config, id) : undefined;
   if (!running[0] && !managed[0]) {
-    if (!saved) throw new Error(`Session not found (use the complete ID): ${id}`);
-    if (!existsSync(saved.cwd) || !statSync(saved.cwd).isDirectory())
-      throw new Error(`Session working directory does not exist: ${saved.cwd}`);
+    const candidate = saved ?? recovery;
+    if (!candidate) throw new Error(`Session not found (use the complete ID): ${id}`);
+    if (!existsSync(candidate.cwd) || !statSync(candidate.cwd).isDirectory())
+      throw new Error(`Session working directory does not exist: ${candidate.cwd}`);
   }
-  return { running: running[0], managed: managed[0], saved };
+  return { running: running[0], managed: managed[0], saved, recovery };
 }
 
 async function openSaved(
@@ -1651,18 +1845,30 @@ async function openSaved(
   id: string,
   mode: "normal" | "temporary" = "normal",
 ): Promise<Pane> {
-  const { running, managed, saved } = await resolveSaved(config, id);
+  const { running, managed, saved, recovery } = await resolveSaved(config, id);
   if (running) return running;
   if (managed) return await waitForSession(config, managed.session, id);
-  if (!saved) throw new Error(`Session not found (use the complete ID): ${id}`);
+  const candidate = saved ?? recovery;
+  if (!candidate) throw new Error(`Session not found (use the complete ID): ${id}`);
   const name = sessionName(id);
-  const created = await createSession(config, { ...saved, temporary: mode === "temporary" }, name);
+  const created = await createSession(
+    config,
+    { id, cwd: candidate.cwd, file: saved?.file, temporary: mode === "temporary" },
+    name,
+  );
   return await waitForSession(config, created ?? name, id);
 }
 
 async function createSession(
   config: Config,
-  session: { id: string; cwd: string; file?: string; request?: string; temporary?: boolean },
+  session: {
+    id: string;
+    cwd: string;
+    file?: string;
+    request?: string;
+    temporary?: boolean;
+    warm?: boolean;
+  },
   name: string,
 ): Promise<string | undefined> {
   const startupCommand =
@@ -1676,12 +1882,9 @@ async function createSession(
     ...(startupCommand === undefined
       ? { PI_TMUX_STARTUP_MODE: "create" }
       : { PI_TMUX_STARTUP_COMMAND: startupCommand }),
+    ...(session.warm ? { PI_TMUX_STARTUP_MODE: "warm" } : {}),
   };
-  const global = await tmux(config, ["show-environment", "-gs"]);
-  const assignments = global.stdout.replace(/"(?:\\.|[^"\\])*"/gs, "");
-  const removed = [...assignments.matchAll(/; export ([^;\n]+);/g)]
-    .map((match) => match[1]!)
-    .filter((key) => !Object.hasOwn(desired, key) && !GENERATED_ENV_KEYS.has(key));
+  const removed = await excludedGlobalEnvironment(config, desired);
   const environment = Object.entries(desired).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
   const selection = session.file ? ["--session", session.file] : ["--session-id", session.id];
   const paneCommand = platform.paneCommand(
@@ -1961,7 +2164,8 @@ async function sendSessionMessage(
       console.log("delivered");
       return 0;
     }
-    if (outcome === "lost") throw new Error(`Target pane disappeared before consuming ${optionName}`);
+    if (outcome === "lost")
+      throw new Error(`Target pane disappeared before consuming ${optionName}`);
     throw new Error(`Message option ${optionName} was not consumed within ${waitSeconds} seconds`);
   } catch (error) {
     throw new Error(`Cannot send message to session ${id}: ${errorMessage(error)}`);
@@ -2337,6 +2541,8 @@ async function livePanes(
           cwd: metadata.cwd,
           file: metadata.file,
           startup: metadata.startup,
+          warm: metadata.warm === true,
+          metadata: encoded,
         },
       ];
     });

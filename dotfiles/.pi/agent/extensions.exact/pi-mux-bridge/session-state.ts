@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import type { ExecResult, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { subagentSessionDir } from "../agents/index.ts";
+import { subagentSessionDir } from "../agents/session-path.ts";
 import {
   detectManagedPane,
   launchToken,
@@ -13,7 +13,7 @@ import {
   type CommandRunner,
   type ManagedPaneBinding,
   type SessionState,
-} from "./tmux.ts";
+} from "./session-state-tmux.ts";
 
 const TMUX_COMMAND_TIMEOUT_MS = 1_000;
 const RECOVERY_RETRY_INTERVAL_MS = 1_000;
@@ -67,7 +67,7 @@ function probeLoadedVersion(): void {
       cwd: process.cwd(),
       url: import.meta.url,
       indexSha256: sha256Prefix(fileURLToPath(import.meta.url)),
-      tmuxSha256: sha256Prefix(fileURLToPath(new URL("./tmux.ts", import.meta.url))),
+      tmuxSha256: sha256Prefix(fileURLToPath(new URL("./session-state-tmux.ts", import.meta.url))),
       nodeVersion: process.version,
     });
   } catch {}
@@ -75,7 +75,7 @@ function probeLoadedVersion(): void {
 
 probeLoadedVersion();
 
-export type { SessionState } from "./tmux.ts";
+export type { SessionState } from "./session-state-tmux.ts";
 
 interface PublicationGeneration {
   controller: AbortController;
@@ -91,7 +91,7 @@ interface PublicationGeneration {
   environment: Pick<NodeJS.ProcessEnv, "XDG_RUNTIME_DIR" | "TMUX" | "TMUX_PANE">;
 }
 
-export default function sessionStateExtension(pi: ExtensionAPI): void {
+export function registerSessionState(pi: ExtensionAPI): void {
   let generation: PublicationGeneration | undefined;
   let isAgentRunActive = false;
   let isWaitingForApproval = false;
