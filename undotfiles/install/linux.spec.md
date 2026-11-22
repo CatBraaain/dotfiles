@@ -1,11 +1,11 @@
 # Linux install spec
 
-`undotfiles/install/linux.ts` の観測可能な振る舞いの仕様。対象は、BunでCLIを実行するときの、`undotfiles/install/linux.config.yaml` に書かれた環境構成から、ホストのグローバルパッケージと指定コマンドの実行結果への同期である。読者は、このspecだけを読んで要件を承認するユーザーと、実装・テストの担当者。
+`undotfiles/install/linux.ts` の観測可能な振る舞いの仕様。対象は、BunでCLIを実行するときの、`undotfiles/install/linux.install.yaml` に書かれた環境構成から、ホストのグローバルパッケージと指定コマンドの実行結果への同期である。読者は、このspecだけを読んで要件を承認するユーザーと、実装・テストの担当者。
 
 - 対応プラットフォーム: Linux。
 - 実行形式: `bun undotfiles/install/linux.ts <sync|diff>`。引数は`sync`または`diff`の1つだけを受け付ける。
 - 引数の省略または追加、`sync`・`diff`以外の引数は、使用法を出力して終了コード0以外で終了する。
-- 実行には、リポジトリルートの`.env`に`INSTALL_PROFILE=personal|work`で宣言したマシン種別のマーキングを必須とする。`.env`が存在しない、`INSTALL_PROFILE`が未定義、値が`personal`・`work`以外のときは、マーキングエラーを出力して異常終了し、パッケージ操作と`run`の実行を行わない。マーキングの値は、`sync`と`diff`が適用する設定配列（`work`または`personal`）とPersonal-only Handler（後述）の振る舞いを決める。それ以外の項目では、マーキングの値は振る舞いを変えない。
+- 実行には、リポジトリルートの`.env`に`INSTALL_PROFILE=dev|work|personal`で宣言したプロファイルを必須とする。`.env`が存在しない、`INSTALL_PROFILE`が未定義、または値が`dev`・`work`・`personal`以外のときは、マーキングエラーを出力して異常終了し、パッケージ操作と`run`の実行を行わない。
 - `sync` はパッケージ操作と`run`の実行の前に、`sudo -v` で認証する。認証に失敗したときは異常終了し、パッケージ操作と`run`の実行を行わない。以後のsudo呼び出しはsudoの通常の認証キャッシュを利用し、有効期限が切れた場合は再入力を求めることがある。
 - `diff` はsudoを実行しない。
 - `just install` は `sync` を実行する入口とする。`setup.sh`はBootstrapの外部呼び出し元であり、このspecの対象外とする。
@@ -14,7 +14,15 @@
 
 ## 設定
 
-設定ファイルは`linux.ts`と同じディレクトリにある`linux.config.yaml`である。トップレベルは`work`と`personal`をキーとするマップで、`work`配列は全マシン共通のインストール対象、`personal`配列はpersonalプロファイルのマシンで`work`配列に追加するインストール対象とする。`sync`と`diff`は、workプロファイルでは`work`配列だけを、personalプロファイルでは`work`配列と`personal`配列をこの順で連結したものを対象にする。配列の各要素はキーが1つだけのマップとし、その値は1つの文字列とする。`apt`以外の項目では、連結後の配列の順序がInstall / Ensure Phaseの実行順序を表す。`apt`項目はこの順序によらず、Install / Ensure Phaseの先頭でまとめて処理する。
+設定ファイルは`linux.ts`と同じディレクトリにある`linux.install.yaml`である。トップレベルは`dev`・`work`・`personal`をキーとするマップとし、省略した配列は空として扱う。`sync`と`diff`の対象は次のとおり。
+
+| プロファイル | 対象の配列（処理順） |
+| --- | --- |
+| `dev` | `dev` |
+| `work` | `dev`、`work` |
+| `personal` | `dev`、`work`、`personal` |
+
+各項目は下表のキー1つと文字列の値からなるマップとする。各配列内の項目順は維持する。`sync`では`apt`項目を例外として先頭で一括処理する。
 
 | キー | 値 | 管理方式 |
 | --- | --- | --- |
@@ -31,29 +39,31 @@
 
 設定の例:
 
-    work:
+    dev:
       - apt: build-essential
       - uv: ruff
       - bun: prettier
+    work:
       - run: "git config --global init.defaultBranch main"
     personal:
       - custom: blender
 
 パッケージキーの値は、対応するバックエンドが受け付けるパッケージ指定として扱う。各Managerは、その指定からバックエンドが導入対象として識別するパッケージ識別子を解決する。バージョン指定はこの識別子を変えず、導入するバージョンだけを指定する。
 
-設定ファイルが存在しない、YAMLとして読めない、トップレベルが`work`と`personal`をキーとするマップでない、トップレベルにその2キー以外のキーがある、`work`と`personal`の両方に要素がない、配列の要素が単一キーのマップではない、値が文字列ではない、またはキーが表にない設定は無効である。`sync` と `diff` は設定エラーを出力して異常終了し、パッケージ操作と`run`の実行を行わない。
+同じYAMLマップでキーが重複すると、最後に書いた値だけを採用する。重複自体は設定エラーにならないため、キーは同じマップ内で一度だけ指定する。
+
+設定ファイルがない、YAMLとして読めない、または読み取り後の内容が上記の形式を満たさない設定は無効とする。少なくとも1つの配列に項目が必要である。`sync`と`diff`は無効な設定を検出すると、設定エラーを出力して異常終了し、パッケージ操作と`run`の実行を行わない。`dev`プロファイルでは`dev`配列に1件以上の項目が必要であり、sudo認証やホストの状態取得より先に設定を検証する。
 
 ## Personal-only Handler
 
-`custom` Handlerのうち、linux.tsがPersonal-only Handlerとして定義している名前をPersonal-only Handlerとする。現在のPersonal-only Handlerは`blender`である。Personal-only Handlerはpersonalプロファイルのマシンでのみ目的状態を持つため、その名前を`work`配列に含めてはならない。
+`custom` Handlerのうち、linux.tsがPersonal-only Handlerとして定義している名前をPersonal-only Handlerとする。現在のPersonal-only Handlerは`blender`である。Personal-only Handlerはpersonalプロファイルのマシンでのみ目的状態を持つため、その名前は`personal`配列にだけ置く。
 
-- `sync`では、workプロファイルの実行で`work`配列にPersonal-only Handlerの名前があるとき、その項目はHandlerを実行せず失敗として記録する。また、Uninstall Phaseの最後に、導入済みのPersonal-only Handlerの管理下パスの削除を実行する。
-- `diff`では、workプロファイルの実行で`work`配列にPersonal-only Handlerの名前があるとき、その位置で失敗として記録する。また、表示の最後に、導入済みのPersonal-only Handlerを`remove custom: {name}`として表示し、未導入なら表示しない。
-- personalプロファイルでは、Personal-only Handlerは通常の`custom` Handlerと同じ振る舞いをする。
+- `dev`と`work`では、選択した項目にPersonal-only Handlerの名前があれば、その項目を実行せず失敗として記録する。
+- `personal`では、Personal-only Handlerは通常の`custom` Handlerと同じ振る舞いをする。
 
 ## Desired State
 
-`uv`、`bun`、`cargo`、`go`、`brew`、`brew-cask`の値から得られるパッケージ識別子の集合を、それぞれのDeclarative ManagerのDesired Stateとする。`cargo`のパッケージ指定はcrates.ioのcrate名または`crate@version`とし、Desired Stateのパッケージ識別子は`@version`より前のcrate名とする。各Managerは、現在のグローバル状態とこのDesired Stateとの差分を管理する。`brew`の現在状態は`brew leaves`で取得し、他のFormulaの依存先であるFormulaを削除対象に含めない。`cargo`の現在状態は`cargo install --list`で取得する。`go`の現在状態は`gup list --json`で取得する。Managerの状態取得に失敗したときは、そのManagerのUninstall Phaseの削除を行わず、失敗として記録する。
+`uv`、`bun`、`cargo`、`go`、`brew`、`brew-cask`の値から得られるパッケージ識別子の集合を、それぞれのDeclarative ManagerのDesired Stateとする。`cargo`のパッケージ指定はcrates.ioのcrate名または`crate@version`とし、Desired Stateのパッケージ識別子は`@version`より前のcrate名とする。`work`と`personal`では、各Managerが現在のグローバル状態とこのDesired Stateとの差分を管理する。`brew`の現在状態は`brew leaves`で取得し、他のFormulaの依存先であるFormulaを削除対象に含めない。`cargo`の現在状態は`cargo install --list`で取得する。`go`の現在状態は`gup list --json`で取得する。Managerの状態取得に失敗したときは、そのManagerのUninstall Phaseの削除を行わず、失敗として記録する。
 
 `apt`と`flatpak`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`、`android-sdk`、`blender`、`musescore`、`openwhispr`、`rustdesk`、`surge-xt`は目的状態を保証する。
 
@@ -104,11 +114,13 @@ exec "/opt/musescore-4.7.6-x86_64/AppRun" "$@"
 
 ## sync
 
-`sync` は、Install / Ensure Phase、状態取得、Uninstall Phaseの順で環境を同期する。
+`sync`は、`dev`ではInstall / Ensure Phaseだけを実行する。削除候補の状態取得とUninstall Phaseを省き、Personal-only Handlerの導入済みの配置も維持する。`work`と`personal`は、Install / Ensure Phase、状態取得、Uninstall Phaseの順で環境を同期する。
 
 ### 1. Install / Ensure Phase
 
 最初に設定配列から全`apt`項目を収集し、1つのバッチとして処理する。その後、`apt`項目を除いた設定配列を先頭から末尾へ処理する。`flatpak`、`uv`、`bun`、`cargo`、`go`、`brew`、`brew-cask`では、配列上で連続する同じキーの項目を1つのバックエンド操作にまとめる。`custom`と`run`はまとめない。異なるキーが挟まれたあとに再び同じキーが現れた場合は、別のバッチとして処理する。`go install`は同一バッチ内の引数でバージョンsuffixが一致している必要があり、不一致のときはバックエンドが失敗する。宣言的Managerと`run`の各項目は、導入済みかどうかにかかわらず実行する。
+
+`dev`でも選択した項目の通常の更新と依存パッケージの導入を許容する。ただし、インストーラーからのAPT導入操作で導入済みのパッケージの削除が必要な場合は、APT操作を失敗として記録して後続処理を続ける。Homebrew FormulaとCaskの導入時は、Homebrewの自動クリーンアップを抑止する。`run`ではPlaywright CLIの既存ブラウザーの自動クリーンアップを抑止した環境でコマンドを実行する。
 
 | キー | 振る舞い |
 | --- | --- |
@@ -120,7 +132,7 @@ exec "/opt/musescore-4.7.6-x86_64/AppRun" "$@"
 | `go` | 指定されたGo toolに対して`go install`を実行する。バージョンsuffixがない値には`@latest`を付けて実行する。 |
 | `brew` | 指定されたFormulaに対して `HOMEBREW_NO_ENV_HINTS=1 brew install --quiet` を実行する。already-installed警告、reinstall案内、Homebrew の環境ヒントと進捗表示は出ない。 |
 | `brew-cask` | 指定されたCaskに対して `HOMEBREW_NO_ENV_HINTS=1 brew install --quiet --cask` を実行する。Not upgrading警告、Homebrew の環境ヒントと進捗表示は出ない。 |
-| `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。`blender`はPersonal-only Handlerであり、workプロファイルでは実行せず（Personal-only Handlerの節）、personalプロファイルではdownload.blender.orgの最新安定版linux-x64 tarballを`/opt`へ展開し、`/usr/local/bin/blender`からblender実行ファイルへのsymlinkを保証する。`openwhispr`はGitHub releaseの`.deb`を`sudo apt install -y`で導入する。`rustdesk`と`surge-xt`もGitHub releaseの`.deb`を同様に導入する。名前に対応するHandlerがなければ失敗として記録する。 |
+| `custom` | 名前に対応するCustom Handlerを呼び出し、Handlerが定義する目的状態を保証する。Personal-only Handlerの適用範囲は同名の節に従う。`openwhispr`はGitHub releaseの`.deb`を`sudo apt install -y`で導入する。`rustdesk`と`surge-xt`もGitHub releaseの`.deb`を同様に導入する。名前に対応するHandlerがなければ失敗として記録する。 |
 | `run` | 指定されたコマンドを`bash -c`で実行する。同期ごとに必ず実行する。 |
 
 ### 2. State Read
@@ -144,6 +156,8 @@ Uninstall Phaseは、設定ファイル内の要素順序に従わない。Manag
 
 ## diff
 
-`diff` はホストを変更しない。Declarative Managerでは、現在のグローバル状態とDesired Stateの差を、Uninstall Phaseと同じManager名のアルファベット順で削除予定として表示する。状態取得に失敗したManagerの差分は表示しない。次に、Install / Ensure Phaseの予定を設定配列の順序で1要素ずつ表示する。状態取得に失敗したManagerのパッケージ項目は、この予定にも含めない。`apt`で`dpkg-query -W`により導入済みと確認できた項目、および`flatpak`で`flatpak info --user`により導入済みと確認できた項目は表示しない。それ以外のパッケージ項目は、導入済みかどうかにかかわらずinstall / update予定として表示する。`custom`と`run`は配列上の位置で、同期時に呼び出すHandlerまたは実行するコマンドとして表示する。未知のCustom Handlerもその位置で表示して失敗を記録する。workプロファイルでは、`work`配列内のPersonal-only Handlerはその位置で失敗を記録し、加えて表示の最後に、導入済みのPersonal-only Handlerを`remove custom: {name}`として表示する。状態取得の失敗は記録し、他の項目の表示を続ける。
+`diff`はホストを変更しない。`dev`では削除候補の状態取得を行わず、Install / Ensure Phaseの予定だけを表示する。`work`と`personal`では、Declarative Managerの現在のグローバル状態とDesired Stateの差を、Uninstall Phaseと同じManager順で削除予定として表示する。状態取得に失敗したManagerの削除予定と導入予定は表示せず、他の項目の表示を続ける。
+
+Install / Ensure Phaseの予定は「設定」の表に示した配列順と各配列内の項目順に従い、1項目ずつ表示する。APTとFlatpakは導入済みの項目を省く。それ以外のパッケージ項目は、導入済みかどうかにかかわらずinstall / update予定として表示する。`custom`と`run`は同期時に呼び出すHandler名または実行するコマンドを表示する。実行できないCustom Handlerはその位置で失敗として記録する。`work`では表示の最後に、導入済みのPersonal-only Handlerを`remove custom: {name}`として表示する。
 
 差分の有無にかかわらず、失敗がなければ`diff`は終了コード0で終了する。設定エラーは処理せずに異常終了する。

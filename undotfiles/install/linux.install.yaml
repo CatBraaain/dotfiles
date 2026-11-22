@@ -1,20 +1,13 @@
-work:
+dev:
   # System prerequisites
   - apt: flatpak
-  # OpenDesign's Linux native folder picker.
-  - apt: zenity
-  - apt: fonts-noto-cjk
   # Headless Chromium (Playwright E2E recordings) resolves emoji glyphs via fontconfig.
   - apt: fonts-noto-color-emoji
   # Camoufox/Playwright's Firefox runtime needs libasound.so.2 (ALSA), even headless.
   - apt: libasound2t64
   # Camoufox uses Xvfb for a virtual X display and software-rendered WebGL in headless mode.
   - apt: xvfb
-  # x11vnc publishes the headed camoufox display for human handoff (CAPTCHA, login).
-  - apt: x11vnc
-  # Rime Japanese input: Fcitx 5 frontend and Kagiroi's Lua translator support.
-  - apt: fcitx5
-  - apt: fcitx5-rime
+  # Kagiroi's Lua translator support.
   - apt: librime-plugin-lua
   # Rime behavior tests: Lua interpreter for the managed Lua unit tests and
   # librime headers for the headless integration harness (just test-rime).
@@ -35,11 +28,9 @@ work:
   # System packages
   - brew: bubblewrap
   - brew: coreutils
-  - apt: ffmpeg
   - brew: gcc
   - brew: git
   - brew: powershell
-  - brew: socat
   - brew: tmux
   - brew: unzip
 
@@ -47,7 +38,6 @@ work:
   - brew: bun
   - brew: node
   - brew: uv
-  - brew: gup
   - brew: go
   - brew: openjdk
   - brew: rustup
@@ -67,12 +57,9 @@ work:
   # LLM-only CLI tools
   - brew: ast-grep
   - brew: dasel
-  - brew: git-delta
   - brew: hyperfine
   - brew: jq
   - brew: keep-sorted
-  - brew: officecli
-  - brew: pdfcpu
   - brew: rtk
   - brew: sd
   - brew: shellcheck
@@ -82,20 +69,13 @@ work:
   - bun: "@openai/codex"
   - bun: "@playwright/cli"
   - bun: cursor-agent
-  - uv: "trafilatura[all]"
-  - uv: "mineru[all]"
-  - go: github.com/karust/openserp
-
   # Chromium browser for playwright-cli.
   # htmlshot also resolves ~/.cache/ms-playwright/chromium-* for its renders.
   - run: "playwright-cli install-browser chrome-for-testing"
 
   # General CLI tools
-  - apt: btop
   - brew: act
-  - brew: awscli
   - brew: cargo-binstall
-  - brew: eza
   - brew: fd
   - brew: gh
   - brew: git-cliff
@@ -114,17 +94,50 @@ work:
   - bun: oxfmt
   - bun: prettier
   - bun: prettier-markdown-table
-  - uv: harlequin
-  - uv: yt-dlp
 
   # Apps and SDKs
   - apt: chromium
   - flatpak: com.visualstudio.code
+  - brew-cask: android-commandlinetools
+  - custom: android-sdk
+
+work:
+  # System prerequisites
+  # OpenDesign's Linux native folder picker.
+  - apt: zenity
+  - apt: fonts-noto-cjk
+  # x11vnc publishes the headed camoufox display for human handoff (CAPTCHA, login).
+  - apt: x11vnc
+  # Rime Japanese input: Fcitx 5 frontend.
+  - apt: fcitx5
+  - apt: fcitx5-rime
+
+  # System packages
+  - apt: ffmpeg
+  - brew: socat
+
+  # Language runtimes
+  - brew: gup
+
+  # LLM-only CLI tools
+  - brew: git-delta
+  - brew: officecli
+  - brew: pdfcpu
+  - uv: "trafilatura[all]"
+  - uv: "mineru[all]"
+  - go: github.com/karust/openserp
+
+  # General CLI tools
+  - apt: btop
+  - brew: awscli
+  - brew: eza
+  - uv: harlequin
+  - uv: yt-dlp
+
+  # Apps and SDKs
   - custom: drawio
   - custom: openwhispr
   - custom: rustdesk
-  - brew-cask: android-commandlinetools
-  - custom: android-sdk
   # OpenDesign: source install into ~/mirrors/github.com/nexu-io/open-design. The od wrapper in ~/.local/bin shadows /usr/bin/od.
   - custom: opendesign
   # /tmp on disk: mask the systemd tmpfs mount and age /tmp entries out after 2 days.

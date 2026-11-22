@@ -7,12 +7,451 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { installCamoufox } from "./windows";
+import { dirname, join } from "node:path";
+import type { InstallProfile } from "./marking";
+import { installCamoufox, installWindows } from "./windows";
+
+const wingetSourceId = "Microsoft.Winget.Source_8wekyb3d8bbwe";
+const elevationCheck = ["gsudo", "status", "IsElevated"];
+const refreshPath = [
+  "powershell",
+  "-NoProfile",
+  "-Command",
+  "[Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User')",
+];
+const npmInstall = ["cmd", "/c", "npm", "install", "-g", "--ignore-scripts"];
+const piInstall = [...npmInstall, "@earendil-works/pi-coding-agent"];
+const playwrightInstall = [...npmInstall, "@playwright/cli"];
+
+function wingetInstall(packageIds: string, ...options: string[]): string[] {
+  return ["winget", "install", ...packageIds.trim().split(/\s+/), ...options, "--source", "winget"];
+}
+
+const devManaged = `Microsoft.VisualStudioCode Oven-sh.Bun Git.Git Casey.Just OpenJS.NodeJS.LTS
+  Microsoft.PowerShell marlocarlo.psmux Canonical.Ubuntu GitHub.cli Microsoft.coreutils gerardog.gsudo`;
+const workManaged = `BluePointLilac.ContextMenuManager sordum.EasyContextMenu w4po.ExplorerTabUtility
+  AdrienAllard.FileConverter DuongDieuPhap.ImageGlass LocalSend.LocalSend MPC-BE.MPC-BE
+  M2Team.NanaZip OpenWhispr.OpenWhispr ShareX.ShareX Microsoft.Sysinternals.Autologon Rime.Weasel
+  WinDirStat.WinDirStat Microsoft.WindowsTerminal ZedIndustries.Zed AutoHotkey.AutoHotkey
+  RussellBanks.Komac dandavison.delta CatBraaain.runx CatBraaain.wintasks`;
+const personalManaged = `Guru3D.Afterburner CPUID.CPU-Z Rem0o.FanControl GIMP.GIMP.3 ch.LosslessCut
+  Mojang.MinecraftLauncher OBSProject.OBSStudio Guru3D.RTSS Meltytech.Shotcut Valve.Steam
+  Devolutions.UniGetUI HaraldBoegeholz.h2testw`;
+
+function windowsFixture(configText?: string) {
+  const appData = mkdtempSync(join(tmpdir(), "windows-installer-test-"));
+  const desktop = join(appData, "Desktop");
+  const winget = join(appData, "Microsoft", "WinGet");
+  const packages = join(winget, "Packages");
+  const links = join(winget, "Links");
+  mkdirSync(desktop);
+  mkdirSync(links, { recursive: true });
+  const desktopShortcut = join(desktop, "App.lnk");
+  writeFileSync(desktopShortcut, "desktop shortcut");
+
+  function packageExe(folder: string, file: string) {
+    const executable = join(packages, folder, file);
+    mkdirSync(dirname(executable), { recursive: true });
+    writeFileSync(executable, "installed app");
+    return executable;
+  }
+
+  const commands: string[][] = [];
+
+  async function run(
+    profile: InstallProfile,
+    ...failingCommands: ("winget" | "pi" | "playwright" | "camoufox")[]
+  ) {
+    const previousPath = process.env.Path;
+    const previousAppData = process.env.LOCALAPPDATA;
+    const npmPaths: (string | undefined)[] = [];
+    const errors: string[] = [];
+    const lookups: { executable: string; after: string[] | undefined; path: string | undefined }[] =
+      [];
+    const spawn = spyOn(Bun, "spawnSync").mockImplementation((args) => {
+      assert.ok(Array.isArray(args), "expected an argument vector");
+      commands.push(args);
+      const [command] = args;
+      if (command === "cmd") npmPaths.push(process.env.Path);
+      const refreshesPath = command === "powershell" && args[3]?.startsWith("[Environment]");
+      const stdout = refreshesPath ? "machine;user" : "1.0.0";
+      const fails =
+        (failingCommands.includes("winget") && command === "winget") ||
+        (failingCommands.includes("pi") && args.at(-1) === piInstall.at(-1)) ||
+        (failingCommands.includes("playwright") && args.at(-1) === playwrightInstall.at(-1)) ||
+        (failingCommands.includes("camoufox") && args.includes("daijro/camoufox"));
+      return {
+        stdout: Buffer.from(stdout),
+        stderr: Buffer.alloc(0),
+        exitCode: fails ? 1 : 0,
+      } as ReturnType<typeof Bun.spawnSync>;
+    });
+    const relaunch = spyOn(Bun, "spawn").mockImplementation(() =>
+      assert.fail("unexpected relaunch"),
+    );
+    const which = spyOn(Bun, "which").mockImplementation((executable) => {
+      lookups.push({ executable, after: commands.at(-1), path: process.env.Path });
+      return join(links, "openserp.exe");
+    });
+    const stderr = spyOn(console, "error").mockImplementation((error) =>
+      errors.push(String(error)),
+    );
+    process.env.LOCALAPPDATA = appData;
+    try {
+      const readConfig = configText === undefined ? undefined : async () => configText;
+      await installWindows(profile, desktop, readConfig);
+      return { commands, npmPaths, errors, lookups };
+    } finally {
+      stderr.mockRestore();
+      which.mockRestore();
+      relaunch.mockRestore();
+      spawn.mockRestore();
+      if (previousAppData === undefined) delete process.env.LOCALAPPDATA;
+      else process.env.LOCALAPPDATA = previousAppData;
+      if (previousPath === undefined) delete process.env.Path;
+      else process.env.Path = previousPath;
+    }
+  }
+
+  return {
+    appData,
+    desktopShortcut,
+    commands,
+    links,
+    packageExe,
+    run,
+    dispose: () => rmSync(appData, { recursive: true }),
+  };
+}
+
+test("dev installs only its selected packages after the elevation check and refreshes PATH for npm", async () => {
+  const fixture = windowsFixture();
+  try {
+    const { commands, npmPaths, errors, lookups } = await fixture.run("dev", "playwright");
+    assert.deepEqual(commands, [
+      elevationCheck,
+      wingetInstall("Docker.DockerDesktop", "--no-upgrade"),
+      wingetInstall(devManaged),
+      refreshPath,
+      piInstall,
+      playwrightInstall,
+    ]);
+    assert.deepEqual(npmPaths, ["machine;user", "machine;user"]);
+    assert.deepEqual(lookups, []);
+    assert.deepEqual(errors, [`command failed with exit code 1: ${playwrightInstall.join(" ")}`]);
+    assert.equal(readFileSync(fixture.desktopShortcut, "utf8"), "desktop shortcut");
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test("pi installation failure is still fatal", async () => {
+  const fixture = windowsFixture();
+  try {
+    await assert.rejects(
+      fixture.run("dev", "pi"),
+      /command failed with exit code 1: .*pi-coding-agent/,
+    );
+    assert.deepEqual(fixture.commands.slice(-2), [refreshPath, piInstall]);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test("dev leaves WinGet links unchanged", async () => {
+  const fixture = windowsFixture();
+  try {
+    const bunFolder = `Oven-sh.Bun_${wingetSourceId}`;
+    const installedExe = fixture.packageExe(bunFolder, "bun.exe");
+    fixture.packageExe(bunFolder, "bunx.exe");
+    const existingTarget = join(dirname(installedExe), "old", "bun.exe");
+    const existingLink = join(fixture.links, "bun.exe");
+    symlinkSync(existingTarget, existingLink, "file");
+
+    await fixture.run("dev");
+
+    assert.deepEqual(readdirSync(fixture.links), ["bun.exe"]);
+    assert.equal(readlinkSync(existingLink), existingTarget);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test.each(["work", "personal"] as const)(
+  "%s keeps the existing package options and performs cleanup",
+  async (profile) => {
+    const fixture = windowsFixture();
+    try {
+      const app = join(fixture.appData, "Programs", "Camoufox");
+      mkdirSync(app, { recursive: true });
+      writeFileSync(join(app, "camoufox.exe"), "installed browser");
+      writeFileSync(join(app, "application.ini"), "Version=158.0.1-beta.41");
+      const nonDevExecutable = fixture.packageExe(
+        `dandavison.delta_${wingetSourceId}`,
+        "delta.exe",
+      );
+      const replacedLink = join(fixture.links, "delta.exe");
+      writeFileSync(replacedLink, "previous file");
+
+      const { commands, lookups, errors } = await fixture.run(profile, "winget");
+      const wingetCommands = [
+        wingetInstall(
+          "AutoHotkey.AutoHotkey",
+          "--silent",
+          "--version",
+          "1.1.37.02",
+          "--no-upgrade",
+        ),
+        wingetInstall("Docker.DockerDesktop", "--no-upgrade"),
+        wingetInstall(devManaged),
+        wingetInstall("Google.Chrome Mozilla.Firefox", "--no-upgrade"),
+        wingetInstall(workManaged),
+      ];
+      if (profile === "personal") {
+        wingetCommands.push(
+          wingetInstall("Discord.Discord", "--no-upgrade"),
+          wingetInstall(personalManaged),
+        );
+      }
+      const installerCommands = [
+        elevationCheck,
+        ...wingetCommands,
+        refreshPath,
+        piInstall,
+        playwrightInstall,
+      ];
+      assert.deepEqual(commands.slice(0, installerCommands.length), installerCommands);
+      assert.deepEqual(
+        errors,
+        wingetCommands.map((args) => `command failed with exit code 1: ${args.join(" ")}`),
+      );
+      assert.deepEqual(lookups, [
+        { executable: "openserp", after: playwrightInstall, path: "machine;user" },
+      ]);
+      assert.deepEqual(commands[installerCommands.length], [
+        "gh",
+        "release",
+        "view",
+        "--repo",
+        "rustdesk/rustdesk",
+        "--json",
+        "tagName",
+        "--jq",
+        ".tagName",
+      ]);
+      assert.equal(commands[installerCommands.length + 1]?.[0], "powershell");
+      assert.equal(commands.length, installerCommands.length + 2);
+      assert.ok(existsSync(join(app, "version.json")));
+      assert.equal(existsSync(fixture.desktopShortcut), false);
+      assert.equal(realpathSync(replacedLink), realpathSync(nonDevExecutable));
+    } finally {
+      fixture.dispose();
+    }
+  },
+);
+
+test("relaunches the same installer with gsudo before running any installs", async () => {
+  const stopped = new Error("parent process exited");
+  const check = spyOn(Bun, "spawnSync").mockImplementation((args) => {
+    assert.deepEqual(args, elevationCheck);
+    return { exitCode: 1 } as ReturnType<typeof Bun.spawnSync>;
+  });
+  const relaunch = spyOn(Bun, "spawn").mockImplementation((args) => {
+    assert.deepEqual(args, ["gsudo", "-d", process.execPath, join(import.meta.dir, "windows.ts")]);
+    return { exited: Promise.resolve(7) } as ReturnType<typeof Bun.spawn>;
+  });
+  const exit = spyOn(process, "exit").mockImplementation((code) => {
+    assert.equal(code, 7);
+    throw stopped;
+  });
+  try {
+    await assert.rejects(installWindows("dev"), stopped);
+    assert.equal(check.mock.calls.length, 1);
+    assert.equal(relaunch.mock.calls.length, 1);
+  } finally {
+    exit.mockRestore();
+    relaunch.mockRestore();
+    check.mockRestore();
+  }
+});
+
+test("installs pinned WinGet entries first, then batches consecutive identical args", async () => {
+  const fixture = windowsFixture(`dev:
+  - npm: cli-tool
+  - winget: Test.First
+  - winget: { id: Test.Pinned1, args: [--version, "1.2"] }
+  - custom: openserp
+  - winget: { id: Test.Second, args: [] }
+  - winget: { id: Test.Silent1, args: [--silent] }
+  - winget: { id: Test.Silent2, args: [--silent] }
+  - winget: { id: Test.Order1, args: [--no-upgrade, --silent] }
+  - winget: { id: Test.Order2, args: [--silent, --no-upgrade] }
+  - winget: { id: Test.Third }
+  - winget: { id: Test.NoUpgrade, args: [--no-upgrade] }
+  - winget: { id: Test.Pinned2, args: [--version, "2.3"] }
+work: []
+personal: []
+`);
+  try {
+    const { commands } = await fixture.run("dev");
+    assert.deepEqual(commands, [
+      elevationCheck,
+      wingetInstall("Test.Pinned1", "--version", "1.2"),
+      wingetInstall("Test.Pinned2", "--version", "2.3"),
+      wingetInstall("Test.First Test.Second"),
+      wingetInstall("Test.Silent1 Test.Silent2", "--silent"),
+      wingetInstall("Test.Order1", "--no-upgrade", "--silent"),
+      wingetInstall("Test.Order2", "--silent", "--no-upgrade"),
+      wingetInstall("Test.Third"),
+      wingetInstall("Test.NoUpgrade", "--no-upgrade"),
+      refreshPath,
+      [...npmInstall, "cli-tool"],
+    ]);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test("runs npm and custom in cumulative config order and continues after nonfatal failures", async () => {
+  const fixture = windowsFixture(`work:
+  - custom: openserp
+  - npm: cli-tool
+  - winget: Test.WorkOnly
+dev:
+  - custom: camoufox
+  - npm: "@playwright/cli"
+  - winget: Test.DevOnly
+personal:
+  - npm: not-selected
+`);
+  try {
+    fixture.packageExe("test", "test.exe");
+    const { commands, lookups, errors } = await fixture.run("work", "camoufox", "playwright");
+    const camoufoxCommand = commands[3]!;
+    assert.deepEqual(camoufoxCommand.slice(0, 5), [
+      "gh",
+      "release",
+      "download",
+      "--repo",
+      "daijro/camoufox",
+    ]);
+    assert.deepEqual(commands, [
+      elevationCheck,
+      wingetInstall("Test.DevOnly Test.WorkOnly"),
+      refreshPath,
+      camoufoxCommand,
+      playwrightInstall,
+      [...npmInstall, "cli-tool"],
+    ]);
+    assert.deepEqual(lookups, [
+      { executable: "openserp", after: playwrightInstall, path: "machine;user" },
+    ]);
+    assert.deepEqual(errors, [
+      `camoufox install failed: command failed with exit code 1: ${camoufoxCommand.join(" ")}`,
+      `command failed with exit code 1: ${playwrightInstall.join(" ")}`,
+    ]);
+    assert.equal(existsSync(fixture.desktopShortcut), false);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test("uses the last value for a duplicate YAML key and installs no undeclared packages", async () => {
+  const fixture = windowsFixture(`dev:
+  - npm: first
+    npm: last
+work: [{ winget: Test.WorkOnly }]
+personal: []
+`);
+  try {
+    const { commands, lookups } = await fixture.run("dev");
+    assert.deepEqual(commands, [elevationCheck, refreshPath, [...npmInstall, "last"]]);
+    assert.deepEqual(lookups, []);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test("requires Bun YAML support before starting external operations", async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(Bun.YAML, "parse")!;
+  Object.defineProperty(Bun.YAML, "parse", { value: undefined });
+  try {
+    await assert.rejects(
+      installWindows("dev", undefined, async () => ""),
+      /Bun 1\.2\.21/,
+    );
+  } finally {
+    Object.defineProperty(Bun.YAML, "parse", descriptor);
+  }
+});
+
+test.each([
+  ["[]", /must be a map/],
+  ["dev: []\nwork: []", /personal must be a list/],
+  ["dev: []\nwork: {}\npersonal: []", /work must be a list/],
+  ["dev: []\nwork: []\npersonal: []\nother: []", /Unknown .* profile: other/],
+  ["dev: []\nwork: []\npersonal: [{ custom: unknown }]", /unknown custom installer/],
+])("rejects invalid profiles before external operations: %s", async (configText, error) => {
+  const fixture = windowsFixture(configText);
+  try {
+    await assert.rejects(fixture.run("dev"), error);
+    assert.deepEqual(fixture.commands, []);
+    assert.equal(readFileSync(fixture.desktopShortcut, "utf8"), "desktop shortcut");
+    assert.deepEqual(readdirSync(fixture.links), []);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test.each([
+  ["Test.Tool", /must be a map/],
+  ["{}", /must have one key/],
+  ["{ winget: Test.Tool, npm: cli-tool }", /must have one key/],
+  ["{ run: anything }", /unknown key: run/],
+  ["{ winget: --force }", /invalid WinGet id/],
+  ["{ winget: { id: 1.2 } }", /invalid WinGet id/],
+  ["{ winget: [] }", /winget must be an id or a map/],
+  ["{ winget: { id: Test.Tool, source: msstore } }", /unknown key: source/],
+  ["{ winget: { id: Test.Tool, args: '--silent' } }", /args must be an array/],
+  ["{ winget: { id: Test.Tool, args: null } }", /args must be an array/],
+  ["{ winget: { id: Test.Tool, args: [--source, msstore] } }", /invalid WinGet argument/],
+  ["{ winget: { id: Test.Tool, args: [true] } }", /invalid WinGet argument/],
+  ["{ winget: { id: Test.Tool, args: [--silent, --silent] } }", /duplicate WinGet argument/],
+  [
+    "{ winget: { id: Test.Tool, args: [--version, '1.2', --version, '2.3'] } }",
+    /duplicate WinGet argument/,
+  ],
+  ["{ winget: { id: Test.Tool, args: [--version] } }", /invalid WinGet version/],
+  ["{ winget: { id: Test.Tool, args: [--version, 1.2] } }", /invalid WinGet version/],
+  ["{ winget: { id: Test.Tool, args: [--version, --silent] } }", /invalid WinGet version/],
+  ["{ npm: 1 }", /invalid npm package name/],
+  ["{ npm: '--force' }", /invalid npm package name/],
+  ["{ npm: 'cli & echo' }", /invalid npm package name/],
+  ["{ npm: 'cli%PATH%' }", /invalid npm package name/],
+  ["{ npm: '@scope/--force' }", /invalid npm package name/],
+  ["{ npm: 'cli@next' }", /invalid npm package name/],
+  ["{ npm: 'scope/cli' }", /invalid npm package name/],
+  ["{ npm: 'cli.tgz' }", /invalid npm package name/],
+  ["{ custom: true }", /custom name must be a string/],
+  ["{ custom: constructor }", /unknown custom installer/],
+])("rejects invalid entries before external operations: %s", async (entry, error) => {
+  const fixture = windowsFixture(`dev: [{ npm: valid }, ${entry}]\nwork: []\npersonal: []`);
+  try {
+    await assert.rejects(fixture.run("work"), error);
+    assert.deepEqual(fixture.commands, []);
+    assert.equal(readFileSync(fixture.desktopShortcut, "utf8"), "desktop shortcut");
+    assert.deepEqual(readdirSync(fixture.links), []);
+  } finally {
+    fixture.dispose();
+  }
+});
 
 function browserFixture(application: string) {
   const appData = mkdtempSync(join(tmpdir(), "camoufox-installer-test-"));

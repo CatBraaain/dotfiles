@@ -1,0 +1,68 @@
+dev:
+  - winget:
+      id: Docker.DockerDesktop
+      args: [--no-upgrade]
+  - winget: Microsoft.VisualStudioCode
+  - winget: Oven-sh.Bun
+  - winget: Git.Git
+  - winget: Casey.Just
+  - winget: OpenJS.NodeJS.LTS
+  - winget: Microsoft.PowerShell
+  - winget: marlocarlo.psmux
+  - winget: Canonical.Ubuntu
+  - winget: GitHub.cli
+  - winget: Microsoft.coreutils
+  - winget: gerardog.gsudo
+  - npm: "@earendil-works/pi-coding-agent"
+  - npm: "@playwright/cli"
+
+work:
+  - winget:
+      id: AutoHotkey.AutoHotkey
+      args: [--silent, --version, "1.1.37.02", --no-upgrade]
+  - winget:
+      id: Google.Chrome
+      args: [--no-upgrade]
+  - winget:
+      id: Mozilla.Firefox
+      args: [--no-upgrade]
+  - winget: BluePointLilac.ContextMenuManager
+  - winget: sordum.EasyContextMenu
+  - winget: w4po.ExplorerTabUtility
+  - winget: AdrienAllard.FileConverter
+  - winget: DuongDieuPhap.ImageGlass
+  - winget: LocalSend.LocalSend
+  - winget: MPC-BE.MPC-BE
+  - winget: M2Team.NanaZip
+  - winget: OpenWhispr.OpenWhispr
+  - winget: ShareX.ShareX
+  - winget: Microsoft.Sysinternals.Autologon
+  - winget: Rime.Weasel
+  - winget: WinDirStat.WinDirStat
+  - winget: Microsoft.WindowsTerminal
+  - winget: ZedIndustries.Zed
+  - winget: AutoHotkey.AutoHotkey
+  - winget: RussellBanks.Komac
+  - winget: dandavison.delta
+  - winget: CatBraaain.runx
+  - winget: CatBraaain.wintasks
+  - custom: camoufox
+  - custom: openserp
+  - custom: rustdesk
+
+personal:
+  - winget:
+      id: Discord.Discord
+      args: [--no-upgrade]
+  - winget: Guru3D.Afterburner
+  - winget: CPUID.CPU-Z
+  - winget: Rem0o.FanControl
+  - winget: GIMP.GIMP.3
+  - winget: ch.LosslessCut
+  - winget: Mojang.MinecraftLauncher
+  - winget: OBSProject.OBSStudio
+  - winget: Guru3D.RTSS
+  - winget: Meltytech.Shotcut
+  - winget: Valve.Steam
+  - winget: Devolutions.UniGetUI
+  - winget: HaraldBoegeholz.h2testw

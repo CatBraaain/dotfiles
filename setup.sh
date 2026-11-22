@@ -39,7 +39,7 @@ fi
 eval "$("$BREW_BIN" shellenv)"
 
 # bun runs undotfiles/install/linux.ts. Also kept as a brew
-# formula in linux.config.yaml; install keeps both paths in sync idempotently.
+# formula in linux.install.yaml; install keeps both paths in sync idempotently.
 command -v bun >/dev/null 2>&1 || brew install bun
 
 bun undotfiles/install/linux.ts sync

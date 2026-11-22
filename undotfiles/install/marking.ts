@@ -1,11 +1,12 @@
 import { join } from "node:path";
 
-export type InstallProfile = "personal" | "work";
+const installProfiles = ["dev", "work", "personal"] as const;
+export type InstallProfile = (typeof installProfiles)[number];
 
 export const markingPath = join(import.meta.dir, "..", "..", ".env");
 
 export function isInstallProfile(value: string): value is InstallProfile {
-  return value === "personal" || value === "work";
+  return installProfiles.some((profile) => profile === value);
 }
 
 export async function readInstallProfile(readText: () => Promise<string>): Promise<InstallProfile> {
@@ -27,7 +28,7 @@ export async function readInstallProfile(readText: () => Promise<string>): Promi
   const value = profileLine.slice(profileLine.indexOf("=") + 1).trim();
   if (!isInstallProfile(value))
     throw new Error(
-      `unknown INSTALL_PROFILE "${value}" in ${markingPath} (expected "personal" or "work")`,
+      `unknown INSTALL_PROFILE "${value}" in ${markingPath} (expected one of: ${installProfiles.join(", ")})`,
     );
   return value;
 }

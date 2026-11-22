@@ -20,12 +20,12 @@ type BatchableKey = "apt" | "flatpak" | "uv" | "bun" | "cargo" | "go" | "brew" |
 export type Entry = { key: Key; value: string };
 export type InstallBatch = { key: BatchableKey; values: readonly string[] } | Entry;
 type State = Map<DeclarativeKey, Map<string, string>>;
-type CustomHandler = () => void | Promise<void>;
+type CustomHandler = (profile: InstallProfile) => void | Promise<void>;
 type PersonalOnlyHandler = { isInstalled: () => boolean; remove: () => void };
-export type ProfileEntries = { work: readonly Entry[]; personal: readonly Entry[] };
+export type ProfileEntries = { readonly [Profile in InstallProfile]: readonly Entry[] };
 
 export interface Runtime {
-  execute(command: readonly string[]): void;
+  execute(command: readonly string[], options?: { stdin: "inherit" }): void;
   output(command: readonly string[]): string;
   outputAllowFailure(command: readonly string[]): string;
   succeeds(command: readonly string[]): boolean;
@@ -63,7 +63,7 @@ const validKeys = new Set<Key>([
   "custom",
   "run",
 ]);
-const configPath = join(import.meta.dir, "linux.config.yaml");
+const configPath = join(import.meta.dir, "linux.install.yaml");
 const androidSdkDir = join(homedir(), ".android-sdk");
 const flathubRepoUrl = "https://dl.flathub.org/repo/flathub.flatpakrepo";
 export const openDesignDir = join(homedir(), "mirrors", "github.com", "nexu-io", "open-design");
@@ -140,29 +140,25 @@ export class Bootstrap {
     const entriesWithoutApt = this.entries.filter((entry) => entry.key !== "apt");
     for (const batch of coalesceEntries(entriesWithoutApt)) await this.install(batch, profile);
 
-    const states = this.readStates();
-    for (const key of declarativeKeys) this.removeUnused(key, states.get(key));
-    if (profile === "work") this.removePersonalOnlyPackages();
+    if (profile !== "dev") {
+      const states = this.readStates();
+      for (const key of declarativeKeys) this.removeUnused(key, states.get(key));
+      if (profile === "work") this.removePersonalOnlyPackages();
+    }
     return this.finish();
   }
 
   async diff(profile: InstallProfile): Promise<number> {
-    const states = this.readStates();
-    for (const key of declarativeKeys) {
-      const current = states.get(key);
-      if (!current) continue;
-      for (const name of current.keys()) {
-        if (!desiredNames(this.entries, key).has(name)) this.runtime.log(`remove ${key}: ${name}`);
-      }
-    }
+    const states = profile === "dev" ? undefined : this.readStates();
+    if (states) this.reportRemovals(states);
 
     for (const entry of this.entries) {
-      if (isDeclarative(entry.key) && !states.has(entry.key)) continue;
+      if (states && isDeclarative(entry.key) && !states.has(entry.key)) continue;
       if (entry.key === "custom") {
         if (!this.customHandlers.has(entry.value))
           this.fail(`unknown custom handler: ${entry.value}`);
-        else if (profile === "work" && this.personalOnlyHandlers.has(entry.value))
-          this.fail(`personal-only custom handler in work config: ${entry.value}`);
+        else if (profile !== "personal" && this.personalOnlyHandlers.has(entry.value))
+          this.fail(`personal-only custom handler in ${profile} config: ${entry.value}`);
         else this.runtime.log(`custom: ${entry.value}`);
         continue;
       }
@@ -170,7 +166,7 @@ export class Bootstrap {
       if (entry.key === "flatpak" && isFlatpakInstalled(this.runtime, entry.value)) continue;
       this.runtime.log(
         entry.key === "run"
-          ? `run: ${entry.value}`
+          ? `run: ${profileRunCommand(entry.value, profile)}`
           : `install / update ${entry.key}: ${entry.value}`,
       );
     }
@@ -178,6 +174,17 @@ export class Bootstrap {
       for (const [name, handler] of this.personalOnlyHandlers)
         if (handler.isInstalled()) this.runtime.log(`remove custom: ${name}`);
     return this.finish();
+  }
+
+  private reportRemovals(states: State): void {
+    for (const key of declarativeKeys) {
+      const current = states.get(key);
+      if (!current) continue;
+      const desired = desiredNames(this.entries, key);
+      for (const name of current.keys()) {
+        if (!desired.has(name)) this.runtime.log(`remove ${key}: ${name}`);
+      }
+    }
   }
 
   private readStates(): State {
@@ -250,8 +257,8 @@ export class Bootstrap {
     if (!isBatch(batch)) {
       const entry = batch;
       if (entry.key === "custom") {
-        if (profile === "work" && this.personalOnlyHandlers.has(entry.value)) {
-          this.fail(`personal-only custom handler in work config: ${entry.value}`);
+        if (profile !== "personal" && this.personalOnlyHandlers.has(entry.value)) {
+          this.fail(`personal-only custom handler in ${profile} config: ${entry.value}`);
           return;
         }
         const handler = this.customHandlers.get(entry.value);
@@ -259,12 +266,13 @@ export class Bootstrap {
           this.fail(`unknown custom handler: ${entry.value}`);
           return;
         }
-        await this.attemptAsync(`custom ${entry.value}`, handler);
+        await this.attemptAsync(`custom ${entry.value}`, () => handler(profile));
         return;
       }
 
       this.attempt(`install ${entry.key}: ${entry.value}`, () => {
-        if (entry.key === "run") this.runtime.execute(["bash", "-c", entry.value]);
+        if (entry.key === "run")
+          this.runtime.execute(["bash", "-c", profileRunCommand(entry.value, profile)]);
       });
       return;
     }
@@ -276,7 +284,7 @@ export class Bootstrap {
           const missing = batch.values.filter((value) => !isAptInstalled(this.runtime, value));
           if (missing.length === 0) return;
           this.runtime.execute(["sudo", "apt", "update"]);
-          this.runtime.execute(["sudo", "apt", "install", "-y", ...missing]);
+          this.installApt(missing, profile);
           return;
         }
         case "flatpak": {
@@ -304,38 +312,41 @@ export class Bootstrap {
           ]);
           return;
         case "brew":
-          this.runtime.execute([
-            "env",
-            "HOMEBREW_NO_ENV_HINTS=1",
-            "brew",
-            "install",
-            "--quiet",
-            ...batch.values,
-          ]);
-          return;
         case "brew-cask":
           this.runtime.execute([
             "env",
             "HOMEBREW_NO_ENV_HINTS=1",
+            ...(profile === "dev" ? ["HOMEBREW_NO_INSTALL_CLEANUP=1"] : []),
             "brew",
             "install",
             "--quiet",
-            "--cask",
+            ...(batch.key === "brew-cask" ? ["--cask"] : []),
             ...batch.values,
           ]);
       }
     });
   }
 
+  private installApt(values: readonly string[], profile: InstallProfile): void {
+    this.runtime.execute([
+      "sudo",
+      "apt",
+      "install",
+      "-y",
+      ...(profile === "dev" ? ["--no-remove", "--"] : []),
+      ...values,
+    ]);
+  }
+
   private defaultCustomHandlers(): ReadonlyMap<string, CustomHandler> {
-    return new Map([
+    return new Map<string, CustomHandler>([
       ["android-sdk", () => this.installAndroidSdk()],
       ["blender", () => this.installBlender()],
-      ["drawio", () => this.installDrawio()],
+      ["drawio", (profile) => this.installDrawio(profile)],
       ["musescore", () => this.installMuseScore()],
-      ["openwhispr", () => this.installOpenWhispr()],
-      ["rustdesk", () => this.installRustDesk()],
-      ["surge-xt", () => this.installSurgeXt()],
+      ["openwhispr", (profile) => this.installOpenWhispr(profile)],
+      ["rustdesk", (profile) => this.installRustDesk(profile)],
+      ["surge-xt", (profile) => this.installSurgeXt(profile)],
       ["opendesign", () => this.installOpenDesign()],
       ["tmp-disk", () => this.ensureTmpDisk()],
     ]);
@@ -439,7 +450,7 @@ export class Bootstrap {
     this.flatpakRemotePrepared = true;
   }
 
-  private async installDrawio(): Promise<void> {
+  private async installDrawio(profile: InstallProfile): Promise<void> {
     const tag = this.runtime.output([
       "gh",
       "release",
@@ -473,13 +484,13 @@ export class Bootstrap {
       ]);
       const file = readdirSync(directory).find((name) => name.endsWith(".deb"));
       if (!file) throw new Error("draw.io release archive is missing a deb package");
-      this.runtime.execute(["sudo", "apt", "install", "-y", join(directory, file)]);
+      this.installApt([join(directory, file)], profile);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
   }
 
-  private async installOpenWhispr(): Promise<void> {
+  private async installOpenWhispr(profile: InstallProfile): Promise<void> {
     if (this.runtime.output(["uname", "-m"]) !== "x86_64")
       throw new Error("OpenWhispr Linux release supports x86_64 only");
 
@@ -521,13 +532,13 @@ export class Bootstrap {
       ]);
       const file = readdirSync(directory).find((name) => name.endsWith(".deb"));
       if (!file) throw new Error("OpenWhispr release archive is missing a deb package");
-      this.runtime.execute(["sudo", "apt", "install", "-y", join(directory, file)]);
+      this.installApt([join(directory, file)], profile);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
   }
 
-  private async installRustDesk(): Promise<void> {
+  private async installRustDesk(profile: InstallProfile): Promise<void> {
     if (this.runtime.output(["uname", "-m"]) !== "x86_64")
       throw new Error("RustDesk Linux release supports x86_64 only");
 
@@ -569,13 +580,13 @@ export class Bootstrap {
       ]);
       const file = readdirSync(directory).find((name) => name.endsWith(".deb"));
       if (!file) throw new Error("RustDesk release archive is missing a deb package");
-      this.runtime.execute(["sudo", "apt", "install", "-y", join(directory, file)]);
+      this.installApt([join(directory, file)], profile);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
   }
 
-  private async installSurgeXt(): Promise<void> {
+  private async installSurgeXt(profile: InstallProfile): Promise<void> {
     if (this.runtime.output(["uname", "-m"]) !== "x86_64")
       throw new Error("Surge XT Linux release supports x86_64 only");
 
@@ -613,7 +624,7 @@ export class Bootstrap {
       ]);
       const file = readdirSync(directory).find((name) => name.endsWith(".deb"));
       if (!file) throw new Error("Surge XT release archive is missing a deb package");
-      this.runtime.execute(["sudo", "apt", "install", "-y", join(directory, file)]);
+      this.installApt([join(directory, file)], profile);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -816,7 +827,7 @@ export class Bootstrap {
     }
   }
 
-  private async attemptAsync(label: string, action: CustomHandler): Promise<void> {
+  private async attemptAsync(label: string, action: () => void | Promise<void>): Promise<void> {
     try {
       await action();
     } catch (error) {
@@ -864,27 +875,36 @@ function isBatch(batch: InstallBatch): batch is { key: BatchableKey; values: rea
 export function parseConfig(source: string): ProfileEntries {
   const parsed = Bun.YAML.parse(source);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-    throw new Error("config top-level value must be a map with work and personal keys");
-  const profileEntries: { work: Entry[]; personal: Entry[] } = { work: [], personal: [] };
-  for (const [profile, value] of Object.entries(parsed)) {
-    if (profile !== "work" && profile !== "personal")
+    throw new Error("config top-level value must be a map with dev, work or personal keys");
+  const profileEntries: Record<InstallProfile, Entry[]> = { dev: [], work: [], personal: [] };
+  for (const [profile, items] of Object.entries(parsed)) {
+    if (profile !== "dev" && profile !== "work" && profile !== "personal")
       throw new Error(`invalid config top-level key: ${profile}`);
-    if (!Array.isArray(value)) throw new Error(`config ${profile} value must be an array`);
-    profileEntries[profile] = value.map((item, index) => {
-      if (!item || typeof item !== "object" || Array.isArray(item))
-        throw new Error(`config ${profile} entry ${index + 1} must be a map`);
-      const entries = Object.entries(item);
-      if (entries.length !== 1)
-        throw new Error(`config ${profile} entry ${index + 1} must have one key`);
-      const [key, entryValue] = entries[0]!;
-      if (!validKeys.has(key as Key) || typeof entryValue !== "string")
-        throw new Error(`invalid config ${profile} entry ${index + 1}`);
-      return { key: key as Key, value: entryValue };
-    });
+    if (!Array.isArray(items)) throw new Error(`config ${profile} value must be an array`);
+    for (const [index, item] of items.entries()) {
+      const label = `config ${profile} entry ${index + 1}`;
+      const [key, value] = readConfigPair(item, label);
+      if (!validKeys.has(key as Key) || typeof value !== "string")
+        throw new Error(`invalid ${label}`);
+      profileEntries[profile].push({ key: key as Key, value });
+    }
   }
-  if (profileEntries.work.length === 0 && profileEntries.personal.length === 0)
-    throw new Error("config must define entries under work or personal");
+  if (Object.values(profileEntries).every((entries) => entries.length === 0))
+    throw new Error("config must define entries under dev, work or personal");
   return profileEntries;
+}
+
+function readConfigPair(item: unknown, label: string): [string, unknown] {
+  if (!item || typeof item !== "object" || Array.isArray(item))
+    throw new Error(`${label} must be a map`);
+  const entries = Object.entries(item);
+  if (entries.length !== 1) throw new Error(`${label} must have one key`);
+  return entries[0]!;
+}
+
+function profileRunCommand(command: string, profile: InstallProfile): string {
+  if (profile === "dev") return `export PLAYWRIGHT_SKIP_BROWSER_GC=1; ${command}`;
+  return command;
 }
 
 function desiredNames(entries: readonly Entry[], key: DeclarativeKey): Set<string> {
@@ -967,8 +987,12 @@ function message(error: unknown): string {
 }
 
 const systemRuntime: Runtime = {
-  execute(command) {
-    const result = Bun.spawnSync([...command], { stdout: "inherit", stderr: "inherit" });
+  execute(command, options) {
+    const result = Bun.spawnSync([...command], {
+      stdout: "inherit",
+      stderr: "inherit",
+      ...options,
+    });
     if (result.exitCode !== 0) throw new Error(command.join(" "));
   },
   output(command) {
@@ -1000,6 +1024,7 @@ export async function run(
   arguments_: readonly string[],
   readConfig = () => Bun.file(configPath).text(),
   runtime: Runtime = systemRuntime,
+  readMarking = () => Bun.file(markingPath).text(),
 ): Promise<number> {
   const [command] = arguments_;
   if (arguments_.length !== 1 || (command !== "sync" && command !== "diff")) {
@@ -1008,18 +1033,25 @@ export async function run(
   }
 
   try {
-    const profile = await readInstallProfile(() => Bun.file(markingPath).text());
+    const profile = await readInstallProfile(readMarking);
     runtime.log(`install profile: ${profile}`);
-    if (command === "sync") {
-      const auth = Bun.spawnSync(["sudo", "-v"], {
-        stdin: "inherit",
-        stdout: "inherit",
-        stderr: "inherit",
-      });
-      if (auth.exitCode !== 0) return 1;
+    if (command === "sync" && profile !== "dev")
+      runtime.execute(["sudo", "-v"], { stdin: "inherit" });
+
+    let config: ProfileEntries;
+    try {
+      config = parseConfig(await readConfig());
+      if (profile === "dev" && config.dev.length === 0)
+        throw new Error("dev profile requires at least one entry under dev");
+    } catch (error) {
+      throw new Error(`config error: ${message(error)}`);
     }
-    const config = parseConfig(await readConfig());
-    const entries = profile === "personal" ? [...config.work, ...config.personal] : config.work;
+
+    if (command === "sync" && profile === "dev")
+      runtime.execute(["sudo", "-v"], { stdin: "inherit" });
+    const entries = [...config.dev];
+    if (profile !== "dev") entries.push(...config.work);
+    if (profile === "personal") entries.push(...config.personal);
     const bootstrap = new Bootstrap(entries, runtime);
     return command === "sync" ? await bootstrap.sync(profile) : await bootstrap.diff(profile);
   } catch (error) {

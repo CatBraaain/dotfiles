@@ -2,8 +2,7 @@
 // desktop shortcuts and WinGet package links.
 //
 // Usage: bun windows.ts. The profile comes from the INSTALL_PROFILE marking
-// in the repository root .env. The "work" profile skips personal-only apps
-// such as Discord, Steam, and games.
+// in the repository root .env.
 //
 // Requires Administrator. When not elevated, the script relaunches itself via
 // gsudo (one UAC prompt); `gsudo status IsElevated` exits with 0 once
@@ -29,97 +28,52 @@ import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { markingPath, readInstallProfile, type InstallProfile } from "./marking.ts";
 
-const unmanagedPackages: readonly string[] = [
-  // keep-sorted start by_regex=\..+ sticky_comments=no
-  "Google.Chrome",
-  "Docker.DockerDesktop",
-  "Mozilla.Firefox",
-  // keep-sorted end
-];
+type WingetPackage = { key: "winget"; id: string; args: readonly string[] };
+type InstallEntry =
+  | WingetPackage
+  | { key: "npm"; name: string }
+  | { key: "custom"; name: string; install: () => Promise<void> };
 
-// Installed only with the "personal" profile.
-const unmanagedPersonalPackages: readonly string[] = ["Discord.Discord"];
-
-const managedPackages: readonly string[] = [
-  // keep-sorted start by_regex=\..+ sticky_comments=no
-  // "Microsoft.AppInstaller"
-  "BluePointLilac.ContextMenuManager",
-  "sordum.EasyContextMenu",
-  "w4po.ExplorerTabUtility",
-  "AdrienAllard.FileConverter",
-  "DuongDieuPhap.ImageGlass",
-  // "mulaRahul.Keyviz"
-  "LocalSend.LocalSend",
-  "MPC-BE.MPC-BE",
-  "M2Team.NanaZip",
-  "OpenWhispr.OpenWhispr",
-  "ShareX.ShareX",
-  // "StirlingTools.StirlingPDF"
-  "Microsoft.Sysinternals.Autologon",
-  "Microsoft.VisualStudioCode",
-  "Rime.Weasel",
-  "WinDirStat.WinDirStat",
-  "Microsoft.WindowsTerminal",
-  "ZedIndustries.Zed",
-  // keep-sorted end
-];
-
-// Installed only with the "personal" profile.
-const managedPersonalPackages: readonly string[] = [
-  // keep-sorted start by_regex=\..+ sticky_comments=no
-  "Guru3D.Afterburner",
-  "CPUID.CPU-Z",
-  "Rem0o.FanControl",
-  "GIMP.GIMP.3",
-  "ch.LosslessCut",
-  "Mojang.MinecraftLauncher",
-  "OBSProject.OBSStudio",
-  "Guru3D.RTSS",
-  "Meltytech.Shotcut",
-  "Valve.Steam",
-  "Devolutions.UniGetUI",
-  "HaraldBoegeholz.h2testw",
-  // keep-sorted end
-];
-
-const managedDevPackages: readonly string[] = [
-  // keep-sorted start by_regex=\..+ sticky_comments=no
-  // "qishibo.AnotherRedisDesktopManager"
-  "AutoHotkey.AutoHotkey", // windows
-  "Oven-sh.Bun",
-  "Git.Git",
-  "Casey.Just",
-  "RussellBanks.Komac",
-  "OpenJS.NodeJS.LTS",
-  "Microsoft.PowerShell", // windows
-  "marlocarlo.psmux",
-  "Canonical.Ubuntu", // windows
-  "GitHub.cli",
-  "Microsoft.coreutils",
-  "dandavison.delta",
-  "gerardog.gsudo", // windows
-  "CatBraaain.runx", // windows
-  "CatBraaain.wintasks", // windows
-  // keep-sorted end
-];
+const configPath = join(import.meta.dir, "windows.install.yaml");
+const profiles = ["dev", "work", "personal"] as const;
+const wingetPackageId = /^[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+$/i;
+const wingetVersion = /^[a-z0-9][a-z0-9.+_-]*$/i;
+const npmPackageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+const npmArchiveSuffix = /\.(?:tgz|tar\.gz|tar)$/;
+const wingetVersionFlag = "--version";
+const customInstallers = new Map<string, () => Promise<void>>([
+  ["camoufox", installCamoufox],
+  ["openserp", installOpenSerp],
+  ["rustdesk", installRustDesk],
+]);
 
 async function main(): Promise<void> {
   const profile = await readInstallProfile(() => Bun.file(markingPath).text());
+  await installWindows(profile);
+}
+
+export async function installWindows(
+  profile: InstallProfile,
+  desktop = join(homedir(), "Desktop"),
+  readConfig = () => Bun.file(configPath).text(),
+): Promise<void> {
+  const entries = parseInstallEntries(await readConfig(), profile);
   if (!isElevated()) await selfElevate();
-  installWingetPackages(profile);
+  installWingetPackages(entries.filter((entry) => entry.key === "winget"));
   refreshProcessPath();
-  installPi();
-  runAllowingFailure(["cmd", "/c", "npm", "install", "-g", "--ignore-scripts", "@playwright/cli"]);
-  await installCamoufox().catch((error: unknown) =>
-    console.error(`camoufox install failed: ${message(error)}`),
-  );
-  await installOpenSerp().catch((error: unknown) =>
-    console.error(`openserp install failed: ${message(error)}`),
-  );
-  await installRustDesk().catch((error: unknown) =>
-    console.error(`rustdesk install failed: ${message(error)}`),
-  );
-  removeDesktopShortcuts();
+  for (const entry of entries) {
+    if (entry.key === "npm") installNpmPackage(entry.name);
+    if (entry.key === "custom") {
+      await entry
+        .install()
+        .catch((error: unknown) =>
+          console.error(`${entry.name} install failed: ${message(error)}`),
+        );
+    }
+  }
+
+  if (profile === "dev") return;
+  removeDesktopShortcuts(desktop);
   linkWingetPackageExes();
 }
 
@@ -130,36 +84,136 @@ function selfElevate(): Promise<never> {
   return proc.exited.then((code) => process.exit(code ?? 1));
 }
 
-function installWingetPackages(profile: InstallProfile): void {
-  const isPersonal = profile === "personal";
-  const unmanaged = isPersonal
-    ? [...unmanagedPackages, ...unmanagedPersonalPackages]
-    : unmanagedPackages;
-  const managed = isPersonal ? [...managedPackages, ...managedPersonalPackages] : managedPackages;
-  // Individual winget failures are logged but do not abort the rest of the
-  // bootstrap, matching the previous PowerShell behavior.
-  runAllowingFailure([
-    "winget",
-    "install",
-    "AutoHotkey.AutoHotkey",
-    "--silent",
-    "--version",
-    "1.1.37.02",
-    "--no-upgrade",
-    "--source",
-    "winget",
-  ]);
-  runAllowingFailure(["winget", "install", ...unmanaged, "--no-upgrade", "--source", "winget"]);
-  runAllowingFailure(["winget", "install", ...managed, "--source", "winget"]);
-  runAllowingFailure(["winget", "install", ...managedDevPackages, "--source", "winget"]);
+function parseInstallEntries(source: string, profile: InstallProfile): InstallEntry[] {
+  if (typeof Bun.YAML?.parse !== "function") {
+    throw new Error("Bun 1.2.21 or later is required to read windows.install.yaml.");
+  }
+  const config: unknown = Bun.YAML.parse(source);
+  if (!isConfigMap(config)) throw new Error("windows.install.yaml must be a map");
+  for (const key of Object.keys(config)) {
+    if (!profiles.some((name) => name === key))
+      throw new Error(`Unknown windows.install.yaml profile: ${key}`);
+  }
+
+  const lastProfile = profiles.indexOf(profile);
+  return profiles.flatMap((name, index) => {
+    const rawEntries = config[name];
+    if (!Array.isArray(rawEntries)) throw new Error(`windows.install.yaml ${name} must be a list`);
+    const entries = rawEntries.map((entry: unknown, position) =>
+      parseInstallEntry(entry, `windows.install.yaml ${name} entry ${position + 1}`),
+    );
+    return index <= lastProfile ? entries : [];
+  });
 }
 
-const piNpmPackage = "@earendil-works/pi-coding-agent";
+function parseInstallEntry(rawEntry: unknown, label: string): InstallEntry {
+  if (!isConfigMap(rawEntry)) throw new Error(`${label} must be a map`);
+  const pairs = Object.entries(rawEntry);
+  const pair = pairs[0];
+  if (pairs.length !== 1 || !pair) throw new Error(`${label} must have one key`);
 
-// pi has no winget package; --ignore-scripts is required by its install docs
-// (https://github.com/earendil-works/pi#install).
-function installPi(): void {
-  run(["cmd", "/c", "npm", "install", "-g", "--ignore-scripts", piNpmPackage]);
+  const [key, value] = pair;
+  switch (key) {
+    case "winget":
+      return parseWingetPackage(value, label);
+    case "npm":
+      if (!isNpmPackageName(value)) throw new Error(`${label} has an invalid npm package name`);
+      return { key, name: value };
+    case "custom": {
+      if (typeof value !== "string") throw new Error(`${label} custom name must be a string`);
+      const install = customInstallers.get(value);
+      if (!install) throw new Error(`${label} has an unknown custom installer: ${value}`);
+      return { key, name: value, install };
+    }
+    default:
+      throw new Error(`${label} has an unknown key: ${key}`);
+  }
+}
+
+function isNpmPackageName(name: unknown): name is string {
+  if (typeof name !== "string" || !npmPackageName.test(name)) return false;
+  return name.startsWith("@") || !npmArchiveSuffix.test(name);
+}
+
+function parseWingetPackage(rawPackage: unknown, label: string): WingetPackage {
+  if (typeof rawPackage === "string") {
+    return { key: "winget", id: validateWingetId(rawPackage, label), args: [] };
+  }
+
+  if (!isConfigMap(rawPackage)) throw new Error(`${label} winget must be an id or a map`);
+  for (const key of Object.keys(rawPackage)) {
+    if (key !== "id" && key !== "args")
+      throw new Error(`${label} winget has an unknown key: ${key}`);
+  }
+
+  const id = validateWingetId(rawPackage.id, label);
+  const args = "args" in rawPackage ? parseWingetArgs(rawPackage.args, label) : [];
+  return { key: "winget", id, args };
+}
+
+function validateWingetId(id: unknown, label: string): string {
+  if (typeof id !== "string" || !wingetPackageId.test(id))
+    throw new Error(`${label} has an invalid WinGet id`);
+  return id;
+}
+
+function parseWingetArgs(rawArgs: unknown, label: string): string[] {
+  if (!Array.isArray(rawArgs)) throw new Error(`${label} winget args must be an array`);
+
+  const args: string[] = [];
+  const flags = new Set<string>();
+  for (let index = 0; index < rawArgs.length; index++) {
+    const flag: unknown = rawArgs[index];
+    if (flag !== "--silent" && flag !== "--no-upgrade" && flag !== wingetVersionFlag)
+      throw new Error(`${label} has an invalid WinGet argument at position ${index + 1}`);
+    if (flags.has(flag)) throw new Error(`${label} has a duplicate WinGet argument: ${flag}`);
+    flags.add(flag);
+    args.push(flag);
+    if (flag === wingetVersionFlag) {
+      const version: unknown = rawArgs[++index];
+      if (typeof version !== "string" || !wingetVersion.test(version))
+        throw new Error(`${label} has an invalid WinGet version`);
+      args.push(version);
+    }
+  }
+  return args;
+}
+
+function isConfigMap(input: unknown): input is Record<string, unknown> {
+  return (
+    input !== null && typeof input === "object" && Object.getPrototypeOf(input) === Object.prototype
+  );
+}
+
+function installWingetPackages(packages: readonly WingetPackage[]): void {
+  const pinnedPackages = packages.filter((entry) => entry.args.includes(wingetVersionFlag));
+  for (const { id, args } of pinnedPackages) installWingetBatch([id], args);
+
+  const batches: { ids: string[]; args: readonly string[] }[] = [];
+  const unpinnedPackages = packages.filter((entry) => !entry.args.includes(wingetVersionFlag));
+  for (const { id, args } of unpinnedPackages) {
+    const previous = batches.at(-1);
+    if (previous?.args.length === args.length && previous.args.every((arg, i) => arg === args[i])) {
+      previous.ids.push(id);
+    } else {
+      batches.push({ ids: [id], args });
+    }
+  }
+  for (const { ids, args } of batches) installWingetBatch(ids, args);
+}
+
+function installWingetBatch(ids: readonly string[], args: readonly string[]): void {
+  runAllowingFailure(["winget", "install", ...ids, ...args, "--source", "winget"]);
+}
+
+function installNpmPackage(name: string): void {
+  const command = ["cmd", "/c", "npm", "install", "-g", "--ignore-scripts", name];
+  try {
+    run(command);
+  } catch (error) {
+    if (name === "@earendil-works/pi-coding-agent") throw error;
+    console.error(message(error));
+  }
 }
 
 function refreshProcessPath(): void {
@@ -320,8 +374,7 @@ function rustDeskRegistryVersion(): string {
   ]);
 }
 
-function removeDesktopShortcuts(): void {
-  const desktop = join(homedir(), "Desktop");
+function removeDesktopShortcuts(desktop: string): void {
   for (const name of readdirSync(desktop)) {
     if (name.endsWith(".lnk")) rmSync(join(desktop, name), { force: true });
   }
