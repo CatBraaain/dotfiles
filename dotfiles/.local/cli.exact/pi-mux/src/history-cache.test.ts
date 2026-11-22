@@ -159,6 +159,10 @@ const directory = ${JSON.stringify(this.directory)};
 const runningFile = ${JSON.stringify(runningFile)};
 let pane = ${JSON.stringify(pane)};
 if (existsSync(runningFile)) pane = JSON.parse(readFileSync(runningFile, "utf8"));
+function showOption(option) {
+  if (option === "@pi-mux-generation" || option === "@pi-mux-restored") console.log("test-generation");
+  if (option === "@pi_session_state" && existsSync(directory + "/published.json")) console.log(readFileSync(directory + "/published.json", "utf8"));
+}
 switch (args[0]) {
   case "-C":
     for (let index = 1, sequence = 1; index < args.length; index += 5) {
@@ -170,7 +174,8 @@ switch (args[0]) {
       if (tokens[0] === "display-message") console.log(pane.cwd);
       else if (missing) console.log("unknown variable: PI_TMUX_TEMPORARY");
       else if (tokens.at(-1) === "PI_TMUX_SESSION_ID") console.log("PI_TMUX_SESSION_ID=" + pane.id);
-      else if (tokens[0] !== "show-options") throw new Error("Unexpected mock batch command: " + command);
+      else if (tokens[0] === "show-options") showOption(tokens.at(-1));
+      else throw new Error("Unexpected mock batch command: " + command);
       console.log((missing ? "%error" : "%end") + " 1 " + sequence++ + " 0");
       if (missing) process.exitCode = 1;
     }
@@ -192,8 +197,7 @@ switch (args[0]) {
     console.log(pane.cwd);
     break;
   case "show-options":
-    if (args.at(-1) === "@pi-mux-generation" || args.at(-1) === "@pi-mux-restored") console.log("test-generation");
-    if (args.at(-1) === "@pi_session_state" && existsSync(directory + "/published.json")) console.log(readFileSync(directory + "/published.json", "utf8"));
+    showOption(args.at(-1));
     break;
   case "new-session": {
     const environment = new Map();

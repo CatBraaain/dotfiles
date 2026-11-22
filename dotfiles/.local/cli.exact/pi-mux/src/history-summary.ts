@@ -24,6 +24,8 @@ const SESSION_HEADER_MAX_BYTES = 64 * 1024;
 const SESSION_HEADER_PREFIX_BYTES = 1024;
 const SESSION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
 const FIRST_MESSAGE_MAX_CODE_POINTS = 80;
+const SESSION_INFO_TYPE_BYTES = Buffer.from("session_info");
+const JSON_UNICODE_ESCAPE_BYTES = Buffer.from("\\u");
 
 export type SavedSessionSummary = { title: string | null; mtime: number | null };
 
@@ -221,10 +223,10 @@ function readSavedSessionSummary(
     let mtime: number | null = null;
     let mtimeFound = false;
     for (const line of reverseLines(fd, size)) {
-      if (!line) continue;
+      if (line.length === 0 || (mtimeFound && !mayContainSessionInfo(line))) continue;
       let entry: unknown;
       try {
-        entry = JSON.parse(line);
+        entry = JSON.parse(line.toString("utf8"));
       } catch {
         continue;
       }
@@ -345,7 +347,11 @@ function truncateCodePoints(text: string, limit: number): string {
   return text.slice(0, end);
 }
 
-function* reverseLines(fd: number, size: number): Generator<string> {
+function mayContainSessionInfo(line: Buffer): boolean {
+  return line.includes(SESSION_INFO_TYPE_BYTES) || line.includes(JSON_UNICODE_ESCAPE_BYTES);
+}
+
+function* reverseLines(fd: number, size: number): Generator<Buffer> {
   let position = size;
   let parts: Buffer[] = [];
   while (position > 0) {
@@ -361,19 +367,15 @@ function* reverseLines(fd: number, size: number): Generator<string> {
     let end = length;
     let newline = buffer.lastIndexOf(10, end - 1);
     while (newline >= 0) {
-      if (parts.length > 0) {
-        const suffix = buffer.subarray(newline + 1, end);
-        yield Buffer.concat([suffix, ...parts.reverse()]).toString("utf8");
-      } else {
-        yield buffer.toString("utf8", newline + 1, end);
-      }
+      const suffix = buffer.subarray(newline + 1, end);
+      yield parts.length > 0 ? Buffer.concat([suffix, ...parts.reverse()]) : suffix;
       parts = [];
       end = newline;
       newline = end > 0 ? buffer.lastIndexOf(10, end - 1) : -1;
     }
     if (end > 0) parts.push(buffer.subarray(0, end));
   }
-  if (parts.length > 0) yield Buffer.concat(parts.reverse()).toString("utf8");
+  if (parts.length > 0) yield Buffer.concat(parts.reverse());
 }
 
 function fileFingerprint(stat: BigIntStats): string {

@@ -500,17 +500,30 @@ function parseSource(source: unknown): StateSource {
   };
 }
 
+function temporarySessionQuery(session: string): string[] {
+  return ["show-environment", "-t", session, "PI_TMUX_TEMPORARY"];
+}
+
 async function isTemporarySession(
   config: TmuxConfig,
   session: string,
   id: string,
-  allowMissing = false,
 ): Promise<boolean> {
-  const result = await tmux(config, ["show-environment", "-t", session, "PI_TMUX_TEMPORARY"], true);
+  const result = await tmux(config, temporarySessionQuery(session), true);
+  return readTemporarySession(config, session, id, result, "strict");
+}
+
+function readTemporarySession(
+  config: TmuxConfig,
+  session: string,
+  id: string,
+  result: Awaited<ReturnType<typeof tmux>>,
+  mode: "strict" | "allow-missing",
+): boolean {
   if (result.exitCode !== 0) {
     if (result.stderr.includes("unknown variable: PI_TMUX_TEMPORARY")) return false;
     if (
-      allowMissing &&
+      mode === "allow-missing" &&
       (serverIsAbsent(config, result.stderr) ||
         result.stderr.includes("no such session:") ||
         result.stderr.includes("can't find session:"))
@@ -1992,38 +2005,54 @@ async function collectWorkspaceList(
 ): Promise<ListedWorkspace[]> {
   const saved = panes.filter((pane) => existsSync(pane.file));
   const unsaved = panes.filter((pane) => !existsSync(pane.file));
-  const sessions = await Promise.all(
-    saved.map(async ({ id, cwd, file, pane, session }) => {
-      const [metadata, pending] = await Promise.all([
-        tmux(config, ["show-options", "-pqv", "-t", pane, "@pi_session_state"]),
-        tmux(config, ["show-options", "-pqv", "-t", pane, "@pi_session_state_pending"]),
-      ]);
-      const temporary = await isTemporarySession(config, session, id, true);
-      return {
-        cwd,
-        session: {
-          id,
-          file,
-          ...parseSessionMetadata(metadata.stdout, id, file),
-          publishPending: parsePublishPending(pending.stdout, id),
-          ...(temporary ? { temporary: true as const } : {}),
-        } satisfies ListedSession,
-      };
-    }),
-  );
-  const empty = await Promise.all(
-    unsaved.map(async ({ id, cwd, file, session }) => {
-      const temporary = await isTemporarySession(config, session, id, true);
-      return {
-        cwd,
-        session: {
-          id,
-          file,
-          ...(temporary ? { temporary: true as const } : {}),
-        } satisfies EmptySession,
-      };
-    }),
-  );
+  const savedQueries = saved.flatMap(({ pane, session }) => [
+    ["show-options", "-pqv", "-t", pane, "@pi_session_state"],
+    ["show-options", "-pqv", "-t", pane, "@pi_session_state_pending"],
+    temporarySessionQuery(session),
+  ]);
+  const commands = [
+    ...savedQueries,
+    ...unsaved.map(({ session }) => temporarySessionQuery(session)),
+  ];
+  const results = await listTmuxQueries(config, commands);
+  const sessions = saved.map(({ id, cwd, file, session }, index) => {
+    const queryIndex = index * 3;
+    const metadata = results[queryIndex]!;
+    const pending = results[queryIndex + 1]!;
+    for (const result of [metadata, pending]) {
+      if (result.exitCode !== 0)
+        throw new Error(`tmux show-options failed: ${result.stderr.trim()}`);
+    }
+    const temporary = readTemporarySession(
+      config,
+      session,
+      id,
+      results[queryIndex + 2]!,
+      "allow-missing",
+    );
+    return {
+      cwd,
+      session: {
+        id,
+        file,
+        ...parseSessionMetadata(metadata.stdout, id, file),
+        publishPending: parsePublishPending(pending.stdout, id),
+        ...(temporary ? { temporary: true as const } : {}),
+      } satisfies ListedSession,
+    };
+  });
+  const empty = unsaved.map(({ id, cwd, file, session }, index) => {
+    const result = results[savedQueries.length + index]!;
+    const temporary = readTemporarySession(config, session, id, result, "allow-missing");
+    return {
+      cwd,
+      session: {
+        id,
+        file,
+        ...(temporary ? { temporary: true as const } : {}),
+      } satisfies EmptySession,
+    };
+  });
   if (registration === "register")
     registerWorkspaces(
       config,
@@ -2035,6 +2064,14 @@ async function collectWorkspaceList(
   for (const { cwd, session } of sessions) workspaces.get(cwd)?.sessions.push(session);
   for (const { cwd, session } of empty) workspaces.get(cwd)?.empty.push(session);
   return [...workspaces.values()];
+}
+
+async function listTmuxQueries(config: TmuxConfig, commands: string[][]) {
+  const batch = platform.windows
+    ? undefined
+    : await tmuxQueries(config, commands).catch(() => undefined);
+  if (batch !== undefined) return batch;
+  return Promise.all(commands.map((command) => tmux(config, command, true)));
 }
 
 async function tmuxClients(config: TmuxConfig): Promise<TmuxClient[]> {

@@ -928,6 +928,12 @@ exec ${JSON.stringify(realTmux)} "$@"
     await waitUntil(() => this.clients().some((client) => client.session === session));
   }
 
+  beforeCliTmux(script: string): void {
+    const wrapper = join(this.directory, "bin/tmux");
+    const guardedCommand = readFileSync(wrapper, "utf8");
+    writeFileSync(wrapper, guardedCommand.replace("\nexec ", `\n${script}\nexec `));
+  }
+
   run(args: string[]) {
     return spawnSync(process.execPath, ["run", source, ...args], {
       cwd: this.cwd,
@@ -1063,9 +1069,28 @@ describe("list workspace panes", () => {
       const emptyFile = join(fixture.directory, "conversations", `later_${emptyId}.jsonl`);
       fixture.piSession("saved", { id: savedId, file: savedFile });
       fixture.piSession("fresh", { id: emptyId, file: emptyFile, temporary: true });
+      fixture.tmux([
+        "set-option",
+        "-w",
+        "-t",
+        "saved",
+        "@pi_session_state",
+        JSON.stringify({ version: 1, sessionId: savedId, state: "running", title: "Window title" }),
+      ]);
+      fixture.tmux([
+        "set-option",
+        "-g",
+        "@pi_session_state_pending",
+        JSON.stringify({ version: 1, sessionId: savedId, attemptAt: 1 }),
+      ]);
+      fixture.tmux(["set-environment", "-g", "PI_TMUX_TEMPORARY", savedId]);
+      const invocations = join(fixture.directory, "list-tmux-commands");
+      fixture.beforeCliTmux(`printf '%s\\n' "$5" >> ${JSON.stringify(invocations)}`);
+
       const result = fixture.run(["list"]);
       assert.equal(result.error, undefined);
       assert.equal(result.status, 0, result.stderr);
+      assert.equal(readFileSync(invocations, "utf8"), "list-panes\n-C\n");
       assert.deepEqual(JSON.parse(result.stdout), [
         {
           cwd: fixture.cwd,
@@ -1085,6 +1110,65 @@ describe("list workspace panes", () => {
       await fixture.cleanup();
     }
   }, 20_000);
+
+  it("uses the saved title and omits temporary when a session disappears after enumeration", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      const file = conversationFile(fixture.agentDir, fixture.cwd, id, { title: "Saved title" });
+      fixture.piSession("leaving", { id, file, temporary: true });
+      fixture.plainSession("host");
+      fixture.beforeCliTmux(`if [ "$5" = -C ]; then
+  ${JSON.stringify(realTmux)} -S "$2" kill-session -t leaving || exit 1
+fi`);
+
+      const result = fixture.run(["list"]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [
+        {
+          cwd: fixture.cwd,
+          sessions: [{ id, file, state: null, title: "Saved title", publishPending: null }],
+          empty: [],
+        },
+      ]);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  for (const saved of [true, false]) {
+    it(`preserves the missing-server rule after enumeration for ${saved ? "saved" : "empty"} panes`, async () => {
+      const fixture = new SessionFixture();
+      try {
+        const id = randomUUID();
+        const file = saved
+          ? conversationFile(fixture.agentDir, fixture.cwd, id)
+          : join(fixture.directory, `${id}.jsonl`);
+        fixture.piSession("leaving", { id, file, temporary: true });
+        fixture.beforeCliTmux(`if [ "$5" = -C ]; then
+  ${JSON.stringify(realTmux)} -S "$2" kill-server || exit 1
+  rm -f "$2"
+fi`);
+
+        const result = fixture.run(["list"]);
+        if (saved) {
+          assert.equal(result.status, 1, result.stderr);
+          assert.equal(result.stdout, "");
+          assert.match(
+            result.stderr,
+            /tmux show-options failed: (no server running|error connecting)/,
+          );
+        } else {
+          assert.equal(result.status, 0, result.stderr);
+          assert.deepEqual(JSON.parse(result.stdout), [
+            { cwd: fixture.cwd, sessions: [], empty: [{ id, file }] },
+          ]);
+        }
+      } finally {
+        await fixture.cleanup();
+      }
+    }, 20_000);
+  }
 
   it("validates the published state and title independently and prefers the published title", async () => {
     const fixture = new SessionFixture();
@@ -1284,6 +1368,33 @@ exec ${JSON.stringify(realTmux)} "$@"
       assert.equal(inspectionFailure.status, 1);
       assert.match(inspectionFailure.stderr, /Cannot inspect pi sessions/);
       assert.match(inspectionFailure.stderr, /tmux: injected inspection failure/);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("does not register a cwd whose last pane disappears before the locked recheck", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const otherCwd = join(fixture.directory, "other-workspace");
+      mkdirSync(otherCwd);
+      const id = randomUUID();
+      const file = join(fixture.directory, "conversations", `${id}.jsonl`);
+      fixture.piSessionIn("leaving", otherCwd, { id, file });
+      fixture.plainSession("host");
+      const firstInspection = join(fixture.directory, "first-pane-inspection");
+      fixture.beforeCliTmux(`if [ "$5" = list-panes ]; then
+  if [ -e ${JSON.stringify(firstInspection)} ]; then
+    ${JSON.stringify(realTmux)} -S "$2" kill-session -t leaving || exit 1
+  fi
+  touch ${JSON.stringify(firstInspection)}
+fi`);
+
+      const snapshotBefore = readFileSync(restoreFile(fixture), "utf8");
+      const result = fixture.run(["list"]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [{ cwd: fixture.cwd, sessions: [], empty: [] }]);
+      assert.equal(readFileSync(restoreFile(fixture), "utf8"), snapshotBefore);
     } finally {
       await fixture.cleanup();
     }

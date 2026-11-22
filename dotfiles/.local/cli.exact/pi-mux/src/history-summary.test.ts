@@ -57,7 +57,7 @@ function sessionInfo(name: unknown): unknown {
 }
 
 describe("history summary read consistency", () => {
-  it("re-resolves the original once when it changes during the read and saves only the stable result", () => {
+  it("re-resolves a file appended to during reverse title lookup and saves only the stable result", () => {
     const directory = join(temporaryRoot, randomUUID());
     const file = join(directory, "session.jsonl");
     fs.mkdirSync(directory, { recursive: true });
@@ -66,16 +66,20 @@ describe("history summary read consistency", () => {
       [
         JSON.stringify({ type: "session_info", name: "Before update" }),
         JSON.stringify({ type: "message", text: "x".repeat(1024 * 1024) }),
+        JSON.stringify(assistantMessage("Last activity")),
         "",
       ].join("\n"),
     );
     const previousCacheHome = process.env.XDG_CACHE_HOME;
     process.env.XDG_CACHE_HOME = join(directory, "cache");
     const originalReadSync = fs.readSync;
+    const originalSize = fs.statSync(file).size;
     let updated = false;
     const read = spyOn(fs, "readSync").mockImplementation((...args: unknown[]) => {
       const count: number = Reflect.apply(originalReadSync, fs, args);
-      if (!updated) {
+      const position = Number(args[4]);
+      const isReverseReadBeforeTail = position > 0 && position + count < originalSize;
+      if (!updated && isReverseReadBeforeTail) {
         fs.appendFileSync(
           file,
           JSON.stringify({ type: "session_info", name: "After update" }) + "\n",
@@ -88,12 +92,14 @@ describe("history summary read consistency", () => {
       const summaries = new HistorySummaryCache();
       const duringUpdate = summaries.resolve(file);
       assert.equal(updated, true);
-      assert.deepEqual(duringUpdate, { title: "After update", mtime: null });
+      const expected = { title: "After update", mtime: Date.parse("2026-01-01T00:00:01.000Z") };
+      assert.deepEqual(duringUpdate, expected);
       const cacheDirectory = join(directory, "cache", "pi-mux", "history-titles");
-      assert.equal(fs.readdirSync(cacheDirectory).length, 1);
-      read.mockRestore();
-      assert.deepEqual(summaries.resolve(file), { title: "After update", mtime: null });
-      assert.deepEqual(summaries.resolve(file), { title: "After update", mtime: null });
+      const [cacheFile, ...otherCacheFiles] = fs.readdirSync(cacheDirectory);
+      assert.ok(cacheFile);
+      assert.deepEqual(otherCacheFiles, []);
+      const { title, mtime } = JSON.parse(fs.readFileSync(join(cacheDirectory, cacheFile), "utf8"));
+      assert.deepEqual({ title, mtime }, expected);
     } finally {
       read.mockRestore();
       if (previousCacheHome === undefined) delete process.env.XDG_CACHE_HOME;
@@ -335,8 +341,33 @@ describe("history reverse line boundaries", () => {
     name: title,
     padding: "x".repeat(paddingBytes),
   });
+  const laterMessageLine = JSON.stringify(assistantMessage("Later message"));
   const cases = [
     { name: "CRLF lines", contents: [messageLine, titleLine, ""].join("\r\n") },
+    {
+      name: "an escaped title entry type before a later message",
+      contents: [
+        messageLine,
+        titleLine.replace("session_info", "\\u0073ession_info"),
+        laterMessageLine,
+      ].join("\n"),
+      mtime: "2026-01-01T00:00:01.000Z",
+    },
+    {
+      name: "a title entry type split across the reverse chunk boundary",
+      contents: [
+        messageLine,
+        titleLine,
+        "x".repeat(
+          chunkBytes -
+            Buffer.byteLength(laterMessageLine) -
+            Buffer.byteLength(titleLine.slice(titleLine.indexOf("session_info") + 5)) -
+            2,
+        ),
+        laterMessageLine,
+      ].join("\n"),
+      mtime: "2026-01-01T00:00:01.000Z",
+    },
     { name: "empty lines", contents: ["", messageLine, "", titleLine, "", ""].join("\n") },
     {
       name: "a newline at the reverse chunk boundary",
@@ -358,7 +389,7 @@ describe("history reverse line boundaries", () => {
       process.env.XDG_CACHE_HOME = cacheHome;
       try {
         const summaries = new HistorySummaryCache();
-        const expected = { title, mtime: Date.parse("2026-01-01T00:00:00.000Z") };
+        const expected = { title, mtime: Date.parse(testCase.mtime ?? "2026-01-01T00:00:00.000Z") };
         assert.deepEqual(summaries.resolve(file), expected);
         assert.deepEqual(summaries.resolve(file), expected);
       } finally {
