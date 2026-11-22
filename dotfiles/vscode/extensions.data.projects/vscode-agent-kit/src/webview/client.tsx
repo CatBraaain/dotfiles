@@ -828,7 +828,14 @@ interface SessionsAppProps {
   connectionStatusElement: HTMLElement;
 }
 
-/** Slide duration and easing of the archive list transition (DESIGN.md). */
+function hasAddedSessions(current: ReadonlySet<string>, previous: ReadonlySet<string>): boolean {
+  for (const sessionId of current) {
+    if (!previous.has(sessionId)) return true;
+  }
+  return false;
+}
+
+/** Slide duration and easing of the list transition (DESIGN.md). */
 const LIST_SLIDE_TRANSITION = "transform 700ms cubic-bezier(0.45, 0, 0.25, 1)";
 /** Safety cleanup after the slide; some pauses skip transitionend. */
 const LIST_SLIDE_CLEANUP_MS = 900;
@@ -844,11 +851,16 @@ function SessionsApp({
   const [collapsedCwds, setCollapsedCwds] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [workspaceMenu, setWorkspaceMenu] = useState<WorkspaceMenuState | null>(null);
   const topPositionsRef = useRef<Map<string, number>>(new Map());
+  /** Visible row ids of the latest measured commit; null until the first one. */
+  const visibleRowIdsRef = useRef<ReadonlySet<string> | null>(null);
+  const measuredStateRef = useRef(snapshot.state);
   const hasMenuWorkspace = snapshot.state.groups.some((group) => group.cwd === workspaceMenu?.cwd);
 
-  // Slide the list parts that moved during an in-flight archive/unarchive
-  // update. Groups and rows are real elements moving with FLIP, so hit
-  // targets stay under the visible list while the whole list slides.
+  // Slide the list parts that moved during an animated list update: an
+  // in-flight archive/unarchive, or a list update that adds a visible
+  // session row (SPEC "一覧更新のアニメーション"). Groups and rows are real
+  // elements moving with FLIP, so hit targets stay under the visible list
+  // while the whole list slides.
   useLayoutEffect(() => {
     const docTop = (element: HTMLElement): number =>
       element.getBoundingClientRect().top + window.scrollY;
@@ -857,13 +869,28 @@ function SessionsApp({
     const elements = Array.from(document.querySelectorAll<HTMLElement>(".group, .session-row"));
     const previous = topPositionsRef.current;
     const current = new Map<string, number>();
+    const rowIds = new Set<string>();
     for (const element of elements) {
-      current.set(measureKey(element), docTop(element));
+      const key = measureKey(element);
+      current.set(key, docTop(element));
+      if (element.classList.contains("session-row")) rowIds.add(key);
     }
     topPositionsRef.current = current;
 
+    // Detect added rows only on a list update, not on mode or collapse
+    // changes that re-render without new data.
+    const isStateUpdate = measuredStateRef.current !== snapshot.state;
+    measuredStateRef.current = snapshot.state;
+    const previousRowIds = visibleRowIdsRef.current;
+    const addedRow =
+      isStateUpdate && previousRowIds !== null && hasAddedSessions(rowIds, previousRowIds);
+    visibleRowIdsRef.current = rowIds;
+
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!snapshot.animated || reduceMotion) return;
+    // Both triggers slide only on a list update; a collapse or mode change
+    // between updates must not reuse the pending archive flag.
+    const shouldSlide = (snapshot.animated && isStateUpdate) || addedRow;
+    if (!shouldSlide || reduceMotion) return;
 
     const timers: ReturnType<typeof setTimeout>[] = [];
     const moved: HTMLElement[] = [];
@@ -903,7 +930,7 @@ function SessionsApp({
     return () => {
       for (const timer of timers) clearTimeout(timer);
     };
-  }, [snapshot.state, snapshot.animated]);
+  }, [snapshot.state, snapshot.animated, modes, collapsedCwds]);
 
   useEffect(() => {
     if (!hasMenuWorkspace) setWorkspaceMenu(null);
@@ -1109,8 +1136,8 @@ export function initClient(bridge: ClientBridge): () => void {
     }
     if (message.type === "sessions" && isClientState(message.state)) {
       const { pendingArchives, pendingUnarchives } = store.getSnapshot();
-      // Animate while an archive or unarchive is in flight so the rows
-      // below slide instead of jumping. Other updates stay immediate.
+      // Animate while an archive or unarchive is in flight; added rows are
+      // detected on the applied list in the view (SPEC "一覧更新のアニメーション").
       store.setSessions(message.state, pendingArchives.size > 0 || pendingUnarchives.size > 0);
     }
     if (message.type === "newSessionFinished" && typeof message.requestId === "string") {

@@ -618,6 +618,104 @@ describe("session list loading in the mounted client", () => {
     expect(await moving.getAttribute("style")).toBeNull();
   });
 
+  const addedSession = {
+    sessionId: "added-1",
+    displayName: "Atlas added",
+    updatedAtMs: null,
+    isArchived: false,
+  };
+  const atlas = slideState.groups[0];
+  const afterAddState: WebviewState = {
+    ...slideState,
+    groups: [{ ...atlas, sessions: [addedSession, ...atlas.sessions] }],
+  };
+
+  it("slides the rows below an added session row and snaps the initial list", async () => {
+    await receive({ type: "sessions", state: slideState });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(2);
+    const existing = page.locator('[data-row-session="slide-2"]');
+    expect(await existing.getAttribute("style")).toBeNull();
+    await receive({ type: "sessions", state: afterAddState });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(3);
+    await expect.poll(() => existing.getAttribute("style")).toContain("transform");
+    expect(await existing.getAttribute("style")).toContain("transition");
+    const added = page.locator('[data-row-session="added-1"]');
+    expect(await added.getAttribute("style")).toBeNull();
+    await expect.poll(() => existing.getAttribute("style")).toBe("");
+  });
+
+  it("skips the added-session slide under reduced motion", async () => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await receive({ type: "sessions", state: slideState });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(2);
+    await receive({ type: "sessions", state: afterAddState });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(3);
+    expect(await page.locator('[data-row-session="slide-2"]').getAttribute("style")).toBeNull();
+  });
+
+  it("snaps a list update that only adds a hidden session row", async () => {
+    await receive({ type: "sessions", state: slideState });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(2);
+    const [first, second, archived] = atlas.sessions;
+    const reorderedState: WebviewState = {
+      ...slideState,
+      groups: [
+        {
+          ...atlas,
+          sessions: [second, first, archived, { ...addedSession, isArchived: true }],
+        },
+      ],
+    };
+    await receive({ type: "sessions", state: reorderedState });
+    const rows = page.locator(".session-row");
+    await expect.poll(() => rows.first().getAttribute("data-row-session")).toBe("slide-2");
+    expect(
+      await rows.evaluateAll((elements) => elements.map((row) => row.getAttribute("style"))),
+    ).toEqual([null, null]);
+  });
+
+  it("slides when an added row replaces a removed one at the same count", async () => {
+    await receive({ type: "sessions", state: slideState });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(2);
+    const replacedState: WebviewState = {
+      ...slideState,
+      groups: [{ ...atlas, sessions: [addedSession, atlas.sessions[0]] }],
+    };
+    await receive({ type: "sessions", state: replacedState });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(2);
+    const shifted = page.locator(`[data-row-session="${sessionId}"]`);
+    await expect.poll(() => shifted.getAttribute("style")).toContain("transform");
+    const added = page.locator('[data-row-session="added-1"]');
+    expect(await added.getAttribute("style")).toBeNull();
+  });
+
+  const betaGroup: WebviewState["groups"][number] = {
+    cwd: "/workspace/beta",
+    label: "beta",
+    sessions: [{ ...addedSession, sessionId: "beta-1", displayName: "Beta row" }],
+  };
+
+  it("does not slide a collapse-only change after an animated archive update", async () => {
+    await receive({
+      type: "sessions",
+      state: { ...slideState, groups: [...slideState.groups, betaGroup] },
+    });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(3);
+    await page.locator(`[data-archive="${sessionId}"]`).click();
+    const [request] = await archiveRequests();
+    await receive({
+      type: "sessions",
+      state: { ...afterSlideState, groups: [...afterSlideState.groups, betaGroup] },
+    });
+    const moving = page.locator('[data-group-cwd="/workspace/beta"]');
+    await expect.poll(() => moving.getAttribute("style")).toContain("transform");
+    await expect.poll(() => moving.getAttribute("style")).toBe("");
+    await receive({ type: "archiveFinished", requestId: request.requestId });
+    await page.getByRole("button", { name: "Collapse atlas" }).click();
+    await expect.poll(() => page.locator(".session-row").count()).toBe(1);
+    expect(await moving.getAttribute("style")).toBe("");
+  });
+
   it("keeps workspace input across automatic snapshots until the add acknowledgement", async () => {
     await receive({ type: "sessions", state });
     await expectLoaded();
