@@ -3,7 +3,7 @@
 // externals, merge composition, replace sidecars, local hooks.
 import { cp, mkdir, open, readdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, posix, relative, sep, win32 } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path";
 import { applyPathMap, createCopyRouter, type CopyRouter } from "./build-path-map.ts";
 import { currentPlatform, mapSegment, type Platform } from "./path-mapping.ts";
 import { applyExternals } from "./build-external.ts";
@@ -11,7 +11,7 @@ import { composeMergeTargets } from "./build-merge.ts";
 import { applyReplaceSidecars } from "./build-replace.ts";
 import { collectHooks, runHooks, type HookEvent } from "./build-hooks.ts";
 import { adoptHomeLnkBytes } from "./lnk.ts";
-import { resolveWsl, type WslConnection } from "./wsl.ts";
+import { resolveGuestPath, resolveWsl, runWsl, uncDistro, type WslConnection } from "./wsl.ts";
 
 export type { Platform };
 
@@ -37,7 +37,7 @@ export async function main(
   const distDir = join(root, "dist");
 
   await timed("rebuild dist", onPhase, async () => {
-    await rm(distDir, { recursive: true, force: true });
+    await removeDist(distDir, wsl);
     await copyDir(sourceDir, distDir, {
       sourceRoot: sourceDir,
       distRoot: distDir,
@@ -52,6 +52,20 @@ export async function main(
   await timed("replace", onPhase, () => applyReplaceSidecars(distDir, homeRoot));
   await runHooks(hooks, distDir, homeRoot, onHookEvent);
   if (platform === "windows") await adoptHomeLnkBytes(distDir, homeRoot);
+}
+
+async function removeDist(distDir: string, wsl: WslConnection | undefined): Promise<void> {
+  const absoluteDistDir = resolve(distDir);
+  if (process.platform !== "win32" || !uncDistro(absoluteDistDir)) {
+    await rm(distDir, { recursive: true, force: true });
+    return;
+  }
+
+  if (!wsl) throw new Error(`WSL connection required to remove dist: ${absoluteDistDir}`);
+  const guestDistDir = await resolveGuestPath(wsl, absoluteDistDir);
+  const result = await runWsl(wsl, ["rm", "-rf", "--", guestDistDir]);
+  if (!result.ok)
+    throw new Error(`Failed to remove dist in WSL: ${absoluteDistDir}: ${result.stderr}`);
 }
 
 type CopyContext = {

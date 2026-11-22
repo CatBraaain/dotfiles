@@ -11,7 +11,7 @@ export type ProcessResult = { ok: boolean; stdout: string; stderr: string };
 
 export async function resolveWsl(sourceRoot: string): Promise<WslConnection | undefined> {
   if (process.platform !== "win32") return undefined;
-  const sourceDistro = uncDistro(sourceRoot);
+  const sourceDistro = uncDistro(win32.resolve(sourceRoot));
   const selection = sourceDistro ? ["--distribution", sourceDistro] : [];
   let probe: ProcessResult;
   try {
@@ -94,7 +94,7 @@ export async function runWsl(
   return result;
 }
 
-async function resolveGuestPath(
+export async function resolveGuestPath(
   connection: Pick<WslConnection, "distro" | "user">,
   guestWindowsPath: string,
 ): Promise<string> {
