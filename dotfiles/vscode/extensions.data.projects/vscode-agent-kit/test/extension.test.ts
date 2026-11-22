@@ -7,7 +7,6 @@ import { promisify } from "node:util";
 import type * as vscode from "vscode";
 import manifest from "../package.json";
 import { activate } from "../src/extension";
-import { EmptySessionPool } from "../src/emptySessionPool";
 import { SessionWebviewProvider } from "../src/webview/sessionWebviewProvider";
 import { cleanup, tempDir } from "./fixtures";
 
@@ -196,14 +195,10 @@ describe("extension commands", () => {
   });
 
   it("starts list acquisition without a webview and watches only conversation files", async () => {
-    const sync = vi
-      .spyOn(EmptySessionPool.prototype, "syncWorkspaces")
-      .mockImplementation(() => {});
     const refresh = vi.spyOn(SessionWebviewProvider.prototype, "refresh").mockResolvedValue();
     register();
     await vi.waitFor(() => expect(api.watchers).toHaveLength(1));
     expect(api.createOutputChannel).toHaveBeenCalledWith("Agent Kit", { log: true });
-    expect(sync).not.toHaveBeenCalled();
     expect(refresh).toHaveBeenCalledOnce();
     expect(api.watchers[0]).toMatchObject({
       base: { fsPath: "/fixture/sessions" },
@@ -212,32 +207,10 @@ describe("extension commands", () => {
     expect(api.watchers[0].onDidDelete).toHaveBeenCalledOnce();
   });
 
-  it("observes session file creation and changes without relying on state or Refresh", async () => {
-    vi.spyOn(EmptySessionPool.prototype, "syncWorkspaces").mockImplementation(() => {});
-    const changed = vi
-      .spyOn(EmptySessionPool.prototype, "onSessionFileChanged")
-      .mockImplementation(() => {});
-    register();
-    await vi.waitFor(() => expect(api.watchers).toHaveLength(1));
-    for (const method of ["onDidCreate", "onDidChange"] as const) {
-      const callback = api.watchers[0][method].mock.calls[0][0] as (uri: {
-        fsPath: string;
-      }) => void;
-      callback({ fsPath: "/fixture/sessions/first.jsonl" });
-    }
-    expect(changed.mock.calls).toEqual([
-      ["/fixture/sessions/first.jsonl"],
-      ["/fixture/sessions/first.jsonl"],
-    ]);
-  });
-
-  it("routes file creation, changes and deletion to history without changing prewarm deletion handling", async () => {
+  it("routes file creation, changes and deletion to history", async () => {
     const historyChanged = vi
       .spyOn(SessionWebviewProvider.prototype, "onSessionFileChanged")
       .mockResolvedValue();
-    const prewarmChanged = vi
-      .spyOn(EmptySessionPool.prototype, "onSessionFileChanged")
-      .mockImplementation(() => {});
     register();
     await vi.waitFor(() => expect(api.watchers).toHaveLength(1));
     for (const method of ["onDidCreate", "onDidChange", "onDidDelete"] as const) {
@@ -247,10 +220,6 @@ describe("extension commands", () => {
       callback({ fsPath: "/fixture/sessions/unregistered-or-deleted.jsonl" });
     }
     expect(historyChanged.mock.calls).toEqual([[], [], []]);
-    expect(prewarmChanged.mock.calls).toEqual([
-      ["/fixture/sessions/unregistered-or-deleted.jsonl"],
-      ["/fixture/sessions/unregistered-or-deleted.jsonl"],
-    ]);
   });
 
   it("watches custom directories published by history or an unsaved Pi and releases removed workspaces", async () => {
@@ -310,7 +279,6 @@ describe("extension commands", () => {
       const historyChanged = vi
         .spyOn(SessionWebviewProvider.prototype, "onSessionFileChanged")
         .mockResolvedValue();
-      vi.spyOn(EmptySessionPool.prototype, "onSessionFileChanged").mockImplementation(() => {});
       register();
       await vi.waitFor(() => expect(watcherFor(custom)).toBeDefined());
       expect(watcherFor(join(agent, "sessions"))).toBeUndefined();
@@ -401,7 +369,6 @@ describe("extension commands", () => {
   // vscode adapter down to the sync engine, with git running for real in a
   // temporary repository.
   it("promotes the agents workspace folder, writes the title, and syncs worktree folders", async () => {
-    vi.spyOn(EmptySessionPool.prototype, "syncWorkspaces").mockImplementation(() => {});
     const execFile = promisify(execFileCallback);
     const repository = join(root, "main");
     const worktree = join(root, "feat-x");

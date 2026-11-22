@@ -180,9 +180,7 @@ for (const outcome of ["success", "failure", "diagnostics"] as const) {
           { playwright, fixedResponse: true },
           async (ready) => {
             host = ready;
-            await expect.poll(() => ready.piProcesses().length).toBeGreaterThan(0);
-            ownedPids = ready.piProcesses().map(({ pid }) => pid);
-            expect(ownedPids.length).toBeGreaterThan(0);
+            ownedPids = startOwnedPi(ready);
             if (outcome === "failure") throw bodyError;
           },
           info,

@@ -4,7 +4,6 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { SessionLauncher } from "./launcher";
-import { EmptySessionPool } from "./emptySessionPool";
 import { FolderSyncEngine, type VscodeLike } from "./folderSync";
 import type { ExecFile } from "./gitWorktrees";
 import { resolveConfiguredSessionRoot } from "./paths";
@@ -75,12 +74,6 @@ export function activate(context: vscode.ExtensionContext): void {
     log,
   );
 
-  const emptySessions = new EmptySessionPool({
-    mux: registry.mux,
-    onError: (message) => {
-      void vscode.window.showErrorMessage(message);
-    },
-  });
   const folderSync = new FolderSyncEngine({
     vscode: folderSyncApi(),
     execFile,
@@ -89,7 +82,6 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(folderSync.start());
   const launcher: SessionLauncher = new SessionLauncher({
     registry,
-    emptySessions,
     onSessionStarted: () => provider.refresh(false),
   });
   let sessionRoot: string | undefined;
@@ -102,10 +94,8 @@ export function activate(context: vscode.ExtensionContext): void {
       join(context.globalStorageUri.fsPath, "session-list-workspaces"),
     ),
     registry,
-    emptySessions,
     startNewSession: (cwd, onPresented) => launcher.start(cwd, onPresented),
     onWorkspaces: (cwds) => {
-      emptySessions.syncWorkspaces(cwds);
       folderSync.updateList(cwds);
     },
     onSessionFiles: (files) => {
@@ -128,15 +118,12 @@ export function activate(context: vscode.ExtensionContext): void {
     const watcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(vscode.Uri.file(directory), "**/*.jsonl"),
     );
-    function changed(uri: vscode.Uri): void {
-      emptySessions.onSessionFileChanged(uri.fsPath);
+    function changed(): void {
       void provider.onSessionFileChanged();
     }
     watcher.onDidCreate(changed);
     watcher.onDidChange(changed);
-    watcher.onDidDelete(() => {
-      void provider.onSessionFileChanged();
-    });
+    watcher.onDidDelete(changed);
     return watcher;
   }
 
@@ -168,7 +155,6 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     launcher,
     registry,
-    emptySessions,
     provider,
     {
       dispose: () => {

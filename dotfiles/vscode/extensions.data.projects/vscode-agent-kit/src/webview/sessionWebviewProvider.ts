@@ -5,7 +5,6 @@ import type { WorkspaceStore } from "../workspaceStore";
 import { listSessionSnapshot, sessionFileExists, type SessionSummary } from "../sessionStore";
 import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
 import { DisplayRecoveryCancelledError, type TerminalRegistry } from "../terminalRegistry";
-import type { EmptySessionPool } from "../emptySessionPool";
 import { errorMessage } from "../guards";
 import { cwdGroupKey } from "../grouping";
 import { flattenPiMuxSessions, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../piMux";
@@ -32,7 +31,6 @@ export interface SessionWebviewDeps {
   startNewSession: (cwd: string, onPresented: () => void) => Promise<string | undefined>;
   onWorkspaces?: (cwds: readonly string[]) => void;
   onSessionFiles?: (files: readonly { file: string; cwd: string }[]) => void;
-  emptySessions?: EmptySessionPool;
   log?: Pick<vscode.LogOutputChannel, "error">;
 }
 
@@ -635,13 +633,11 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
     if (this.registeredCwds.has(directory)) {
-      await this.deps.emptySessions?.resumeWorkspace(directory);
       this.post({ type: "workspaceAdded" });
       return;
     }
     try {
       await this.deps.registry.mux.registerWorkspace(directory);
-      await this.deps.emptySessions?.resumeWorkspace(directory);
     } catch (error) {
       this.postError(`Failed to register workspace ${directory}: ${errorMessage(error)}`);
       return;
@@ -654,9 +650,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     this.refreshVersion += 1;
     this.stopListPolling();
     try {
-      await this.deps.emptySessions?.suspendWorkspace(cwd);
       await this.deps.registry.mux.unregisterWorkspace(cwd);
-      this.deps.emptySessions?.completeUnregister(cwd);
       await this.updateAddedWorkspaces([], this.refreshVersion, cwd);
     } catch (error) {
       this.postError(`Failed to unregister workspace ${cwd}: ${errorMessage(error)}`);
@@ -739,8 +733,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
 
     if (signal.aborted) return;
     present(terminal);
-    await this.deps.emptySessions?.resumeWorkspace(session.cwd);
-    if (signal.aborted) return;
     if (temporary) this.temporarySessionIds.add(sessionId);
     else this.temporarySessionIds.delete(sessionId);
     await this.stopTemporaryDisplayedSession(previousSessionId);

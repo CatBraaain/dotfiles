@@ -1,56 +1,24 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test } from "../support/vscode";
 
 test(
-  "Tracks public list membership and title for running Pi while prewarming hidden workspaces",
+  "Tracks public list membership and title for running Pi",
   { annotation: { type: "spec", description: "E2E-16" } },
   async ({ host }) => {
-    let id = "";
-    let target = "";
-    let file = "";
     let registeredCwds: string[] = [];
-    const folders = host.snapshot().folders;
-    await test.step("Keep the prewarmed unsaved Pi out of the public list rows", async () => {
-      await expect.poll(() => host.piProcesses().length).toBe(3);
-      const runtime = host.piProcesses().find(({ cwd }) => cwd === host.sessions.A.cwd)!;
-      target = runtime.target;
-      await expect
-        .poll(() =>
-          host.tmux(["display-message", "-p", "-t", target, "#{@pi-tmux-session}"]).trim(),
-        )
-        .not.toBe("");
-      const metadata = JSON.parse(
-        Buffer.from(
-          host.tmux(["display-message", "-p", "-t", target, "#{@pi-tmux-session}"]).trim(),
-          "base64",
-        ).toString("utf8"),
-      );
-      id = metadata.id;
-      file = metadata.file;
-      expect(existsSync(file)).toBe(false);
-      const workspaces = JSON.parse(
-        execFileSync(join(host.directory, "bin/pi-mux"), ["list"], {
-          env: host.env,
-          encoding: "utf8",
-        }),
-      );
-      const workspace = workspaces.find(
-        (workspace: { cwd: string }) => workspace.cwd === host.sessions.A.cwd,
-      );
-      expect(workspace.sessions).toEqual([]);
-      expect(workspace.empty).toContainEqual({ id, file });
+    const agentsFolder = join(host.directory, "home", ".agents", "workspace");
+    await test.step("Show registered workspace headers without starting Pi", async () => {
       const frame = await host.sessionFrame();
-      await expect(
-        frame.locator(`[data-session="${id}"]`).describe("Unsaved prewarmed Pi"),
-      ).toHaveCount(0);
       registeredCwds = host.listWorkspaces().map(({ cwd }) => cwd);
+      for (const cwd of registeredCwds)
+        await expect(frame.locator(`.group-header[title="${cwd}"]`)).toBeVisible();
+      expect(host.piProcesses()).toHaveLength(0);
     });
     await test.step("Apply a public title independently of null state and observe automatic list updates", async () => {
       await host.activateSession("A");
       const saved = host.sessionRuntime("A")!;
-      expect(saved.target).not.toBe(target);
       host.tmux([
         "set-option",
         "-p",
@@ -69,10 +37,9 @@ test(
         .locator(`[data-session="${host.sessions.A.id}"]`)
         .describe("Published running title row");
       await expect(row.locator(".session-name")).toHaveText("Published running title");
-      expect(existsSync(file)).toBe(false);
       expect(host.listWorkspaces().map(({ cwd }) => cwd)).toEqual(registeredCwds);
     });
-    await test.step("Register a workspace while Sessions is hidden and observe background prewarming", async () => {
+    await test.step("Register a workspace while Sessions is hidden", async () => {
       await host.page
         .getByRole("tab", { name: /Source Control/ })
         .describe("SCM sidebar")
@@ -82,9 +49,7 @@ test(
       execFileSync(join(host.directory, "bin/pi-mux"), ["workspace", "register", cwd], {
         env: host.env,
       });
-      await expect
-        .poll(() => host.piProcesses().filter((runtime) => runtime.cwd === cwd))
-        .toHaveLength(1);
+      await expect.poll(() => host.snapshot().folders).toContain(cwd);
       const frame = await host.sessionFrame();
       await expect(
         frame.locator(`.group-header[title="${cwd}"]`).describe("Background registered workspace"),
@@ -92,9 +57,8 @@ test(
       const group = frame
         .locator("section.group")
         .filter({ has: frame.locator(`.group-header[title="${cwd}"]`) });
-      await expect(
-        group.locator(".session-row").describe("Hidden empty prewarmed Pi rows"),
-      ).toHaveCount(0);
+      await expect(group.locator(".session-row")).toHaveCount(0);
+      expect(host.piProcesses().filter((process) => process.cwd === cwd)).toHaveLength(0);
     });
     await test.step("Remove all public registrations and retain headers without stale rows", async () => {
       for (const { cwd } of host.listWorkspaces()) host.piMux(["workspace", "unregister", cwd]);
@@ -108,7 +72,7 @@ test(
       expect(host.listWorkspaces()).toEqual([]);
       expect(host.piProcesses()).toHaveLength(0);
     });
-    await test.step("Restart the extension host and restore headers without prewarming them", async () => {
+    await test.step("Restart the extension host and restore headers", async () => {
       await host.restartExtensionHost();
       const frame = await host.sessionFrame();
       for (const cwd of registeredCwds) {
@@ -147,10 +111,15 @@ test(
           .locator(`.group-header[title="${host.sessions.A.cwd}"]`)
           .describe("Rediscovered header"),
       ).toBeVisible();
+      expect(host.piProcesses().filter(({ cwd }) => cwd === host.sessions.A.cwd)).toHaveLength(0);
       await expect
-        .poll(() => host.piProcesses().filter(({ cwd }) => cwd === host.sessions.A.cwd))
-        .toHaveLength(1);
-      expect(host.snapshot().folders).toEqual(folders);
+        .poll(() => host.snapshot().folders)
+        .toEqual([
+          agentsFolder,
+          host.sessions.A.cwd,
+          host.sessions.B.cwd,
+          host.sessions.External.cwd,
+        ]);
     });
   },
 );

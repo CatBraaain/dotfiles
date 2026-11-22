@@ -32,13 +32,13 @@ interface RegistrationStatusObservation {
 test.use({ trace: "on" });
 
 test(
-  "Shows saved history with workspace All alongside a prewarmed unsaved Pi",
+  "Shows saved history with workspace All",
   { annotation: { type: "spec", description: "E2E-1" } },
   async ({ host }, testInfo) => {
-    await test.step("Inspect work folder groups and hidden prewarmed Unarchived rows", async () => {
+    await test.step("Inspect work folder groups with no unsaved rows", async () => {
       const frame = await host.sessionFrame();
       await expect(
-        frame.locator(".session-row").describe("Unsaved prewarmed Pi rows stay hidden"),
+        frame.locator(".session-row").describe("Unsaved Pi rows stay hidden"),
       ).toHaveCount(0);
       for (const key of ["A", "B"]) {
         const group = frame
@@ -327,15 +327,15 @@ test(
       const pids = host
         .piProcesses()
         .map((entry) => entry.pid)
-        .sort();
+        .sort((a, b) => a - b);
       await host.selectSession("A");
       await host.expectNativeDisplay("A");
       expect(host.snapshot().terminals.find((terminal) => terminal.owned)!.pid).toBe(displayPid);
       expect(
         host
           .piProcesses()
-          .map((entry) => entry.pid)
-          .sort(),
+          .map(({ pid }) => pid)
+          .sort((a, b) => a - b),
       ).toEqual(pids);
       for (const [key, pid] of firstPids)
         expect(
@@ -348,7 +348,7 @@ test(
       const pids = host
         .piProcesses()
         .map((entry) => entry.pid)
-        .sort();
+        .sort((a, b) => a - b);
       const runtime = host.piProcesses().find((entry) => entry.pid === firstPids.get("A"))!;
       await host.restartExtensionHost();
       await host.selectSession("A");
@@ -362,16 +362,16 @@ test(
       expect(
         host
           .piProcesses()
-          .map((entry) => entry.pid)
-          .sort(),
+          .map(({ pid }) => pid)
+          .sort((a, b) => a - b),
       ).toEqual(pids);
       await host.selectSession("B");
       await host.expectNativeDisplay("B");
       expect(
         host
           .piProcesses()
-          .map((entry) => entry.pid)
-          .sort(),
+          .map(({ pid }) => pid)
+          .sort((a, b) => a - b),
       ).toEqual(pids);
     });
     await test.step("Replace a restored legacy fixed-name tab in the same cwd without restarting Pi", async () => {
@@ -380,7 +380,7 @@ test(
       const pids = host
         .piProcesses()
         .map((entry) => entry.pid)
-        .sort();
+        .sort((a, b) => a - b);
       await host.openLegacyDisplay("A");
       const legacy = host.snapshot();
       const legacyDisplay = legacy.terminals.find((terminal) => terminal.owned)!;
@@ -404,8 +404,8 @@ test(
       expect(
         host
           .piProcesses()
-          .map((entry) => entry.pid)
-          .sort(),
+          .map(({ pid }) => pid)
+          .sort((a, b) => a - b),
       ).toEqual(pids);
       await testInfo.attach("Legacy display migration", {
         body: JSON.stringify({ title, pids, legacy, restored, migrated }),
@@ -416,8 +416,8 @@ test(
       expect(
         host
           .piProcesses()
-          .map((entry) => entry.pid)
-          .sort(),
+          .map(({ pid }) => pid)
+          .sort((a, b) => a - b),
       ).toEqual(pids);
     });
     await test.step("Restart only an exited selected Pi from its saved session", async () => {
@@ -550,7 +550,7 @@ test(
   "Excludes unregistered cwd history and automatically removes a deleted saved conversation",
   { annotation: { type: "spec", description: "E2E-7" } },
   async ({ host }) => {
-    await expect.poll(() => host.piProcesses().length).toBe(3);
+    await expect.poll(() => host.piProcesses().length).toBe(0);
     const baseline = host
       .piProcesses()
       .map(({ pid }) => pid)
@@ -630,7 +630,7 @@ test.describe("First assistant response through a loopback fixture provider", ()
       }
 
       await test.step("Open a new Pi from its workspace and record its unsaved session ID", async () => {
-        await expect.poll(() => host.piProcesses().length, { timeout: 30_000 }).toBe(3);
+        await expect.poll(() => host.piProcesses().length).toBe(0);
         await host.activateSession("B");
         await expect.poll(() => host.sessionRuntime("B")).toBeDefined();
         const frame = await host.sessionFrame();
@@ -720,8 +720,9 @@ test.describe("First assistant response through a loopback fixture provider", ()
             cwd: folder,
             file: session.file,
           });
-        const saved = host.listWorkspaces().find(({ cwd }) => cwd === folder)!.sessions;
-        expect(saved).toEqual(
+        const workspace = host.listWorkspaces().find(({ cwd }) => cwd === folder)!;
+        expect(workspace.empty).toEqual([]);
+        expect(workspace.sessions).toEqual(
           expect.arrayContaining([expect.objectContaining({ id: session.id, file: session.file })]),
         );
       });
@@ -862,12 +863,21 @@ test(
         group.locator(".session-row").describe("Unsaved new session rows stay hidden"),
       ).toHaveCount(0);
       const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
+      const mux = new PiMux(async (_executable, args) => host.piMux(args));
       await group.locator(".group-new-session").click();
-      await host.expectPiVisible(folder);
       await expect
-        .poll(() => host.snapshot().terminals.find((terminal) => terminal.owned)?.pid)
-        .toBe(displayPid);
-      expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
+        .poll(() => mux.current(displayPid))
+        .toMatchObject({
+          cwd: folder,
+          id: expect.not.stringMatching(metadata.id),
+        });
+      await host.expectPiVisible(folder);
+      const second = (await mux.current(displayPid))!;
+      const secondRuntime = host.piProcesses().find(({ target }) => target === second.target)!;
+      expect(secondRuntime.pid).not.toBe(runtime.pid);
+      const folderProcesses = host.piProcesses().filter((entry) => entry.cwd === folder);
+      expect(folderProcesses).toHaveLength(2);
+      expect(folderProcesses.map(({ pid }) => pid)).toContain(runtime.pid);
       expect(existsSync(metadata.file)).toBe(false);
       const otherCwd = host.sessions.B.cwd;
       await frame
@@ -877,12 +887,18 @@ test(
       await host.expectPiVisible(otherCwd);
       const other = host.piProcesses().find((entry) => entry.cwd === otherCwd)!;
       expect(other.pid).not.toBe(runtime.pid);
-      expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
+      expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual(
+        expect.arrayContaining([runtime, secondRuntime]),
+      );
       await group.locator(".group-new-session").click();
+      await expect.poll(() => mux.current(displayPid)).toMatchObject({ cwd: folder });
       await host.expectPiVisible(folder);
-      expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
+      expect([metadata.id, second.id]).not.toContain((await mux.current(displayPid))!.id);
+      const remaining = host.piProcesses().filter((entry) => entry.cwd === folder);
+      expect(remaining).toHaveLength(3);
+      expect(remaining).toEqual(expect.arrayContaining([runtime, secondRuntime]));
       expect(existsSync(metadata.file)).toBe(false);
-      await testInfo.attach("Unsaved same-cwd session reuse", {
+      await testInfo.attach("Unsaved same-cwd new sessions", {
         body: JSON.stringify({
           metadata,
           runtime,
@@ -929,6 +945,9 @@ test(
     });
 
     await test.step("Unregister a workspace from the list", async () => {
+      for (const cwd of [folder, host.sessions.A.cwd]) {
+        host.piMux(["new", "--detached", "--cwd", cwd]);
+      }
       const frame = await host.sessionFrame();
       const group = frame
         .locator("section.group")
@@ -958,12 +977,8 @@ test(
       });
       await expect(menu).toBeVisible();
       await expect(unregister).toBeVisible();
-      await expect
-        .poll(() => host.piProcesses().filter(({ cwd }) => cwd === folder))
-        .toHaveLength(1);
-      await expect
-        .poll(() => host.piProcesses().filter(({ cwd }) => cwd !== folder))
-        .toHaveLength(3);
+      await expect.poll(() => host.piProcesses()).toHaveLength(2);
+      expect(host.piProcesses().filter(({ cwd }) => cwd === folder)).toHaveLength(1);
       const otherPids = host
         .piProcesses()
         .filter(({ cwd }) => cwd !== folder)
@@ -1002,7 +1017,7 @@ test(
   "New Workspace のキャンセルと無効なパスを安全に扱える",
   { annotation: { type: "spec", description: "E2E-12" } },
   async ({ host }, testInfo) => {
-    await expect.poll(() => host.piProcesses().length).toBe(3);
+    await expect.poll(() => host.piProcesses().length).toBe(0);
     const baseline = host
       .piProcesses()
       .map(({ pid }) => pid)
@@ -1475,7 +1490,7 @@ test(
     ] as const;
     let registeredCwds: string[] = [];
     await test.step("Prepare four conversations in one workspace in update order", async () => {
-      await expect.poll(() => host.piProcesses().length).toBe(3);
+      await expect.poll(() => host.piProcesses().length).toBe(0);
       for (const { cwd } of host.listWorkspaces()) host.piMux(["workspace", "unregister", cwd]);
       const sessionDirectory = dirname(host.sessions.A.session);
       for (const [reverseIndex, { key }] of [...phases].reverse().entries()) {

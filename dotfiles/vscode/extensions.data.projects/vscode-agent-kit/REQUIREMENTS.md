@@ -27,7 +27,7 @@ Agent Kit は、VS Code内にセッションの一覧・切替の入口を提供
 
 - 会話の操作・表示は Pi TUI が担い、拡張は一覧・切替を補助する。独自のチャットUIやメッセージ表示で Pi TUI を置き換えない。
 - セッションとエージェントの正本は Pi が持つ。拡張はPiのセッションファイルを読み取り専用で扱い、作成・更新を Pi CLI に任せる。原本の変更・削除・移動や、独自形式への変換を行わない。
-- 稼働セッションと空の新規 Pi の補充対象は pi-mux の公開情報を正とする。Session List に保持する workspace を、Pi の所属・復元・補充の対象と混同しない。空の workspace も識別する。JSONL は表示情報の補完と保存済み会話の探索に使う。
+- 稼働セッションは pi-mux の公開情報を正とする。Session List に保持する workspace を、Pi の所属・復元の対象と混同しない。空の workspace も識別する。JSONL は表示情報の補完と保存済み会話の探索に使う。
 - セッション行の集合・状態・名前は取得可能な最新情報で自動更新する。取得失敗と正常な空一覧を区別し、一時的な失敗で既存一覧を失わない。
 - 追加済み workspace の見出しは pi-mux 側から消えても保持し、削除はユーザーの手動登録解除に限る。登録解除は対象の Pi の終了と pi-mux の登録解除を伴う。手動削除後にその作業先で Pi が再び起動されたら、自動追加の対象とする。Session List への追加・保持は VS Code の `workspaceFolders` を変更せず、`workspaceFolders` への反映は pi-mux list と `git worktree list` を正とする同期で行う。
 - `workspaceFolders` は、フォルダ0 (`~/.agents/workspace`)、pi-mux list に登録された workspace、および各 workspace の本体リポジトリの worktree だけを保つ。それ以外のフォルダは同期で外す。並びは pi-mux list の順に従い、各 workspace の直後にその本体リポジトリの worktree を続ける。

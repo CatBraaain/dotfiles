@@ -1,14 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { chmod, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
 import { webviewAppMarkup } from "../src/webview/webviewHtml";
 import { SessionLauncher } from "../src/launcher";
-import { EmptySessionPool } from "../src/emptySessionPool";
 import { WorkspaceStore } from "../src/workspaceStore";
-import * as workDirectory from "../src/workDirectory";
 import { PiMux, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../src/piMux";
 import { TerminalRegistry } from "../src/terminalRegistry";
 import { editorTerminals } from "../src/terminals";
@@ -57,7 +55,6 @@ const inactiveSessionId = "00000000-0000-4000-8000-000000000002";
 const unknownSessionId = "00000000-0000-4000-8000-000000000099";
 let root: string;
 const providers: SessionWebviewProvider[] = [];
-const emptyPools: EmptySessionPool[] = [];
 let sharedRuntimes: ReturnType<typeof providerRuntimes>;
 let workspaceStorage: ReturnType<typeof createWorkspaceStorage>;
 
@@ -84,7 +81,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
   for (const provider of providers.splice(0)) provider.dispose();
-  for (const pool of emptyPools.splice(0)) pool.dispose();
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -1215,7 +1211,7 @@ describe("SessionWebviewProvider", () => {
       },
     );
 
-    it("publishes cwd snapshots for prewarming even before a webview exists", async () => {
+    it("publishes cwd snapshots even before a webview exists", async () => {
       const runtime = providerRuntimes();
       const onWorkspaces = vi.fn();
       const { provider } = createProvider({
@@ -3203,7 +3199,7 @@ describe("SessionWebviewProvider", () => {
       expect(vscodeMocks.updateWorkspaceFolders).not.toHaveBeenCalled();
     });
 
-    it("retains headers but drops rows and prewarming targets after a successful empty list", async () => {
+    it("retains headers but drops rows after a successful empty list", async () => {
       const runtime = providerRuntimes();
       await seedSavedSession(activeSessionId, root, { runtimes: runtime });
       const { provider, workspaces, groups, onWorkspaces, mocks } = await fixture(runtime);
@@ -3569,244 +3565,6 @@ describe("SessionWebviewProvider", () => {
         .at(-1)?.[0].state.groups;
       expect(lastGroups).toEqual(groups);
     });
-  });
-
-  describe("workspace unregister with background prewarming", () => {
-    function poolProviderFixture() {
-      const saved = new Set<string>();
-      const { mocks, live, emptyIds, workspaces } = sharedRuntimes;
-      mocks.newSession.mockImplementation(async (cwd) => {
-        const directory = await realpath(cwd);
-        const reusable = [...live.values()].find(
-          (runtime) =>
-            runtime.cwd === directory &&
-            emptyIds.has(runtime.sessionId) &&
-            !saved.has(`/sessions/${runtime.sessionId}.jsonl`),
-        );
-        if (reusable !== undefined) return reusable.sessionId;
-        const sessionId = `new-${mocks.newSession.mock.calls.length}`;
-        live.set(sessionId, { sessionId, cwd: directory, target: `pi-${sessionId}` });
-        emptyIds.add(sessionId);
-        workspaces.add(cwd);
-        return sessionId;
-      });
-      const fileExists = vi.fn(async (file: string) => saved.has(file));
-      const onError = vi.fn();
-      const pool = new EmptySessionPool({ mux: sharedRuntimes.mux, fileExists, onError });
-      emptyPools.push(pool);
-      const registry = createRegistry();
-      const terminal = { processId: Promise.resolve(123), show: vi.fn(), dispose: vi.fn() };
-      mockTerminal(sharedRuntimes, terminal, registry, root);
-      const launcher = new SessionLauncher({
-        registry,
-        emptySessions: pool,
-        onSessionStarted: () => provider.refresh(),
-      });
-      const { provider } = createProvider({
-        registry,
-        emptySessions: pool,
-        onWorkspaces: (cwds) => pool.syncWorkspaces(cwds),
-        startNewSession: (cwd) => launcher.start(cwd),
-      });
-      const webview = createView();
-      return { pool, provider, webview, saved, fileExists, onError, launcher };
-    }
-
-    it.each([false, true])(
-      "drains an issued startup before unregister and rejects stale list sync (alias=%s)",
-      async (alias) => {
-        const aliasCwd = join(root, "alias");
-        if (alias) {
-          await symlink(root, aliasCwd);
-          sharedRuntimes.workspaces.add(aliasCwd);
-        }
-        const events: string[] = [];
-        const startup = deferred<void>();
-        const { mocks, live, workspaces, emptyIds } = sharedRuntimes;
-        mocks.newSession.mockImplementationOnce(async (cwd) => {
-          events.push("new:start");
-          await startup.promise;
-          live.set("late", { sessionId: "late", cwd: root, target: "late-target" });
-          emptyIds.add("late");
-          workspaces.add(cwd);
-          events.push("new:complete");
-          return "late";
-        });
-        const unregister = mocks.unregisterWorkspace.getMockImplementation()!;
-        mocks.unregisterWorkspace.mockImplementationOnce(async (cwd) => {
-          events.push("unregister");
-          await unregister(cwd);
-        });
-        const { pool, provider, webview, onError, launcher } = poolProviderFixture();
-        if (alias) {
-          pool.syncWorkspaces([aliasCwd]);
-          await vi.waitFor(() =>
-            expect(mocks.newSession).toHaveBeenCalledExactlyOnceWith(aliasCwd),
-          );
-        }
-        provider.resolveWebviewView(webview.view as never);
-        await webview.receive({ type: "ready" });
-        await vi.waitFor(() => expect(mocks.newSession).toHaveBeenCalledOnce());
-
-        const staleList = deferred<void>();
-        const queried = deferred<void>();
-        const list = mocks.list.getMockImplementation()!;
-        mocks.list.mockImplementationOnce(async () => {
-          const snapshot = await list();
-          queried.resolve();
-          await staleList.promise;
-          return snapshot;
-        });
-        const refreshing = provider.refresh();
-        await queried.promise;
-        const suspend = vi.spyOn(pool, "suspendWorkspace");
-        const removing = webview.receive({ type: "unregisterWorkspace", cwd: root });
-        await vi.waitFor(() => expect(suspend).toHaveBeenCalledExactlyOnceWith(root));
-        pool.syncWorkspaces(alias ? [root, aliasCwd] : [root]);
-        expect(mocks.unregisterWorkspace).not.toHaveBeenCalled();
-        expect(events).toEqual(["new:start"]);
-
-        startup.resolve();
-        await vi.waitFor(() => expect(mocks.unregisterWorkspace).toHaveBeenCalledOnce());
-        staleList.resolve();
-        await Promise.all([refreshing, removing]);
-        await provider.refresh();
-        await provider.refresh();
-        expect(events).toEqual(["new:start", "new:complete", "unregister"]);
-        expect(mocks.newSession).toHaveBeenCalledOnce();
-        expect(workspaces.has(root)).toBe(false);
-        expect(live.has("late")).toBe(false);
-        expect(onError).not.toHaveBeenCalled();
-
-        const reRegisteredCwd = alias ? join(root, "new-alias") : root;
-        if (alias) await symlink(root, reRegisteredCwd);
-        workspaces.add(reRegisteredCwd);
-        await provider.refresh();
-        await vi.waitFor(() => expect(mocks.newSession).toHaveBeenCalledTimes(2));
-        expect(workspaces.has(reRegisteredCwd)).toBe(true);
-        launcher.dispose();
-      },
-    );
-
-    it("does not propagate an unrelated cwd EACCES into workspace unregister", async () => {
-      const blockedParent = join(root, "blocked");
-      const blockedCwd = join(blockedParent, "workspace-b");
-      await mkdir(blockedCwd, { recursive: true });
-      const validationStarted = deferred<void>();
-      const releaseValidation = deferred<void>();
-      const requireDirectory = workDirectory.requireWorkDirectory;
-      vi.spyOn(workDirectory, "requireWorkDirectory").mockImplementation(async (cwd) => {
-        if (cwd === blockedCwd) {
-          validationStarted.resolve();
-          await releaseValidation.promise;
-        }
-        return requireDirectory(cwd);
-      });
-      sharedRuntimes.workspaces.add(blockedCwd);
-      const { pool, provider, webview, fileExists, onError, launcher } = poolProviderFixture();
-      await chmod(blockedParent, 0o000);
-      try {
-        await expect(realpath(blockedCwd)).rejects.toMatchObject({ code: "EACCES" });
-        provider.resolveWebviewView(webview.view as never);
-        await webview.receive({ type: "ready" });
-        await validationStarted.promise;
-        await vi.waitFor(() => expect(fileExists).toHaveBeenCalledOnce());
-        const suspend = vi.spyOn(pool, "suspendWorkspace");
-        const removing = webview.receive({ type: "unregisterWorkspace", cwd: root });
-        await vi.waitFor(() => expect(suspend).toHaveBeenCalledExactlyOnceWith(root));
-        releaseValidation.resolve();
-        await removing;
-        await vi.waitFor(() =>
-          expect(onError).toHaveBeenCalledExactlyOnceWith(
-            expect.stringContaining(`Empty Pi session in ${blockedCwd}: EACCES`),
-          ),
-        );
-        expect(sharedRuntimes.mocks.unregisterWorkspace).toHaveBeenCalledExactlyOnceWith(root);
-        expect(sharedRuntimes.workspaces.has(root)).toBe(false);
-        expect(sharedRuntimes.workspaces.has(blockedCwd)).toBe(true);
-        expect(sharedRuntimes.mocks.newSession).toHaveBeenCalledExactlyOnceWith(root);
-        expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
-      } finally {
-        releaseValidation.resolve();
-        await chmod(blockedParent, 0o700);
-        launcher.dispose();
-      }
-    });
-
-    it.each(["addWorkspace", "newSession", "openSession"] as const)(
-      "does not refill after a failed unregister until an explicit %s request",
-      async (request) => {
-        await seedSavedSession(activeSessionId);
-        const { mocks, live, workspaces, emptyIds } = sharedRuntimes;
-        const { pool, provider, webview, saved, fileExists, onError, launcher } =
-          poolProviderFixture();
-        provider.resolveWebviewView(webview.view as never);
-        await webview.receive({ type: "ready" });
-        await vi.waitFor(() => expect(fileExists).toHaveBeenCalledOnce());
-
-        const events: string[] = [];
-        const refill = deferred<void>();
-        mocks.newSession.mockImplementationOnce(async (cwd) => {
-          events.push("refill:start");
-          await refill.promise;
-          live.set("late-refill", { sessionId: "late-refill", cwd, target: "refill-target" });
-          emptyIds.add("late-refill");
-          workspaces.add(cwd);
-          events.push("refill:complete");
-          return "late-refill";
-        });
-        mocks.unregisterWorkspace.mockImplementationOnce(async () => {
-          events.push("unregister:failed");
-          live.clear();
-          throw new Error("restore removal denied after stopping Pi");
-        });
-        saved.add("/sessions/new-1.jsonl");
-        pool.onSessionFileChanged("/sessions/new-1.jsonl");
-        await vi.waitFor(() => expect(mocks.newSession).toHaveBeenCalledTimes(2));
-        const removing = webview.receive({ type: "unregisterWorkspace", cwd: root });
-        await vi.waitFor(() => expect(events).toEqual(["refill:start"]));
-        pool.syncWorkspaces([root]);
-        expect(mocks.unregisterWorkspace).not.toHaveBeenCalled();
-        refill.resolve();
-        await removing;
-        await provider.refresh();
-        pool.syncWorkspaces([]);
-        pool.syncWorkspaces([root]);
-        pool.onSessionFileChanged("/sessions/new-1.jsonl");
-        await provider.refresh();
-        expect(events).toEqual(["refill:start", "refill:complete", "unregister:failed"]);
-        expect(mocks.newSession).toHaveBeenCalledTimes(2);
-        expect(workspaces.has(root)).toBe(true);
-        expect(live.size).toBe(0);
-        expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
-          expect.stringContaining("restore removal denied after stopping Pi"),
-        );
-
-        await webview.receive(
-          request === "addWorkspace"
-            ? { type: request, path: root }
-            : request === "newSession"
-              ? { type: request, cwd: root }
-              : { type: request, sessionId: activeSessionId },
-        );
-        await vi.waitFor(() =>
-          expect(mocks.newSession).toHaveBeenCalledTimes(request === "newSession" ? 4 : 3),
-        );
-        const newestId = [...live.keys()].find((id) => id.startsWith("new-"))!;
-        const file = `/sessions/${newestId}.jsonl`;
-        await vi.waitFor(() =>
-          expect(fileExists.mock.calls.filter(([candidate]) => candidate === file)).toHaveLength(
-            request === "newSession" ? 2 : 1,
-          ),
-        );
-        const beforeSave = mocks.newSession.mock.calls.length;
-        saved.add(file);
-        pool.onSessionFileChanged(file);
-        await vi.waitFor(() => expect(mocks.newSession).toHaveBeenCalledTimes(beforeSave + 1));
-        expect(onError).not.toHaveBeenCalled();
-        launcher.dispose();
-      },
-    );
   });
 
   it("launches the requested group cwd for the new session", async () => {

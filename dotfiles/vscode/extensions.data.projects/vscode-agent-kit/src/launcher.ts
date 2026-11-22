@@ -2,11 +2,9 @@ import type * as vscode from "vscode";
 import { requireWorkDirectory } from "./workDirectory";
 import type { TerminalRegistry } from "./terminalRegistry";
 import type { PiSession } from "./piMux";
-import type { EmptySessionPool } from "./emptySessionPool";
 
 export interface SessionLauncherDeps {
   registry: TerminalRegistry;
-  emptySessions?: EmptySessionPool;
   onSessionStarted: (sessionId: string) => void | Promise<void>;
 }
 
@@ -37,7 +35,6 @@ export class SessionLauncher implements vscode.Disposable {
         if (early === undefined) onPresented?.();
       }
       if (this.disposed) return;
-      this.deps.emptySessions?.observeOpened(session.cwd, session.sessionId);
       await this.deps.onSessionStarted(session.sessionId);
       return previousSessionId;
     });

@@ -13,6 +13,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   rmSync,
@@ -708,9 +709,15 @@ exec '${realTmux}' -N "$@"
     chmodSync(join(this.directory, "bin/tmux"), 0o700);
     copyFileSync(join(dotfiles, "tmux/pi.conf"), join(this.directory, "home/.config/tmux/pi.conf"));
     const agentSource = join(dotfiles, ".pi/agent");
-    for (const name of ["index.ts", "shared.ts"])
+    // Copy every bridge source file, not a fixed list: the extension imports
+    // sibling modules (e.g. messages.ts), and a missing copy makes Pi crash
+    // before startup inside the fixture (ticket 20261121-134009).
+    const bridgeSource = join(agentSource, "extensions.exact/pi-mux-bridge");
+    for (const name of readdirSync(bridgeSource).filter(
+      (name) => name.endsWith(".ts") && !name.endsWith(".test.ts"),
+    ))
       copyFileSync(
-        join(agentSource, "extensions.exact/pi-mux-bridge", name),
+        join(bridgeSource, name),
         join(this.directory, "agent/extensions/pi-mux-bridge", name),
       );
     const sourceModules = join(agentSource, "node_modules");
