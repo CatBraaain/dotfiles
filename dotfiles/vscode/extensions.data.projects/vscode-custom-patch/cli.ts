@@ -1,3 +1,4 @@
+import { isAbsolute, parse } from "node:path";
 import { ensurePatched, installRoots, workbenchSearchDirs } from "./src/patch.ts";
 
 declare const BUNDLED_SCM_COLLAPSE: string;
@@ -7,12 +8,20 @@ if (command !== "ensure" && command !== "remove") {
   console.error(`unknown command: ${command} (expected ensure or remove)`);
   process.exit(1);
 }
-const pluginsDir = process.argv[3];
+const pathOption = process.argv[3];
+const useAppOut = pathOption === "--app-out";
+const appOut = useAppOut ? (process.argv[4] ?? "") : undefined;
+if (appOut !== undefined && (command !== "ensure" || !isAbsoluteAppOut(appOut))) {
+  console.error("usage: ensure --app-out <absolute-directory>");
+  process.exit(1);
+}
+const searchDirs =
+  appOut === undefined ? workbenchSearchDirs({ extraRoots: installRoots() }) : [appOut];
 const plugins = [{ name: "scm-collapse.js", content: BUNDLED_SCM_COLLAPSE }];
 
 const result = ensurePatched({
-  searchDirs: workbenchSearchDirs({ extraRoots: installRoots() }),
-  ...(pluginsDir === undefined ? { plugins } : { pluginsDir }),
+  searchDirs,
+  ...(useAppOut || pathOption === undefined ? { plugins } : { pluginsDir: pathOption }),
   mode: command,
 });
 
@@ -31,3 +40,7 @@ const messages: Record<string, string> = {
   fresh: "workbench patch already matches plugins",
 };
 console.log(messages[result]);
+
+function isAbsoluteAppOut(path: string): boolean {
+  return isAbsolute(path) && (process.platform !== "win32" || parse(path).root.length > 1);
+}
