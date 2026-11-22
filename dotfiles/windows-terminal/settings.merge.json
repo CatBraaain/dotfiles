@@ -366,6 +366,7 @@
     ]
   },
   "schemes": [],
+  "tabSwitcherMode": "disabled",
   "themes": [],
   "warning.multiLinePaste": false
 }
