@@ -6,6 +6,7 @@
  */
 
 import {
+  Component,
   createElement,
   memo,
   useEffect,
@@ -16,6 +17,7 @@ import {
   useSyncExternalStore,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
+  type ReactNode,
 } from "react";
 import { createRoot } from "react-dom/client";
 import { initDocumentScrollbar } from "./documentScrollbar";
@@ -824,25 +826,163 @@ const SessionRow = memo(function SessionRow(
 interface SessionsAppProps {
   bridge: ClientBridge;
   store: ReturnType<typeof createClientStore>;
+  sessionsElement: HTMLElement;
   statusElement: HTMLElement;
   connectionStatusElement: HTMLElement;
 }
 
-function hasAddedSessions(current: ReadonlySet<string>, previous: ReadonlySet<string>): boolean {
-  for (const sessionId of current) {
-    if (!previous.has(sessionId)) return true;
-  }
-  return false;
+const LIST_SLIDE_DURATION_MS = 700;
+const LIST_SLIDE_EASING = "cubic-bezier(0.45, 0, 0.25, 1)";
+const SLIDE_TARGETS = ".group-header, .session-row";
+
+function hasSameListLayout(
+  before: readonly ClientSessionGroup[],
+  after: readonly ClientSessionGroup[],
+): boolean {
+  return (
+    before === after ||
+    (before.length === after.length &&
+      before.every((group, index) => {
+        const nextGroup = after[index];
+        return (
+          group.cwd === nextGroup.cwd &&
+          group.sessions.length === nextGroup.sessions.length &&
+          group.sessions.every(
+            (session, rowIndex) => session.sessionId === nextGroup.sessions[rowIndex].sessionId,
+          )
+        );
+      }))
+  );
 }
 
-/** Slide duration and easing of the list transition (DESIGN.md). */
-const LIST_SLIDE_TRANSITION = "transform 700ms cubic-bezier(0.45, 0, 0.25, 1)";
-/** Safety cleanup after the slide; some pauses skip transitionend. */
-const LIST_SLIDE_CLEANUP_MS = 900;
+interface SessionListMotionProps {
+  container: HTMLElement;
+  stateGroups: readonly ClientSessionGroup[];
+  visibleGroups: readonly ClientSessionGroup[];
+  animateArchive: boolean;
+  children: ReactNode;
+}
+
+interface SlidePosition {
+  layoutTop: number;
+  visualTop: number;
+}
+
+type ListSlideSnapshot = Map<string, SlidePosition> | "snap" | null;
+
+function slideTargetKey(element: HTMLElement): string {
+  const sessionId = element.getAttribute("data-row-session");
+  return sessionId === null
+    ? `group:${element.getAttribute("data-workspace-menu")}`
+    : `row:${sessionId}`;
+}
+
+class SessionListMotion extends Component<SessionListMotionProps, object, ListSlideSnapshot> {
+  private readonly slides = new Map<HTMLElement, Animation>();
+
+  override getSnapshotBeforeUpdate(previous: SessionListMotionProps): ListSlideSnapshot {
+    const { container, stateGroups, visibleGroups, animateArchive } = this.props;
+    if (hasSameListLayout(previous.visibleGroups, visibleGroups)) return null;
+    if (
+      previous.stateGroups === stateGroups ||
+      previous.visibleGroups.length === 0 ||
+      typeof Element.prototype.animate !== "function" ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return "snap";
+    }
+
+    if (!animateArchive) {
+      const previousIds = new Set(
+        previous.visibleGroups.flatMap((group) =>
+          group.sessions.map((session) => session.sessionId),
+        ),
+      );
+      const hasAddedRow = visibleGroups.some((group) =>
+        group.sessions.some((session) => !previousIds.has(session.sessionId)),
+      );
+      if (!hasAddedRow) return "snap";
+    }
+
+    const targets = container.querySelectorAll<HTMLElement>(SLIDE_TARGETS);
+    const scrollY = window.scrollY;
+    return new Map(
+      Array.from(targets, (element) => [
+        slideTargetKey(element),
+        {
+          layoutTop: element.offsetTop,
+          visualTop: element.getBoundingClientRect().top + scrollY,
+        },
+      ]),
+    );
+  }
+
+  override componentDidUpdate(
+    _previousProps: SessionListMotionProps,
+    _previousState: object,
+    before: ListSlideSnapshot,
+  ): void {
+    if (before === null) return;
+    if (before === "snap") {
+      this.cancelSlides();
+      return;
+    }
+
+    const moved: { element: HTMLElement; beforeTop: number }[] = [];
+    this.props.container.querySelectorAll<HTMLElement>(SLIDE_TARGETS).forEach((element) => {
+      const position = before.get(slideTargetKey(element));
+      if (position === undefined || element.offsetTop === position.layoutTop) return;
+      moved.push({ element, beforeTop: position.visualTop });
+    });
+    for (const element of this.slides.keys()) {
+      if (!element.isConnected) this.cancelSlide(element);
+    }
+    for (const { element } of moved) this.cancelSlide(element);
+
+    const scrollY = window.scrollY;
+    const offsets = moved.map(({ element, beforeTop }) => ({
+      element,
+      deltaY: beforeTop - (element.getBoundingClientRect().top + scrollY),
+    }));
+
+    for (const { element, deltaY } of offsets) {
+      if (deltaY === 0) continue;
+      const slide = element.animate(
+        [{ transform: `translateY(${deltaY}px)` }, { transform: "translateY(0)" }],
+        { duration: LIST_SLIDE_DURATION_MS, easing: LIST_SLIDE_EASING, fill: "backwards" },
+      );
+      this.slides.set(element, slide);
+      slide.onfinish = () => {
+        this.slides.delete(element);
+      };
+    }
+  }
+
+  override componentWillUnmount(): void {
+    this.cancelSlides();
+  }
+
+  override render(): ReactNode {
+    return this.props.children;
+  }
+
+  private cancelSlides(): void {
+    for (const element of this.slides.keys()) this.cancelSlide(element);
+  }
+
+  private cancelSlide(element: HTMLElement): void {
+    const slide = this.slides.get(element);
+    if (slide === undefined) return;
+    slide.onfinish = null;
+    slide.cancel();
+    this.slides.delete(element);
+  }
+}
 
 function SessionsApp({
   bridge,
   store,
+  sessionsElement,
   statusElement,
   connectionStatusElement,
 }: SessionsAppProps): ReactElement {
@@ -850,87 +990,15 @@ function SessionsApp({
   const [modes, setModes] = useState<ReadonlyMap<string, ViewMode>>(() => new Map());
   const [collapsedCwds, setCollapsedCwds] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [workspaceMenu, setWorkspaceMenu] = useState<WorkspaceMenuState | null>(null);
-  const topPositionsRef = useRef<Map<string, number>>(new Map());
-  /** Visible row ids of the latest measured commit; null until the first one. */
-  const visibleRowIdsRef = useRef<ReadonlySet<string> | null>(null);
-  const measuredStateRef = useRef(snapshot.state);
   const hasMenuWorkspace = snapshot.state.groups.some((group) => group.cwd === workspaceMenu?.cwd);
-
-  // Slide the list parts that moved during an animated list update: an
-  // in-flight archive/unarchive, or a list update that adds a visible
-  // session row (SPEC "一覧更新のアニメーション"). Groups and rows are real
-  // elements moving with FLIP, so hit targets stay under the visible list
-  // while the whole list slides.
-  useLayoutEffect(() => {
-    const docTop = (element: HTMLElement): number =>
-      element.getBoundingClientRect().top + window.scrollY;
-    const measureKey = (element: HTMLElement): string =>
-      element.getAttribute("data-group-cwd") ?? element.getAttribute("data-row-session") ?? "";
-    const elements = Array.from(document.querySelectorAll<HTMLElement>(".group, .session-row"));
-    const previous = topPositionsRef.current;
-    const current = new Map<string, number>();
-    const rowIds = new Set<string>();
-    for (const element of elements) {
-      const key = measureKey(element);
-      current.set(key, docTop(element));
-      if (element.classList.contains("session-row")) rowIds.add(key);
-    }
-    topPositionsRef.current = current;
-
-    // Detect added rows only on a list update, not on mode or collapse
-    // changes that re-render without new data.
-    const isStateUpdate = measuredStateRef.current !== snapshot.state;
-    measuredStateRef.current = snapshot.state;
-    const previousRowIds = visibleRowIdsRef.current;
-    const addedRow =
-      isStateUpdate && previousRowIds !== null && hasAddedSessions(rowIds, previousRowIds);
-    visibleRowIdsRef.current = rowIds;
-
-    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    // Both triggers slide only on a list update; a collapse or mode change
-    // between updates must not reuse the pending archive flag.
-    const shouldSlide = (snapshot.animated && isStateUpdate) || addedRow;
-    if (!shouldSlide || reduceMotion) return;
-
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    const moved: HTMLElement[] = [];
-    // Invert the group sections first so the rows inside them keep their
-    // visual place; each row then only animates its own extra movement.
-    for (const element of elements) {
-      if (!element.classList.contains("group")) continue;
-      const before = previous.get(measureKey(element));
-      if (before === undefined) continue;
-      const delta = before - docTop(element);
-      if (delta === 0) continue;
-      element.style.transition = "none";
-      element.style.transform = `translateY(${delta}px)`;
-      moved.push(element);
-    }
-    for (const row of elements) {
-      if (row.classList.contains("group")) continue;
-      const before = previous.get(measureKey(row));
-      if (before === undefined) continue;
-      const delta = before - docTop(row);
-      if (delta === 0) continue;
-      row.style.transition = "none";
-      row.style.transform = `translateY(${delta}px)`;
-      moved.push(row);
-    }
-    for (const element of moved) {
-      element.getBoundingClientRect();
-      element.style.transition = LIST_SLIDE_TRANSITION;
-      element.style.transform = "translateY(0)";
-      const clear = () => {
-        element.style.transition = "";
-        element.style.transform = "";
-      };
-      element.addEventListener("transitionend", clear, { once: true });
-      timers.push(setTimeout(clear, LIST_SLIDE_CLEANUP_MS));
-    }
-    return () => {
-      for (const timer of timers) clearTimeout(timer);
-    };
-  }, [snapshot.state, snapshot.animated, modes, collapsedCwds]);
+  const visibleGroups = useMemo(
+    () =>
+      snapshot.state.groups.map((group) => ({
+        ...group,
+        sessions: visibleGroupSessions(group, modes.get(group.cwd) ?? "unarchived", collapsedCwds),
+      })),
+    [snapshot.state.groups, modes, collapsedCwds],
+  );
 
   useEffect(() => {
     if (!hasMenuWorkspace) setWorkspaceMenu(null);
@@ -991,11 +1059,16 @@ function SessionsApp({
   const pendingUnarchiveIds = new Set(snapshot.pendingUnarchives.values());
   const currentDay = new Date().toDateString();
   return (
-    <>
-      {snapshot.state.groups.length === 0 && (
+    <SessionListMotion
+      container={sessionsElement}
+      stateGroups={snapshot.state.groups}
+      visibleGroups={visibleGroups}
+      animateArchive={snapshot.animated}
+    >
+      {visibleGroups.length === 0 && (
         <p className="empty">{EMPTY_LIST_MESSAGES[snapshot.loadStatus]}</p>
       )}
-      {snapshot.state.groups.map((group) => {
+      {visibleGroups.map((group) => {
         const mode = modes.get(group.cwd) ?? "unarchived";
         const header = groupDescriptor(
           { ...group, sessions: [] },
@@ -1015,7 +1088,7 @@ function SessionsApp({
               <StaticDescriptor key={index} descriptor={child} actions={actions} />
             ),
           ),
-          ...visibleGroupSessions(group, mode, collapsedCwds).map((session) => (
+          ...group.sessions.map((session) => (
             <SessionRow
               key={session.sessionId}
               {...session}
@@ -1035,7 +1108,7 @@ function SessionsApp({
           onUnregister={(cwd) => bridge.postMessage({ type: "unregisterWorkspace", cwd })}
         />
       )}
-    </>
+    </SessionListMotion>
   );
 }
 
@@ -1204,6 +1277,7 @@ export function initClient(bridge: ClientBridge): () => void {
     <SessionsApp
       bridge={bridge}
       store={store}
+      sessionsElement={sessionsElement}
       statusElement={statusElement}
       connectionStatusElement={connectionStatusElement}
     />,

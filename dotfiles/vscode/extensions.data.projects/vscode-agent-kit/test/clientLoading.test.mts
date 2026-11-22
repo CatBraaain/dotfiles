@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ExtensionMessage, WebviewState } from "../src/webview/protocol";
 import { webviewAppMarkup } from "../src/webview/webviewHtml";
@@ -26,6 +26,20 @@ const state: WebviewState = {
   ],
   displayedSessionId: sessionId,
 };
+
+function animationCount(locator: Locator): Promise<number> {
+  return locator.evaluate((element) => element.getAnimations().length);
+}
+
+function pauseSlideAt(locator: Locator, timeMs: number): Promise<number> {
+  return locator.evaluate(async (element, timeMs) => {
+    const slide = element.getAnimations()[0];
+    slide.pause();
+    await slide.ready;
+    slide.currentTime = timeMs;
+    return element.getBoundingClientRect().top;
+  }, timeMs);
+}
 
 describe("session list loading in the mounted client", () => {
   let browser: Browser;
@@ -599,12 +613,10 @@ describe("session list loading in the mounted client", () => {
     const [request] = await archiveRequests();
     await receive({ type: "sessions", state: afterSlideState });
     const moving = page.locator('[data-row-session="slide-2"]');
-    await expect.poll(() => moving.getAttribute("style")).toContain("transform");
-    expect(await moving.getAttribute("style")).toContain("transition");
+    await expect.poll(() => animationCount(moving)).toBe(1);
     await receive({ type: "archiveFinished", requestId: request.requestId });
     await receive({ type: "sessions", state: afterSlideState });
-    await page.waitForTimeout(1000);
-    await expect.poll(() => moving.getAttribute("style")).not.toContain("transform");
+    await expect.poll(() => animationCount(moving)).toBe(0);
   });
 
   it("skips the pending-archive slide under reduced motion", async () => {
@@ -615,7 +627,7 @@ describe("session list loading in the mounted client", () => {
     await receive({ type: "sessions", state: afterSlideState });
     await expect.poll(() => page.locator(".session-row").count()).toBe(1);
     const moving = page.locator('[data-row-session="slide-2"]');
-    expect(await moving.getAttribute("style")).toBeNull();
+    expect(await animationCount(moving)).toBe(0);
   });
 
   const addedSession = {
@@ -634,14 +646,69 @@ describe("session list loading in the mounted client", () => {
     await receive({ type: "sessions", state: slideState });
     await expect.poll(() => page.locator(".session-row").count()).toBe(2);
     const existing = page.locator('[data-row-session="slide-2"]');
-    expect(await existing.getAttribute("style")).toBeNull();
+    expect(await animationCount(existing)).toBe(0);
     await receive({ type: "sessions", state: afterAddState });
     await expect.poll(() => page.locator(".session-row").count()).toBe(3);
-    await expect.poll(() => existing.getAttribute("style")).toContain("transform");
-    expect(await existing.getAttribute("style")).toContain("transition");
+    await expect.poll(() => animationCount(existing)).toBe(1);
     const added = page.locator('[data-row-session="added-1"]');
-    expect(await added.getAttribute("style")).toBeNull();
-    await expect.poll(() => existing.getAttribute("style")).toBe("");
+    expect(await animationCount(added)).toBe(0);
+    await expect.poll(() => animationCount(existing)).toBe(0);
+  });
+
+  it("starts an overlapping slide from the row's current on-screen position", async () => {
+    await receive({ type: "sessions", state: slideState });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(2);
+    await receive({ type: "sessions", state: afterAddState });
+    const existing = page.locator('[data-row-session="slide-2"]');
+    await expect.poll(() => animationCount(existing)).toBe(1);
+    const before = await pauseSlideAt(existing, 280);
+
+    const groupAfterAdd = afterAddState.groups[0];
+    const secondAddition = { ...addedSession, sessionId: "added-2" };
+    await receive({
+      type: "sessions",
+      state: {
+        ...slideState,
+        groups: [{ ...groupAfterAdd, sessions: [secondAddition, ...groupAfterAdd.sessions] }],
+      },
+    });
+    await page.locator('[data-row-session="added-2"]').waitFor();
+    const after = await pauseSlideAt(existing, 0);
+    expect(after).toBeCloseTo(before);
+  });
+
+  it("does not move an unchanged row when a later update adds a row at the end", async () => {
+    await receive({ type: "sessions", state: slideState });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(2);
+    await receive({ type: "sessions", state: afterAddState });
+    const existing = page.locator('[data-row-session="slide-2"]');
+    await expect.poll(() => animationCount(existing)).toBe(1);
+    await pauseSlideAt(existing, 280);
+
+    const groupAfterAdd = afterAddState.groups[0];
+    const renamedGroup = {
+      ...groupAfterAdd,
+      sessions: groupAfterAdd.sessions.map((session) =>
+        session.sessionId === "slide-2" ? { ...session, displayName: "Renamed" } : session,
+      ),
+    };
+    await receive({ type: "sessions", state: { ...slideState, groups: [renamedGroup] } });
+    await existing.getByText("Renamed", { exact: true }).waitFor();
+    await existing.evaluate((row) => row.getAnimations()[0].finish());
+    await expect.poll(() => animationCount(existing)).toBe(0);
+    const before = await existing.evaluate((row) => row.getBoundingClientRect().top);
+
+    const tail = { ...addedSession, sessionId: "tail" };
+    await receive({
+      type: "sessions",
+      state: {
+        ...slideState,
+        groups: [{ ...renamedGroup, sessions: [...renamedGroup.sessions, tail] }],
+      },
+    });
+    await page.locator('[data-row-session="tail"]').waitFor();
+    const after = await existing.evaluate((row) => row.getBoundingClientRect().top);
+    expect(after).toBeCloseTo(before);
   });
 
   it("skips the added-session slide under reduced motion", async () => {
@@ -650,7 +717,7 @@ describe("session list loading in the mounted client", () => {
     await expect.poll(() => page.locator(".session-row").count()).toBe(2);
     await receive({ type: "sessions", state: afterAddState });
     await expect.poll(() => page.locator(".session-row").count()).toBe(3);
-    expect(await page.locator('[data-row-session="slide-2"]').getAttribute("style")).toBeNull();
+    expect(await animationCount(page.locator('[data-row-session="slide-2"]'))).toBe(0);
   });
 
   it("snaps a list update that only adds a hidden session row", async () => {
@@ -670,8 +737,8 @@ describe("session list loading in the mounted client", () => {
     const rows = page.locator(".session-row");
     await expect.poll(() => rows.first().getAttribute("data-row-session")).toBe("slide-2");
     expect(
-      await rows.evaluateAll((elements) => elements.map((row) => row.getAttribute("style"))),
-    ).toEqual([null, null]);
+      await rows.evaluateAll((elements) => elements.map((row) => row.getAnimations().length)),
+    ).toEqual([0, 0]);
   });
 
   it("slides when an added row replaces a removed one at the same count", async () => {
@@ -684,9 +751,9 @@ describe("session list loading in the mounted client", () => {
     await receive({ type: "sessions", state: replacedState });
     await expect.poll(() => page.locator(".session-row").count()).toBe(2);
     const shifted = page.locator(`[data-row-session="${sessionId}"]`);
-    await expect.poll(() => shifted.getAttribute("style")).toContain("transform");
+    await expect.poll(() => animationCount(shifted)).toBe(1);
     const added = page.locator('[data-row-session="added-1"]');
-    expect(await added.getAttribute("style")).toBeNull();
+    expect(await animationCount(added)).toBe(0);
   });
 
   const betaGroup: WebviewState["groups"][number] = {
@@ -694,6 +761,61 @@ describe("session list loading in the mounted client", () => {
     label: "beta",
     sessions: [{ ...addedSession, sessionId: "beta-1", displayName: "Beta row" }],
   };
+
+  it("does not move a new row even if its workspace header moves", async () => {
+    await receive({
+      type: "sessions",
+      state: { ...slideState, groups: [atlas, betaGroup] },
+    });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(3);
+    const secondAddition = { ...addedSession, sessionId: "added-beta" };
+    await receive({
+      type: "sessions",
+      state: {
+        ...slideState,
+        groups: [
+          afterAddState.groups[0],
+          { ...betaGroup, sessions: [secondAddition, ...betaGroup.sessions] },
+        ],
+      },
+    });
+
+    const added = page.locator('[data-row-session="added-beta"]');
+    const positions = await added.evaluate((row) => {
+      const startTop = row.getBoundingClientRect().top;
+      const workspaceAnimations = row.closest(".group")?.getAnimations({ subtree: true }) ?? [];
+      for (const animation of workspaceAnimations) animation.finish();
+      return {
+        startTop,
+        endTop: row.getBoundingClientRect().top,
+        slides: workspaceAnimations.length,
+      };
+    });
+    expect(positions.slides).toBeGreaterThan(0);
+    expect(positions.startTop).toBeCloseTo(positions.endTop);
+  });
+
+  it("slides a previously visible session when it moves to a different workspace", async () => {
+    await receive({
+      type: "sessions",
+      state: { ...slideState, groups: [atlas, betaGroup] },
+    });
+    await expect.poll(() => page.locator(".session-row").count()).toBe(3);
+    const [first, movedSession] = atlas.sessions;
+    await receive({
+      type: "sessions",
+      state: {
+        ...slideState,
+        groups: [
+          { ...atlas, sessions: [addedSession, first] },
+          { ...betaGroup, sessions: [movedSession, ...betaGroup.sessions] },
+        ],
+      },
+    });
+
+    const moved = page.locator('[data-group-cwd="/workspace/beta"] [data-row-session="slide-2"]');
+    await expect.poll(() => animationCount(moved)).toBe(1);
+  });
 
   it("does not slide a collapse-only change after an animated archive update", async () => {
     await receive({
@@ -707,13 +829,13 @@ describe("session list loading in the mounted client", () => {
       type: "sessions",
       state: { ...afterSlideState, groups: [...afterSlideState.groups, betaGroup] },
     });
-    const moving = page.locator('[data-group-cwd="/workspace/beta"]');
-    await expect.poll(() => moving.getAttribute("style")).toContain("transform");
-    await expect.poll(() => moving.getAttribute("style")).toBe("");
+    const moving = page.locator('[data-group-cwd="/workspace/beta"] .group-header');
+    await expect.poll(() => animationCount(moving)).toBe(1);
+    await expect.poll(() => animationCount(moving)).toBe(0);
     await receive({ type: "archiveFinished", requestId: request.requestId });
     await page.getByRole("button", { name: "Collapse atlas" }).click();
     await expect.poll(() => page.locator(".session-row").count()).toBe(1);
-    expect(await moving.getAttribute("style")).toBe("");
+    expect(await animationCount(moving)).toBe(0);
   });
 
   it("keeps workspace input across automatic snapshots until the add acknowledgement", async () => {
