@@ -1,6 +1,6 @@
 # Session worktreeメタデータ仕様
 
-本書は、pi の session に関連する Git worktree を記録する `session-metadata` 拡張の入出力・状態・エラーを定める。読者は拡張の保守者と、session ファイルを読む外部ツールの開発者である。目的と重要制約は [REQUIREMENTS.md](./REQUIREMENTS.md) に従う。保存形式は pi の標準 [CustomEntry](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/docs/session-format.md#customentry) を使う。
+本書は、pi の session に関連する Git worktree を記録する `worktree` 拡張の入出力・状態・エラーを定める。読者は拡張の保守者と、session ファイルを読む外部ツールの開発者である。目的と重要制約は [REQUIREMENTS.md](./REQUIREMENTS.md) に従う。保存形式は pi の標準 [CustomEntry](https://github.com/earendil-works/pi/blob/v1.5.0/packages/coding-agent/docs/session-format.md#customentry) を使う。
 
 ## 記録形式と保存
 
@@ -64,7 +64,7 @@ Bash 操作への自動追従で得た一覧を、`customType: "session-worktree
 
 宣言一覧は `type: "custom"`、`customType: "session-worktree-declarations"`、`data.worktrees: { name: string, path: string }[]` として pi の標準 custom エントリ追記 API で保存する。内容が変わらない場合は追記しない。同じセッションの並行要求は先行更新を保持して順に反映する。正規化した絶対パスを宣言順に保持し、名前・パスの重複を許さない。既存の自動追従エントリは移行しない。読み手はセッション全体の追記順で最後の宣言一覧を採用する。エントリがなければ空一覧、不正なエントリは読み取り失敗とする。宣言時に現存しない対象は一覧から除き、外部の読み手も現存する対象だけを使う。
 
-作成・所属確認・宣言記録は `session-metadata` が担当する。作成は現在のリポジトリと検証済みの名前から決まるパスに限る。モデル指定の任意パス・shell 本文や、リポジトリ由来のコードに作成権限を渡さない。
+作成・所属確認・宣言記録は `worktree` 拡張が担当する。作成は現在のリポジトリと検証済みの名前から決まるパスに限る。モデル指定の任意パス・shell 本文や、リポジトリ由来のコードに作成権限を渡さない。
 
 宣言が受理され、呼出session が変わっていないことを確認してから、[Guardrails の拡張向け API](../guardrails/SPEC.md#7-run-tools-cli-によるfs-io) に対象の絶対パスを渡す。この経路で許可するのは対象サブworktree だけで、親フォルダや Git 共有メタデータは含めない。API が拒否した場合は成功を返さない。宣言解除時はこの経路で追加した許可だけを外す。対象が削除・移動・再作成され、宣言時と同じ対象だと確認できない場合も、再宣言までこの経路の許可を適用しない。宣言エントリを読むだけでは、再開・分岐先・別session に許可は生じない。Agent Kit での表示切り替えは書き込み許可に影響しない。
 

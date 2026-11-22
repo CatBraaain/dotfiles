@@ -574,7 +574,7 @@ Sessions の標準ビュータイトルにある更新操作の名前とツー�
 
 ## 選択セッションの SCM 表示
 
-共有 Terminal の表示先セッションが確定したとき、同じ VS Code ウィンドウの SCM 変更一覧を、そのセッションの main worktree、開始 `cwd` が属するサブworktree があればその worktree、および宣言済みサブworktree に絞る。main worktree はセッションの `cwd` が属するリポジトリから求める。同じパスは重複表示しない。宣言は [session-metadata の仕様](../../../.pi/agent/extensions.exact/session-metadata/SPEC.md#利用宣言ツール-session_worktree) に従い、選択セッションの JSONL から読み取る。同じリポジトリに属する現存 worktree と照合し、絶対パスで識別する。
+共有 Terminal の表示先セッションが確定したとき、同じ VS Code ウィンドウの SCM 変更一覧を、そのセッションの main worktree、開始 `cwd` が属するサブworktree があればその worktree、および宣言済みサブworktree に絞る。main worktree はセッションの `cwd` が属するリポジトリから求める。同じパスは重複表示しない。宣言は [worktree 拡張の仕様](../../../.pi/agent/extensions.exact/worktree/SPEC.md#利用宣言ツール-session_worktree) に従い、選択セッションの JSONL から読み取る。同じリポジトリに属する現存 worktree と照合し、絶対パスで識別する。
 
 | 条件 | 動作 |
 | --- | --- |
