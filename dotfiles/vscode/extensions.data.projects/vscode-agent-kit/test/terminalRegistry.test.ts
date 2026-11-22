@@ -483,26 +483,84 @@ describe("TerminalRegistry", () => {
     expect(existing.dispose).toHaveBeenCalledOnce();
   });
 
-  it("waits through long lifecycle preparation until the client attaches", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const restored = displayTerminal();
-    const { registry, mocks, displays } = setup(restored);
-    let release!: (session: PiMuxCurrentSession | undefined) => void;
-    mocks.current.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          release = resolve;
-        }),
+  it("drops a vanished switch target and runs the next queued request", async () => {
+    const { registry, mocks, live } = setup();
+    const { terminal } = await registry.open(session("A"));
+    mocks.switch.mockImplementationOnce(async () => {
+      live.delete("B");
+      return "target-missing";
+    });
+
+    const opening = registry.run(() => registry.open(session("B")));
+    const next = registry.run(() => registry.open(session("A")));
+
+    await expect(opening).rejects.toThrow("Pi session B is no longer running");
+    expect((await next).terminal).toBe(terminal);
+    expect(mocks.switch).toHaveBeenCalledExactlyOnceWith("B", 123);
+    expect(registry.displayedSessionId).toBe("A");
+  });
+
+  it("retries while the client is missing without querying the full list again", async () => {
+    const { registry, mocks } = setup();
+    const { terminal } = await registry.open(session("A"));
+    mocks.list.mockClear();
+    mocks.switch.mockResolvedValueOnce("client-missing");
+
+    expect((await registry.open(session("B"))).terminal).toBe(terminal);
+
+    expect(mocks.switch).toHaveBeenCalledTimes(2);
+    expect(mocks.list).toHaveBeenCalledOnce();
+    expect(registry.displayedSessionId).toBe("B");
+  });
+
+  it("waits for confirmation without reissuing a successful switch", async () => {
+    const { registry, mocks, client } = setup();
+    const { terminal } = await registry.open(session("A"));
+    mocks.switch.mockImplementationOnce(async (sessionId) => {
+      client.attachedId = sessionId;
+      mocks.current.mockResolvedValueOnce(undefined);
+      return "switched";
+    });
+    mocks.current.mockClear();
+
+    expect((await registry.open(session("B"))).terminal).toBe(terminal);
+
+    expect(mocks.current).toHaveBeenCalledTimes(3);
+    expect(mocks.switch).toHaveBeenCalledExactlyOnceWith("B", 123);
+    expect(registry.displayedSessionId).toBe("B");
+  });
+
+  it("stops retrying after the switch deadline even if the target is still running", async () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    const { registry, mocks, displays } = setup();
+    await registry.open(session("A"));
+    mocks.switch.mockImplementationOnce(async () => {
+      vi.advanceTimersByTime(60_000);
+      return "client-missing";
+    });
+
+    await expect(registry.open(session("B"))).rejects.toThrow(
+      "Timed out switching to Pi session B",
     );
-    const opening = registry.open(session("A"));
-    await vi.waitFor(() => expect(mocks.current).toHaveBeenCalledOnce());
-    vi.setSystemTime(Date.now() + 150_000);
-    release(undefined);
-    const result = await opening;
-    expect(result.terminal).toBe(restored);
-    expect(mocks.current).toHaveBeenCalledTimes(2);
-    expect(restored.dispose).not.toHaveBeenCalled();
-    expect(displays.create).not.toHaveBeenCalled();
+
+    expect(mocks.switch).toHaveBeenCalledExactlyOnceWith("B", 123);
+    expect(displays.create).toHaveBeenCalledOnce();
+    expect(registry.displayedSessionId).toBe("A");
+  });
+
+  it("accepts a confirmed switch that finishes at the retry deadline", async () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    const { registry, mocks, client } = setup();
+    const { terminal } = await registry.open(session("A"));
+    mocks.switch.mockImplementationOnce(async (sessionId) => {
+      vi.advanceTimersByTime(60_000);
+      client.attachedId = sessionId;
+      return "switched";
+    });
+
+    expect((await registry.open(session("B"))).terminal).toBe(terminal);
+    expect(mocks.switch).toHaveBeenCalledExactlyOnceWith("B", 123);
+    expect(registry.displayedSessionId).toBe("B");
   });
 
   it("rejects a close during attachment even when a resolved session is returned", async () => {

@@ -3,6 +3,8 @@ import { isAbsolute } from "node:path";
 import { errorMessage, isRecord } from "./guards";
 
 const QUERY_TIMEOUT_MS = 10_000;
+const SWITCH_TARGET_MISSING_EXIT_CODE = 2;
+const SWITCH_CLIENT_MISSING_EXIT_CODE = 3;
 const QUERY_COMMANDS = new Set(["list", "history", "current", "switch"]);
 
 export interface PiSession {
@@ -128,16 +130,20 @@ export class PiMux {
     }
   }
 
-  /** Switch a tmux client to a session. False means the session or client was not found. */
-  async switch(sessionId: string, clientPid?: number): Promise<boolean> {
+  async switch(
+    sessionId: string,
+    clientPid?: number,
+  ): Promise<"switched" | "target-missing" | "client-missing"> {
     const args = ["switch", sessionId, ...clientPidArgs(clientPid)];
     try {
       await this.execute("pi-mux", args, undefined);
-      return true;
+      return "switched";
     } catch (error) {
-      if (isCliUnavailable(error))
-        throw new Error(`pi-mux ${args.join(" ")}: ${errorMessage(error)}`);
-      return false;
+      if (isRecord(error) && error.exitCode === SWITCH_TARGET_MISSING_EXIT_CODE)
+        return "target-missing";
+      if (isRecord(error) && error.exitCode === SWITCH_CLIENT_MISSING_EXIT_CODE)
+        return "client-missing";
+      throw new Error(`pi-mux ${args.join(" ")}: ${errorMessage(error)}`);
     }
   }
 
@@ -294,7 +300,12 @@ async function executePiMux(executable: string, args: string[], cwd?: string): P
         return;
       }
       reject(
-        new Error(describeFailure(executable, child, Buffer.concat(stderrChunks).toString("utf8"))),
+        Object.assign(
+          new Error(
+            describeFailure(executable, child, Buffer.concat(stderrChunks).toString("utf8")),
+          ),
+          { exitCode },
+        ),
       );
     });
   });

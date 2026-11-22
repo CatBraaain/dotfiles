@@ -180,8 +180,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return 0;
     }
     if (operation.kind === "switch") {
-      await switchSession(tmuxConfiguration(), operation.id, operation.clientPid);
-      return 0;
+      try {
+        await switchSession(tmuxConfiguration(), operation.id, operation.clientPid);
+        return 0;
+      } catch (error) {
+        if (!(error instanceof SwitchResolutionError)) throw error;
+        console.error(`pi-mux: ${error.message}`);
+        return error.exitCode;
+      }
     }
     if (operation.kind === "current") {
       console.log(JSON.stringify(await currentSession(tmuxConfiguration(), operation.clientPid)));
@@ -1850,6 +1856,20 @@ async function tmuxClients(config: TmuxConfig): Promise<TmuxClient[]> {
     });
 }
 
+const SWITCH_TARGET_MISSING_EXIT_CODE = 2;
+const SWITCH_CLIENT_MISSING_EXIT_CODE = 3;
+
+class SwitchResolutionError extends Error {
+  constructor(
+    message: string,
+    readonly exitCode:
+      | typeof SWITCH_TARGET_MISSING_EXIT_CODE
+      | typeof SWITCH_CLIENT_MISSING_EXIT_CODE,
+  ) {
+    super(message);
+  }
+}
+
 async function resolveClient(
   config: TmuxConfig,
   clientPid: number | undefined,
@@ -1862,13 +1882,14 @@ async function resolveClient(
           (client) =>
             client.pid === clientPid || platform.processParentPid(client.pid) === clientPid,
         );
-  if (matching.length !== 1)
-    throw new Error(
-      clientPid === undefined
-        ? `Expected one attached tmux client, found ${matching.length}`
-        : `Cannot identify the tmux client for process ${clientPid}`,
-    );
-  return matching[0]!;
+  if (matching.length === 1) return matching[0]!;
+  const message =
+    clientPid === undefined
+      ? `Expected one attached tmux client, found ${matching.length}`
+      : `Cannot identify the tmux client for process ${clientPid}`;
+  if (matching.length === 0)
+    throw new SwitchResolutionError(message, SWITCH_CLIENT_MISSING_EXIT_CODE);
+  throw new Error(message);
 }
 
 async function switchSession(
@@ -1877,7 +1898,11 @@ async function switchSession(
   clientPid: number | undefined,
 ): Promise<void> {
   const targets = (await livePanes(config, "list")).filter((pane) => pane.id === id);
-  if (targets.length === 0) throw new Error(`Session not found (use the complete ID): ${id}`);
+  if (targets.length === 0)
+    throw new SwitchResolutionError(
+      `Session not found (use the complete ID): ${id}`,
+      SWITCH_TARGET_MISSING_EXIT_CODE,
+    );
   if (targets.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
   const client = await resolveClient(config, clientPid);
   await tmux(config, ["switch-client", "-c", client.name, "-t", `=${targets[0]!.name}`]);

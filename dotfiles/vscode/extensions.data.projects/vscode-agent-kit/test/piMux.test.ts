@@ -231,22 +231,14 @@ describe("PiMux", () => {
     },
   );
 
-  it("switches through the CLI and reports a failed resolution as false", async () => {
-    const execute = vi
-      .fn()
-      .mockResolvedValueOnce("")
-      .mockRejectedValueOnce(Object.assign(new Error("Session not found: B"), { code: 1 }));
-    const mux = new PiMux(execute);
-    expect(await mux.switch("A", 456)).toBe(true);
-    expect(execute).toHaveBeenNthCalledWith(
-      1,
+  it("switches through the CLI with the target ID and client PID", async () => {
+    const execute = vi.fn().mockResolvedValue("");
+    expect(await new PiMux(execute).switch("A", 456)).toBe("switched");
+    expect(execute).toHaveBeenCalledExactlyOnceWith(
       "pi-mux",
       ["switch", "A", "--client-pid", "456"],
       undefined,
     );
-    expect(await mux.switch("B")).toBe(false);
-    expect(execute).toHaveBeenNthCalledWith(2, "pi-mux", ["switch", "B"], undefined);
-    expect(execute).toHaveBeenCalledTimes(2);
   });
 
   it("propagates a spawn failure from switch instead of treating it as a resolution failure", async () => {

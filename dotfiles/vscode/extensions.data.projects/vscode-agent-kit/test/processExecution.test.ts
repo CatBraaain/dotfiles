@@ -51,6 +51,21 @@ afterEach(() => {
 });
 
 describe("external command environment", () => {
+  it.each([
+    [2, "target-missing"],
+    [3, "client-missing"],
+  ] as const)("reports switch exit %i as %s", async (exitCode, result) => {
+    await withPiMuxProcess(`process.exit(${exitCode});`, async () => {
+      expect(await new PiMux().switch("A")).toBe(result);
+    });
+  });
+
+  it("propagates other switch failures with the command diagnostics", async () => {
+    await withPiMuxProcess('console.error("switch failed"); process.exit(1);', async () => {
+      await expect(new PiMux().switch("A")).rejects.toThrow("switch failed (pi-mux exited with 1)");
+    });
+  });
+
   it("calls pi-mux with argv, cwd, and no inherited tmux context", async () => {
     vi.stubEnv("TMUX", "/unrelated/socket,1,0");
     vi.stubEnv("TMUX_PANE", "%9");

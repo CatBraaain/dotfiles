@@ -4,7 +4,11 @@ import { isDeepStrictEqual } from "node:util";
 import type { WorkspaceStore } from "../workspaceStore";
 import { listSessionSnapshot, sessionFileExists, type SessionSummary } from "../sessionStore";
 import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
-import { DisplayRecoveryCancelledError, type TerminalRegistry } from "../terminalRegistry";
+import {
+  DisplayRecoveryCancelledError,
+  SwitchTargetExitedError,
+  type TerminalRegistry,
+} from "../terminalRegistry";
 import { errorMessage } from "../guards";
 import { cwdGroupKey } from "../grouping";
 import { flattenPiMuxSessions, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../piMux";
@@ -728,6 +732,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       this.postError(
         `Failed to open session ${sessionId} in ${session.cwd}: ${errorMessage(error)}`,
       );
+      if (error instanceof SwitchTargetExitedError) void this.refresh(false);
       return;
     }
 

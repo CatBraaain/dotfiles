@@ -90,10 +90,11 @@ export function fakeRuntimes() {
       async (ids: readonly string[]): Promise<Set<string> | null> =>
         new Set(ids.filter((id) => live.has(id))),
     ),
-    switch: vi.fn(async (sessionId: string, clientPid?: number): Promise<boolean> => {
-      if (!clientMatches(clientPid) || !live.has(sessionId)) return false;
+    switch: vi.fn(async (sessionId: string, clientPid?: number): ReturnType<PiMux["switch"]> => {
+      if (!live.has(sessionId)) return "target-missing";
+      if (!clientMatches(clientPid)) return "client-missing";
       client.attachedId = sessionId;
-      return true;
+      return "switched";
     }),
     current: vi.fn(async (clientPid?: number): Promise<PiMuxCurrentSession | undefined> => {
       if (!clientMatches(clientPid) || client.attachedId === undefined) return undefined;

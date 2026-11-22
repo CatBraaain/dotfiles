@@ -1375,10 +1375,10 @@ describe("switch", () => {
       });
       await fixture.attach("pi");
       const unknownPid = fixture.run(["switch", id, "--client-pid", "999999999"]);
-      assert.equal(unknownPid.status, 1);
+      assert.equal(unknownPid.status, 3);
       assert.ok(unknownPid.stderr.includes("Cannot identify the tmux client"));
-      const unknownId = fixture.run(["switch", randomUUID()]);
-      assert.equal(unknownId.status, 1);
+      const unknownId = fixture.run(["switch", randomUUID(), "--client-pid", "999999999"]);
+      assert.equal(unknownId.status, 2);
       assert.ok(unknownId.stderr.includes("Session not found"));
       assert.equal(fixture.clients()[0]!.session, "pi");
     } finally {
@@ -1395,7 +1395,7 @@ describe("switch", () => {
         file: join(fixture.directory, "conversations", `${id}.jsonl`),
       });
       const noClient = fixture.run(["switch", id]);
-      assert.equal(noClient.status, 1);
+      assert.equal(noClient.status, 3);
       assert.ok(noClient.stderr.includes("Expected one attached tmux client, found 0"));
       await fixture.attach("pi");
       await fixture.attach("pi");

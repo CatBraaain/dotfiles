@@ -7,6 +7,8 @@ import { errorMessage } from "./guards";
 import { sameWorkDirectory } from "./workDirectory";
 import { cwdGroupKey } from "./grouping";
 
+const SWITCH_RETRY_WINDOW_MS = 60_000;
+
 interface DisplayRecovery {
   previous: PiSession;
   requestedCwd: string;
@@ -14,6 +16,8 @@ interface DisplayRecovery {
 }
 
 export class DisplayRecoveryCancelledError extends Error {}
+
+export class SwitchTargetExitedError extends Error {}
 
 export interface EarlyNewSession {
   readonly terminal: vscode.Terminal;
@@ -144,7 +148,11 @@ export class TerminalRegistry implements vscode.Disposable {
       return await this.connect(launch, isAlive && intent === "select", signal, recovery);
     } catch (error) {
       signal?.throwIfAborted();
-      if (error instanceof DisplayRecoveryCancelledError) throw error;
+      if (
+        error instanceof DisplayRecoveryCancelledError ||
+        error instanceof SwitchTargetExitedError
+      )
+        throw error;
       throw new Error(`Pi session ${launch.sessionId} in ${launch.cwd}: ${errorMessage(error)}`);
     } finally {
       if (recovery !== undefined) this.recoveries.delete(recovery);
@@ -452,14 +460,23 @@ export class TerminalRegistry implements vscode.Disposable {
     const pid = await terminal.processId;
     signal.throwIfAborted();
     if (pid === undefined) throw new Error(`Pi display process did not start in ${session.cwd}`);
+    const switchDeadlineMs = performance.now() + SWITCH_RETRY_WINDOW_MS;
+    let switchAccepted = false;
     while (terminal.exitStatus === undefined) {
       signal.throwIfAborted();
       const current = await this.mux.current(pid);
       signal.throwIfAborted();
       if (terminal.exitStatus !== undefined) break;
       if (current?.id === session.sessionId) return;
-      await this.mux.switch(session.sessionId, pid);
-      signal.throwIfAborted();
+      if (performance.now() >= switchDeadlineMs)
+        throw new Error(`Timed out switching to Pi session ${session.sessionId}`);
+      if (!switchAccepted) {
+        const switchResult = await this.mux.switch(session.sessionId, pid);
+        signal.throwIfAborted();
+        if (switchResult === "target-missing")
+          throw new SwitchTargetExitedError(`Pi session ${session.sessionId} is no longer running`);
+        switchAccepted = switchResult === "switched";
+      }
       await sleep(50, undefined, { signal });
     }
     throw new Error(`Pi display exited before attaching pid=${pid} in ${session.cwd}`);

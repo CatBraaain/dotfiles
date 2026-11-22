@@ -3986,6 +3986,32 @@ describe("SessionWebviewProvider", () => {
     );
   });
 
+  it("refreshes a vanished switch target and keeps the current display", async () => {
+    const { webview, provider, registry, terminal, live, mocks, sentState, row } =
+      await unreadFixture();
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    expect(row(inactiveSessionId).isArchived).toBe(false);
+    mocks.history.mockClear();
+    mocks.switch.mockImplementationOnce(async () => {
+      live.delete(inactiveSessionId);
+      return "target-missing";
+    });
+
+    await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    await finishRefresh(provider);
+
+    expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining(`Pi session ${inactiveSessionId} is no longer running`),
+    );
+    expect(mocks.switch).toHaveBeenCalledExactlyOnceWith(inactiveSessionId, 123);
+    expect(mocks.history).not.toHaveBeenCalled();
+    expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(1);
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(registry.displayedSessionId).toBe(activeSessionId);
+    expect(sentState().displayedSessionId).toBe(activeSessionId);
+    expect(row(inactiveSessionId).isArchived).toBe(true);
+  });
+
   it("opens a live session when its saved session file disappeared", async () => {
     const runtimes = providerRuntimes();
     const filePath = await seedSavedSession(activeSessionId, root, { runtimes });
