@@ -11,22 +11,31 @@ interface Report {
   now: number;
   probes: number;
   pid: number;
-  pidFile: string | null;
 }
 
-function runServer(scenario: string, env: Record<string, string> = {}): Report {
+function runServer(
+  scenario: string,
+  env: Record<string, string> = {},
+  runtimeDir: "absolute" | "relative" | "empty" | "unset" = "absolute",
+): Report {
   const root = mkdtempSync(join(tmpdir(), "browse-server-contract-"));
   try {
     const childEnv: Record<string, string | undefined> = {
       ...process.env,
       XDG_CACHE_HOME: root,
       CAMOUFOX_HEADLESS: "1",
+      CAMOUFOX_BASE_URL: "ws://127.0.0.1:9378/camoufox",
     };
     for (const name of ["CAMOUFOX_EXECUTABLE_PATH", "CAMOUFOX_PLAYWRIGHT_CORE", "XDG_RUNTIME_DIR"])
       delete childEnv[name];
+    const runtimeHome = join(root, "runtime-dir");
+    if (runtimeDir === "absolute") childEnv.XDG_RUNTIME_DIR = runtimeHome;
+    if (runtimeDir === "relative") childEnv.XDG_RUNTIME_DIR = "relative-runtime-dir";
+    if (runtimeDir === "empty") childEnv.XDG_RUNTIME_DIR = "";
     const child = Bun.spawnSync(
       [process.execPath, join(import.meta.dir, "fixtures/server-lifecycle.ts"), scenario],
       {
+        cwd: root,
         env: { ...childEnv, ...env },
         timeout: 5000,
       },
@@ -59,12 +68,38 @@ describe("server startup contract", () => {
     );
     const launches = report.events.filter(([name]) => name === "spawn");
     assert.equal(launches.length, 1);
-    assert.equal(launches[0]?.[2].at(-1), "__server");
+    assert.equal(launches[0]?.[2].at(-2), "__server");
+    assert.equal(launches[0]?.[2].at(-1), "9378");
     assert.equal(launches[0]?.[3].detached, true);
     assert.equal(launches[0]?.[3].stdio[0], "ignore");
     assert.equal(typeof launches[0]?.[3].stdio[1], "number");
     assert.equal(launches[0]?.[3].stdio[1], launches[0]?.[3].stdio[2]);
     assert.equal(report.events.filter(([name]) => name === "unref").length, 1);
+  });
+
+  it("waits for the configured endpoint without starting a second process on the port", () => {
+    const report = runServer("start-port-in-use");
+    assert.equal(report.error, undefined);
+    assert.equal(report.probes, 3);
+    assert.equal(
+      report.events.some(([name]) => name === "spawn"),
+      false,
+    );
+  });
+
+  it("fails without spawning when two local servers match the port", () => {
+    const report = runServer("start-duplicate");
+    assert.match(report.error!, /Multiple local Camoufox servers/);
+    assert.equal(
+      report.events.some(([name]) => name === "spawn"),
+      false,
+    );
+  });
+
+  it("rejects port zero before probing", () => {
+    const report = runServer("start", { CAMOUFOX_BASE_URL: "ws://127.0.0.1:0/camoufox" });
+    assert.match(report.error!, /nonzero port/);
+    assert.equal(report.probes, 0);
   });
 
   it("abandons startup at 15 seconds rather than waiting forever", () => {
@@ -84,22 +119,26 @@ describe("server startup contract", () => {
   });
 });
 
-describe("server restart contract", () => {
-  it("stops the deduplicated PID-file and pgrep union, escalates after ten seconds, then restarts", () => {
+describe.skipIf(process.platform === "win32")("server restart contract", () => {
+  it("stops the matching process, escalates after ten seconds, then restarts", () => {
     const report = runServer("restart");
     assert.equal(report.error, undefined);
     const stops = report.events.filter(([name, , signal]) => name === "kill" && signal !== 0);
     assert.deepEqual(stops, [
       ["kill", 41001, "SIGTERM", 0],
-      ["kill", 41002, "SIGTERM", 0],
       ["kill", 41001, "SIGKILL", 10000],
-      ["kill", 41002, "SIGKILL", 10000],
     ]);
     assert.ok(
       report.events.findIndex(([name]) => name === "spawn") >
         report.events.findLastIndex(([name, , signal]) => name === "kill" && signal === "SIGKILL"),
     );
-    assert.equal(report.events.find(([name]) => name === "spawn")?.[2].at(-1), "__server");
+    assert.equal(report.events.find(([name]) => name === "spawn")?.[2].at(-2), "__server");
+  });
+
+  it("does not accept a websocket response without readiness from its child", () => {
+    const report = runServer("restart-no-ready");
+    assert.match(report.error!, /camoufox server not ready/);
+    assert.equal(report.probes, 1);
   });
 
   it("does not escalate processes that terminate after SIGTERM", () => {
@@ -111,35 +150,6 @@ describe("server restart contract", () => {
     );
     assert.equal(report.now, 500);
   });
-
-  it("does not signal a live recycled PID on Windows", () => {
-    const report = runServer("windows-recycled", { SystemRoot: "C:\\Windows" });
-    assert.equal(report.error, undefined);
-    assert.deepEqual(
-      report.events.find(([name]) => name === "windowsStopCheck"),
-      ["windowsStopCheck", "41003"],
-    );
-    assert.deepEqual(
-      report.events.filter(([name, , signal]) => name === "kill" && signal !== 0),
-      [],
-    );
-    assert.equal(report.events.filter(([name]) => name === "spawn").length, 1);
-  });
-
-  for (const [scenario, error] of [
-    ["windows-stop-failed", "Could not stop the verified Camoufox server"],
-    ["windows-stop-timeout", "Could not determine the Camoufox server stop result"],
-  ] as const) {
-    it(`aborts Windows restart after ${scenario}`, () => {
-      const report = runServer(scenario, { SystemRoot: "C:\\Windows" });
-      assert.ok(report.error?.includes(error), report.error ?? "Restart did not report an error");
-      assert.equal(report.probes, 0);
-      assert.equal(
-        report.events.some(([name]) => name === "spawn"),
-        false,
-      );
-    });
-  }
 
   for (const scenario of ["none", "recycled"]) {
     it(`skips stopping ${scenario === "none" ? "absent servers" : "a recycled non-server PID"} and starts a server`, () => {
@@ -154,9 +164,91 @@ describe("server restart contract", () => {
   }
 });
 
+describe("Windows restart failures", () => {
+  for (const [scenario, error] of [
+    ["windows-stop-failed", /Cannot terminate the Windows Camoufox server/],
+    ["windows-stop-timeout", /Could not confirm the Windows Camoufox server exited/],
+  ] as const) {
+    it(`does not launch another server after ${scenario}`, () => {
+      const report = runServer(scenario);
+      assert.match(report.error!, error);
+      assert.equal(report.probes, 0);
+      assert.equal(
+        report.events.some(([name]) => name === "spawn"),
+        false,
+      );
+    });
+  }
+});
+
+describe.skipIf(process.platform !== "linux")("server stop contract", () => {
+  it("refuses to stop any process when two match the same port", () => {
+    const report = runServer("stop-duplicate");
+    assert.match(report.error!, /Multiple local Camoufox servers/);
+    assert.equal(
+      report.events.some(([name]) => name === "kill"),
+      false,
+    );
+  });
+
+  it("succeeds without starting a server when no local server exists", () => {
+    const report = runServer("stop-none");
+    assert.equal(report.error, undefined);
+    assert.equal(
+      report.events.some(([name]) => name === "spawn" || name === "kill"),
+      false,
+    );
+  });
+
+  it("reports a pgrep failure instead of treating it as no match", () => {
+    const report = runServer("stop-pgrep-error");
+    assert.match(report.error!, /pgrep: invalid pattern/);
+    assert.equal(
+      report.events.some(([name]) => name === "kill"),
+      false,
+    );
+  });
+
+  it("reports a server that does not exit after SIGKILL", () => {
+    const report = runServer("stop-hung");
+    const escalations = report.events.filter(
+      ([name, , signal]) => name === "kill" && signal === "SIGKILL",
+    );
+    assert.deepEqual(escalations, [["kill", 41001, "SIGKILL", 10000]]);
+    assert.match(report.error!, /Camoufox server did not stop/);
+  });
+
+  it("ignores matching arguments from an executable other than browse or Bun", () => {
+    const report = runServer("stop-other-executable");
+    assert.equal(report.error, undefined);
+    assert.equal(
+      report.events.some(([name]) => name === "kill"),
+      false,
+    );
+  });
+
+  it("fails without signaling if the selected identity changes before signaling", () => {
+    const report = runServer("stop-raced");
+    assert.match(report.error!, /Cannot confirm the Linux Camoufox process identity/);
+    assert.equal(
+      report.events.some(([name]) => name === "kill"),
+      false,
+    );
+  });
+
+  it("does not send SIGKILL to a PID reused by a different command", () => {
+    const report = runServer("stop-reused");
+    assert.equal(report.error, undefined);
+    assert.equal(
+      report.events.some(([name, , signal]) => name === "kill" && signal === "SIGKILL"),
+      false,
+    );
+  });
+});
+
 describe("internal server contract", () => {
   it("resolves default executable, playwright-cli's protocol library, and runtime directory", () => {
-    const report = runServer("internal-headless");
+    const report = runServer("internal-headless", {}, "unset");
     assert.equal(report.error, undefined);
     const launch = report.events.find(([name]) => name === "launchServer")?.[1];
     assert.equal(launch.executablePath, join(homedir(), ".cache/camoufox/camoufox-bin"));
@@ -180,60 +272,43 @@ describe("internal server contract", () => {
   });
 
   for (const signal of ["SIGINT", "SIGTERM"]) {
-    it(`writes its PID only after listening and clears it before browser close on ${signal}`, () => {
+    it(`closes the browser and exits on ${signal}`, () => {
       const report = runServer("internal-headless", { FIXTURE_SIGNAL: signal });
       assert.equal(report.error, undefined);
       assert.deepEqual(
-        report.events.find(([name]) => name === "pid"),
-        ["pid", String(report.pid)],
-      );
-      assert.ok(
-        report.events.findIndex(([name]) => name === "launchServer") <
-          report.events.findIndex(([name]) => name === "pid"),
-      );
-      assert.deepEqual(
         report.events.find(([name]) => name === "closeServer"),
-        ["closeServer", false],
+        ["closeServer"],
       );
-      assert.equal(report.pidFile, null);
       assert.deepEqual(report.events.at(-1), ["exit", 0]);
-      assert.equal(report.events.filter(([name]) => name === "kill").length, 0);
     });
   }
 
-  it("does not remove another server's PID file during shutdown", () => {
-    const report = runServer("internal-foreign-pid");
-    assert.equal(report.pidFile, "other\n");
-    assert.deepEqual(
-      report.events.find(([name]) => name === "closeServer"),
-      ["closeServer", true],
-    );
-  });
-
-  it("leaves the winner's PID record intact when a second launch loses the port race", () => {
+  it("reports when a different server already owns the port", () => {
     const report = runServer("internal-collision");
     assert.match(report.error!, /EADDRINUSE/);
-    assert.equal(report.pidFile, "winner\n");
     assert.equal(
-      report.events.filter(([name]) => name === "pid" || name === "closeServer").length,
-      0,
+      report.events.some(([name]) => name === "closeServer"),
+      false,
     );
   });
 
   it("honors executable and playwright overrides, binds the configured endpoint, and keeps headless helpers off", () => {
-    const report = runServer("internal-headless", {
-      CAMOUFOX_EXECUTABLE_PATH: "/fixture/camoufox",
-      CAMOUFOX_PLAYWRIGHT_CORE: "/fixture/playwright",
-      CAMOUFOX_BASE_URL: "ws://127.0.0.2:9991/custom",
-      XDG_RUNTIME_DIR: "/fixture/runtime",
-    });
+    const report = runServer(
+      "internal-headless",
+      {
+        CAMOUFOX_EXECUTABLE_PATH: "/fixture/camoufox",
+        CAMOUFOX_PLAYWRIGHT_CORE: "/fixture/playwright",
+        CAMOUFOX_BASE_URL: "ws://127.0.0.2:9991/custom",
+      },
+      "absolute",
+    );
     const launch = report.events.find(([name]) => name === "launchServer")?.[1];
     assert.equal(report.error, undefined);
     assert.equal(launch.executablePath, "/fixture/camoufox");
     assert.equal(launch.host, "127.0.0.2");
     assert.equal(launch.port, 9991);
     assert.equal(launch.wsPath, "/custom");
-    assert.equal(launch.env.XDG_RUNTIME_DIR, "/fixture/runtime");
+    assert.equal(launch.env.XDG_RUNTIME_DIR.endsWith("runtime-dir"), true);
     assert.equal(report.events.filter(([name]) => name === "display" || name === "vnc").length, 0);
     assert.ok(
       report.events.some(([name, path]) => name === "require" && path === "/fixture/playwright"),
@@ -302,43 +377,68 @@ describe("bootstrap and recovery timing", () => {
     });
   }
 
-  it("arbitrates recovery with the restart lock and drains every slot except its own", () => {
-    const report = runServer("recover-won", { BROWSE_SLOT: "2" });
-    assert.equal(report.error, undefined);
-    const lock = report.events.find(
-      ([name, command]) => name === "spawnSync" && command === "flock",
-    )!;
-    assert.deepEqual(lock[2].slice(0, 3), ["-n", "-E", "192"]);
-    assert.ok(lock[2][3].endsWith("browse-restart.lock"));
-    const slotFiles = (lock[2] as string[])
-      .filter((arg) => /browse-slot-/.test(arg))
-      .map((arg) => basename(arg));
-    assert.deepEqual(slotFiles, ["browse-slot-0.lock", "browse-slot-1.lock", "browse-slot-3.lock"]);
-    assert.deepEqual(lock[2].slice(-3), ["__locked", "server", "restart"]);
-    assert.equal(report.events.filter(([name]) => name === "probe").length, 0);
-  });
+  it.skipIf(process.platform === "win32")(
+    "arbitrates recovery with the restart lock and drains every slot except its own",
+    () => {
+      const report = runServer("recover-won", { BROWSE_SLOT: "2" });
+      assert.equal(report.error, undefined);
+      const lock = report.events.find(
+        ([name, command]) => name === "spawnSync" && command === "flock",
+      )!;
+      assert.deepEqual(lock[2].slice(0, 3), ["-n", "-E", "192"]);
+      assert.ok(lock[2][3].endsWith("browse-restart.lock"));
+      const slotFiles = (lock[2] as string[])
+        .filter((arg) => /browse-slot-/.test(arg))
+        .map((arg) => basename(arg));
+      assert.deepEqual(slotFiles, [
+        "browse-slot-0.lock",
+        "browse-slot-1.lock",
+        "browse-slot-3.lock",
+      ]);
+      assert.deepEqual(lock[2].slice(-3), ["__locked", "server", "restart"]);
+      assert.equal(report.events.filter(([name]) => name === "probe").length, 0);
+    },
+  );
 
   for (const scenario of ["recover-lost", "recover-cooldown"]) {
-    it(`waits for healthy without submitting another restart: ${scenario}`, () => {
-      const report = runServer(scenario);
-      assert.equal(report.error, undefined);
-      assert.equal(report.probes, 3);
-      assert.equal(report.events.filter(([name]) => name === "spawn").length, 0);
-      const flockCalls = report.events.filter(
-        ([name, command]) => name === "spawnSync" && command === "flock",
-      );
-      assert.equal(flockCalls.length, scenario === "recover-lost" ? 1 : 0);
-      assert.deepEqual(
-        report.events.filter(([name]) => name === "timeout"),
-        [["timeout", 15000]],
-      );
-    });
+    it.skipIf(process.platform === "win32")(
+      `waits for healthy without submitting another restart: ${scenario}`,
+      () => {
+        const report = runServer(scenario, {}, "absolute");
+        assert.equal(report.error, undefined);
+        assert.equal(report.probes, 3);
+        assert.equal(report.events.filter(([name]) => name === "spawn").length, 0);
+        const flockCalls = report.events.filter(
+          ([name, command]) => name === "spawnSync" && command === "flock",
+        );
+        assert.equal(flockCalls.length, scenario === "recover-lost" ? 1 : 0);
+        assert.deepEqual(
+          report.events.filter(([name]) => name === "timeout"),
+          [["timeout", 15000]],
+        );
+      },
+    );
   }
 
-  it("performs the restart directly when flock is unavailable", () => {
-    const report = runServer("recover-no-flock");
-    assert.equal(report.error, undefined);
-    assert.equal(report.events.filter(([name]) => name === "spawn").length, 1);
-    assert.equal(report.probes, 3);
-  });
+  it.skipIf(process.platform === "win32")(
+    "reports a failed restart instead of treating it as a lock win",
+    () => {
+      const report = runServer("recover-failed");
+      assert.match(report.error!, /Camoufox recovery restart failed: 1/);
+      assert.equal(
+        report.events.some(([name]) => name === "spawn"),
+        false,
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "performs the restart directly when flock is unavailable",
+    () => {
+      const report = runServer("recover-no-flock");
+      assert.equal(report.error, undefined);
+      assert.equal(report.events.filter(([name]) => name === "spawn").length, 1);
+      assert.equal(report.probes, 3);
+    },
+  );
 });

@@ -18,10 +18,12 @@ import { loginTwitter } from "./twitter-auth";
 import { fetchJson, formatSearchMarkdown, searchJson } from "./output";
 import { searchOne } from "./search";
 import {
+  camoufoxServerPort,
   restartCamoufoxServer,
   restartInFlight,
   runCamoufoxServer,
   startCamoufoxServer,
+  stopCamoufoxServer,
   waitForRestartToFinish,
 } from "./server";
 import { emitJson, fail, selfRunArgv, usageFail } from "./util";
@@ -31,9 +33,6 @@ import { emitJson, fail, selfRunArgv, usageFail } from "./util";
 // as a child of `flock` holding one slot lock, so the kernel releases the lock
 // even when the holder crashes; the lock file is only an anchor and may stay
 // behind. Reddit / StackOverflow fetches and `server start` need no slot;
-// `server restart` drains all four (see restartCommand and server.ts). While
-// waiting, renders yield to an in-flight restart so it can cut to the head of
-// the queue (spec: 待機中と獲得の直後には restart ロックの保持を探知し…让位する).
 async function runInSlot(run: () => Promise<void>): Promise<void> {
   if (process.argv[2] === LOCKED_SUBCOMMAND) {
     // Spec: 獲得の直後にも restart ロックの保持を探知し、進行していれば让位する。
@@ -99,6 +98,7 @@ const USAGE = `usage: browse search "<query>" [--lang <code>] [--json]
        browse fetch <url> [--json]
        browse login twitter
        browse server start
+       browse server stop
        browse server restart
        browse display show
        browse display hide`;
@@ -109,6 +109,7 @@ const LOGIN_USAGE = `usage: browse login twitter`;
 const DISPLAY_USAGE = `usage: browse display show
        browse display hide`;
 const SERVER_USAGE = `usage: browse server start
+       browse server stop
        browse server restart`;
 
 interface SearchArgs {
@@ -181,6 +182,9 @@ async function main(): Promise<void> {
       displayCommand(rest);
       break;
     case SERVER_SUBCOMMAND:
+      if (rest.length !== 1 || rest[0] !== camoufoxServerPort()) {
+        fail("The internal Camoufox server requires the configured port");
+      }
       await runCamoufoxServer();
       break;
     default:
@@ -237,18 +241,17 @@ function serverCommand(argv: string[]): Promise<void> {
   const [action, ...extra] = argv;
   if (extra.length > 0) usageFail(SERVER_USAGE);
   if (action === "start") return startCamoufoxServer();
-  if (action === "restart") return restartCommand();
+  if (action === "stop" || action === "restart") return runAfterDrainingRenderSlots(action);
   usageFail(SERVER_USAGE);
 }
 
-// Spec: `browse server restart` は restart ロックと 4 つすべての render スロット
-// を獲得してから再起動する（drain: 実行中の render は完了まで、新規の render は
-// 再起動完了まで待たされる）。再実行した子は `__locked` 付きなので本体を直接
-// 実行する。flock(1) が無い環境では獲得せずに再起動する。
-async function restartCommand(): Promise<void> {
-  if (process.argv[2] === LOCKED_SUBCOMMAND) return restartCamoufoxServer();
+async function runAfterDrainingRenderSlots(action: "stop" | "restart"): Promise<void> {
+  if (action === "stop" && process.platform !== "linux") {
+    fail("browse server stop is only supported on Linux");
+  }
+  const run = action === "stop" ? stopCamoufoxServer : restartCamoufoxServer;
+  if (process.argv[2] === LOCKED_SUBCOMMAND) return run();
   const stateDirPath = stateDir();
-  // flock(1) does not create the lock file's parent directory.
   mkdirSync(stateDirPath, { recursive: true });
   const chain = [join(stateDirPath, RESTART_LOCK_FILE)];
   for (let slot = 0; slot < SLOT_COUNT; slot++) {
@@ -259,7 +262,11 @@ async function restartCommand(): Promise<void> {
     [...chain, ...selfRunArgv, ...lockedBrowseArgs(LOCKED_SUBCOMMAND, process.argv.slice(2))],
     { stdio: "inherit", env: process.env },
   );
-  if (result.error) return restartCamoufoxServer(); // no flock(1): nothing to drain
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || action === "restart") return run();
+    throw result.error;
+  }
   process.exit(result.status ?? 1);
 }
 

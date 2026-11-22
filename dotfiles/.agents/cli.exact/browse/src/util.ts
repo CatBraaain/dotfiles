@@ -4,9 +4,7 @@ import { execFile } from "node:child_process";
 import { dirname } from "node:path";
 import { CONVERT_TIMEOUT_MS } from "./config";
 
-const bundledSourceRoots = ["/$bunfs/root/", "B:/~BUN/root/"];
-const modulePath = import.meta.path.replaceAll("\\", "/");
-export const isCompiledBinary = bundledSourceRoots.some((root) => modulePath.startsWith(root));
+export const isCompiledBinary = Bun.isStandaloneExecutable;
 
 // The path naming this CLI in child command lines and process sweeps: the
 // project directory that bun re-runs from source, or the executable itself

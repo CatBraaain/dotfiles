@@ -1,7 +1,23 @@
 import { describe, it } from "bun:test";
 import { strict as assert } from "node:assert";
 import { RESTART_COOLDOWN_MS } from "./config";
-import { openserpServeArgs, restartInCooldown } from "./server";
+import { camoufoxServerPort, openserpServeArgs, restartInCooldown } from "./server";
+
+describe("camoufoxServerPort", () => {
+  it("uses the port regardless of host and path", () => {
+    assert.equal(camoufoxServerPort("ws://127.0.0.1:9378/camoufox"), "9378");
+    assert.equal(camoufoxServerPort("ws://127.0.0.2:9378/another-path"), "9378");
+  });
+
+  it("uses the standard port when the URL omits it", () => {
+    assert.equal(camoufoxServerPort("ws://localhost/camoufox"), "80");
+    assert.equal(camoufoxServerPort("wss://localhost/camoufox"), "443");
+  });
+
+  it("rejects port zero because it does not identify a fixed listener", () => {
+    assert.throws(() => camoufoxServerPort("ws://localhost:0/camoufox"), /nonzero port/);
+  });
+});
 
 describe("openserpServeArgs", () => {
   it("keeps --quiet and adds --log_level error to the serve arguments", () => {

@@ -1,30 +1,23 @@
-// Camoufox server lifecycle: health checks, detached bootstrap, the `__server`
-// process itself (Xvfb/x11vnc wiring and playwright-core launch), pid file
-// bookkeeping and `server restart` targeting. The openserp server bootstrap
-// lives here too, since it follows the same detached-spawn + health-poll shape.
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from "node:child_process";
 import {
   closeSync,
   mkdirSync,
   openSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
-  rmSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { isCamoufoxServerCommand } from "./backends";
 import {
   CAMOUFOX_DEFAULT_BASE_URL,
   camoufoxBaseUrl,
   currentSlotNumber,
   FLOCK_CONFLICT_EXIT_CODE,
   LOCKED_SUBCOMMAND,
-  OPENSERP_DEFAULT_BASE_URL,
   openserpBaseUrl,
   RESTART_COOLDOWN_MS,
   RESTART_LOCK_FILE,
@@ -38,8 +31,9 @@ import {
   WEBSOCKET_HEALTH_TIMEOUT_MS,
 } from "./config";
 import { ensureDisplay, ensureX11vnc, DISPLAY_NUMBER, resolveHeadless } from "./display";
+import { openLinuxProcess } from "./linux-process";
 import { delay, selfRunArgv, selfRunPath } from "./util";
-import { stopWindowsServer } from "./windows-server";
+import { findWindowsServerProcesses, stopWindowsProcess } from "./windows-process";
 
 const CAMOUFOX_EXECUTABLE_PATH =
   process.env.CAMOUFOX_EXECUTABLE_PATH ?? join(homedir(), ".cache", "camoufox", "camoufox-bin");
@@ -67,19 +61,54 @@ export function camoufoxServerHealthy(baseUrl: string, signal: AbortSignal): Pro
 // Spec: `browse server start` は冪等。起動済みなら何もせず終了コード 0。
 export async function startCamoufoxServer(): Promise<void> {
   const baseUrl = camoufoxBaseUrl();
+  const port = camoufoxServerPort(baseUrl);
   const signal = AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS);
   if (await camoufoxServerHealthy(baseUrl, signal)) return;
-  spawnBrowseDetached([SERVER_SUBCOMMAND]);
+  const supportsDiscovery = process.platform === "linux" || process.platform === "win32";
+  if (!supportsDiscovery || !findServerProcess(port)) {
+    spawnBrowseDetached([SERVER_SUBCOMMAND, port]);
+  }
   await waitForServerHealthy(baseUrl, signal);
 }
 
-// Spec: `browse server restart` は実行中の server を停止してから起動し直す。
-// 呼び出し元が排他を担う（`browse server restart` は restart ロック + 全スロット
-// の drain chain、render 復旧は recoverCamoufoxServer の仲裁 chain の下で本体と
-// して呼ぶ）。
+export function camoufoxServerPort(baseUrl: string | URL = camoufoxBaseUrl()): string {
+  const url = new URL(baseUrl);
+  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+    throw new Error("CAMOUFOX_BASE_URL must use ws: or wss:");
+  }
+  const port = url.port || (url.protocol === "ws:" ? "80" : "443");
+  if (port === "0") throw new Error("CAMOUFOX_BASE_URL must use a nonzero port");
+  return port;
+}
+
+type ServerProcess = { pid: number; identity: string; startedAtMs?: number };
+
 export async function restartCamoufoxServer(): Promise<void> {
-  await stopCamoufoxServers();
-  await startCamoufoxServer();
+  const endpoint = camoufoxBaseUrl();
+  const port = camoufoxServerPort(endpoint);
+  const target = findServerProcess(port);
+  if (target) await stopServerProcess(target, port);
+
+  const signal = AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS);
+  if (await camoufoxServerHealthy(endpoint, signal)) {
+    throw new Error(`Cannot restart Camoufox: ${endpoint} is already responding`);
+  }
+  const child = spawnBrowseDetached([SERVER_SUBCOMMAND, port], "notify");
+  let ready = false;
+  child.on("message", (message) => {
+    if (message === "camoufox-ready") ready = true;
+  });
+  try {
+    await waitForServerHealthy(endpoint, signal, () => ready && child.exitCode == null);
+  } finally {
+    if (child.connected) child.disconnect();
+  }
+}
+
+export async function stopCamoufoxServer(): Promise<void> {
+  const port = camoufoxServerPort();
+  const target = findServerProcess(port);
+  if (target) await stopServerProcess(target, port);
 }
 
 // --- render-recovery restart arbitration ---
@@ -110,8 +139,11 @@ function tryRunRecoveryRestart(): RecoveryRestartOutcome {
   // The re-entered `__locked server restart` runs the restart body directly.
   args.push(...selfRunArgv, LOCKED_SUBCOMMAND, "server", "restart");
   const result = spawnSync("flock", args, { stdio: "inherit", env: process.env });
-  if (result.error) return "no-flock"; // no flock(1): no parallelism to arbitrate
-  return result.status === FLOCK_CONFLICT_EXIT_CODE ? "lost" : "won";
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return "no-flock";
+  if (result.status === FLOCK_CONFLICT_EXIT_CODE) return "lost";
+  if (result.status === 0) return "won";
+  const reason = result.error?.message ?? result.signal ?? result.status;
+  throw new Error("Camoufox recovery restart failed: " + reason);
 }
 
 // Recovery entry for the camoufox retry hook (the caller holds a render slot).
@@ -130,15 +162,20 @@ export async function recoverCamoufoxServer(): Promise<void> {
   await waitForServerHealthy(camoufoxBaseUrl(), AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));
 }
 
-// The server writes its pid file once its port is listening, so the file's
-// mtime stands in for the server start time (spec: 起動時刻は PID ファイルの
-// 書き込み時刻)。Unknown (unreadable / missing) means no cooldown.
-export function serverStartedAtMs(): number | undefined {
-  try {
-    return statSync(join(stateDir(), "camoufox-server.pid")).mtimeMs;
-  } catch {
-    return undefined;
-  }
+function serverStartedAtMs(): number | undefined {
+  const port = camoufoxServerPort();
+  const target = findServerProcess(port);
+  if (!target) return undefined;
+  if (process.platform === "win32") return target.startedAtMs;
+
+  const age = spawnSync("ps", ["-p", String(target.pid), "-o", "etimes="], {
+    encoding: "utf8",
+    timeout: SERVER_STOP_TIMEOUT_MS,
+  });
+  const seconds = age.stdout?.trim() ?? "";
+  if (age.status !== 0 || !/^\d+$/.test(seconds)) return undefined;
+  if (linuxProcessIdentity(target.pid, port) !== target.identity) return undefined;
+  return Date.now() - Number(seconds) * 1000;
 }
 
 export function restartInCooldown(startedAtMs: number | undefined, nowMs: number): boolean {
@@ -188,10 +225,20 @@ export async function ensureCamoufoxServer(signal: AbortSignal): Promise<void> {
   await waitForServerHealthy(baseUrl, signal);
 }
 
-async function waitForServerHealthy(baseUrl: string, signal: AbortSignal): Promise<void> {
+async function waitForServerHealthy(
+  baseUrl: string,
+  signal: AbortSignal,
+  isLocalServerReady?: () => boolean,
+): Promise<void> {
   while (!signal.aborted) {
     await delay(SERVER_HEALTH_POLL_INTERVAL_MS, signal);
-    if (await camoufoxServerHealthy(baseUrl, signal)) return;
+    if (isLocalServerReady && !isLocalServerReady()) continue;
+    if (
+      (await camoufoxServerHealthy(baseUrl, signal)) &&
+      (!isLocalServerReady || isLocalServerReady())
+    ) {
+      return;
+    }
   }
   throw new Error(`camoufox server not ready at ${baseUrl}`);
 }
@@ -218,7 +265,7 @@ async function serverHealthy(baseUrl: string, path: string, signal: AbortSignal)
 
 // Spec: camoufox server のログは <XDG_CACHE_HOME|~/.cache>/pi/web-search/
 // camoufox-server.log へ追記（書き込み不能なら出力破棄で続行）。
-function spawnBrowseDetached(args: readonly string[]): void {
+function spawnBrowseDetached(args: readonly string[], readiness?: "notify"): ChildProcess {
   let logFd: number | "ignore" = "ignore";
   try {
     mkdirSync(stateDir(), { recursive: true });
@@ -228,9 +275,9 @@ function spawnBrowseDetached(args: readonly string[]): void {
   }
   try {
     // The child keeps its own dup of the fd, so close ours right away.
-    spawnDetachedServer(selfRunArgv[0]!, [...selfRunArgv.slice(1), ...args], {
+    return spawnDetachedServer(selfRunArgv[0], [...selfRunArgv.slice(1), ...args], {
       detached: true,
-      stdio: ["ignore", logFd, logFd],
+      stdio: readiness ? ["ignore", logFd, logFd, "ipc"] : ["ignore", logFd, logFd],
     });
   } finally {
     if (typeof logFd === "number") closeSync(logFd);
@@ -372,148 +419,114 @@ export async function runCamoufoxServer(): Promise<void> {
   const server = await firefox.launchServer({
     ...launch,
     host: baseUrl.hostname,
-    port: Number(baseUrl.port),
+    port: Number(camoufoxServerPort(baseUrl)),
     wsPath: baseUrl.pathname === "/" ? "/camoufox" : baseUrl.pathname,
   });
-  writeServerPidFile();
   console.log(`[camoufox-server] listening on ${baseUrl}`);
   console.log(`[camoufox-server] executablePath: ${launch.executablePath}`);
 
   process.on("SIGINT", () => void shutdownServer(server));
   process.on("SIGTERM", () => void shutdownServer(server));
+  process.send?.("camoufox-ready");
 }
 
 async function shutdownServer(server: CamoufoxServerHandle): Promise<void> {
-  clearServerPidFile();
   await server.close();
   process.exit(0);
 }
 
-// --- server pid file / restart targeting ---
-
-// The server records its pid after the port is established, so `browse
-// restart` can stop exactly the server process. A port-race loser exits
-// before writing, keeping the winner's record intact.
-function serverPidFilePath(): string {
-  return join(stateDir(), "camoufox-server.pid");
+function findServerProcess(port: string): ServerProcess | undefined {
+  const candidates =
+    process.platform === "win32"
+      ? findWindowsServerProcesses(selfRunArgv, SERVER_SUBCOMMAND, port)
+      : findLinuxServerProcesses(port);
+  if (candidates.length > 1)
+    throw new Error("Multiple local Camoufox servers match the configured port");
+  return candidates[0];
 }
 
-function writeServerPidFile(): void {
-  try {
-    mkdirSync(stateDir(), { recursive: true });
-    writeFileSync(serverPidFilePath(), `${process.pid}\n`);
-  } catch {
-    // Best effort: restart falls back to the pgrep sweep below.
-  }
-}
-
-function readServerPidFile(): number | undefined {
-  try {
-    const pid = Number.parseInt(readFileSync(serverPidFilePath(), "utf8").trim(), 10);
-    return Number.isInteger(pid) ? pid : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function clearServerPidFile(): void {
-  try {
-    if (readServerPidFile() === process.pid) rmSync(serverPidFilePath());
-  } catch {
-    // Best effort: a stale pid file is validated before any kill.
-  }
-}
-
-async function stopCamoufoxServers(): Promise<void> {
+async function stopServerProcess(target: ServerProcess, port: string): Promise<void> {
   if (process.platform === "win32") {
-    const pid = readServerPidFile();
-    if (pid !== undefined && pid !== process.pid) {
-      stopWindowsServer(pid, [...selfRunArgv, SERVER_SUBCOMMAND]);
-    }
+    stopWindowsProcess(target.pid, target.identity, SERVER_STOP_TIMEOUT_MS);
     return;
   }
+  const handle = openLinuxProcess(target.pid);
+  if (!handle) return;
+  try {
+    if (linuxProcessIdentity(target.pid, port) !== target.identity) {
+      if (handle.hasExited()) return;
+      throw new Error("Cannot confirm the Linux Camoufox process identity");
+    }
 
-  const pids = camoufoxServerPids();
-  if (pids.length === 0) return;
-  for (const pid of pids) {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // already gone
-    }
-  }
-  const deadline = Date.now() + SERVER_STOP_TIMEOUT_MS;
-  while (Date.now() < deadline && pids.some(processAlive)) {
-    await delay(100);
-  }
-  // A hung server ignores SIGTERM; escalate so restart always recovers.
-  for (const pid of pids) {
-    if (processAlive(pid)) {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        // already gone
-      }
-    }
-  }
-  // Give the kernel a moment to release the listening port after SIGKILL.
-  const killDeadline = Date.now() + 2_000;
-  while (Date.now() < killDeadline && pids.some(processAlive)) {
-    await delay(50);
+    handle.send("SIGTERM");
+    const deadline = Date.now() + SERVER_STOP_TIMEOUT_MS;
+    while (Date.now() < deadline && !handle.hasExited()) await delay(100);
+    if (handle.hasExited()) return;
+
+    handle.send("SIGKILL");
+    const killDeadline = Date.now() + 2_000;
+    while (Date.now() < killDeadline && !handle.hasExited()) await delay(50);
+    if (!handle.hasExited()) throw new Error("Camoufox server did not stop");
+  } finally {
+    handle.close();
   }
 }
 
-function processAlive(pid: number): boolean {
+function findLinuxServerProcesses(port: string): ServerProcess[] {
+  if (process.platform !== "linux") {
+    throw new Error("Camoufox process discovery is only supported on Linux and Windows");
+  }
+  const pattern = SERVER_SUBCOMMAND + " " + port + "$";
+  const sweep = spawnSync("pgrep", ["-u", String(process.geteuid?.()), "-f", "--", pattern], {
+    encoding: "utf8",
+    timeout: SERVER_STOP_TIMEOUT_MS,
+  });
+  if (sweep.status === 1) return [];
+  if (sweep.status !== 0) {
+    const reason = sweep.error?.message || sweep.stderr?.trim() || sweep.signal || sweep.status;
+    throw new Error("Cannot find local Camoufox processes: pgrep: " + reason);
+  }
+
+  const pids = new Set(sweep.stdout.trim().split(/\s+/).map(Number));
+  return [...pids].flatMap((pid) => {
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return [];
+    const identity = linuxProcessIdentity(pid, port);
+    return identity === undefined ? [] : [{ pid, identity }];
+  });
+}
+
+function linuxProcessStartTicks(proc: string): string | undefined {
+  const stat = readFileSync(proc + "/stat", "utf8");
+  const fields = stat.slice(stat.lastIndexOf(") ") + 2).split(" ");
+  const startTicks = fields[19];
+  return fields[0] !== "Z" && startTicks && /^\d+$/.test(startTicks) ? startTicks : undefined;
+}
+
+function linuxProcessIdentity(pid: number, port: string): string | undefined {
+  const proc = "/proc/" + pid;
   try {
-    process.kill(pid, 0);
-    return true;
+    if (statSync(proc).uid !== process.geteuid?.()) return undefined;
+    const identity = linuxProcessStartTicks(proc);
+    if (!identity) return undefined;
+    const args = readFileSync(proc + "/cmdline", "utf8").split("\0");
+    if (args.at(-1) === "") args.pop();
+    if (
+      args.length !== selfRunArgv.length + 2 ||
+      args.at(-2) !== SERVER_SUBCOMMAND ||
+      args.at(-1) !== port
+    ) {
+      return undefined;
+    }
+    const expectedExecutable = realpathSync(process.execPath);
+    const executable = readlinkSync(proc + "/exe");
+    if (executable !== expectedExecutable && executable !== expectedExecutable + " (deleted)") {
+      return undefined;
+    }
+    if (selfRunArgv.length === 2 && args[1] !== selfRunPath) return undefined;
+    return linuxProcessStartTicks(proc) === identity ? identity : undefined;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-// Identify the server processes to stop: the pid file is the primary record,
-// and a pgrep sweep of the exact "<script> __server" command line catches
-// current servers whose pid file was lost. Search/fetch processes never match
-// the pattern because their command line names a different subcommand.
-function camoufoxServerPids(): number[] {
-  const pids = new Set<number>();
-  const pidFilePid = readServerPidFile();
-  if (
-    pidFilePid !== undefined &&
-    pidFilePid !== process.pid &&
-    looksLikeCamoufoxServer(pidFilePid)
-  ) {
-    pids.add(pidFilePid);
-  }
-  for (const pattern of [`${selfRunPath} ${SERVER_SUBCOMMAND}`]) {
-    const sweep = spawnSync("pgrep", ["-f", pattern], { encoding: "utf8" });
-    if (sweep.status !== 0) continue;
-    for (const line of sweep.stdout.split("\n")) {
-      const pid = Number.parseInt(line, 10);
-      if (Number.isInteger(pid) && pid !== process.pid && looksLikeCamoufoxServer(pid)) {
-        pids.add(pid);
-      }
-    }
-  }
-  return [...pids];
-}
-
-// Linux verifies that a candidate still runs this browse script in server mode.
-function looksLikeCamoufoxServer(pid: number): boolean {
-  if (process.platform !== "linux") return processAlive(pid);
-  try {
-    const args = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
-    const scriptPath = realpathSync(selfRunPath);
-    const normalizedArgs = args.map((arg) => {
-      try {
-        return realpathSync(arg);
-      } catch {
-        return arg;
-      }
-    });
-    return isCamoufoxServerCommand(normalizedArgs, scriptPath, SERVER_SUBCOMMAND);
-  } catch {
-    return false;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ESRCH") return undefined;
+    throw error;
   }
 }

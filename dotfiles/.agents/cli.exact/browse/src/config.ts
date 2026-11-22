@@ -83,9 +83,6 @@ export function openserpBaseUrl(): string {
   return process.env.OPENSERP_BASE_URL ?? OPENSERP_DEFAULT_BASE_URL;
 }
 
-// Log, lock, pid file and playwright-cli config all live next to the shared
-// camoufox-server log (spec: "camoufox server のログは
-// <XDG_CACHE_HOME または ~/.cache>/pi/web-search/camoufox-server.log へ追記").
 export function stateDir(): string {
   return join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "pi", "web-search");
 }

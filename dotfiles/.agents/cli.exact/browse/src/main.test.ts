@@ -1,6 +1,15 @@
 import { describe, it } from "bun:test";
 import { strict as assert } from "node:assert";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,7 +20,8 @@ import { restartInFlight, waitForRestartToFinish } from "./server";
 // package.json's main field, exactly like the deployed `~/.agents/cli/browse`.
 const browseProjectDir = join(import.meta.dir, "..");
 const displayUsage = "usage: browse display show\n       browse display hide\n";
-const serverUsage = "usage: browse server start\n       browse server restart\n";
+const serverUsage =
+  "usage: browse server start\n       browse server stop\n       browse server restart\n";
 
 type CommandResult = {
   status: number | null;
@@ -87,15 +97,6 @@ async function assertBrowserStillRunning(child: ChildProcess): Promise<void> {
   assert.equal(didExit, false, "browse stopped or restarted the browser process");
 }
 
-// browse looks the server pid up under <cache>/pi/web-search/; point that at
-// the test root so the pid file route is exercised without machine state.
-function writeServerPidFile(root: string, pid: number | undefined): void {
-  if (pid === undefined) return;
-  const stateDir = join(root, "pi", "web-search");
-  mkdirSync(stateDir, { recursive: true });
-  writeFileSync(join(stateDir, "camoufox-server.pid"), `${pid}\n`);
-}
-
 function runBrowse(
   args: string[],
   binDir: string,
@@ -125,9 +126,10 @@ function runBrowseAsync(
   binDir: string,
   logPath: string,
   extraEnv: Record<string, string> = {},
+  projectDir = browseProjectDir,
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [browseProjectDir, ...args], {
+    const child = spawn(process.execPath, [projectDir, ...args], {
       env: {
         ...process.env,
         ...extraEnv,
@@ -153,7 +155,7 @@ describe("browse server", () => {
   it("rejects missing, unknown, and extra server actions", () => {
     const root = mkdtempSync(join(tmpdir(), "browse-server-"));
     try {
-      for (const args of [["server"], ["server", "toggle"], ["server", "start", "extra"]]) {
+      for (const args of [["server"], ["server", "toggle"], ["server", "stop", "extra"]]) {
         const result = runBrowse(args, root, join(root, "requests"));
         assert.equal(result.status, 1);
         assert.equal(result.stderr, serverUsage);
@@ -190,6 +192,108 @@ describe("browse server", () => {
   });
 });
 
+describe("browse server stop", () => {
+  it.skipIf(process.platform !== "linux")(
+    "stops the configured port without a PID file, regardless of host and path",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "browse-server-stop-"));
+      const projectDir = join(root, "browse[1]");
+      const camoufoxModule = join(root, ".pi", "agent", "node_modules", "camoufox-js", "dist");
+      const playwrightModule = join(root, "playwright.cjs");
+      const cacheHome = join(root, "cache");
+      const readyFile = join(root, "browser-ready");
+      const legacyPidFile = join(cacheHome, "pi", "web-search", "camoufox-server.pid");
+      const endpoint = "ws://127.0.0.1:39778/camoufox";
+      const port = "39778";
+      const env = {
+        HOME: root,
+        XDG_CACHE_HOME: cacheHome,
+        CAMOUFOX_HEADLESS: "1",
+        CAMOUFOX_BASE_URL: endpoint,
+        CAMOUFOX_PLAYWRIGHT_CORE: playwrightModule,
+      };
+      mkdirSync(projectDir);
+      for (const entry of ["src", "scripts", "package.json"]) {
+        cpSync(join(browseProjectDir, entry), join(projectDir, entry), { recursive: true });
+      }
+      mkdirSync(camoufoxModule, { recursive: true });
+      writeFileSync(join(camoufoxModule, "utils.js"), "export const launchOptions = () => ({});");
+      writeFileSync(
+        playwrightModule,
+        `module.exports.firefox = {
+        async launchServer() {
+          setImmediate(() => require("node:fs").writeFileSync(${JSON.stringify(readyFile)}, ""));
+          const timer = setInterval(() => {}, 1000);
+          return { close() { clearInterval(timer); } };
+        },
+      };`,
+      );
+      const server = Bun.spawn([process.execPath, projectDir, "__server", port], {
+        env: { ...process.env, ...env, XDG_RUNTIME_DIR: "" },
+        stdout: "ignore",
+        stderr: "pipe",
+      });
+      try {
+        const deadline = Date.now() + 2_000;
+        while (!existsSync(readyFile) && server.exitCode === null && Date.now() < deadline) {
+          await Bun.sleep(10);
+        }
+        if (server.exitCode !== null) assert.fail(await new Response(server.stderr).text());
+        assert.ok(existsSync(readyFile));
+        assert.ok(!existsSync(legacyPidFile));
+
+        const stop = (url: string) =>
+          runBrowseAsync(
+            ["server", "stop"],
+            root,
+            join(root, "unused"),
+            {
+              ...env,
+              CAMOUFOX_BASE_URL: url,
+              XDG_RUNTIME_DIR: join(root, "runtime"),
+            },
+            projectDir,
+          );
+        const ok = { status: 0, stdout: "", stderr: "" };
+        assert.deepEqual(await stop("ws://127.0.0.1:39779/camoufox"), ok);
+        assert.equal(server.exitCode, null);
+
+        const samePort = "ws://127.0.0.2:39778/different-path";
+        assert.deepEqual(await stop(samePort), ok);
+        assert.ok(!existsSync(legacyPidFile));
+        assert.equal(await server.exited, 0);
+        assert.deepEqual(await stop(samePort), ok);
+      } finally {
+        if (server.exitCode === null) server.kill();
+        await server.exited;
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.skipIf(process.platform !== "linux")("fails with a diagnostic if pgrep cannot search", () => {
+    const root = mkdtempSync(join(tmpdir(), "browse-server-stop-error-"));
+    try {
+      const pgrep = join(root, "pgrep");
+      writeFileSync(pgrep, "#!/bin/sh\necho 'search failed' >&2\nexit 2\n", { mode: 0o755 });
+      const result = runBrowse(["server", "stop"], root, join(root, "unused"), {
+        XDG_RUNTIME_DIR: root,
+        XDG_CACHE_HOME: join(root, "cache"),
+      });
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /pgrep: search failed/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "linux")("reports that stop is unsupported outside Linux", () => {
+    const result = runBrowse(["server", "stop"], "", "");
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /only supported on Linux/);
+  });
+});
+
 describe("browse display", () => {
   if (process.platform === "win32") {
     it.skip("requires a POSIX x11vnc test double", () => {});
@@ -216,12 +320,12 @@ describe("browse display", () => {
     const statePath = join(root, "vnc-state");
     const browser = startBrowserProcess();
     writeFileSync(statePath, "cookie=session\n");
-    writeServerPidFile(root, browser.pid);
     try {
       createFakeX11vnc(root);
       const result = runBrowse(["display", "show"], root, logPath, {
         X11VNC_STATE: statePath,
         XDG_CACHE_HOME: root,
+        XDG_RUNTIME_DIR: root,
       });
       assert.equal(result.status, 0);
       assert.equal(result.stdout, "");
@@ -240,12 +344,12 @@ describe("browse display", () => {
     const statePath = join(root, "vnc-state");
     const browser = startBrowserProcess();
     writeFileSync(statePath, "cookie=session\n");
-    writeServerPidFile(root, browser.pid);
     try {
       createFakeX11vnc(root);
       const result = runBrowse(["display", "hide"], root, logPath, {
         X11VNC_STATE: statePath,
         XDG_CACHE_HOME: root,
+        XDG_RUNTIME_DIR: root,
       });
       assert.equal(result.status, 0);
       assert.equal(result.stdout, "");

@@ -9,6 +9,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
        browse fetch <url> [--json]
        browse login twitter
        browse server start
+       browse server stop
        browse server restart
        browse display show
        browse display hide
@@ -22,15 +23,15 @@ usage: browse search "<query>" [--lang <code>] [--json]
 - GitHub API は `GITHUB_TOKEN` または `GH_TOKEN` 環境変数があれば認証付きで呼ぶ。discussions の GraphQL は token が必須で、無いときは GitHub backend が失敗する
 - `OPENSERP_BASE_URL` / `CAMOUFOX_BASE_URL` 環境変数で接続先を変更できる
 - openserp が未起動のときは `openserp serve --quiet --log_level error` をバックグラウンド起動し、`/ready` 応答を 250ms間隔で待ち、15秒で断念する。serve の stderr（openserp のログ出力）は破棄する
-- camoufox server は `browse` 自身の内部サーバーモード（`browse __server`。usage には出ない）として起動し、machine の shutdown かプロセスの kill まで動き続ける。server が未接続のときは `browse server start` をバックグラウンド起動し、websocket接続（1接続1秒上限）で healthy を判定し、250ms間隔で再プローブして15秒で断念する
+- camoufox server は `browse` 自身の内部サーバーモード（`browse __server <ポート番号>`。usage には出ない）として起動し、machine の shutdown かプロセスの kill まで動き続ける。server が未接続のときは `browse server start` をバックグラウンド起動し、websocket接続（1接続1秒上限）で healthy を判定し、250ms間隔で再プローブして15秒で断念する
 - camoufox server と `browse server start` のログは `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/` 配下の `camoufox-server.log` へ、Xvfb と x11vnc の出力は同じディレクトリの `xvfb.log`・`x11vnc.log` へ追記する
-- camoufox server は起動してポートの待受を確立した時点で、自身の PID を `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/camoufox-server.pid` へ書く
+- camoufox server は起動引数に待受ポート番号を持つ。`CAMOUFOX_BASE_URL` のポートを使い、省略時は `ws:` が80、`wss:` が443とする。ポート0は拒否する。PID ファイルの読み書きは行わない。新規起動の判定・停止・再起動・自動復旧では、同じ OS 上で同じユーザー・同じ実行ファイル・同じポート番号のローカルサーバーを探す。ホストやパスが異なっても、同じポート番号で複数台を管理することはできない。Windows は PowerShell のプロセス情報、Linux は `pgrep` と `/proc` を使う
 - playwright-cli のブラウザは firefox で、remote endpoint に camoufox を使う。セッションキーは検索が `web-search-<n>`、フェッチが `web-fetch-<n>`、server の機能ヘルスチェックが `web-health-<n>`（`<n>` は renderスロット番号。`flock(1)` が無い環境ではプロセスの PID）で、同時に走るrender と機能ヘルスチェックが同じセッションを共有しない。各実行の冒頭と終了時にセッションを閉じる
 - server の機能ヘルスチェックは、websocket接続と、ローカルHTTP（127.0.0.1）へのページopen の完了で判定する。ページopen がタイムアウトまでに完了しなければ応答不能とする（websocket応答だけでは、ページopen は成功するが HTTPナビゲーションが一切完了しないbrowser のハングを検知できない）
-- camoufox を使う `search` と `fetch` は、renderスロットセマフォ（既定4スロット）で並列実行する。スロットは `flock(1)` に依存し、利用できない環境では待ち合わせせずに実行する。スロットの獲得は、コマンド自身を内部サブコマンド `__locked`（usage には出ない）付きで空いているスロットの `flock(1)` の下へ再実行することで行う。4スロットすべてが埋まっていれば待つ。待機中と獲得の直後には restartロックの保持を探知し、server再起動（`browse server restart`・render復旧のいずれか）が進行していれば、まだrender を開始していない分はその完了まで让位する。これにより再起動はスロット待ちの先頭に割り込み、完了後、让位した待機がスロットを取り直す。`__locked` が直接渡された実行はスロットを取得せずにコマンド本体を実行する。この再入は、スロット保持中の search / fetch が detached で server起動を依頼するときにも使う
-- `browse server restart` は restartロックと 4つすべての renderスロットを `flock(1)` で獲得してから再起動する。実行中の render は完了まで、新規の render は再起動完了まで待たされる。`flock(1)` が無い環境では獲得せずに再起動する
+- camoufox を使う `search` と `fetch` は、renderスロットセマフォ（既定4スロット）で並列実行する。スロットは `flock(1)` に依存し、利用できない環境では待ち合わせせずに実行する。スロットの獲得は、コマンド自身を内部サブコマンド `__locked`（usage には出ない）付きで空いているスロットの `flock(1)` の下へ再実行することで行う。4スロットすべてが埋まっていれば待つ。待機中と獲得の直後には restartロックの保持を探知し、server停止・再起動が進行していれば、まだrender を開始していない分はその完了まで待機し、完了後にスロットを取り直す。`__locked` が直接渡された実行はスロットを取得せずにコマンド本体を実行する。この再入は、スロット保持中の search / fetch が detached で server起動を依頼するときにも使う
+- `browse server stop` と `browse server restart` は restartロックと 4つすべての renderスロットを `flock(1)` で獲得してから実行する。実行中の render は完了まで、新規の render は停止・再起動操作の完了まで待つ。`flock(1)` が無い環境では待ち合わせずに実行する
 - render復旧に伴うserver再起動は restartロックで仲裁する。restartロックを獲得した側は、自分の renderスロット以外を獲得してから再起動する（自身のスロットは呼び出し元が保持中のため、4スロットすべてが再起動中に排除される）。獲得できなかった側は再起動を申請せず、server の healthy を 15秒まで待つ
-- server が起動してから 30秒以内の render復旧による再起動申請は、再起動せずserver の healthy を 15秒まで待つ。server の起動時刻は PIDファイルの書き込み時刻とする。PIDファイルが読めないときはクールダウンを適用せず従来通り再起動する
+- server が起動してから 30秒以内の render復旧による再起動申請は、再起動せずserver の healthy を 15秒まで待つ。起動時刻は OS が報告するプロセスの開始時刻とする。対象がいない、または時刻を取得できない場合はクールダウンを適用しない
 - Reddit / StackOverflow / YouTube / Twitter / Hacker News / Wikipedia / arXiv の専用経路と `server start` は renderスロットを取得しない。GitHub は camoufox へのフォールバックを持つため取得する
 
 ## 共通の振る舞い
@@ -43,7 +44,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | render が abortされる | 実行 | ローカルHTTP へのページopen を含む機能ヘルスチェックを行い、応答不能ならserverを自動再起動して同じbackendを再試行する。自動復旧後も全backendが失敗した場合は、`All ... failed` 行の次行へ `Hint: ...` 形式で、失敗が過渡的な可能性を示した再試行と、手動再起動 `~/.agents/cli/browse server restart` を案内する |
 | challenge / captcha を検出した | 実行 | 同一backend を1回だけ新しいsessionで再試行し、それでも失敗したら次のbackendへ進む |
 | Camoufoxのrenderがabort・timeout・切断した | 実行 | serverの機能ヘルスチェックを行う。応答不能ならserverを再起動してから新しいsessionで同じbackendを再試行する。再起動はrestartロックで仲裁し、自分以外のrenderスロットの完了を待って再起動する。仲裁に負けた側は再起動を申請せず、再起動の完了を15秒まで待つ。1コマンド全体のserver復旧再試行は1回までとし、失敗後は次のbackendへ進む |
-| `search` または camoufox経路の `fetch` が同時に起動された | 実行 | 空いているrenderスロットで並列実行する（上限4）。すべてのスロットが埋まっていたら先に開始した実行の完了を待つ。待機中に server再起動が進行を始めたら、未開始の待機は再起動に让位する（再起動が待ち行列の先頭に割り込む。render開始済みの分は完了を待つだけ）。Reddit / StackOverflow / YouTube / Twitter / Hacker News / Wikipedia / arXiv の専用経路はスロットを取得せず待ち合わせない。`login` は camoufox を使うためスロットを取得する |
+| `search` または camoufox経路の `fetch` が同時に起動された | 実行 | 空いているrenderスロットで並列実行する（上限4）。すべてのスロットが埋まっていたら先に開始した実行の完了を待つ。待機中に server停止・再起動が始まったら、未開始の render はその完了まで待つ（開始済みの render は継続する）。Reddit / StackOverflow / YouTube / Twitter / Hacker News / Wikipedia / arXiv の専用経路はスロットを取得せず待ち合わせない。`login` は camoufox を使うためスロットを取得する |
 | サブコマンドがない・未知のサブコマンドを渡した | 実行 | usage を stderr へ出力し、終了コード1 で終わる |
 | 未知のフラグを渡した | 実行 | 対象サブコマンドの usage行を stderr へ出力し、終了コード1 で終わる |
 | 必須引数が不足している（位置引数0個） | 実行 | 対象サブコマンドの usage行を stderr へ出力し、終了コード1 で終わる |
@@ -58,7 +59,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | --- | --- |
 | server起動待ち・セッションclose・restartロック競合時の再起動完了待ち | 15秒 |
 | server起動からの render復旧再起動の申請抑制期間 | 30秒 |
-| `browse server restart` の最初の停止要求から終了までの待ち | 10秒 |
+| `browse server stop` / `browse server restart` の停止待ち（SIGTERM を送ってから SIGKILL に上げるまで） | 10秒 |
 | ページopen・ナビゲーション・DOM取得 | 30秒 |
 | render中に他の実行の server再起動が始まったとき | 実行中の render は再起動を待たず実行を継続する（再起動側が renderスロットの解放を待つため、実行中render が再起動の完了を待つ循環待ちは起きない） |
 | openserpパース・trafilatura変換・Reddit の各要求・StackOverflow の各要求・GitHub API の各要求・Hacker News / Wikipedia / arXiv / RSS / fxtwitter の各要求 | 15秒 |
@@ -106,9 +107,20 @@ camoufox server の起動を保証する冪等なサブコマンド。CLI内部�
 | 条件・状態 | 操作 | 結果 |
 | --- | --- | --- |
 | camoufox server が起動済み（websocket接続が成功する） | 実行 | 何もせず終了コード0 で終わる |
-| camoufox server が未起動 | 実行 | 内部サーバーモードをバックグラウンド起動し、websocket接続が成功するまで 250ms間隔で待ち、終了コード0 で終わる |
+| 設定先が応答せず、Linux・Windows で同じポートに対応するローカルサーバーが1件見つかった | 実行 | 追加起動せず、設定先への WebSocket 接続が成功するまで待つ |
+| 設定先が応答せず、起動対象がいない | 実行 | 内部サーバーモードをバックグラウンド起動し、WebSocket 接続が成功するまで 250ms間隔で待ち、終了コード0 で終わる |
 | 待ちが 15秒に達した | 実行 | エラー1行を stderr へ出力し、終了コード1 で終わる |
 | 起動に失敗したserver がポートを占有している | 実行 | 2番目以降の server はポート衝突で終了する（先の server が serve を続けるため無害） |
+
+## `browse server stop`
+
+Linux（WSL を含む）で設定されたポートのローカル camoufox server を停止する。後続の起動は [`browse server start`](#browse-server-start) の既存の呼び出し経路に従う。
+
+| 条件・状態 | 結果 |
+| --- | --- |
+| 対象を停止した、または対象がいない | 起動し直さず、終了コード0 で終わる |
+| 候補が複数ある、探索に失敗した、または対象の終了を確認できない | エラー1行を stderr へ出力し、終了コード1 で終わる |
+| Linux 以外で実行した | 非対応のエラー1行を stderr へ出力し、終了コード1 で終わる |
 
 ## `browse server restart`
 
@@ -116,14 +128,10 @@ hangしたcamoufox server の復旧用に、実行中の server を停止して�
 
 | 条件・状態 | 操作 | 結果 |
 | --- | --- | --- |
-| 実行 | 排他 | restartロックと 4つすべての renderスロットを `flock(1)` で獲得してから再起動する。`flock(1)` が無い環境では獲得せずに再起動する |
-| Windows ネイティブで実行 | 停止対象の特定 | PIDファイルが指すプロセスの実行ファイルまたは起動されたスクリプトが、この `browse` と一致し、`__server` がそのサブコマンドであると確認できた場合のみ、そのプロセスを対象にする。確認できない場合や、停止する時点で PID が別プロセスを指す場合は対象にしない |
-| Windows ネイティブ以外で実行 | 停止対象の特定 | 停止対象は「PIDファイルの対象（Linux では `/proc/<pid>/cmdline` で実行中のbrowseスクリプトと `__server` 引数を検証する）」と「`pgrep -f <browse スクリプト> __server` 掃引」の和集合である |
-| Windows ネイティブで停止対象がある | 停止 | 強制終了要求を送り、10秒以内に終了しなければ同じプロセスに再送する |
-| Windows ネイティブで停止に失敗、または停止処理の結果が不明 | 実行 | エラーを返し、起動手順へ進まない |
-| Windows ネイティブ以外で停止対象がある | 停止 | 対象へ SIGTERM を送り、10秒以内に終了しなければ SIGKILLする |
-| 停止後 | 実行 | `browse server start` と同じ手順で起動し直し、ready を待つ |
-| 停止対象が無い | 実行 | 停止を飛ばして `browse server start` と同じ手順に進む |
+| Linux | 停止 | ポート番号と一致するローカルサーバーを終了する。対象へ SIGTERM を送り、10秒以内に終了しなければ、同じプロセスを指すハンドル経由で SIGKILL を送る。ハンドルを取得できない環境では停止しない |
+| Windows | 停止 | ポート番号と一致するローカルサーバーを、生成時刻を照合したプロセスハンドルで強制終了し、同じプロセスの終了を10秒まで待つ。終了しなければ同じハンドルで強制終了を再送し、2秒まで待つ |
+| 停止後、または停止対象なし | 起動 | 設定先が応答していなければ起動する。今回起動した子プロセスが待受開始を通知し、WebSocket が応答するまで待つ |
+| 候補が複数ある、探索・停止に失敗した、または設定先が既に応答する | エラー | 別のプロセスは停止せず、エラー1行を stderr に出力して終了コード1で終わる |
 
 ## `browse login twitter`
 
@@ -178,7 +186,7 @@ server の実行環境は環境変数で上書きできる:
 
 fingerprint生成に使うcamoufox-js は、`~/.pi/agent` 配下から解決する。
 
-server は SIGINT / SIGTERM を受け取ったとき、PIDファイルから自身の PID を清除してbrowser server を closeし、終了コード0 で終わる。Xvfb と x11vnc はこの時点で停止せず、次回の server起動で再利用される。
+server は SIGINT / SIGTERM を受け取ったとき、browser server を closeし、終了コード0 で終わる。Xvfb と x11vnc はこの時点で停止せず、次回の server起動で再利用される。
 
 ## `browse search "<query>"`
 

@@ -2,23 +2,37 @@ import { mock, spyOn } from "bun:test";
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as nodeModule from "node:module";
+import { openLinuxProcess } from "../linux-process";
 import { join } from "node:path";
 import * as util from "../util";
 
 const scenario = process.argv[2]!;
-const windows = scenario.startsWith("windows-");
-Object.defineProperty(process, "platform", { value: windows ? "win32" : "linux" });
+if (scenario.startsWith("windows-")) {
+  Object.defineProperty(process, "platform", { value: "win32" });
+}
 const events: unknown[][] = [];
 const signals: { deadline: number; controller: AbortController }[] = [];
-const pidFile = join(process.env.XDG_CACHE_HOME!, "pi/web-search/camoufox-server.pid");
+const port = "9378";
 let now = 0;
 let probes = 0;
-let pidFilePid: number | undefined =
-  scenario === "restart" || scenario === "term-exit" ? 41001 : undefined;
-const alive = new Set(pidFilePid ? [41001, 41002] : []);
-if (scenario === "recycled" || windows) pidFilePid = 41003;
-if (windows) alive.add(41003);
+let openedTarget = false;
+const liveTargets = [
+  "start-port-in-use",
+  "restart",
+  "term-exit",
+  "stop-hung",
+  "stop-reused",
+  "stop-raced",
+  "stop-other-executable",
+  "recover-cooldown",
+].includes(scenario);
+const alive = new Set(liveTargets ? [41001] : []);
+if (scenario === "stop-duplicate" || scenario === "start-duplicate") {
+  alive.add(41001);
+  alive.add(41002);
+}
 const nativeRead = fs.readFileSync;
+const nativeReadlink = fs.readlinkSync;
 const nativeStat = fs.statSync;
 const nativeSetTimeout = setTimeout;
 if (scenario === "websocket-timeout") {
@@ -40,13 +54,46 @@ spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
 spyOn(process, "kill").mockImplementation((pid, signal) => {
   events.push(["kill", pid, signal, now]);
   if (!alive.has(pid)) throw Object.assign(new Error("gone"), { code: "ESRCH" });
-  if (signal === "SIGKILL" || (scenario === "term-exit" && signal === "SIGTERM")) alive.delete(pid);
+  const exitsOnTerm = scenario === "term-exit";
+  if ((signal === "SIGKILL" && scenario !== "stop-hung") || (signal === "SIGTERM" && exitsOnTerm)) {
+    alive.delete(pid);
+  }
   return true;
 });
 spyOn(process, "exit").mockImplementation(((code: number) => {
   events.push(["exit", code]);
 }) as never);
 
+mock.module("../windows-process", () => ({
+  findWindowsServerProcesses: () => {
+    if (scenario.startsWith("windows-stop-")) return [{ pid: 41001, identity: "fixture" }];
+    return [...alive].map((pid) => ({ pid, identity: "fixture" }));
+  },
+  stopWindowsProcess: () => {
+    if (scenario === "windows-stop-failed") {
+      throw new Error("Cannot terminate the Windows Camoufox server");
+    }
+    if (scenario === "windows-stop-timeout") {
+      throw new Error("Could not confirm the Windows Camoufox server exited");
+    }
+    throw new Error("Unexpected Windows process stop in this fixture");
+  },
+}));
+mock.module("../linux-process", () => ({
+  openLinuxProcess: (pid: number): ReturnType<typeof openLinuxProcess> => {
+    openedTarget = true;
+    return {
+      send(signal) {
+        process.kill(pid, signal);
+      },
+      hasExited() {
+        if (scenario === "stop-reused" && now >= 100 && pid === 41001) return true;
+        return !alive.has(pid);
+      },
+      close() {},
+    };
+  },
+}));
 mock.module("../util", () => ({
   ...util,
   delay: async (ms: number) => {
@@ -58,15 +105,27 @@ mock.module("../util", () => ({
 mock.module("node:fs", () => ({
   ...fs,
   statSync: (path: string) =>
-    scenario === "recover-cooldown" && path === pidFile ? { mtimeMs: -1000 } : nativeStat(path),
+    path.startsWith("/proc/") ? { uid: process.geteuid?.() } : nativeStat(path),
+  readlinkSync: (path: string) => {
+    if (!path.startsWith("/proc/")) return nativeReadlink(path);
+    return scenario === "stop-other-executable"
+      ? "/usr/bin/tail"
+      : fs.realpathSync(process.execPath);
+  },
   readFileSync: (path: fs.PathOrFileDescriptor, options?: unknown) => {
-    if (path === pidFile && !scenario.startsWith("internal")) {
-      if (pidFilePid === undefined) throw new Error("no pid file");
-      return `${pidFilePid}\n`;
-    }
     if (String(path).startsWith("/proc/")) {
       const pid = Number(String(path).split("/")[2]);
-      return ["bun", util.selfRunPath, pid === 41003 ? "search" : "__server"].join("\0");
+      if (pid !== 41003 && !alive.has(pid))
+        throw Object.assign(new Error("gone"), { code: "ENOENT" });
+      const reused =
+        (scenario === "stop-reused" && now >= 100) || (scenario === "stop-raced" && openedTarget);
+      if (String(path).endsWith("/stat")) {
+        const fields = ["S", ...Array(18).fill("0"), reused ? "1235" : "1234"];
+        return pid + " (browse) " + fields.join(" ");
+      }
+      return (
+        ["bun", util.selfRunPath, pid === 41003 ? "search" : "__server", port].join("\0") + "\0"
+      );
     }
     return nativeRead(path, options as never);
   },
@@ -75,40 +134,31 @@ mock.module("node:child_process", () => ({
   ...childProcess,
   spawn: (command: string, args: string[], options: unknown) => {
     events.push(["spawn", command, args, options, now]);
+    alive.add(42000);
     return {
-      on: () => {},
+      pid: 42000,
+      exitCode: null,
+      on: (event: string, listener: (message: unknown) => void) => {
+        if (event === "message" && scenario !== "restart-no-ready") listener("camoufox-ready");
+      },
       unref: () => {
         events.push(["unref"]);
       },
     };
   },
-  spawnSync: (command: string, args: string[], options?: childProcess.SpawnSyncOptions) => {
-    if (command.endsWith("\\powershell.exe")) {
-      events.push(["windowsStopCheck", options?.env?.BROWSE_SERVER_PID]);
-      if (scenario === "windows-stop-timeout") {
-        return {
-          status: null,
-          error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
-        };
-      }
-      return { status: scenario === "windows-stop-failed" ? 2 : 0 };
-    }
+  spawnSync: (command: string, args: string[]) => {
     events.push(["spawnSync", command, args]);
     if (command === "flock" && scenario === "recover-lost") return { status: 192 };
+    if (command === "flock" && scenario === "recover-failed") return { status: 1 };
     if (command === "flock" && scenario === "recover-no-flock")
-      return { error: new Error("ENOENT") };
-    if (command === "pgrep" && windows) return { error: new Error("ENOENT") };
-    if (command === "pgrep")
-      return {
-        status: 0,
-        stdout: [...alive]
-          .filter((pid) => pid !== 41001)
-          .concat(
-            [...alive].filter((pid) => pid !== 41001),
-            [41003, process.pid],
-          )
-          .join("\n"),
-      };
+      return { error: Object.assign(new Error("ENOENT"), { code: "ENOENT" }) };
+    if (command === "pgrep" && scenario === "stop-pgrep-error") {
+      return { status: 2, stderr: "invalid pattern" };
+    }
+    if (command === "pgrep") {
+      return { status: 0, stdout: [...alive, 41003, process.pid].join("\n") };
+    }
+    if (command === "ps" && scenario === "recover-cooldown") return { status: 0, stdout: "1\n" };
     if (command === "which" || command === "where") return { status: 0, stdout: process.execPath };
     return { status: 0, stdout: "" };
   },
@@ -159,7 +209,7 @@ function fixtureRequire(path: string) {
           if (scenario === "internal-collision") throw new Error("EADDRINUSE");
           return {
             close: async () => {
-              events.push(["closeServer", fs.existsSync(pidFile)]);
+              events.push(["closeServer"]);
             },
           };
         },
@@ -176,6 +226,7 @@ mock.module("node:module", () => ({ ...nodeModule, createRequire: () => fixtureR
 
 const {
   startCamoufoxServer,
+  stopCamoufoxServer,
   ensureCamoufoxServer,
   ensureOpenserpServer,
   recoverCamoufoxServer,
@@ -194,13 +245,7 @@ if (scenario.startsWith("openserp")) {
 }
 try {
   if (scenario.startsWith("internal")) {
-    if (scenario === "internal-collision") {
-      fs.mkdirSync(join(pidFile, ".."), { recursive: true });
-      fs.writeFileSync(pidFile, "winner\n");
-    }
     await runCamoufoxServer();
-    events.push(["pid", fs.readFileSync(pidFile, "utf8").trim()]);
-    if (scenario === "internal-foreign-pid") fs.writeFileSync(pidFile, "other\n");
     process.emit(process.env.FIXTURE_SIGNAL === "SIGINT" ? "SIGINT" : "SIGTERM");
     await Promise.resolve();
   } else if (scenario === "websocket-timeout") {
@@ -209,7 +254,12 @@ try {
     await ensureOpenserpServer(AbortSignal.timeout(15000));
   } else if (scenario.startsWith("recover-")) {
     await recoverCamoufoxServer();
-  } else if (windows || ["restart", "none", "term-exit", "recycled"].includes(scenario)) {
+  } else if (scenario.startsWith("stop-")) {
+    await stopCamoufoxServer();
+  } else if (
+    scenario.startsWith("windows-") ||
+    ["restart", "none", "term-exit", "recycled", "restart-no-ready"].includes(scenario)
+  ) {
     await restartCamoufoxServer();
   } else if (scenario === "ensure") {
     await ensureCamoufoxServer(AbortSignal.timeout(15000));
@@ -227,6 +277,5 @@ console.log(
     now,
     probes,
     pid: process.pid,
-    pidFile: fs.existsSync(pidFile) ? fs.readFileSync(pidFile, "utf8") : null,
   }),
 );
