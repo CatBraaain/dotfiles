@@ -109,6 +109,7 @@ export class VSCodeFixture {
     PI_OFFLINE: "1",
     PI_SKIP_VERSION_CHECK: "1",
     PI_REVIEW_BASE: this.directory,
+    TICKET_TEST_TMUX_SOCKET: this.tmuxSocket,
     GIT_CONFIG_NOSYSTEM: "1",
   };
   readonly sessions: Record<string, SessionFixture> = {};

@@ -5,17 +5,22 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { SessionLauncher } from "./launcher";
 import { FolderSyncEngine, type VscodeLike } from "./folder-sync";
-import type { ExecFile } from "./git-worktrees";
 import { resolveConfiguredSessionRoot } from "./paths";
 import { SELECT_SCM_REPOSITORIES, SessionScmSelection } from "./session-scm";
 import { TerminalRegistry } from "./terminal-registry";
 import { editorTerminals, isDisplayTerminal } from "./terminals";
+import { registerTicketDispatch } from "./ticket-dispatch";
 import { WorkspaceStore } from "./workspace-store";
 import { SessionWebviewProvider, VIEW_ID } from "./webview/session-webview-provider";
 
+const TICKET_DISPATCH_TIMEOUT_MS = 15_000;
 const execFileAsync = promisify(execFileCallback);
 
-const execFile: ExecFile = async (file, args, options) => {
+const execFile = async (
+  file: string,
+  args: readonly string[],
+  options: { cwd: string; timeout?: number },
+): Promise<{ stdout: string }> => {
   const { stdout } = await execFileAsync(file, args, {
     ...options,
     windowsHide: true,
@@ -196,6 +201,12 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
+  const refreshTicketDispatch = registerTicketDispatch(
+    context,
+    (args) => execFile("ticket", args, { cwd: homeDir, timeout: TICKET_DISPATCH_TIMEOUT_MS }),
+    log,
+  );
+
   void initializeSessionRoot();
   void provider.refresh();
 
@@ -211,7 +222,9 @@ export function activate(context: vscode.ExtensionContext): void {
         for (const watcher of historyWatchers.values()) watcher.dispose();
       },
     },
-    vscode.commands.registerCommand("agentKit.refreshSessions", () => provider.refreshManually()),
+    vscode.commands.registerCommand("agentKit.refreshSessions", async () => {
+      await Promise.all([provider.refreshManually(), refreshTicketDispatch()]);
+    }),
     vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
       webviewOptions: { retainContextWhenHidden: true },
     }),

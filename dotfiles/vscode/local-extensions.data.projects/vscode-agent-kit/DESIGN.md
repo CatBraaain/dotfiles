@@ -24,7 +24,7 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 
 ## レイアウト
 
-Layout: Sessions ビュータイトル — 見出しと一覧の更新操作を一行にまとめる → VS Code 標準ビュータイトル（[参照](https://code.visualstudio.com/api/references/contribution-points#contributes.menus)）; scroll owner: `html`（Webview document）; anti-patterns: Webview 内の重複した見出しと更新ツールバー。
+Layout: Sessions ビュータイトル — 見出しと操作を一行にまとめる → VS Code 標準ビュータイトル（[参照](https://code.visualstudio.com/api/references/contribution-points#contributes.menus)）; scroll owner: `html`（Webview document）; anti-patterns: Webview 内の重複した見出しと更新ツールバー。
 
 Layout: 一覧の通信エラー — 通信障害を一覧より先に読み、通常時は領域を空けない → stack（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/stacking/stack.md)）; scroll owner: `html`（document）; anti-patterns: 見た目だけの並べ替え、フッターへの混在、空の表示領域。
 
@@ -41,7 +41,7 @@ Layout: ワークスペースのメニュー — 一覧を押し下げず起動�
 | 対象 | 値 |
 | --- | --- |
 | 全体の余白 | Webview viewport を基準に、アプリが上と左右12pxを一度だけ確保する。`body` の padding は0。下はフッターの12pxで確保する。グループ間は12px |
-| ビュータイトル | VS Code 標準の `Sessions` タイトルと右側の refresh アイコン。寸法・配色・hover・focus は VS Code 標準に従う |
+| ビュータイトル | VS Code 標準の `Sessions` タイトルと右側の操作アイコン。refresh の左に Ticket Dispatch のアイコンを1つ表示する。開始は再生（`debug-start`）、停止は一時停止（`debug-pause`）で示す。間隔・寸法・配色・hover・focus は VS Code 標準に従う |
 | フッター | 一覧の下。上境界線（境界トークン）と上下・左右12pxの余白で区切る。操作の下余白は、一覧の長さとスクロール位置によらず一覧の上余白と同じ12pxとする |
 | 取得状態・操作エラー表示 | 文字があるときだけフッターの操作より上に表示し、高さ16px以上、操作との間隔8pxとする。空のときは表示領域と間隔を確保せず、上境界線の下端から操作の上端まで12pxとする |
 | 通信エラー表示 | 一覧より前の document フローに配置する。12px文字・`errorForeground`・高さ16px以上とし、一覧との間隔は8px。空のときは表示領域と間隔を確保しない |

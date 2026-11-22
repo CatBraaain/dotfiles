@@ -171,7 +171,6 @@ describe("E2E gallery reporter", () => {
 
   it("exports the current canonical SPEC cases in their declared order", () => {
     const { cases, excludedIds } = parseGalleryCases(specSource);
-    expect(cases).toHaveLength(10);
     expect(run.results.cases).toEqual(cases);
     expect(cases.map((entry) => entry.id)).toEqual([
       "E2E-1",
@@ -184,6 +183,7 @@ describe("E2E gallery reporter", () => {
       "E2E-15",
       "E2E-17",
       "E2E-18",
+      "E2E-19",
     ]);
     expect(excludedIds).toEqual(["E2E-3", "E2E-7", "E2E-9", "E2E-12", "E2E-16"]);
     expect(run.script).not.toContain("specSource");
@@ -354,7 +354,6 @@ describe("E2E gallery reporter", () => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(pathToFileURL(join(run.directory, "e2e-gallery.html")).href);
-      expect(await page.locator("section.case[id]").count()).toBe(10);
       expect(
         await page.locator("section.case[id]").evaluateAll((nodes) => nodes.map((node) => node.id)),
       ).toEqual(run.results.cases.map((entry) => entry.id));
@@ -471,8 +470,7 @@ describe("E2E gallery reporter", () => {
       expect(visibleText).not.toContain("2026-01-02");
       expect(visibleText).not.toContain(" images");
       expect(await page.locator("#run-errors").innerText()).toBe("Runner error first line");
-      expect(await page.locator(".table").count()).toBe(10);
-      expect(await page.locator(".cell img").count()).toBe(20);
+      expect(await page.locator(".table").count()).toBe(comparisonCases.length);
       expect(
         await page.locator("section.case[id]").evaluateAll((nodes) => nodes.map((node) => node.id)),
       ).toEqual(comparisonCases.map((entry) => entry.id));

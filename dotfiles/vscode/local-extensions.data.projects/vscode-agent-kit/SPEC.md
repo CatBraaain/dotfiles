@@ -44,6 +44,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 | E2E-16 | 稼働 Pi の list.title と非表示中の workspace 追加を自動反映する | [データソース](#データソース)・[実行フェーズの表示](#実行フェーズの表示)どおりの一覧反映 | なし | 保存 E2E（隔離環境の公開 CLI） |
 | E2E-17 | 本体リポジトリの worktree を作成・削除すると `workspaceFolders` に反映する | [workspaceFolders 同期](#workspacefolders-同期)どおりの管理フォルダの追加・削除 | Worktree added／Worktree removed | 保存 E2E（隔離環境の公開 CLI と git） |
 | E2E-18 | どの構成で開いた起動でもフォルダ0を `~/.agents/workspace` に付け替え、フォルダモードでは untitled ワークスペースへ遷移し、タイトルバーからフォルダ名を除く | [workspaceFolders 同期](#workspacefolders-同期)どおりの遷移とタイトルバーの書き込み | After promotion | 保存 E2E |
+| E2E-19 | Sessions のビュータイトルから全プロジェクト向け dispatch を開始・停止する | [Ticket Dispatch アクション](#ticket-dispatch-アクション)どおりの切替と起動済み Pi の保持 | Dispatch stopped／Dispatch running | 保存 E2E（隔離環境の公開 CLI） |
 
 保存 E2E 以外の振る舞いは、unit が workspace 登録 CLI・セッション読み取り・表示名・グルーピング・Webview の描画・グループの開閉・行の選択表示（共有 Terminal の表示先への追従）・メッセージプロトコル・アーカイブ・実行フェーズ表示・Terminal 対応付け・New Session と New Workspace の各契約、worktree の検出・管理フォルダの同期・タイトルバーの書き込みの各契約を検証し、Storybook 静的カタログの smoke が Webview の表示と操作を検証する。各契約の詳細は後続の定義節に従う。
 
@@ -152,7 +153,7 @@ Activity Bar に view container `Agent Kit` を追加し、その中に拡張機
 
 サイドバーは次の順で表示する。
 
-1. VS Code 標準のビュータイトルに `Sessions` と「Refresh アクション」の更新操作を表示する
+1. VS Code 標準のビュータイトルに `Sessions` と「Ticket Dispatch アクション」「Refresh アクション」の操作を表示する
 2. Webview 内に cwd ごとのグループを、枠線を持たない余白で区切ったセクションで表示する。一覧に現れるグループは追加済みワークスペースだけである。セッション行は「データソース」に従う。グループ見出しに開閉の chevron、basename、省略メニュー、「表示モード」に従うモード切替、そのワークスペースで新しい Pi を起動する `New session` 操作を表示する。登録解除の入口は「ワークスペース登録解除」に従う。見出しのホバーのヒントに cwd のフルパスを表示し、同じ basename のプロジェクトや worktree を区別する。chevron または見出し名を選ぶと、そのグループの行の表示を開閉する。見出し名の通常の `Enter` / `Space` はグループ開閉として使える。開閉状態の既定は開いた状態で、VS Code 再起動後も維持しない
 3. グループ内にセッションを行として表示する。行は表示名とセッションの状態（選択・アーカイブ済み・実行フェーズ）を示す。左端の状態アイコンと行ホバーのヒントは「実行フェーズの表示」の対応表に従う
 4. 各行の右端には、更新日時（等幅の数字で表示する）と、`Archive` または `Unarchive` 操作をこの順で表示する。`Archive` と `Unarchive` はアーカイブのアイコンとアーカイブからの復帰のアイコンで示す。ホバーのヒントは `Archive` または `Unarchive` とする
@@ -446,6 +447,17 @@ Storybook のカタログで、VS Code API と実セッションファイルを�
 Sessions の標準ビュータイトルにある更新操作の名前とツールチップは `Refresh Sessions` とする。
 
 この更新操作の取得対象は「保存履歴の更新」に従い、取得結果で一覧を再描画する。稼働 Pi の自動更新は「実行フェーズの表示」、保存済み会話の自動更新は「保存履歴の更新」に従う。セッション行は「データソース」、workspace の表示と保持は「workspace 登録と永続情報」に従う。
+
+### Ticket Dispatch アクション
+
+Sessions のビュータイトルに、全プロジェクト向け dispatcher を操作するボタンを1つ表示する。操作対象は選択中のセッションやワークスペースに依存しない。拡張の起動時、`Refresh Sessions` の選択時、dispatch 操作後に `ticket dispatch list` の結果を反映する。
+
+| 全プロジェクト向け dispatcher | 操作名とツールチップ | 選択したときの動作 |
+| --- | --- | --- |
+| 未稼働 | `Start Ticket Dispatch (All Projects)` | `ticket dispatch start --all` を実行する |
+| 稼働中 | `Stop New Ticket Dispatch (Running Agents Continue)` | `ticket dispatch stop --all` を実行する。起動済みの Pi はそのまま作業を続ける |
+
+稼働状態が確認できない間と、確認・操作の処理中はボタンを無効にする。`Refresh Sessions` で再確認できる。操作直前に稼働状態を確認し、表示された操作が現在の状態に対応しなければ表示だけを更新する。操作中にボタンを再度選んでも、コマンドは重ねて実行しない。ユーザー操作での確認・実行に失敗した場合は、VS Code のエラー通知に理由を表示する。プロジェクト単位の dispatcher は既存の `ticket dispatch` の規則で保護される。
 
 ### New Workspace アクション
 

@@ -85,6 +85,11 @@ const api = vi.hoisted(() => ({
 
 vi.mock("node:os", { spy: true });
 
+const refreshTicketDispatch = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../src/ticket-dispatch", () => ({
+  registerTicketDispatch: () => refreshTicketDispatch,
+}));
+
 vi.mock("vscode", () => ({
   commands: { registerCommand: api.registerCommand, executeCommand: api.executeCommand },
   window: api,
@@ -194,7 +199,9 @@ describe("extension commands", () => {
 
   it("does not register or contribute the removed tmux settings command", () => {
     register();
-    expect(api.registerCommand.mock.calls.map(([id]) => id)).toEqual(["agentKit.refreshSessions"]);
+    expect(api.registerCommand.mock.calls.map(([id]) => id)).not.toContain(
+      "agentKit.reapplyTmuxSettings",
+    );
     expect(
       manifest.contributes.commands.some(
         ({ command }) => command === "agentKit.reapplyTmuxSettings",
@@ -376,7 +383,9 @@ describe("extension commands", () => {
     expect(api.watchers.map(({ pattern }) => pattern)).toEqual(["**/*.jsonl"]);
 
     await writeFile(settingsPath, JSON.stringify({ sessionDir: second }), "utf8");
-    const refresh = api.registerCommand.mock.calls[0][1] as () => Promise<void>;
+    const [, refresh] = api.registerCommand.mock.calls.find(
+      ([id]) => id === "agentKit.refreshSessions",
+    )!;
     await refresh();
     expect(watcherFor(second)).toBeUndefined();
     expect(watcherFor(first)?.dispose).not.toHaveBeenCalled();
@@ -398,16 +407,17 @@ describe("extension commands", () => {
       title: "Refresh Sessions",
       icon: "$(refresh)",
     });
-    expect(manifest.contributes.menus).toEqual({
-      "view/title": [
-        {
-          command: "agentKit.refreshSessions",
-          when: "view == agentKit.sessions",
-          group: "navigation",
-        },
-      ],
-      commandPalette: [{ command: "agentKit.refreshSessions", when: "false" }],
-    });
+    const forRefresh = ({ command }: { command: string }) => command === "agentKit.refreshSessions";
+    expect(manifest.contributes.menus["view/title"].filter(forRefresh)).toEqual([
+      {
+        command: "agentKit.refreshSessions",
+        when: "view == agentKit.sessions",
+        group: "navigation@2",
+      },
+    ]);
+    expect(manifest.contributes.menus.commandPalette.filter(forRefresh)).toEqual([
+      { command: "agentKit.refreshSessions", when: "false" },
+    ]);
     expect(manifest.contributes.viewsContainers.activitybar[0].title).toBe("Agent Kit");
     expect(manifest.contributes.views.agentKitViews[0].name).toBe("Sessions");
   });
@@ -424,6 +434,7 @@ describe("extension commands", () => {
 
     expect(refreshManually).toHaveBeenCalledOnce();
     expect(refreshManually.mock.instances[0]).toBe(provider);
+    expect(refreshTicketDispatch).toHaveBeenCalledOnce();
     expect(api.showInformationMessage).not.toHaveBeenCalled();
     expect(api.showErrorMessage).not.toHaveBeenCalled();
   });

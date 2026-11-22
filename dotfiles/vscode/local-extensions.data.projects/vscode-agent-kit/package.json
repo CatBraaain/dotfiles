@@ -41,19 +41,51 @@
         "category": "Agent Kit",
         "title": "Refresh Sessions",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "agentKit.startTicketDispatch",
+        "category": "Agent Kit",
+        "title": "Start Ticket Dispatch (All Projects)",
+        "icon": "$(debug-start)",
+        "enablement": "agentKit.ticketDispatchReady"
+      },
+      {
+        "command": "agentKit.stopTicketDispatch",
+        "category": "Agent Kit",
+        "title": "Stop New Ticket Dispatch (Running Agents Continue)",
+        "icon": "$(debug-pause)",
+        "enablement": "agentKit.ticketDispatchReady"
       }
     ],
     "menus": {
       "view/title": [
         {
+          "command": "agentKit.startTicketDispatch",
+          "when": "view == agentKit.sessions && !agentKit.ticketDispatchRunning",
+          "group": "navigation@1"
+        },
+        {
+          "command": "agentKit.stopTicketDispatch",
+          "when": "view == agentKit.sessions && agentKit.ticketDispatchRunning",
+          "group": "navigation@1"
+        },
+        {
           "command": "agentKit.refreshSessions",
           "when": "view == agentKit.sessions",
-          "group": "navigation"
+          "group": "navigation@2"
         }
       ],
       "commandPalette": [
         {
           "command": "agentKit.refreshSessions",
+          "when": "false"
+        },
+        {
+          "command": "agentKit.startTicketDispatch",
+          "when": "false"
+        },
+        {
+          "command": "agentKit.stopTicketDispatch",
           "when": "false"
         }
       ]
