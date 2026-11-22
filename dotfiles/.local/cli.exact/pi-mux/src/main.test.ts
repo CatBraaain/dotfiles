@@ -792,11 +792,24 @@ exec ${JSON.stringify(realTmux)} "$@"
   }
 
   piSession(name: string, entry: { id: string; file: string; temporary?: boolean }): void {
-    const [session, pane, pid] = this.startPane(name);
+    this.piSessionIn(name, this.cwd, entry);
+  }
+
+  piSessionIn(
+    name: string,
+    cwd: string,
+    entry: { id: string; file: string; temporary?: boolean },
+  ): void {
+    const [session, pane, pid] = this.startPane(name, ["/bin/sleep", "300"], cwd);
     this.tmux(["set-environment", "-t", session, "PI_TMUX_SESSION_ID", entry.id]);
     if (entry.temporary)
       this.tmux(["set-environment", "-t", session, "PI_TMUX_TEMPORARY", entry.id]);
-    this.publishPiMetadata(pane, pid, entry, this.launchTokenOf(name));
+    this.publishPiMetadata(pane, pid, entry, this.launchTokenOf(name), cwd);
+  }
+
+  shellSession(name: string): { session: string; pane: string; pid: string } {
+    const [session, pane, pid] = this.startPane(name, ["/bin/sh"]);
+    return { session, pane, pid };
   }
 
   plainSession(name: string): void {
@@ -844,6 +857,7 @@ exec ${JSON.stringify(realTmux)} "$@"
     pid: string,
     entry: { id: string; file: string },
     token: string,
+    cwd = this.cwd,
   ): void {
     this.tmux([
       "set-option",
@@ -854,7 +868,7 @@ exec ${JSON.stringify(realTmux)} "$@"
       Buffer.from(
         JSON.stringify({
           id: entry.id,
-          cwd: this.cwd,
+          cwd,
           file: entry.file,
           pid: Number(pid),
           startup: "ready",
@@ -864,19 +878,22 @@ exec ${JSON.stringify(realTmux)} "$@"
     ]);
   }
 
-  private startPane(name: string): [string, string, string] {
+  private startPane(
+    name: string,
+    command: string[] = ["/bin/sleep", "300"],
+    cwd = this.cwd,
+  ): [string, string, string] {
     const [session, pane, pid] = this.tmux([
       "new-session",
       "-d",
       "-s",
       name,
       "-c",
-      this.cwd,
+      cwd,
       "-P",
       "-F",
       "#{session_id}\t#{pane_id}\t#{pane_pid}",
-      "/bin/sleep",
-      "300",
+      ...command,
     ]).split("\t");
     assert.ok(session && pane && pid, `cannot start pane for ${name}`);
     this.panePids.push(Number(pid));
@@ -1064,6 +1081,236 @@ describe("list workspace panes", () => {
           empty: [{ id: emptyId, file: emptyFile, temporary: true }],
         },
       ]);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("validates the published state and title independently and prefers the published title", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      const savedFile = join(
+        fixture.directory,
+        "conversations",
+        `2026-01-01T00-00-00-000Z_${id}.jsonl`,
+      );
+      mkdirSync(dirname(savedFile), { recursive: true });
+      writeFileSync(
+        savedFile,
+        [
+          JSON.stringify({
+            type: "session",
+            version: 1,
+            id,
+            cwd: fixture.cwd,
+            timestamp: "2026-01-01T00:00:00.000Z",
+          }),
+          JSON.stringify({
+            type: "session_info",
+            id: "e1",
+            parentId: null,
+            timestamp: "2026-01-01T00:00:01.000Z",
+            name: "Saved title",
+          }),
+        ].join("\n") + "\n",
+      );
+      fixture.piSession("saved", { id, file: savedFile });
+      const pane = fixture.tmux(["display-message", "-p", "-t", "saved", "#{pane_id}"]);
+      const entryOf = (listing: string) => {
+        const sessions = JSON.parse(listing)[0].sessions;
+        assert.equal(sessions.length, 1);
+        return sessions[0];
+      };
+      const savedEntry = {
+        id,
+        file: savedFile,
+        state: null,
+        title: "Saved title",
+        publishPending: null,
+      };
+      for (const value of [
+        "{broken",
+        JSON.stringify({ version: 2, sessionId: id, state: "running", title: "From version 2" }),
+        JSON.stringify({
+          version: 1,
+          sessionId: "other-session",
+          state: "running",
+          title: "From another session",
+        }),
+      ]) {
+        fixture.tmux(["set-option", "-p", "-t", pane, "@pi_session_state", value]);
+        const result = fixture.run(["list"]);
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(
+          entryOf(result.stdout),
+          savedEntry,
+          `an invalid option must reset both values: ${value}`,
+        );
+      }
+      for (const [value, expected] of [
+        [
+          JSON.stringify({ version: 1, sessionId: id, state: "waiting-approval", title: 42 }),
+          { ...savedEntry, state: "waiting-approval" },
+        ],
+        [
+          JSON.stringify({ version: 1, sessionId: id, state: "paused", title: "Published" }),
+          { ...savedEntry, title: "Published" },
+        ],
+        [
+          JSON.stringify({ version: 1, sessionId: id, state: "running" }),
+          { ...savedEntry, state: "running" },
+        ],
+        [
+          JSON.stringify({ version: 1, sessionId: id, state: "running", title: null }),
+          { ...savedEntry, state: "running" },
+        ],
+        [
+          JSON.stringify({
+            version: 1,
+            sessionId: id,
+            state: "running",
+            title: "Published during the run",
+          }),
+          { ...savedEntry, state: "running", title: "Published during the run" },
+        ],
+      ] as const) {
+        fixture.tmux(["set-option", "-p", "-t", pane, "@pi_session_state", value]);
+        const result = fixture.run(["list"]);
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(entryOf(result.stdout), expected, `value: ${value}`);
+      }
+      fixture.tmux(["set-option", "-pu", "-t", pane, "@pi_session_state"]);
+      const cleared = fixture.run(["list"]);
+      assert.equal(cleared.status, 0, cleared.stderr);
+      assert.deepEqual(entryOf(cleared.stdout), savedEntry);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 40_000);
+
+  it("accepts a pi process descending from the pane shell and drops the pane after that process ends", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const shell = fixture.shellSession("shellhost");
+      const pidFile = join(fixture.directory, "child.pid");
+      fixture.tmux([
+        "send-keys",
+        "-t",
+        shell.pane,
+        `sleep 300 & echo $! > ${pidFile}`,
+        "Enter",
+      ]);
+      await waitUntil(() => existsSync(pidFile));
+      const childPid = Number(readFileSync(pidFile, "utf8").trim());
+      assert.ok(Number.isSafeInteger(childPid) && childPid > 0, `child pid: ${childPid}`);
+      const id = randomUUID();
+      const file = join(fixture.directory, "conversations", `${id}.jsonl`);
+      fixture.tmux([
+        "set-option",
+        "-p",
+        "-t",
+        shell.pane,
+        "@pi-tmux-session",
+        Buffer.from(
+          JSON.stringify({
+            id,
+            cwd: fixture.cwd,
+            file,
+            pid: Number(shell.pid),
+            processPid: childPid,
+            startup: "ready",
+          }),
+        ).toString("base64"),
+      ]);
+      const listed = fixture.run(["list"]);
+      assert.equal(listed.status, 0, listed.stderr);
+      assert.deepEqual(JSON.parse(listed.stdout), [
+        { cwd: fixture.cwd, sessions: [], empty: [{ id, file }] },
+      ]);
+      process.kill(childPid, "SIGKILL");
+      fixture.tmux(["send-keys", "-t", shell.pane, "Enter"]);
+      await waitUntil(() => !existsSync(`/proc/${childPid}`));
+      const after = fixture.run(["list"]);
+      assert.equal(after.status, 0, after.stderr);
+      assert.deepEqual(JSON.parse(after.stdout), [{ cwd: fixture.cwd, sessions: [], empty: [] }]);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("fails on invalid pi metadata and on tmux inspection failures", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      const file = join(fixture.directory, "conversations", `${id}.jsonl`);
+      fixture.piSession("broken", { id, file });
+      const pane = fixture.tmux(["display-message", "-p", "-t", "broken", "#{pane_id}"]);
+      const pid = fixture.tmux(["display-message", "-p", "-t", "broken", "#{pane_pid}"]);
+      fixture.tmux([
+        "set-option",
+        "-p",
+        "-t",
+        pane,
+        "@pi-tmux-session",
+        Buffer.from(
+          JSON.stringify({
+            id,
+            cwd: fixture.cwd,
+            file: "relative.jsonl",
+            pid: Number(pid),
+            startup: "ready",
+          }),
+        ).toString("base64"),
+      ]);
+      const metadataFailure = fixture.run(["list"]);
+      assert.equal(metadataFailure.status, 1);
+      assert.match(metadataFailure.stderr, /Invalid pi session metadata/);
+      fixture.tmux(["kill-session", "-t", "broken"]);
+
+      const wrapper = join(fixture.directory, "bin/tmux");
+      rmSync(wrapper, { force: true });
+      writeFileSync(
+        wrapper,
+        `#!/bin/sh
+if [ "$1" != -S ] || [ "$2" != ${JSON.stringify(fixture.socket)} ]; then exit 64; fi
+case "$*" in *list-panes*) printf '%s\\n' 'tmux: injected inspection failure' >&2; exit 1;; esac
+exec ${JSON.stringify(realTmux)} "$@"
+`,
+        { mode: 0o700 },
+      );
+      fixture.plainSession("host");
+      const inspectionFailure = fixture.run(["list"]);
+      assert.equal(inspectionFailure.status, 1);
+      assert.match(inspectionFailure.stderr, /Cannot inspect pi sessions/);
+      assert.match(inspectionFailure.stderr, /tmux: injected inspection failure/);
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
+  it("registers an unregistered running cwd during list and keeps existing registrations", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const otherCwd = join(fixture.directory, "other-workspace");
+      mkdirSync(otherCwd, { recursive: true });
+      const id = randomUUID();
+      const file = join(fixture.directory, "conversations", `${id}.jsonl`);
+      fixture.piSessionIn("other", otherCwd, { id, file });
+      const result = fixture.run(["list"]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [
+        { cwd: fixture.cwd, sessions: [], empty: [] },
+        { cwd: otherCwd, sessions: [], empty: [{ id, file }] },
+      ]);
+      assert.deepEqual(JSON.parse(readFileSync(restoreFile(fixture), "utf8")), {
+        version: 1,
+        generation: "",
+        workspaces: [
+          { cwd: fixture.cwd, sessions: [] },
+          { cwd: otherCwd, sessions: [] },
+        ],
+      });
     } finally {
       await fixture.cleanup();
     }
@@ -2671,6 +2918,211 @@ describe("send parsing", () => {
     });
     assert.throws(() => parseOperation(["send", "abc123", "x".repeat(2801)]), /limit is 2800/);
     assert.throws(() => parseOperation(["send", "abc123", "あ".repeat(2801)]), /limit is 2800/);
+  });
+});
+
+describe("state argument parsing", () => {
+  const validSource = {
+    socket: "/run/user/1000/pi-tmux/server.sock",
+    serverPid: 4242,
+    pane: "%3",
+    pid: 9999,
+    token: "0f1e2d3c-4b5a-6978-8976-a5b4c3d2e1f0",
+  };
+  const parsedSource = {
+    socket: validSource.socket,
+    serverPid: 4242,
+    pane: "%3",
+    pid: 9999,
+    token: validSource.token,
+  };
+
+  it("parses source and title in both option orders", () => {
+    assert.deepEqual(
+      parseOperation([
+        "state",
+        "abc123",
+        "running",
+        "--source",
+        JSON.stringify(validSource),
+        "--title",
+        '"Fix the build"',
+      ]),
+      {
+        kind: "state",
+        id: "abc123",
+        source: parsedSource,
+        notification: { clear: false, state: "running", title: "Fix the build" },
+      },
+    );
+    assert.deepEqual(
+      parseOperation([
+        "state",
+        "abc123",
+        "waiting-user",
+        "--title",
+        "null",
+        "--source",
+        JSON.stringify(validSource),
+      ]),
+      {
+        kind: "state",
+        id: "abc123",
+        source: parsedSource,
+        notification: { clear: false, state: "waiting-user", title: null },
+      },
+    );
+    assert.deepEqual(
+      parseOperation(["state", "abc123", "--clear", "--source", JSON.stringify(validSource)]),
+      {
+        kind: "state",
+        id: "abc123",
+        source: parsedSource,
+        notification: { clear: true },
+      },
+    );
+  });
+
+  it("accepts every documented state value and keeps literal titles", () => {
+    const title = 'line1\n#{session_name} "quoted"';
+    for (const state of ["running", "waiting-approval", "waiting-user"]) {
+      assert.deepEqual(
+        parseOperation([
+          "state",
+          "abc123",
+          state,
+          "--title",
+          JSON.stringify(title),
+          "--source",
+          JSON.stringify(validSource),
+        ]).notification,
+        { clear: false, state, title },
+      );
+    }
+  });
+
+  it("rejects missing or malformed conversation IDs", () => {
+    assert.throws(
+      () => parseOperation(["state"]),
+      /state <missing>: Invalid complete conversation ID/,
+    );
+    assert.throws(
+      () => parseOperation(["state", "Invalid ID!"]),
+      /state Invalid ID!: Invalid complete conversation ID/,
+    );
+  });
+
+  it("rejects invalid state values", () => {
+    assert.throws(() => parseOperation(["state", "abc123"]), /state abc123: Invalid state/);
+    for (const state of ["paused", "Running", "--clearing"])
+      assert.throws(
+        () =>
+          parseOperation([
+            "state",
+            "abc123",
+            state,
+            "--source",
+            JSON.stringify(validSource),
+            "--title",
+            "null",
+          ]),
+        /state abc123: Invalid state/,
+        `state: ${state}`,
+      );
+  });
+
+  it("rejects missing, duplicate, and unexpected arguments", () => {
+    const base = ["state", "abc123", "running"];
+    for (const args of [
+      [...base, "--title", "null"],
+      [...base, "--source", JSON.stringify(validSource)],
+      ["state", "abc123", "--clear", "--source", JSON.stringify(validSource), "--title", "null"],
+    ])
+      assert.throws(
+        () => parseOperation(args),
+        /State requires source and title; clear requires only source/,
+        JSON.stringify(args),
+      );
+    const origin = JSON.stringify(validSource);
+    for (const args of [
+      [...base, "--source", origin, "--source", origin, "--title", "null"],
+      [...base, "--source", origin, "--title", "null", "--title", "null"],
+      [...base, "extra", "--source", origin, "--title", "null"],
+      [...base, "--source", origin, "--title"],
+      [...base, "--wait", "5", "--source", origin, "--title", "null"],
+    ])
+      assert.throws(
+        () => parseOperation(args),
+        /Missing, duplicate, or unexpected state argument/,
+        JSON.stringify(args),
+      );
+  });
+
+  it("rejects invalid JSON and malformed source objects", () => {
+    for (const value of ["{broken", "null", "[]", '"source"'])
+      assert.throws(
+        () => parseOperation(["state", "abc123", "running", "--source", value, "--title", "null"]),
+        /state abc123:/,
+        `source: ${value}`,
+      );
+    for (const changed of [
+      { socket: "relative/server.sock" },
+      { serverPid: 0 },
+      { serverPid: -1 },
+      { serverPid: 1.5 },
+      { serverPid: "4242" },
+      { pane: "3" },
+      { pane: "%abc" },
+      { pid: 0 },
+      { pid: "9999" },
+      { token: "not-a-uuid" },
+    ]) {
+      assert.throws(
+        () =>
+          parseOperation([
+            "state",
+            "abc123",
+            "running",
+            "--source",
+            JSON.stringify({ ...validSource, ...changed }),
+            "--title",
+            "null",
+          ]),
+        /state abc123: Invalid source/,
+        JSON.stringify(changed),
+      );
+    }
+  });
+
+  it("rejects titles that are neither strings nor null", () => {
+    assert.throws(
+      () =>
+        parseOperation([
+          "state",
+          "abc123",
+          "running",
+          "--source",
+          JSON.stringify(validSource),
+          "--title",
+          "{broken",
+        ]),
+      /state abc123:/,
+    );
+    for (const title of ["42", "true", "[]", '{"nested":true}'])
+      assert.throws(
+        () =>
+          parseOperation([
+            "state",
+            "abc123",
+            "running",
+            "--source",
+            JSON.stringify(validSource),
+            "--title",
+            title,
+          ]),
+        /state abc123: Invalid title/,
+        `title: ${title}`,
+      );
   });
 });
 
