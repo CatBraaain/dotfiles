@@ -2,10 +2,11 @@ import type * as vscode from "vscode";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { DisplayTerminals } from "./terminals";
 import type { PiMuxCurrentSession } from "./pi-mux";
-import { PiMux, hasLiveSession, type PiSession } from "./pi-mux";
+import { PiMux, type PiSession } from "./pi-mux";
 import { errorMessage } from "./guards";
 import { sameWorkDirectory } from "./work-directory";
 import { cwdGroupKey } from "./grouping";
+import type { DisplayedScmSession } from "./session-scm";
 
 const SWITCH_RETRY_WINDOW_MS = 60_000;
 
@@ -43,6 +44,7 @@ export class TerminalRegistry implements vscode.Disposable {
   constructor(
     private readonly terminals: DisplayTerminals,
     readonly mux: PiMux = new PiMux(),
+    private readonly onDisplayedSession?: (session: DisplayedScmSession | undefined) => void,
   ) {}
 
   get displayedSessionId(): string | undefined {
@@ -127,7 +129,7 @@ export class TerminalRegistry implements vscode.Disposable {
   }
 
   async open(
-    launch: PiSession,
+    launch: PiSession & DisplayedScmSession,
     intent: "select" | "unarchive" = "select",
     signal?: AbortSignal,
   ): Promise<{ terminal: vscode.Terminal }> {
@@ -144,8 +146,19 @@ export class TerminalRegistry implements vscode.Disposable {
       signal?.throwIfAborted();
       const workspaces = await this.mux.list();
       signal?.throwIfAborted();
-      const isAlive = hasLiveSession(workspaces, launch.sessionId);
-      return await this.connect(launch, isAlive && intent === "select", signal, recovery);
+      const { filePath: savedFile, ...session } = launch;
+      const liveSession = workspaces
+        .flatMap(({ sessions, empty }) => [...sessions, ...empty])
+        .find(({ id }) => id === session.sessionId);
+      const reuseDisplay = liveSession !== undefined && intent === "select";
+      const display = await this.connect(session, reuseDisplay, signal, recovery);
+      if (this.disposed || this.closed.has(display.terminal)) return display;
+      this.onDisplayedSession?.({
+        sessionId: session.sessionId,
+        cwd: session.cwd,
+        filePath: liveSession?.file ?? savedFile,
+      });
+      return display;
     } catch (error) {
       signal?.throwIfAborted();
       if (
@@ -186,6 +199,7 @@ export class TerminalRegistry implements vscode.Disposable {
     }
     this.displayedSession = undefined;
     this.displayedSessionCwd = undefined;
+    this.onDisplayedSession?.(undefined);
   }
 
   cancelDisplayRecovery(cwd: string): void {
@@ -200,7 +214,10 @@ export class TerminalRegistry implements vscode.Disposable {
   }
 
   onTerminalClosed(terminal: vscode.Terminal): void {
-    if (this.display === terminal) this.display = undefined;
+    if (this.display === terminal) {
+      this.display = undefined;
+      if (!this.closeWaiters.has(terminal)) this.onDisplayedSession?.(undefined);
+    }
     this.closed.add(terminal);
     this.attachments.get(terminal)?.abort(new Error("Pi display closed during attachment"));
     this.closeWaiters.get(terminal)?.resolve();
@@ -419,6 +436,7 @@ export class TerminalRegistry implements vscode.Disposable {
       if (this.disposed || this.closed.has(terminal)) return undefined;
       this.displayedSession = session.sessionId;
       this.displayedSessionCwd = session.cwd;
+      this.onDisplayedSession?.(session);
       return session;
     } catch (error) {
       if (this.disposed || this.closed.has(terminal)) return undefined;
@@ -431,7 +449,7 @@ export class TerminalRegistry implements vscode.Disposable {
     terminal: vscode.Terminal,
     cwd: string,
     signal: AbortSignal,
-  ): Promise<PiSession> {
+  ): Promise<DisplayedScmSession> {
     const pid = await terminal.processId;
     signal.throwIfAborted();
     if (pid === undefined) throw new Error(`Pi display process did not start in ${cwd}`);
@@ -445,7 +463,7 @@ export class TerminalRegistry implements vscode.Disposable {
           current.cwd === cwd || (await sameWorkDirectory(current.cwd, cwd).catch(() => false));
         if (!inRequestedCwd)
           throw new Error(`Pi display attached to ${current.cwd} instead of ${cwd}`);
-        return { sessionId: current.id, cwd };
+        return { sessionId: current.id, cwd, filePath: current.file };
       }
       await sleep(50, undefined, { signal });
     }

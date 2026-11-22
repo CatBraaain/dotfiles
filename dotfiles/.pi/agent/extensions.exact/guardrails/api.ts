@@ -142,9 +142,11 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
   });
   pi.on("session_shutdown", () => {
     active = false;
+    guardrail.clearDirectoryGrants();
     guardrail.expireTurnCommandApprovals();
   });
   pi.on("session_start", (_event, ctx) => {
+    guardrail.clearDirectoryGrants();
     guardrail.expireTurnCommandApprovals();
     if (guardrail.invalidCommandPatterns.length === 0) return;
     const patterns = guardrail.invalidCommandPatterns.map((p) => JSON.stringify(p)).join(", ");
@@ -154,6 +156,14 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
     async execute(request) {
       assertActive();
       return executeGuardedTool(guardrail, runner, cwd, request);
+    },
+    assertDirectoryGrantAllowed(path) {
+      assertActive();
+      guardrail.assertDirectoryGrantAllowed(path);
+    },
+    grantExistingDirectory(path, validate) {
+      assertActive();
+      return guardrail.grantExistingDirectory(path, validate);
     },
   };
 }
@@ -178,9 +188,52 @@ function writePermissionGuideline(paths: {
   ].join("\n");
 }
 
-export type GuardrailsAPI = {
+export type DirectoryWriteAccess = {
+  assertDirectoryGrantAllowed(path: string): void;
+  grantExistingDirectory(path: string, validate?: () => boolean): () => void;
+};
+
+export type GuardrailsAPI = DirectoryWriteAccess & {
   execute(request: GuardedToolRequest): Promise<AgentToolResult<unknown>>;
 };
+
+const DIRECTORY_ACCESS_CHANNEL = "dotfiles.guardrails.directory-write-access";
+
+type DirectoryAccessRequest = {
+  sessionId: string;
+  receive(access: DirectoryWriteAccess): void;
+};
+
+export function publishDirectoryWriteAccess(pi: ExtensionAPI, access: DirectoryWriteAccess): void {
+  let sessionId: string | undefined;
+  pi.on("session_start", (_event, ctx) => {
+    sessionId = ctx.sessionManager.getSessionId();
+  });
+  pi.on("session_shutdown", () => {
+    sessionId = undefined;
+  });
+  pi.events.on(DIRECTORY_ACCESS_CHANNEL, (data) => {
+    const request = data as DirectoryAccessRequest;
+    if (
+      sessionId !== undefined &&
+      request?.sessionId === sessionId &&
+      typeof request.receive === "function"
+    )
+      request.receive(access);
+  });
+}
+
+export function getDirectoryWriteAccess(pi: ExtensionAPI, sessionId: string): DirectoryWriteAccess {
+  let access: DirectoryWriteAccess | undefined;
+  pi.events.emit(DIRECTORY_ACCESS_CHANNEL, {
+    sessionId,
+    receive(value) {
+      access = value;
+    },
+  } satisfies DirectoryAccessRequest);
+  if (!access) throw new Error("Guardrails directory write access is unavailable for this session");
+  return access;
+}
 
 export type { GuardedToolContext, GuardedToolRequest } from "./execute.ts";
 export { normalizeToolPath } from "./normalize-path.ts";

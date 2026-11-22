@@ -290,13 +290,15 @@ describe("extension commands", () => {
       deps: ConstructorParameters<typeof SessionWebviewProvider>[0];
     };
     provider.deps.onSessionFiles!([
-      { cwd: "/project", file: "/custom/history/A.jsonl" },
-      { cwd: "/project", file: "/custom/history/planned.jsonl" },
-      { cwd: "/project", file: "/fixture/sessions/group/B.jsonl" },
+      { id: "A", cwd: "/project", file: "/custom/history/A.jsonl" },
+      { id: "planned", cwd: "/project", file: "/custom/history/planned.jsonl" },
+      { id: "B", cwd: "/project", file: "/fixture/sessions/group/B.jsonl" },
     ]);
     expect(api.watchers).toHaveLength(2);
     expect(watcherFor("/custom/history")).toBeDefined();
-    provider.deps.onSessionFiles!([{ cwd: "/project", file: "/custom/history/planned.jsonl" }]);
+    provider.deps.onSessionFiles!([
+      { id: "planned", cwd: "/project", file: "/custom/history/planned.jsonl" },
+    ]);
     expect(api.watchers).toHaveLength(2);
     provider.deps.onSessionFiles!([]);
     expect(watcherFor("/custom/history")?.dispose).toHaveBeenCalledOnce();

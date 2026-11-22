@@ -17,6 +17,7 @@ import {
 import {
   createGuardrailsAPI,
   normalizeToolPath,
+  publishDirectoryWriteAccess,
   type GuardedToolRequest,
   type GuardrailsAPI,
 } from "../guardrails/api.ts";
@@ -49,7 +50,7 @@ type GuardedExecutor = (
 
 function createGuardedExecutor(
   definition: ToolDefinition,
-  guardrails: GuardrailsAPI,
+  guardrails: Pick<GuardrailsAPI, "execute">,
   cwd: string,
   initializationError: unknown,
 ): GuardedExecutor {
@@ -93,9 +94,11 @@ function registerGuardedTool(
 function initializeGuardrails(
   pi: ExtensionAPI,
   configPath?: string,
-): { guardrails: GuardrailsAPI; initializationError?: unknown } {
+): { guardrails: Pick<GuardrailsAPI, "execute">; initializationError?: unknown } {
   try {
-    return { guardrails: createGuardrailsAPI(pi, configPath) };
+    const guardrails = createGuardrailsAPI(pi, configPath);
+    publishDirectoryWriteAccess(pi, guardrails);
+    return { guardrails };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     pi.on("session_start", (_event, context) => {

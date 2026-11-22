@@ -408,10 +408,9 @@ main worktree ではファイルを編集しない。編集を伴う作業は、
 ### 作成
 
 1. branch名は取り組む機能を表すkebab-case英語（例: `add-export-command`）。リポジトリ規約があれば優先する。
-2. `git worktree add ~/.agents/worktrees/<リポジトリ名>/<branch> -b <branch>` で HEAD から worktree を作成する。worktree はリポジトリごとに `~/.agents/worktrees/<リポジトリ名>/` ディレクトリへ集約する。フォルダ名（末尾セグメント）が `agents-` / `copilot-` で始まるときは branch名を変えず `wt-` を前置する（例: branch `agents-fix-x` → フォルダ `wt-agents-fix-x`。VS Code内蔵Git拡張が、その名前の worktreeフォルダを SCMビューから非表示にするため）。書き込みが sandbox にブロックされたら、作成先の worktreeパス（またはその親ディレクトリ）を ask_permission で承認させる。
-3. branch名が既に存在して `-b` が失敗するときは、既存branch・worktree を checkout・再利用しない。main worktree の HEAD から、このタスクの対象や範囲の違いが伝わる自然に一意な別名branch（kebab-case英語）で新規worktree を作成する。
-4. 作成直後に `git worktree list` の対象行を見て、末尾セグメントが `agents-` / `copilot-` で始まるフォルダが `wt-` 前置きなしで存在した場合は `git worktree move` で `wt-` 前置きのフォルダ名へ改名する（例: `agents-fix-x` → `wt-agents-fix-x`）。
-5. worktree内のファイルは絶対パスで read/write/editする。相対パスはセッションcwd（main worktree）に解決されるため、worktree のファイル指定に使わない。git操作は `git -C <worktree のパス>` で実行する。
+2. pi では `session_worktree` に `action: "declare"` と `name` を渡す。指定したサブworktree があればそのまま利用し、なければ main worktree の HEAD から作成する。既存の worktree を引き継ぐ場合は、その名前を宣言する。新規作業では、既存の別作業と衝突しない名前を選ぶ。すでにサブworktree 内を cwd として起動した場合は、その cwd 配下を再宣言せずに利用できる。
+3. 宣言ツールがない環境では、既存作業と衝突しない名前で `git worktree add ~/.agents/worktrees/<リポジトリ名>/<branch> -b <branch>` を使う。フォルダ名が `agents-` / `copilot-` で始まる場合は branch 名を変えず、フォルダ名に `wt-` を前置する。
+4. worktree内のファイルは絶対パスで read/write/editする。相対パスはセッションcwd（main worktree）に解決されるため、worktree のファイル指定に使わない。git操作は `git -C <worktree のパス>` で実行する。
 
 main の未コミット変更はその場に残す。worktree への持ち運びは行わない。
 

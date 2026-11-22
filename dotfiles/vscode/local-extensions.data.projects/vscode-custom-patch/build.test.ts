@@ -37,6 +37,8 @@ it("restores all outputs for unchanged build inputs and keeps two cache generati
         "scripts/build.ts",
         "src/extension.ts",
         "src/patch.ts",
+        "src/scm-bridge.ts",
+        "src/scm-selection.ts",
         "plugins/scm-collapse/package.json",
         "plugins/scm-collapse/tsconfig.json",
         plugin,
@@ -75,9 +77,16 @@ it("restores all outputs for unchanged build inputs and keeps two cache generati
     assert.equal(packages, 2);
     assert.notDeepEqual(await readFile(join(vscode, vsix + ".sha256")), firstOutputs[1]);
 
-    await appendFile(join(project, plugin), '\nconsole.info("changed again");\n');
+    const bridgePath = join(project, "src/scm-selection.ts");
+    const bridgeSource = await readFile(bridgePath, "utf8");
+    const collapseHash = await readFile(join(vscode, vsix + ".sha256"));
+    await writeFile(
+      bridgePath,
+      bridgeSource.replace("agentKit.scm.selectRepositories", "fixture.scm.selectRepositories"),
+    );
     await buildCustomPatch(vscode, dist, buildWithStub);
     assert.equal(packages, 3);
+    assert.notDeepEqual(await readFile(join(vscode, vsix + ".sha256")), collapseHash);
     const cache = join(root, ".cache/vscode-custom-patch", `${process.platform}-${process.arch}`);
     assert.equal((await readdir(cache)).length, 2);
   } finally {

@@ -1,5 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
   compileCommandRuleEntries,
   defaultGuardrailConfigPath,
@@ -66,6 +74,26 @@ export type ToolContext = {
   ui?: ToolUI;
 };
 
+function canonicalWritePath(path: string): string {
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    return join(canonicalWritePath(dirname(path)), basename(path));
+  }
+  return realpathSync.native(path);
+}
+
+function directoryIdentity(path: string): string | undefined {
+  try {
+    const stats = lstatSync(path, { bigint: true });
+    if (stats.isDirectory() && realpathSync.native(path) === path)
+      return `${stats.dev}:${stats.ino}:${stats.birthtimeNs}`;
+  } catch {
+    return undefined;
+  }
+}
+
 const ALLOW_OPTION = "Yes, allow";
 const ALLOW_ONCE_OPTION = "Allow once";
 const ALLOW_TURN_OPTION = "Allow in this turn";
@@ -104,6 +132,7 @@ function highlightCommandMatch(raw: string, span: MatchSpan, accentStart: string
 
 export class Guardrail {
   private readonly dynamicPaths = new Map<string, Set<"read" | "write">>();
+  private readonly directoryGrants = new Map<symbol, { path: string; isCurrent: () => boolean }>();
   /** One-shot ask_permission approvals, as normalized command segments (§3). */
   private readonly approvedCommands: string[][][] = [];
   /**
@@ -163,14 +192,62 @@ export class Guardrail {
       cwd: this.cwd,
       config: this.config,
       globCache: this.globCache,
-      dynamicPaths: this.dynamicPaths,
+      dynamicPaths: this.getDynamicPaths(),
       mode,
       commandCwd,
     });
   }
 
   getDynamicPaths(): DynamicPaths {
-    return new Map(this.dynamicPaths);
+    const paths = new Map(this.dynamicPaths);
+    for (const path of this.currentGrantPaths()) {
+      paths.set(path, new Set([...(paths.get(path) ?? []), "write"]));
+    }
+    return paths;
+  }
+
+  assertDirectoryGrantAllowed(path: string): void {
+    if (!isAbsolute(path) || path.includes("\0") || path !== resolve(path))
+      throw new Error(`Expected a normalized absolute directory path: ${path}`);
+    if (canonicalWritePath(path) !== path)
+      throw new Error(`Directory grant path uses a symbolic link: ${path}`);
+    this.assertWriteNotDenied(path);
+  }
+
+  grantExistingDirectory(path: string, validate?: () => boolean): () => void {
+    this.assertDirectoryGrantAllowed(path);
+    const identity = directoryIdentity(path);
+    if (identity === undefined) throw new Error(`Directory does not exist: ${path}`);
+    function isCurrent(): boolean {
+      return directoryIdentity(path) === identity && (validate?.() ?? true);
+    }
+    if (!isCurrent()) throw new Error(`Directory changed before it could be granted: ${path}`);
+    const id = Symbol();
+    this.directoryGrants.set(id, { path, isCurrent });
+    return () => {
+      this.directoryGrants.delete(id);
+    };
+  }
+
+  clearDirectoryGrants(): void {
+    this.directoryGrants.clear();
+  }
+
+  private *currentGrantPaths(): Iterable<string> {
+    for (const [id, grant] of this.directoryGrants) {
+      if (grant.isCurrent()) yield grant.path;
+      else this.directoryGrants.delete(id);
+    }
+  }
+
+  private assertWriteNotDenied(path: string): void {
+    if (pathsMatchCandidate(credentialPaths(this.config, this.cwd, this.globCache), path))
+      throw new Error(`Access denied for credential path: ${path}`);
+    const { action, matched } = resolvePathActionMatch(
+      writePaths(this.config, this.cwd, this.globCache),
+      path,
+    );
+    if (action === "deny" && matched !== undefined) throw new Error(`Access denied: ${path}`);
   }
 
   async authorizePath(
@@ -217,6 +294,13 @@ export class Guardrail {
   private hasDynamicGrant(operation: "read" | "write", candidatePath: string): boolean {
     for (const [grantedPath, accessModes] of this.dynamicPaths)
       if (accessModes.has(operation) && pathCovers(grantedPath, candidatePath)) return true;
+    if (operation !== "write") return false;
+    for (const path of this.currentGrantPaths()) {
+      if (!pathCovers(path, candidatePath)) continue;
+      const canonical = canonicalWritePath(candidatePath);
+      if (canonical !== candidatePath) this.assertWriteNotDenied(canonical);
+      if (pathCovers(path, canonical)) return true;
+    }
     return false;
   }
 

@@ -87,24 +87,27 @@ export function findWorktreeScopes(command: string, cwd: string): WorktreeScope[
 
 export async function loadWorktreeSnapshot(cwd: string, run: BashQuery): Promise<WorktreeSnapshot> {
   const output = await run(quote(["git", "-C", cwd, "worktree", "list", "--porcelain", "-z"]));
-  if (!output.startsWith("worktree ") || !output.endsWith("\0\0"))
-    throw new Error(`Invalid or incomplete Git worktree list for ${cwd}`);
-  const records = output.split("\0\0").filter(Boolean);
-  const roots = records.map((record) => {
-    const fields = record.split("\0");
-    const path = fields[0]!.slice("worktree ".length);
-    if (!fields[0]!.startsWith("worktree ") || !isAbsolute(path))
-      throw new Error(`Invalid Git worktree path for ${cwd}`);
-    return { path, bare: fields.includes("bare") };
-  });
-  const mainPath = roots[0]!.path;
+  const roots = parseWorktreeRoots(output, cwd);
   const worktrees = roots
     .filter((root) => !root.bare)
     .flatMap(({ path }) => {
       const identity = worktreeIdentity(path);
       return identity ? [{ path: realpathSync(path), identity }] : [];
     });
-  return { cwd: mainPath, worktrees };
+  return { cwd: roots[0]!.path, worktrees };
+}
+
+export function parseWorktreeRoots(output: string, cwd: string): { path: string; bare: boolean }[] {
+  if (!output.startsWith("worktree ") || !output.endsWith("\0\0"))
+    throw new Error(`Invalid or incomplete Git worktree list for ${cwd}`);
+  const records = output.split("\0\0").filter(Boolean);
+  return records.map((record) => {
+    const fields = record.split("\0");
+    const path = fields[0]!.slice("worktree ".length);
+    if (!fields[0]!.startsWith("worktree ") || !isAbsolute(path))
+      throw new Error(`Invalid Git worktree path for ${cwd}`);
+    return { path, bare: fields.includes("bare") };
+  });
 }
 
 export function detectWorkspaceChanges(
@@ -170,17 +173,6 @@ export async function retainLiveWorkspaces(
     if (live.has(canonical)) retained.push(canonical);
   }
   return [...new Set(retained)];
-}
-
-export function normalizeWorkspacePath(path: string, cwd: string): string {
-  const reference = path.startsWith("@") ? path.slice(1) : path;
-  const expanded =
-    reference === "~"
-      ? homedir()
-      : reference.startsWith("~/")
-        ? `${homedir()}/${reference.slice(2)}`
-        : reference;
-  return resolveWorktreePath(expanded, cwd);
 }
 
 function resolveWorktreePath(path: string, cwd: string): string {

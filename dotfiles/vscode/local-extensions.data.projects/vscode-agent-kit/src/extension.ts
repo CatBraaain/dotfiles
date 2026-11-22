@@ -7,6 +7,7 @@ import { SessionLauncher } from "./launcher";
 import { FolderSyncEngine, type VscodeLike } from "./folder-sync";
 import type { ExecFile } from "./git-worktrees";
 import { resolveConfiguredSessionRoot } from "./paths";
+import { SELECT_SCM_REPOSITORIES, SessionScmSelection } from "./session-scm";
 import { TerminalRegistry } from "./terminal-registry";
 import { editorTerminals, isDisplayTerminal } from "./terminals";
 import { WorkspaceStore } from "./workspace-store";
@@ -64,10 +65,35 @@ function folderSyncApi(): VscodeLike {
   };
 }
 
+interface GitExtension {
+  readonly enabled: boolean;
+  getAPI(version: 1): { readonly repositories: readonly { rootUri: vscode.Uri }[] };
+}
+
+function detectedGitRoots(): string[] | undefined {
+  const git = vscode.extensions?.getExtension<GitExtension>("vscode.git");
+  if (!git?.isActive || !git.exports.enabled) return undefined;
+  return git.exports
+    .getAPI(1)
+    .repositories.map(({ rootUri }) =>
+      rootUri.scheme === "vscode-remote" && rootUri.authority.startsWith("wsl+")
+        ? rootUri.path
+        : rootUri.fsPath,
+    );
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const homeDir = homedir();
-  const registry = new TerminalRegistry(editorTerminals());
   const log = vscode.window.createOutputChannel("Agent Kit", { log: true });
+  const scm = new SessionScmSelection({
+    execFile,
+    detectedRoots: detectedGitRoots,
+    selectRepositories: (paths) => vscode.commands.executeCommand(SELECT_SCM_REPOSITORIES, paths),
+    log: (message) => log.error(message),
+  });
+  const registry = new TerminalRegistry(editorTerminals(), undefined, (session) =>
+    scm.track(session),
+  );
 
   function updateActiveTerminalContext(terminal: vscode.Terminal | undefined): void {
     void Promise.resolve(
@@ -90,6 +116,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode: folderSyncApi(),
     execFile,
     homeDir,
+    onWorktreeDetection: () => void scm.refresh(),
   });
   context.subscriptions.push(folderSync.start());
   const launcher: SessionLauncher = new SessionLauncher({
@@ -111,6 +138,13 @@ export function activate(context: vscode.ExtensionContext): void {
       folderSync.updateList(cwds);
     },
     onSessionFiles: (files) => {
+      const displayed = registry.displayedSessionId;
+      for (let index = files.length - 1; displayed !== undefined && index >= 0; index--) {
+        const { id, file } = files[index];
+        if (id !== displayed) continue;
+        scm.updateSessionFile(id, file);
+        break;
+      }
       const directories = new Set(files.map(({ file }) => dirname(file)));
       for (const [directory, watcher] of historyWatchers) {
         if (directories.has(directory)) continue;
@@ -130,7 +164,8 @@ export function activate(context: vscode.ExtensionContext): void {
     const watcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(vscode.Uri.file(directory), "**/*.jsonl"),
     );
-    function changed(): void {
+    function changed(uri: vscode.Uri): void {
+      scm.onSessionFileChanged(uri.fsPath);
       void provider.onSessionFileChanged();
     }
     watcher.onDidCreate(changed);
@@ -171,6 +206,7 @@ export function activate(context: vscode.ExtensionContext): void {
     {
       dispose: () => {
         disposed = true;
+        scm.track(undefined);
         rootWatcher?.dispose();
         for (const watcher of historyWatchers.values()) watcher.dispose();
       },

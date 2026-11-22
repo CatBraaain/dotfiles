@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
-import { join } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { join, relative } from "node:path";
 import { afterEach, describe, it } from "bun:test";
 import { quote } from "shell-quote";
 import {
@@ -13,7 +21,14 @@ import {
   type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { getWorkspaces, WORKSPACES_ENTRY_TYPE } from "./metadata.ts";
+import {
+  getDeclarations,
+  getWorkspaces,
+  DECLARATIONS_ENTRY_TYPE,
+  WORKSPACES_ENTRY_TYPE,
+} from "./metadata.ts";
+import { realBwrapTest } from "../guardrails/bwrap-test-support.ts";
+import toolsExtension from "../tools/index.ts";
 import sessionMetadataExtension from "./index.ts";
 
 type Handler = (event: Record<string, unknown>, context: ExtensionContext) => unknown;
@@ -34,7 +49,7 @@ afterEach(() =>
     .forEach((dispose) => dispose()),
 );
 
-async function createHarness(persist = true) {
+async function createHarness(persist = true, guarded = false) {
   mkdirSync("/tmp/work/dotfiles/session-metadata-custom-qa", { recursive: true });
   const directory = mkdtempSync("/tmp/work/dotfiles/session-metadata-custom-qa/integration-");
   cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
@@ -68,10 +83,8 @@ async function createHarness(persist = true) {
   const renderers = new Map<string, Renderer>();
   const uiErrors: string[] = [];
   const queries: string[] = [];
-  const nestedQueries: string[] = [];
   let manager = newManager();
   let nestedId = 0;
-  let beforeQuery: (() => Promise<void>) | undefined;
   let appendError: Error | undefined;
 
   function newManager(): SessionManager {
@@ -145,7 +158,6 @@ async function createHarness(persist = true) {
       if (command !== "bash" || args[0] !== "-c")
         throw new Error(`Unexpected process command: ${command} ${args.join(" ")}`);
       queries.push(args[1]!);
-      await beforeQuery?.();
       const output = spawnSync(command, args, {
         cwd: options.cwd,
         env: gitEnvironment,
@@ -179,7 +191,24 @@ async function createHarness(persist = true) {
       renderers.set(type, renderer);
     },
   } as unknown as ExtensionAPI;
-  sessionMetadataExtension(pi);
+  const managed = join(directory, ".agents", "worktrees", "main repo");
+  if (guarded) {
+    const config = join(directory, "guardrails.yaml");
+    writeFileSync(
+      config,
+      JSON.stringify({
+        read: [{ allow: "*" }],
+        write: [
+          { allow: root },
+          { deny: [join(managed, "denied"), join(managed, "active", "denied")] },
+        ],
+        credentials: [join(managed, "credential"), join(managed, "active", "secret")],
+        commands: [{ ".*": [{ allow: [] }] }],
+      }),
+    );
+    toolsExtension(pi, config);
+  }
+  sessionMetadataExtension(pi, directory);
   await emit("session_start", { reason: "startup" });
 
   async function bash(command: string, parentToolCallId?: string) {
@@ -212,39 +241,18 @@ async function createHarness(persist = true) {
     return { event, original, outcome };
   }
 
-  async function explicit(action: "register" | "unregister", path: string) {
-    const ctx = context();
-    const toolContext = {
-      ...ctx,
-      async executeTool(name: string, args: { command: string }) {
-        if (name !== "bash") throw new Error(`Unexpected nested tool ${name}`);
-        const id = `explicit/${++nestedId}`;
-        nestedQueries.push(args.command);
-        await beforeQuery?.();
-        await emit(
-          "tool_call",
-          { toolName: name, toolCallId: id, parentToolCallId: "explicit", input: args },
-          ctx,
-        );
-        const outcome = shell(args.command);
-        await emit(
-          "tool_result",
-          {
-            toolName: name,
-            toolCallId: id,
-            parentToolCallId: "explicit",
-            input: args,
-            ...outcome.result,
-            isError: outcome.isError,
-          },
-          ctx,
-        );
-        return { toolCall: { type: "toolCall", id, name, arguments: args }, ...outcome };
-      },
-    } as unknown as ExtensionToolContext;
+  function invoke(tool: string, params: Record<string, unknown>, ctx = context()) {
     return tools
-      .get("session_worktree")!
-      .execute("explicit", { action, path }, undefined, undefined, toolContext);
+      .get(tool)!
+      .execute(tool, params, undefined, undefined, ctx as ExtensionToolContext);
+  }
+
+  function explicit(action: "declare" | "unregister", name: string, cwd = root) {
+    return invoke("session_worktree", { action, name }, { ...context(), cwd });
+  }
+
+  function request(path: string) {
+    return invoke("ask_permission", { path, reason: "test" }, { ...context(), hasUI: false });
   }
 
   return {
@@ -255,7 +263,6 @@ async function createHarness(persist = true) {
     messages,
     uiErrors,
     queries,
-    nestedQueries,
     renderers,
     get manager() {
       return manager;
@@ -264,8 +271,13 @@ async function createHarness(persist = true) {
     bash,
     shell,
     explicit,
-    setBeforeQuery(callback: (() => Promise<void>) | undefined) {
-      beforeQuery = callback;
+    invoke,
+    managed,
+    request,
+    seedWorkspace(path: string) {
+      manager.appendCustomEntry(WORKSPACES_ENTRY_TYPE, {
+        workspaces: [...getWorkspaces(manager), path],
+      });
     },
     setExecError(error: Error) {
       execError = error;
@@ -382,29 +394,10 @@ describe("session metadata extension", () => {
     assert.deepEqual(getWorkspaces(h.manager), [target]);
   });
 
-  it("explicitly registers and unregisters the physical target through symlink and dot-dot", async () => {
-    const h = await createHarness();
-    const actual = join(h.directory, "actual");
-    const deep = join(actual, "deep");
-    const alias = join(h.root, "alias");
-    mkdirSync(deep, { recursive: true });
-    symlinkSync(deep, alias);
-    const target = `${alias}/../existing`;
-    const created = h.shell(quote(["git", "worktree", "add", "--detach", target, "HEAD"]));
-    assert.equal(created.isError, false);
-    const physical = join(actual, "existing");
-    const registered = await h.explicit("register", "@alias/../existing");
-    assert.deepEqual(registered.details, { changed: true, workspaces: [physical] });
-    const removed = h.shell(quote(["git", "worktree", "remove", target]));
-    assert.equal(removed.isError, false);
-    const unregistered = await h.explicit("unregister", "@alias/../existing");
-    assert.deepEqual(unregistered.details, { changed: true, workspaces: [] });
-  });
-
   it("keeps registration order across physical moves and removals through symlink and dot-dot", async () => {
     const h = await createHarness();
     const first = await h.createWorktree("first");
-    await h.explicit("register", first);
+    h.seedWorkspace(first);
     const actual = join(h.directory, "actual");
     const deep = join(actual, "deep");
     const alias = join(h.root, "alias");
@@ -415,7 +408,7 @@ describe("session metadata extension", () => {
     const added = await h.bash(quote(["git", "worktree", "add", "--detach", source, "HEAD"]));
     assert.equal(added.outcome.isError, false);
     const last = await h.createWorktree("last");
-    await h.explicit("register", last);
+    h.seedWorkspace(last);
     const moved = await h.bash(quote(["git", "worktree", "move", source, destination]));
     assert.equal(moved.outcome.isError, false);
     assert.deepEqual(getWorkspaces(h.manager), [first, join(actual, "destination"), last]);
@@ -453,11 +446,9 @@ describe("session metadata extension", () => {
     const command =
       "git worktree add --detach ~/feature HEAD && git worktree add --detach '~/feature' HEAD";
     const module = new URL("./worktrees.ts", import.meta.url).href;
-    const script = `import { findWorktreeScopes, normalizeWorkspacePath } from ${JSON.stringify(module)};
+    const script = `import { findWorktreeScopes } from ${JSON.stringify(module)};
       console.log(JSON.stringify({
-        scopes: findWorktreeScopes(${JSON.stringify(command)}, ${JSON.stringify(h.root)}),
-        explicit: normalizeWorkspacePath("@~/feature", ${JSON.stringify(h.root)}),
-        explicitDotDot: normalizeWorkspacePath("@~/alias/../missing", ${JSON.stringify(h.root)})
+        scopes: findWorktreeScopes(${JSON.stringify(command)}, ${JSON.stringify(h.root)})
       }));`;
     const parsed = JSON.parse(
       execFileSync(process.execPath, ["--eval", script], { env, encoding: "utf8" }),
@@ -467,14 +458,12 @@ describe("session metadata extension", () => {
     assert.equal(result.isError, false, result.result.content[0]!.text);
     expected.forEach((target) => assert.ok(existsSync(join(target, ".git"))));
     assert.deepEqual(parsed.scopes, [{ cwd: h.root, actions: ["add"], paths: expected }]);
-    assert.equal(parsed.explicit, expected[0]);
-    assert.equal(parsed.explicitDotDot, join(physicalHome, "missing"));
   });
 
   it("appends multiple additions in observed Git list order after existing registrations", async () => {
     const h = await createHarness();
     const existing = await h.createWorktree("existing");
-    await h.explicit("register", existing);
+    h.seedWorkspace(existing);
     const zulu = join(h.directory, "zulu");
     const alpha = join(h.directory, "alpha");
     const result = await h.bash(
@@ -487,7 +476,7 @@ describe("session metadata extension", () => {
   it("replaces a registered path after move through cd and git -C", async () => {
     const h = await createHarness();
     const source = await h.createWorktree("source");
-    await h.explicit("register", source);
+    h.seedWorkspace(source);
     const destination = join(h.directory, "destination");
     await h.bash(
       `cd ${quote([source])} && git -C ${quote([h.root])} worktree move ${quote([source, destination])}`,
@@ -502,7 +491,7 @@ describe("session metadata extension", () => {
     const other = SessionManager.create(h.root, join(h.directory, "other-sessions"));
     other.appendCustomEntry(WORKSPACES_ENTRY_TYPE, { workspaces: [path] });
     const otherEntries = structuredClone(other.getEntries());
-    await h.explicit("register", path);
+    h.seedWorkspace(path);
     await h.bash(quote(["git", "worktree", "remove", path]));
     assert.deepEqual(getWorkspaces(h.manager), []);
     assert.deepEqual(other.getEntries(), otherEntries);
@@ -633,142 +622,267 @@ describe("session metadata extension", () => {
     assert.equal(h.messages.length, 0);
   });
 
-  it("explicitly registers an existing worktree through ctx.executeTool", async () => {
-    const h = await createHarness();
-    const path = await h.createWorktree("existing");
-    const result = await h.explicit("register", path);
-    const body = JSON.parse(result.content[0]!.type === "text" ? result.content[0]!.text : "{}");
-    assert.deepEqual(body.workspaces, [path]);
-    assert.deepEqual(body, { changed: true, workspaces: [path] });
-    assert.equal(h.nestedQueries.length, 1);
-    assert.equal(h.messages.length, 0);
-    assert.deepEqual(getWorkspaces(h.manager), [path]);
-  });
+  it("creates from main HEAD when the session starts in another linked worktree", async () => {
+    const h = await createHarness(true, true);
+    assert.equal(
+      h.shell(
+        "printf tracked > tracked && git add tracked && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -m tracked",
+      ).isError,
+      false,
+    );
+    const other = await h.createWorktree("other");
+    assert.equal(
+      h.shell(
+        `git -C ${quote([other])} -c user.name=Fixture -c user.email=fixture@example.invalid commit --allow-empty -m branch-only`,
+      ).isError,
+      false,
+    );
 
-  it("deduplicates repeat registration and removes an association without deleting its worktree", async () => {
-    const h = await createHarness();
-    const path = await h.createWorktree("existing");
-    await h.explicit("register", path);
-    const beforeRepeat = readFileSync(h.manager.getSessionFile()!);
-    await h.explicit("register", path);
-    assert.deepEqual(getWorkspaces(h.manager), [path]);
-    assert.deepEqual(readFileSync(h.manager.getSessionFile()!), beforeRepeat);
-    await h.explicit("unregister", path);
-    assert.deepEqual(getWorkspaces(h.manager), []);
-    assert.equal(existsSync(join(path, ".git")), true);
-  });
-
-  it("keeps the latest session-wide custom snapshot when navigating conversation branches", async () => {
-    const h = await createHarness();
-    const path = await h.createWorktree("shared");
-    await h.explicit("register", path);
-    const sharedHeader = h.manager.getHeader();
-    const entries = h.manager.getEntries();
-    const oldLeafId = h.manager.getLeafId()!;
-    const newLeafId = entries[0]!.id;
-    const before = readFileSync(h.manager.getSessionFile()!);
-    h.manager.branch(newLeafId);
-    await h.emit("session_tree", { oldLeafId, newLeafId });
-    assert.equal(h.manager.getLeafId(), newLeafId);
-    assert.equal(h.manager.getHeader(), sharedHeader);
-    assert.deepEqual(getWorkspaces(h.manager), [path]);
-    assert.deepEqual(readFileSync(h.manager.getSessionFile()!), before);
-    assert.equal(h.messages.length, 0);
-  });
-
-  it("returns success and keeps the list when unregistering an unregistered path", async () => {
-    const h = await createHarness();
-    const registered = await h.createWorktree("registered");
-    const unrelated = await h.createWorktree("unrelated");
-    await h.explicit("register", registered);
-    const result = await h.explicit("unregister", unrelated);
+    const result = await h.explicit("declare", "agents-created", other);
+    const path = join(h.managed, "wt-agents-created");
     assert.deepEqual(result.details, {
-      changed: false,
-      workspaces: [registered],
+      name: "agents-created",
+      path,
+      status: "created",
+      worktrees: [{ name: "agents-created", path }],
     });
-    assert.deepEqual(getWorkspaces(h.manager), [registered]);
-    assert.ok(existsSync(join(unrelated, ".git")));
+    assert.equal(readFileSync(join(path, "tracked"), "utf8"), "tracked");
+    assert.equal(h.shell(`git -C ${quote([path])} status --porcelain`).result.content[0]?.text, "");
+    assert.equal(
+      h.shell(`git -C ${quote([path])} rev-parse HEAD`).result.content[0]?.text,
+      h.shell("git rev-parse HEAD").result.content[0]?.text,
+    );
+    assert.deepEqual(getDeclarations(h.manager), [{ name: "agents-created", path }]);
+    assert.deepEqual(getWorkspaces(h.manager), []);
   });
 
-  it("accepts relative path references for explicit registration", async () => {
-    const h = await createHarness();
-    const path = await h.createWorktree("existing");
-    await h.explicit("register", "@../existing");
+  it("does not run repository hooks, a filesystem monitor or checkout filters when creating", async () => {
+    const h = await createHarness(true, true);
+    const hook = join(h.root, ".git", "hooks", "post-checkout");
+    const marker = join(h.directory, "external-command-ran");
+    const mark = `printf ran > ${quote([marker])}`;
+    writeFileSync(join(h.root, ".gitattributes"), "payload filter=fixture\n");
+    writeFileSync(join(h.root, "payload"), "tracked payload");
+    assert.equal(
+      h.shell(
+        "git add .gitattributes payload && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -m filters",
+      ).isError,
+      false,
+    );
+    writeFileSync(hook, `#!/bin/sh\n${mark}\n`, { mode: 0o700 });
+    assert.equal(h.shell(quote(["git", "config", "hook.fixture.command", mark])).isError, false);
+    assert.equal(h.shell("git config hook.fixture.event reference-transaction").isError, false);
+    assert.equal(
+      h.shell(quote(["git", "config", "filter.fixture.smudge", `${mark}; cat`])).isError,
+      false,
+    );
+    assert.equal(h.shell(quote(["git", "config", "core.fsmonitor", hook])).isError, false);
+    await h.explicit("declare", "safe-creation");
+    assert.equal(
+      readFileSync(join(h.managed, "safe-creation", "payload"), "utf8"),
+      "tracked payload",
+    );
+    assert.equal(existsSync(marker), false);
+  });
+
+  it("reuses a managed linked worktree without touching existing changes or its branch", async () => {
+    const h = await createHarness(true, true);
+    const path = join(h.managed, "existing");
+    assert.equal(
+      h.shell(quote(["git", "worktree", "add", "-b", "existing-branch", path])).isError,
+      false,
+    );
+    writeFileSync(join(path, "draft"), "keep");
+    const result = await h.explicit("declare", "existing");
+    assert.deepEqual(result.details, {
+      name: "existing",
+      path,
+      status: "reused",
+      worktrees: [{ name: "existing", path }],
+    });
+    assert.equal(readFileSync(join(path, "draft"), "utf8"), "keep");
+    assert.equal(
+      h.shell(`git -C ${quote([path])} branch --show-current`).result.content[0]?.text.trim(),
+      "existing-branch",
+    );
+    const file = h.manager.getSessionFile()!;
+    const entry = JSON.parse(readFileSync(file, "utf8").trimEnd().split("\n").at(-1)!);
+    assert.equal(entry.customType, DECLARATIONS_ENTRY_TYPE);
+    assert.deepEqual(entry.data, { worktrees: [{ name: "existing", path }] });
+    const before = readFileSync(file);
+    await h.explicit("declare", "existing");
+    assert.deepEqual(readFileSync(file), before);
+  });
+
+  it("rejects unsafe names, occupied paths and existing branches without changing them", async () => {
+    const h = await createHarness(true, true);
+    for (const name of ["../outside", "-force", "wt-agents-conflict", "normal\n", "some/path"])
+      await assert.rejects(h.explicit("declare", name), /Invalid worktree name/);
+    const normal = join(h.managed, "occupied");
+    mkdirSync(normal, { recursive: true });
+    const marker = join(normal, "draft");
+    writeFileSync(marker, "keep");
+    await assert.rejects(h.explicit("declare", "occupied"), /Not a linked worktree/);
+    assert.equal(readFileSync(marker, "utf8"), "keep");
+    symlinkSync(normal, join(h.managed, "alias"));
+    await assert.rejects(h.explicit("declare", "alias"), /without symbolic links/);
+    assert.equal(h.shell("git branch collision").isError, false);
+    await assert.rejects(h.explicit("declare", "collision"), /already exists/);
+    assert.equal(existsSync(join(h.managed, "collision")), false);
+    assert.deepEqual(getDeclarations(h.manager), []);
+  });
+
+  it("does not create worktrees at paths denied by Guardrails", async () => {
+    const h = await createHarness(true, true);
+    await assert.rejects(h.explicit("declare", "denied"), /Access denied/);
+    await assert.rejects(h.explicit("declare", "credential"), /Access denied for credential path/);
+    assert.equal(existsSync(h.managed), false);
+    assert.deepEqual(getDeclarations(h.manager), []);
+  });
+
+  it("never elevates observed or persisted declarations without a successful tool call", async () => {
+    const h = await createHarness(true, true);
+    const path = join(h.managed, "observed");
+    await h.bash(quote(["git", "worktree", "add", "--detach", path]));
     assert.deepEqual(getWorkspaces(h.manager), [path]);
+    await assert.rejects(h.request(path), /Access requires confirmation/);
+    await h.explicit("declare", "observed");
+    assert.match(JSON.stringify((await h.request(path)).details), /already granted/);
+    await h.emit("session_start", { reason: "resume" });
+    assert.deepEqual(getDeclarations(h.manager), [{ name: "observed", path }]);
+    await assert.rejects(h.request(path), /Access requires confirmation/);
   });
 
-  it("allows explicit unregister after external removal", async () => {
-    const h = await createHarness();
-    const path = await h.createWorktree("gone");
-    await h.explicit("register", path);
-    h.shell(quote(["git", "worktree", "remove", path]));
-    await h.explicit("unregister", path);
-    assert.deepEqual(getWorkspaces(h.manager), []);
-  });
+  realBwrapTest(
+    "uses one write grant for registered write, edit and Bash, but only under the declared path",
+    async () => {
+      const h = await createHarness(true, true);
+      const path = join(h.managed, "active");
+      const file = join(path, "text.txt");
+      await h.explicit("declare", "active");
+      const noninteractive = { hasUI: false } as ExtensionContext;
+      const write = await h.invoke(
+        "write",
+        { path: relative(process.cwd(), file), content: "start" },
+        noninteractive,
+      );
+      assert.notEqual(write.isError, true);
+      const edit = await h.invoke(
+        "edit",
+        { path: file, edits: [{ oldText: "start", newText: "changed" }] },
+        noninteractive,
+      );
+      assert.notEqual(edit.isError, true);
+      const bash = await h.invoke(
+        "bash",
+        { command: `cd ${quote([path])} && printf bash >> text.txt` },
+        noninteractive,
+      );
+      assert.notEqual(bash.isError, true);
+      assert.equal(readFileSync(file, "utf8"), "changedbash");
+      const outside = await h.invoke(
+        "bash",
+        { command: `printf denied > ${quote([join(h.managed, "outside")])}` },
+        noninteractive,
+      );
+      assert.equal(outside.isError, true);
+      assert.equal(existsSync(join(h.managed, "outside")), false);
+      for (const name of ["denied", "secret"]) {
+        const protectedPath = join(path, name);
+        writeFileSync(protectedPath, "unchanged");
+        await assert.rejects(
+          h.invoke("write", { path: protectedPath, content: "wrong" }, noninteractive),
+          /Access denied/,
+        );
+        const blocked = await h.invoke(
+          "bash",
+          { command: `printf wrong > ${quote([protectedPath])}` },
+          noninteractive,
+        );
+        assert.equal(blocked.isError, true);
+        assert.equal(readFileSync(protectedPath, "utf8"), "unchanged");
+      }
+      await h.explicit("unregister", "active");
+      await assert.rejects(
+        h.invoke("write", { path: file, content: "wrong" }, noninteractive),
+        /Access requires confirmation/,
+      );
+      assert.equal(readFileSync(file, "utf8"), "changedbash");
+      assert.ok(existsSync(join(path, ".git")));
+    },
+  );
 
-  it("rejects a subdirectory rather than registering a path below the worktree root", async () => {
-    const h = await createHarness();
-    const path = await h.createWorktree("existing");
-    const child = join(path, "child");
-    mkdirSync(child);
-    await assert.rejects(h.explicit("register", child), /Not a Git worktree root/);
-    assert.deepEqual(getWorkspaces(h.manager), []);
-  });
-
-  it("rejects an explicit Git query failure with the requested target and reason", async () => {
-    const h = await createHarness();
-    const before = readFileSync(h.manager.getSessionFile()!);
-    const result = await h.explicit("register", h.directory);
-    assert.equal(result.isError, true);
-    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-    assert.ok(text.includes(h.directory));
-    assert.match(text, /Git worktree query failed.*not a git repository/s);
-    assert.deepEqual(getWorkspaces(h.manager), []);
-    assert.deepEqual(readFileSync(h.manager.getSessionFile()!), before);
-    assert.equal(h.messages.length, 0);
-  });
-
-  it("rejects an explicit save failure with its target and reason without changing memory", async () => {
-    const h = await createHarness();
-    const path = await h.createWorktree("registered");
-    await h.explicit("register", path);
+  it("does not grant access if the declaration cannot be saved", async () => {
+    const h = await createHarness(true, true);
+    const path = join(h.managed, "unsaved");
     h.setAppendError(new Error("Fixture session append failed"));
-    await assert.rejects(h.explicit("unregister", path), (error: unknown) => {
-      assert.ok(error instanceof Error);
+    await assert.rejects(h.explicit("declare", "unsaved"), (error: Error) => {
       assert.ok(error.message.includes(path));
       assert.match(error.message, /Fixture session append failed/);
       return true;
     });
-    assert.deepEqual(getWorkspaces(h.manager), [path]);
-    assert.equal(h.messages.length, 0);
+    assert.ok(existsSync(path));
+    assert.deepEqual(getDeclarations(h.manager), []);
+    await assert.rejects(h.request(path), /Access requires confirmation/);
   });
 
-  it("prunes stale registrations when explicitly updating another association", async () => {
-    const h = await createHarness();
-    const stale = await h.createWorktree("stale");
-    await h.explicit("register", stale);
-    h.shell(quote(["git", "worktree", "remove", stale]));
-    const fresh = await h.createWorktree("fresh");
-    await h.explicit("register", fresh);
-    assert.deepEqual(getWorkspaces(h.manager), [fresh]);
+  it("revokes the grant even if unregister cannot save the update", async () => {
+    const h = await createHarness(true, true);
+    const path = join(h.managed, "registered");
+    await h.explicit("declare", "registered");
+    h.setAppendError(new Error("Fixture session append failed"));
+    await assert.rejects(h.explicit("unregister", "registered"), /Fixture session append failed/);
+    assert.deepEqual(getDeclarations(h.manager), [{ name: "registered", path }]);
+    await assert.rejects(h.request(path), /Access requires confirmation/);
   });
 
-  it("serializes concurrent explicit updates without losing an association", async () => {
-    const h = await createHarness();
-    const first = await h.createWorktree("one");
-    const second = await h.createWorktree("two");
-    await Promise.all([h.explicit("register", first), h.explicit("register", second)]);
-    assert.deepEqual(getWorkspaces(h.manager), [first, second]);
+  it("expires a grant when a worktree is replaced and can unregister after deletion", async () => {
+    const h = await createHarness(true, true);
+    const path = join(h.managed, "gone");
+    await h.explicit("declare", "gone");
+    assert.equal(h.shell(quote(["git", "worktree", "remove", path])).isError, false);
+    assert.equal(h.shell(quote(["git", "worktree", "add", path, "gone"])).isError, false);
+    await assert.rejects(h.request(path), /Access requires confirmation/);
+    await h.explicit("declare", "gone");
+    assert.match(JSON.stringify((await h.request(path)).details), /already granted/);
+    assert.equal(h.shell(quote(["git", "worktree", "remove", path])).isError, false);
+    assert.deepEqual((await h.explicit("unregister", "gone")).details, {
+      name: "gone",
+      changed: true,
+      worktrees: [],
+    });
+    assert.deepEqual((await h.explicit("unregister", "gone")).details, {
+      name: "gone",
+      changed: false,
+      worktrees: [],
+    });
   });
 
-  it("accepts a standard custom entry without creating a session file early", async () => {
-    const h = await createHarness(false);
-    const path = await h.createWorktree("unflushed");
-    const result = await h.explicit("register", path);
-    assert.deepEqual(result.details, { changed: true, workspaces: [path] });
+  it("prunes stale declarations and serializes updates across conversation branches", async () => {
+    const h = await createHarness(true, true);
+    await h.explicit("declare", "stale");
+    const stale = join(h.managed, "stale");
+    assert.equal(
+      h.shell(quote(["git", "worktree", "move", stale, join(h.managed, "moved")])).isError,
+      false,
+    );
+    await assert.rejects(h.request(stale), /Access requires confirmation/);
+    h.manager.branch(h.manager.getEntries()[0]!.id);
+    await h.emit("session_tree", {});
+    await Promise.all([h.explicit("declare", "one"), h.explicit("declare", "two")]);
+    assert.deepEqual(getDeclarations(h.manager), [
+      { name: "one", path: join(h.managed, "one") },
+      { name: "two", path: join(h.managed, "two") },
+    ]);
+  });
+
+  it("accepts a declaration without forcing a session file into existence", async () => {
+    const h = await createHarness(false, true);
+    await h.explicit("declare", "unflushed");
     assert.equal(existsSync(h.manager.getSessionFile()!), false);
-    assert.deepEqual(getWorkspaces(h.manager), [path]);
-    assert.deepEqual(h.manager.getEntries().at(-1)?.type, "custom");
+    assert.deepEqual(getDeclarations(h.manager), [
+      { name: "unflushed", path: join(h.managed, "unflushed") },
+    ]);
   });
 
   it("does not describe a custom API update as saved to disk", async () => {
@@ -842,17 +956,14 @@ describe("session metadata extension", () => {
     assert.equal(h.messages.length, 0);
   });
 
-  it("cancels explicit registration if the session changes during its query", async () => {
-    const h = await createHarness();
-    const path = await h.createWorktree("switching");
-    const old = h.manager;
-    h.setBeforeQuery(async () => {
-      h.setBeforeQuery(undefined);
-      await h.switchSession();
-    });
-    await assert.rejects(h.explicit("register", path), /Session changed/);
-    assert.deepEqual(getWorkspaces(old), []);
-    assert.deepEqual(getWorkspaces(h.manager), []);
+  it("does not grant or append a queued declaration after a session switch", async () => {
+    const h = await createHarness(true, true);
+    const pending = h.explicit("declare", "switching");
+    const failure = assert.rejects(pending, /Session changed|operation was aborted/);
+    const old = await h.switchSession();
+    await failure;
+    assert.deepEqual(getDeclarations(old), []);
+    assert.deepEqual(getDeclarations(h.manager), []);
   });
 
   it("discards preflight state for a blocked call without a tool_result", async () => {
@@ -945,64 +1056,5 @@ describe("session metadata extension", () => {
     const component = renderer({ ...message, role: "custom", timestamp: 1 }, options, theme)!;
     assert.equal(component.render(100).join("\n").trim(), "Worktree metadata updated (1 change)");
     assert.match(String(message.content), new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  });
-});
-
-describe("public metadata Bash diagnostics", () => {
-  for (const mode of ["outer", "inner", "cancel"] as const)
-    it(`retains received ${mode} response at the registered tool`, async () => {
-      const h = await createHarness();
-      const controller = new AbortController();
-      const reason = new Error("metadata cancelled");
-      const response = {
-        toolCall: { type: "toolCall" as const, id: "nested", name: "bash", arguments: {} },
-        isError: mode === "outer",
-        result: {
-          content: [{ type: "text" as const, text: "Git refused" }],
-          isError: mode === "inner",
-          details: { source: "original" },
-          structuredContent: { output: "Git refused", exit_code: 2, truncated: false },
-        },
-      };
-      const ctx = {
-        cwd: h.root,
-        sessionManager: h.manager,
-        async executeTool() {
-          if (mode === "cancel") controller.abort(reason);
-          return response;
-        },
-      } as unknown as ExtensionToolContext;
-      const result = await h.tools
-        .get("session_worktree")!
-        .execute(
-          "failure",
-          { action: "register", path: h.root },
-          controller.signal,
-          undefined,
-          ctx,
-        );
-      assert.equal(result.isError, true);
-      const details = result.details as { bash: typeof response; reason: unknown };
-      assert.strictEqual(details.bash.result, response.result);
-      assert.equal(details.bash.isError, response.isError);
-      if (mode === "cancel") assert.strictEqual(details.reason, reason);
-      assert.deepEqual(getWorkspaces(h.manager), []);
-    });
-  it("propagates SDK exception identity from the registered tool", async () => {
-    const h = await createHarness();
-    const failure = new Error("Expired SDK context");
-    const ctx = {
-      cwd: h.root,
-      sessionManager: h.manager,
-      async executeTool() {
-        throw failure;
-      },
-    } as unknown as ExtensionToolContext;
-    await assert.rejects(
-      h.tools
-        .get("session_worktree")!
-        .execute("throw", { action: "register", path: h.root }, undefined, undefined, ctx),
-      (error) => error === failure,
-    );
   });
 });

@@ -352,6 +352,10 @@ bashコマンドの sandbox ではこのマスクを行わない。`credentials`
 
 公開APIは `createGuardrailsAPI(pi, configPath?)` で取得する。取得時に登録される `ask_permission` と `execute(request)` は同じ認可・承認状態を使う。
 
+信頼された拡張コードは、同じ API で、実在するディレクトリの絶対パスに確認ダイアログなしでセッション内の書き込み許可を追加できる。許可は指定先とその配下だけに適用し、既存のパス認可と sandbox の共通状態を使う。明示 `deny` と credentials の保護は維持する。存在しないパスは作成せずエラーを返す。この API はエージェントツールとして公開しない。
+
+呼び出し元は追加した許可だけを解除できる。別経路の許可は解除しない。セッション切り替え・終了時には追加した許可を破棄する。追加・解除は後続のツール呼び出しに適用し、起動済みの sandbox は変更しない。
+
 `execute(request)` は、ツール名・引数・呼び出しごとのcontext・AbortSignal・onUpdateを受け付ける。要求ごとに認可（§2〜§4）し、認可済みの呼び出しをsandbox内で実行する。画像readは§2.1を先に適用する。最終ツール結果はPromiseで返し、認可・実行時の例外はrejectionで返す。
 
 呼び出し元の信頼されたコードは、モデル向け引数 `params` とは別に、内部専用の `executor?: { entrypoint: string }` を渡せる。entrypointは絶対ファイルパスとし、相対パス・不正な値を拒否する。descriptorで指定できるのはentrypointだけであり、shell・環境変数・bind・sandbox modeを指定できない。認可対象とfs/bashのmodeはツール名と正規化後の引数で決まる。

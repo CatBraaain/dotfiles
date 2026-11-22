@@ -11,8 +11,8 @@ if (command !== "ensure" && command !== "remove") {
 const pathOption = process.argv[3];
 const useAppOut = pathOption === "--app-out";
 const appOut = useAppOut ? (process.argv[4] ?? "") : undefined;
-if (appOut !== undefined && (command !== "ensure" || !isAbsoluteAppOut(appOut))) {
-  console.error("usage: ensure --app-out <absolute-directory>");
+if (appOut !== undefined && !isAbsoluteAppOut(appOut)) {
+  console.error(`usage: ${command} --app-out <absolute-directory>`);
   process.exit(1);
 }
 const searchDirs =
@@ -21,7 +21,9 @@ const plugins = [{ name: "scm-collapse.js", content: BUNDLED_SCM_COLLAPSE }];
 
 const result = ensurePatched({
   searchDirs,
-  ...(useAppOut || pathOption === undefined ? { plugins } : { pluginsDir: pathOption }),
+  ...(useAppOut || pathOption === undefined
+    ? { plugins, enableScmBridge: true }
+    : { pluginsDir: pathOption }),
   mode: command,
 });
 
@@ -29,6 +31,9 @@ const failures: Record<string, string> = {
   "no-workbench": "workbench.html not found",
   unwritable: "workbench.html is not writable",
   "backup-missing": "patch backup is missing; leaving the patch in place",
+  "bridge-unwritable": "SCM bridge: workbench.desktop.main.js cannot be updated",
+  "bridge-invalid":
+    "SCM bridge: workbench.desktop.main.js has an invalid patch boundary; leaving it in place",
 };
 if (result in failures) {
   console.error(failures[result]);

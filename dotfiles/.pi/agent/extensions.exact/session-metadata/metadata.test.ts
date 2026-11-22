@@ -3,7 +3,34 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:f
 import { join } from "node:path";
 import { afterEach, describe, it } from "bun:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { getWorkspaces, saveWorkspaces, WORKSPACES_ENTRY_TYPE } from "./metadata.ts";
+import {
+  DECLARATIONS_ENTRY_TYPE,
+  getDeclarations,
+  getWorkspaces,
+  saveWorkspaces,
+  WORKSPACES_ENTRY_TYPE,
+} from "./metadata.ts";
+
+describe("session worktree declarations", () => {
+  it("rejects malformed latest snapshots instead of falling back to earlier declarations", () => {
+    const manager = createSession();
+    const live = { name: "live", path: "/worktrees/app/live" };
+    const second = { name: "other", path: "/worktrees/app/other" };
+    manager.appendCustomEntry(DECLARATIONS_ENTRY_TYPE, { worktrees: [live] });
+    assert.deepEqual(getDeclarations(manager), [live]);
+    for (const worktrees of [
+      [live, { ...second, name: live.name }],
+      [live, { ...second, path: live.path }],
+      [{ ...live, path: "../live" }],
+      [{ ...live, path: "/worktrees/../live" }],
+      [{ ...live, name: "wt-copilot-conflict" }],
+      [{ ...live, path: "/worktrees/with\0nul" }],
+    ]) {
+      manager.appendCustomEntry(DECLARATIONS_ENTRY_TYPE, { worktrees });
+      assert.throws(() => getDeclarations(manager), /Invalid worktrees in custom entry/);
+    }
+  });
+});
 
 const temporaryDirectories: string[] = [];
 

@@ -159,6 +159,7 @@ function byFolderName(a: { readonly name: string }, b: { readonly name: string }
 export interface FolderSyncDeps {
   readonly vscode: VscodeLike;
   readonly execFile: ExecFile;
+  readonly onWorktreeDetection?: () => void;
   /** Home directory used to locate `~/.agents/workspace`. */
   readonly homeDir: string;
   /** Overrides path identity resolution for tests. */
@@ -467,6 +468,7 @@ export class FolderSyncEngine {
       // overlap.
       this.scheduleDetection(WORKTREE_DETECT_INTERVAL_MS);
       void this.enqueue(() => this.applySync());
+      this.deps.onWorktreeDetection?.();
     }
   }
 

@@ -1,19 +1,31 @@
-import {
-  type ExtensionAPI,
-  type ExtensionContext,
-  type ExtensionToolContext,
-} from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { homedir } from "node:os";
+import { getDirectoryWriteAccess } from "../guardrails/api.ts";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { getWorkspaces, saveWorkspaces, type WorkspaceUpdate } from "./metadata.ts";
+import {
+  getDeclarations,
+  getWorkspaces,
+  isWorktreeName,
+  saveDeclarations,
+  saveWorkspaces,
+  WORKTREE_NAME_PATTERN,
+  type WorkspaceUpdate,
+} from "./metadata.ts";
+import {
+  createDeclaredWorktree,
+  loadDeclarationRepository,
+  managedWorktreePath,
+  pathExists,
+  verifyDeclaredWorktree,
+} from "./declarations.ts";
 import {
   applyWorkspaceChanges,
   detectWorkspaceChanges,
   findWorktreeScopes,
   loadWorktreeSnapshot,
-  normalizeWorkspacePath,
   retainLiveWorkspaces,
   type BashQuery,
   type WorkspaceChanges,
@@ -24,9 +36,6 @@ import {
 
 const MESSAGE_TYPE = "session-worktrees";
 const NoticeSchema = Type.Object({ summary: Type.String() });
-const QueryDetailsSchema = Type.Object({
-  truncation: Type.Optional(Type.Object({ truncated: Type.Optional(Type.Boolean()) })),
-});
 interface Observation {
   snapshot: WorktreeSnapshot;
   actions: WorktreeAction[];
@@ -38,8 +47,23 @@ interface PendingCall {
   observations: Observation[];
 }
 
-export default function sessionMetadataExtension(pi: ExtensionAPI): void {
+export default function sessionMetadataExtension(pi: ExtensionAPI, home = homedir()): void {
   let generation = 0;
+  let lifetime = new AbortController();
+  const granted = new Map<string, () => void>();
+
+  function revoke(name: string): void {
+    granted.get(name)?.();
+    granted.delete(name);
+  }
+
+  function resetSession(): void {
+    lifetime.abort();
+    lifetime = new AbortController();
+    generation++;
+    pending.clear();
+    for (const name of granted.keys()) revoke(name);
+  }
   let updateQueue: Promise<void> = Promise.resolve();
   const pending = new Map<string, PendingCall>();
 
@@ -68,25 +92,6 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
       )
         throw new Error(`Git worktree query failed: ${result.stderr || result.stdout}`);
       return result.stdout;
-    };
-  }
-
-  function toolRunner(ctx: ExtensionToolContext, signal: AbortSignal | undefined): BashQuery {
-    return async function run(command) {
-      signal?.throwIfAborted();
-      const outcome = await ctx
-        .executeTool("bash", { command }, { signal })
-        .catch((error: unknown) => {
-          throw new QueryFailure(error);
-        });
-      try {
-        signal?.throwIfAborted();
-        const text = queryText(outcome.result);
-        if (outcome.isError) throw new Error(`Git worktree query failed: ${text}`);
-        return text;
-      } catch (error) {
-        throw new QueryFailure(error, outcome);
-      }
     };
   }
 
@@ -138,15 +143,8 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
     }
   }
 
-  pi.on("session_start", () => {
-    generation++;
-    pending.clear();
-  });
-
-  pi.on("session_shutdown", () => {
-    generation++;
-    pending.clear();
-  });
+  pi.on("session_start", resetSession);
+  pi.on("session_shutdown", resetSession);
 
   pi.on("tool_call", async (event, ctx) => {
     if (event.toolName !== "bash" || typeof event.input.command !== "string") return;
@@ -197,60 +195,70 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
     name: "session_worktree",
     label: "Session worktree",
     description:
-      "Register or unregister a Git worktree for the calling session. Use for an existing worktree or a handoff from another session. Returns the updated workspaces after the standard session API accepts the snapshot. Does not create or delete worktrees.",
+      "Declare a named worktree for this session before editing it. Reuses an existing managed worktree or creates one from the repository's main HEAD. Unregister removes only this declaration and its write grant, not Git files or branches.",
     parameters: Type.Object({
-      action: StringEnum(["register", "unregister"] as const),
-      path: Type.String({
-        minLength: 1,
-        description: "Worktree root, absolute or relative to the session cwd",
+      action: StringEnum(["declare", "unregister"] as const),
+      name: Type.String({
+        pattern: WORKTREE_NAME_PATTERN,
+        description: "Managed worktree name in kebab-case",
       }),
     }),
-    async execute(_id, params, signal, _onUpdate, ctx) {
+    async execute(_id, { action, name }, signal, _onUpdate, ctx) {
+      if (!isWorktreeName(name)) throw new Error(`Invalid worktree name: ${name}`);
+      if (action !== "declare" && action !== "unregister")
+        throw new Error("Invalid worktree action");
       const expected = generation;
       const sessionId = ctx.sessionManager.getSessionId();
+      const operationSignal = AbortSignal.any([lifetime.signal, ...(signal ? [signal] : [])]);
+
+      function checkCurrent(): void {
+        if (!isCurrent(expected, ctx, sessionId))
+          throw new Error("Session changed during the worktree operation");
+        operationSignal.throwIfAborted();
+      }
+
+      let target: string | undefined;
       return enqueue(async () => {
-        if (!isCurrent(expected, ctx, sessionId))
-          throw new Error("Session changed before worktree registration");
-        const path = normalizeWorkspacePath(params.path, ctx.cwd);
-        const run = toolRunner(ctx, signal);
-        const snapshots: WorktreeSnapshot[] = [];
-        if (params.action === "register") {
-          const snapshot = await loadWorktreeSnapshot(path, run);
-          if (!snapshot.worktrees.some((worktree) => worktree.path === path))
-            throw new Error(`Not a Git worktree root: ${path}`);
-          snapshots.push(snapshot);
+        checkCurrent();
+        if (action === "unregister") {
+          revoke(name);
+          const previous = getDeclarations(ctx.sessionManager);
+          const worktrees = previous.filter((entry) => entry.name !== name);
+          const changed = saveDeclarations(pi, previous, worktrees);
+          return toolResult({ name, changed, worktrees });
         }
-        if (!isCurrent(expected, ctx, sessionId))
-          throw new Error("Session changed during worktree registration");
-        const previous = getWorkspaces(ctx.sessionManager);
-        const proposed =
-          params.action === "register"
-            ? [...previous, path]
-            : previous.filter((workspace) => workspace !== path);
-        const live = await retainLiveWorkspaces(proposed, run, snapshots);
-        if (!isCurrent(expected, ctx, sessionId))
-          throw new Error("Session changed during worktree registration");
-        const update = saveWorkspaces(pi, ctx.sessionManager, live);
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify(update) }],
-          details: update,
-        };
+
+        const access = getDirectoryWriteAccess(pi, sessionId);
+        const previous = getDeclarations(ctx.sessionManager);
+        const repository = await loadDeclarationRepository(ctx.cwd, operationSignal);
+        const path = managedWorktreePath(home, repository.main, name);
+        target = path;
+        checkCurrent();
+        access.assertDirectoryGrantAllowed(path);
+        const live = previous.filter((entry) => {
+          if (verifyDeclaredWorktree(repository, entry.path)) return true;
+          revoke(entry.name);
+          return false;
+        });
+        const existing = verifyDeclaredWorktree(repository, path);
+        if (!existing && pathExists(path))
+          throw new Error(`Not a linked worktree of this repository: ${path}`);
+        const worktree =
+          existing ?? (await createDeclaredWorktree(repository, path, name, operationSignal));
+        checkCurrent();
+        if (!worktree.isCurrent()) throw new Error(`Worktree changed before declaration: ${path}`);
+        const declaration = { name, path };
+        const worktrees = live.some((entry) => entry.name === name && entry.path === path)
+          ? live
+          : [...live.filter((entry) => entry.name !== name && entry.path !== path), declaration];
+        saveDeclarations(pi, previous, worktrees);
+        const revokeGrant = access.grantExistingDirectory(path, worktree.isCurrent);
+        revoke(name);
+        granted.set(name, revokeGrant);
+        return toolResult({ ...declaration, status: existing ? "reused" : "created", worktrees });
       }).catch((error: unknown) => {
-        if (error instanceof QueryFailure && error.response)
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Session worktree ${params.action} failed for ${params.path}: ${errorMessage(error.reason)}`,
-              },
-            ],
-            isError: true,
-            details: { bash: error.response, reason: error.reason },
-          };
-        if (error instanceof QueryFailure) throw error.reason;
-        if (signal?.aborted) throw signal.reason;
         throw new Error(
-          `Session worktree ${params.action} failed for ${params.path}: ${errorMessage(error)}`,
+          `Session worktree ${action} failed for ${target ?? name}: ${errorMessage(error)}`,
           { cause: error },
         );
       });
@@ -298,28 +306,11 @@ function notifyUpdated(
   );
 }
 
-class QueryFailure extends Error {
-  constructor(
-    readonly reason: unknown,
-    readonly response?: Awaited<ReturnType<ExtensionToolContext["executeTool"]>>,
-  ) {
-    super(errorMessage(reason));
-  }
-}
-
-function queryText(result: {
-  content: { type: string; text?: string }[];
-  details?: unknown;
-  isError?: boolean;
-}): string {
-  const text = result.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text ?? "")
-    .join("\n");
-  if (result.isError) throw new Error(`Git worktree query failed: ${text}`);
-  if (Value.Check(QueryDetailsSchema, result.details) && result.details.truncation?.truncated)
-    throw new Error("Git worktree query was truncated");
-  return text;
+function toolResult<T>(details: T) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(details) }],
+    details,
+  };
 }
 
 function errorMessage(error: unknown): string {

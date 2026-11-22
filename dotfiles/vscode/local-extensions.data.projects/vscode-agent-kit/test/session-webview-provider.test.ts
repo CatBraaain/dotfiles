@@ -1239,7 +1239,7 @@ describe("SessionWebviewProvider", () => {
         mtime: 2,
         size: 10,
       };
-      const planned = { cwd: root, file: "/custom/planned/session.jsonl" };
+      const planned = { id: "planned", cwd: root, file: "/custom/planned/session.jsonl" };
       runtime.history.set(entry.id, entry);
       runtime.live.set("planned", { sessionId: "planned", cwd: root, target: "pi-planned" });
       runtime.emptyIds.add("planned");
@@ -1252,7 +1252,7 @@ describe("SessionWebviewProvider", () => {
       const webview = createView();
       provider.resolveWebviewView(webview.view as never);
       await webview.receive({ type: "ready" });
-      const expectedFiles = [{ file: entry.file, cwd: root }, planned];
+      const expectedFiles = [{ id: entry.id, file: entry.file, cwd: root }, planned];
       expect(observe.mock.lastCall?.[0]).toEqual(expectedFiles);
       runtime.history.clear();
       runtime.mocks.history.mockRejectedValueOnce(new Error("unavailable"));

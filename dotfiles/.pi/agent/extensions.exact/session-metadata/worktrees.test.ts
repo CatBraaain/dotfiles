@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, it } from "bun:test";
@@ -9,7 +9,6 @@ import {
   detectWorkspaceChanges,
   findWorktreeScopes,
   loadWorktreeSnapshot,
-  normalizeWorkspacePath,
   retainLiveWorkspaces,
   type WorktreeSnapshot,
 } from "./worktrees.ts";
@@ -264,49 +263,5 @@ describe("Git worktree queries", () => {
     const input = fixture();
     const output = `worktree ${input.root}\0HEAD abc\0branch refs/heads/main\0\0`;
     assert.deepEqual(await retainLiveWorkspaces([input.linked], async () => output), []);
-  });
-});
-
-describe("workspace paths", () => {
-  it("normalizes references, relative paths and home paths", () => {
-    assert.equal(normalizeWorkspacePath("@../feature", "/repo/main"), "/repo/feature");
-    assert.equal(normalizeWorkspacePath("~/feature", "/repo"), join(homedir(), "feature"));
-  });
-
-  it("resolves a symlink to the worktree identity path", () => {
-    const input = fixture();
-    const link = join(input.directory, "alias");
-    symlinkSync(input.linked, link);
-    assert.equal(normalizeWorkspacePath(link, "/repo"), input.linked);
-  });
-
-  it("resolves existing symlink parents before a missing path suffix", () => {
-    const input = fixture();
-    const link = join(input.directory, "alias");
-    symlinkSync(input.linked, link);
-    assert.equal(
-      normalizeWorkspacePath(join(link, "missing", "feature"), "/repo"),
-      join(input.linked, "missing", "feature"),
-    );
-  });
-
-  for (const form of ["absolute", "relative"]) {
-    it(`resolves symlinks before dot-dot in ${form} form with a missing suffix`, () => {
-      const input = fixture();
-      const deep = join(input.linked, "deep");
-      const alias = join(input.root, "alias");
-      mkdirSync(deep);
-      symlinkSync(deep, alias);
-      const path = form === "absolute" ? `${alias}/../missing/feature` : "alias/../missing/feature";
-      assert.equal(
-        normalizeWorkspacePath(path, input.root),
-        join(input.linked, "missing", "feature"),
-      );
-    });
-  }
-
-  it("rejects an empty or NUL-containing path", () => {
-    assert.throws(() => normalizeWorkspacePath("", "/repo"), /Invalid/);
-    assert.throws(() => normalizeWorkspacePath("a\0b", "/repo"), /Invalid/);
   });
 });

@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import type {
-  ExtensionAPI,
-  ExtensionToolContext,
-  ToolDefinition,
+import {
+  createEventBus,
+  type ExtensionAPI,
+  type ExtensionToolContext,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { realBwrapTest } from "../guardrails/bwrap-test-support.ts";
 import toolsExtension from "./index.ts";
@@ -46,6 +47,7 @@ async function withBashRuntime(
   const handlers = new Map<string, ((event: unknown, context: unknown) => unknown)[]>();
   const context = {
     modelRegistry: {},
+    sessionManager: { getSessionId: () => "fixture" },
     hasUI: false,
     thinkingLevel: "off",
   } as unknown as ExtensionToolContext;
@@ -72,6 +74,7 @@ async function withBashRuntime(
   };
   toolsExtension(
     {
+      events: createEventBus(),
       registerTool(definition: ToolDefinition) {
         definitions.set(definition.name, definition);
       },

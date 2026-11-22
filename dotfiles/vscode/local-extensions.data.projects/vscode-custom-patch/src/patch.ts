@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, extname, join } from "node:path";
+import { ensureScmBridge } from "./scm-bridge.ts";
 
 export type PluginEntry = { name: string; content: string };
 export type ReadFile = (filePath: string) => string;
@@ -23,7 +24,9 @@ export type EnsureResult =
   | "fresh"
   | "no-workbench"
   | "unwritable"
-  | "backup-missing";
+  | "backup-missing"
+  | "bridge-unwritable"
+  | "bridge-invalid";
 
 const SESSION_ID_PATTERN = /<!-- !! VSCODE-CUSTOM-CSS-SESSION-ID ([0-9a-fA-F-]+) !! -->/;
 const PATCH_SEGMENT_PATTERN =
@@ -115,11 +118,15 @@ export function workbenchSearchDirs({
 }
 
 export function findWorkbenchHtml(searchDirs: string[]): string | null {
-  for (const dir of searchDirs) {
+  return findWorkbench(searchDirs)?.htmlPath ?? null;
+}
+
+function findWorkbench(searchDirs: string[]): { appOut: string; htmlPath: string } | null {
+  for (const appOut of searchDirs) {
     for (const workbench of WORKBENCH_DIR_CANDIDATES) {
       for (const html of HTML_FILE_CANDIDATES) {
-        const candidate = join(dir, workbench, html);
-        if (existsSync(candidate)) return candidate;
+        const htmlPath = join(appOut, workbench, html);
+        if (existsSync(htmlPath)) return { appOut, htmlPath };
       }
     }
   }
@@ -141,6 +148,7 @@ export function ensurePatched(
   options: {
     searchDirs: string[];
     mode?: EnsureMode;
+    enableScmBridge?: boolean;
   } & ({ pluginsDir: string } | { plugins: PluginEntry[] }),
 ): EnsureResult {
   const { searchDirs, mode = "ensure" } = options;
@@ -150,8 +158,19 @@ export function ensurePatched(
       : "plugins" in options
         ? options.plugins
         : (pluginEntries(options.pluginsDir) ?? []);
-  const htmlPath = findWorkbenchHtml(searchDirs);
-  if (htmlPath === null) return "no-workbench";
+  const workbench = findWorkbench(searchDirs);
+  if (!workbench) return "no-workbench";
+  const htmlResult = ensureHtmlPatched(workbench.htmlPath, entries);
+  if (htmlResult === "unwritable" || htmlResult === "backup-missing") return htmlResult;
+
+  const bridgeResult = ensureScmBridge(
+    workbench.appOut,
+    mode === "ensure" && options.enableScmBridge === true,
+  );
+  return bridgeResult === "fresh" ? htmlResult : bridgeResult;
+}
+
+function ensureHtmlPatched(htmlPath: string, entries: PluginEntry[]): EnsureResult {
   const workbenchDir = dirname(htmlPath);
   const currentHtml = readFileSync(htmlPath, "utf-8");
   if (extractPatchSegment(currentHtml) === segmentFromPlugins(entries)) return "fresh";

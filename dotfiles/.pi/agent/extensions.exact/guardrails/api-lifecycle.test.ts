@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe } from "bun:test";
+import { describe, it } from "bun:test";
 import { realBwrapTest } from "./bwrap-test-support.ts";
 import type {
   ExtensionAPI,
@@ -12,6 +12,87 @@ import type {
 import { createGuardrailsAPI } from "./api.ts";
 
 describe("guardrails API lifetime", () => {
+  it(
+    "never creates a directory as part of a trusted grant",
+    withDirectory(async (directory) => {
+      const { api } = fixture(directory);
+      const target = join(directory, "missing");
+      assert.throws(() => api.grantExistingDirectory(target), /Directory does not exist/);
+      assert.equal(existsSync(target), false);
+      assert.throws(() => api.grantExistingDirectory("relative"), /absolute directory path/);
+      assert.throws(
+        () => api.grantExistingDirectory(join(directory, "config.yaml")),
+        /Directory does not exist/,
+      );
+    }),
+  );
+
+  it(
+    "revokes only the specified grant and leaves confirmed permissions intact",
+    withDirectory(async (directory) => {
+      const { api, tools } = fixture(directory);
+      const target = join(directory, "requested");
+      const other = join(directory, "other");
+      mkdirSync(other);
+      const permission = tools.get("ask_permission")!;
+      const confirm = {
+        hasUI: true,
+        ui: { confirm: async () => true },
+      } as unknown as ExtensionToolContext;
+      const noUI = { hasUI: false } as ExtensionToolContext;
+      await permission.execute(
+        "confirmed",
+        { path: target, reason: "test" },
+        undefined,
+        undefined,
+        confirm,
+      );
+
+      const revokeTarget = api.grantExistingDirectory(target);
+      const revokeOther = api.grantExistingDirectory(other);
+      const revokeIndependent = api.grantExistingDirectory(other);
+      revokeTarget();
+      revokeOther();
+      for (const path of [target, other]) {
+        const outcome = await permission.execute(
+          "check",
+          { path, reason: "test" },
+          undefined,
+          undefined,
+          noUI,
+        );
+        assert.deepEqual(outcome.details, { status: "already granted", grantedPath: path });
+      }
+      revokeIndependent();
+      await assert.rejects(
+        permission.execute("check", { path: other, reason: "test" }, undefined, undefined, noUI),
+        /Access requires confirmation/,
+      );
+    }),
+  );
+
+  it(
+    "stops exposing old directory grants on session shutdown",
+    withDirectory(async (directory) => {
+      const target = join(directory, "target");
+      mkdirSync(target);
+      const first = fixture(directory);
+      const revoke = first.api.grantExistingDirectory(target);
+      first.handlers.get("session_shutdown")!({ reason: "reload" });
+      assert.throws(() => first.api.grantExistingDirectory(target), /API is no longer active/);
+
+      const replacement = fixture(directory);
+      const context = { hasUI: false } as ExtensionToolContext;
+      await assert.rejects(
+        replacement.tools
+          .get("ask_permission")!
+          .execute("old-grant", { path: target, reason: "test" }, undefined, undefined, context),
+        /Access requires confirmation/,
+      );
+      revoke();
+    }),
+  );
+
   realBwrapTest(
     "shares a path grant between ask_permission and execution within one instance only",
     withDirectory(async (directory) => {

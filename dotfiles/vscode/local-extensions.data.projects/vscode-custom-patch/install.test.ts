@@ -235,10 +235,21 @@ it("patches only the app output directory selected by the CLI", async () => {
   const selectedOut = join(root, "selected", "out");
   const original = "<html><head></head></html>";
   const workbenchFile = join("vs", "code", "electron-browser", "workbench", "workbench.html");
+  const bundleFile = join("vs", "workbench", "workbench.desktop.main.js");
+  const originalBundle = `
+var viewService = createDecorator("scmView");
+registry.registerCommand("scm.setActiveProvider", accessor => { accessor.get(viewService); });
+class View {
+  constructor() { this.selectionModeConfig = config("scm.repositories.selectionMode"); }
+  set visibleRepositories(repositories) {}
+}`;
   for (const out of [oldOut, selectedOut]) {
     const html = join(out, workbenchFile);
+    const bundle = join(out, bundleFile);
     await mkdir(dirname(html), { recursive: true });
+    await mkdir(dirname(bundle), { recursive: true });
     await writeFile(html, original);
+    await writeFile(bundle, originalBundle);
   }
   await buildProject(import.meta.dir, vscodeDir, async () => {});
   const cli = join(vscodeDir, "cli.js");
@@ -246,9 +257,20 @@ it("patches only the app output directory selected by the CLI", async () => {
   assert.equal(patch.exitCode, 0, patch.stderr.toString());
   assert.match(await readFile(join(selectedOut, workbenchFile), "utf8"), /VSCODE-CUSTOM-CSS-START/);
   assert.equal(await readFile(join(oldOut, workbenchFile), "utf8"), original);
+  assert.match(
+    await readFile(join(selectedOut, bundleFile), "utf8"),
+    /agentKit\.scm\.selectRepositories/,
+  );
+  assert.equal(await readFile(join(oldOut, bundleFile), "utf8"), originalBundle);
+
   const repeat = Bun.spawnSync([process.execPath, cli, "ensure", "--app-out", selectedOut]);
   assert.equal(repeat.exitCode, 0, repeat.stderr.toString());
   assert.match(repeat.stdout.toString(), /patch already matches/);
+
+  const restore = Bun.spawnSync([process.execPath, cli, "remove", "--app-out", selectedOut]);
+  assert.equal(restore.exitCode, 0, restore.stderr.toString());
+  assert.equal(await readFile(join(selectedOut, workbenchFile), "utf8"), original);
+  assert.equal(await readFile(join(selectedOut, bundleFile), "utf8"), originalBundle);
 });
 
 function windowsCommand(argv: string[]): string {

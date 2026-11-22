@@ -8,10 +8,14 @@ const failures: Record<string, string> = {
   "no-workbench": "workbench.html not found; skipping",
   unwritable: "workbench.html not writable; skipping (vscode-custom-patch reapplies at startup)",
   "backup-missing": "patch backup is missing; leaving the patch in place",
+  "bridge-unwritable": "SCM bridge: workbench.desktop.main.js cannot be updated; skipping",
+  "bridge-invalid":
+    "SCM bridge: workbench.desktop.main.js has an invalid patch boundary; leaving it in place",
 };
 
 const result = ensurePatched({
   searchDirs: workbenchSearchDirs({ extraRoots: installRoots() }),
+  enableScmBridge: true,
   plugins: [
     {
       name: "scm-collapse.js",
