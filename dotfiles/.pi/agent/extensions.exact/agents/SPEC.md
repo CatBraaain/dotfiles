@@ -9,4 +9,4 @@ agents拡張の振る舞いは、次の機能別仕様で定める。読者は�
 | レート制限時の再試行 | [rate-limit.spec.md](rate-limit.spec.md) |
 | 画像入力 | [image-input.spec.md](image-input.spec.md) |
 | subagentツール | [subagent.spec.md](subagent.spec.md) |
-| 独立したmainセッションの作成 | [newagent.spec.md](newagent.spec.md) |
+| agentツール | [agent.spec.md](agent.spec.md) |

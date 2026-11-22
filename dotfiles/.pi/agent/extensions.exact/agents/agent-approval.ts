@@ -11,12 +11,12 @@ import {
   type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 
-// pi-tui enables mouse reporting only in the alt-screen TUI, so main-screen
-// overlays receive no wheel events unless SGR wheel tracking is enabled here.
 const ENABLE_MOUSE_TRACKING = "\x1b[?1000h\x1b[?1006h";
 const DISABLE_MOUSE_TRACKING = "\x1b[?1006l\x1b[?1000l";
 const WHEEL_SCROLL_LINES = 3;
 const SGR_WHEEL_PREFIX = "\x1b[<6";
+
+export type ApprovalField = { label: string; text: string };
 
 function wheelDirection(data: string): number | undefined {
   if (!data.startsWith(SGR_WHEEL_PREFIX)) return undefined;
@@ -25,10 +25,10 @@ function wheelDirection(data: string): number | undefined {
   return tail.startsWith("4") ? -1 : 1;
 }
 
-export async function showNewagentApproval(
+export async function showAgentApproval(
   ui: ExtensionUIContext,
   question: string,
-  details: { prompt: string; cwd?: string },
+  fields: ApprovalField[],
   options: string[],
   signal?: AbortSignal,
 ): Promise<string | undefined> {
@@ -37,13 +37,14 @@ export async function showNewagentApproval(
   try {
     return await ui.custom<string | undefined>(
       (tui, theme, _keybindings, done) => {
+        const dialog = new AgentApprovalDialog(tui, theme, question, fields, options, done);
         function onAbort(): void {
-          done(undefined);
+          dialog.finish(undefined);
         }
         cancel = onAbort;
         signal?.addEventListener("abort", cancel, { once: true });
         if (signal?.aborted) cancel();
-        return new NewagentApprovalDialog(tui, theme, question, details, options, done);
+        return dialog;
       },
       {
         overlay: true,
@@ -55,7 +56,7 @@ export async function showNewagentApproval(
   }
 }
 
-export class NewagentApprovalDialog implements Component {
+export class AgentApprovalDialog implements Component {
   readonly capturesViewportInput = true;
   private scrollTop = 0;
   private selectedIndex = 0;
@@ -68,17 +69,13 @@ export class NewagentApprovalDialog implements Component {
     private readonly tui: Pick<TUI, "terminal" | "requestRender">,
     private readonly theme: Pick<Theme, "fg">,
     private readonly question: string,
-    details: { prompt: string; cwd?: string },
+    fields: ApprovalField[],
     private readonly options: string[],
     private readonly done: (result: string | undefined) => void,
   ) {
-    const cells = [
-      { label: "prompt", text: details.prompt },
-      ...(details.cwd === undefined ? [] : [{ label: "cwd", text: details.cwd }]),
-    ];
-    this.displayCells = cells.map((cell) => ({
-      ...cell,
-      text: cell.text.replace(/\p{Cc}/gu, (character) =>
+    this.displayCells = fields.map((field) => ({
+      ...field,
+      text: field.text.replace(/\p{Cc}/gu, (character) =>
         character === "\n"
           ? character
           : `\\x${character.charCodeAt(0).toString(16).padStart(2, "0")}`,
@@ -140,7 +137,7 @@ export class NewagentApprovalDialog implements Component {
     this.tui.requestRender();
   }
 
-  private finish(result: string | undefined): void {
+  finish(result: string | undefined): void {
     if (this.ownsMouseTracking) this.tui.terminal.write(DISABLE_MOUSE_TRACKING);
     this.done(result);
   }

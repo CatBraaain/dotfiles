@@ -4,11 +4,12 @@ import { afterAll, beforeAll, describe, it } from "bun:test";
 import { parse } from "shell-quote";
 import { getTmuxPaths, PARENT_PI_ENV_KEYS } from "../pi-mux-bridge/shared.ts";
 import {
-  registerNewagentTool,
-  buildTmuxCommand,
+  registerAgentTool,
+  buildCreateCommand,
+  buildSendCommand,
   validateInput,
-  type NewagentInput,
-} from "./newagent.ts";
+  type AgentInput,
+} from "./agent.ts";
 
 type DialogOptions = { signal?: AbortSignal };
 
@@ -38,7 +39,7 @@ type CapturedHandlers = Map<string, (event: any, context?: any) => unknown>;
 
 function captureTool(handlers?: CapturedHandlers): any {
   const tools: any[] = [];
-  registerNewagentTool({
+  registerAgentTool({
     registerTool: (tool: any) => tools.push(tool),
     on: (event: string, handler: (event: any, context?: any) => unknown) =>
       handlers?.set(event, handler),
@@ -47,10 +48,10 @@ function captureTool(handlers?: CapturedHandlers): any {
   return tools[0];
 }
 
-function bashOutcome(
-  exitCode = 0,
-  output = "Pi session fixture-id\nAttach with: tmux -S fixture.sock attach-session -t $7",
-) {
+const CREATE_OUTPUT =
+  "Pi session fixture-id\nAttach with: tmux -S fixture.sock attach-session -t $7";
+
+function bashOutcome(exitCode = 0, output = CREATE_OUTPUT) {
   return {
     isError: exitCode !== 0,
     result: {
@@ -115,14 +116,16 @@ function mockContext(
   return { cwd, hasUI: true, mode, ui, executeTool };
 }
 
-const recordingExecutor = (): { executeTool: ExecuteTool; commands: string[] } => {
+const recordingExecutor = (
+  output = CREATE_OUTPUT,
+): { executeTool: ExecuteTool; commands: string[] } => {
   const commands: string[] = [];
   return {
     commands,
     async executeTool(name: string, args: unknown) {
       assert.equal(name, "bash");
       commands.push((args as { command: string }).command);
-      return bashOutcome();
+      return bashOutcome(0, output);
     },
   };
 };
@@ -144,7 +147,8 @@ function withAgentName(
   };
 }
 
-const request: NewagentInput = { prompt: "fix the failing build" };
+const request: AgentInput = { message: "fix the failing build" };
+const sendRequest: AgentInput = { message: "report the current status", "session-id": "abc123" };
 
 const previousAgentName = process.env.PI_AGENT_NAME;
 beforeAll(() => {
@@ -156,27 +160,52 @@ afterAll(() => {
 });
 
 describe("入力の検証", () => {
-  it("空白の prompt を拒否する", () => {
-    assert.match(validateInput({ prompt: "  " })!, /prompt must not be empty/);
+  it("空白の message を拒否する", () => {
+    assert.match(validateInput({ message: "  " })!, /message must not be empty/);
   });
 
-  it("NUL を含む prompt を拒否する", () => {
-    assert.match(validateInput({ prompt: "a\0b" })!, /cannot contain NUL/);
+  it("NUL を含む message を拒否する", () => {
+    assert.match(validateInput({ message: "a\0b" })!, /message cannot contain NUL/);
   });
+
+  it("rejects a blank session id", () => {
+    assert.match(
+      validateInput({ message: "x", "session-id": " " })!,
+      /session-id must not be empty/,
+    );
+  });
+
+  it("rejects a session id containing NUL", () => {
+    assert.match(validateInput({ message: "x", "session-id": "a\0b" })!, /NUL/);
+  });
+
+  it("rejects wait without a session id", () => {
+    assert.match(validateInput({ message: "x", wait: 5 })!, /wait is only valid with session-id/);
+  });
+
+  for (const wait of [0, -1, 1.5]) {
+    it(`rejects a non-positive-integer wait: ${wait}`, () => {
+      assert.match(
+        validateInput({ message: "x", "session-id": "abc", wait })!,
+        /wait must be a positive integer/,
+      );
+    });
+  }
 
   it("rejects a working directory containing NUL", () => {
-    assert.match(validateInput({ prompt: "x", cwd: "/a\0b" })!, /cwd cannot contain NUL/);
+    assert.equal(validateInput({ ...request, cwd: "a\0b" }), "agent cwd cannot contain NUL");
   });
 
-  it("accepts a prompt and working directory", () => {
-    assert.equal(validateInput({ prompt: "x", cwd: "/tmp" }), undefined);
+  it("accepts a message alone and a send with session id and wait", () => {
+    assert.equal(validateInput({ message: "x" }), undefined);
+    assert.equal(validateInput({ message: "x", "session-id": "abc", wait: 1 }), undefined);
   });
 });
 
 describe("common independent startup command", () => {
   it("uses the dedicated runtime and common CLI without calling tmux directly", () => {
     const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated runtime" });
-    const command = buildTmuxCommand({ prompt: "fix it", cwd: "/repo" }, paths);
+    const command = buildCreateCommand({ message: "fix it", cwd: "/repo" }, paths);
     const tokens = parse(command);
     assert.deepEqual(tokens.slice(0, 2), ["bash", "-lc"]);
     const script = tokens[2] as string;
@@ -195,14 +224,14 @@ describe("common independent startup command", () => {
   });
 
   it("removes parent conversation state before entering the shared launcher", () => {
-    const command = buildTmuxCommand({ prompt: "x", cwd: "/r" });
+    const command = buildCreateCommand({ message: "x", cwd: "/r" });
     const script = parse(command)[2] as string;
     const tokens = parse(script);
     assert.deepEqual(tokens.slice(1, 1 + PARENT_PI_ENV_KEYS.length), [...PARENT_PI_ENV_KEYS]);
     assert.equal(script.includes("unset TERM"), false);
   });
 
-  for (const prompt of [
+  for (const message of [
     "fix it",
     'it\'s $(x) `y` "z"',
     "--session option-like\nnext line",
@@ -210,9 +239,9 @@ describe("common independent startup command", () => {
     "--",
     "@/file with spaces.txt",
   ]) {
-    it(`preserves a literal prompt argument: ${JSON.stringify(prompt)}`, () => {
+    it(`preserves a literal message argument: ${JSON.stringify(message)}`, () => {
       const cwd = "/dir with space/quote's\nnext line";
-      const command = buildTmuxCommand({ prompt, cwd });
+      const command = buildCreateCommand({ message, cwd });
       const decoded = spawnSync("bash", ["-c", `bash() { printf '%s' "$2"; }\n${command}`]);
       assert.equal(decoded.status, 0, String(decoded.stderr));
       const script = decoded.stdout.toString();
@@ -225,52 +254,127 @@ describe("common independent startup command", () => {
       const expanded = spawnSync("bash", ["-c", `set -- ${invocation}\nprintf '%s\\0' "$@"`]);
       assert.equal(expanded.status, 0, String(expanded.stderr));
       const argumentsPassed = expanded.stdout.toString().split("\0").slice(0, -1);
-      assert.deepEqual(argumentsPassed, ["pi-mux", "new", "--detached", prompt]);
+      assert.deepEqual(argumentsPassed, ["pi-mux", "new", "--detached", message]);
+    });
+  }
+});
+
+describe("send command", () => {
+  it("uses the dedicated runtime and keeps the sender environment", () => {
+    const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated runtime" });
+    const command = buildSendCommand({ sessionId: "abc123", message: "the current status" }, paths);
+    const tokens = parse(command);
+    assert.deepEqual(tokens.slice(0, 2), ["bash", "-lc"]);
+    const script = tokens[2] as string;
+    const inner = parse(script);
+    assert.ok(inner.includes("XDG_RUNTIME_DIR=/isolated runtime"));
+    assert.deepEqual(inner.slice(inner.indexOf("exec")), [
+      "exec",
+      "pi-mux",
+      "send",
+      "abc123",
+      "the current status",
+    ]);
+    assert.equal(script.includes("unset"), false);
+    assert.equal(script.includes("PI_SESSION_ID"), false);
+  });
+
+  it("places --wait immediately after send when waiting is requested", () => {
+    const command = buildSendCommand({
+      sessionId: "abc123",
+      message: "the current status",
+      wait: 7,
+    });
+    const inner = parse(parse(command)[2] as string);
+    assert.deepEqual(inner.slice(inner.indexOf("send")), [
+      "send",
+      "--wait",
+      "7",
+      "abc123",
+      "the current status",
+    ]);
+  });
+
+  for (const message of [
+    "status?",
+    'it\'s $(x) `y` "z"',
+    "--wait 5\nnext line",
+    "@/file with spaces.txt",
+  ]) {
+    it(`preserves a literal message argument: ${JSON.stringify(message)}`, () => {
+      const command = buildSendCommand({ sessionId: "abc123", message, wait: 9 });
+      const decoded = spawnSync("bash", ["-c", `bash() { printf '%s' "$2"; }\n${command}`]);
+      assert.equal(decoded.status, 0, String(decoded.stderr));
+      const script = decoded.stdout.toString();
+      const invocation = script.slice(script.indexOf("exec ") + "exec ".length);
+      const expanded = spawnSync("bash", ["-c", `set -- ${invocation}\nprintf '%s\\0' "$@"`]);
+      assert.equal(expanded.status, 0, String(expanded.stderr));
+      const argumentsPassed = expanded.stdout.toString().split("\0").slice(0, -1);
+      assert.deepEqual(argumentsPassed, ["pi-mux", "send", "--wait", "9", "abc123", message]);
     });
   }
 });
 
 describe("ツールの登録", () => {
-  it("newagent として登録し、bash に到達する", () => {
+  it("agent として登録し、bash に到達する", () => {
     const tool = captureTool();
-    assert.equal(tool.name, "newagent");
+    assert.equal(tool.name, "agent");
     assert.deepEqual(tool.reachesTools(), ["bash"]);
-    assert.deepEqual(Object.keys(tool.parameters.properties).sort(), ["cwd", "prompt"]);
+    assert.deepEqual(Object.keys(tool.parameters.properties).sort(), [
+      "cwd",
+      "message",
+      "session-id",
+      "wait",
+    ]);
     assert.deepEqual(Object.keys(tool.outputSchema.properties).sort(), ["error", "status"]);
   });
 });
 
 describe("承認", () => {
-  it("Allow once はその呼び出しだけを許可し、次の呼び出しは再度確認する", async () => {
-    const tool = captureTool();
-    const { ui, calls } = approvalUi({ dialog: "once" });
-    const executor = recordingExecutor();
-    await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
-    await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
-    assert.equal(calls.selections.length, 2);
-    assert.equal(executor.commands.length, 2);
-  });
+  for (const [action, input, otherInput, status] of [
+    ["creation", request, sendRequest, "created"],
+    ["sending", sendRequest, request, "delivered"],
+  ] as const) {
+    it(`allows ${action} once and prompts on the next call`, async () => {
+      const tool = captureTool();
+      const { ui, calls } = approvalUi({ dialog: "once" });
+      const executor = recordingExecutor();
+      const context = mockContext(ui, executor.executeTool);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await tool.execute("t", input, undefined, undefined, context);
+        assert.equal(result.structuredContent.status, status);
+      }
+      assert.equal(calls.selections.length, 2);
+      assert.equal(executor.commands.length, 2);
+    });
 
-  it("Allow in this session はセッション内の再確認を省略する", async () => {
-    const tool = captureTool();
-    const { ui, calls } = approvalUi({ dialog: "session" });
-    const executor = recordingExecutor();
-    await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
-    await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
-    await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
-    assert.equal(calls.selections.length, 1);
-    assert.equal(executor.commands.length, 3);
-  });
+    for (const grant of ["turn", "session"] as const) {
+      it(`limits ${grant} approval to ${action} and honors its lifetime`, async () => {
+        const handlers: CapturedHandlers = new Map();
+        const tool = captureTool(handlers);
+        const allowed = approvalUi({ dialog: grant });
+        const denied = approvalUi({ dialog: "deny" });
+        const executor = recordingExecutor();
+        const allowedContext = mockContext(allowed.ui, executor.executeTool);
+        const deniedContext = mockContext(denied.ui, executor.executeTool);
 
-  it("Allow in this turn は次のユーザー入力まで再確認を省略する", async () => {
-    const tool = captureTool();
-    const { ui, calls } = approvalUi({ dialog: "turn" });
-    const executor = recordingExecutor();
-    await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
-    await tool.execute("t", request, undefined, undefined, mockContext(ui, executor.executeTool));
-    assert.equal(calls.selections.length, 1);
-    assert.equal(executor.commands.length, 2);
-  });
+        const first = await tool.execute("t", input, undefined, undefined, allowedContext);
+        assert.equal(first.structuredContent.status, status);
+        const other = await tool.execute("t", otherInput, undefined, undefined, deniedContext);
+        assert.equal(other.structuredContent.status, "denied");
+        assert.equal(executor.commands.length, 1);
+
+        const same = await tool.execute("t", input, undefined, undefined, deniedContext);
+        assert.equal(same.structuredContent.status, status);
+        assert.equal(denied.calls.selections.length, 1);
+
+        handlers.get("input")!({});
+        const nextTurn = await tool.execute("t", input, undefined, undefined, deniedContext);
+        assert.equal(nextTurn.structuredContent.status, grant === "turn" ? "denied" : status);
+        assert.equal(executor.commands.length, grant === "turn" ? 2 : 3);
+      });
+    }
+  }
 
   it("Deny は理由なしで実行を中止する", async () => {
     const tool = captureTool();
@@ -374,7 +478,8 @@ describe("承認", () => {
     );
     assert.deepEqual(calls.selections, [
       {
-        title: "Allow creating a new main-agent session?\nprompt: fix the failing build",
+        title:
+          "Allow creating a new main-agent session?\nTurn and session approvals apply to session creation only.\nmessage: fix the failing build",
         options: [
           "Allow once",
           "Allow in this turn",
@@ -399,36 +504,55 @@ describe("承認", () => {
     assert.equal(executor.commands.length, 2);
   });
 
-  it("passes the full multiline prompt and specified resolved cwd to select", async () => {
+  it("passes the full multiline message to the create approval", async () => {
     const tool = captureTool();
     const { ui, calls } = approvalUi({ dialog: "once" });
     const executor = recordingExecutor();
-    const prompt = "x".repeat(100) + "\n\nlast line\n";
+    const message = "x".repeat(100) + "\n\nlast line\n";
     await tool.execute(
       "t",
-      { prompt, cwd: "sub/dir" },
+      { message },
       undefined,
       undefined,
       mockContext(ui, executor.executeTool, "/repo"),
     );
     assert.equal(
       calls.selections[0]?.title,
-      `Allow creating a new main-agent session?\nprompt: ${prompt}\ncwd: /repo/sub/dir`,
+      `Allow creating a new main-agent session?\nTurn and session approvals apply to session creation only.\nmessage: ${message}`,
     );
     const script = parse(executor.commands[0]!)[2] as string;
-    const tokens = parse(script);
-    assert.equal(tokens.at(-1), prompt);
+    assert.equal(parse(script).at(-1), message);
   });
 
-  it("passes the full multiline prompt to confirm without an omitted cwd", async () => {
+  it("shows the destination session id and wait in the send approval", async () => {
+    const tool = captureTool();
+    const { ui, calls } = approvalUi({ dialog: "once" });
+    const executor = recordingExecutor("delivered");
+    const message = "x".repeat(100) + "\n\nlast line\n";
+    await tool.execute(
+      "t",
+      { message, "session-id": "abc123", wait: 7 },
+      undefined,
+      undefined,
+      mockContext(ui, executor.executeTool, "/repo"),
+    );
+    assert.equal(
+      calls.selections[0]?.title,
+      `Allow sending a message to another session?\nTurn and session approvals apply to message sending only.\nmessage: ${message}\nsession-id: abc123\nwait: 7 seconds`,
+    );
+    const script = parse(executor.commands[0]!)[2] as string;
+    assert.equal(parse(script).at(-1), message);
+  });
+
+  it("passes the full multiline message to confirm without a session id", async () => {
     const tool = captureTool();
     const { ui, calls } = approvalUi({ confirm: true });
     const executor = recordingExecutor();
-    const prompt = "x".repeat(100) + "\n\nlast line\n";
+    const message = "x".repeat(100) + "\n\nlast line\n";
     const uiWithoutSelect: ApprovalUI = { confirm: ui.confirm };
     await tool.execute(
       "t",
-      { prompt },
+      { message },
       undefined,
       undefined,
       mockContext(uiWithoutSelect, executor.executeTool),
@@ -436,13 +560,13 @@ describe("承認", () => {
     assert.deepEqual(calls.confirmations, [
       {
         title: "Allow creating a new main-agent session?",
-        message: `prompt: ${prompt}`,
+        message: `message: ${message}`,
         signal: undefined,
       },
     ]);
     assert.equal(calls.selections.length, 0);
     const script = parse(executor.commands[0]!)[2] as string;
-    assert.equal(parse(script).at(-1), prompt);
+    assert.equal(parse(script).at(-1), message);
   });
 
   it("treats selection cancellation as denial and requests an optional reason", async () => {
@@ -458,7 +582,7 @@ describe("承認", () => {
     );
     assert.deepEqual(result.structuredContent, {
       status: "denied",
-      error: "newagent denied by user",
+      error: "agent denied by user",
     });
     assert.deepEqual(calls.inputTitles, ["Denied. Optional reason for the agent:"]);
     assert.equal(executor.commands.length, 0);
@@ -491,7 +615,7 @@ describe("承認", () => {
         undefined,
         mockContext(ui, executor.executeTool),
       );
-      assert.equal(result.structuredContent.error, "newagent denied by user");
+      assert.equal(result.structuredContent.error, "agent denied by user");
       assert.equal(executor.commands.length, 0);
     });
   }
@@ -797,10 +921,10 @@ describe("実行", () => {
     const executor = recordingExecutor();
     const result = await tool.execute(
       "t",
-      { prompt: "fix it", cwd: "/repo" },
+      { message: "fix it" },
       undefined,
       undefined,
-      mockContext(ui, executor.executeTool),
+      mockContext(ui, executor.executeTool, "/repo"),
     );
     assert.equal(executor.commands.length, 1);
     const script = parse(executor.commands[0]!)[2] as string;
@@ -815,11 +939,29 @@ describe("実行", () => {
     );
   });
 
-  it("passes an exact --detached prompt through the registered bash", async () => {
+  it("does not report created when pi-mux prints help instead of a session id", async () => {
+    const tool = captureTool();
+    const { ui } = approvalUi({ dialog: "once" });
+    const executor = recordingExecutor("Usage: pi-mux new");
+    const result = await tool.execute(
+      "t",
+      { message: "--help" },
+      undefined,
+      undefined,
+      mockContext(ui, executor.executeTool),
+    );
+    assert.equal(result.isError, true);
+    assert.deepEqual(result.structuredContent, {
+      status: "error",
+      error: "agent create failed:\nUsage: pi-mux new",
+    });
+  });
+
+  it("passes an exact --detached message through the registered bash", async () => {
     const tool = captureTool();
     const { ui } = approvalUi({ dialog: "once" });
     const executor = recordingExecutor();
-    const input = { prompt: "--detached" };
+    const input = { message: "--detached" };
     assert.equal(validateInput(input), undefined);
     const result = await tool.execute(
       "t",
@@ -841,37 +983,53 @@ describe("実行", () => {
     assert.deepEqual(result.structuredContent, { status: "created" });
   });
 
-  it("uses ctx.cwd when cwd is omitted without generating a window name", async () => {
+  it("runs the new session from ctx.cwd", async () => {
     const tool = captureTool();
     const { ui } = approvalUi({ dialog: "once" });
     const executor = recordingExecutor();
     const result = await tool.execute(
       "t",
-      { prompt: "fix it" },
+      { message: "fix it" },
       undefined,
       undefined,
       mockContext(ui, executor.executeTool, "/from/ctx"),
     );
     assert.ok((parse(executor.commands[0]!)[2] as string).includes("cd -- /from/ctx"));
     assert.deepEqual(result.structuredContent, { status: "created" });
-    assert.equal(Object.hasOwn(result.structuredContent, "window"), false);
   });
 
-  it("相対 cwd を ctx.cwd 基準で絶対パスに解決する", async () => {
+  for (const [cwd, resolvedCwd] of [
+    ["../other repo", "/other repo"],
+    ["/absolute repo", "/absolute repo"],
+  ] as const) {
+    it(`shows and uses the resolved working directory for ${cwd}`, async () => {
+      const tool = captureTool();
+      const { ui, calls } = approvalUi({ dialog: "once" });
+      const executor = recordingExecutor();
+      const context = mockContext(ui, executor.executeTool);
+      const result = await tool.execute("t", { ...request, cwd }, undefined, undefined, context);
+      assert.equal(
+        calls.selections[0]?.title,
+        `Allow creating a new main-agent session?\nTurn and session approvals apply to session creation only.\nmessage: ${request.message}\ncwd: ${resolvedCwd}`,
+      );
+      const command = parse(parse(executor.commands[0]!)[2] as string);
+      const cdIndex = command.indexOf("cd");
+      assert.deepEqual(command.slice(cdIndex, cdIndex + 3), ["cd", "--", resolvedCwd]);
+      assert.deepEqual(result.structuredContent, { status: "created" });
+    });
+  }
+
+  it("rejects cwd on sends before asking for approval or running bash", async () => {
     const tool = captureTool();
-    const { ui } = approvalUi({ dialog: "once" });
+    const { ui, calls } = approvalUi({ dialog: "once" });
     const executor = recordingExecutor();
-    await tool.execute(
-      "t",
-      { prompt: "fix it", cwd: "sub/dir" },
-      undefined,
-      undefined,
-      mockContext(ui, executor.executeTool, "/base/cwd"),
+    const context = mockContext(ui, executor.executeTool);
+    await assert.rejects(
+      tool.execute("t", { ...sendRequest, cwd: "" }, undefined, undefined, context),
+      /cwd is only valid when creating a session/,
     );
-    assert.ok(
-      (parse(executor.commands[0]!)[2] as string).includes("cd -- /base/cwd/sub/dir"),
-      `resolved cwd missing: ${executor.commands[0]}`,
-    );
+    assert.equal(calls.selections.length, 0);
+    assert.equal(executor.commands.length, 0);
   });
 
   it("reports command errors without requiring a prestarted service", async () => {
@@ -887,20 +1045,77 @@ describe("実行", () => {
     );
     assert.equal(result.isError, true);
     assert.equal(result.structuredContent.status, "error");
-    assert.equal(Object.hasOwn(result.structuredContent, "window"), false);
-    assert.match(result.content[0].text, /tmux command failed/);
+    assert.match(result.content[0].text, /agent create failed/);
     assert.equal(result.content[0].text.includes("systemctl"), false);
   });
 
-  it("uses the bash registered in each execution context", async () => {
+  it("sends the message to the live session without waiting for consumption", async () => {
     const tool = captureTool();
-    const { ui } = approvalUi({ dialog: "session" });
-    const first = recordingExecutor();
-    const second = recordingExecutor();
-    await tool.execute("t", request, undefined, undefined, mockContext(ui, first.executeTool));
-    await tool.execute("t", request, undefined, undefined, mockContext(ui, second.executeTool));
-    assert.equal(first.commands.length, 1);
-    assert.equal(second.commands.length, 1);
+    const { ui } = approvalUi({ dialog: "once" });
+    const executor = recordingExecutor("");
+    const result = await tool.execute(
+      "t",
+      sendRequest,
+      undefined,
+      undefined,
+      mockContext(ui, executor.executeTool),
+    );
+    assert.equal(executor.commands.length, 1);
+    const inner = parse(parse(executor.commands[0]!)[2] as string);
+    assert.deepEqual(inner.slice(inner.indexOf("exec")), [
+      "exec",
+      "pi-mux",
+      "send",
+      "abc123",
+      "report the current status",
+    ]);
+    assert.deepEqual(result.structuredContent, { status: "delivered" });
+    assert.equal(result.details.status, "delivered");
+    assert.equal(
+      result.content[0].text,
+      "Sent the message to session abc123 without waiting for consumption.",
+    );
+  });
+
+  it("passes wait through to pi-mux send", async () => {
+    const tool = captureTool();
+    const { ui } = approvalUi({ dialog: "once" });
+    const executor = recordingExecutor("delivered");
+    const result = await tool.execute(
+      "t",
+      { ...sendRequest, wait: 30 },
+      undefined,
+      undefined,
+      mockContext(ui, executor.executeTool),
+    );
+    const inner = parse(parse(executor.commands[0]!)[2] as string);
+    assert.deepEqual(inner.slice(inner.indexOf("send")), [
+      "send",
+      "--wait",
+      "30",
+      "abc123",
+      "report the current status",
+    ]);
+    assert.deepEqual(result.structuredContent, { status: "delivered" });
+    assert.equal(result.content[0].text, "Session abc123 consumed the message.");
+  });
+
+  it("reports an unconsumed send timeout as an error result", async () => {
+    const tool = captureTool();
+    const { ui } = approvalUi({ dialog: "once" });
+    const executeTool: ExecuteTool = async () =>
+      bashOutcome(1, "message not consumed: @pi-mux-msg-<uuid>");
+    const result = await tool.execute(
+      "t",
+      { ...sendRequest, wait: 5 },
+      undefined,
+      undefined,
+      mockContext(ui, executeTool),
+    );
+    assert.equal(result.isError, true);
+    assert.equal(result.structuredContent.status, "error");
+    assert.match(result.content[0].text, /agent send failed/);
+    assert.match(result.content[0].text, /not consumed/);
   });
 
   it("tmux コマンドの失敗をエラーとして返す", async () => {
@@ -915,7 +1130,7 @@ describe("実行", () => {
       mockContext(ui, executeTool),
     );
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /tmux command failed/);
+    assert.match(result.content[0].text, /agent create failed/);
     assert.match(result.content[0].text, /tmux: unknown command/);
   });
 
@@ -934,5 +1149,16 @@ describe("実行", () => {
       mockContext(ui, executeTool),
     );
     assert.equal(result.isError, true);
+  });
+
+  it("uses the bash registered in each execution context", async () => {
+    const tool = captureTool();
+    const { ui } = approvalUi({ dialog: "session" });
+    const first = recordingExecutor();
+    const second = recordingExecutor();
+    await tool.execute("t", request, undefined, undefined, mockContext(ui, first.executeTool));
+    await tool.execute("t", request, undefined, undefined, mockContext(ui, second.executeTool));
+    assert.equal(first.commands.length, 1);
+    assert.equal(second.commands.length, 1);
   });
 });

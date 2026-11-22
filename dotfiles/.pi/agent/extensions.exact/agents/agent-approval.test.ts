@@ -12,8 +12,8 @@ import {
   type Terminal,
   type TUI,
 } from "@earendil-works/pi-tui";
-import { NewagentApprovalDialog, showNewagentApproval } from "./newagent-approval.ts";
-import { registerNewagentTool } from "./newagent.ts";
+import { AgentApprovalDialog, showAgentApproval, type ApprovalField } from "./agent-approval.ts";
+import { registerAgentTool } from "./agent.ts";
 
 const QUESTION = "Allow creating a new main-agent session?";
 const OPTIONS = [
@@ -55,21 +55,14 @@ class MemoryTerminal implements Terminal {
   setProgramStatus(): void {}
 }
 
-function approvalHarness(mode: "regular" | "fullscreen", prompt: string, cwd?: string) {
+function approvalHarness(mode: "regular" | "fullscreen", fields: ApprovalField[]) {
   const terminal = new MemoryTerminal();
   const tui = mode === "regular" ? new TuiMainScreen(terminal) : new TuiAltScreen(terminal);
   tui.addChild(new Text(Array.from({ length: 70 }, () => "BACKGROUND CHAT").join("\n")));
   const answers: (string | undefined)[] = [];
-  const component = new NewagentApprovalDialog(
-    tui,
-    theme,
-    QUESTION,
-    { prompt, cwd },
-    OPTIONS,
-    (answer) => {
-      answers.push(answer);
-    },
-  );
+  const component = new AgentApprovalDialog(tui, theme, QUESTION, fields, OPTIONS, (answer) => {
+    answers.push(answer);
+  });
   tui.start();
   const overlay = tui.showOverlay(component, {
     width: "100%",
@@ -89,27 +82,30 @@ function approvalHarness(mode: "regular" | "fullscreen", prompt: string, cwd?: s
 for (const mode of ["regular", "fullscreen"] as const) {
   describe(`${mode} approval overlay`, () => {
     it("puts field labels on separate frame tops and only values inside matching frames", () => {
-      const harness = approvalHarness(mode, "first line\nsecond line", "/repo/child");
+      const harness = approvalHarness(mode, [
+        { label: "message", text: "first line\nsecond line" },
+        { label: "session-id", text: "abc123" },
+      ]);
       try {
         const lines = harness.frame();
         const cells = lines.map((line) => line.slice(2, -2));
-        const promptIndex = cells.findIndex((line) => line.startsWith("┌─ prompt "));
-        const cwdIndex = cells.findIndex((line) => line.startsWith("┌─ cwd "));
+        const messageIndex = cells.findIndex((line) => line.startsWith("┌─ message "));
+        const sessionIndex = cells.findIndex((line) => line.startsWith("┌─ session-id "));
         const cellWidth = harness.terminal.columns - 4;
         const bottom = "└" + "─".repeat(cellWidth - 2) + "┘";
-        assert.equal(promptIndex, 3);
-        assert.equal(cwdIndex, promptIndex + 5);
-        assert.equal(cells[promptIndex + 1]?.slice(2, -2).trimEnd(), "first line");
-        assert.equal(cells[promptIndex + 2]?.slice(2, -2).trimEnd(), "second line");
-        assert.equal(cells[promptIndex + 3], bottom);
-        assert.equal(cells[promptIndex + 4]?.trim(), "");
-        assert.equal(cells[cwdIndex + 1]?.slice(2, -2).trimEnd(), "/repo/child");
-        assert.equal(cells[cwdIndex + 2], bottom);
-        assert.equal(visibleWidth(cells[promptIndex]!), cellWidth);
-        assert.equal(visibleWidth(cells[cwdIndex]!), cellWidth);
+        assert.equal(messageIndex, 3);
+        assert.equal(sessionIndex, messageIndex + 5);
+        assert.equal(cells[messageIndex + 1]?.slice(2, -2).trimEnd(), "first line");
+        assert.equal(cells[messageIndex + 2]?.slice(2, -2).trimEnd(), "second line");
+        assert.equal(cells[messageIndex + 3], bottom);
+        assert.equal(cells[messageIndex + 4]?.trim(), "");
+        assert.equal(cells[sessionIndex + 1]?.slice(2, -2).trimEnd(), "abc123");
+        assert.equal(cells[sessionIndex + 2], bottom);
+        assert.equal(visibleWidth(cells[messageIndex]!), cellWidth);
+        assert.equal(visibleWidth(cells[sessionIndex]!), cellWidth);
         assert.equal(lines.filter((line) => line.startsWith("├")).length, 2);
         assert.equal(
-          lines.some((line) => /prompt:|cwd:/.test(line)),
+          lines.some((line) => /session-id:|message:/.test(line)),
           false,
         );
       } finally {
@@ -117,16 +113,18 @@ for (const mode of ["regular", "fullscreen"] as const) {
       }
     });
 
-    it("keeps cwd-like prompt text inside the prompt cell when cwd is omitted", () => {
-      const harness = approvalHarness(mode, "first line\ncwd: prompt text");
+    it("keeps session-id-like message text inside the message cell when session-id is omitted", () => {
+      const harness = approvalHarness(mode, [
+        { label: "message", text: "first line\nsession-id: message text" },
+      ]);
       try {
         const lines = harness.frame();
-        const promptIndex = lines.findIndex((line) => line.includes("┌─ prompt "));
-        assert.ok(promptIndex > 0);
-        assert.ok(lines[promptIndex + 1]?.includes("first line"));
-        assert.ok(lines[promptIndex + 2]?.includes("cwd: prompt text"));
+        const messageIndex = lines.findIndex((line) => line.includes("┌─ message "));
+        assert.ok(messageIndex > 0);
+        assert.ok(lines[messageIndex + 1]?.includes("first line"));
+        assert.ok(lines[messageIndex + 2]?.includes("session-id: message text"));
         assert.equal(
-          lines.some((line) => line.includes("┌─ cwd ")),
+          lines.some((line) => line.includes("┌─ session-id ")),
           false,
         );
         assert.equal(lines.filter((line) => line.startsWith("├")).length, 2);
@@ -136,7 +134,10 @@ for (const mode of ["regular", "fullscreen"] as const) {
     });
 
     it("fits field titles and values within narrow and resized terminal widths", () => {
-      const harness = approvalHarness(mode, "日本語🙂".repeat(30), "/repo/child");
+      const harness = approvalHarness(mode, [
+        { label: "message", text: "日本語🙂".repeat(30) },
+        { label: "session-id", text: "abc123" },
+      ]);
       try {
         harness.terminal.rows = 200;
         for (const columns of [42, 16, 10, 8, 6, 4, 2, 1, 0, 80]) {
@@ -148,10 +149,10 @@ for (const mode of ["regular", "fullscreen"] as const) {
             `columns: ${columns}`,
           );
           if (columns >= 16) {
-            assert.ok(lines.some((line) => line.includes("┌─ prompt ")));
-            assert.ok(lines.some((line) => line.includes("┌─ cwd ")));
+            assert.ok(lines.some((line) => line.includes("┌─ message ")));
+            assert.ok(lines.some((line) => line.includes("┌─ session")));
           }
-          if (columns === 10) assert.ok(lines.some((line) => line.includes("┌─ pr┐")));
+          if (columns === 10) assert.ok(lines.some((line) => line.includes("┌─ me┐")));
         }
       } finally {
         harness.tui.stop();
@@ -161,7 +162,7 @@ for (const mode of ["regular", "fullscreen"] as const) {
     it("shows untrusted conceal, clear-screen and OSC sequences literally in raw terminal output", () => {
       const details =
         "benign \x1b[8mHIDDEN DANGEROUS REQUEST\x1b[28m done \x1b[2J\n\nlast\r\t\x1b]2;FAKE TITLE\x07\n";
-      const harness = approvalHarness(mode, details);
+      const harness = approvalHarness(mode, [{ label: "message", text: details }]);
       try {
         harness.terminal.columns = 160;
         harness.frame();
@@ -189,7 +190,9 @@ for (const mode of ["regular", "fullscreen"] as const) {
       for (const code of controlCodes) {
         const control = String.fromCharCode(code);
         const literal = `BEFORE\\x${code.toString(16).padStart(2, "0")}AFTER`;
-        const harness = approvalHarness(mode, `BEFORE${control}AFTER`);
+        const harness = approvalHarness(mode, [
+          { label: "message", text: `BEFORE${control}AFTER` },
+        ]);
         try {
           harness.frame();
           const rawComponent = harness.component.render(80).join("\n");
@@ -207,11 +210,11 @@ for (const mode of ["regular", "fullscreen"] as const) {
     });
 
     for (const rows of [16, 24, 40]) {
-      it(`keeps the question, borders and all choices visible through the final prompt line at ${rows} rows`, () => {
+      it(`keeps the question, borders and all choices visible through the final message line at ${rows} rows`, () => {
         const details =
           Array.from({ length: 100 }, (_, index) => `body-${index}`).join("\n") +
           "\n\nFINAL LINE\n";
-        const harness = approvalHarness(mode, details);
+        const harness = approvalHarness(mode, [{ label: "message", text: details }]);
         try {
           harness.terminal.rows = rows;
           const first = harness.frame();
@@ -252,15 +255,17 @@ for (const mode of ["regular", "fullscreen"] as const) {
     }
 
     it("scrolls by wheel and page in both directions without changing selection", () => {
-      const harness = approvalHarness(
-        mode,
-        Array.from({ length: 100 }, (_, index) => `line-${index}`).join("\n"),
-      );
+      const harness = approvalHarness(mode, [
+        {
+          label: "message",
+          text: Array.from({ length: 100 }, (_, index) => `line-${index}`).join("\n"),
+        },
+      ]);
       try {
         const start = harness.frame();
         harness.terminal.input("\x1b[<65;10;5M");
         const down = harness.frame();
-        assert.ok(start[3]?.includes("┌─ prompt "));
+        assert.ok(start[3]?.includes("┌─ message "));
         assert.ok(start[4]?.includes("line-0"));
         assert.ok(down[4]?.includes("line-3"));
         harness.terminal.input("\x1b[<64;10;5M");
@@ -279,27 +284,32 @@ for (const mode of ["regular", "fullscreen"] as const) {
       }
     });
 
-    it("scrolls through a long prompt into the cwd cell while keeping choices fixed", () => {
-      const prompt = Array.from({ length: 100 }, (_, index) => `line-${index}`).join("\n");
-      const harness = approvalHarness(mode, prompt, "/repo/child");
+    it("scrolls through a long message into the session-id cell while keeping choices fixed", () => {
+      const harness = approvalHarness(mode, [
+        {
+          label: "message",
+          text: Array.from({ length: 100 }, (_, index) => `line-${index}`).join("\n"),
+        },
+        { label: "session-id", text: "abc123" },
+      ]);
       try {
         const first = harness.frame();
         const choiceRows = OPTIONS.map((option) =>
           first.findIndex((line) => line.includes(option)),
         );
-        assert.ok(first[3]?.includes("┌─ prompt "));
+        assert.ok(first[3]?.includes("┌─ message "));
         assert.ok(first[4]?.includes("line-0"));
         for (let page = 0; page < 110; page++) {
           harness.terminal.input("\x1b[6~");
           harness.frame();
         }
         const last = harness.frame();
-        const cwdIndex = last.findIndex((line) => line.includes("/repo/child"));
-        assert.ok(cwdIndex > 0);
-        assert.ok(last[cwdIndex - 1]?.includes("┌─ cwd "));
-        assert.equal(last[cwdIndex - 2]?.slice(2, -2).trim(), "");
-        assert.ok(last[cwdIndex - 3]?.includes("└"));
-        assert.ok(last[cwdIndex - 4]?.includes("line-99"));
+        const sessionIndex = last.findIndex((line) => line.includes("abc123"));
+        assert.ok(sessionIndex > 0);
+        assert.ok(last[sessionIndex - 1]?.includes("┌─ session-id "));
+        assert.equal(last[sessionIndex - 2]?.slice(2, -2).trim(), "");
+        assert.ok(last[sessionIndex - 3]?.includes("└"));
+        assert.ok(last[sessionIndex - 4]?.includes("line-99"));
         assert.deepEqual(
           OPTIONS.map((option) => last.findIndex((line) => line.includes(option))),
           choiceRows,
@@ -312,7 +322,9 @@ for (const mode of ["regular", "fullscreen"] as const) {
     });
 
     it("reflows wide text on resize and keeps the final line reachable with fixed choices", () => {
-      const harness = approvalHarness(mode, "日本語🙂".repeat(250) + "\n\nLAST\n");
+      const harness = approvalHarness(mode, [
+        { label: "message", text: "日本語🙂".repeat(250) + "\n\nLAST\n" },
+      ]);
       try {
         for (const [columns, rows] of [
           [80, 24],
@@ -350,7 +362,7 @@ for (const mode of ["regular", "fullscreen"] as const) {
       [3, ["\x1b[A"]],
     ] as const) {
       it(`confirms choice ${index} with Tab, Shift+Tab or arrow keys`, () => {
-        const harness = approvalHarness(mode, "prompt: test");
+        const harness = approvalHarness(mode, [{ label: "message", text: "message: test" }]);
         try {
           const first = harness.frame();
           for (const key of keys) harness.terminal.input(key);
@@ -366,7 +378,7 @@ for (const mode of ["regular", "fullscreen"] as const) {
     }
 
     it("returns cancellation on Escape", () => {
-      const harness = approvalHarness(mode, "prompt: test");
+      const harness = approvalHarness(mode, [{ label: "message", text: "message: test" }]);
       try {
         harness.frame();
         harness.terminal.input("\x1b");
@@ -377,7 +389,7 @@ for (const mode of ["regular", "fullscreen"] as const) {
     });
 
     it("enables SGR wheel tracking only when the TUI does not, and disables it on confirm", () => {
-      const harness = approvalHarness(mode, "prompt: test");
+      const harness = approvalHarness(mode, [{ label: "message", text: "message: test" }]);
       try {
         harness.frame();
         assert.equal(
@@ -454,7 +466,7 @@ describe("approval lifecycle and tool routing", () => {
       const harness = customUi(tui);
       const handlers = new Map<string, (event: any) => unknown>();
       const tools: any[] = [];
-      registerNewagentTool({
+      registerAgentTool({
         registerTool(tool: unknown) {
           tools.push(tool);
         },
@@ -470,14 +482,17 @@ describe("approval lifecycle and tool routing", () => {
         ui: harness.ui,
         async executeTool() {
           executions++;
-          return { isError: false, result: { content: [{ type: "text", text: "created" }] } };
+          return {
+            isError: false,
+            result: { content: [{ type: "text", text: "Pi session fixture-id" }] },
+          };
         },
       };
       const controller = new AbortController();
       try {
         const first = tools[0].execute(
           "test",
-          { prompt: "test" },
+          { message: "test" },
           controller.signal,
           undefined,
           context,
@@ -504,7 +519,7 @@ describe("approval lifecycle and tool routing", () => {
         }
         assert.equal(executions, ["once", "turn", "session"].includes(answer) ? 1 : 0);
         assert.equal(tui.hasOverlay(), false);
-        const second = tools[0].execute("test", { prompt: "next" }, undefined, undefined, context);
+        const second = tools[0].execute("test", { message: "next" }, undefined, undefined, context);
         if (answer !== "turn" && answer !== "session") harness.getComponent()!.handleInput!("\r");
         await second;
         assert.equal(harness.calls.custom, answer === "turn" || answer === "session" ? 1 : 2);
@@ -512,7 +527,7 @@ describe("approval lifecycle and tool routing", () => {
           handlers.get("input")!({ source: "interactive" });
           const third = tools[0].execute(
             "test",
-            { prompt: "third" },
+            { message: "third" },
             undefined,
             undefined,
             context,
@@ -544,10 +559,10 @@ describe("approval lifecycle and tool routing", () => {
       listeners--;
       return remove(...args);
     };
-    const pending = showNewagentApproval(
+    const pending = showAgentApproval(
       harness.ui,
       QUESTION,
-      { prompt: "test" },
+      [{ label: "message", text: "test" }],
       OPTIONS,
       controller.signal,
     );
@@ -556,6 +571,7 @@ describe("approval lifecycle and tool routing", () => {
     controller.abort();
     assert.equal(await pending, undefined);
     assert.equal(tui.hasOverlay(), false);
+    assert.ok(terminal.output.includes("\x1b[?1006l\x1b[?1000l"));
     assert.equal(listeners, 0);
   });
 
@@ -565,37 +581,46 @@ describe("approval lifecycle and tool routing", () => {
     const controller = new AbortController();
     controller.abort();
     await assert.rejects(
-      showNewagentApproval(harness.ui, QUESTION, { prompt: "x" }, OPTIONS, controller.signal),
+      showAgentApproval(
+        harness.ui,
+        QUESTION,
+        [{ label: "message", text: "x" }],
+        OPTIONS,
+        controller.signal,
+      ),
       { name: "AbortError" },
     );
     assert.equal(harness.calls.custom, 0);
   });
 
   for (const mode of ["tui", "rpc"] as const) {
-    it(`routes ${mode} approval through its own UI and preserves full prompt and cwd`, async () => {
+    it(`routes ${mode} approval through its own UI and preserves the full message`, async () => {
       const oldAgent = process.env.PI_AGENT_NAME;
       process.env.PI_AGENT_NAME = "main";
       const terminal = new MemoryTerminal();
       const tui = new TuiMainScreen(terminal);
       const harness = customUi(tui);
       const tools: any[] = [];
-      registerNewagentTool({
+      registerAgentTool({
         registerTool(tool: unknown) {
           tools.push(tool);
         },
         on() {},
       } as any);
       const commands: string[] = [];
-      const prompt = "x".repeat(100) + "\n\nFINAL\x1b[8m hidden\x1b[28m\r\t\n";
+      const message = "x".repeat(100) + "\n\nFINAL\x1b[8m hidden\x1b[28m\r\t\n";
       try {
-        const pending = tools[0].execute("test", { prompt, cwd: "child" }, undefined, undefined, {
+        const pending = tools[0].execute("test", { message }, undefined, undefined, {
           mode,
           hasUI: true,
           cwd: "/repo",
           ui: harness.ui,
           async executeTool(_name: string, args: { command: string }) {
             commands.push(args.command);
-            return { isError: false, result: { content: [{ type: "text", text: "created" }] } };
+            return {
+              isError: false,
+              result: { content: [{ type: "text", text: "Pi session fixture-id" }] },
+            };
           },
         });
         if (mode === "tui") {
@@ -606,9 +631,7 @@ describe("approval lifecycle and tool routing", () => {
             .map(stripTerminalSequences)
             .join("\n");
           assert.ok(rendered.includes("FINAL\\x1b[8m hidden\\x1b[28m\\x0d\\x09"));
-          assert.ok(rendered.includes("┌─ cwd "));
-          assert.ok(rendered.includes("/repo/child"));
-          assert.equal(rendered.includes("cwd:"), false);
+          assert.equal(rendered.includes("┌─ session-id "), false);
           harness.getComponent()!.handleInput!("\r");
         }
         const result = await pending;
@@ -617,7 +640,71 @@ describe("approval lifecycle and tool routing", () => {
         assert.equal(harness.calls.select, mode === "rpc" ? 1 : 0);
         assert.equal(commands.length, 1);
         const script = parse(commands[0]!)[2] as string;
-        assert.equal(parse(script).at(-1), prompt);
+        assert.equal(parse(script).at(-1), message);
+      } finally {
+        if (oldAgent === undefined) delete process.env.PI_AGENT_NAME;
+        else process.env.PI_AGENT_NAME = oldAgent;
+      }
+    });
+
+    it(`routes ${mode} send approval with the session id and wait`, async () => {
+      const oldAgent = process.env.PI_AGENT_NAME;
+      process.env.PI_AGENT_NAME = "main";
+      const terminal = new MemoryTerminal();
+      const tui = new TuiMainScreen(terminal);
+      const harness = customUi(tui);
+      const tools: any[] = [];
+      registerAgentTool({
+        registerTool(tool: unknown) {
+          tools.push(tool);
+        },
+        on() {},
+      } as any);
+      const commands: string[] = [];
+      const message = "report the status";
+      try {
+        const pending = tools[0].execute(
+          "test",
+          { message, "session-id": "abc123", wait: 20 },
+          undefined,
+          undefined,
+          {
+            mode,
+            hasUI: true,
+            cwd: "/repo",
+            ui: harness.ui,
+            async executeTool(_name: string, args: { command: string }) {
+              commands.push(args.command);
+              return { isError: false, result: { content: [{ type: "text", text: "delivered" }] } };
+            },
+          },
+        );
+        if (mode === "tui") {
+          await harness.opened;
+          const rendered = harness
+            .getComponent()!
+            .render(80)
+            .map(stripTerminalSequences)
+            .join("\n");
+          assert.ok(rendered.includes("┌─ session-id "));
+          assert.ok(rendered.includes("abc123"));
+          assert.ok(rendered.includes("20 seconds"));
+          assert.ok(rendered.includes("report the status"));
+          harness.getComponent()!.handleInput!("\r");
+        }
+        const result = await pending;
+        assert.equal(result.structuredContent.status, "delivered");
+        assert.equal(harness.calls.custom, mode === "tui" ? 1 : 0);
+        assert.equal(harness.calls.select, mode === "rpc" ? 1 : 0);
+        assert.equal(commands.length, 1);
+        const inner = parse(parse(commands[0]!)[2] as string);
+        assert.deepEqual(inner.slice(inner.indexOf("send")), [
+          "send",
+          "--wait",
+          "20",
+          "abc123",
+          message,
+        ]);
       } finally {
         if (oldAgent === undefined) delete process.env.PI_AGENT_NAME;
         else process.env.PI_AGENT_NAME = oldAgent;

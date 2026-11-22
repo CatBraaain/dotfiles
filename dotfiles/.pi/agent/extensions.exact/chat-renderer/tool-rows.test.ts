@@ -70,7 +70,7 @@ const toolNames = [
   "subagent",
   "recontext",
   "session_search",
-  "newagent",
+  "agent",
   "powershell",
   "mystery_tool",
   "constructor",
@@ -953,11 +953,25 @@ describe("single tool rows", () => {
   });
 });
 
+describe("agent summaries", () => {
+  for (const [args, preview, status] of [
+    [{ message: "test" }, "test", "created"],
+    [{ "session-id": "abc123", message: "test" }, "abc123", "delivered"],
+  ] as const) {
+    it(`renders the stored status ${status} in the folded row`, () => {
+      const row = createRow("agent");
+      row.updateArgs(args);
+      row.updateResult({ content: [], details: { status }, isError: false });
+      assert.equal(renderedText(row), ` agent ${preview} — agent: ${status}`);
+    });
+  }
+});
+
 describe("summary failure boundaries", () => {
   for (const phase of ["before validation", "after validation error"]) {
-    it(`renders non-string session names ${phase}`, () => {
-      const row = createRow("newagent");
-      row.updateArgs({ name: 42, prompt: "test" });
+    it(`renders non-string send targets ${phase}`, () => {
+      const row = createRow("agent");
+      row.updateArgs({ "session-id": 42, message: "test" });
       if (phase === "after validation error") {
         row.updateResult({
           content: [{ type: "text", text: "argument validation failed" }],
@@ -965,16 +979,16 @@ describe("summary failure boundaries", () => {
         });
       }
       const status = phase === "before validation" ? "Running..." : "argument validation failed";
-      assert.equal(renderedText(row), ` newagent test — ${status}`);
+      assert.equal(renderedText(row), ` agent test — ${status}`);
     });
   }
 
-  it("ignores a non-string prompt when formatting the session call", () => {
-    const row = createRow("newagent");
-    row.updateArgs({ name: "  session label  ", prompt: 42 });
-    assert.equal(renderedText(row), " newagent session label — Running...");
-    row.updateArgs({ name: 42, prompt: 42 });
-    assert.ok(renderedText(row).startsWith(" newagent"));
+  it("ignores a non-string message when formatting the send call", () => {
+    const row = createRow("agent");
+    row.updateArgs({ "session-id": "  abc123  ", message: 42 });
+    assert.equal(renderedText(row), " agent abc123 — Running...");
+    row.updateArgs({ "session-id": 42, message: 42 });
+    assert.ok(renderedText(row).startsWith(" agent"));
     assert.equal(renderedText(row).includes("[render error]"), false);
   });
 

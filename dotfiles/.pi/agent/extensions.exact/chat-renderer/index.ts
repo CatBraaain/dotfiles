@@ -66,7 +66,7 @@ const WEB_DISPLAYS = {
 } as const;
 const SESSION_DISPLAYS = {
   session_search: { successStatus: "complete", text: allTextContent },
-  newagent: { successStatus: "created", text: allTextContent },
+  agent: { successStatus: "created", text: allTextContent },
 };
 
 const REGISTRY: Record<string, RendererEntry> = {
@@ -120,7 +120,9 @@ const REGISTRY: Record<string, RendererEntry> = {
         },
         result(result, { expanded, isPartial }, theme, context) {
           const status =
-            result.structuredContent?.status ?? (context.isError ? "error" : display.successStatus);
+            result.structuredContent?.status ??
+            result.details?.status ??
+            (context.isError ? "error" : display.successStatus);
           const summary = isPartial ? "Running..." : `${name}: ${status}`;
           return theme.fg(
             context.isError ? "error" : "toolOutput",
@@ -275,13 +277,17 @@ function formatWebCall(name: string, args: Record<string, any>, theme: ToolTheme
 }
 
 function formatSessionCall(name: string, args: Record<string, unknown>, theme: ToolTheme): string {
-  const sessionName = typeof args.name === "string" ? args.name.trim() : "";
-  const prompt = typeof args.prompt === "string" ? args.prompt : "";
   const preview =
     name === "session_search"
       ? (args.action ?? "")
-      : truncateText(sessionName || prompt, SESSION_PREVIEW_LIMIT);
+      : truncateText(agentCallTarget(args), SESSION_PREVIEW_LIMIT);
   return titleLine(`${name} ${preview}`, theme);
+}
+
+function agentCallTarget(args: Record<string, unknown>): string {
+  const sessionId = typeof args["session-id"] === "string" ? args["session-id"].trim() : "";
+  const message = typeof args.message === "string" ? args.message : "";
+  return sessionId || message;
 }
 
 function formatSubagentCall(args: Record<string, any>, theme: ToolTheme): string {
