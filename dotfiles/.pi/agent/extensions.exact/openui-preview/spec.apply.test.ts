@@ -8,6 +8,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -34,13 +35,17 @@ const EXPECTED_SPEC = {
   version: "shared-1.0.0",
 };
 const CLI_SOURCE = `
+import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { version } from "@fixture/shared-library";
+const { fixtureComponents } = await import(process.argv[3]);
+assert.ok(fixtureComponents.includes("Stack"));
 const output = process.argv[process.argv.indexOf("--out") + 1];
 writeFileSync(output, JSON.stringify({ ...${JSON.stringify(EXPECTED_SPEC)}, version }));
 `;
 const LIBRARY_SOURCE =
   'import { version } from "@fixture/shared-library";\n' +
+  'export { SUPPORTED_COMPONENTS as fixtureComponents } from "./supported-components";\n' +
   "export const promptOptions = { examples: [version], additionalRules: [] };\n";
 
 afterEach(() => {
@@ -51,19 +56,21 @@ function createFixture() {
   mkdirSync("/tmp/work/dotfiles/openui-preview-tests", { recursive: true });
   const root = mkdtempSync("/tmp/work/dotfiles/openui-preview-tests/spec-");
   fixtureRoots.push(root);
-  const distHookDir = join(root, "dist", ".pi", "agent", "extensions.exact", "openui-preview");
-  const homeHookDir = join(root, "home", ".pi", "agent", "extensions.exact", "openui-preview");
+  const distRoot = join(root, "dist");
+  const distHookDir = join(distRoot, ".pi", "agent", "extensions.exact", "openui-preview");
   const agentDir = join(root, "home", ".pi", "agent");
+  const homeHookDir = join(agentDir, "extensions", "openui-preview");
   const nodeModules = join(agentDir, "node_modules");
   mkdirSync(distHookDir, { recursive: true });
   mkdirSync(homeHookDir, { recursive: true });
-  writeFileSync(join(root, "dist", ".pi", "agent", "bun.lock"), "");
+  const lockPath = join(agentDir, "bun.lock");
+  writeFileSync(lockPath, "");
   writeFileSync(join(distHookDir, "library.data.ts"), LIBRARY_SOURCE);
   for (const file of ["display-only.ts", "supported-components.ts", "prompt.ts"]) {
-    copyFileSync(join(import.meta.dir, file), join(distHookDir, file));
+    copyFileSync(join(import.meta.dir, file), join(homeHookDir, file));
   }
-  copyFileSync(join(import.meta.dir, "spec.apply.ts"), join(distHookDir, "spec.apply.ts"));
-  return { root, distHookDir, homeHookDir, nodeModules };
+  copyFileSync(join(import.meta.dir, "spec.build.ts"), join(distHookDir, "spec.build.ts"));
+  return { root, distRoot, distHookDir, homeHookDir, lockPath, nodeModules };
 }
 
 function prepareNodeModules(fixture: ReturnType<typeof createFixture>, cliSource = CLI_SOURCE) {
@@ -85,9 +92,26 @@ function prepareNodeModules(fixture: ReturnType<typeof createFixture>, cliSource
 }
 
 function runHook(fixture: ReturnType<typeof createFixture>) {
-  return Bun.spawnSync([process.execPath, join(fixture.distHookDir, "spec.apply.ts")], {
-    cwd: fixture.homeHookDir,
+  const distHook = join(fixture.distHookDir, "spec.apply.ts");
+  copyFileSync(join(import.meta.dir, "spec.apply.ts"), distHook);
+  const built = Bun.spawnSync([process.execPath, join(fixture.distHookDir, "spec.build.ts")], {
+    cwd: fixture.distHookDir,
   });
+  assert.equal(built.exitCode, 0, built.stderr.toString());
+
+  const homeHook = join(fixture.homeHookDir, "spec.apply.ts");
+  copyFileSync(distHook, homeHook);
+  const offlineDist = join(fixture.root, "offline-dist");
+  renameSync(fixture.distRoot, offlineDist);
+  try {
+    return Bun.spawnSync([process.execPath, homeHook], {
+      cwd: fixture.homeHookDir,
+      env: { ...process.env, DOTFILES_DIST_DIR: fixture.distRoot },
+    });
+  } finally {
+    renameSync(offlineDist, fixture.distRoot);
+    rmSync(homeHook);
+  }
 }
 
 function removeCli(fixture: ReturnType<typeof createFixture>) {
@@ -95,7 +119,7 @@ function removeCli(fixture: ReturnType<typeof createFixture>) {
 }
 
 describe("OpenUI spec apply hook", () => {
-  it("generates spec and prompt options from the dist-side library", () => {
+  it("generates spec and prompt options from the built hook copied to home without dist", () => {
     const fixture = createFixture();
     prepareNodeModules(fixture);
     const result = runHook(fixture);
@@ -111,6 +135,7 @@ describe("OpenUI spec apply hook", () => {
     const skillPath = join(fixture.homeHookDir, SKILL_FILE);
     assert.equal(readFileSync(skillPath, "utf8"), opuiSkill(fixture.homeHookDir));
     assert.equal(existsSync(join(fixture.homeHookDir, "spec-gen-stamp")), true);
+    assert.equal(existsSync(join(fixture.homeHookDir, "library.data.ts")), false);
     assert.equal(existsSync(join(fixture.homeHookDir, ".spec-gen")), false);
   });
 
@@ -143,7 +168,7 @@ describe("OpenUI spec apply hook", () => {
     prepareNodeModules(fixture);
     assert.equal(runHook(fixture).exitCode, 0);
     removeCli(fixture);
-    writeFileSync(join(fixture.root, "dist", ".pi", "agent", "bun.lock"), "changed\n");
+    writeFileSync(fixture.lockPath, "changed\n");
     const result = runHook(fixture);
     assert.notEqual(result.exitCode, 0);
     assert.ok(result.stderr.toString().includes("OpenUI CLI is missing"));
@@ -332,7 +357,7 @@ describe("OpenUI skill generation", () => {
         const excluded = new Set(removed);
         const selected = SUPPORTED_COMPONENTS.filter((name) => !excluded.has(name));
         writeFileSync(
-          join(fixture.distHookDir, "supported-components.ts"),
+          join(fixture.homeHookDir, "supported-components.ts"),
           `export const SUPPORTED_COMPONENTS = ${JSON.stringify(selected)} as const;\n`,
         );
         const source = readFileSync(join(import.meta.dir, "library.data.ts"), "utf8").replace(
@@ -429,7 +454,7 @@ describe("OpenUI skill generation", () => {
         );
         const selected = SUPPORTED_COMPONENTS.filter((name) => name !== removed);
         writeFileSync(
-          join(fixture.distHookDir, "supported-components.ts"),
+          join(fixture.homeHookDir, "supported-components.ts"),
           `export const SUPPORTED_COMPONENTS = ${JSON.stringify(selected)} as const;\n`,
         );
         const result = runHook(fixture);
@@ -453,10 +478,9 @@ describe("OpenUI skill generation", () => {
       async () => {
         const fixture = createFixture();
         symlinkSync(join(import.meta.dir, "..", "..", "node_modules"), fixture.nodeModules, "dir");
-        symlinkSync(fixture.nodeModules, join(fixture.distHookDir, "node_modules"), "dir");
         const selectedNames = SUPPORTED_COMPONENTS.filter((name) => name !== omitted);
         writeFileSync(
-          join(fixture.distHookDir, "supported-components.ts"),
+          join(fixture.homeHookDir, "supported-components.ts"),
           `export const SUPPORTED_COMPONENTS = ${JSON.stringify(selectedNames)} as const;\n`,
         );
         const upstreamAddition =
@@ -488,7 +512,7 @@ describe("OpenUI skill generation", () => {
         assert.equal(text.ok, omitted !== "TextContent" && omitted !== "Stack");
         const browserSource = readFileSync(join(import.meta.dir, "snapshot-browser.js"), "utf8");
         writeFileSync(
-          join(fixture.distHookDir, "snapshot-browser.js"),
+          join(fixture.homeHookDir, "snapshot-browser.js"),
           browserSource
             .replace("const supported =", upstreamAddition + "const supported =")
             .replace(
@@ -497,7 +521,7 @@ describe("OpenUI skill generation", () => {
             ),
         );
         const bundle = await Bun.build({
-          entrypoints: [join(fixture.distHookDir, "snapshot-browser.js")],
+          entrypoints: [join(fixture.homeHookDir, "snapshot-browser.js")],
           target: "browser",
           format: "iife",
           minify: true,
@@ -570,7 +594,7 @@ describe("OpenUI skill generation", () => {
       const fixture = createFixture();
       prepareNodeModules(fixture);
       assert.equal(runHook(fixture).exitCode, 0);
-      const source = join(fixture.distHookDir, file);
+      const source = join(fixture.homeHookDir, file);
       writeFileSync(source, readFileSync(source, "utf8") + "\n");
       removeCli(fixture);
       const result = runHook(fixture);
@@ -601,7 +625,7 @@ describe("OpenUI skill generation", () => {
     assert.equal(runHook(fixture).exitCode, 0);
     const stampPath = join(fixture.homeHookDir, "spec-gen-stamp");
     writeFileSync(stampPath, "legacy-stamp");
-    const source = join(fixture.distHookDir, "prompt.ts");
+    const source = join(fixture.homeHookDir, "prompt.ts");
     writeFileSync(
       source,
       readFileSync(source, "utf8").replace(
@@ -622,7 +646,7 @@ describe("OpenUI skill generation", () => {
       assert.equal(runHook(fixture).exitCode, 0);
       const files = ["spec.json", "prompt-options.json", SKILL_FILE, "spec-gen-stamp"];
       const previous = files.map((file) => readFileSync(join(fixture.homeHookDir, file), "utf8"));
-      writeFileSync(join(fixture.root, "dist", ".pi", "agent", "bun.lock"), "changed");
+      writeFileSync(fixture.lockPath, "changed");
       if (failure === "cli") {
         writeFileSync(
           join(fixture.nodeModules, "@openuidev", "cli", "dist", "index.js"),
@@ -630,7 +654,7 @@ describe("OpenUI skill generation", () => {
         );
       } else {
         writeFileSync(
-          join(fixture.distHookDir, "prompt.ts"),
+          join(fixture.homeHookDir, "prompt.ts"),
           'export function opuiSkill() { throw new Error("skill generation failed"); }',
         );
       }
@@ -655,7 +679,7 @@ describe("OpenUI skill generation", () => {
       assert.equal(runHook(fixture).exitCode, 0);
       const files = [SKILL_FILE, "spec.json", "prompt-options.json", "spec-gen-stamp"];
       const previous = files.map((file) => readFileSync(join(fixture.homeHookDir, file), "utf8"));
-      const source = join(fixture.distHookDir, "prompt.ts");
+      const source = join(fixture.homeHookDir, "prompt.ts");
       writeFileSync(
         source,
         readFileSync(source, "utf8").replace("answers in markdown", "answers in updated markdown"),

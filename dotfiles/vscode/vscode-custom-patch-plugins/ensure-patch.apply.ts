@@ -1,7 +1,4 @@
 #!/usr/bin/env bun
-// Apply hook: run the custom patch engine against this deployed plugins
-// folder, so a finished apply guarantees injection without a VS Code round
-// trip. cwd is this folder's home directory and contains cli.js and plugins.
 import {
   ensurePatched,
   installRoots,

@@ -10,10 +10,11 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
+declare const EMBEDDED_LIBRARY_SOURCE: string | undefined;
+
 const LIBRARY_FILE = "library.data.ts";
-const DISPLAY_ONLY_FILE = "display-only.ts";
-const COMPONENTS_FILE = "supported-components.ts";
 const PROMPT_FILE = "prompt.ts";
+const HOME_SOURCE_FILES = ["display-only.ts", "supported-components.ts", PROMPT_FILE];
 const SKILL_FILE = join("skills", "openui-preview", "SKILL.md");
 const SPEC_FILE = "spec.json";
 const PROMPT_OPTIONS_FILE = "prompt-options.json";
@@ -23,20 +24,11 @@ const GENERATION_DIR = ".spec-gen";
 const CLI_ENTRY_SEGMENTS = ["@openuidev", "cli", "dist", "index.js"];
 
 async function main(): Promise<void> {
-  const homeHookDir = process.cwd();
-  // The hook snapshot runs from the dist-side extension folder
-  // (dotfiles-manager SPEC.md §apply スクリプト), so dist files resolve here.
-  const distHookDir = import.meta.dirname;
-  const librarySource = join(distHookDir, LIBRARY_FILE);
-  if (!existsSync(librarySource)) return;
+  if (typeof EMBEDDED_LIBRARY_SOURCE === "undefined") return;
 
-  const fingerprint = hashFiles([
-    librarySource,
-    join(distHookDir, DISPLAY_ONLY_FILE),
-    join(distHookDir, COMPONENTS_FILE),
-    join(distHookDir, PROMPT_FILE),
-    join(distHookDir, "..", "..", LOCK_FILE),
-  ]);
+  const homeHookDir = process.cwd();
+  const librarySource = EMBEDDED_LIBRARY_SOURCE;
+  const fingerprint = hashGenerationInputs(homeHookDir, librarySource);
   const stampPath = join(homeHookDir, STAMP_FILE);
   const outputsExist = [SPEC_FILE, PROMPT_OPTIONS_FILE, SKILL_FILE].every((file) =>
     existsSync(join(homeHookDir, file)),
@@ -57,10 +49,11 @@ async function main(): Promise<void> {
   mkdirSync(generationDir, { recursive: true });
   let preserveBackups = false;
   try {
-    for (const file of [LIBRARY_FILE, DISPLAY_ONLY_FILE, COMPONENTS_FILE, PROMPT_FILE]) {
-      copyFileSync(join(distHookDir, file), join(generationDir, file));
+    for (const file of HOME_SOURCE_FILES) {
+      copyFileSync(join(homeHookDir, file), join(generationDir, file));
     }
     const library = join(generationDir, LIBRARY_FILE);
+    writeFileSync(library, librarySource);
     const generated = Bun.spawnSync(
       [
         process.execPath,
@@ -140,10 +133,15 @@ function findNodeModules(startDir: string): string | undefined {
   }
 }
 
-function hashFiles(paths: string[]): string {
+function hashGenerationInputs(homeHookDir: string, librarySource: string): string {
   const hash = createHash("sha256");
-  for (const path of paths) {
-    hash.update(path).update("\0").update(readFileSync(path)).update("\0");
+  hash.update(LIBRARY_FILE).update("\0").update(librarySource).update("\0");
+  for (const file of [...HOME_SOURCE_FILES, join("..", "..", LOCK_FILE)]) {
+    hash
+      .update(file)
+      .update("\0")
+      .update(readFileSync(join(homeHookDir, file)))
+      .update("\0");
   }
   return hash.digest("hex");
 }

@@ -3,22 +3,33 @@
 // Consumes the classification produced by diff.ts, writes the home tree,
 // and runs apply scripts. The build stage (dist generation) is a separate
 // stage and not part of this file.
-import { existsSync } from "node:fs";
-import * as fsPromises from "node:fs/promises";
-const { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm, symlink } = fsPromises;
-import { dirname, join, resolve } from "node:path";
+import { constants } from "node:fs";
+import {
+  access,
+  chmod,
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  unlink,
+} from "node:fs/promises";
+import { basename, dirname, join, normalize, relative, resolve, sep } from "node:path";
 import { Stream } from "node:stream";
 import { expandHomeRoot, positionalArguments } from "./args.ts";
-import { compareCodeUnits, comparesExecutableBits, readSymlinkTarget } from "./compare.ts";
+import {
+  compareCodeUnits,
+  comparesExecutableBits,
+  lstatOrNull,
+  readSymlinkTarget,
+} from "./compare.ts";
 import { collectDifferences, main as diffMain, type DiffEntry, type DiffResult } from "./diff.ts";
 import { renderDiffs } from "./diff-render.ts";
-import {
-  ensureHookDirectory,
-  forwardHookOutput,
-  removeEmptyHookDirectories,
-  removeHookSnapshot,
-  writeHookSnapshot,
-} from "./hook-runner.ts";
+import { forwardHookOutput } from "./hook-runner.ts";
 import {
   currentPlatform,
   hookPlatform,
@@ -31,9 +42,7 @@ export type ApplyResult = { added: string[]; changed: string[]; removed: string[
 export type ApplyScript = {
   distPath: string;
   fileName: string;
-  folderRel: string;
   homeFolderRel: string;
-  contents: string;
 };
 export type Declarations = {
   applyScripts: ApplyScript[];
@@ -103,36 +112,51 @@ export async function collectDeclarations(distRoot: string): Promise<Declaration
   return declarations;
 }
 
-type PreparedScript = {
-  script: ApplyScript;
-  startedAt: number;
-  cwd: string;
-  snapshotPath?: string;
-  createdDirectories: string[];
-  prepFailure?: string;
+type StartedScript = { script: ApplyScript; startedAt: number };
+
+type ScriptTarget = StartedScript & { copyPath: string } & (
+    | { canonicalCopyPath: string; pathError?: never }
+    | { pathError: string; canonicalCopyPath?: never }
+  );
+
+type PreparedScript = StartedScript & {
+  copyPath: string;
+  canonicalCopyPath: string;
+  stagingCleanupError?: string;
 };
 
-// Runs TypeScript apply hooks (spec §apply スクリプト) after applying. Each
-// runs as a standalone bun process from a snapshot in its dist folder, with
-// its cwd at the script folder's home directory (created if missing). Normal
-// hooks run concurrently, started in collected order; post hooks run after
-// all normal hooks complete, in collected order. Failed hooks are collected
-// and returned without stopping later hooks.
 export async function runApplyScripts(
   scripts: ApplyScript[],
   distRoot: string,
   homeRoot: string,
 ): Promise<string[]> {
-  // Snapshots for every script are written up front in collected order, so a
-  // script that moves or removes dist folders cannot race another script's
-  // snapshot preparation.
-  const prepared: PreparedScript[] = [];
-  for (const script of scripts) prepared.push(await prepareScript(script, distRoot, homeRoot));
+  if (scripts.length === 0) return [];
+  const startedScripts = scripts.map((script) => {
+    const startedAt = performance.now();
+    writeLine(`  [${script.distPath}] Started`);
+    return { script, startedAt };
+  });
+  const requestedHome = resolve(homeRoot);
+  const canonicalHome = resolveScriptDirectory(requestedHome);
+  const targets = await Promise.all(
+    startedScripts.map((script) => findScriptTarget(script, requestedHome, canonicalHome)),
+  );
+  const targetCounts = new Map<string, number>();
+  for (const { canonicalCopyPath } of targets) {
+    if (canonicalCopyPath === undefined) continue;
+    const copyKey = normalizePathKey(canonicalCopyPath);
+    targetCounts.set(copyKey, (targetCounts.get(copyKey) ?? 0) + 1);
+  }
+  const distPaths = new Set(scripts.map(({ distPath }) => normalizePathKey(distPath)));
 
-  const results: Array<string | null> = prepared.map((entry) => entry.prepFailure ?? null);
-  const tasks = prepared
-    .map((entry, index) => ({ entry, index }))
-    .filter(({ entry }) => entry.prepFailure === undefined);
+  const results: Array<string | null> = Array.from({ length: scripts.length }, () => null);
+  const tasks: Array<{ entry: PreparedScript; index: number }> = [];
+  for (const [index, target] of targets.entries()) {
+    const prepared = await prepareScript(target, distRoot, distPaths, targetCounts);
+    if (typeof prepared === "string") results[index] = prepared;
+    else tasks.push({ entry: prepared, index });
+  }
+
   const normal = tasks.filter(({ entry }) => !isPostHookName(entry.script.fileName));
   const posts = tasks.filter(({ entry }) => isPostHookName(entry.script.fileName));
   await Promise.all(
@@ -145,40 +169,83 @@ export async function runApplyScripts(
   return results.filter((failure) => failure !== null);
 }
 
-async function prepareScript(
-  script: ApplyScript,
-  distRoot: string,
-  homeRoot: string,
-): Promise<PreparedScript> {
-  const entry: PreparedScript = {
-    script,
-    startedAt: performance.now(),
-    cwd: join(homeRoot, script.homeFolderRel),
-    createdDirectories: [],
-  };
-  if (!script.distPath.endsWith(".ts")) {
-    entry.prepFailure = `apply hook has unsupported extension: ${script.distPath}`;
-    writeLine(`  [${script.distPath}] ✗ Failed (${elapsedSeconds(entry.startedAt)}s)`);
-    return entry;
-  }
-  const label = `apply script failed: ${script.distPath}`;
-  const scriptDirectory = dirname(join(distRoot, script.distPath));
-  let snapshotPath: string | undefined;
+async function findScriptTarget(
+  started: StartedScript,
+  requestedHome: string,
+  canonicalHome: Promise<string>,
+): Promise<ScriptTarget> {
+  const { homeFolderRel, fileName } = started.script;
+  const copyPath = resolve(requestedHome, homeFolderRel, fileName);
   try {
-    entry.createdDirectories = await ensureHookDirectory(scriptDirectory, distRoot);
-    await mkdir(entry.cwd, { recursive: true });
-    snapshotPath = await writeHookSnapshot(scriptDirectory, script.fileName, script.contents);
-    entry.snapshotPath = snapshotPath;
+    const canonicalHomeRoot = await canonicalHome;
+    if (!isPathWithin(requestedHome, dirname(copyPath))) {
+      throw new Error("home copy path is outside the home root");
+    }
+    const canonicalCopyPath = await resolveScriptPath(copyPath);
+    if (!isPathWithin(canonicalHomeRoot, dirname(canonicalCopyPath))) {
+      throw new Error("home copy path is outside the home root");
+    }
+    return { ...started, copyPath, canonicalCopyPath };
   } catch (error) {
-    const diagnostic = messageOf(error);
-    entry.prepFailure = diagnostic.startsWith(label) ? diagnostic : `${label}: ${diagnostic}`;
+    return { ...started, copyPath, pathError: messageOf(error) };
+  }
+}
+
+async function prepareScript(
+  target: ScriptTarget,
+  distRoot: string,
+  distPaths: ReadonlySet<string>,
+  targetCounts: ReadonlyMap<string, number>,
+): Promise<PreparedScript | string> {
+  const { script, startedAt, copyPath, canonicalCopyPath, pathError } = target;
+  const label = `apply script failed: ${script.distPath}`;
+  if (!script.distPath.endsWith(".ts")) {
+    writeScriptResult(script, startedAt, false);
+    return `apply hook has unsupported extension: ${script.distPath}`;
+  }
+  try {
+    if (canonicalCopyPath === undefined) throw new Error(pathError);
+    const copyKey = normalizePathKey(canonicalCopyPath);
+    if ((targetCounts.get(copyKey) ?? 0) > 1) throw new Error("conflicting home copy path");
+
+    const sourcePath = resolve(distRoot, script.distPath);
+    const source = await lstat(sourcePath);
+    if (!source.isFile()) throw new Error("copy source is not a regular file");
+    await access(sourcePath, constants.R_OK);
+
+    const sourceKey = normalizePathKey(await realpath(sourcePath));
+    const distKey = normalizePathKey(await realpath(distRoot));
+    const distRelativeTarget = relative(distKey, copyKey);
+    if (copyKey === sourceKey || distPaths.has(distRelativeTarget)) {
+      throw new Error("home copy path overlaps a dist declaration");
+    }
+
+    const stagingCleanupError = await placeScriptCopy(sourcePath, copyPath);
+    return { script, startedAt, copyPath, canonicalCopyPath, stagingCleanupError };
+  } catch (error) {
+    writeScriptResult(script, startedAt, false);
+    return `${label}: ${messageOf(error)}`;
+  }
+}
+
+async function placeScriptCopy(sourcePath: string, copyPath: string): Promise<string | undefined> {
+  const parent = dirname(copyPath);
+  await mkdir(parent, { recursive: true });
+  await validateScriptFile(copyPath);
+  const stagingDir = await mkdtemp(join(parent, ".apply-tmp-"));
+  const stagingPath = join(stagingDir, basename(copyPath));
+  let stagingCleanupError: string | undefined;
+  try {
+    await copyFile(sourcePath, stagingPath);
+    await rename(stagingPath, copyPath);
+  } finally {
     try {
-      if (snapshotPath) await removeHookSnapshot(snapshotPath, distRoot);
-    } catch {
-      // Snapshot removal must not mask the preparation failure.
+      await rm(stagingDir, { recursive: true, force: true });
+    } catch (error) {
+      stagingCleanupError = `copy staging cleanup failed: ${messageOf(error)}`;
     }
   }
-  return entry;
+  return stagingCleanupError;
 }
 
 async function executePrepared(
@@ -186,84 +253,78 @@ async function executePrepared(
   distRoot: string,
   homeRoot: string,
 ): Promise<string | null> {
-  const { script } = entry;
+  const { script, startedAt, copyPath, canonicalCopyPath, stagingCleanupError } = entry;
   const label = `apply script failed: ${script.distPath}`;
   const errors: string[] = [];
-  writeLine(`  [${script.distPath}] Started`);
   try {
-    await spawnCollectedScript(entry, distRoot, homeRoot, label);
+    await spawnChild(
+      [process.execPath, copyPath],
+      dirname(copyPath),
+      {
+        ...process.env,
+        DOTFILES_DIST_DIR: resolve(distRoot),
+        DOTFILES_HOME_ROOT: resolve(homeRoot),
+        DOTFILES_MANAGER_SRC: import.meta.dir,
+      },
+      label,
+      script.distPath,
+    );
   } catch (error) {
     errors.push(messageOf(error));
   } finally {
     try {
-      if (entry.snapshotPath) await removeHookSnapshot(entry.snapshotPath, distRoot);
+      if ((await resolveScriptPath(copyPath)) === canonicalCopyPath) {
+        if (await validateScriptFile(copyPath)) await unlink(copyPath);
+      }
     } catch (error) {
-      errors.push(`snapshot cleanup failed: ${messageOf(error)}`);
-    }
-    try {
-      await removeEmptyHookDirectories(entry.createdDirectories);
-    } catch (error) {
-      errors.push(`directory cleanup failed: ${messageOf(error)}`);
+      errors.push(`copy cleanup failed: ${messageOf(error)}`);
     }
   }
-  writeLine(
-    `  [${script.distPath}] ${errors.length === 0 ? "✓ Complete" : "✗ Failed"} (${elapsedSeconds(entry.startedAt)}s)`,
-  );
+  if (stagingCleanupError) errors.push(stagingCleanupError);
+  writeScriptResult(script, startedAt, errors.length === 0);
   if (errors.length === 0) return null;
   const diagnostic = errors.join("; ");
   return diagnostic.startsWith(label) ? diagnostic : `${label}: ${diagnostic}`;
 }
 
-// Runs a collected script from its snapshot in the original dist folder. A
-// concurrently running script may delete or move the snapshot before the
-// child process opens it; restore the snapshot from the collected contents
-// before spawning and once more after a failed spawn without it, so the
-// script still runs (SPEC.md §applyスクリプト).
-async function spawnCollectedScript(
-  entry: PreparedScript,
-  distRoot: string,
-  homeRoot: string,
-  label: string,
-): Promise<void> {
-  await restoreSnapshot(entry, distRoot);
-  try {
-    await spawnSnapshotProcess(entry, distRoot, homeRoot, label);
-    return;
-  } catch (error) {
-    if (existsSync(entry.snapshotPath!)) throw error;
+async function validateScriptFile(path: string): Promise<boolean> {
+  const existing = await lstatOrNull(path);
+  if (existing === null) return false;
+  if (!existing.isFile() && !existing.isSymbolicLink()) {
+    throw new Error(`cannot replace or remove a non-file entry at ${path}`);
   }
-  await restoreSnapshot(entry, distRoot);
-  await spawnSnapshotProcess(entry, distRoot, homeRoot, label);
+  return true;
 }
 
-async function spawnSnapshotProcess(
-  entry: PreparedScript,
-  distRoot: string,
-  homeRoot: string,
-  label: string,
-): Promise<void> {
-  await spawnChild(
-    [process.execPath, resolve(entry.snapshotPath!)],
-    entry.cwd,
-    {
-      ...process.env,
-      DOTFILES_DIST_DIR: resolve(distRoot),
-      DOTFILES_HOME_ROOT: resolve(homeRoot),
-      DOTFILES_MANAGER_SRC: import.meta.dir,
-    },
-    label,
-    entry.script.distPath,
-  );
+function isPathWithin(root: string, path: string): boolean {
+  const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
+  return path === root || path.startsWith(prefix);
 }
 
-async function restoreSnapshot(entry: PreparedScript, distRoot: string): Promise<void> {
-  if (existsSync(entry.snapshotPath!)) return;
-  const scriptDirectory = dirname(join(distRoot, entry.script.distPath));
-  entry.createdDirectories.push(...(await ensureHookDirectory(scriptDirectory, distRoot)));
-  entry.snapshotPath = await writeHookSnapshot(
-    scriptDirectory,
-    entry.script.fileName,
-    entry.script.contents,
+async function resolveScriptPath(path: string): Promise<string> {
+  return join(await resolveScriptDirectory(dirname(path)), basename(path));
+}
+
+async function resolveScriptDirectory(directory: string): Promise<string> {
+  try {
+    return normalize(await realpath(directory));
+  } catch (error) {
+    const parent = dirname(directory);
+    if ((error as { code?: string }).code !== "ENOENT" || parent === directory) throw error;
+    if ((await lstatOrNull(directory)) !== null) throw error;
+    return join(await resolveScriptDirectory(parent), basename(directory));
+  }
+}
+
+function normalizePathKey(path: string): string {
+  const normalized = normalize(path);
+  const ignoresCase = process.platform === "win32" || process.platform === "darwin";
+  return ignoresCase ? normalized.toLowerCase() : normalized;
+}
+
+function writeScriptResult(script: ApplyScript, startedAt: number, succeeded: boolean): void {
+  writeLine(
+    `  [${script.distPath}] ${succeeded ? "✓ Complete" : "✗ Failed"} (${elapsedSeconds(startedAt)}s)`,
   );
 }
 
@@ -297,8 +358,6 @@ export async function main(
 ): Promise<number> {
   const options = parseArgs(argv);
   if (options.dryRun) return diffMain(options.rest);
-  // Absolute so script paths handed to child interpreters resolve against
-  // dist, not against the child cwd at the home-side folder.
   const distRoot = resolve(options.distRoot);
   const { homeRoot } = options;
 
@@ -475,9 +534,7 @@ async function walkDeclarations(
     const script = {
       distPath: dirRel === "" ? entry.name : `${dirRel}/${entry.name}`,
       fileName: entry.name,
-      folderRel: dirRel,
       homeFolderRel: homeFolderOf(dirRel),
-      contents: await readFile(join(dirAbs, entry.name), "utf8"),
     };
     if (isPostHookName(entry.name)) postScripts.push(script);
     else out.applyScripts.push(script);

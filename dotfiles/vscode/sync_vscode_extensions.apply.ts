@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { $ } from "bun";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 const extensionsForWindows = ["ms-vscode-remote.remote-wsl", "tomoki1207.pdf"];
@@ -49,21 +50,11 @@ const extensionsForLinux = [
   "yzhang.markdown-all-in-one",
 ];
 
-// Built locally from source and installed via VSIX instead of the Marketplace.
-// "targets" lists the OS installations each extension is synced to.
-const localVscodeExtensions: { id: string; targets: Label[] }[] = [
-  { id: "todo-lsp.todo", targets: ["linux"] },
-  { id: "agent-kit.agent-kit", targets: ["linux"] },
-  { id: "catbraaain.vscode-custom-patch", targets: ["linux", "windows"] },
-];
-const localExtensionIds = localVscodeExtensions.map((extension) => extension.id);
+const mirrorExtensionIds = ["todo-lsp.todo", "agent-kit.agent-kit"];
+const workspaceExtensionId = "catbraaain.vscode-custom-patch";
+const localExtensionIds = [...mirrorExtensionIds, workspaceExtensionId];
 
-// Extensions packaged by build hooks into this dist folder. Values are the
-// VSIX file name prefix ("name-version.data.vsix"; the reserved .data. marker
-// keeps the file out of the home deployment).
-const workspaceVsixPrefixes: Record<string, string> = {
-  "catbraaain.vscode-custom-patch": "vscode-custom-patch-",
-};
+declare const EMBEDDED_WORKSPACE_VSIX: { fileName: string; version: string; base64: string };
 
 const home = process.env.HOME;
 if (home === undefined) throw new Error("HOME: unbound variable");
@@ -77,10 +68,10 @@ let linuxExtensionEntries: [string, string][] | undefined;
 
 async function main() {
   if (await hasCommand("code")) {
-    for (const { id, targets } of localVscodeExtensions) {
-      if (!targets.includes("linux")) continue;
-      await installLocalExtension(id);
+    for (const id of mirrorExtensionIds) {
+      await installMirrorExtension(id);
     }
+    await installWorkspaceExtension("linux");
     await syncExtensions("linux");
   } else {
     console.error("warn: 'code' not found; skipping linux extensions");
@@ -93,24 +84,12 @@ async function main() {
     // Missing or unreadable /proc/version does not indicate WSL.
   }
   if (isWsl && (await hasCommand("powershell.exe"))) {
-    for (const { id, targets } of localVscodeExtensions) {
-      if (!targets.includes("windows")) continue;
-      await installLocalExtensionToWindows(id);
-    }
+    await installWorkspaceExtension("windows");
     await syncExtensions("windows");
   }
 }
 
-async function installLocalExtension(extension: string) {
-  if (workspaceVsixPrefixes[extension] !== undefined) {
-    const vsix = findWorkspaceVsix(extension);
-    if ((await installedExtensionVersion("linux", extension)) === vsix.version) return;
-    console.log(`[linux] install ${vsix.path}`);
-    await $`code --install-extension ${vsix.path} --force`;
-    linuxExtensionEntries = undefined;
-    return;
-  }
-
+async function installMirrorExtension(extension: string) {
   const { url, repo } = localExtensionSource(extension);
   if (isDirectory(join(repo, ".git"))) {
     const localHead = (await $`git -C ${repo} rev-parse HEAD`.text()).trimEnd();
@@ -132,33 +111,25 @@ async function installLocalExtension(extension: string) {
   linuxExtensionEntries = undefined;
 }
 
-async function installLocalExtensionToWindows(extension: string) {
-  const vsix = findWorkspaceVsix(extension);
-  if ((await installedExtensionVersion("windows", extension)) === vsix.version) return;
-  const windowsPath = (await $`wslpath -w ${vsix.path}`.text()).replace(/\n+$/, "");
-  console.log(`[windows] install ${vsix.path}`);
-  await runCode("windows", ["--install-extension", windowsPath, "--force"]);
+async function installWorkspaceExtension(label: Label) {
+  const { fileName, version, base64 } = EMBEDDED_WORKSPACE_VSIX;
+  if ((await installedExtensionVersion(label, workspaceExtensionId)) === version) return;
+
+  const assetDir = mkdtempSync(join(tmpdir(), "vscode-custom-patch-"));
+  try {
+    const vsixPath = join(assetDir, fileName);
+    await Bun.write(vsixPath, Buffer.from(base64, "base64"));
+    const installerPath = label === "windows" ? await windowsInstallerPath(vsixPath) : vsixPath;
+    console.log(`[${label}] install ${vsixPath}`);
+    await runCode(label, ["--install-extension", installerPath, "--force"]);
+  } finally {
+    rmSync(assetDir, { force: true, recursive: true });
+  }
 }
 
-// Build hooks leave their VSIX next to this apply script in the dist folder
-// (import.meta.dir is the original dist folder, see SPEC apply scripts).
-function findWorkspaceVsix(extension: string): { path: string; version: string } {
-  const prefix = workspaceVsixPrefixes[extension];
-  if (prefix === undefined) {
-    throw new Error(`error: unknown workspace extension '${extension}'`);
-  }
-  const suffix = ".data.vsix";
-  const candidates = readdirSync(import.meta.dir).filter(
-    (name) => name.startsWith(prefix) && name.endsWith(suffix),
-  );
-  if (candidates.length !== 1) {
-    throw new Error(
-      `error: expected exactly one ${prefix}*${suffix} beside ${import.meta.url}, found ${candidates.length}`,
-    );
-  }
-  const fileName = candidates[0]!;
-  const version = fileName.slice(prefix.length, -suffix.length);
-  return { path: join(import.meta.dir, fileName), version };
+async function windowsInstallerPath(vsixPath: string): Promise<string> {
+  const windowsPath = (await $`wslpath -w ${vsixPath}`.text()).trimEnd();
+  return `'${windowsPath.replace(/['‘’‚‛]/g, "$&$&")}'`;
 }
 
 async function syncExtensions(label: Label) {

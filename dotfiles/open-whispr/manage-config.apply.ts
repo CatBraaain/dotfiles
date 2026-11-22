@@ -22,6 +22,8 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { parse as parseYaml } from "yaml";
 
+declare const EMBEDDED_MANAGED_KEYS_YAML: string | null | undefined;
+
 export const MANAGED_KEYS_FILE = "managed-keys.data.yaml";
 
 export type ManagedStorageTarget = { key: string; value: string };
@@ -226,6 +228,10 @@ export function loadManagedConfig(baseDir: string): ManagedConfig {
   } catch {
     throw new HookError("INVALID_INPUT", `managed keys file is missing: ${declarationPath}`);
   }
+  return parseManagedConfig(text, declarationPath);
+}
+
+function parseManagedConfig(text: string, declarationPath: string): ManagedConfig {
   let raw: unknown;
   try {
     raw = parseYaml(text);
@@ -1030,7 +1036,17 @@ export async function manageConfig(options: {
   let keysSha256: string | null = null;
   try {
     const paths = resolvePaths(options.platform, options.env);
-    const { keys: targets, dictionary } = loadManagedConfig(paths.managedKeysDir);
+    const embeddedYaml =
+      !paths.isE2E && typeof EMBEDDED_MANAGED_KEYS_YAML !== "undefined"
+        ? EMBEDDED_MANAGED_KEYS_YAML
+        : undefined;
+    if (embeddedYaml === null) {
+      throw new HookError("INVALID_INPUT", `managed keys file is missing: ${MANAGED_KEYS_FILE}`);
+    }
+    const { keys: targets, dictionary } =
+      embeddedYaml === undefined
+        ? loadManagedConfig(paths.managedKeysDir)
+        : parseManagedConfig(embeddedYaml, MANAGED_KEYS_FILE);
     keysSha256 = managedKeysSha256(targets, dictionary);
     const recognizedProfile = isRecognizedProfile(paths.profileDir);
     if (recognizedProfile)

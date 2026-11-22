@@ -1,7 +1,8 @@
-import { describe, it, beforeEach, afterEach } from "bun:test";
+import { describe, it, beforeEach, afterEach, spyOn } from "bun:test";
 import assert from "node:assert/strict";
 import {
   chmod,
+  link,
   mkdir,
   mkdtemp,
   readdir,
@@ -13,6 +14,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -384,7 +386,7 @@ describe("apply scripts", () => {
     assert.equal(existsSync(join(homeRoot, "node_modules/pkg/setup.apply.ts")), false);
   });
 
-  it("runs machine-specific scripts after applying without placing them in home", async () => {
+  it("runs machine-specific scripts and removes the home copy afterward", async () => {
     await put(distRoot, "tools/keep.txt", "same\n");
     await put(homeRoot, "tools/keep.txt", "same\n");
     await putApplyScript(distRoot, "tools/setup.machine-apply.ts");
@@ -404,32 +406,41 @@ describe("apply scripts", () => {
       join(homeRoot, "tools"),
     );
   });
-  it("runs a TypeScript hook in the mapped home folder without requiring a shebang", async () => {
-    await putApplyScript(
-      distRoot,
-      "tools/setup.apply.ts",
-      `import { writeFile } from "node:fs/promises";\nawait writeFile("apply-out.txt", JSON.stringify([process.cwd(), import.meta.dir]));`,
-    );
+  it("runs the same-name copy in the mapped home folder with home-relative imports", async () => {
+    const body = `import { writeFile } from "node:fs/promises";
+import { direction } from "./helper.ts";
+await writeFile("apply-out.txt", JSON.stringify([process.cwd(), import.meta.dir, import.meta.path, direction]));`;
+    await putApplyScript(distRoot, "tools.exact/setup.apply.ts", body);
+    await put(distRoot, "tools.exact/helper.ts", 'export const direction = "dist";');
+    await put(homeRoot, "tools/helper.ts", 'export const direction = "home";');
     const declarations = await collectDeclarations(distRoot);
+    const cwd = join(homeRoot, "tools");
+    const copyPath = join(cwd, "setup.apply.ts");
 
-    await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
-    const output = JSON.parse(await readFile(join(homeRoot, "tools", "apply-out.txt"), "utf8"));
-    assert.deepEqual(output, [join(homeRoot, "tools"), join(distRoot, "tools")]);
+    assert.deepEqual(failures, []);
+    const output = JSON.parse(await readFile(join(cwd, "apply-out.txt"), "utf8"));
+    assert.deepEqual(output, [cwd, cwd, copyPath, "home"]);
+    assert.equal(existsSync(copyPath), false);
+    assert.equal(await readFile(join(distRoot, "tools.exact/setup.apply.ts"), "utf8"), `${body}\n`);
   });
 
-  it("runs a shebang hook with the home cwd and dist import directory", async () => {
+  it("runs a TypeScript hook regardless of its shebang", async () => {
     await putApplyScript(
       distRoot,
       "tools/setup.apply.ts",
-      `#!/usr/bin/env bun\nimport { writeFile } from "node:fs/promises";\nawait writeFile("apply-out.txt", JSON.stringify([process.cwd(), import.meta.dir]));`,
+      `#!/nonexistent/interpreter\nimport { writeFile } from "node:fs/promises";\nawait writeFile("apply-out.txt", process.cwd());`,
     );
     const declarations = await collectDeclarations(distRoot);
 
-    await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
-    const output = JSON.parse(await readFile(join(homeRoot, "tools", "apply-out.txt"), "utf8"));
-    assert.deepEqual(output, [join(homeRoot, "tools"), join(distRoot, "tools")]);
+    assert.deepEqual(failures, []);
+    assert.equal(
+      await readFile(join(homeRoot, "tools/apply-out.txt"), "utf8"),
+      join(homeRoot, "tools"),
+    );
   });
 
   it("runs every script exactly once regardless of completion order", async () => {
@@ -453,102 +464,394 @@ describe("apply scripts", () => {
     ]);
   });
 
-  it("runs a collected script after an earlier script moves it in dist", async () => {
-    const orderFile = join(root, "apply-order.txt");
-    const movedPath = join(distRoot, "moved/z-late.apply.ts");
-    await putApplyScript(
-      distRoot,
-      "a-move.apply.ts",
-      `import { appendFile, mkdir, rename } from "node:fs/promises";\nawait mkdir(${JSON.stringify(join(distRoot, "moved"))}, { recursive: true });\nawait rename(${JSON.stringify(join(distRoot, "z-late.apply.ts"))}, ${JSON.stringify(movedPath)});\nawait appendFile(${JSON.stringify(orderFile)}, "move\\n");`,
-    );
-    await putApplyScript(
-      distRoot,
-      "z-late.apply.ts",
-      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(orderFile)}, "collected\\n");`,
-    );
+  it("copies current dist contents only for declarations found at collection", async () => {
+    await putApplyScript(distRoot, "setup.apply.ts", "process.exit(99);");
     const declarations = await collectDeclarations(distRoot);
+    await putApplyScript(distRoot, "setup.apply.ts");
+    await putApplyScript(distRoot, "added.apply.ts", "process.exit(98);");
 
-    await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
-    assert.deepEqual((await readFile(orderFile, "utf8")).trim().split("\n").sort(), [
-      "collected",
-      "move",
-    ]);
-    assert.equal(existsSync(movedPath), true);
+    assert.deepEqual(failures, []);
+    assert.equal(await readFile(join(homeRoot, "apply-out.txt"), "utf8"), homeRoot);
+    assert.equal(existsSync(join(homeRoot, "added.apply.ts")), false);
   });
 
-  it("runs a collected script after removal and preserves existing ancestors", async () => {
-    const orderFile = join(root, "apply-order.txt");
-    await putApplyScript(
-      distRoot,
-      "a-prune.apply.ts",
-      `import { appendFile, rm } from "node:fs/promises";\nawait rm(${JSON.stringify(join(distRoot, "pkg/sub"))}, { recursive: true, force: true });\nawait appendFile(${JSON.stringify(orderFile)}, "prune\\n");`,
-    );
-    await putApplyScript(
-      distRoot,
-      "pkg/sub/z-late.apply.ts",
-      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(orderFile)}, "collected\\n");`,
-    );
-    await put(distRoot, "pkg/keep.txt", "keep\n");
+  it("reports a missing source without replacing its home entry or stopping other hooks", async () => {
+    await putApplyScript(distRoot, "missing.apply.ts");
+    await putApplyScript(distRoot, "remaining.apply.ts");
     const declarations = await collectDeclarations(distRoot);
+    await rm(join(distRoot, "missing.apply.ts"));
+    const copyPath = await put(homeRoot, "missing.apply.ts", "keep this file");
 
-    await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
-    assert.deepEqual((await readFile(orderFile, "utf8")).trim().split("\n").sort(), [
-      "collected",
-      "prune",
-    ]);
-    assert.equal(await readFile(join(distRoot, "pkg/keep.txt"), "utf8"), "keep\n");
-    assert.equal(existsSync(join(distRoot, "pkg/sub")), false);
+    assert.equal(failures.length, 1);
+    assert.match(failures[0]!, /^apply script failed: missing\.apply\.ts:.*ENOENT/);
+    assert.equal(await readFile(copyPath, "utf8"), "keep this file");
+    assert.equal(await readFile(join(homeRoot, "apply-out.txt"), "utf8"), homeRoot);
   });
 
-  it("runs a collected post script after a normal script removes its directory", async () => {
-    const orderFile = join(root, "apply-order.txt");
+  it("preserves the original and cleans staging when a copy fails after a partial write", async () => {
+    await putApplyScript(distRoot, "setup.apply.ts");
+    const copyPath = await put(homeRoot, "setup.apply.ts", "keep this file");
+    const declarations = await collectDeclarations(distRoot);
+    const copyFile = spyOn(fs, "copyFile").mockImplementationOnce(async (_source, destination) => {
+      await writeFile(destination, "partial copy");
+      throw new Error("EFBIG: file too large");
+    });
+
+    try {
+      const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+      assert.deepEqual(failures, ["apply script failed: setup.apply.ts: EFBIG: file too large"]);
+      assert.equal(await readFile(copyPath, "utf8"), "keep this file");
+      assert.deepEqual(await readdir(homeRoot), ["setup.apply.ts"]);
+    } finally {
+      copyFile.mockRestore();
+    }
+  });
+
+  it("starts timing before target preflight and logs its failure", async () => {
+    await putApplyScript(distRoot, "setup.apply.ts");
+    const declarations = await collectDeclarations(distRoot);
+    let clockMs = 0;
+    const now = spyOn(performance, "now").mockImplementation(() => clockMs);
+    const write = spyOn(process.stdout, "write");
+    const realpath = spyOn(fs, "realpath").mockImplementationOnce(async () => {
+      assert.equal(write.mock.calls[0]?.[0], "  [setup.apply.ts] Started\n");
+      clockMs = 1_000;
+      throw new Error("preflight denied");
+    });
+
+    try {
+      const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+      assert.deepEqual(failures, ["apply script failed: setup.apply.ts: preflight denied"]);
+      assert.deepEqual(
+        write.mock.calls.map(([chunk]) => chunk),
+        ["  [setup.apply.ts] Started\n", "  [setup.apply.ts] ✗ Failed (1.00s)\n"],
+      );
+    } finally {
+      write.mockRestore();
+      realpath.mockRestore();
+      now.mockRestore();
+    }
+  });
+
+  it("runs and removes a placed copy even if staging cleanup fails", async () => {
+    await putApplyScript(distRoot, "setup.apply.ts");
+    const { applyScripts } = await collectDeclarations(distRoot);
+    const remove = spyOn(fs, "rm").mockRejectedValueOnce(new Error("staging cleanup denied"));
+
+    try {
+      const failures = await runApplyScripts(applyScripts, distRoot, homeRoot);
+
+      assert.deepEqual(failures, [
+        "apply script failed: setup.apply.ts: copy staging cleanup failed: staging cleanup denied",
+      ]);
+      assert.equal(await readFile(join(homeRoot, "apply-out.txt"), "utf8"), homeRoot);
+      assert.equal(existsSync(join(homeRoot, "setup.apply.ts")), false);
+    } finally {
+      remove.mockRestore();
+    }
+  });
+
+  it("pre-copies post hooks and does not restore one removed before execution", async () => {
     await putApplyScript(
       distRoot,
-      "a-remove.apply.ts",
-      `import { appendFile, rm } from "node:fs/promises";\nawait rm(${JSON.stringify(join(distRoot, "pkg/sub"))}, { recursive: true, force: true });\nawait appendFile(${JSON.stringify(orderFile)}, "remove\\n");`,
+      "remove.apply.ts",
+      `import { unlink } from "node:fs/promises";
+await unlink("a.postapply.ts");`,
     );
     await putApplyScript(
       distRoot,
-      "pkg/sub/z-late.postapply.ts",
-      `import { appendFile } from "node:fs/promises";\nawait appendFile(${JSON.stringify(orderFile)}, "collected\\n");`,
+      "a.postapply.ts",
+      `import { writeFile } from "node:fs/promises";
+await writeFile("restored.txt", "unexpected");`,
     );
+    await putApplyScript(distRoot, "z.postapply.ts");
+    const declarations = await collectDeclarations(distRoot);
+
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    assert.deepEqual(failures, ["apply script failed: a.postapply.ts (exit code 1)"]);
+    assert.equal(existsSync(join(homeRoot, "restored.txt")), false);
+    assert.equal(existsSync(join(homeRoot, "a.postapply.ts")), false);
+    assert.equal(existsSync(join(distRoot, "a.postapply.ts")), true);
+    assert.equal(await readFile(join(homeRoot, "apply-out.txt"), "utf8"), homeRoot);
+  });
+
+  it("runs post hooks after normal hooks, children first and in filename order", async () => {
+    const orderFile = join(root, "order.txt");
+    const hooks = [
+      ["a.postapply.ts", "root-a"],
+      ["z.postapply.ts", "root-z"],
+      ["pkg/b.postapply.ts", "pkg-b"],
+      ["pkg/a.postapply.ts", "pkg-a"],
+      ["pkg/run.apply.ts", "normal"],
+    ] as const;
+    for (const [path, marker] of hooks) {
+      await putApplyScript(
+        distRoot,
+        path,
+        `import { appendFile } from "node:fs/promises";
+await appendFile(${JSON.stringify(orderFile)}, ${JSON.stringify(`${marker}\n`)});`,
+      );
+    }
     const declarations = await collectDeclarations(distRoot);
 
     const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
     assert.deepEqual(failures, []);
-    assert.deepEqual((await readFile(orderFile, "utf8")).trim().split("\n").sort(), [
-      "collected",
-      "remove",
+    assert.deepEqual((await readFile(orderFile, "utf8")).trim().split("\n"), [
+      "normal",
+      "pkg-a",
+      "pkg-b",
+      "root-a",
+      "root-z",
     ]);
   });
 
-  it("removes a script snapshot after its hook moves its directory", async () => {
-    const sourceDirectory = join(distRoot, "self");
-    const movedDirectory = join(distRoot, "moved");
+  it.skipIf(process.platform === "win32")(
+    "cleans neither a moved copy nor a file behind a redirected cwd",
+    async () => {
+      const movedDirectory = join(homeRoot, "moved");
+      const distDirectory = join(distRoot, "self");
+      await putApplyScript(
+        distRoot,
+        "self/move.apply.ts",
+        `import { rename, symlink } from "node:fs/promises";
+await rename(import.meta.dir, ${JSON.stringify(movedDirectory)});
+await symlink(${JSON.stringify(distDirectory)}, import.meta.dir, "dir");`,
+      );
+      const declarations = await collectDeclarations(distRoot);
+
+      const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+      assert.deepEqual(failures, []);
+      assert.deepEqual(await readdir(movedDirectory), ["move.apply.ts"]);
+      assert.deepEqual(await readdir(distDirectory), ["move.apply.ts"]);
+    },
+  );
+
+  it("replaces a same-name home file and does not restore it", async () => {
+    await putApplyScript(distRoot, "setup.apply.ts");
+    const copyPath = await put(homeRoot, "setup.apply.ts", "old contents");
+
+    const exitCode = await main([distRoot, homeRoot, "--yes"]);
+
+    assert.equal(exitCode, 0);
+    assert.equal(await readFile(join(homeRoot, "apply-out.txt"), "utf8"), homeRoot);
+    assert.equal(existsSync(copyPath), false);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "replaces a same-name symlink without changing its target",
+    async () => {
+      await putApplyScript(distRoot, "setup.apply.ts");
+      const target = await put(root, "linked.txt", "keep this file");
+      await putHomeSymlink(homeRoot, "setup.apply.ts", target);
+      const declarations = await collectDeclarations(distRoot);
+
+      const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+      assert.deepEqual(failures, []);
+      assert.equal(await readFile(target, "utf8"), "keep this file");
+      assert.equal(await readFile(join(homeRoot, "apply-out.txt"), "utf8"), homeRoot);
+      await assert.rejects(readlink(join(homeRoot, "setup.apply.ts")), { code: "ENOENT" });
+    },
+  );
+
+  it("replaces a same-name hardlink without changing its target", async () => {
+    await putApplyScript(distRoot, "setup.apply.ts");
+    const target = await put(root, "linked.txt", "keep this file");
+    await link(target, join(homeRoot, "setup.apply.ts"));
+    const declarations = await collectDeclarations(distRoot);
+
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    assert.deepEqual(failures, []);
+    assert.equal(await readFile(target, "utf8"), "keep this file");
+    assert.equal(existsSync(join(homeRoot, "setup.apply.ts")), false);
+  });
+
+  it("fails before replacing a same-name home directory", async () => {
+    await putApplyScript(distRoot, "setup.apply.ts");
+    const nestedFile = await put(homeRoot, "setup.apply.ts/keep.txt", "keep this file");
+    const declarations = await collectDeclarations(distRoot);
+
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    assert.equal(failures.length, 1);
+    assert.match(failures[0]!, /^apply script failed: setup\.apply\.ts:.*non-file entry/);
+    assert.equal(await readFile(nestedFile, "utf8"), "keep this file");
+    assert.equal(existsSync(join(homeRoot, "apply-out.txt")), false);
+  });
+
+  it("does not remove a directory created in place of the home copy", async () => {
     await putApplyScript(
       distRoot,
-      "self/move.apply.ts",
-      `import { rename } from "node:fs/promises";\nawait rename(${JSON.stringify(sourceDirectory)}, ${JSON.stringify(movedDirectory)});`,
+      "setup.apply.ts",
+      `import { mkdir, unlink, writeFile } from "node:fs/promises";
+await unlink(import.meta.path);
+await mkdir(import.meta.path);
+await writeFile("setup.apply.ts/keep.txt", "keep this file");`,
     );
     const declarations = await collectDeclarations(distRoot);
 
-    await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
-    assert.equal(existsSync(join(movedDirectory, "move.apply.ts")), true);
-    assert.deepEqual(await readdir(movedDirectory), ["move.apply.ts"]);
+    assert.equal(failures.length, 1);
+    assert.match(failures[0]!, /^apply script failed: setup\.apply\.ts: copy cleanup failed:/);
+    assert.equal(
+      await readFile(join(homeRoot, "setup.apply.ts/keep.txt"), "utf8"),
+      "keep this file",
+    );
+  });
+
+  it("rejects all declarations mapped to the same home path before writing to it", async () => {
+    await putApplyScript(distRoot, "tools/setup.apply.ts");
+    await putApplyScript(distRoot, "tools.exact/setup.apply.ts");
+    const copyPath = await put(homeRoot, "tools/setup.apply.ts", "keep this file");
+    const declarations = await collectDeclarations(distRoot);
+
+    const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+    assert.deepEqual(failures, [
+      "apply script failed: tools.exact/setup.apply.ts: conflicting home copy path",
+      "apply script failed: tools/setup.apply.ts: conflicting home copy path",
+    ]);
+    assert.equal(await readFile(copyPath, "utf8"), "keep this file");
+    assert.equal(existsSync(join(homeRoot, "tools/apply-out.txt")), false);
+  });
+
+  it.each(["win32", "darwin"])("rejects case-only home path collisions on %s", async (platform) => {
+    await putApplyScript(distRoot, "tools/Setup.apply.ts");
+    await putApplyScript(distRoot, "TOOLS.exact/setup.apply.ts");
+    const declarations = await collectDeclarations(distRoot);
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...originalPlatform, value: platform });
+
+    try {
+      const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+      assert.equal(failures.length, 2);
+      assert.ok(failures.every((failure) => failure.includes("conflicting home copy path")));
+      assert.deepEqual(await readdir(homeRoot), []);
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatform);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects an external parent alias without changing the outside file or creating directories",
+    async () => {
+      await putApplyScript(distRoot, "redirected/setup.apply.ts");
+      await putApplyScript(distRoot, "redirected/missing/other.apply.ts");
+      const outside = join(root, "home-outside");
+      const outsideFile = await put(outside, "setup.apply.ts", "keep this file");
+      await symlink(outside, join(homeRoot, "redirected"), "dir");
+      const declarations = await collectDeclarations(distRoot);
+
+      const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+      assert.deepEqual(failures, [
+        "apply script failed: redirected/missing/other.apply.ts: home copy path is outside the home root",
+        "apply script failed: redirected/setup.apply.ts: home copy path is outside the home root",
+      ]);
+      assert.equal(await readFile(outsideFile, "utf8"), "keep this file");
+      assert.deepEqual(await readdir(outside), ["setup.apply.ts"]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "accepts an alias for the requested home root and a parent alias within it",
+    async () => {
+      const homeAlias = join(root, "home-alias");
+      await symlink(homeRoot, homeAlias, "dir");
+      await mkdir(join(homeRoot, "tools"));
+      await symlink("tools", join(homeRoot, "alias"), "dir");
+      await putApplyScript(distRoot, "alias/new/setup.apply.ts");
+      const declarations = await collectDeclarations(distRoot);
+
+      const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeAlias);
+
+      assert.deepEqual(failures, []);
+      assert.deepEqual(await readdir(join(homeRoot, "tools/new")), ["apply-out.txt"]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "does not replace the source when home aliases dist",
+    async () => {
+      const body = "process.exit(99);";
+      await putApplyScript(distRoot, "tools/setup.apply.ts", body);
+      await symlink(distRoot, join(root, "alias"), "dir");
+      const declarations = await collectDeclarations(distRoot);
+
+      const failures = await runApplyScripts(
+        declarations.applyScripts,
+        distRoot,
+        join(root, "alias"),
+      );
+
+      assert.deepEqual(failures, [
+        "apply script failed: tools/setup.apply.ts: home copy path overlaps a dist declaration",
+      ]);
+      assert.equal(await readFile(join(distRoot, "tools/setup.apply.ts"), "utf8"), `${body}\n`);
+    },
+  );
+
+  it("does not replace another declaration when home overlaps dist", async () => {
+    const firstPath = "nested/setup.apply.ts";
+    const secondPath = "nested/nested/setup.apply.ts";
+    const body = "process.exit(99);";
+    await putApplyScript(distRoot, firstPath);
+    await putApplyScript(distRoot, secondPath, body);
+    const declarations = await collectDeclarations(distRoot);
+
+    const failures = await runApplyScripts(
+      declarations.applyScripts,
+      distRoot,
+      join(distRoot, "nested"),
+    );
+
+    assert.deepEqual(failures, [
+      `apply script failed: ${secondPath} (exit code 99)`,
+      `apply script failed: ${firstPath}: home copy path overlaps a dist declaration`,
+    ]);
+    assert.equal(await readFile(join(distRoot, secondPath), "utf8"), `${body}\n`);
+  });
+
+  it("removes the prepared home copy after a spawn error", async () => {
+    await putApplyScript(distRoot, "setup.apply.ts");
+    const declarations = await collectDeclarations(distRoot);
+    const spawn = spyOn(Bun, "spawn").mockImplementationOnce(() => {
+      throw new Error("spawn denied");
+    });
+
+    try {
+      const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+      assert.deepEqual(failures, ["apply script failed: setup.apply.ts: spawn denied"]);
+      assert.equal(spawn.mock.calls.length, 1);
+      assert.equal(existsSync(join(homeRoot, "setup.apply.ts")), false);
+    } finally {
+      spawn.mockRestore();
+    }
   });
 
   it("reports unsupported extensions and keeps running remaining scripts", async () => {
     await put(distRoot, "pkg/bad.apply.sh", "not a TypeScript hook\n");
+    const copyPath = await put(homeRoot, "pkg/bad.apply.sh", "keep this file");
     await putApplyScript(distRoot, "pkg/good.apply.ts");
     const declarations = await collectDeclarations(distRoot);
 
     const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
     assert.deepEqual(failures, ["apply hook has unsupported extension: pkg/bad.apply.sh"]);
+    assert.equal(await readFile(copyPath, "utf8"), "keep this file");
     assert.equal(existsSync(join(homeRoot, "pkg", "apply-out.txt")), true);
   });
 
@@ -560,6 +863,7 @@ describe("apply scripts", () => {
     const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
     assert.deepEqual(failures, ["apply script failed: fail.apply.ts (exit code 3)"]);
+    assert.equal(existsSync(join(homeRoot, "fail.apply.ts")), false);
     assert.equal(await readFile(join(homeRoot, "apply-out.txt"), "utf8"), homeRoot);
   });
 
@@ -596,6 +900,7 @@ describe("unsupported apply scripts", () => {
     const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
 
     assert.deepEqual(failures, ["apply hook has unsupported extension: ps/task.apply.ps1"]);
+    assert.equal(existsSync(join(homeRoot, "ps")), false);
   });
 });
 
