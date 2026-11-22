@@ -1877,7 +1877,7 @@ const context = await buildHookContext();
 
 async function runManager(
   args: string | string[],
-  captureLogTimes = false,
+  { captureLogTimes = false, stdin }: { captureLogTimes?: boolean; stdin?: string } = {},
 ): Promise<{
   code: number;
   stdout: string;
@@ -1903,6 +1903,7 @@ try { process.exitCode = await main(${JSON.stringify(commands)}, ${JSON.stringif
 catch (error) { console.error(error instanceof Error ? error.message : error); process.exitCode = 1; }
 process.stderr.write("\\n__LOG_TIMES__" + JSON.stringify(logTimes));`;
   const child = Bun.spawn([process.execPath, "-e", script], {
+    stdin: stdin === undefined ? "ignore" : Buffer.from(stdin),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -2018,7 +2019,7 @@ describe("manager CLI", () => {
   it("reports a managed stage duration matching its measured log interval", async () => {
     await put(root, "dotfiles/new.txt", "content\n");
 
-    const result = await runManager("managed", true);
+    const result = await runManager("managed", { captureLogTimes: true });
 
     assert.equal(result.code, 0, result.stderr);
     const stageStart = result.logTimes.find(({ line }) => line.startsWith("stage managed start"));
@@ -2061,42 +2062,60 @@ describe("manager CLI", () => {
     }
   });
 
-  it("builds before applying and runs apply scripts", async () => {
-    await put(root, "dotfiles/file.txt", "new\n");
-    await put(
-      root,
-      "dotfiles/done.apply.ts",
-      'import { writeFile } from "node:fs/promises"; await writeFile("done.txt", "ran\\n");',
-    );
-    await put(distRoot, "old.txt", "stale\n");
+  for (const flags of [[], ["--yes"], ["--ask"]]) {
+    const args = ["apply", ...flags];
+    const shouldAsk = flags.includes("--ask");
+    it(`${args.join(" ")} builds, displays the diff and applies ${shouldAsk ? "after confirmation" : "without confirmation"}`, async () => {
+      await put(root, "dotfiles/file.txt", "new\n");
+      await put(root, "dotfiles/done.apply.ts", 'await Bun.write("done.txt", "ran\\n");');
+      await put(distRoot, "old.txt", "stale\n");
 
-    const result = await runManager(["apply", "--yes"]);
+      const result = await runManager(args, shouldAsk ? { stdin: "y\n" } : {});
 
-    assert.equal(result.code, 0, result.stderr);
-    assert.equal(await readFile(join(homeRoot, "file.txt"), "utf8"), "new\n");
-    assert.equal(await readFile(join(homeRoot, "done.txt"), "utf8"), "ran\n");
-    assert.equal(existsSync(join(distRoot, "old.txt")), false);
-  });
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /diff: [\s\S]*file\.txt/);
+      assert.equal(result.stdout.includes("Apply? [y/N]"), shouldAsk);
+      assert.equal(await readFile(join(homeRoot, "file.txt"), "utf8"), "new\n");
+      assert.equal(await readFile(join(homeRoot, "done.txt"), "utf8"), "ran\n");
+      assert.equal(existsSync(join(distRoot, "old.txt")), false);
+    });
+  }
 
-  it("builds before diff without writing to home or running apply scripts", async () => {
-    await put(root, "dotfiles/file.txt", "new\n");
-    await put(
-      root,
-      "dotfiles/done.apply.ts",
-      'import { writeFile } from "node:fs/promises"; await writeFile("done.txt", "ran");',
-    );
-    await put(homeRoot, "file.txt", "old\n");
+  for (const command of [["diff"], ["apply", "--dry-run"]]) {
+    it(`${command.join(" ")} builds and displays the diff without writing to home or running apply scripts`, async () => {
+      await put(root, "dotfiles/file.txt", "new\n");
+      await put(root, "dotfiles/done.apply.ts", 'await Bun.write("done.txt", "ran");');
+      await put(homeRoot, "file.txt", "old\n");
 
-    const result = await runManager("diff");
+      const result = await runManager(command);
 
-    assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stdout, /file\.txt/);
-    assert.match(result.stdout, /old/);
-    assert.match(result.stdout, /new/);
-    assert.equal(await readFile(join(distRoot, "file.txt"), "utf8"), "new\n");
-    assert.equal(await readFile(join(homeRoot, "file.txt"), "utf8"), "old\n");
-    assert.equal(existsSync(join(homeRoot, "done.txt")), false);
-  });
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /^stage diff start$/m);
+      assert.match(result.stdout, new RegExp(`^command ${command[0]} success`, "m"));
+      assert.match(result.stdout, /file\.txt/);
+      assert.match(result.stdout, /old/);
+      assert.match(result.stdout, /new/);
+      assert.doesNotMatch(result.stdout, /Apply\? \[y\/N\]/);
+      assert.equal(await readFile(join(distRoot, "file.txt"), "utf8"), "new\n");
+      assert.equal(await readFile(join(homeRoot, "file.txt"), "utf8"), "old\n");
+      assert.equal(existsSync(join(homeRoot, "done.txt")), false);
+    });
+  }
+
+  for (const stdin of ["n\n", undefined]) {
+    it(`apply --ask does not apply ${stdin ? "when declined" : "at end of input"}`, async () => {
+      await put(root, "dotfiles/file.txt", "new\n");
+      await put(root, "dotfiles/done.apply.ts", 'await Bun.write("done.txt", "ran");');
+      await put(homeRoot, "file.txt", "old\n");
+
+      const result = await runManager(["apply", "--ask"], { stdin });
+
+      assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /file\.txt[\s\S]*Apply\? \[y\/N\][\s\S]*apply aborted/);
+      assert.equal(await readFile(join(homeRoot, "file.txt"), "utf8"), "old\n");
+      assert.equal(existsSync(join(homeRoot, "done.txt")), false);
+    });
+  }
 
   it("builds before listing managed paths without writing to home", async () => {
     await put(root, "dotfiles/new.txt", "content\n");
@@ -2156,7 +2175,16 @@ describe("manager CLI", () => {
 
   it("rejects invalid arguments without logs or rebuilding dist", async () => {
     await put(distRoot, "sentinel.txt", "keep\n");
-    for (const args of [[], ["unknown"], ["apply", "extra"]]) {
+    for (const args of [
+      [],
+      ["unknown"],
+      ["apply", "extra"],
+      ["apply", "--ask", "--dry-run"],
+      ["apply", "--invalid"],
+      ["diff", "--ask"],
+      ["managed", "--dry-run"],
+      ["diff", "--yes"],
+    ]) {
       const result = await runManager(args);
       assert.equal(result.code, 1);
       assert.match(result.stderr, /usage: bun dotfiles-manager/);

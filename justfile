@@ -24,8 +24,17 @@ format:
   ~/.bun/install/global/node_modules/oxfmt/bin/oxfmt . "!**/*.md"
   prettier --write --plugin ~/.bun/install/global/node_modules/prettier-markdown-table/index.js "**/*.md"
 
-apply:
-  bun dotfiles-manager apply
+[positional-arguments]
+[unix]
+apply *args:
+  bun dotfiles-manager apply "$@"
+
+[positional-arguments]
+[script("pwsh", "-NoProfile", "-File")]
+[windows]
+apply *args:
+  bun dotfiles-manager apply @args
+  exit $LASTEXITCODE
 
 [linux]
 test-rime:

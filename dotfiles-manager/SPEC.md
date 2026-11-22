@@ -35,13 +35,14 @@ buildステージは、内部で次の順に処理する。
 
 | コマンド | 結果 |
 | --- | --- |
-| `just apply` | ライフサイクル全体を実行し、差分の表示と確認プロンプトへの `y` の回答の後に home を dist の内容へ更新する |
-| `just diff` | build と差分検知までを実行し、差分を表示する。home へ書き込まず、applyスクリプトを実行しない |
+| `just apply` | 差分を表示し、確認せずに適用と applyスクリプトの実行へ進む |
+| `just apply --ask` | 差分を表示し、確認プロンプトへの `y` の回答があったときだけ適用と applyスクリプトの実行へ進む |
+| `just diff` / `just apply --dry-run` | build 後に差分を表示する。確認、home の更新、applyスクリプトの実行は行わない |
 | `just managed` | build を実行し、適用対象エントリの home相対パス一覧を表示する。home を変更しない |
 
-`just apply` / `just diff` / `just managed` はそれぞれ `bun dotfiles-manager <apply|diff|managed>` を呼ぶ。`bun` はディレクトリパスを package.json の `main` で解決するため、エントリファイル名を明示せずに呼べる。内部CLI は各サブコマンドで後続操作より先に build を実行し、build に失敗すると後続操作を実行せず非0 で終了する。引数なし、不明なサブコマンド、余分な引数の場合は使用方法を表示して非0 で終了し、build は実行しない。
+各 `just` レシピは対応する `bun dotfiles-manager <apply|diff|managed>` を呼び、`apply` はオプションを内部CLI へ渡す。`bun` はディレクトリパスを package.json の `main` で解決するため、エントリファイル名を明示せずに呼べる。内部CLI は各サブコマンドで後続操作より先に build を実行し、build に失敗すると後続操作を実行せず非0 で終了する。引数なし、不明なサブコマンド、余分な引数の場合は使用方法を表示して非0 で終了し、build は実行しない。`--ask`、`--dry-run`、`--yes` は `apply` 専用とする。`--ask` と `--dry-run` を併用した場合は不正な引数として扱う。`--yes` は既定の動作を変えない互換オプションである。
 
-内部CLI の `apply` は、適用ステージの差分検知後に `diff: <内訳> (<秒>s)` と §差分表示 に従う差分を表示し、続けて `Apply? [y/N]` を stdout に表示して標準入力から 1行を読む。回答の前後の空白を除いた値が大文字小文字を問わず `y` のときだけ、適用と applyスクリプトの実行へ進む。`y` 以外の回答、または標準入力が回答の前に終端に達したときは `apply aborted` を表示し、home を変更せずapplyスクリプトを実行せず、終了コード0 で終了する。`--yes` を指定したときは確認を行わず、差分の表示の後に直ちに適用へ進む。`--yes` は `apply` に対してのみ指定でき、`diff`・`managed` に対する指定は使用方法を表示して非0 で終了する。
+内部CLI の `apply` は、`--dry-run` を指定しない場合、適用ステージの差分検知後に `diff: <内訳> (<秒>s)` と §差分表示 に従う差分を表示する。`--ask` では続けて `Apply? [y/N]` を stdout に表示し、標準入力から 1行を読む。回答の前後の空白を除いた値が大文字小文字を問わず `y` のときだけ、適用と applyスクリプトの実行へ進む。`y` 以外の回答、または標準入力が回答の前に終端に達したときは `apply aborted` を表示し、home を変更せずapplyスクリプトを実行せず、終了コード0 で終了する。`apply --dry-run` は適用ステージの代わりに diffステージを実行する。最後の経過時間ログのコマンド名は `apply` とする。
 
 内部CLI の `apply` / `diff` / `managed` では、build の開始に `[build] Started`、成功時に `[build] Complete (<秒>s)`、失敗時に `[build] Failed (<秒>s)` を stdout に表示する。実行する各buildフックの開始には `  [<path>] Started`、成功時には `  [<path>] ✓ Complete (<秒>s)`、失敗時には `  [<path>] ✗ Failed (<秒>s)` を表示する。`<path>` はフックの dist相対パスであり、フック行の先頭には半角スペースを 2個置く。build の各フェーズの完了時には `  [build] <フェーズ> (<秒>s)` をフック行と同じインデントで表示する。`<フェーズ>` は dist再構築の `rebuild dist`、パス対応表の `path map`、外部取得の `externals`、merge変換の `merge`、置換sidecar の `replace` であり、行は実行順に現れる。フック自身の stdout / stderr は §フックシステム の出力規則に従う。
 
@@ -69,7 +70,7 @@ command diff success (1.28s)
 
 `bun dotfiles-manager/src/diff.ts [--managed] [--json] [distRoot] [homeRoot]` は build を行わず、指定したdist と home を比較する。引数を省略したときは `dist` と `~` を使う。`--managed` は管理対象の home相対パスを 1行ずつ表示し、`--json` より優先する。`--json` は `changed`、`typeMismatches`、`added`、`removedExact`、`removedIgnored` の各分類についてhome相対パスの配列を 2スペースインデントの JSON と末尾改行で出力する。`unchanged` は JSON に含めない。通常の表示は §差分表示 に従う。
 
-`bun dotfiles-manager/src/apply.ts [--dry-run] [--yes] <distRoot> <homeRoot> [--json]` は build を行わず、指定したdist と home の差分を検知して適用する。`--dry-run` は差分を表示するだけで、home の更新と applyスクリプトの実行を行わない。`--dry-run --json` は `src/diff.ts --json` と同じ分類を出力する。`--json` を単独で指定した通常適用の出力は変わらない。通常適用は差分検知に `diff: <内訳> (<秒>s)`、適用に `apply: <内訳> (<秒>s)`、applyスクリプトの実行に `apply scripts: <数> scripts (<秒>s)` を表示し、`<秒>s` は各処理の開始からの経過秒数である。通常適用の確認プロンプトと `--yes` の振る舞いは内部CLI の `apply` と同じである。
+`bun dotfiles-manager/src/apply.ts [--dry-run] [--yes] <distRoot> <homeRoot> [--json]` は build を行わず、指定したdist と home の差分を検知して適用する。`--dry-run` は差分を表示するだけで、home の更新と applyスクリプトの実行を行わない。`--dry-run --json` は `src/diff.ts --json` と同じ分類を出力する。`--json` を単独で指定した通常適用の出力は変わらない。通常適用は差分検知に `diff: <内訳> (<秒>s)`、適用に `apply: <内訳> (<秒>s)`、applyスクリプトの実行に `apply scripts: <数> scripts (<秒>s)` を表示し、`<秒>s` は各処理の開始からの経過秒数である。通常適用は内部CLI の `apply --ask` と同じ確認を行う。`--yes` を指定すると確認せずに適用する。
 
 `src/diff.ts` と `src/apply.ts` の直接CLI は成功時に終了コード0 を返す。必須引数がないとき、位置引数が多すぎるとき（`src/diff.ts`）、dist または home がディレクトリでないとき、または処理に失敗したときは、エラーを stderr に表示して非0 で終了する。
 

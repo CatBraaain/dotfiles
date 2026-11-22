@@ -6,20 +6,26 @@ import { main as build } from "./build.ts";
 import { main as diff } from "./diff.ts";
 import { resolveWsl, type WslConnection } from "./wsl.ts";
 
-const usage = "usage: bun dotfiles-manager <apply|diff|managed> [--yes] (--yes is for apply only)";
+const usage = "usage: bun dotfiles-manager <apply [--ask | --dry-run] [--yes] | diff | managed>";
+const applyFlags = ["--ask", "--dry-run", "--yes"];
 
 export async function main(
   args: readonly string[],
   root = resolve(import.meta.dir, "../.."),
   homeRoot = homedir(),
 ): Promise<number> {
-  const yes = args.includes("--yes");
-  const rest = args.filter((argument) => argument !== "--yes");
-  const [command] = rest;
-  const isSingleArgument = rest.length === 1;
+  const flags = args.filter((argument) => applyFlags.includes(argument));
+  const [command, ...extraArgs] = args.filter((argument) => !applyFlags.includes(argument));
   const isKnownCommand = command === "apply" || command === "diff" || command === "managed";
-  const isYesAllowed = !yes || command === "apply";
-  if (!isSingleArgument || !isKnownCommand || !isYesAllowed) throw new Error(usage);
+  const hasMisplacedFlags = flags.length > 0 && command !== "apply";
+  const shouldAsk = flags.includes("--ask");
+  const isDryRun = flags.includes("--dry-run");
+  const hasConflictingFlags = shouldAsk && isDryRun;
+  if (!isKnownCommand || extraArgs.length > 0 || hasMisplacedFlags || hasConflictingFlags) {
+    throw new Error(usage);
+  }
+
+  const stage = isDryRun ? "diff" : command;
 
   const started = performance.now();
   let confirmationWaitMs = 0;
@@ -31,11 +37,14 @@ export async function main(
 
     const distRoot = join(root, "dist");
     const code = await logStage(
-      command,
-      () =>
-        command === "apply"
-          ? apply([distRoot, homeRoot, ...(yes ? ["--yes"] : [])], confirmApply)
-          : diff(command === "managed" ? ["--managed", distRoot, homeRoot] : [distRoot, homeRoot]),
+      stage,
+      () => {
+        if (stage === "apply") {
+          const applyArgs = shouldAsk ? [distRoot, homeRoot] : [distRoot, homeRoot, "--yes"];
+          return apply(applyArgs, confirmApply);
+        }
+        return diff(stage === "managed" ? ["--managed", distRoot, homeRoot] : [distRoot, homeRoot]);
+      },
       elapsedWithoutConfirmation,
     );
     logElapsed(
