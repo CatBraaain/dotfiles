@@ -9,7 +9,7 @@ import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
 import { applyPathMap } from "./build-path-map.ts";
 import { applyReplacements, applyReplaceSidecars, parseReplaceSidecar } from "./build-replace.ts";
-import { runHooks } from "./build-hooks.ts";
+import { collectHooks, runHooks } from "./build-hooks.ts";
 import { main } from "./build.ts";
 
 let root: string;
@@ -199,6 +199,32 @@ describe("run", () => {
       tools: "both",
     });
     assert.equal(existsSync(join(distRoot, "settings.windows-merge.json")), false);
+  });
+
+  it.each([
+    ["linux", "linux"],
+    ["windows", "windows"],
+    ["darwin", "macos"],
+  ] as const)("collects only shared and matching build hooks on %s", async (platform, modifier) => {
+    const hookPrefixes = ["common.", "hook.linux-", "hook.windows-", "hook.macos-"];
+    await Promise.all(
+      hookPrefixes.flatMap((prefix) => [
+        put(distRoot, `${prefix}build.ts`, ""),
+        put(distRoot, `${prefix}postbuild.ts`, ""),
+      ]),
+    );
+
+    const hooks = await collectHooks(distRoot, platform);
+
+    assert.deepEqual(
+      hooks.map((hook) => hook.name),
+      [
+        "common.build.ts",
+        `hook.${modifier}-build.ts`,
+        "common.postbuild.ts",
+        `hook.${modifier}-postbuild.ts`,
+      ],
+    );
   });
 
   it("runs a windows-build hook only on the Windows build", async () => {

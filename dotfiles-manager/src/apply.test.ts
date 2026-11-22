@@ -360,6 +360,38 @@ describe("apply classification matrix", () => {
 });
 
 describe("apply scripts", () => {
+  it.each([
+    ["linux", "linux"],
+    ["win32", "windows"],
+    ["darwin", "macos"],
+  ] as const)("collects only shared and matching apply hooks on %s", async (platform, modifier) => {
+    const hookPrefixes = ["common.", "hook.linux-", "hook.windows-", "hook.macos-"];
+    await Promise.all(
+      hookPrefixes.flatMap((prefix) => [
+        put(distRoot, `${prefix}apply.ts`, ""),
+        put(distRoot, `${prefix}postapply.ts`, ""),
+      ]),
+    );
+
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...originalPlatform, value: platform });
+    try {
+      const { applyScripts } = await collectDeclarations(distRoot);
+
+      assert.deepEqual(
+        applyScripts.map((script) => script.distPath),
+        [
+          "common.apply.ts",
+          `hook.${modifier}-apply.ts`,
+          "common.postapply.ts",
+          `hook.${modifier}-postapply.ts`,
+        ],
+      );
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatform);
+    }
+  });
+
   it("collects scripts in node_modules but skips excluded folders", async () => {
     await putApplyScript(distRoot, "node_modules/pkg/x.apply.ts");
     await put(distRoot, ".build.d/hidden/x.apply.sh", "script\n");

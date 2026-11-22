@@ -7,7 +7,11 @@ export type Platform = "windows" | "linux" | "darwin";
 const excludedEntryPrefixes = [".build"];
 
 export function currentPlatform(): Platform {
-  return process.platform === "win32" ? "windows" : process.platform === "darwin" ? "darwin" : "linux";
+  return process.platform === "win32"
+    ? "windows"
+    : process.platform === "darwin"
+      ? "darwin"
+      : "linux";
 }
 
 // Build and apply hooks stay in dist and are not copied to home.
@@ -18,10 +22,14 @@ const applyScriptNamePattern = /\.(?:(linux|macos|windows)-)?(machine-)?(?:post)
 const postHookNamePattern = /\.(?:(linux|macos|windows)-)?(machine-)?post(?:build|apply)\.[^.]+$/;
 // The OS modifier only applies when it matches the current platform
 // (spec: SPEC.md §フックシステム); callers filter by the current platform.
-const hookPlatformPattern = /\.(?:(linux|macos|windows)-)(?:machine-)?(?:post)?(?:build|apply)\.[^.]+$/;
+const hookPlatformPattern =
+  /\.(?:(linux|macos|windows)-)(?:machine-)?(?:post)?(?:build|apply)\.[^.]+$/;
 
-export function hookPlatform(name: string): string | undefined {
-  return hookPlatformPattern.exec(name)?.[1];
+export function hookPlatform(name: string): Platform | undefined {
+  const modifier = hookPlatformPattern.exec(name)?.[1];
+  if (modifier === "macos") return "darwin";
+  if (modifier === "linux" || modifier === "windows") return modifier;
+  return undefined;
 }
 
 export function isApplyScriptName(name: string): boolean {
