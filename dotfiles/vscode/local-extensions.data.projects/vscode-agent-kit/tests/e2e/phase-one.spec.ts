@@ -12,13 +12,13 @@ import { basename, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Frame } from "playwright/test";
 import { expect, test, type VSCodeFixture } from "../support/vscode";
-import { PiMux } from "../../src/piMux";
+import { PiMux } from "../../src/pi-mux";
 import {
   FIXTURE_MODEL,
   FIXTURE_PROMPT,
   FIXTURE_PROVIDER,
   FIXTURE_REPLY,
-} from "../support/fixedResponseProvider";
+} from "../support/fixed-response-provider";
 
 interface RegistrationStatusObservation {
   atMs: number;

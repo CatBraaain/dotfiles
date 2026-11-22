@@ -4,8 +4,8 @@
 import type { Meta, StoryObj } from "@storybook/react";
 import { useEffect, useRef } from "react";
 import { initClient } from "../src/webview/client";
-import { webviewAppMarkup } from "../src/webview/webviewHtml";
-import { createDemoBridge, type DemoState } from "./demoBridge";
+import { webviewAppMarkup } from "../src/webview/webview-html";
+import { createDemoBridge, type DemoState } from "./demo-bridge";
 
 const meta: Meta = {
   title: "Sessions/Sidebar",

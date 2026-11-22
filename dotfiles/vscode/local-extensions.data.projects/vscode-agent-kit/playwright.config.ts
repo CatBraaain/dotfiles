@@ -10,7 +10,7 @@ export default defineConfig({
   outputDir: "dist/test-results",
   reporter: [
     ["list"],
-    ["./tests/support/e2eGalleryReporter.ts"],
+    ["./tests/support/e2e-gallery-reporter.ts"],
     ["html", { outputFolder: "dist/playwright-report", open: "never" }],
     ["json", { outputFile: "dist/playwright-results.json" }],
   ],

@@ -4,13 +4,13 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { promisify } from "node:util";
 import { SessionLauncher } from "./launcher";
-import { FolderSyncEngine, type VscodeLike } from "./folderSync";
-import type { ExecFile } from "./gitWorktrees";
+import { FolderSyncEngine, type VscodeLike } from "./folder-sync";
+import type { ExecFile } from "./git-worktrees";
 import { resolveConfiguredSessionRoot } from "./paths";
-import { TerminalRegistry } from "./terminalRegistry";
+import { TerminalRegistry } from "./terminal-registry";
 import { editorTerminals } from "./terminals";
-import { WorkspaceStore } from "./workspaceStore";
-import { SessionWebviewProvider, VIEW_ID } from "./webview/sessionWebviewProvider";
+import { WorkspaceStore } from "./workspace-store";
+import { SessionWebviewProvider, VIEW_ID } from "./webview/session-webview-provider";
 
 const execFileAsync = promisify(execFileCallback);
 

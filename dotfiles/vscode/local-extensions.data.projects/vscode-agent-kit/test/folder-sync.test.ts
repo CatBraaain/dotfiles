@@ -6,9 +6,9 @@ import {
   FolderSyncEngine,
   UNTITLED_TITLE_TEMPLATE,
   WORKTREE_DETECT_INTERVAL_MS,
-} from "../src/folderSync";
-import type { UriLike, VscodeLike } from "../src/folderSync";
-import type { WorktreeEntry } from "../src/gitWorktrees";
+} from "../src/folder-sync";
+import type { UriLike, VscodeLike } from "../src/folder-sync";
+import type { WorktreeEntry } from "../src/git-worktrees";
 import {
   createFakeGit,
   FakeVscode,
@@ -17,7 +17,7 @@ import {
   WORKSPACE_TARGET,
   wt,
   type FakeGit,
-} from "./folderSyncFixtures";
+} from "./folder-sync-fixtures";
 import { cleanup, tempDir } from "./fixtures";
 
 const HOME = "/home/user";

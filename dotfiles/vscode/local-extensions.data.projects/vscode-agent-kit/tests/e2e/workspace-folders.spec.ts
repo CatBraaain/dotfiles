@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { expect, test } from "../support/vscode";
-import { UNTITLED_TITLE_TEMPLATE } from "../../src/folderSync";
+import { UNTITLED_TITLE_TEMPLATE } from "../../src/folder-sync";
 
 function fixtureGit(host: { directory: string }, cwd: string, args: string[]): string {
   return execFileSync("git", ["-C", cwd, ...args], {

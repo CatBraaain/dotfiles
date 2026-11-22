@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { PiMux } from "../src/piMux";
+import { PiMux } from "../src/pi-mux";
 
 const liveSession = { id: "A", file: "/saved/A.jsonl", state: "running", title: "Title" };
 const emptySession = { id: "empty", file: "/saved/empty.jsonl" };

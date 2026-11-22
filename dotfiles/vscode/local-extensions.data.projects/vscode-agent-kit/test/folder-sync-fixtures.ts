@@ -12,8 +12,8 @@ import type {
   UriLike,
   VscodeLike,
   WorkspaceFolderLike,
-} from "../src/folderSync";
-import type { ExecFile, WorktreeEntry } from "../src/gitWorktrees";
+} from "../src/folder-sync";
+import type { ExecFile, WorktreeEntry } from "../src/git-worktrees";
 
 // Mirrors the numeric value of vscode.ConfigurationTarget.Workspace.
 export const WORKSPACE_TARGET = 2;

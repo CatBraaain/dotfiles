@@ -10,14 +10,14 @@ import type {
   TestResult,
   TestStep,
 } from "playwright/types/testReporter";
-import { parseGalleryCases, serializeGalleryRun } from "./e2eGallery";
+import { parseGalleryCases, serializeGalleryRun } from "./e2e-gallery";
 import type {
   GalleryAttempt,
   GalleryImage,
   GalleryRun,
   GalleryStep,
   GalleryTest,
-} from "./e2eGallery";
+} from "./e2e-gallery";
 
 const IMAGE_EXTENSIONS: Record<string, string> = {
   "image/png": "png",

@@ -14,8 +14,8 @@ import { runInNewContext } from "node:vm";
 import { chromium } from "playwright";
 import type { Browser, Page } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { parseGalleryCases, serializeGalleryRun } from "../tests/support/e2eGallery";
-import type { GalleryRun, GalleryTest } from "../tests/support/e2eGallery";
+import { parseGalleryCases, serializeGalleryRun } from "../tests/support/e2e-gallery";
+import type { GalleryRun, GalleryTest } from "../tests/support/e2e-gallery";
 
 const root = resolve(import.meta.dirname, "..");
 const scratchRoot = "/tmp/work/vscode-agent-kit/unify-e2e-gallery";
@@ -59,7 +59,7 @@ ${source}`,
       projects: options.projects?.map((name) => ({ name })),
       maxFailures: options.maxFailures ?? 0,
       outputDir: join(directory, "test-results"),
-      reporter: [[join(root, "tests/support/e2eGalleryReporter.ts")]],
+      reporter: [[join(root, "tests/support/e2e-gallery-reporter.ts")]],
     })};`,
   );
   const args = [

@@ -1,5 +1,5 @@
 import type { Decorator, Preview } from "@storybook/react";
-import { webviewStyles } from "../src/webview/webviewStyles";
+import { webviewStyles } from "../src/webview/webview-styles";
 
 /** Dark-theme fallbacks for the --vscode-* variables the webview styles use;
  * mirrors a VS Code dark sidebar so the catalog matches the real view. */

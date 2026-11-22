@@ -20,7 +20,7 @@ import {
   resolveMainRepository,
   worktreeFolderName,
   type ExecFile,
-} from "./gitWorktrees";
+} from "./git-worktrees";
 
 export interface UriLike {
   readonly scheme?: string;
@@ -291,7 +291,8 @@ export class FolderSyncEngine {
       const subscription = this.deps.vscode.workspace.onDidChangeWorkspaceFolders(() => done(true));
       this.folderWaitSubscription = subscription;
       this.folderWaitRelease = () => done(false);
-      const timeout = timeoutMs === undefined ? undefined : setTimeout(() => done(false), timeoutMs);
+      const timeout =
+        timeoutMs === undefined ? undefined : setTimeout(() => done(false), timeoutMs);
     });
   }
 

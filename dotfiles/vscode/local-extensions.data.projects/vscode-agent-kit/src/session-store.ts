@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { flattenPiMuxSessions, type PiMuxHistoryEntry, type PiMuxWorkspace } from "./piMux";
+import { flattenPiMuxSessions, type PiMuxHistoryEntry, type PiMuxWorkspace } from "./pi-mux";
 
 /** One Pi session as listed by the extension. */
 export interface SessionSummary {

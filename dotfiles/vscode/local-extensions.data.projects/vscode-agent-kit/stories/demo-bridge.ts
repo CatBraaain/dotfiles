@@ -2,9 +2,9 @@
 // in-memory sample store. Never touches real session files or the metadata
 // store; openSession is ignored (terminals do not exist in the catalog).
 
-import type { SessionSummary } from "../src/sessionStore";
+import type { SessionSummary } from "../src/session-store";
 import type { SessionPhase } from "../src/webview/protocol";
-import { sessionViewGroups } from "../src/webview/sessionViewData";
+import { sessionViewGroups } from "../src/webview/session-view-data";
 
 /** Demo state a story starts from (SPEC.md「静的プレビュー」表 1 行目). */
 export type DemoState = "sample" | "empty" | "delayed";

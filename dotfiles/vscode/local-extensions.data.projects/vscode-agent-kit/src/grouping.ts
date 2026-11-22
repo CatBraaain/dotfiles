@@ -1,4 +1,4 @@
-import type { SessionSummary } from "./sessionStore";
+import type { SessionSummary } from "./session-store";
 
 export interface SessionGroup {
   cwd: string;

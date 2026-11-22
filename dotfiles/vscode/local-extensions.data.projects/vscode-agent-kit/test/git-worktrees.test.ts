@@ -5,9 +5,9 @@ import {
   parseWorktreePorcelain,
   resolveMainRepository,
   worktreeFolderName,
-} from "../src/gitWorktrees";
+} from "../src/git-worktrees";
 import { cleanup, tempDir } from "./fixtures";
-import { wt } from "./folderSyncFixtures";
+import { wt } from "./folder-sync-fixtures";
 
 // SPEC workspaceFolders 同期/worktree の検出: the worktree list is read
 // from `git worktree list --porcelain`, so the parser must handle every

@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import type * as vscode from "vscode";
 import manifest from "../package.json";
 import { activate } from "../src/extension";
-import { SessionWebviewProvider } from "../src/webview/sessionWebviewProvider";
+import { SessionWebviewProvider } from "../src/webview/session-webview-provider";
 import { cleanup, tempDir } from "./fixtures";
 
 interface WatcherStub {

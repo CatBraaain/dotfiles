@@ -25,13 +25,13 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { PiMuxWorkspace } from "../../src/piMux";
+import type { PiMuxWorkspace } from "../../src/pi-mux";
 import {
   FIXTURE_MODEL,
   FIXTURE_PROVIDER,
   startFixedResponseProvider,
   type FixedResponseProvider,
-} from "./fixedResponseProvider";
+} from "./fixed-response-provider";
 
 const root = resolve(__dirname, "../..");
 const dotfiles = process.env.PI_REVIEW_DOTFILES ?? join(homedir(), "projects/dotfiles/dotfiles");

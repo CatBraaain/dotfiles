@@ -20,7 +20,7 @@ import {
   type ReactNode,
 } from "react";
 import { createRoot } from "react-dom/client";
-import { initDocumentScrollbar } from "./documentScrollbar";
+import { initDocumentScrollbar } from "./document-scrollbar";
 
 /** Per-workspace display mode: unarchived sessions only, or all sessions. */
 export type ViewMode = "unarchived" | "all";

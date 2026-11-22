@@ -1,10 +1,10 @@
 import type * as vscode from "vscode";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { DisplayTerminals } from "./terminals";
-import type { PiMuxCurrentSession } from "./piMux";
-import { PiMux, hasLiveSession, type PiSession } from "./piMux";
+import type { PiMuxCurrentSession } from "./pi-mux";
+import { PiMux, hasLiveSession, type PiSession } from "./pi-mux";
 import { errorMessage } from "./guards";
-import { sameWorkDirectory } from "./workDirectory";
+import { sameWorkDirectory } from "./work-directory";
 import { cwdGroupKey } from "./grouping";
 
 const SWITCH_RETRY_WINDOW_MS = 60_000;

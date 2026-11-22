@@ -1,4 +1,4 @@
-import { webviewStyles } from "./webviewStyles";
+import { webviewStyles } from "./webview-styles";
 
 export interface WebviewHtmlOptions {
   /** Webview URI of the client module (dist-webview/webview/client.js). */

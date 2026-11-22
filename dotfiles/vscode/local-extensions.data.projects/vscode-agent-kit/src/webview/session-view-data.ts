@@ -1,5 +1,5 @@
 import { cwdGroupKey, groupSessions } from "../grouping";
-import type { SessionSummary } from "../sessionStore";
+import type { SessionSummary } from "../session-store";
 import type { SessionPhase, WebviewSessionGroup } from "./protocol";
 
 /** Store-derived state the view projects: the registered workspace cwds

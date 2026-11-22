@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { homedir } from "node:os";
-import type { PiSession } from "./piMux";
+import type { PiSession } from "./pi-mux";
 
 const OWNER_KEY = "PI_SESSIONS_DISPLAY";
 const OWNER_VALUE = "1";

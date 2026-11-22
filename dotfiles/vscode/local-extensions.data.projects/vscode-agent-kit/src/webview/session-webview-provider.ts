@@ -1,25 +1,25 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { WorkspaceStore } from "../workspaceStore";
-import { listSessionSnapshot, sessionFileExists, type SessionSummary } from "../sessionStore";
-import { expandWorkDirectoryInput, requireWorkDirectory } from "../workDirectory";
+import type { WorkspaceStore } from "../workspace-store";
+import { listSessionSnapshot, sessionFileExists, type SessionSummary } from "../session-store";
+import { expandWorkDirectoryInput, requireWorkDirectory } from "../work-directory";
 import {
   DisplayRecoveryCancelledError,
   SwitchTargetExitedError,
   type TerminalRegistry,
-} from "../terminalRegistry";
+} from "../terminal-registry";
 import { errorMessage } from "../guards";
 import { cwdGroupKey } from "../grouping";
-import { flattenPiMuxSessions, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../piMux";
+import { flattenPiMuxSessions, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../pi-mux";
 import {
   parseWebviewRequest,
   type ExtensionMessage,
   type SessionPhase,
   type WebviewState,
 } from "./protocol";
-import { sessionViewGroups } from "./sessionViewData";
-import { webviewHtml } from "./webviewHtml";
+import { sessionViewGroups } from "./session-view-data";
+import { webviewHtml } from "./webview-html";
 
 export const VIEW_ID = "agentKit.sessions";
 export const LIST_REFRESH_INTERVAL_MS = 250;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { cwdLabel, groupSessions } from "../src/grouping";
-import type { SessionSummary } from "../src/sessionStore";
+import type { SessionSummary } from "../src/session-store";
 
 function session(
   overrides: Partial<SessionSummary> & Pick<SessionSummary, "sessionId" | "cwd" | "createdAtMs">,

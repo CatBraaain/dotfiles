@@ -1,7 +1,7 @@
 import type * as vscode from "vscode";
-import { requireWorkDirectory } from "./workDirectory";
-import type { TerminalRegistry } from "./terminalRegistry";
-import type { PiSession } from "./piMux";
+import { requireWorkDirectory } from "./work-directory";
+import type { TerminalRegistry } from "./terminal-registry";
+import type { PiSession } from "./pi-mux";
 
 export interface SessionLauncherDeps {
   registry: TerminalRegistry;

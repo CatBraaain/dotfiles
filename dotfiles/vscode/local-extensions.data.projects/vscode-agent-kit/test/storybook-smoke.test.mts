@@ -22,7 +22,7 @@ const mime: Record<string, string> = {
   ".svg": "image/svg+xml",
 };
 
-// Sample session ids from stories/demoBridge.ts.
+// Sample session ids from stories/demo-bridge.ts.
 const atlasCurrentId = "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10";
 const atlasArchivedId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
 const piToolsPlainId = "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72";

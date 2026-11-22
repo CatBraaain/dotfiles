@@ -6,8 +6,8 @@ import { promisify } from "node:util";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { WebviewSession, WebviewState } from "../src/webview/protocol";
-import { webviewAppMarkup } from "../src/webview/webviewHtml";
-import { webviewStyles } from "../src/webview/webviewStyles";
+import { webviewAppMarkup } from "../src/webview/webview-html";
+import { webviewStyles } from "../src/webview/webview-styles";
 
 type ChangedField = "displayName" | "updatedAtMs" | "state" | "hasUnread";
 type RowLocation = "onscreen" | "offscreen" | "excluded" | "collapsed";
@@ -93,8 +93,8 @@ describe("single-row display work", () => {
       source
         .replace(anchor, "  globalThis.__rowBuilds.push(session.sessionId);\n" + anchor)
         .replace(
-          '"./documentScrollbar"',
-          JSON.stringify(resolve("src/webview/documentScrollbar")),
+          '"./document-scrollbar"',
+          JSON.stringify(resolve("src/webview/document-scrollbar")),
         ) +
       '\nglobalThis.__receiveSessions = (state) => flushRowUpdate(() => window.dispatchEvent(new MessageEvent("message", { data: { type: "sessions", state } })));';
     const entryPath = join(outputDir, "client.tsx");

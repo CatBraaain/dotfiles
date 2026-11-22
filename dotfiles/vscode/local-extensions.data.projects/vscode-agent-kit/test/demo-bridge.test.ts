@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDemoBridge, type DemoBridgeRequest, type DemoState } from "../stories/demoBridge";
+import { createDemoBridge, type DemoBridgeRequest, type DemoState } from "../stories/demo-bridge";
 
 interface DemoSession {
   sessionId: string;
