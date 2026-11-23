@@ -233,6 +233,7 @@ function addConfiguredMounts(
     globCache: Map<string, string[]>;
     dynamicPaths: DynamicPaths;
     mode: SandboxMode;
+    readOnly?: boolean;
   },
 ): void {
   const gitMainWorktreePath = resolveGitMainWorktreePath(input.cwd);
@@ -263,7 +264,11 @@ function addConfiguredMounts(
     // write grants inside the cwd, turning the whole tree read-only.
     mount(input.cwd, false);
   }
-  for (const path of allowFinalPaths) mount(path, true);
+  for (const path of allowFinalPaths) mount(path, !input.readOnly);
+  if (input.readOnly) {
+    for (const path of input.dynamicPaths.keys()) mount(path, false);
+    return;
+  }
   if (input.mode === "fs") {
     for (const [path, accessModes] of input.dynamicPaths) mount(path, accessModes.has("write"));
     return;
@@ -321,11 +326,12 @@ export function buildSandboxArgs(input: {
   dynamicPaths: DynamicPaths;
   mode: SandboxMode;
   commandCwd?: string;
+  readOnly?: boolean;
 }): string[] {
   const args = ["--die-with-parent"];
   if (readAllPaths(input.config)) args.push("--ro-bind", "/", "/");
   args.push("--proc", "/proc", "--dev", "/dev");
-  if (input.mode === "bash") {
+  if (input.mode === "bash" && !input.readOnly) {
     // Keep GPU device binds optional across native Linux and WSL environments.
     for (const devicePath of ["/dev/dxg", "/dev/dri"])
       args.push("--dev-bind-try", devicePath, devicePath);

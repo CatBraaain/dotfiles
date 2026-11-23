@@ -405,11 +405,13 @@ main worktree ではファイルを編集しない。編集を伴う作業は、
 - まとまった作業単位の完了時: 「finish・discard・close」の finish を、user の承認を得てから実行する。
 - 適用しない: 読み取りのみの調査・検索・検証、コミット・マージなど worktree を必要としない操作。
 
+pi では worktree の作成・削除に `session_worktree` を使い、Bash で `git worktree add`・`git worktree remove` を直接実行しない。ツールの `project` を省略するとセッション開始時の cwd が属するリポジトリを選ぶ。`project` には `~/projects` 直下のリポジトリのディレクトリ名を指定できるが、「Cross-Project Requests」の制約は変わらない。
+
 ### 作成
 
 1. branch名は取り組む機能を表すkebab-case英語（例: `add-export-command`）。リポジトリ規約があれば優先する。
-2. pi では `session_worktree` に `action: "declare"` と `name` を渡す。指定したサブworktree があればそのまま利用し、なければ main worktree の HEAD から作成する。既存の worktree を引き継ぐ場合は、その名前を宣言する。新規作業では、既存の別作業と衝突しない名前を選ぶ。すでにサブworktree 内を cwd として起動した場合は、その cwd 配下を再宣言せずに利用できる。
-3. 宣言ツールがない環境では、既存作業と衝突しない名前で `git worktree add ~/.agents/worktrees/<リポジトリ名>/<branch> -b <branch>` を使う。フォルダ名が `agents-` / `copilot-` で始まる場合は branch 名を変えず、フォルダ名に `wt-` を前置する。
+2. pi では `session_worktree` に `action: "add"` とブランチ名を `name` として渡す。指定したサブworktree があればそのまま利用し、なければ main worktree の HEAD から作成する。既存の worktree を引き継ぐ場合は、その名前を指定する。新規作業では、既存の別作業と衝突しない名前を選ぶ。すでにサブworktree 内を cwd として起動した場合は、その cwd 配下を再宣言せずに利用できる。
+3. pi 以外の環境では、既存作業と衝突しない名前で `git worktree add ~/.agents/worktrees/<リポジトリ名>/<branch> -b <branch>` を使う。フォルダ名が `agents-` / `copilot-` で始まる場合は branch 名を変えず、フォルダ名に `wt-` を前置する。
 4. worktree内のファイルは絶対パスで read/write/editする。相対パスはセッションcwd（main worktree）に解決されるため、worktree のファイル指定に使わない。git操作は `git -C <worktree のパス>` で実行する。
 
 main の未コミット変更はその場に残す。worktree への持ち運びは行わない。
@@ -422,7 +424,7 @@ main の未コミット変更はその場に残す。worktree への持ち運び
 
 ローカルの使い捨てworktreeブランチを統合先（main等）へマージするときは、履歴を線形に保つ。
 
-1. 統合先で `git merge --ff-only <branch>` を実行する。`git -C <main worktree のパス> merge --ff-only <branch>` でも実行できる。
+1. 統合先で Bash の `git merge --ff-only refs/heads/<name>` を実行する。`<name>` はブランチ名。main worktree へ統合する場合は `git -C <main worktree のパス> merge --ff-only refs/heads/<name>` でも実行できる。
 2. 統合先が divergeして失敗するときは、対象ブランチを `git rebase <統合先>` してから再度ff-onlyマージする。
 3. `--no-ff` によるmerge commit と `--squash` によるsquash統合は行わない。
 
@@ -446,21 +448,22 @@ user は worktree を「wt」と略すことがある（例: finish wt）。略�
 finish — 統合の判断が入るため、commit前の未コミットの状態で user のレビューを経た承認を得る。質問の前に、確認対象の場所、レビュー観点、レビュー方法を示す。検証まで済ませた段階で、「Asking Format」に従う `## 質問` として、worktree名（worktreeパスの末尾セグメント）を含んだ「worktree `<名前>` を finishしてよいですか？」と必ず尋ね、commit は承認後に行う。成果物は user が承認の回答をした時点の作業ツリーの内容であり、agent が質問した時点ではない。user は回答をもって手直しを終えているものとする。承認後:
 
 1. 作業ツリーに未コミット変更（user の手直しを含む）があれば、質問せず成果に含めて1つのコミットで commitする（意味単位への分割はこのコミットには適用しない）。手直しを取り消してはならず、破棄は user の明示が必要。検証のやり直しはしない。手順3の backup branch は、close で worktreeごと削除するため作らない。
-2. 「統合」に従って統合先へマージする。
-3. close を実行する。
+2. 対象リポジトリの main worktree で「統合」に従ってマージする。
+3. マージ成功後、finish として close を実行する。
 
 discard — 成果を捨てる判断が入るため、実行前に user の承認を得る。承認後:
 
 1. worktree の branch名と未コミット変更を確認し、捨てる対象を特定する。
-2. close を `--force` と `-D` で実行する。
+2. discard として close を実行する。
 
-close — bash のカレントディレクトリが対象worktree内にあると削除に失敗するため、対象外のディレクトリから実行する。エディタのワークスペースから worktree を外す操作は本手順に含まず、user が手動で行う。
+close — エディタのワークスペースから worktree を外す操作は本手順に含まず、user が手動で行う。
 
-1. `git worktree remove <worktree のパス>` で worktree を削除する。
-2. `git branch -d <branch>` で、worktree が checkoutしていたbranch を削除する。
-3. `git worktree list` に prunable な参照が残っていれば、`git worktree prune` を実行する。
+1. worktree と対応するブランチを削除する。
+   - pi: `session_worktree` に `action: "remove"` と `name` を渡す。finish では `discard` を省略し、discard では `discard: true` を渡す。ツールの追加確認ダイアログはない。セッション開始時の cwd を含む worktree は削除できない。
+   - pi 以外: 対象外のディレクトリから Bash で実行する。finish では `git worktree remove <worktree のパス>`、成功後に `git branch -d <branch>` を実行する。discard では `git worktree remove --force <worktree のパス>`、成功後に `git branch -D <branch>` を実行する。
+2. `git worktree list` に prunable な参照が残っていれば、Bash で `git worktree prune` を実行する。
 
-手順1・2は、未コミット変更・未マージの branch があると失敗する。失敗したときは close単独で先へ進らず、成果を取り込むなら finish、捨てるときは user の承認を得てdiscard として扱う。
+削除に失敗した場合は残った状態を確認し、close 単独で強制削除に切り替えない。成果を取り込むなら finish、捨てるなら user の承認を得て discard として扱う。
 
 検証: `git worktree list` に対象worktree がなく、`git branch --list <branch>` が空であること。中途終了で残ったworktree は `git worktree list` で点検する。
 

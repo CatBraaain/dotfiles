@@ -1,15 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { realpathSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { dirname, join, resolve } from "node:path";
-import { quote } from "shell-quote";
-import { SandboxRunner, worktreeRemovalArgs, type WorktreeRemoval } from "./sandbox-runner.ts";
+import { dirname, isAbsolute, resolve } from "node:path";
+import { SandboxRunner, type ScopedExecution } from "./sandbox-runner.ts";
+
+export type { ScopedExecution } from "./sandbox-runner.ts";
 import { executeGuardedTool, type GuardedToolRequest } from "./execute.ts";
-import type {
-  AgentToolResult,
-  ExtensionAPI,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { pathCovers } from "./config.ts";
 import { Guardrail, writeApprovalNote } from "./guardrail.ts";
 import { withNormalizedPath } from "./normalize-path.ts";
 
@@ -20,14 +19,14 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
   }
   const cwd = process.cwd();
   const guardrail = new Guardrail(cwd, configPath);
-  const runner = new SandboxRunner(cwd, (mode, commandCwd) =>
-    guardrail.buildArgs(mode, commandCwd),
+  const runner = new SandboxRunner(cwd, (mode, commandCwd, readOnly) =>
+    guardrail.buildArgs(mode, commandCwd, readOnly),
   );
 
-  const removalScope = new AsyncLocalStorage<RemovalScope>();
+  const scopedExecution = new AsyncLocalStorage<ScopedExecutionState>();
 
-  function getRemovalScope(id: string): RemovalScope | undefined {
-    const scope = removalScope.getStore();
+  function getScopedExecutionState(id: string): ScopedExecutionState | undefined {
+    const scope = scopedExecution.getStore();
     return scope?.id === id ? scope : undefined;
   }
 
@@ -169,55 +168,42 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
   return {
     async execute(request) {
       assertActive();
-      const scope = request.toolName === "bash" ? getRemovalScope(request.id) : undefined;
+      const scope = request.toolName === "bash" ? getScopedExecutionState(request.id) : undefined;
       if (!scope) return executeGuardedTool(guardrail, runner, cwd, request);
-      const { removal, command, sessionId } = scope;
+      const { call, command, sessionId } = scope;
       const signal = request.signal
         ? AbortSignal.any([scope.signal, request.signal])
         : scope.signal;
-      if (scope.closed) throw new Error("Worktree removal grant has been revoked");
+      if (scope.closed) throw new Error("Scoped execution grant has been revoked");
       if (
         scope.used ||
         request.params.command !== command ||
         request.context.sessionManager?.getSessionId() !== sessionId
       )
-        throw new Error("Worktree removal does not match this Bash call");
+        throw new Error("Scoped execution grant does not match this Bash call");
       scope.used = true;
       signal.throwIfAborted();
-      await guardrail.authorizeCommand(
-        quote(["git", ...worktreeRemovalArgs(removal)]),
-        request.context,
+      guardrail.assertScopedCommandAllowed([call.executable, ...call.args]);
+      const protectedPaths = guardrail.planScopedWriteProtection(
+        call.write?.paths ?? [],
+        call.write?.directories ?? [],
+        runner.sandboxed(),
+        call.write?.unlinkSymlinks,
       );
-      assertActive();
-      signal.throwIfAborted();
-      if (scope.closed) throw new Error("Worktree removal grant has been revoked");
-      guardrail.assertWorktreeRemovalAllowed(
-        dirname(removal.path),
-        join(removal.common, "worktrees"),
-      );
-      const result = await runner.runWorktreeRemoval(removal, scope.validate, signal);
+      const result = await runner.runScopedExecution(call, protectedPaths, signal);
       scope.executed = true;
       return result;
     },
-    async confirmWorktreeRemoval(path, ctx, signal) {
-      if (!ctx.hasUI) throw new Error("Worktree removal requires user confirmation");
-      return guardrail.withUiLock(async () => {
-        assertActive();
-        signal.throwIfAborted();
-        return ctx.ui.confirm("Remove managed worktree?", JSON.stringify(path), { signal });
-      });
-    },
-    grantWorktreeRemoval(removal, id, sessionId, validate, signal) {
+    grantScopedExecution(call, id, sessionId, signal) {
       assertActive();
-      if (!runner.sandboxed()) throw new Error("Worktree removal requires bwrap isolation");
       signal.throwIfAborted();
-      const command = `/bin/false worktree-removal-${randomUUID()}`;
-      const scope: RemovalScope = {
+      call = validateScopedExecution(call, runner.sandboxed());
+      const command = `/bin/false scoped-execution-${randomUUID()}`;
+      const scope: ScopedExecutionState = {
         id,
         sessionId,
-        removal,
+        call,
         command,
-        validate,
         signal,
         used: false,
         executed: false,
@@ -229,8 +215,8 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
           return scope.executed;
         },
         run(task) {
-          if (scope.closed) throw new Error("Worktree removal grant has been revoked");
-          return removalScope.run(scope, task);
+          if (scope.closed) throw new Error("Scoped execution grant has been revoked");
+          return scopedExecution.run(scope, task);
         },
         dispose() {
           scope.closed = true;
@@ -241,9 +227,118 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
       assertActive();
       guardrail.assertDirectoryGrantAllowed(path);
     },
+    assertScopedWriteAllowed(paths, directories, unlinkSymlinks) {
+      assertActive();
+      if (directories === undefined) guardrail.assertScopedWriteAllowed(paths);
+      else
+        guardrail.planScopedWriteProtection(paths, directories, runner.sandboxed(), unlinkSymlinks);
+    },
     grantExistingDirectory(path, validate) {
       assertActive();
       return guardrail.grantExistingDirectory(path, validate);
+    },
+  };
+}
+
+function validateScopedExecution(call: ScopedExecution, sandboxed: boolean): ScopedExecution {
+  function absolute(path: string): boolean {
+    return isAbsolute(path) && resolve(path) === path && !path.includes("\0");
+  }
+  function scopedDirectory(path: string): boolean {
+    return absolute(path) && path !== dirname(path);
+  }
+
+  const { executable, cwd, args, env, allowedCodes, write } = call;
+  if (
+    !absolute(executable) ||
+    !absolute(cwd) ||
+    args.some((arg) => typeof arg !== "string" || arg.includes("\0")) ||
+    Object.entries(env).some(
+      ([key, val]) =>
+        !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) ||
+        (val !== undefined && (typeof val !== "string" || val.includes("\0"))),
+    ) ||
+    allowedCodes.some((code) => !Number.isInteger(code) || code < 1 || code > 255 || code === 125)
+  )
+    throw new Error("Invalid scoped execution input");
+  const copy = {
+    executable,
+    cwd,
+    args: [...args],
+    env: { ...env },
+    allowedCodes: [...allowedCodes],
+  };
+  if (!write) return copy;
+
+  const {
+    directories,
+    paths,
+    unlinkSymlinks,
+    createDirectories,
+    readOnlyView,
+    readOnlyFile,
+    validate,
+  } = write;
+  if (
+    directories.length === 0 ||
+    directories.some((path) => !scopedDirectory(path)) ||
+    paths.some(
+      (path) =>
+        !absolute(path) ||
+        !directories.some(
+          (dir) =>
+            pathCovers(dir, path) || (createDirectories?.includes(path) && pathCovers(path, dir)),
+        ),
+    ) ||
+    createDirectories?.some((path) => !scopedDirectory(path) || !paths.includes(path)) ||
+    unlinkSymlinks?.some(
+      (path) =>
+        !paths.includes(path) || directories.includes(path) || createDirectories?.includes(path),
+    ) ||
+    (readOnlyView &&
+      (!scopedDirectory(readOnlyView.directory) ||
+        readOnlyView.paths.some(
+          (path) =>
+            !scopedDirectory(path) ||
+            path === readOnlyView.directory ||
+            !pathCovers(readOnlyView.directory, path) ||
+            directories.some((dir) => pathCovers(dir, path) || pathCovers(path, dir)),
+        ) ||
+        directories.some((path) => pathCovers(path, readOnlyView.directory)) ||
+        !directories.some((path) => pathCovers(readOnlyView.directory, path)))) ||
+    (readOnlyFile &&
+      (!absolute(readOnlyFile.path) ||
+        typeof readOnlyFile.contents !== "string" ||
+        paths.some((path) => pathCovers(readOnlyFile.path, path)) ||
+        directories.some((path) => pathCovers(readOnlyFile.path, path)) ||
+        !(readOnlyView
+          ? pathCovers(readOnlyView.directory, readOnlyFile.path) &&
+            readOnlyFile.path !== readOnlyView.directory
+          : directories.some(
+              (path) => path !== readOnlyFile.path && pathCovers(path, readOnlyFile.path),
+            ))))
+  )
+    throw new Error("Invalid scoped write plan");
+  if (sandboxed) {
+    const realExecutable = realpathSync.native(executable);
+    if (
+      directories.some((path) => pathCovers(path, executable) || pathCovers(path, realExecutable))
+    )
+      throw new Error("Scoped executable overlaps a writable directory");
+  }
+  return {
+    ...copy,
+    write: {
+      paths: [...paths],
+      directories: [...directories],
+      unlinkSymlinks: unlinkSymlinks && [...unlinkSymlinks],
+      createDirectories: createDirectories && [...createDirectories],
+      readOnlyView: readOnlyView && {
+        directory: readOnlyView.directory,
+        paths: [...readOnlyView.paths],
+      },
+      readOnlyFile: readOnlyFile && { ...readOnlyFile },
+      validate,
     },
   };
 }
@@ -268,19 +363,18 @@ function writePermissionGuideline(paths: {
   ].join("\n");
 }
 
-type RemovalScope = {
+type ScopedExecutionState = {
   id: string;
   sessionId: string;
-  removal: WorktreeRemoval;
+  call: ScopedExecution;
   command: string;
-  validate: () => void;
   signal: AbortSignal;
   used: boolean;
   executed: boolean;
   closed: boolean;
 };
 
-type WorktreeRemovalGrant = {
+type ScopedExecutionGrant = {
   command: string;
   readonly executed: boolean;
   run<T>(task: () => Promise<T>): Promise<T>;
@@ -288,19 +382,18 @@ type WorktreeRemovalGrant = {
 };
 
 export type DirectoryWriteAccess = {
-  confirmWorktreeRemoval(
-    path: string,
-    ctx: ExtensionContext,
-    signal: AbortSignal,
-  ): Promise<boolean>;
-  grantWorktreeRemoval(
-    removal: WorktreeRemoval,
+  grantScopedExecution(
+    call: ScopedExecution,
     id: string,
     sessionId: string,
-    validate: () => void,
     signal: AbortSignal,
-  ): WorktreeRemovalGrant;
+  ): ScopedExecutionGrant;
   assertDirectoryGrantAllowed(path: string): void;
+  assertScopedWriteAllowed(
+    paths: readonly string[],
+    directories?: readonly string[],
+    unlinkSymlinks?: readonly string[],
+  ): void;
   grantExistingDirectory(path: string, validate?: () => boolean): () => void;
 };
 

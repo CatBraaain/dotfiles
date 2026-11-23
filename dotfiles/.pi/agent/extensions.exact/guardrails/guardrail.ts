@@ -2,17 +2,28 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path";
+import { quote } from "shell-quote";
 import {
   commandOnceApprovalKey,
   commandPatternApprovalKey,
   compileCommandRuleEntries,
   defaultGuardrailConfigPath,
+  expandBraces,
+  expandPathSection,
+  expandRuntimeVariables,
+  globToRegExp,
+  hasGlob,
+  repositoryName,
+  resolveGitMainWorktreePath,
+  resolvePattern,
+  restoreRepositoryName,
   type CommandActionMatch,
   type CompiledCommandRuleEntry,
   type GuardrailConfig,
@@ -94,6 +105,171 @@ function directoryIdentity(path: string): string | undefined {
       return `${stats.dev}:${stats.ino}:${stats.birthtimeNs}`;
   } catch {
     return undefined;
+  }
+}
+
+function compileMutationPatterns(
+  patterns: string[] | undefined,
+  cwd: string,
+  main: string | undefined,
+  name: string,
+) {
+  const foldCase = process.platform === "win32" || process.platform === "darwin";
+  function normalize(path: string): string {
+    const portable = process.platform === "win32" ? path.replaceAll("\\", "/") : path;
+    return foldCase ? portable.normalize("NFC").toLowerCase() : portable;
+  }
+
+  const realMatches = new Set<string>();
+  const paths = new Map<string, string>();
+  function recordMatch(path: string, canonical: string): void {
+    realMatches.add(normalize(canonical));
+    paths.set(path, canonical);
+  }
+  const aliases = new Map<string, { path: string; pattern: RegExp }[]>();
+  const normalizedName = normalize(name);
+  const matchers = (patterns ?? [])
+    .flatMap((pattern) => expandRuntimeVariables(pattern, main, cwd))
+    .flatMap(expandBraces)
+    .map((pattern) => resolvePattern(pattern, cwd))
+    .map((pattern) => {
+      let prefix = pattern;
+      while (hasGlob(prefix)) prefix = dirname(prefix);
+      const literalPrefix = restoreRepositoryName(prefix, name);
+      const canonical = mutationPatternAlias(literalPrefix);
+      const normalized = normalize(pattern);
+      if (!hasGlob(pattern)) {
+        if (mutationPathExists(literalPrefix))
+          recordMatch(literalPrefix, canonical ?? literalPrefix);
+        const literals = [normalize(literalPrefix), ...(canonical ? [normalize(canonical)] : [])];
+        return (candidate: string) => literals.includes(candidate);
+      }
+
+      const glob = globToRegExp(normalized, normalizedName);
+      const regexes = [new RegExp(glob.source, "s")];
+      const suffix = normalize(pattern.slice(prefix.length));
+      if (canonical && prefix !== dirname(prefix)) {
+        const suffixRegex = globToRegExp(suffix, normalizedName);
+        const literal = normalize(canonical).replace(/[.*+?^{}()|[\]\\]/g, "\\$&");
+        regexes.push(new RegExp("^" + literal + suffixRegex.source.slice(1), "s"));
+      }
+      collectMutationAliases(
+        literalPrefix,
+        suffix,
+        regexes[0]!,
+        normalizedName,
+        normalize,
+        recordMatch,
+        (path, canonical, pattern) => {
+          const key = normalize(canonical);
+          const entries = aliases.get(key) ?? [];
+          entries.push({ path, pattern });
+          aliases.set(key, entries);
+        },
+      );
+      return (candidate: string) => regexes.some((regex) => regex.test(candidate));
+    });
+
+  return { matches, paths };
+
+  function matches(candidate: string): boolean {
+    for (let path = candidate; ; path = dirname(path)) {
+      const normalized = normalize(path);
+      if (realMatches.has(normalized) || matchers.some((matches) => matches(normalized)))
+        return true;
+      if (aliases.size !== 0 && matchesProspectiveAlias(path)) return true;
+      if (dirname(path) === path) return false;
+    }
+  }
+
+  function matchesProspectiveAlias(candidate: string): boolean {
+    const suffix: string[] = [];
+    for (let ancestor = candidate; ; ancestor = dirname(ancestor)) {
+      for (const alias of aliases.get(normalize(ancestor)) ?? []) {
+        const projected = join(alias.path, ...suffix);
+        if (
+          alias.pattern.test(normalize(projected)) &&
+          normalize(canonicalWritePath(projected)) === normalize(candidate)
+        )
+          return true;
+      }
+      if (dirname(ancestor) === ancestor) return false;
+      suffix.unshift(basename(ancestor));
+    }
+  }
+}
+
+function collectMutationAliases(
+  root: string,
+  suffix: string,
+  pattern: RegExp,
+  repository: string,
+  normalize: (path: string) => string,
+  recordMatch: (path: string, canonical: string) => void,
+  recordAlias: (path: string, canonical: string, pattern: RegExp) => void,
+): void {
+  const segments = suffix.split("/").filter(Boolean);
+  const hasCrossSegmentClass = [...suffix.matchAll(/\[[^\]]+\]/g)].some(([characterClass]) =>
+    globToRegExp(characterClass, repository).test("/"),
+  );
+  const fallback =
+    hasCrossSegmentClass || segments.some((segment) => segment !== "**" && segment.includes("**"));
+  const matchers = segments.map(
+    (segment) => new RegExp(globToRegExp(segment, repository).source, "s"),
+  );
+  const decode = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  let visited = 0;
+  walk(root, 0, new Set());
+
+  function walk(path: string, index: number, ancestors: Set<string>): void {
+    if (++visited > 100_000)
+      throw new Error("Too many paths to verify scoped write protection under " + root);
+    const directory = mutationPathExists(path);
+    if (!directory) return;
+    const canonical = realpathSync.native(path);
+    if (pattern.test(normalize(path))) recordMatch(path, canonical);
+    if (!directory.isDirectory() || (!fallback && index === segments.length)) return;
+    if (canonical !== path && (path === root || lstatSync(path).isSymbolicLink()))
+      recordAlias(path, canonical, pattern);
+
+    const recursive = fallback || segments[index] === "**";
+    const nextIndex = recursive ? index : index + 1;
+    if (recursive && ancestors.has(canonical))
+      throw new Error("Cannot verify scoped write protection through a directory cycle: " + path);
+    if (!fallback && recursive && index + 1 < segments.length) walk(path, index + 1, ancestors);
+    const nextAncestors = new Set([...ancestors, canonical]);
+    for (const bytes of readdirSync(path, { encoding: "buffer" })) {
+      const entry = decode.decode(bytes);
+      if (recursive || matchers[index]!.test(normalize(entry)))
+        walk(join(path, entry), nextIndex, nextAncestors);
+    }
+  }
+}
+
+function mutationPathExists(path: string) {
+  try {
+    return statSync(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOTDIR") return undefined;
+    if (code !== "ENOENT") throw error;
+    try {
+      if (lstatSync(path).isSymbolicLink())
+        throw new Error(`Cannot resolve a symbolic link in scoped write protection: ${path}`);
+    } catch (missing) {
+      if ((missing as NodeJS.ErrnoException).code !== "ENOENT") throw missing;
+    }
+    return undefined;
+  }
+}
+
+function mutationPatternAlias(path: string): string | undefined {
+  try {
+    const canonical = canonicalWritePath(path);
+    return canonical === path ? undefined : canonical;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOTDIR") return undefined;
+    throw error;
   }
 }
 
@@ -197,7 +373,7 @@ export class Guardrail {
   }
 
   /** Build the bwrap argument list (delegates to the shared pure builder; tests use this entry). */
-  buildArgs(mode: SandboxMode, commandCwd = this.cwd): string[] {
+  buildArgs(mode: SandboxMode, commandCwd = this.cwd, readOnly = false): string[] {
     return buildSandboxArgs({
       cwd: this.cwd,
       config: this.config,
@@ -205,6 +381,7 @@ export class Guardrail {
       dynamicPaths: this.getDynamicPaths(),
       mode,
       commandCwd,
+      readOnly,
     });
   }
 
@@ -221,36 +398,125 @@ export class Guardrail {
       throw new Error(`Expected a normalized absolute directory path: ${path}`);
     if (canonicalWritePath(path) !== path)
       throw new Error(`Directory grant path uses a symbolic link: ${path}`);
-    this.assertWriteNotDenied(path);
+    this.assertScopedWriteAllowed([path]);
   }
 
-  assertWorktreeRemovalAllowed(parent: string, adminParent: string): void {
-    if (!readAllPaths(this.config))
-      throw new Error('Worktree removal requires Bash read access configured with allow: "*"');
-    const { ask, deny } = writePathsByFinalAction(this.config, this.cwd, this.globCache);
-    const protectedPaths = [...deny, ...credentialPaths(this.config, this.cwd, this.globCache)];
-    for (const directory of [parent, adminParent]) {
-      this.assertDirectoryGrantAllowed(directory);
-      for (const protectedPath of protectedPaths) {
-        const canonical = canonicalWritePath(protectedPath);
-        if (
-          [protectedPath, canonical].some(
-            (path) => pathCovers(directory, path) || pathCovers(path, directory),
-          )
-        )
-          throw new Error(`Worktree removal overlaps a protected path: ${directory}`);
+  private scopedWriteProtection() {
+    const main = resolveGitMainWorktreePath(this.cwd);
+    const name = repositoryName(this.cwd, main);
+    const credentials = compileMutationPatterns(this.config.credentials, this.cwd, main, name);
+    const writeRules = (this.config.write ?? []).map(({ action, patterns }, index) => ({
+      action,
+      protection:
+        action === "deny" ? compileMutationPatterns(patterns, this.cwd, main, name) : undefined,
+      index,
+    }));
+    const expandedWrite = expandPathSection(
+      this.config.write,
+      this.cwd,
+      false,
+      main,
+      this.globCache,
+    );
+
+    function writeDenied(path: string): boolean {
+      let denied = false;
+      for (const { action, protection, index } of writeRules) {
+        if (protection?.matches(path) || pathsMatchCandidate(expandedWrite[index]!.paths, path))
+          denied = action === "deny";
+      }
+      return denied;
+    }
+
+    function assertAllowed(paths: readonly string[], unlinkSymlinks: readonly string[] = []): void {
+      for (const path of paths) {
+        if (!isAbsolute(path) || path.includes("\0") || path !== resolve(path))
+          throw new Error(`Expected a normalized absolute mutation path: ${path}`);
+        if (credentials.matches(path))
+          throw new Error(`Access denied for credential path: ${path}`);
+        if (writeDenied(path)) throw new Error(`Access denied: ${path}`);
+        let canonical: string;
+        try {
+          if (unlinkSymlinks.includes(path)) {
+            const parent = dirname(path);
+            if (!lstatSync(path).isSymbolicLink())
+              throw new Error("Expected a symbolic link to unlink");
+            canonical = join(realpathSync.native(parent), basename(path));
+          } else {
+            canonical = canonicalWritePath(path);
+          }
+        } catch (cause) {
+          throw new Error(`Cannot resolve scoped write path: ${path}`, { cause });
+        }
+        if (canonical !== path)
+          throw new Error(`Scoped write path uses an alias: ${path} resolves to ${canonical}`);
       }
     }
-    const writeSection = writePaths(this.config, this.cwd, this.globCache);
-    const grants = [...this.getDynamicPaths()];
-    for (const path of [adminParent, ...ask.filter((path) => pathCovers(adminParent, path))]) {
-      const { action } = resolvePathActionMatch(writeSection, path);
-      const granted = grants.some(
-        ([grant, modes]) => modes.has("write") && pathCovers(grant, path),
-      );
-      if (action !== "allow" && !granted)
-        throw new Error(`Git worktree metadata is not writable: ${path}`);
+
+    return {
+      assertAllowed,
+      *protectedPaths(): Iterable<[string, string]> {
+        yield* credentials.paths;
+        for (const { protection } of writeRules) {
+          if (!protection) continue;
+          for (const [path, canonical] of protection.paths) {
+            if (writeDenied(path) || writeDenied(canonical)) yield [path, canonical];
+          }
+        }
+      },
+    };
+  }
+
+  assertScopedWriteAllowed(paths: readonly string[]): void {
+    this.scopedWriteProtection().assertAllowed(paths);
+  }
+
+  assertScopedCommandAllowed(argv: readonly string[]): void {
+    const executablePath = argv[0]!;
+    const executableName = win32.basename(executablePath);
+    const names = [executableName.replace(/\.exe$/i, ""), executableName, executablePath];
+    for (const executable of new Set(names)) {
+      const command = quote([executable, ...argv.slice(1)]);
+      const rule = resolveCommandActionMatch(this.commandEntries, command);
+      if (rule.action === "deny" && rule.matched !== undefined)
+        throw new Error(`Command denied: ${command}`);
     }
+  }
+
+  planScopedWriteProtection(
+    paths: readonly string[],
+    directories: readonly string[],
+    sandboxed: boolean,
+    unlinkSymlinks: readonly string[] = [],
+  ): string[] {
+    const protection = this.scopedWriteProtection();
+    protection.assertAllowed(directories);
+    protection.assertAllowed(paths, unlinkSymlinks);
+    if (!sandboxed || directories.length === 0) return [];
+    if (!readAllPaths(this.config))
+      throw new Error(
+        'Scoped write execution requires Bash read access configured with allow: "*"',
+      );
+    const masks = new Set<string>();
+    for (const [path, canonical] of protection.protectedPaths()) {
+      if (
+        directories.some(
+          (directory) => pathCovers(path, directory) || pathCovers(canonical, directory),
+        )
+      )
+        throw new Error(`Scoped write scope overlaps a protected path: ${path}`);
+      if (path !== canonical && directories.some((directory) => pathCovers(directory, path)))
+        throw new Error(`Scoped write scope overlaps a protected alias: ${path}`);
+      if (directories.some((directory) => pathCovers(directory, canonical))) {
+        const blocked = paths.find((planned) => pathCovers(canonical, planned));
+        if (blocked !== undefined)
+          throw new Error(
+            `Scoped write plan conflicts with read-only protection: ${blocked} (mount: ${canonical})`,
+          );
+        masks.add(canonical);
+      }
+    }
+    return [...masks].sort((a, b) => a.length - b.length);
   }
 
   grantExistingDirectory(path: string, validate?: () => boolean): () => void {

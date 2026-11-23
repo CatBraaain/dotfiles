@@ -12,14 +12,18 @@ import {
   saveDeclarations,
   saveWorkspaces,
   WORKTREE_NAME_PATTERN,
+  type WorktreeDeclaration,
   type WorkspaceUpdate,
 } from "./metadata.ts";
 import {
   createDeclaredWorktree,
-  loadDeclarationRepository,
+  type GitOperation,
+  isLiveDeclaration,
   managedWorktreePath,
+  observeMutation,
   pathExists,
-  planWorktreeRemoval,
+  removeDeclaredWorktree,
+  selectDeclarationRepository,
   verifyDeclaredWorktree,
 } from "./declarations.ts";
 import {
@@ -53,9 +57,9 @@ export default function sessionMetadataExtension(pi: ExtensionAPI, home = homedi
   let lifetime = new AbortController();
   const granted = new Map<string, () => void>();
 
-  function revoke(name: string): void {
-    granted.get(name)?.();
-    granted.delete(name);
+  function revoke(path: string): void {
+    granted.get(path)?.();
+    granted.delete(path);
   }
 
   function resetSession(): void {
@@ -63,7 +67,7 @@ export default function sessionMetadataExtension(pi: ExtensionAPI, home = homedi
     lifetime = new AbortController();
     generation++;
     pending.clear();
-    for (const name of granted.keys()) revoke(name);
+    for (const path of granted.keys()) revoke(path);
   }
   const enqueueMetadata = serialQueue();
   const enqueueDeclaration = serialQueue();
@@ -188,21 +192,37 @@ export default function sessionMetadataExtension(pi: ExtensionAPI, home = homedi
     name: "session_worktree",
     label: "Session worktree",
     description:
-      "Declare a named worktree for this session before editing it. Reuses an existing managed worktree or creates one from the repository's main HEAD. Unregister only clears the declaration and its write grant. Remove deletes an existing managed worktree after user confirmation, without forcing removal or deleting its branch.",
-    reachesTools: (input) => (input?.action === "remove" ? ["bash"] : []),
+      "Add or reuse a named worktree and declare it for this session, or remove a managed worktree and its branch. Remove requires a clean worktree and a merged branch unless discard is true. Obtain user approval for finish or discard before calling remove.",
+    reachesTools: () => ["bash"],
     parameters: Type.Object({
-      action: StringEnum(["declare", "unregister", "remove"] as const),
+      action: StringEnum(["add", "remove"] as const),
       name: Type.String({
         pattern: WORKTREE_NAME_PATTERN,
         description: "Managed worktree name in kebab-case",
       }),
+      project: Type.Optional(
+        Type.String({
+          description:
+            "Repository directory directly under ~/projects; defaults to the session start repository",
+        }),
+      ),
+      discard: Type.Optional(
+        Type.Boolean({
+          description: "For remove only: discard unmerged commits and local changes",
+        }),
+      ),
     }),
-    async execute(id, { action, name }, signal, _onUpdate, ctx) {
+    async execute(id, { action, name, project, discard }, signal, _onUpdate, ctx) {
       if (!isWorktreeName(name)) throw new Error(`Invalid worktree name: ${name}`);
-      if (action !== "declare" && action !== "unregister" && action !== "remove")
-        throw new Error("Invalid worktree action");
+      if (action !== "add" && action !== "remove") throw new Error("Invalid worktree action");
+      if (discard !== undefined && (action !== "remove" || typeof discard !== "boolean"))
+        throw new Error("discard must be a boolean and is only valid for remove");
+      if (project !== undefined && typeof project !== "string")
+        throw new Error("project must be a directory name");
+
       const expected = generation;
       const sessionId = ctx.sessionManager.getSessionId();
+      const cwd = ctx.sessionManager.getCwd();
       const operationSignal = AbortSignal.any([lifetime.signal, ...(signal ? [signal] : [])]);
 
       function checkCurrent(): void {
@@ -211,119 +231,144 @@ export default function sessionMetadataExtension(pi: ExtensionAPI, home = homedi
         operationSignal.throwIfAborted();
       }
 
-      let target: string | undefined;
       return enqueueDeclaration(async () => {
-        checkCurrent();
-        if (action === "unregister") {
-          revoke(name);
+        let target: string | undefined;
+        let observe: (() => Promise<string>) | undefined;
+        let declarationState = "unchanged";
+        let permissionState = "no new grant";
+        try {
+          checkCurrent();
+          const access = getDirectoryWriteAccess(pi, sessionId);
+          let nextCall = 0;
+          const operation: GitOperation = {
+            signal: operationSignal,
+            async run(call, signal) {
+              if (!isCurrent(expected, ctx, sessionId))
+                throw new Error("Session changed during the worktree operation");
+              const grant = access.grantScopedExecution(
+                call,
+                `${id}/${++nextCall}`,
+                sessionId,
+                signal,
+              );
+              try {
+                const outcome = await grant.run(() =>
+                  ctx.executeTool("bash", { command: grant.command }, { signal }),
+                );
+                if (signal === operationSignal) checkCurrent();
+                if (outcome.isError || outcome.result.isError)
+                  throw new Error(
+                    outcome.result.content
+                      .filter((part) => part.type === "text")
+                      .map((part) => part.text)
+                      .join("\n"),
+                  );
+                const details = outcome.result.details as { output?: unknown } | undefined;
+                if (!grant.executed || typeof details?.output !== "string")
+                  throw new Error("Guardrails did not run the scoped Bash call");
+                return details.output;
+              } finally {
+                grant.dispose();
+              }
+            },
+          };
           const previous = getDeclarations(ctx.sessionManager);
-          const worktrees = previous.filter((entry) => entry.name !== name);
-          const changed = saveDeclarations(pi, previous, worktrees);
-          return toolResult({ name, changed, worktrees });
-        }
+          const repository = await selectDeclarationRepository(home, cwd, project, operation);
+          const path = managedWorktreePath(home, repository.main, name);
+          target = path;
+          const destination = { repository, path, name };
+          const mutation = {
+            ...destination,
+            operation,
+            assertAllowed: access.assertScopedWriteAllowed,
+            beforeMutation(admin: string) {
+              checkCurrent();
+              observe = () => observeMutation(destination, operation, admin);
+            },
+          };
 
-        const access = getDirectoryWriteAccess(pi, sessionId);
-        const previous = getDeclarations(ctx.sessionManager);
-        const repository = await loadDeclarationRepository(ctx.cwd, operationSignal);
-        const path = managedWorktreePath(home, repository.main, name);
-        target = path;
-        checkCurrent();
-        if (action === "remove") {
-          const existing = verifyDeclaredWorktree(repository, path);
-          if (!existing) throw new Error(`Not a linked worktree of this repository: ${path}`);
-          if (!(await access.confirmWorktreeRemoval(path, ctx, operationSignal)))
-            throw new Error("Worktree removal was not approved");
-          checkCurrent();
-          const removal = await planWorktreeRemoval(repository, path, existing, operationSignal);
-          function validate(): void {
-            checkCurrent();
-            if (!existing?.isCurrent()) throw new Error(`Worktree changed before removal: ${path}`);
-          }
-          let failure: { cause: unknown } | undefined;
-          const grant = access.grantWorktreeRemoval(
-            removal,
-            `${id}/1`,
-            sessionId,
-            validate,
-            operationSignal,
-          );
-          try {
-            const outcome = await grant.run(() =>
-              ctx.executeTool("bash", { command: grant.command }, { signal: operationSignal }),
-            );
-            if (outcome.isError || outcome.result.isError)
-              throw new Error(
-                outcome.result.content
-                  .map((part) => (part.type === "text" ? part.text : ""))
-                  .join("\n"),
-              );
-            if (!grant.executed) throw new Error("Guardrails did not run the scoped Bash call");
-          } catch (cause) {
-            failure = { cause };
-          } finally {
-            grant.dispose();
-          }
-          checkCurrent();
-          const remaining = await loadDeclarationRepository(repository.main, operationSignal);
-          checkCurrent();
-          const registered = remaining.subtrees.has(path);
-          const exists = pathExists(path);
-          if (remaining.common !== repository.common || remaining.main !== repository.main)
-            throw new Error(`Repository changed during removal: ${path}`);
-          if (registered !== exists)
-            throw new Error(
-              `Incomplete removal: directory ${exists ? "exists" : "is absent"}, Git registration ${registered ? "exists" : "is absent"}`,
-              failure,
-            );
-          if (failure) throw failure.cause;
-          if (exists) throw new Error(`Git did not remove the worktree: ${path}`);
-          const worktrees = previous.filter((entry) => entry.name !== name || entry.path !== path);
-          revoke(name);
-          saveDeclarations(pi, previous, worktrees);
-          await enqueueMetadata(async () => {
-            if (!isCurrent(expected, ctx, sessionId)) return;
+          if (action === "remove") {
+            const worktrees = previous.filter((entry) => entry.path !== path);
+            let pathRemoved = false;
             try {
-              const recorded = getWorkspaces(ctx.sessionManager);
-              const update = saveWorkspaces(
-                pi,
-                ctx.sessionManager,
-                recorded.filter((workspace) => workspace !== path),
-              );
-              if (update.changed)
-                notifyUpdated(pi, recorded, update, { added: [], moved: [], removed: [path] });
-            } catch (error) {
-              notifyFailure(error);
+              await removeDeclaredWorktree(mutation, cwd, discard ?? false, () => {
+                pathRemoved = true;
+                const hadGrant = granted.has(path);
+                revoke(path);
+                permissionState = hadGrant ? "revoked" : "no grant";
+                if (!isCurrent(expected, ctx, sessionId)) return;
+                declarationState = "update failed";
+                declarationState = saveDeclarations(pi, previous, worktrees)
+                  ? "removed"
+                  : "unchanged";
+              });
+            } finally {
+              if (pathRemoved) {
+                await enqueueMetadata(async () => {
+                  if (!isCurrent(expected, ctx, sessionId)) return;
+                  try {
+                    const recorded = getWorkspaces(ctx.sessionManager);
+                    const update = saveWorkspaces(
+                      pi,
+                      ctx.sessionManager,
+                      recorded.filter((workspace) => workspace !== path),
+                    );
+                    if (update.changed)
+                      notifyUpdated(pi, recorded, update, {
+                        added: [],
+                        moved: [],
+                        removed: [path],
+                      });
+                  } catch (error) {
+                    notifyFailure(error);
+                  }
+                });
+              }
             }
-          });
-          return toolResult({ name, path, status: "removed", worktrees });
+            return toolResult({ name, path, branch: name, status: "removed", worktrees });
+          }
+
+          access.assertDirectoryGrantAllowed(path);
+          const live: WorktreeDeclaration[] = [];
+          for (const entry of previous) {
+            if (await isLiveDeclaration(entry.path, operation)) live.push(entry);
+          }
+          checkCurrent();
+          if (live.some((entry) => entry.name === name && entry.path !== path))
+            throw new Error(`Worktree name already declared for another repository: ${name}`);
+          if (live.some((entry) => entry.path === path && entry.name !== name))
+            throw new Error(`Worktree path already declared under another name: ${path}`);
+          const existing = verifyDeclaredWorktree(repository, path);
+          if (!existing && pathExists(path))
+            throw new Error(`Not a linked worktree of this repository: ${path}`);
+          const worktree = existing ?? (await createDeclaredWorktree(mutation));
+          checkCurrent();
+          if (!worktree.isCurrent())
+            throw new Error(`Worktree changed before declaration: ${path}`);
+          const declaration = { name, path };
+          const worktrees = live.some((entry) => entry.path === path)
+            ? live
+            : [...live, declaration];
+          observe = () => observeMutation(destination, operation, worktree.admin);
+          declarationState = "update failed";
+          declarationState = saveDeclarations(pi, previous, worktrees) ? "saved" : "unchanged";
+          checkCurrent();
+          const revokeGrant = access.grantExistingDirectory(path, worktree.isCurrent);
+          for (const entry of previous) {
+            if (!worktrees.some((liveEntry) => liveEntry.path === entry.path)) revoke(entry.path);
+          }
+          revoke(path);
+          granted.set(path, revokeGrant);
+          return toolResult({ ...declaration, status: existing ? "reused" : "created", worktrees });
+        } catch (error) {
+          const state = observe
+            ? ` (${await observe()}; declaration=${declarationState}; permission=${permissionState})`
+            : "";
+          throw new Error(
+            `Session worktree ${action} failed for ${target ?? name}: ${errorMessage(error)}${state}`,
+            { cause: error },
+          );
         }
-        access.assertDirectoryGrantAllowed(path);
-        const live = previous.filter((entry) => {
-          if (verifyDeclaredWorktree(repository, entry.path)) return true;
-          revoke(entry.name);
-          return false;
-        });
-        const existing = verifyDeclaredWorktree(repository, path);
-        if (!existing && pathExists(path))
-          throw new Error(`Not a linked worktree of this repository: ${path}`);
-        const worktree =
-          existing ?? (await createDeclaredWorktree(repository, path, name, operationSignal));
-        checkCurrent();
-        if (!worktree.isCurrent()) throw new Error(`Worktree changed before declaration: ${path}`);
-        const declaration = { name, path };
-        const worktrees = live.some((entry) => entry.name === name && entry.path === path)
-          ? live
-          : [...live.filter((entry) => entry.name !== name && entry.path !== path), declaration];
-        saveDeclarations(pi, previous, worktrees);
-        const revokeGrant = access.grantExistingDirectory(path, worktree.isCurrent);
-        revoke(name);
-        granted.set(name, revokeGrant);
-        return toolResult({ ...declaration, status: existing ? "reused" : "created", worktrees });
-      }).catch((error: unknown) => {
-        throw new Error(
-          `Session worktree ${action} failed for ${target ?? name}: ${errorMessage(error)}`,
-          { cause: error },
-        );
       });
     },
   });

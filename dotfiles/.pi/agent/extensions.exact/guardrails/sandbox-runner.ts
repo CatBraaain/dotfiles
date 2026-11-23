@@ -1,128 +1,76 @@
 import { spawn } from "node:child_process";
-import { accessSync, closeSync, constants, fstatSync, lstatSync, openSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  realpathSync,
+  rmdirSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPackageDir, type AgentToolResult } from "@earendil-works/pi-coding-agent";
-import {
-  type ToolName,
-  type ToolSession,
-  pathCovers,
-  sanitizeSandboxEnvironment,
-} from "./config.ts";
+import { type ToolName, type ToolSession, sanitizeSandboxEnvironment } from "./config.ts";
 import type { SandboxMode } from "./sandbox.ts";
 
 type RunOptions = {
   input?: string | Buffer;
+  cwd?: string;
   env?: NodeJS.ProcessEnv;
   onData?: (data: Buffer, stream: "stdout" | "stderr") => void;
   signal?: AbortSignal;
   timeout?: number;
   mode?: SandboxMode;
   cooperativeCancellation?: boolean;
+  maxOutputBytes?: number;
   sandbox?: { args: string[]; mountFds: number[] };
 };
 
-export type WorktreeRemoval = {
-  git: string;
-  main: string;
-  common: string;
-  path: string;
-  objectFormat: "sha1" | "sha256";
-  refFormat: "files" | "reftable";
+export type ScopedExecution = {
+  executable: string;
+  cwd: string;
+  args: readonly string[];
+  env: NodeJS.ProcessEnv;
+  allowedCodes: readonly number[];
+  write?: {
+    paths: readonly string[];
+    directories: readonly string[];
+    unlinkSymlinks?: readonly string[];
+    readOnlyFile?: { path: string; contents: string };
+    readOnlyView?: { directory: string; paths: readonly string[] };
+    createDirectories?: readonly string[];
+    validate(): void;
+  };
 };
 
-export function worktreeRemovalArgs({ main, common, path }: WorktreeRemoval): string[] {
+function scopedShellCommand(argv: readonly string[], env: NodeJS.ProcessEnv): string {
+  function shellArg(value: string): string {
+    return "'" + value.replaceAll("'", "'\\''") + "'";
+  }
+  const environment = Object.entries(env)
+    .filter((entry): entry is [string, string] => entry[1] !== undefined)
+    .map(([name, value]) => `${name}=${value}`);
+  const command = ["env", "-i", ...environment, ...argv].map(shellArg).join(" ");
   return [
-    "-C",
-    main,
-    `--git-dir=${common}`,
-    `--work-tree=${main}`,
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "core.fsmonitor=false",
-    "worktree",
-    "remove",
-    "--",
-    path,
-  ];
+    "exec 3>&1",
+    `scoped_error=$(MSYS2_ARG_CONV_EXCL='*' ${command} 2>&1 >&3)`,
+    "scoped_status=$?",
+    'if [ -n "$scoped_error" ]; then printf "%s\\n" "$scoped_error" >&2; exit 125; fi',
+    'exit "$scoped_status"',
+  ].join("\n");
 }
 
-export function worktreeRemovalGit(): string {
-  for (const path of ["/usr/bin/git", "/run/current-system/sw/bin/git"]) {
-    try {
-      accessSync(path, constants.X_OK);
-      return path;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
-  throw new Error("Worktree removal requires a system Git executable");
-}
-
-function worktreeRemovalSandbox(removal: WorktreeRemoval): string[] {
-  const { common, git, main, path, refFormat } = removal;
-  const args = [
-    "--die-with-parent",
-    "--unshare-pid",
-    "--unshare-net",
-    "--ro-bind",
-    "/",
-    "/",
-    "--proc",
-    "/proc",
-    "--dev",
-    "/dev",
-    "--clearenv",
-    "--setenv",
-    "PATH",
-    dirname(git),
-    "--setenv",
-    "LC_ALL",
-    "C",
-    "--setenv",
-    "GIT_CONFIG_GLOBAL",
-    "/dev/null",
-    "--setenv",
-    "GIT_CONFIG_SYSTEM",
-    "/dev/null",
-    "--setenv",
-    "GIT_NO_LAZY_FETCH",
-    "1",
-    "--setenv",
-    "GIT_ALLOW_PROTOCOL",
-    "",
-    "--setenv",
-    "GIT_OPTIONAL_LOCKS",
-    "0",
-    "--setenv",
-    "GIT_COMMON_DIR",
-    common,
-    "--tmpfs",
-    common,
-  ];
-  const refs = refFormat === "reftable" ? ["reftable"] : ["refs", "packed-refs"];
-  for (const entry of ["HEAD", "objects", "info", ...refs]) {
-    const source = join(common, entry);
-    args.push("--ro-bind-try", source, source);
-  }
-  return [
-    ...args,
-    "--ro-bind-data",
-    "0",
-    join(common, "config"),
-    "--bind-fd",
-    "4",
-    join(common, "worktrees"),
-    "--remount-ro",
-    common,
-    "--bind-fd",
-    "3",
-    dirname(path),
-    "--chdir",
-    main,
-    "--",
-  ];
+function validateMountDirectory(path: string): void {
+  if (
+    !isAbsolute(path) ||
+    path !== resolve(path) ||
+    path === dirname(path) ||
+    !lstatSync(path).isDirectory() ||
+    realpathSync.native(path) !== path
+  )
+    throw new Error(`Invalid scoped execution directory: ${path}`);
 }
 
 type RunResult = { exitCode: number | null; stdout: Buffer; stderr: Buffer };
@@ -141,7 +89,7 @@ export class SandboxRunner {
 
   constructor(
     private readonly cwd: string,
-    readonly buildArgs: (mode: SandboxMode, commandCwd?: string) => string[],
+    readonly buildArgs: (mode: SandboxMode, commandCwd?: string, readOnly?: boolean) => string[],
     readonly sandboxed: () => boolean = platformSandboxes,
   ) {}
 
@@ -150,6 +98,7 @@ export class SandboxRunner {
     params: unknown,
     options: {
       mode: SandboxMode;
+      cwd?: string;
       executor?: { entrypoint: string };
       imageMimeType?: string;
       signal?: AbortSignal;
@@ -178,6 +127,7 @@ export class SandboxRunner {
       [entrypoint, toolName, ...(cooperativeCancellation ? ["--cancel-on-stdin-close"] : [])],
       {
         input: request,
+        cwd: options.cwd,
         cooperativeCancellation,
         mode: options.mode,
         signal: options.signal,
@@ -190,62 +140,128 @@ export class SandboxRunner {
     return response.result;
   }
 
-  async runWorktreeRemoval(
-    removal: WorktreeRemoval,
-    validate: () => void,
+  async runScopedExecution(
+    call: ScopedExecution,
+    protectedPaths: readonly string[],
     signal: AbortSignal,
   ): Promise<AgentToolResult<unknown>> {
-    if (!this.sandboxed()) throw new Error("Worktree removal requires bwrap isolation");
-    const parent = dirname(removal.path);
-    const { git, objectFormat, refFormat } = removal;
-    if (
-      pathCovers(parent, removal.main) ||
-      pathCovers(parent, removal.common) ||
-      pathCovers(removal.common, parent) ||
-      pathCovers(parent, git)
-    )
-      throw new Error(`Worktree removal mounts overlap: ${parent}`);
-    const extensions = [
-      ...(objectFormat === "sha256" ? ["objectFormat = sha256"] : []),
-      ...(refFormat === "reftable" ? ["refStorage = reftable"] : []),
-    ];
-    const config = [
-      "[core]",
-      `repositoryformatversion = ${extensions.length > 0 ? 1 : 0}`,
-      ...(extensions.length > 0 ? ["[extensions]", ...extensions] : []),
-      "",
-    ].join("\n");
-    const sandboxArgs = worktreeRemovalSandbox(removal);
-    const mountFds: number[] = [];
-    const mountPaths = [parent, join(removal.common, "worktrees")];
+    const { executable, args, cwd, env, write, allowedCodes } = call;
+    if (!this.sandboxed()) {
+      write?.validate();
+      const result = await this.runTool(
+        "bash",
+        {
+          command: scopedShellCommand([executable, ...args], env),
+          timeout: 60,
+        },
+        { mode: "bash", cwd, signal },
+      );
+      const output = result.structuredContent as {
+        output?: string;
+        truncated?: boolean;
+        exit_code?: number;
+      };
+      if (
+        !output ||
+        typeof output.output !== "string" ||
+        output.output.includes("\uFFFD") ||
+        output.truncated !== false ||
+        typeof output.exit_code !== "number"
+      )
+        throw new Error("Invalid or truncated scoped execution result");
+      if (
+        output.exit_code !== 0 &&
+        (!allowedCodes.includes(output.exit_code) || output.output !== "")
+      )
+        throw new Error(output.output.trim() || `Scoped command failed (exit ${output.exit_code})`);
+      return { content: [], details: { output: output.exit_code === 0 ? output.output : "" } };
+    }
+
+    const mounts: number[] = [];
+    const created = new Map<string, { dev: bigint; ino: bigint }>();
+    const sandboxArgs = write
+      ? ["--die-with-parent", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev"]
+      : this.buildArgs("bash", cwd, true);
+    sandboxArgs.push("--unshare-pid", "--unshare-net", "--clearenv");
+    for (const [name, value] of Object.entries(env))
+      if (value !== undefined) sandboxArgs.push("--setenv", name, value);
+    let outcome: AgentToolResult<unknown>;
+    let cleanupFailure: { cause: unknown } | undefined;
     try {
-      for (const path of mountPaths)
-        mountFds.push(
-          openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW),
-        );
-      validate();
-      for (const [index, path] of mountPaths.entries()) {
-        const opened = fstatSync(mountFds[index]!, { bigint: true });
-        const current = lstatSync(path, { bigint: true });
-        if (!current.isDirectory() || current.dev !== opened.dev || current.ino !== opened.ino)
-          throw new Error(`Worktree removal mount changed: ${path}`);
+      if (write) {
+        write.validate();
+        for (const path of write.createDirectories ?? []) {
+          if (!isAbsolute(path) || path !== resolve(path) || !write.paths.includes(path))
+            throw new Error(`Unvalidated scoped creation directory: ${path}`);
+          validateMountDirectory(dirname(path));
+          mkdirSync(path);
+          created.set(path, lstatSync(path, { bigint: true }));
+        }
+        const directories = [...new Set(write.directories)].sort((a, b) => a.length - b.length);
+        const view = write.readOnlyView;
+        if (view) {
+          validateMountDirectory(view.directory);
+          sandboxArgs.push("--tmpfs", view.directory);
+          for (const path of view.paths) sandboxArgs.push("--ro-bind-try", path, path);
+        }
+        for (const path of directories) {
+          validateMountDirectory(path);
+          const fd = openSync(
+            path,
+            constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+          );
+          mounts.push(fd);
+          sandboxArgs.push("--bind-fd", String(mounts.length + 2), path);
+        }
+        for (const path of protectedPaths) sandboxArgs.push("--ro-bind", path, path);
+        if (write.readOnlyFile) sandboxArgs.push("--ro-bind-data", "0", write.readOnlyFile.path);
+        if (view) sandboxArgs.push("--remount-ro", view.directory);
+        write.validate();
+        for (const [index, path] of directories.entries()) {
+          const opened = fstatSync(mounts[index]!, { bigint: true });
+          const current = lstatSync(path, { bigint: true });
+          if (!current.isDirectory() || current.dev !== opened.dev || current.ino !== opened.ino)
+            throw new Error(`Scoped execution mount changed: ${path}`);
+        }
       }
-      const result = await this.run(git, worktreeRemovalArgs(removal), {
-        input: config,
-        signal,
+      if (write) sandboxArgs.push("--chdir", cwd);
+      sandboxArgs.push("--");
+      const result = await this.run(executable, [...args], {
+        ...(write?.readOnlyFile ? { input: write.readOnlyFile.contents } : {}),
+        sandbox: { args: sandboxArgs, mountFds: mounts },
         timeout: 60,
-        sandbox: { args: sandboxArgs, mountFds },
+        maxOutputBytes: 8 * 1024 * 1024,
+        signal,
       });
-      const output = Buffer.concat([result.stdout, result.stderr]).toString("utf8").trim();
-      if (result.exitCode !== 0)
-        throw new Error(output || `Git worktree removal failed (exit ${result.exitCode})`);
-      return {
-        content: [{ type: "text", text: output || `Removed ${removal.path}` }],
-        details: { exitCode: result.exitCode },
+      const decode = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+      const stderr = decode.decode(result.stderr).trim();
+      if (
+        result.exitCode === null ||
+        (!allowedCodes.includes(result.exitCode) && result.exitCode !== 0)
+      )
+        throw new Error(stderr || `Scoped command failed (exit ${result.exitCode})`);
+      if (stderr) throw new Error(`Scoped command wrote to stderr: ${stderr}`);
+      outcome = {
+        content: [],
+        details: { output: result.exitCode === 0 ? decode.decode(result.stdout) : "" },
       };
     } finally {
-      for (const fd of mountFds) closeSync(fd);
+      for (const fd of mounts) closeSync(fd);
+      for (const [path, initial] of [...created].reverse()) {
+        try {
+          const current = lstatSync(path, { bigint: true });
+          if (current.isDirectory() && current.dev === initial.dev && current.ino === initial.ino)
+            rmdirSync(path);
+        } catch (error) {
+          if (
+            !["ENOENT", "ENOTEMPTY", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")
+          )
+            cleanupFailure ??= { cause: error };
+        }
+      }
     }
+    if (cleanupFailure) throw new Error("Scoped directory cleanup failed", cleanupFailure);
+    return outcome;
   }
 
   private run(
@@ -264,7 +280,10 @@ export class SandboxRunner {
   ): Promise<RunResult> {
     return new Promise((resolveRun, rejectRun) => {
       options.signal?.throwIfAborted();
-      const environment = sanitizeSandboxEnvironment({ ...process.env, ...options.env });
+      const environment = sanitizeSandboxEnvironment({
+        ...process.env,
+        ...options.env,
+      });
       const isolated = this.sandboxed();
       if (options.sandbox && !isolated) throw new Error("bwrap isolation is unavailable");
       const child = spawn(
@@ -277,7 +296,7 @@ export class SandboxRunner {
             ]
           : commandArgs,
         {
-          cwd: this.cwd,
+          cwd: options.cwd ?? this.cwd,
           env: environment,
           stdio: [
             options.input === undefined ? "ignore" : "pipe",
@@ -290,6 +309,8 @@ export class SandboxRunner {
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       let timedOut = false;
+      let outputBytes = 0;
+      let outputExceeded = false;
       let processError: Error | undefined;
       let inputError: Error | undefined;
       function stopExecution(): void {
@@ -308,12 +329,19 @@ export class SandboxRunner {
           : undefined;
       const onAbort = stopExecution;
       options.signal?.addEventListener("abort", onAbort, { once: true });
+      function collect(buffers: Buffer[], chunk: Buffer): void {
+        outputBytes += chunk.length;
+        if (options.maxOutputBytes !== undefined && outputBytes > options.maxOutputBytes) {
+          if (!outputExceeded) stopExecution();
+          outputExceeded = true;
+        } else buffers.push(chunk);
+      }
       child.stdout?.on("data", (chunk: Buffer) => {
-        stdout.push(chunk);
+        collect(stdout, chunk);
         options.onData?.(chunk, "stdout");
       });
       child.stderr?.on("data", (chunk: Buffer) => {
-        stderr.push(chunk);
+        collect(stderr, chunk);
         options.onData?.(chunk, "stderr");
       });
       child.on("error", (error: Error) => {
@@ -323,6 +351,7 @@ export class SandboxRunner {
         if (timeoutHandle) clearTimeout(timeoutHandle);
         options.signal?.removeEventListener("abort", onAbort);
         if (processError) return rejectRun(processError);
+        if (outputExceeded) return rejectRun(new Error("Scoped command output exceeds the limit"));
         if (inputError)
           return rejectRun(new Error("Sandbox worker input failed", { cause: inputError }));
         const execution = {

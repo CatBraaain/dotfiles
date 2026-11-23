@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Guardrail } from "./guardrail.ts";
-import { SandboxRunner } from "./sandbox-runner.ts";
+import { SandboxRunner, type ScopedExecution } from "./sandbox-runner.ts";
 import { sanitizeSandboxEnvironment } from "./config.ts";
 import { realBwrapTest } from "./bwrap-test-support.ts";
 
@@ -59,6 +59,62 @@ describe("sandbox executors", () => {
       }
     },
   );
+
+  it("uses the standard Bash worker for scoped reads and writes when sandboxing is unavailable", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "scoped-fallback-"));
+    try {
+      const runner = new SandboxRunner(
+        directory,
+        () => {
+          assert.fail("Fallback must not construct bwrap mounts");
+        },
+        () => false,
+      );
+      const target = "fixture's result";
+      const signal = new AbortController().signal;
+      let bashCalls = 0;
+      let writes = 0;
+      const runTool = runner.runTool.bind(runner);
+      runner.runTool = (...args) => {
+        assert.equal(args[0], "bash");
+        assert.equal(args[2].executor, undefined);
+        assert.equal(args[2].signal, signal);
+        bashCalls++;
+        return runTool(...args);
+      };
+      async function run(script: string, write = false) {
+        const call: ScopedExecution = {
+          executable: process.execPath,
+          cwd: directory,
+          args: ["-e", script, target],
+          env: {},
+          allowedCodes: [],
+          write: write
+            ? {
+                paths: [join(directory, target)],
+                directories: [directory],
+                validate() {
+                  writes++;
+                },
+              }
+            : undefined,
+        };
+        const result = await runner.runScopedExecution(call, [], signal);
+        return (result.details as { output: string }).output;
+      }
+      await run('Bun.write(process.argv[1], "fixture")', true);
+      assert.equal(
+        await run("process.stdout.write(await Bun.file(process.argv[1]).text())"),
+        "fixture",
+      );
+      await run('require("node:fs").unlinkSync(process.argv[1])', true);
+      assert.equal(existsSync(join(directory, target)), false);
+      assert.equal(writes, 2);
+      assert.equal(bashCalls, 3);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 10_000);
 
   for (const entrypoint of ["relative.ts", "", "/tmp/invalid\u0000.ts"]) {
     it(`rejects an invalid executor path ${JSON.stringify(entrypoint)} before building mounts`, async () => {
