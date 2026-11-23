@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
+  constants,
   existsSync,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
@@ -26,6 +28,16 @@ import {
   type LastRun,
 } from "./history-summary";
 import { platform } from "./platform";
+import {
+  isViewReceipt,
+  metadataFileIdentity,
+  metadataFileRevision,
+  sessionMetadata,
+  SessionMetadataCache,
+  SessionPathChangedError,
+  type UnresolvedFile,
+  type ViewReceipt,
+} from "./session-metadata";
 
 type ListOperation =
   | { kind: "list"; scope: "all" | "active"; json: boolean }
@@ -38,6 +50,8 @@ type Operation =
   | { kind: "open"; id: string; temporary: boolean; detached: boolean }
   | { kind: "open-exact"; id: string; file: string }
   | { kind: "inspect"; id: string }
+  | { kind: "metadata"; id: string; viewFile?: string }
+  | { kind: "record-view"; id: string; receipt: ViewReceipt }
   | DispatchTicketOperation
   | { kind: "state"; id: string; source: StateSource; notification: StateNotification }
   | { kind: "send"; id: string; waitSeconds: number | undefined; text: string }
@@ -131,6 +145,9 @@ type UnifiedSession = ListedSession & {
 type UnifiedWorkspace = { cwd: string; sessions: UnifiedSession[] };
 type Config = ReturnType<typeof configuration>;
 type TmuxConfig = ReturnType<typeof tmuxConfiguration> & { noStart?: true };
+type SavedSessionConfig = Pick<TmuxConfig, "agentDir"> & {
+  env: NodeJS.ProcessEnv;
+};
 
 const SESSION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
 const DISPATCH_TICKET_ID_PATTERN = /^[0-9]{8}-[0-9]{6}(?:[-._][A-Za-z0-9][A-Za-z0-9._-]*)?$/;
@@ -140,6 +157,9 @@ const STARTUP_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 50;
 const SEND_WAIT_POLL_INTERVAL_MS = 100;
 const MESSAGE_TEXT_MAX_CODE_POINTS = 2800;
+const VIEW_RECEIPT_TIMEOUT_SECONDS = 5;
+const VIEW_RECEIPT_MAX_ENCODED_LENGTH = 16_384;
+const BASE64_OPTION_VALUE = /^[A-Za-z0-9+/]+={0,2}$/;
 const GENERATED_ENV_KEYS = new Set([
   "TMUX",
   "TMUX_PANE",
@@ -182,6 +202,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux open [--temporary] [--detached] <session-id>
   pi-mux open --detached --expect-file <absolute-jsonl-path> <session-id>
   pi-mux inspect <session-id>
+  pi-mux metadata <session-id>
   pi-mux state <session-id> <state> --source <JSON> --title <JSON>
   pi-mux state <session-id> --clear --source <JSON>
   pi-mux send [--wait <seconds>] <session-id> <text...>
@@ -213,6 +234,35 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         console.error(`pi-mux: Cannot inspect session ${operation.id}: ${errorMessage(error)}`);
         return 75;
       }
+    }
+    if (operation.kind === "metadata") {
+      const { id, viewFile } = operation;
+      if (viewFile !== undefined) {
+        const file = realpathSync(viewFile);
+        const history = await new SessionMetadataCache(id, `view:${file}`, "").read(
+          async () => file,
+        );
+        console.log(
+          JSON.stringify({
+            file,
+            fileIdentity: history.identity,
+            responseId: history.summary.response?.id ?? null,
+          }),
+        );
+      } else {
+        const config = { agentDir: resolveAgentDirectory(), env: process.env };
+        const history = await readSessionMetadata(config, id);
+        console.log(JSON.stringify(sessionMetadata(id, history.summary)));
+      }
+      return 0;
+    }
+    if (operation.kind === "record-view") {
+      await sendViewReceipt(
+        { ...tmuxConfiguration(), noStart: true },
+        operation.id,
+        operation.receipt,
+      );
+      return 0;
     }
     if (operation.kind === "open-exact") {
       if (process.platform !== "linux") throw new Error("Exact session reopen requires Linux");
@@ -605,6 +655,30 @@ export function parseOperation(argv: string[]): Operation {
     if (argv.length === 2 && id && SESSION_ID_PATTERN.test(id)) return { kind: "inspect", id };
     if (id === "--dispatch-ticket") return parseDispatchTicketOperation(argv.slice(2));
   }
+  if (argv[0] === "metadata") {
+    const [, first, id, viewFile] = argv;
+    if (argv.length === 2 && first && SESSION_ID_PATTERN.test(first))
+      return { kind: "metadata", id: first };
+    if (
+      argv.length === 4 &&
+      first === "--view-target" &&
+      id &&
+      SESSION_ID_PATTERN.test(id) &&
+      viewFile &&
+      isAbsolute(viewFile) &&
+      viewFile.endsWith(".jsonl") &&
+      !viewFile.includes("\0")
+    )
+      return { kind: "metadata", id, viewFile };
+  }
+  if (argv[0] === "record-view" && argv.length === 3) {
+    const id = argv[1];
+    if (id && SESSION_ID_PATTERN.test(id)) {
+      const receipt: unknown = JSON.parse(argv[2]!);
+      if (isViewReceipt(receipt)) return { kind: "record-view", id, receipt };
+    }
+    throw new Error("Invalid session view receipt");
+  }
   if (argv[0] === "close") {
     const conditional = argv[1] === "--if-temporary";
     const id = argv[conditional ? 2 : 1];
@@ -643,7 +717,7 @@ export function parseOperation(argv: string[]): Operation {
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] [--detached] <session-id> | open --detached --expect-file <absolute-jsonl-path> <session-id> | inspect <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | list --active [--json] | list --saved [--cwd <absolute-cwd>] [--json] | list --displayed [--client-pid <pid>] [--json] | switch <session-id> [--client-pid <pid>] | history [--cwd <absolute-cwd>] [--json] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | reload [<session-id>] | restart [--force]]",
+    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] [--detached] <session-id> | open --detached --expect-file <absolute-jsonl-path> <session-id> | inspect <session-id> | metadata <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | list --active [--json] | list --saved [--cwd <absolute-cwd>] [--json] | list --displayed [--client-pid <pid>] [--json] | switch <session-id> [--client-pid <pid>] | history [--cwd <absolute-cwd>] [--json] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | reload [<session-id>] | restart [--force]]",
   );
 }
 
@@ -1089,9 +1163,13 @@ function configuration() {
   return { ...config, pi: executable("pi") };
 }
 
+function resolveAgentDirectory(): string {
+  return expandPath(process.env.PI_CODING_AGENT_DIR || "~/.pi/agent");
+}
+
 function tmuxConfiguration() {
   const directory = join(platform.runtimeStateRoot(), "pi-tmux");
-  const agentDir = expandPath(process.env.PI_CODING_AGENT_DIR || "~/.pi/agent");
+  const agentDir = resolveAgentDirectory();
   const extension = join(agentDir, "extensions", "pi-mux-bridge", "index.ts");
   const tmuxConfig = join(homedir(), ".config", "tmux", "pi.conf");
   const env = Object.fromEntries(
@@ -2787,6 +2865,65 @@ async function sendSessionMessage(
   }
 }
 
+async function sendViewReceipt(
+  config: TmuxConfig,
+  id: string,
+  receipt: ViewReceipt,
+): Promise<void> {
+  const targets = (await livePanes(config, "list")).filter((pane) => pane.id === id);
+  const target = targets[0];
+  if (!target || targets.length !== 1)
+    throw new Error(`Cannot identify a single live session: ${id}`);
+  if (
+    realpathSync(target.file) !== receipt.file ||
+    metadataFileIdentity(receipt.file) !== receipt.fileIdentity
+  )
+    throw new Error(`Session ${id} no longer points at the viewed history`);
+  const server = await serverLifetime(config);
+  if (!server) throw new Error("Dedicated server is not running");
+  const option = `@pi-mux-view-${randomUUID()}`;
+  const payload = Buffer.from(
+    JSON.stringify({
+      v: 1,
+      sessionId: id,
+      processPid: target.pid,
+      file: receipt.file,
+      fileIdentity: receipt.fileIdentity,
+      responseId: receipt.responseId,
+      viewedAt: receipt.viewedAt,
+    }),
+  ).toString("base64");
+  if (payload.length > VIEW_RECEIPT_MAX_ENCODED_LENGTH)
+    throw new Error(`View receipt is too large for session ${id}`);
+  if (!/^%\d+$/.test(target.pane) || !BASE64_OPTION_VALUE.test(target.metadata))
+    throw new Error(`Invalid pane identity for session ${id}`);
+  const paneGuard = paneEntityGuard(server.pid, target.pane, target.panePid);
+  const writeAndReadBack = guardedTmuxLine(
+    target.pane,
+    `#{&&:${paneGuard},#{==:#{@pi-tmux-session},${target.metadata}}}`,
+    [
+      ["set-option", "-p", "-t", target.pane, option, payload],
+      ["show-options", "-pqv", "-t", target.pane, option],
+    ],
+  );
+  const result = await tmux(config, ["source-file", "-"], false, `${writeAndReadBack}\n`);
+  if (result.stdout.trim() !== payload) throw new Error(`Cannot queue view for session ${id}`);
+  const outcome = await waitForMessageConsumption(
+    config,
+    target.pane,
+    option,
+    VIEW_RECEIPT_TIMEOUT_SECONDS,
+  );
+  if (outcome === "timeout") {
+    const clear = guardedTmuxLine(target.pane, paneGuard, [
+      ["set-option", "-pu", "-t", target.pane, option],
+    ]);
+    await tmux(config, ["source-file", "-"], true, `${clear}\n`);
+  }
+  if (outcome !== "consumed")
+    throw new Error(`View receipt not consumed for session ${id}: ${outcome}`);
+}
+
 async function waitForMessageConsumption(
   config: TmuxConfig,
   pane: string,
@@ -3272,7 +3409,7 @@ function sessionName(id: string): string {
   return `pi-${createHash("sha256").update(id).digest("hex")}`;
 }
 
-async function configuredSessionRoot(config: TmuxConfig): Promise<string | undefined> {
+async function configuredSessionRoot(config: SavedSessionConfig): Promise<string | undefined> {
   const settingPaths = [
     join(config.agentDir, "settings.json"),
     join(process.cwd(), ".pi", "settings.json"),
@@ -3311,21 +3448,22 @@ type SessionDirectoryLayer = { directories: string[]; archived: boolean };
 type SavedSessionLayers = { customRoot: string | undefined; layers: SessionDirectoryLayer[] };
 
 async function savedSessionLayers(
-  config: TmuxConfig,
-  groups: string[],
+  config: SavedSessionConfig,
+  groups?: string[],
 ): Promise<SavedSessionLayers> {
   const customRoot = await configuredSessionRoot(config);
   if (customRoot) return { customRoot, layers: [{ directories: [customRoot], archived: false }] };
+  const directories = groups ?? (await cwdGroupDirectories(config));
   return {
     customRoot: undefined,
     layers: [
-      { directories: groups, archived: false },
-      { directories: groups.map((group) => join(group, "archive")), archived: true },
+      { directories, archived: false },
+      { directories: directories.map((group) => join(group, "archive")), archived: true },
     ],
   };
 }
 
-async function cwdGroupDirectories(config: TmuxConfig): Promise<string[]> {
+async function cwdGroupDirectories(config: SavedSessionConfig): Promise<string[]> {
   const root = join(config.agentDir, "sessions");
   return (await sessionDirectoryEntries(root))
     .filter(
@@ -3366,15 +3504,59 @@ async function findSaved(
   id: string,
   purpose: "open" | "restore" = "open",
 ): Promise<Session | undefined> {
-  const { layers } = await savedSessionLayers(config, await cwdGroupDirectories(config));
-  for (const { directories } of layers) {
-    const files = [
-      ...new Set(
-        (await Promise.all(directories.map(sessionFiles))).flat().map((file) => realpathSync(file)),
+  const { layers } = await savedSessionLayers(config);
+  return findSavedInLayers(layers, id, purpose);
+}
+
+async function readSessionMetadata(config: SavedSessionConfig, id: string) {
+  try {
+    return await readSessionMetadataOnce(config, id);
+  } catch (error) {
+    if (!(error instanceof SessionPathChangedError)) throw error;
+    return await readSessionMetadataOnce(config, id);
+  }
+}
+
+async function readSessionMetadataOnce(config: SavedSessionConfig, id: string) {
+  const { customRoot, layers } = await savedSessionLayers(config);
+  const scope = customRoot ?? join(config.agentDir, "sessions");
+  const directories = layers.flatMap((layer) => layer.directories).sort();
+  const directoryRevision = createHash("sha256")
+    .update(
+      JSON.stringify(
+        directories.map((path) => {
+          const stat = statSync(path, { bigint: true, throwIfNoEntry: false });
+          return [path, stat && [stat.dev, stat.ino, stat.mtimeNs, stat.ctimeNs].join(":")];
+        }),
       ),
-    ];
-    const matches = files.flatMap((file) => {
-      const header = readHeader(file);
+    )
+    .digest("hex");
+  return new SessionMetadataCache(id, scope, directoryRevision).read(
+    async (unresolvedFiles) => (await findSavedInLayers(layers, id, "open", unresolvedFiles))?.file,
+  );
+}
+
+async function findSavedInLayers(
+  layers: SessionDirectoryLayer[],
+  id: string,
+  purpose: "open" | "restore",
+  unresolvedFiles?: UnresolvedFile[],
+): Promise<Session | undefined> {
+  for (const { directories } of layers) {
+    const listed = (await Promise.all(directories.map(sessionFiles))).flat();
+    const files = new Set(
+      listed.flatMap((file) => {
+        const canonical = unresolvedFiles
+          ? ifPresent(() => realpathSync(file))
+          : realpathSync(file);
+        return canonical === undefined ? [] : [canonical];
+      }),
+    );
+    const matches = [...files].flatMap((file) => {
+      const revision = unresolvedFiles ? ifPresent(() => metadataFileRevision(file)) : undefined;
+      const header = unresolvedFiles
+        ? ifPresent(() => readHeader(file, "verified"))
+        : readHeader(file);
       if (
         header?.type !== "session" ||
         typeof header.id !== "string" ||
@@ -3384,6 +3566,7 @@ async function findSaved(
       ) {
         if (purpose === "restore" || header?.id === id)
           throw new Error(`Invalid session header: ${file}`);
+        if (revision !== undefined) unresolvedFiles?.push({ file, revision });
         return [];
       }
       if (header.id !== id) return [];
@@ -3394,6 +3577,16 @@ async function findSaved(
     if (matches[0]) return matches[0];
   }
   return undefined;
+}
+
+function ifPresent<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP") return undefined;
+    throw error;
+  }
 }
 
 async function sessionFiles(directory: string): Promise<string[]> {
@@ -3410,10 +3603,13 @@ async function sessionDirectoryEntries(directory: string) {
   });
 }
 
-function readHeader(path: string): Record<string, unknown> | undefined {
-  const fd = openSync(path, "r");
+function readHeader(path: string, mode?: "verified"): Record<string, unknown> | undefined {
+  const fd = openSync(
+    path,
+    mode === "verified" ? constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW : "r",
+  );
   try {
-    return readSessionHeader(fd);
+    return mode === "verified" && !fstatSync(fd).isFile() ? undefined : readSessionHeader(fd);
   } finally {
     closeSync(fd);
   }

@@ -4,6 +4,7 @@ import type {
   PiMuxCurrentSession,
   PiMuxHistoryEntry,
   PiMuxLastRun,
+  PiMuxViewTarget,
   PiMuxWorkspace,
   PiRuntime,
   PiSession,
@@ -39,6 +40,12 @@ export function fakeRuntimes() {
     return runtime;
   });
   const muxMocks = {
+    viewTarget: vi.fn(
+      async (_sessionId: string, _file: string): Promise<PiMuxViewTarget | undefined> => undefined,
+    ),
+    recordView: vi.fn(
+      async (_sessionId: string, _target: PiMuxViewTarget, _viewedAtMs: number) => {},
+    ),
     registerWorkspace: vi.fn(async (cwd: string) => {
       workspaces.add(cwd);
     }),

@@ -1,4 +1,5 @@
 import type * as vscode from "vscode";
+import { realpath } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { DisplayTerminals } from "./terminals";
 import type { PiMuxCurrentSession } from "./pi-mux";
@@ -171,6 +172,46 @@ export class TerminalRegistry implements vscode.Disposable {
     } finally {
       if (recovery !== undefined) this.recoveries.delete(recovery);
     }
+  }
+
+  async confirmSessionDisplay(
+    terminal: vscode.Terminal,
+    sessionId: string,
+    file: string,
+    isCurrent: () => boolean,
+  ): Promise<boolean> {
+    const canConfirm = () => isCurrent() && this.canConfirmDisplay(terminal, sessionId);
+    const deadlineMs = performance.now() + SWITCH_RETRY_WINDOW_MS;
+    const timeout = new AbortController();
+    let pid: number | undefined;
+    try {
+      pid = await Promise.race([
+        terminal.processId,
+        sleep(SWITCH_RETRY_WINDOW_MS, undefined, { signal: timeout.signal }),
+      ]);
+    } finally {
+      timeout.abort();
+    }
+    if (pid === undefined) return false;
+    while (canConfirm() && performance.now() < deadlineMs) {
+      const current = await this.mux.current(pid);
+      if (!canConfirm()) return false;
+      if (current?.id === sessionId) {
+        const displayedFile = current.file === file ? file : await realpath(current.file);
+        return displayedFile === file && canConfirm();
+      }
+      await sleep(50);
+    }
+    return false;
+  }
+
+  private canConfirmDisplay(terminal: vscode.Terminal, sessionId: string): boolean {
+    return (
+      !this.disposed &&
+      terminal.exitStatus === undefined &&
+      this.currentDisplay() === terminal &&
+      this.displayedSession === sessionId
+    );
   }
 
   async displayForSession(sessionId: string): Promise<vscode.Terminal | undefined> {

@@ -3,9 +3,16 @@ import { isAbsolute } from "node:path";
 import { errorMessage, isEpochMs, isRecord } from "./guards";
 
 const QUERY_TIMEOUT_MS = 10_000;
+const VIEW_TARGET_TIMEOUT_MS = 2_000;
 const SWITCH_TARGET_MISSING_EXIT_CODE = 2;
 const SWITCH_CLIENT_MISSING_EXIT_CODE = 3;
-const QUERY_COMMANDS = new Set(["list", "history", "switch"]);
+const QUERY_COMMANDS = new Set(["list", "history", "switch", "metadata", "record-view"]);
+
+export interface PiMuxViewTarget {
+  file: string;
+  fileIdentity: string;
+  responseId: string | null;
+}
 
 export interface PiSession {
   sessionId: string;
@@ -187,6 +194,29 @@ export class PiMux {
     return { id, cwd, file, target };
   }
 
+  async viewTarget(sessionId: string, file: string): Promise<PiMuxViewTarget> {
+    const output = await this.command(["metadata", "--view-target", sessionId, file]);
+    const target = parseJsonOutput(output, "metadata --view-target");
+    if (
+      !isRecord(target) ||
+      typeof target.file !== "string" ||
+      !isAbsolute(target.file) ||
+      target.file.includes("\0") ||
+      (target.responseId !== null &&
+        (typeof target.responseId !== "string" ||
+          !/^[A-Za-z0-9_-]{1,128}$/.test(target.responseId))) ||
+      typeof target.fileIdentity !== "string" ||
+      !/^\d+:\d+:-?\d+$/.test(target.fileIdentity)
+    )
+      throw new Error("Invalid pi-mux view target response");
+    return { file: target.file, fileIdentity: target.fileIdentity, responseId: target.responseId };
+  }
+
+  async recordView(sessionId: string, target: PiMuxViewTarget, viewedAtMs: number): Promise<void> {
+    const receipt = { ...target, viewedAt: new Date(viewedAtMs).toISOString() };
+    await this.command(["record-view", sessionId, JSON.stringify(receipt)]);
+  }
+
   /** List saved conversations, newest first. Throws when the CLI fails. */
   async history(cwd?: string): Promise<PiMuxHistoryEntry[]> {
     const output = await this.command([
@@ -312,7 +342,12 @@ async function executePiMux(executable: string, args: string[], cwd?: string): P
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       cwd,
-      timeout: QUERY_COMMANDS.has(args[0]) ? QUERY_TIMEOUT_MS : 0,
+      timeout:
+        args[0] === "metadata"
+          ? VIEW_TARGET_TIMEOUT_MS
+          : QUERY_COMMANDS.has(args[0])
+            ? QUERY_TIMEOUT_MS
+            : 0,
       env: {
         ...process.env,
         COLORTERM: process.env.COLORTERM ?? "truecolor",

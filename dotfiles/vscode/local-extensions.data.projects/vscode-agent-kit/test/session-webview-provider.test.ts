@@ -3997,6 +3997,79 @@ describe("SessionWebviewProvider", () => {
     },
   );
 
+  it("records the pre-display response only after the client confirms the session", async () => {
+    const { webview, terminal, mocks } = await unreadFixture();
+    const confirmation = deferred<Awaited<ReturnType<PiMux["current"]>>>();
+    const target = { file: "/saved/A.jsonl", fileIdentity: "1:2:3", responseId: "shown-response" };
+    mocks.viewTarget.mockResolvedValue(target);
+    mocks.current.mockReturnValueOnce(confirmation.promise);
+
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    expect(terminal.show).toHaveBeenCalled();
+    expect(mocks.viewTarget.mock.invocationCallOrder[0]).toBeLessThan(
+      terminal.show.mock.invocationCallOrder[0],
+    );
+    expect(mocks.recordView).not.toHaveBeenCalled();
+    mocks.viewTarget.mockResolvedValue({ ...target, responseId: "response-arrived-after-show" });
+    confirmation.resolve({
+      id: activeSessionId,
+      cwd: root,
+      file: "/saved/A.jsonl",
+      target: "pi-A",
+    });
+    await vi.waitFor(() =>
+      expect(mocks.recordView).toHaveBeenCalledExactlyOnceWith(
+        activeSessionId,
+        target,
+        expect.any(Number),
+      ),
+    );
+    expect(mocks.viewTarget).toHaveBeenCalledOnce();
+  });
+
+  it("does not record history when the newly shown terminal fails to attach", async () => {
+    const logError = vi.fn();
+    const { webview, mocks } = await unreadFixture({ log: { error: logError } });
+    mocks.viewTarget.mockResolvedValue({
+      file: "/saved/A.jsonl",
+      fileIdentity: "1:2:3",
+      responseId: "shown-response",
+    });
+    mocks.current.mockRejectedValueOnce(new Error("no client"));
+
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    await vi.waitFor(() =>
+      expect(logError).toHaveBeenCalledWith(expect.stringContaining("no client")),
+    );
+    expect(mocks.recordView).not.toHaveBeenCalled();
+    expect(sessionOpenState.update).toHaveBeenCalledOnce();
+  });
+
+  it("does not let a late confirmation supersede a later view of the same session", async () => {
+    const { webview, registry, mocks } = await unreadFixture();
+    const firstConfirm = deferred<boolean>();
+    const confirmation = vi
+      .spyOn(registry, "confirmSessionDisplay")
+      .mockResolvedValue(true)
+      .mockReturnValueOnce(firstConfirm.promise);
+    const oldTarget = { file: "/saved/A.jsonl", fileIdentity: "1:2:3", responseId: "older" };
+    const newTarget = { ...oldTarget, responseId: "newer" };
+    mocks.viewTarget.mockResolvedValueOnce(oldTarget);
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
+    mocks.viewTarget.mockResolvedValueOnce(newTarget);
+    await webview.receive({ type: "openSession", sessionId: activeSessionId });
+    expect(confirmation).toHaveBeenCalledTimes(2);
+    firstConfirm.resolve(true);
+    await firstConfirm.promise;
+    await Promise.resolve();
+    expect(mocks.recordView).toHaveBeenCalledExactlyOnceWith(
+      activeSessionId,
+      newTarget,
+      expect.any(Number),
+    );
+  });
+
   it("does not open saved history whose header cwd is outside list workspaces", async () => {
     const cwd = join(root, "missing");
     await seedSavedSession(inactiveSessionId, cwd);

@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { quote } from "shell-quote";
 import { partitionMessageOptions, messageOptions, type AgentMessage } from "./messages.ts";
 import { registerLegacyDraftRecovery } from "./first-input-handoff.ts";
+import { recordDispatchTicket, recordViewReceipt, viewOptions } from "./session-metadata.ts";
 import { registerSessionState } from "./session-state.ts";
 import {
   getTmuxPaths,
@@ -26,6 +27,7 @@ export function rejectSessionChange(ctx: ExtensionContext): { cancel: true } | u
 let messageTimer: ReturnType<typeof setInterval> | undefined;
 let messageIdentity: ManagedPaneIdentity | undefined;
 const injectedMessageNames = new Set<string>();
+const consumedViewOptions = new Set<string>();
 let lastMessageFailure: string | undefined;
 
 export function stopMessageWatcher(): void {
@@ -35,18 +37,28 @@ export function stopMessageWatcher(): void {
   }
   messageIdentity = undefined;
   injectedMessageNames.clear();
+  consumedViewOptions.clear();
   lastMessageFailure = undefined;
 }
 
 function startMessageWatcher(
-  pi: Pick<ExtensionAPI, "exec" | "sendMessage">,
+  pi: Pick<ExtensionAPI, "exec" | "sendMessage" | "appendEntry">,
   ctx: ExtensionContext,
 ): void {
   stopMessageWatcher();
   if (ctx.mode !== "tui") return;
   if ((process.env.TMUX ?? "").split(",")[0] !== getTmuxPaths().socketPath) return;
-  messageTimer = setInterval(() => {
-    drainAgentMessages(pi, ctx).catch((error) => reportMessagePollFailure(error));
+  let polling = false;
+  messageTimer = setInterval(async () => {
+    if (polling) return;
+    polling = true;
+    try {
+      await drainAgentMessages(pi, ctx);
+    } catch (error) {
+      reportMessagePollFailure(error);
+    } finally {
+      polling = false;
+    }
   }, MESSAGE_POLL_INTERVAL_MS);
 }
 
@@ -64,7 +76,7 @@ function reportMessagePollFailure(error: unknown): void {
 }
 
 export async function drainAgentMessages(
-  pi: Pick<ExtensionAPI, "exec" | "sendMessage">,
+  pi: Pick<ExtensionAPI, "exec" | "sendMessage" | "appendEntry">,
   ctx: ExtensionContext,
 ): Promise<void> {
   const paths = getTmuxPaths();
@@ -79,6 +91,14 @@ export async function drainAgentMessages(
     "tmux",
     tmuxArgs(paths, ["show-options", "-p", "-t", identity.pane]),
   );
+  for (const { name, encoded } of viewOptions(listing.stdout)) {
+    if (!consumedViewOptions.has(name)) {
+      recordViewReceipt(pi, ctx.sessionManager, encoded);
+      consumedViewOptions.add(name);
+    }
+    await unsetMessageOption(execute, paths, identity, name);
+    consumedViewOptions.delete(name);
+  }
   const { valid, invalid } = partitionMessageOptions(messageOptions(listing.stdout));
   for (const name of invalid) await unsetMessageOption(execute, paths, identity, name);
   for (const { name, message } of valid) {
@@ -128,7 +148,10 @@ async function unsetMessageOption(
 export default function fixedSessionExtension(pi: ExtensionAPI): void {
   pi.on("session_before_switch", (_event, ctx) => rejectSessionChange(ctx));
   pi.on("session_before_fork", (_event, ctx) => rejectSessionChange(ctx));
-  pi.on("session_start", (_event, ctx) => startMessageWatcher(pi, ctx));
+  pi.on("session_start", (_event, ctx) => {
+    startMessageWatcher(pi, ctx);
+    if (ctx.mode === "tui") recordDispatchTicket(pi, ctx.sessionManager, process.env);
+  });
   pi.on("session_shutdown", () => stopMessageWatcher());
   const startupCommand = process.env.PI_TMUX_STARTUP_COMMAND;
   let startupPending = true;

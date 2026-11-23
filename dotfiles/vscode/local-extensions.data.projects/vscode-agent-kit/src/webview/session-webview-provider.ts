@@ -11,7 +11,12 @@ import {
 } from "../terminal-registry";
 import { errorMessage, isEpochMs } from "../guards";
 import { cwdGroupKey } from "../grouping";
-import { flattenPiMuxSessions, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../pi-mux";
+import {
+  flattenPiMuxSessions,
+  type PiMuxHistoryEntry,
+  type PiMuxViewTarget,
+  type PiMuxWorkspace,
+} from "../pi-mux";
 import {
   parseWebviewRequest,
   type ExtensionMessage,
@@ -64,6 +69,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private refreshVersion = 0;
   private latestSelection: symbol | undefined;
   private readonly pendingOpens = new Map<AbortController, string>();
+  private readonly pendingHistoryViews = new Map<string, Promise<void>>();
+  private historyViewVersion = 0;
   private pendingRefresh: Promise<void> | undefined;
   private refreshRequested = false;
   private manualLoadingRequested = false;
@@ -743,9 +750,11 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     const previousSessionId = this.deps.registry.displayedSessionId;
     const { sessionId } = session;
     const temporary = intent === "select" && this.archivedSessionIds.has(sessionId);
+    let hasSavedFile: boolean;
     try {
+      hasSavedFile = await sessionFileExists(session.filePath);
       if (
-        !(await sessionFileExists(session.filePath)) &&
+        !hasSavedFile &&
         !(await this.deps.registry.mux.aliveSessionIds([sessionId]))?.has(sessionId)
       ) {
         if (signal.aborted) return;
@@ -758,11 +767,16 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
 
+    let terminal: vscode.Terminal;
+    let viewTarget: PiMuxViewTarget | undefined;
     try {
       signal.throwIfAborted();
-      await requireWorkDirectory(session.cwd);
+      [, viewTarget] = await Promise.all([
+        requireWorkDirectory(session.cwd),
+        hasSavedFile ? this.readHistoryViewTarget(session) : undefined,
+      ]);
       signal.throwIfAborted();
-      const { terminal } = await this.deps.registry.open(
+      ({ terminal } = await this.deps.registry.open(
         {
           sessionId,
           cwd: session.cwd,
@@ -771,7 +785,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         },
         intent,
         signal,
-      );
+      ));
       if (this.disposed || signal.aborted || !present(terminal)) return;
     } catch (error) {
       if (this.disposed || signal.aborted || error instanceof DisplayRecoveryCancelledError) return;
@@ -783,12 +797,53 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
 
     const saving = this.saveSessionOpen(sessionId, Date.now());
+    const version = ++this.historyViewVersion;
+    if (viewTarget !== undefined) this.saveHistoryView(terminal, sessionId, viewTarget, version);
     this.acknowledgePublishedCompletion(sessionId);
     if (temporary) this.temporarySessionIds.add(sessionId);
     else this.temporarySessionIds.delete(sessionId);
     await this.stopTemporaryDisplayedSession(previousSessionId);
     await this.refresh(false);
     await saving;
+  }
+
+  private async readHistoryViewTarget({
+    sessionId,
+    filePath,
+  }: SessionSummary): Promise<PiMuxViewTarget | undefined> {
+    try {
+      return await this.deps.registry.mux.viewTarget(sessionId, filePath);
+    } catch (error) {
+      this.deps.log?.error(
+        `Cannot read view target for Pi session ${sessionId}: ${errorMessage(error)}`,
+      );
+      return undefined;
+    }
+  }
+
+  private saveHistoryView(
+    terminal: vscode.Terminal,
+    sessionId: string,
+    target: PiMuxViewTarget,
+    version: number,
+  ): void {
+    const registry = this.deps.registry;
+    const isCurrent = () => !this.disposed && version === this.historyViewVersion;
+    const saving = registry
+      .confirmSessionDisplay(terminal, sessionId, target.file, isCurrent)
+      .then(async (confirmed) => {
+        if (confirmed && isCurrent()) await registry.mux.recordView(sessionId, target, Date.now());
+      })
+      .catch((error) => {
+        this.deps.log?.error(
+          `Cannot record view of Pi session ${sessionId}: ${errorMessage(error)}`,
+        );
+      })
+      .finally(() => {
+        if (this.pendingHistoryViews.get(sessionId) === saving)
+          this.pendingHistoryViews.delete(sessionId);
+      });
+    this.pendingHistoryViews.set(sessionId, saving);
   }
 
   private async stopTemporaryDisplayedSession(
@@ -801,8 +856,16 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     ) {
       return;
     }
+    const registry = this.deps.registry;
+    const pending = this.pendingHistoryViews.get(previousSessionId);
+    if (pending) {
+      void pending.then(() =>
+        registry.run(() => this.stopTemporaryDisplayedSession(previousSessionId)),
+      );
+      return;
+    }
     try {
-      await this.deps.registry.mux.closeTemporarySession(previousSessionId);
+      await registry.mux.closeTemporarySession(previousSessionId);
     } catch (error) {
       this.postError(
         `Failed to close temporary Pi session ${previousSessionId}: ${errorMessage(error)}`,
