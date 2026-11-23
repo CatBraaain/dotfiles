@@ -16,7 +16,6 @@ import {
   resolveGitMainWorktreePath,
   resolvePathActionMatch,
   resolvePattern,
-  restoreRepositoryName,
 } from "./config.ts";
 
 export type DynamicPaths = Map<string, Set<"read" | "write">>;
@@ -193,27 +192,22 @@ export function hiddenFsPaths(
   ];
 }
 
-/**
- * Create allow-final write paths so their writable binds have a target (§6.1).
- * Only allow-final paths are created: a deny/ask-final path is never
- * writable-bound, so creating it would hand the sandbox a path fs tools deny
- * writing to. Globs expand to existing paths only, so they skip the mkdir -p
- * guarantee by themselves. Runtime-directory paths belong to the session
- * manager: an absent runtime directory is left unbound by --bind-try instead
- * of being created.
- */
 export function prepareWriteDirectories(
   config: GuardrailConfig,
   cwd: string,
   globCache: Map<string, string[]>,
 ): void {
-  const runtimeDir = process.env.XDG_RUNTIME_DIR;
-  const runtimePath = runtimeDir
-    ? restoreRepositoryName(resolvePattern(runtimeDir, cwd), "")
-    : undefined;
   for (const path of writePathsByFinalAction(config, cwd, globCache).allow) {
-    if (runtimePath && pathCovers(runtimePath, path)) continue;
-    if (!existsSync(path)) mkdirSync(path, { recursive: true });
+    if (existsSync(path)) continue;
+    try {
+      mkdirSync(path, { recursive: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `guardrails: could not create write directory ${JSON.stringify(path)}:`,
+        message,
+      );
+    }
   }
 }
 

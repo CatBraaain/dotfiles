@@ -1,6 +1,6 @@
 import { COMMAND_PREVIEW_LIMIT, truncateText } from "../shared/tool-text.ts";
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, describe, it } from "bun:test";
+import { afterEach, beforeEach, describe, it, spyOn } from "bun:test";
 import {
   createEventBus,
   type ExtensionAPI,
@@ -1155,22 +1155,34 @@ describe("§3.a パス文字列の解決", () => {
   );
 
   it(
-    "${XDG_RUNTIME_DIR} を含むエントリは起動時に作成しない",
+    "creates and binds missing write directories resolved from XDG_RUNTIME_DIR",
     withTempDirectory((directory) => {
-      const absentRuntimeDir = join(directory, "runtime");
+      const runtimeDir = join(directory, "runtime");
       const previousRuntimeDir = process.env.XDG_RUNTIME_DIR;
-      process.env.XDG_RUNTIME_DIR = `${absentRuntimeDir}/`;
+      process.env.XDG_RUNTIME_DIR = `${runtimeDir}/`;
       try {
         const configPath = join(directory, "config.yaml");
         writeFileSync(
           configPath,
-          'write:\n  - {allow: ["${XDG_RUNTIME_DIR}", "${XDG_RUNTIME_DIR}/app"]}\n',
+          'write:\n  - {allow: ["${XDG_RUNTIME_DIR}", "${XDG_RUNTIME_DIR}/app", "./snapshots/${XDG_RUNTIME_DIR}"]}\n',
         );
         const args = new Guardrail(directory, configPath).buildArgs("fs");
 
-        assert.equal(existsSync(absentRuntimeDir), false);
-        assert.deepEqual(readdirSync(directory), ["config.yaml"]);
-        assert.equal(args.includes(absentRuntimeDir), false);
+        const expectedPaths = [
+          runtimeDir,
+          join(runtimeDir, "app"),
+          join(directory, "snapshots", runtimeDir),
+        ];
+        for (const path of expectedPaths) {
+          assert.equal(existsSync(path), true, path);
+          assert.ok(
+            args.some(
+              (arg, index) =>
+                arg === "--bind-try" && args[index + 1] === path && args[index + 2] === path,
+            ),
+            path,
+          );
+        }
       } finally {
         if (previousRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
         else process.env.XDG_RUNTIME_DIR = previousRuntimeDir;
@@ -1178,6 +1190,35 @@ describe("§3.a パス文字列の解決", () => {
     }),
   );
 });
+
+it(
+  "warns on a startup directory creation failure and prepares later write paths",
+  withTempDirectory((directory) => {
+    const configPath = join(directory, "config.yaml");
+    const blockedParent = join(directory, "file");
+    const failedPath = join(blockedParent, "child");
+    const cachePath = join(directory, "cache");
+    writeFileSync(blockedParent, "unchanged");
+    writeFileSync(configPath, 'write:\n  - {allow: ["./file/child", "./cache"]}\n');
+
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const args = new Guardrail(directory, configPath).buildArgs("fs");
+
+      assert.equal(warning.mock.calls.length, 1);
+      const [warningText, errorText] = warning.mock.calls[0] ?? [];
+      assert.equal(String(warningText).includes(JSON.stringify(failedPath)), true);
+      assert.match(String(errorText), /mkdir/);
+      assert.equal(existsSync(failedPath), false);
+      assert.equal(args.includes(failedPath), false);
+      assert.equal(readFileSync(blockedParent, "utf8"), "unchanged");
+      assert.equal(existsSync(cachePath), true);
+      assert.equal(args.includes(cachePath), true);
+    } finally {
+      warning.mockRestore();
+    }
+  }),
+);
 
 describe("write.allow environment variables", () => {
   const variableName = "GUARDRAILS_TEST_WRITE_DIRECTORY";

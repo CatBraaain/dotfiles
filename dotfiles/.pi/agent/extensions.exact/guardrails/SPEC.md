@@ -152,9 +152,9 @@ fs系ツール（`read` `write` `edit` `grep` `find` `ls`）と `ask_permission`
 
 `write.allow` では、パスエントリ内の任意の位置に `${NAME}` を記述できる。名前は `[A-Za-z_][A-Za-z0-9_]*` とする。起動時に設定を読み込む時点の環境変数の値を使う。参照した環境変数が一つでも未設定または空文字列なら、そのパスエントリを丸ごとスキップする。値に含まれる変数参照は再展開しない。glob・ブレースの構文（選択肢の区切りを含む）は設定に直接書いた文字だけに適用し、値に由来する文字はリテラルとして扱う。OS による違いはない。
 
-`write.allow` 以外で参照できる環境変数は `XDG_RUNTIME_DIR` のみ。未設定または空文字列なら、その変数を含むパスエントリを丸ごとスキップする。ランタイムディレクトリの実在条件は §6.1 に従う。
+`write.allow` 以外で参照できる環境変数は `XDG_RUNTIME_DIR` のみ。未設定または空文字列なら、その変数を含むパスエントリを丸ごとスキップする。
 
-`${REPOSITORY_NAME}` はパスエントリ内の任意の位置に記述できる。`~/.agents/work/${REPOSITORY_NAME}` と `~/.agents/worktrees/${REPOSITORY_NAME}` は、Git repository内の main・linked worktree から同じ main worktree名の作業フォルダへ解決し、Git repository外では開始ディレクトリ名の作業フォルダへ解決する。名前はリテラルのパス成分として扱い、名前内の `*`・`[...]`・`{a,b}` や変数表記を再展開しない。設定へ直接記述したglob・ブレースは展開する。例えば、開始cwd が `/tmp/{alpha,beta}` の場合、作業フォルダは `~/.agents/work/{alpha,beta}` の1件となる。正規化後のbasename が空のルートディレクトリでは、この変数を含むエントリは許可・bind・作成しない。展開後のパス配下だけが許可・bind対象となる。`write` の後勝ちで `allow` に確定した固定パスは、起動時に `mkdir -p` される。
+`${REPOSITORY_NAME}` はパスエントリ内の任意の位置に記述できる。`~/.agents/work/${REPOSITORY_NAME}` と `~/.agents/worktrees/${REPOSITORY_NAME}` は、Git repository内の main・linked worktree から同じ main worktree名の作業フォルダへ解決し、Git repository外では開始ディレクトリ名の作業フォルダへ解決する。名前はリテラルのパス成分として扱い、名前内の `*`・`[...]`・`{a,b}` や変数表記を再展開しない。設定へ直接記述したglob・ブレースは展開する。例えば、開始cwd が `/tmp/{alpha,beta}` の場合、作業フォルダは `~/.agents/work/{alpha,beta}` の1件となる。正規化後のbasename が空のルートディレクトリでは、この変数を含むエントリは許可・bind・作成しない。展開後のパス配下だけが許可・bind対象となる。起動時の作成は §6.1 に従う。
 
 ### globパターン
 
@@ -283,7 +283,7 @@ network は開放。fs制限の対象外。
 | 項目 | 意味 |
 | --- | --- |
 | `read` | read / grep / find / ls のパスアクション（§2・§3）。パスの記述形式は §3（相対パスは cwd から解決） |
-| `write` | write / edit のパスアクション（§2・§3）。後勝ちで `allow` に確定する固定パスは起動時に作成される（§6.1） |
+| `write` | write / edit のパスアクション（§2・§3）。固定パスの起動時の作成は §6.1 に従う |
 | `credentials` | bash の sandbox に read-only で bindするパスパターン。`read` `write` `edit` `grep` `find` `ls` からは常に拒否され、read / write のアクション判定・動的許可の対象外（§2.2・§3） |
 | `commands` | コマンドのアクション（§4）。パターンは正規表現（JavaScript `RegExp`）として評価する |
 
@@ -327,9 +327,9 @@ command と args の各文字列はJavaScript RegExp sourceであり、実行フ
 
 ### 6.1 bind とパスの実在保証
 
-`read` / `write` の `allow` アクションのパスは bwrap で bindするため実在が必須（`write` は後勝ちで `allow` に確定したパスのみ。下段）。ホワイトリスト方式（§2）なので未bind のパスはサンドボックス内に存在せず、PM がキャッシュディレクトリを自前作成できない。よって起動時に piプロセス本体（フェンス外）が `write` の後勝ちで `allow` に確定する固定パスを `mkdir -p` し、bwrap は `--bind-try` で存在を気にせずbindする。`${GIT_MAIN_WORKTREE_PATH}` と `${REPOSITORY_NAME}` を含むエントリも、解決できたときは `mkdir -p` の対象とする（Git repositoryの内外を問わない。`~/.agents/worktrees/${REPOSITORY_NAME}` のような worktree 置き場ディレクトリを作るため）。`${XDG_RUNTIME_DIR}` を含むエントリは作成対象外とする（ランタイムディレクトリはセッションマネージャーが管理し、実在するときだけ bindする）。
+bwrap で bindするにはパスが実在する必要がある。サンドボックス内から作れないキャッシュなどを用意するため、起動時に piプロセス本体(フェンス外)が、後勝ちで `allow` に確定した未作成の `write` 固定パスを `mkdir -p` で作成しようとする。変数を含むエントリも、固定パスに解決できれば同じように扱う。作成に失敗した場合は対象パスとエラーを警告に出し、残りのパスの処理と起動を続ける。実在する `write` の bind対象は `--bind-try` で bwrap に渡す。
 
-`write` の動的許可パスも同じ実在保証の対象とし、承認時にフェンス外で作成する（ファイル単体スコープは親ディレクトリの `mkdir -p` と空ファイル作成、ディレクトリスコープは対象ディレクトリの `mkdir -p`）。実在保証に成功した許可だけを動的許可と bind対象に追加する。作成に失敗した許可要求はエラーを返し、後続のツール呼び出しの動作を変えない。`read` の動的許可でパスは作成しない。
+`write` の動的許可パスは承認時にフェンス外で作成する（ファイル単体スコープは親ディレクトリの `mkdir -p` と空ファイル作成、ディレクトリスコープは対象ディレクトリの `mkdir -p`）。実在保証に成功した許可だけを動的許可と bind対象に追加する。作成に失敗した許可要求はエラーを返し、後続のツール呼び出しの動作を変えない。`read` の動的許可でパスは作成しない。
 
 `credentials` のパスは bash の sandbox にのみ `--ro-bind` する。credentials のファイル自体や glob のマッチ先は作成せず、存在するパスだけを起動時に bindする。
 
