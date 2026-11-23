@@ -2946,7 +2946,10 @@ exec ${JSON.stringify(realTmux)} "$@"
   }, 20000);
 });
 
-function prepareManagedPi(fixture: SessionFixture): void {
+function prepareManagedPi(
+  fixture: SessionFixture,
+  publicationGates?: { metadata: string; state: string },
+): void {
   writeFileSync(
     join(fixture.directory, "bin/pi"),
     `#!${process.execPath}
@@ -2971,7 +2974,9 @@ function tmux(args) {
   const result = spawnSync(${JSON.stringify(realTmux)}, ["-S", ${JSON.stringify(fixture.socket)}, ...args]);
   if (result.status !== 0) process.exit(99);
 }
+${publicationGates ? `while (!(await Bun.file(${JSON.stringify(publicationGates.metadata)}).exists())) await Bun.sleep(10);` : ""}
 tmux(["set-option", "-p", "-t", pane, "@pi-tmux-session", Buffer.from(JSON.stringify(metadata)).toString("base64")]);
+${publicationGates ? `while (!(await Bun.file(${JSON.stringify(publicationGates.state)}).exists())) await Bun.sleep(10);` : ""}
 tmux(["set-option", "-p", "-t", pane, "@pi_session_state", JSON.stringify({version:1,sessionId:id,state:"waiting-user"})]);
 appendFileSync(${JSON.stringify(join(fixture.directory, "launches.jsonl"))}, JSON.stringify({id,cwd:process.cwd(),args:process.argv.slice(2)}) + "\\n");
 await Bun.sleep(300000);
@@ -4123,6 +4128,83 @@ describe("reload", () => {
         },
       ]);
     } finally {
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("waits for the replacement pi to publish its own state during concurrent reloads", async () => {
+    const fixture = new SessionFixture();
+    let first: ReturnType<typeof startReload> | undefined;
+    let second: ReturnType<typeof startReload> | undefined;
+    try {
+      const metadata = join(fixture.directory, "allow-metadata");
+      const state = join(fixture.directory, "allow-state");
+      prepareManagedPi(fixture, { metadata, state });
+      const id = addManagedSession(fixture, "target", "waiting-user");
+      const pane = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_id}"]);
+      function panePid() {
+        return fixture.tmux(["display-message", "-p", "-t", pane, "#{pane_pid}"]);
+      }
+      const oldPid = panePid();
+      const oldState = fixture.run([
+        "state",
+        id,
+        "waiting-user",
+        "--source",
+        JSON.stringify({
+          socket: fixture.socket,
+          serverPid: Number(fixture.tmux(["display-message", "-p", "#{pid}"])),
+          pane,
+          pid: Number(oldPid),
+          token: fixture.launchTokenOf("target"),
+        }),
+        "--title",
+        "null",
+      ]);
+      assert.equal(oldState.status, 0, oldState.stderr);
+      const pending = JSON.stringify({ version: 1, sessionId: id, attemptAt: Date.now() });
+      fixture.tmux(["set-option", "-p", "-t", pane, "@pi_session_state_pending", pending]);
+
+      const scans = join(fixture.directory, "second-reload-scans");
+      writeFileSync(scans, "");
+      const wrapper = join(fixture.directory, "bin/tmux");
+      writeFileSync(
+        wrapper,
+        readFileSync(wrapper, "utf8").replace(
+          "exec ",
+          `case "$PI_MUX_FIXTURE_SECOND_RELOAD:$5:$*" in
+  1:-C:*@pi_session_state*) printf . >> ${JSON.stringify(scans)} ;;
+esac
+exec `,
+        ),
+      );
+      first = startReload(fixture, [id]);
+      await waitUntil(() => panePid() !== oldPid);
+      const replacementPid = panePid();
+      fixture.env.PI_MUX_FIXTURE_SECOND_RELOAD = "1";
+      second = startReload(fixture, [id]);
+      writeFileSync(metadata, "");
+      const firstResult = await finishReload(first);
+      assert.equal(firstResult.status, 0, firstResult.stderr);
+      assert.equal(firstResult.stdout.trim(), `reloaded ${id}`);
+
+      await waitUntil(() => panePid() !== replacementPid || readFileSync(scans).length >= 2);
+      assert.equal(panePid(), replacementPid, "second reload replaced pi before state publication");
+      assert.equal(second.exitCode, null);
+      assert.equal(fixture.tmux(["show-options", "-pqv", "-t", pane, "@pi-mux-state-source"]), "");
+      assert.equal(
+        fixture.tmux(["show-options", "-pqv", "-t", pane, "@pi_session_state_pending"]),
+        pending,
+      );
+      writeFileSync(state, "");
+      const secondResult = await finishReload(second);
+      assert.equal(secondResult.status, 0, secondResult.stderr);
+      assert.equal(secondResult.stdout.trim(), `reloaded ${id}`);
+      assert.notEqual(panePid(), replacementPid);
+    } finally {
+      first?.kill();
+      second?.kill();
+      await Promise.all([first?.exited, second?.exited]);
       await fixture.cleanup();
     }
   }, 20000);

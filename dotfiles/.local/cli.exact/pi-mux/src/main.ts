@@ -1406,6 +1406,8 @@ async function reloadTarget(
     [
       tmuxArguments(["set-option", "-pu", "-t", pane.pane, "@pi-tmux-session"]),
       tmuxArguments(["respawn-pane", "-k", "-t", pane.pane, "--", paneCommand]),
+      tmuxArguments(["set-option", "-pu", "-t", pane.pane, "@pi_session_state"]),
+      tmuxArguments(["set-option", "-pu", "-t", pane.pane, "@pi-mux-state-source"]),
       tmuxArguments([
         "set-option",
         "-pF",
