@@ -472,7 +472,7 @@ discard — 成果を捨てる判断が入るため、実行前に user の承�
 close — エディタのワークスペースから worktree を外す操作は本手順に含まず、user が手動で行う。
 
 1. 対象の worktree とブランチの対応を `git worktree list --porcelain` で確認する。自分のセッションの作業先だけを、対象外のディレクトリから操作する。セッション開始時の cwd を含む worktree は削除しない。
-   - finish: `git merge-base --is-ancestor <branch> <統合先>` で統合済みと確認する。削除直前に `git --no-optional-locks -C <worktree のパス> status --porcelain=v1 --untracked-files=all --ignored --ignore-submodules=none` が成功し、出力が空であることを確認する。確認できなければ worktree とブランチを残して停止する。`git worktree remove <worktree のパス>` が成功したら `git branch -d <branch>` を実行する。
+   - finish: `git worktree remove <worktree のパス>` が成功したら `git branch -d <branch>` を実行する。
    - discard: `git worktree remove --force <worktree のパス>` が成功したら `git branch -D <branch>` を実行する。
 2. `git worktree list` に prunable な参照が残っていれば、Bash で `git worktree prune` を実行する。
 
