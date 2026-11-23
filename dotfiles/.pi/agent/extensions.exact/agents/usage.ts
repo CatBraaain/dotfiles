@@ -1,3 +1,6 @@
+import { access } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
@@ -65,14 +68,22 @@ export function scoreCandidates(
 export async function runUsage(
   pi: Pick<ExtensionAPI, "exec">,
   signal?: AbortSignal,
+  { platform = process.platform, homeDir = homedir() } = {},
 ): Promise<{ exitCode: number; stdout: string }> {
   signal?.throwIfAborted();
-  const result = await pi.exec("bash", ["-c", "exec usage --json"], {
+  const isWindows = platform === "win32";
+  const command = isWindows ? join(homeDir, ".agents", "cli", "usage.exe") : "bash";
+  const args = isWindows ? ["--json"] : ["-c", "exec usage --json"];
+  const result = await pi.exec(command, args, {
     signal,
     timeout: USAGE_TIMEOUT_MS,
   });
   signal?.throwIfAborted();
   if (result.killed || ("truncated" in result && result.truncated === true))
     throw new Error("Usage query returned killed or truncated output");
+  if (isWindows && result.code === 1) {
+    await access(command);
+    signal?.throwIfAborted();
+  }
   return { exitCode: result.code, stdout: result.stdout };
 }

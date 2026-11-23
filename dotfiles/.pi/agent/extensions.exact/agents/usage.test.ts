@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, it } from "bun:test";
 import { runUsage, scoreCandidates, parseUsageFacts, type ProviderUsageFacts } from "./usage.ts";
@@ -134,7 +137,10 @@ describe("usage execution through pi.exec", () => {
       };
     });
     const controller = new AbortController();
-    assert.deepEqual(await runUsage(pi, controller.signal), { exitCode, stdout: "[]" });
+    assert.deepEqual(await runUsage(pi, controller.signal, { platform: "linux" }), {
+      exitCode,
+      stdout: "[]",
+    });
     assert.deepEqual(received, [
       "bash",
       ["-c", "exec usage --json"],
@@ -142,18 +148,52 @@ describe("usage execution through pi.exec", () => {
     ]);
   });
 
-  it("keeps command-not-found exit 127 for a missing usage CLI", async () => {
-    const pi = createPi(async (command, args) => {
-      assert.equal(command, "bash");
-      const result = spawnSync("/bin/bash", args as string[], {
-        encoding: "utf8",
-        env: { ...process.env, PATH: "/missing-usage-fixture" },
-      });
-      assert.ifError(result.error);
-      return { code: result.status, stdout: result.stdout, stderr: result.stderr, killed: false };
+  it("starts the installed Windows usage executable without Bash", async () => {
+    const executable = join(homedir(), ".agents", "cli", "usage.exe");
+    const controller = new AbortController();
+    const pi = createPi(async (...args) => {
+      assert.deepEqual(args, [
+        executable,
+        ["--json"],
+        { signal: controller.signal, timeout: 25_000 },
+      ]);
+      return { code: 0, stdout: "[]", stderr: "", killed: false, truncated: false };
     });
-    assert.deepEqual(await runUsage(pi), { exitCode: 127, stdout: "" });
+    assert.deepEqual(await runUsage(pi, controller.signal, { platform: "win32" }), {
+      exitCode: 0,
+      stdout: "[]",
+    });
   });
+
+  it("reports ENOENT when the Windows executable is missing and pi.exec returns 1", async () => {
+    const homeDir = join(tmpdir(), randomUUID());
+    const pi = createPi(async () => ({
+      code: 1,
+      stdout: "",
+      stderr: "spawn failed",
+      killed: false,
+      truncated: false,
+    }));
+    await assert.rejects(runUsage(pi, undefined, { platform: "win32", homeDir }), {
+      code: "ENOENT",
+    });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps command-not-found exit 127 for a missing usage CLI",
+    async () => {
+      const pi = createPi(async (command, args) => {
+        assert.equal(command, "bash");
+        const result = spawnSync("/bin/bash", args as string[], {
+          encoding: "utf8",
+          env: { ...process.env, PATH: "/missing-usage-fixture" },
+        });
+        assert.ifError(result.error);
+        return { code: result.status, stdout: result.stdout, stderr: result.stderr, killed: false };
+      });
+      assert.deepEqual(await runUsage(pi), { exitCode: 127, stdout: "" });
+    },
+  );
 
   it("does not start a pre-aborted query", async () => {
     const controller = new AbortController();

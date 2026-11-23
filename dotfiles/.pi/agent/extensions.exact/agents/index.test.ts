@@ -7344,16 +7344,18 @@ describe("usage scoring and ordering", () => {
 
   it.each([
     { name: "missing CLI", exitCode: 127, stdout: "" },
+    { name: "missing executable", exitCode: 127, stdout: "", spawnError: "ENOENT" },
     { name: "malformed output", exitCode: 0, stdout: "not json" },
   ])(
     "disables only routing after $name and preserves the configured fallback",
-    async ({ exitCode, stdout }) => {
+    async ({ exitCode, stdout, spawnError }) => {
       let calls = 0;
       const extension = captureAgentsExtension(
         { config: routedConfig },
         {
           async executeUsage() {
             calls++;
+            if (spawnError) throw Object.assign(new Error("spawn failed"), { code: spawnError });
             return { exitCode, stdout };
           },
         },
@@ -8387,8 +8389,7 @@ describe("shipped agents.yaml through the shared usage entry", () => {
       ],
       nowMs,
     );
-    const usageCalls: Array<[string, string[], unknown]> = [];
-    const usageResponses: string[] = [];
+    let usageCalls = 0;
     const extension = captureAgentsExtension(
       { config: parsed.config },
       {
@@ -8403,9 +8404,8 @@ describe("shipped agents.yaml through the shared usage entry", () => {
           { provider: "commandcode", id: "z-ai/glm-5.3-flash" },
         ],
         executeUsage: runUsage,
-        usageExec: async (command, args, options) => {
-          usageCalls.push([command, args, options]);
-          usageResponses.push(usageJson);
+        usageExec: async () => {
+          usageCalls++;
           return { code: 0, stdout: usageJson, stderr: "", killed: false, truncated: false };
         },
       },
@@ -8419,11 +8419,7 @@ describe("shipped agents.yaml through the shared usage entry", () => {
     const clock = spyOn(Date, "now").mockReturnValue(nowMs);
     try {
       await extension.sessionStart();
-      assert.equal(usageCalls.length, 1);
-      assert.deepEqual(usageCalls, [
-        ["bash", ["-c", "exec usage --json"], { signal: undefined, timeout: 25_000 }],
-      ]);
-      assert.deepEqual(usageResponses, [usageJson]);
+      assert.equal(usageCalls, 1);
       assert.deepEqual(appliedModelKeys(), [
         "openai-codex/gpt-6.1-sol",
         "commandcode/z-ai/glm-5.3-flash",
@@ -8432,12 +8428,7 @@ describe("shipped agents.yaml through the shared usage entry", () => {
 
       extension.context.model = { provider: "external", id: "x" };
       await extension.runClassCommand("high");
-      assert.equal(usageCalls.length, 2);
-      assert.deepEqual(usageCalls, [
-        ["bash", ["-c", "exec usage --json"], { signal: undefined, timeout: 25_000 }],
-        ["bash", ["-c", "exec usage --json"], { signal: undefined, timeout: 25_000 }],
-      ]);
-      assert.deepEqual(usageResponses, [usageJson, usageJson]);
+      assert.equal(usageCalls, 2);
       const highApplied = appliedModelKeys().slice(3);
       assert.equal(highApplied[0], "openai-codex/gpt-6.1-sol");
       assert.equal(highApplied[1], "commandcode/z-ai/glm-5.3-flash");

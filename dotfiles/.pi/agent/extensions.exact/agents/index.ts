@@ -1226,8 +1226,15 @@ export default function agentsExtension(
         const { exitCode, stdout } = await executeUsage(pi, signal);
         if (exitCode === 127) routingUsageDisabled = true;
         if (exitCode === 0) usageStdout = stdout;
-      } catch {
-        usageStdout = undefined;
+      } catch (error) {
+        if (
+          !signal?.aborted &&
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "ENOENT"
+        ) {
+          routingUsageDisabled = true;
+        }
       }
     }
     const nowMs = Date.now();
