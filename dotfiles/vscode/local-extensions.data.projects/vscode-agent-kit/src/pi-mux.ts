@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { isAbsolute } from "node:path";
-import { errorMessage, isRecord } from "./guards";
+import { errorMessage, isEpochMs, isRecord } from "./guards";
 
 const QUERY_TIMEOUT_MS = 10_000;
 const SWITCH_TARGET_MISSING_EXIT_CODE = 2;
@@ -24,7 +24,13 @@ export interface PiMuxSession {
   title: string | null;
   /** Last state publication attempt that pi-mux has not applied yet; null when none. */
   publishPending?: PiMuxPublishPending | null;
+  lastRun?: PiMuxLastRun;
   temporary?: true;
+}
+
+export interface PiMuxLastRun {
+  atMs: number;
+  aborted: boolean;
 }
 
 /** `publishPending` item: the publication was attempted at `attemptAt` (Unix epoch ms). */
@@ -128,7 +134,12 @@ export class PiMux {
     if (!Array.isArray(workspaces) || !workspaces.every(isPiMuxWorkspace)) {
       throw new Error("Invalid pi-mux list response");
     }
-    return workspaces;
+    return workspaces.map((workspace) => ({
+      ...workspace,
+      sessions: workspace.sessions.map(({ lastRun, ...session }) =>
+        isPiMuxLastRun(lastRun) ? { ...session, lastRun } : session,
+      ),
+    }));
   }
 
   async aliveSessionIds(sessionIds: readonly string[]): Promise<Set<string> | null> {
@@ -214,7 +225,10 @@ function isCliUnavailable(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
-function isPiMuxWorkspace(workspace: unknown): workspace is PiMuxWorkspace {
+type PiMuxSessionPayload = Omit<PiMuxSession, "lastRun"> & { lastRun?: unknown };
+type PiMuxWorkspacePayload = Omit<PiMuxWorkspace, "sessions"> & { sessions: PiMuxSessionPayload[] };
+
+function isPiMuxWorkspace(workspace: unknown): workspace is PiMuxWorkspacePayload {
   return (
     isRecord(workspace) &&
     typeof workspace.cwd === "string" &&
@@ -226,7 +240,7 @@ function isPiMuxWorkspace(workspace: unknown): workspace is PiMuxWorkspace {
   );
 }
 
-function isPiMuxSession(session: unknown): session is PiMuxSession {
+function isPiMuxSession(session: unknown): session is PiMuxSessionPayload {
   return (
     isRecord(session) &&
     typeof session.id === "string" &&
@@ -240,14 +254,12 @@ function isPiMuxSession(session: unknown): session is PiMuxSession {
   );
 }
 
+function isPiMuxLastRun(value: unknown): value is PiMuxLastRun {
+  return isRecord(value) && isEpochMs(value.atMs) && typeof value.aborted === "boolean";
+}
+
 function isPiMuxPublishPending(value: unknown): value is PiMuxPublishPending | null {
-  if (value === null) return true;
-  return (
-    isRecord(value) &&
-    typeof value.attemptAt === "number" &&
-    Number.isSafeInteger(value.attemptAt) &&
-    value.attemptAt > 0
-  );
+  return value === null || (isRecord(value) && isEpochMs(value.attemptAt));
 }
 
 function isPiMuxEmptySession(session: unknown): session is PiMuxEmptySession {

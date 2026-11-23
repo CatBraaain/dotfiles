@@ -60,13 +60,13 @@ export class TerminalRegistry implements vscode.Disposable {
     return next;
   }
 
-  preparePresentation(mode: "reveal" | "focus" = "reveal"): (terminal: vscode.Terminal) => void {
+  preparePresentation(mode: "reveal" | "focus" = "reveal"): (terminal: vscode.Terminal) => boolean {
     const version = ++this.presentationVersion;
     return (terminal) => this.present(terminal, mode, version);
   }
 
-  private present(terminal: vscode.Terminal, mode: "reveal" | "focus", version: number): void {
-    if (this.disposed || this.closed.has(terminal)) return;
+  private present(terminal: vscode.Terminal, mode: "reveal" | "focus", version: number): boolean {
+    if (this.disposed || this.closed.has(terminal)) return false;
     const preserveFocus = mode === "reveal" || version !== this.presentationVersion;
     terminal.show(preserveFocus);
     void terminal.processId.then(
@@ -83,6 +83,7 @@ export class TerminalRegistry implements vscode.Disposable {
       },
       () => {},
     );
+    return true;
   }
 
   presentExisting(): void {

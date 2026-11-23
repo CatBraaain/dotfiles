@@ -26,8 +26,13 @@ const SESSION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
 const FIRST_MESSAGE_MAX_CODE_POINTS = 80;
 const SESSION_INFO_TYPE_BYTES = Buffer.from("session_info");
 const JSON_UNICODE_ESCAPE_BYTES = Buffer.from("\\u");
+const LAST_RUN_SCAN_BYTES = 16 * 1024 * 1024;
+const LAST_RUN_CUSTOM_TYPE = "pi-mux-last-run";
+const LAST_RUN_CUSTOM_TYPE_BYTES = Buffer.from(`"${LAST_RUN_CUSTOM_TYPE}"`);
+const CUSTOM_TYPE_BYTES = Buffer.from('"custom"');
 
 export type SavedSessionSummary = { title: string | null; mtime: number | null };
+export type LastRun = { atMs: number; aborted: boolean };
 
 type SavedSessionHeader = { id: string; cwd: string; btime: number };
 type StoredSummary = SavedSessionSummary & {
@@ -188,6 +193,78 @@ function readSavedSessionHeader(fd: number): SavedSessionHeader | null {
   if (!header || header.type !== "session") return null;
   const parsed = { id: header.id, cwd: header.cwd, btime: parseEpochMs(header.timestamp) };
   return isValidHeader(parsed) ? parsed : null;
+}
+
+export function readSessionLastRun(file: string, id: string): LastRun | undefined {
+  const maxAttempts = 2;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK);
+      try {
+        const before = fstatSync(fd, { bigint: true });
+        const size = Number(before.size);
+        if (!before.isFile() || !Number.isSafeInteger(size)) return undefined;
+        const header = readSessionHeader(fd);
+        if (header?.type !== "session" || header.id !== id) return undefined;
+        const lastRun = findLastRun(fd, size, id);
+        if (
+          sameFingerprint(before, fstatSync(fd, { bigint: true })) &&
+          sameFingerprint(before, statSync(file, { bigint: true }))
+        )
+          return lastRun;
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+export function parseLastRun(value: unknown): LastRun | undefined {
+  if (!isJsonObject(value)) return undefined;
+  const { atMs, aborted } = value;
+  if (
+    typeof atMs !== "number" ||
+    !Number.isSafeInteger(atMs) ||
+    atMs <= 0 ||
+    typeof aborted !== "boolean"
+  )
+    return undefined;
+  return { atMs, aborted };
+}
+
+function findLastRun(fd: number, size: number, id: string): LastRun | undefined {
+  const start = Math.max(0, size - LAST_RUN_SCAN_BYTES);
+  for (const line of reverseLines(fd, size, start)) {
+    const mayContainLastRun =
+      (line.includes(LAST_RUN_CUSTOM_TYPE_BYTES) && line.includes(CUSTOM_TYPE_BYTES)) ||
+      line.includes(JSON_UNICODE_ESCAPE_BYTES);
+    if (!mayContainLastRun) continue;
+
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line.toString("utf8"));
+    } catch {
+      continue;
+    }
+    if (
+      !isJsonObject(entry) ||
+      entry.type !== "custom" ||
+      entry.customType !== LAST_RUN_CUSTOM_TYPE ||
+      !isJsonObject(entry.data) ||
+      entry.data.sessionId !== id
+    )
+      continue;
+
+    const lastRun = parseLastRun(entry.data);
+    if (lastRun) return lastRun;
+  }
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function readSessionHeader(fd: number): Record<string, unknown> | undefined {
@@ -356,11 +433,11 @@ function mayContainSessionInfo(line: Buffer): boolean {
   return line.includes(SESSION_INFO_TYPE_BYTES) || line.includes(JSON_UNICODE_ESCAPE_BYTES);
 }
 
-function* reverseLines(fd: number, size: number): Generator<Buffer> {
+function* reverseLines(fd: number, size: number, start = 0): Generator<Buffer> {
   let position = size;
   let parts: Buffer[] = [];
-  while (position > 0) {
-    const length = Math.min(SUMMARY_READ_CHUNK_BYTES, position);
+  while (position > start) {
+    const length = Math.min(SUMMARY_READ_CHUNK_BYTES, position - start);
     position -= length;
     const buffer = Buffer.allocUnsafe(length);
     let filled = 0;
@@ -380,7 +457,7 @@ function* reverseLines(fd: number, size: number): Generator<Buffer> {
     }
     if (end > 0) parts.push(buffer.subarray(0, end));
   }
-  if (parts.length > 0) yield Buffer.concat(parts.reverse());
+  if (start === 0 && parts.length > 0) yield Buffer.concat(parts.reverse());
 }
 
 function fileFingerprint(stat: BigIntStats): string {

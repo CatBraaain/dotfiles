@@ -107,9 +107,19 @@ async function waitFor(label: string, predicate: () => boolean): Promise<void> {
   }
 }
 
+const LAST_RUN_ENTRY_TYPE = "pi-mux-last-run";
+
+interface CustomEntry {
+  type: "custom";
+  customType: string;
+  data: unknown;
+}
+
 interface ExtensionHarness {
   agentDir: string;
   restorePath: string;
+  entries: CustomEntry[];
+  entryCountsAtStateCalls: number[];
   commands: Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>;
   server: FakeTmuxServer;
   sessionId: string;
@@ -127,6 +137,7 @@ async function createExtensionHarness(
     customDir?: boolean;
     dedicated?: boolean;
     deferDiscovery?: boolean;
+    failFirstAppend?: boolean;
   } = {},
 ): Promise<ExtensionHarness> {
   await mkdir("/tmp/work/dotfiles", { recursive: true });
@@ -182,6 +193,8 @@ async function createExtensionHarness(
   const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
   const server = new FakeTmuxServer(socketPath);
   const modelRegistry = {};
+  const entries: CustomEntry[] = [];
+  const entryCountsAtStateCalls: number[] = [];
   const context = {
     signal: runController.signal,
     modelRegistry,
@@ -189,12 +202,12 @@ async function createExtensionHarness(
       getCwd: () => workspacePath,
       getSessionId: () => harnessSessionId.value,
       getSessionName: () => harnessSessionId.name,
-      getSessionFile: () => undefined,
       getSessionDir: () => sessionDir,
       getHeader: () => ({ parentSession: "/ordinary/top-level-parent.jsonl" }),
     },
   } as unknown as ExtensionContext;
   const events: ExtensionAPI["events"] = bus;
+  let failNextAppend = options.failFirstAppend;
   const pi = {
     on(type: string, handler: EventHandler) {
       const registered = handlers.get(type) ?? [];
@@ -202,11 +215,19 @@ async function createExtensionHarness(
       handlers.set(type, registered);
     },
     events,
+    appendEntry(customType: string, data: unknown) {
+      if (failNextAppend) {
+        failNextAppend = false;
+        throw new Error("Session append temporarily failed");
+      }
+      entries.push({ type: "custom", customType, data });
+    },
     registerCommand(name: string, command: Parameters<ExtensionAPI["registerCommand"]>[1]) {
       commands.set(name, command);
     },
     exec(command: string, args: string[], options: { timeout?: number; signal?: AbortSignal }) {
       assert.deepEqual(options, { timeout: 1_000 });
+      if (isStateCall({ file: command, args })) entryCountsAtStateCalls.push(entries.length);
       return server.run(command, args);
     },
   } as unknown as ExtensionAPI;
@@ -217,6 +238,8 @@ async function createExtensionHarness(
   const harness: ExtensionHarness = {
     agentDir,
     restorePath,
+    entries,
+    entryCountsAtStateCalls,
     commands,
     server,
     get sessionId() {
@@ -234,7 +257,11 @@ async function createExtensionHarness(
     async emit(type, fields = {}) {
       if (type === "session_info_changed")
         harnessSessionId.name = fields.name as string | undefined;
-      const event = { type, ...fields } as ExtensionEvent;
+      const event = {
+        type,
+        ...(type === "agent_settled" ? { aborted: false } : {}),
+        ...fields,
+      } as ExtensionEvent;
       for (const handler of handlers.get(type) ?? []) {
         const result = await handler(event, context);
         assert.equal(result, undefined);
@@ -295,6 +322,7 @@ describe("sessionStateExtension in child sessions", () => {
         assert.equal(existsSync(h.restorePath), false);
         assert.deepEqual([...h.commands.keys()], []);
         assert.deepEqual(h.server.commands, []);
+        assert.deepEqual(h.entries, []);
       } finally {
         await h.close();
       }
@@ -671,7 +699,9 @@ describe("session-state MVP state boundaries", () => {
         await finishEventLoopTurn();
         await finishEventLoopTurn();
         const count = h.server.commands.length;
-        await h.emit(event === "session_start" ? "ui_prompt_end" : event);
+        if (event !== "agent_settled") {
+          await h.emit(event === "session_start" ? "ui_prompt_end" : event);
+        }
         await finishEventLoopTurn();
         assert.equal(h.server.commands.length, count, event);
       }
@@ -720,14 +750,22 @@ describe("session-state MVP state boundaries", () => {
         () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-approval"),
       );
       const count = h.server.commands.length;
-      for (const event of [...progressEvents, "agent_start", "agent_settled"]) await h.emit(event);
+      const requestCount = stateArguments(h.server.commands).length;
+      for (const event of [...progressEvents, "agent_start"]) await h.emit(event);
       await finishEventLoopTurn();
       assert.equal(h.server.commands.length, count);
+      const atMs = Date.now();
+      await emitSettledAt(h, atMs);
+      await finishEventLoopTurn();
+      assert.deepEqual(h.entries, [lastRunEntry(h.sessionId, { atMs, aborted: false })]);
+      assert.equal(stateArguments(h.server.commands).length, requestCount);
       await h.emit("ui_prompt_end");
       await waitFor(
         "idle",
         () => h.server.paneOptionOf("%0") === stateOptionValue("s1", "waiting-user"),
       );
+      assert.equal(stateArguments(h.server.commands).length, requestCount + 1);
+      assert.equal(h.entryCountsAtStateCalls.at(-1), 1);
     } finally {
       await h.close();
     }
@@ -963,7 +1001,7 @@ describe("session-state latest publication recovery", () => {
       );
       assert.equal(new Set(requests.map((args) => args[args.indexOf("--source") + 1])).size, 1);
       delete h.server.responses.state;
-      await h.emit("agent_settled");
+      await h.emit("ui_prompt_end");
       await finishEventLoopTurn();
       assert.equal(stateArguments(h.server.commands).length, requests.length);
     } finally {
@@ -1085,7 +1123,7 @@ describe("session-state partial publication recovery", () => {
           [title ?? null, title ?? null, title ?? null],
         );
         const count = h.server.commands.length;
-        await h.emit("agent_settled");
+        await h.emit("ui_prompt_end");
         await h.emit("session_info_changed", { name: title });
         await finishEventLoopTurn();
         assert.equal(h.server.commands.length, count);
@@ -1181,6 +1219,138 @@ function stateArguments(commands: CommandCall[]): string[][] {
   return commands.filter((call) => isStateCall(call)).map((call) => call.args);
 }
 
+function lastRunEntry(sessionId: string, run: { atMs: number; aborted: boolean }): CustomEntry {
+  return { type: "custom", customType: LAST_RUN_ENTRY_TYPE, data: { sessionId, ...run } };
+}
+
+async function emitSettledAt(h: ExtensionHarness, atMs: number, aborted = false): Promise<void> {
+  const clock = spyOn(Date, "now").mockReturnValue(atMs);
+  try {
+    await h.emit("agent_settled", { aborted });
+  } finally {
+    clock.mockRestore();
+  }
+}
+
+describe("session-state settlements", () => {
+  it("retries a failed append before notifying waiting-user", async () => {
+    const h = await createExtensionHarness({ failFirstAppend: true });
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      await h.emit("agent_settled", { aborted: true });
+      await waitFor("settled", () => stateArguments(h.server.commands).length === 2);
+      assert.equal(h.entries.length, 1);
+      assert.equal((h.entries[0]!.data as { aborted: boolean }).aborted, true);
+      assert.deepEqual(h.entryCountsAtStateCalls, [0, 1]);
+    } finally {
+      await h.close();
+    }
+  });
+  it("appends before publishing with standard argv, even for identical state, title, and timestamp", async () => {
+    const h = await createExtensionHarness();
+    try {
+      await h.emit("session_start");
+      await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
+      const args = [
+        "state",
+        h.sessionId,
+        "waiting-user",
+        "--title",
+        "null",
+        "--source",
+        JSON.stringify({
+          socket: h.server.socketPath,
+          serverPid: process.pid,
+          pane: "%0",
+          pid: process.pid,
+          token: process.env.PI_TMUX_LAUNCH_TOKEN,
+        }),
+      ];
+      const atMs = Date.now();
+      await emitSettledAt(h, atMs);
+      await waitFor("first settlement", () => stateArguments(h.server.commands).length === 2);
+      await emitSettledAt(h, atMs);
+      await waitFor("second settlement", () => stateArguments(h.server.commands).length === 3);
+      await emitSettledAt(h, atMs + 1, true);
+      await waitFor("aborted settlement", () => stateArguments(h.server.commands).length === 4);
+      assert.deepEqual(stateArguments(h.server.commands), [args, args, args, args]);
+      assert.deepEqual(h.entryCountsAtStateCalls, [0, 1, 2, 3]);
+      assert.deepEqual(h.entries, [
+        lastRunEntry(h.sessionId, { atMs, aborted: false }),
+        lastRunEntry(h.sessionId, { atMs, aborted: false }),
+        lastRunEntry(h.sessionId, { atMs: atMs + 1, aborted: true }),
+      ]);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("republishes the same state after an in-flight publication, coalescing to the latest run", async () => {
+    const h = await createExtensionHarness();
+    const inFlight = Promise.withResolvers<ExecResult>();
+    try {
+      h.server.responses.state = () => inFlight.promise;
+      await h.emit("session_start");
+      await waitFor("initial publication", () => stateArguments(h.server.commands).length === 1);
+      const atMs = Date.now();
+      await emitSettledAt(h, atMs);
+      await emitSettledAt(h, atMs + 1, true);
+      assert.deepEqual(h.entries, [
+        lastRunEntry(h.sessionId, { atMs, aborted: false }),
+        lastRunEntry(h.sessionId, { atMs: atMs + 1, aborted: true }),
+      ]);
+      assert.deepEqual(h.entryCountsAtStateCalls, [0]);
+      delete h.server.responses.state;
+      inFlight.resolve(completedResult(""));
+      await waitFor("fresh publication", () => h.entryCountsAtStateCalls.length === 2);
+      await finishEventLoopTurn();
+      const requests = stateArguments(h.server.commands);
+      assert.deepEqual(requests, [requests[0], requests[0]]);
+      assert.deepEqual(h.entryCountsAtStateCalls, [0, 2]);
+    } finally {
+      delete h.server.responses.state;
+      inFlight.resolve(completedResult(""));
+      await h.close();
+    }
+  });
+
+  it("captures settlement during pane verification and appends only after verification", async () => {
+    const h = await createExtensionHarness();
+    const verification = Promise.withResolvers<ExecResult>();
+    try {
+      h.server.responses["display-message"] = () => verification.promise;
+      await h.emit("session_start");
+      await waitFor("pane verification", () => h.server.hasPending());
+      const atMs = Date.now();
+      await emitSettledAt(h, atMs);
+      assert.deepEqual(h.entries, []);
+      verification.resolve(
+        completedResult([h.server.socketPath, process.pid, "%0", "", process.pid].join("\t")),
+      );
+      await waitFor("first publication", () => stateArguments(h.server.commands).length === 1);
+      assert.deepEqual(h.entryCountsAtStateCalls, [1]);
+      assert.deepEqual(h.entries, [lastRunEntry(h.sessionId, { atMs, aborted: false })]);
+    } finally {
+      verification.resolve(completedResult(""));
+      await h.close();
+    }
+  });
+
+  it("does not save settlements outside the dedicated server", async () => {
+    const h = await createExtensionHarness({ dedicated: false });
+    try {
+      await h.emit("session_start");
+      await h.emit("agent_settled", { aborted: true });
+      await finishEventLoopTurn();
+      assert.deepEqual(h.entries, []);
+      assert.deepEqual(h.server.commands, []);
+    } finally {
+      await h.close();
+    }
+  });
+});
+
 describe("session-state lock retries", () => {
   it("returns from discovery while busy and coalesces later state and title", async () => {
     const h = await createExtensionHarness();
@@ -1190,7 +1360,9 @@ describe("session-state lock retries", () => {
       await waitFor("initial busy request", () => stateArguments(h.server.commands).length > 0);
       await h.emit("agent_start");
       await h.emit("session_info_changed", { name: "Queued title" });
-      await h.emit("agent_settled");
+      const atMs = Date.now();
+      await emitSettledAt(h, atMs);
+      await emitSettledAt(h, atMs + 1, true);
       await waitFor("background retry", () => stateArguments(h.server.commands).length >= 2);
       assert.equal(h.server.paneOptionOf("%0"), undefined);
       delete h.server.responses.state;
@@ -1206,6 +1378,11 @@ describe("session-state lock retries", () => {
       );
       const sources = requests.map((args) => args[args.indexOf("--source") + 1]);
       assert.equal(new Set(sources).size, 1);
+      assert.deepEqual(h.entries, [
+        lastRunEntry(h.sessionId, { atMs, aborted: false }),
+        lastRunEntry(h.sessionId, { atMs: atMs + 1, aborted: true }),
+      ]);
+      assert.deepEqual(h.entryCountsAtStateCalls, [0, 2, 2]);
     } finally {
       delete h.server.responses.state;
       await h.close();

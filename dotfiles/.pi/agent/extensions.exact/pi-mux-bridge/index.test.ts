@@ -62,6 +62,7 @@ function context(mode = "tui") {
       getCwd: () => "/original cwd",
       getSessionDir: () => "/top-level sessions",
       getSessionName: () => undefined,
+      getEntries: () => [],
       getSessionId() {
         return "fixed-id";
       },

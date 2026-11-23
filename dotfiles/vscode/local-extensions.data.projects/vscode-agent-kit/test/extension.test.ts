@@ -121,6 +121,7 @@ vi.mock("vscode", () => ({
 }));
 
 let root: string;
+const globalState = { get: vi.fn(), update: vi.fn().mockResolvedValue(undefined) };
 
 describe("extension commands", () => {
   beforeEach(async () => {
@@ -173,6 +174,7 @@ describe("extension commands", () => {
       subscriptions: [],
       extensionUri: { fsPath: "/extension" },
       globalStorageUri: { fsPath: join(root, "profile-storage") },
+      globalState,
     } as unknown as vscode.ExtensionContext;
     activate(context);
     expect(api.registerCommand).toHaveBeenCalledWith(commandId, expect.any(Function));
@@ -182,16 +184,18 @@ describe("extension commands", () => {
     return registration[1] as () => Promise<void>;
   }
 
-  it("uses profile-wide storage files for the Sessions provider", async () => {
+  it("uses profile-wide storage for Session List workspaces and open times", async () => {
     const directory = join(root, "profile-storage");
     activate({
       subscriptions: [],
       extensionUri: { fsPath: "/extension" },
       globalStorageUri: { fsPath: directory },
+      globalState,
     } as unknown as vscode.ExtensionContext);
     const provider = api.registerWebviewViewProvider.mock.calls[0][1] as {
       deps: ConstructorParameters<typeof SessionWebviewProvider>[0];
     };
+    expect(provider.deps.sessionOpenState).toBe(globalState);
     await provider.deps.workspaceStore.add("/project");
     const files = await readdir(join(directory, "session-list-workspaces"));
     expect(files).toHaveLength(1);
@@ -376,6 +380,7 @@ describe("extension commands", () => {
       subscriptions: [],
       extensionUri: { fsPath: "/extension" },
       globalStorageUri: { fsPath: join(root, "profile-storage") },
+      globalState,
     } as unknown as vscode.ExtensionContext;
     activate(context);
     await vi.waitFor(() => expect(watcherFor(first)).toBeDefined());
@@ -469,6 +474,7 @@ describe("extension commands", () => {
       subscriptions,
       extensionUri: { fsPath: "/extension" },
       globalStorageUri: { fsPath: join(root, "profile-storage") },
+      globalState,
     } as unknown as vscode.ExtensionContext);
 
     try {

@@ -269,6 +269,16 @@ function notify(fixture: CloseFixture, args: string[], origin: StateSource = sta
   );
 }
 
+function lastRunLine(sessionId: string, run: { atMs: number; aborted: boolean | string }): string {
+  return (
+    JSON.stringify({
+      type: "custom",
+      customType: "pi-mux-last-run",
+      data: { sessionId, ...run },
+    }) + "\n"
+  );
+}
+
 function publicState(fixture: CloseFixture): string {
   return fixture.tmux(["show-options", "-pqv", "@pi_session_state"]);
 }
@@ -434,6 +444,13 @@ exec ${JSON.stringify(realTmux)} "$@"
       fixture.tmux(["set-option", "-gu", "@pi-mux-generation"]);
       const before = readFileSync(fixture.restore, "utf8");
       const title = "Quotes ' \"\n #{pane_id}; $(touch /unsafe)";
+      const lastRun = { atMs: 1735689600000, aborted: true };
+      writeFileSync(
+        fixture.conversation,
+        JSON.stringify({ type: "session", id: fixture.id }) +
+          "\n" +
+          lastRunLine(fixture.id, lastRun),
+      );
       for (const state of ["waiting-user", "running", "waiting-approval"] as const) {
         const result = notify(fixture, [state, "--title", JSON.stringify(title)]);
         assert.equal(result.status, 0, result.stderr);
@@ -443,6 +460,7 @@ exec ${JSON.stringify(realTmux)} "$@"
           sessionId: fixture.id,
           state,
           title,
+          ...(state === "waiting-user" ? { lastRun } : {}),
         });
       }
       assert.equal(readFileSync(fixture.restore, "utf8"), before);
@@ -450,6 +468,46 @@ exec ${JSON.stringify(realTmux)} "$@"
       const cleared = notify(fixture, ["--clear"]);
       assert.equal(cleared.status, 0, cleared.stderr);
       assert.equal(publicState(fixture), "");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("publishes waiting-user and title when lastRun cannot be obtained", async () => {
+    const fixture = new CloseFixture("none");
+    try {
+      fixture.start();
+      const title = "Still waiting";
+      const run = lastRunLine(fixture.id, { atMs: 1, aborted: false });
+      const cases = [
+        { name: "invalid header", conversation: "{}\n" + run },
+        { name: "foreign header", conversation: '{"type":"session","id":"foreign"}\n' + run },
+        {
+          name: "no valid run",
+          conversation:
+            JSON.stringify({ type: "session", id: fixture.id }) +
+            "\n" +
+            lastRunLine("foreign", { atMs: 1, aborted: false }) +
+            lastRunLine(fixture.id, { atMs: 0, aborted: false }),
+        },
+        { name: "missing file", conversation: undefined },
+      ];
+      for (const { name, conversation } of cases) {
+        if (conversation === undefined) rmSync(fixture.conversation);
+        else writeFileSync(fixture.conversation, conversation);
+        const result = notify(fixture, ["waiting-user", "--title", JSON.stringify(title)]);
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(
+          JSON.parse(publicState(fixture)),
+          {
+            version: 1,
+            sessionId: fixture.id,
+            state: "waiting-user",
+            title,
+          },
+          name,
+        );
+      }
     } finally {
       await fixture.cleanup();
     }
@@ -1071,15 +1129,40 @@ describe("list scopes", () => {
         activity: recentActivity,
       });
       fixture.piSessionIn("active", liveCwd, { id: sharedId, file: paneFile });
-      const pane = fixture.tmux(["display-message", "-p", "-t", "active", "#{pane_id}"]);
-      fixture.tmux([
-        "set-option",
-        "-p",
-        "-t",
+      const [serverPid, pane, pid] = fixture
+        .tmux(["display-message", "-p", "-t", "active", "#{pid}\t#{pane_id}\t#{pane_pid}"])
+        .split("\t");
+      const origin = {
+        socket: fixture.socket,
+        serverPid: Number(serverPid),
         pane,
-        "@pi_session_state",
-        JSON.stringify({ version: 1, sessionId: sharedId, state: "running", title: "Live title" }),
+        pid: Number(pid),
+        token: fixture.launchTokenOf("active"),
+      };
+      const lastRun = { atMs: 1, aborted: true };
+      const laterTime = { atMs: Date.parse(recentActivity), aborted: false };
+      appendFileSync(
+        paneFile,
+        lastRunLine(sharedId, laterTime) +
+          lastRunLine(sharedId, lastRun) +
+          lastRunLine("foreign", laterTime) +
+          lastRunLine(sharedId, { ...laterTime, atMs: Number.MAX_SAFE_INTEGER + 1 }) +
+          lastRunLine(sharedId, { ...laterTime, aborted: "false" }) +
+          '{"type":"custom","customType":"pi-mux-last-run","data":',
+      );
+      appendFileSync(historyFile, lastRunLine(sharedId, laterTime));
+      const notified = fixture.run([
+        "state",
+        sharedId,
+        "waiting-user",
+        "--title",
+        JSON.stringify("Live title"),
+        "--source",
+        JSON.stringify(origin),
       ]);
+      assert.equal(notified.status, 0, notified.stderr);
+
+      appendFileSync(paneFile, "\n" + lastRunLine(sharedId, laterTime));
 
       const unsavedId = randomUUID();
       const unsavedFile = join(fixture.directory, `${unsavedId}.jsonl`);
@@ -1088,6 +1171,15 @@ describe("list scopes", () => {
         file: unsavedFile,
         temporary: true,
       });
+      const emptyPane = fixture.tmux(["display-message", "-p", "-t", "unsaved", "#{pane_id}"]);
+      fixture.tmux([
+        "set-option",
+        "-p",
+        "-t",
+        emptyPane,
+        "@pi_session_state",
+        JSON.stringify({ version: 1, sessionId: unsavedId, state: "waiting-user", lastRun }),
+      ]);
 
       const archivedId = randomUUID();
       const archivedActivity = "2026-01-02T00:00:00.000Z";
@@ -1097,6 +1189,8 @@ describe("list scopes", () => {
           activity: archivedActivity,
         }),
       );
+
+      appendFileSync(archivedFile, lastRunLine(archivedId, laterTime));
 
       const closedId = randomUUID();
       const closedFile = conversationFile(fixture.agentDir, liveCwd, closedId, {
@@ -1133,9 +1227,10 @@ describe("list scopes", () => {
               file: historyFile,
               active: true,
               saved: true,
-              state: "running",
+              state: "waiting-user",
               title: "Live title",
               publishPending: null,
+              lastRun,
               btime: fixtureBtimeMs,
               mtime: Date.parse(recentActivity),
               size: statSync(historyFile).size,
@@ -1158,11 +1253,31 @@ describe("list scopes", () => {
         },
       ]);
 
+      const active = fixture.run(["list", "--active", "--json"]);
+      assert.equal(active.status, 0, active.stderr);
+      assert.deepEqual(JSON.parse(active.stdout), [
+        { cwd: fixture.cwd, sessions: [], empty: [] },
+        {
+          cwd: liveCwd,
+          sessions: [
+            {
+              id: sharedId,
+              file: paneFile,
+              state: "waiting-user",
+              title: "Live title",
+              publishPending: null,
+              lastRun,
+            },
+          ],
+          empty: [{ id: unsavedId, file: unsavedFile, temporary: true }],
+        },
+      ]);
+
       const table = fixture.run(["list"]);
       assert.equal(table.status, 0, table.stderr);
       assert.deepEqual(tableRows(table.stdout), [
         ["WORKSPACE", "SESSION ID", "STATE", "UPDATED (UTC)", "TITLE"],
-        [liveCwd, sharedId, "running", recentActivity, "Live title"],
+        [liveCwd, sharedId, "waiting-user", recentActivity, "Live title"],
         [liveCwd, unsavedId, "unsaved", "-", "-"],
         [liveCwd, archivedId, "inactive", archivedActivity, "Archived title"],
         [liveCwd, closedId, "inactive", new Date(fixtureBtimeMs).toISOString(), "Closed title"],
@@ -1410,7 +1525,7 @@ fi`);
     }, 20_000);
   }
 
-  it("validates the published state and title independently and prefers the published title", async () => {
+  it("validates the published state, title, and lastRun independently", async () => {
     const fixture = new SessionFixture();
     try {
       const id = randomUUID();
@@ -1453,14 +1568,22 @@ fi`);
         title: "Saved title",
         publishPending: null,
       };
+      const lastRun = { atMs: 1735689600000, aborted: true };
       for (const value of [
         "{broken",
-        JSON.stringify({ version: 2, sessionId: id, state: "running", title: "From version 2" }),
+        JSON.stringify({
+          version: 2,
+          sessionId: id,
+          state: "running",
+          title: "From version 2",
+          lastRun,
+        }),
         JSON.stringify({
           version: 1,
           sessionId: "other-session",
           state: "running",
           title: "From another session",
+          lastRun,
         }),
       ]) {
         fixture.tmux(["set-option", "-p", "-t", pane, "@pi_session_state", value]);
@@ -1469,17 +1592,29 @@ fi`);
         assert.deepEqual(
           entryOf(result.stdout),
           savedEntry,
-          `an invalid option must reset both values: ${value}`,
+          `an invalid option must disregard the published values: ${value}`,
         );
       }
       for (const [value, expected] of [
         [
-          JSON.stringify({ version: 1, sessionId: id, state: "waiting-approval", title: 42 }),
-          { ...savedEntry, state: "waiting-approval" },
+          JSON.stringify({
+            version: 1,
+            sessionId: id,
+            state: "waiting-approval",
+            title: 42,
+            lastRun,
+          }),
+          { ...savedEntry, state: "waiting-approval", lastRun },
         ],
         [
-          JSON.stringify({ version: 1, sessionId: id, state: "paused", title: "Published" }),
-          { ...savedEntry, title: "Published" },
+          JSON.stringify({
+            version: 1,
+            sessionId: id,
+            state: "paused",
+            title: "Published",
+            lastRun,
+          }),
+          { ...savedEntry, title: "Published", lastRun },
         ],
         [
           JSON.stringify({ version: 1, sessionId: id, state: "running" }),
@@ -1495,6 +1630,7 @@ fi`);
             sessionId: id,
             state: "running",
             title: "Published during the run",
+            lastRun: { atMs: lastRun.atMs, aborted: "true" },
           }),
           { ...savedEntry, state: "running", title: "Published during the run" },
         ],
@@ -4206,6 +4342,15 @@ describe("state argument parsing", () => {
     );
   });
 
+  it("documents state notifications with only source and title", () => {
+    const result = spawnSync(process.execPath, ["run", source, "--help"], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    const lines = result.stdout.trimEnd().split("\n");
+    assert.ok(lines.includes("  pi-mux state <session-id> <state> --source <JSON> --title <JSON>"));
+    assert.ok(lines.includes("  pi-mux state <session-id> --clear --source <JSON>"));
+    assert.doesNotMatch(result.stdout, /--last-settlement/);
+  });
+
   it("accepts every documented state value and keeps literal titles", () => {
     const title = 'line1\n#{session_name} "quoted"';
     for (const state of ["running", "waiting-approval", "waiting-user"]) {
@@ -4278,6 +4423,24 @@ describe("state argument parsing", () => {
         /Missing, duplicate, or unexpected state argument/,
         JSON.stringify(args),
       );
+  });
+
+  it("rejects the removed --last-settlement option", () => {
+    assert.throws(
+      () =>
+        parseOperation([
+          "state",
+          "abc123",
+          "waiting-user",
+          "--source",
+          JSON.stringify(validSource),
+          "--title",
+          "null",
+          "--last-settlement",
+          JSON.stringify({ atMs: 1, aborted: false }),
+        ]),
+      /Missing, duplicate, or unexpected state argument/,
+    );
   });
 
   it("rejects invalid JSON and malformed source objects", () => {

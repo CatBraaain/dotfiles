@@ -3,6 +3,7 @@ import type {
   PiMux,
   PiMuxCurrentSession,
   PiMuxHistoryEntry,
+  PiMuxLastRun,
   PiMuxWorkspace,
   PiRuntime,
   PiSession,
@@ -13,6 +14,7 @@ import type {
 export function fakeRuntimes() {
   const live = new Map<string, PiRuntime>();
   const phases = new Map<string, string | null>();
+  const settlements = new Map<string, PiMuxLastRun>();
   const workspaces = new Set<string>();
   const files = new Map<string, string>();
   const titles = new Map<string, string | null>();
@@ -76,6 +78,9 @@ export function fakeRuntimes() {
             file: files.get(runtime.sessionId) ?? `/sessions/${runtime.sessionId}.jsonl`,
             state: phases.get(runtime.sessionId) ?? null,
             title: titles.get(runtime.sessionId) ?? null,
+            ...(settlements.has(runtime.sessionId)
+              ? { lastRun: settlements.get(runtime.sessionId) }
+              : {}),
             ...(temporary.has(runtime.sessionId) ? { temporary: true as const } : {}),
           })),
         empty: [...live.values()]
@@ -130,6 +135,7 @@ export function fakeRuntimes() {
     files,
     titles,
     phases,
+    settlements,
     temporary,
     emptyIds,
     history,

@@ -135,6 +135,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const historyWatchers = new Map<string, vscode.FileSystemWatcher>();
   const provider = new SessionWebviewProvider({
     extensionUri: context.extensionUri.fsPath,
+    sessionOpenState: context.globalState,
     workspaceStore: new WorkspaceStore(
       join(context.globalStorageUri.fsPath, "session-list-workspaces"),
     ),

@@ -25,7 +25,7 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { PiMuxWorkspace } from "../../src/pi-mux";
+import type { PiMuxLastRun, PiMuxWorkspace } from "../../src/pi-mux";
 import {
   FIXTURE_MODEL,
   FIXTURE_PROVIDER,
@@ -246,10 +246,15 @@ export class VSCodeFixture {
     await row.locator(".session-name").describe(`${key} session name`).click({ steps: 15 });
   }
 
-  setSessionPhase(key: string, phase: string | null): void {
+  setSessionPhase(key: string, phase: string | null, lastRun?: PiMuxLastRun): void {
     const runtime = this.sessionRuntime(key);
     if (runtime === undefined) throw new Error(`Pi-mux runtime not found for session ${key}`);
-    const option = JSON.stringify({ version: 1, sessionId: this.sessions[key].id, state: phase });
+    const option = JSON.stringify({
+      version: 1,
+      sessionId: this.sessions[key].id,
+      state: phase,
+      lastRun,
+    });
     const args = ["set-option", "-p", "-t", runtime.target];
     if (phase === null) {
       this.tmux([...args, "-u", "@pi_session_state"]);

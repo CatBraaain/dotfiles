@@ -1607,9 +1607,14 @@ test(
       }
     }
 
+    function showPhase(key: string, phase: (typeof phases)[number], complete: boolean): void {
+      const settlement = complete ? { atMs: Date.now(), aborted: false } : undefined;
+      host.setSessionPhase(key, phase.state, settlement);
+    }
+
     for (const phase of phases.slice(0, 3)) {
       await test.step(`Show ${phase.state} for live A (SPEC execution phase display)`, async () => {
-        host.setSessionPhase("A", phase.state);
+        showPhase("A", phase, phase.state === "waiting-user");
         await expectPhase("A", { ...phase, hasUnread: phase.state === "waiting-user" });
         expect(host.listWorkspaces().map(({ cwd }) => cwd)).toEqual(registeredCwds);
       });
@@ -1634,13 +1639,20 @@ test(
     await test.step("Keep a displayed completion unread until its row is explicitly selected", async () => {
       await openLiveSession("A");
       for (const phase of [phases[0], phases[2]]) {
-        host.setSessionPhase("A", phase.state);
+        showPhase("A", phase, phase.state === "waiting-user");
         await expectPhase("A", { ...phase, hasUnread: phase.state === "waiting-user" });
         expect(host.listWorkspaces().map(({ cwd }) => cwd)).toEqual(registeredCwds);
       }
       await openLiveSession("External");
       await expectPhase("A", { ...phases[2], hasUnread: true });
       await openLiveSession("A");
+      await expectPhase("A", phases[2]);
+    });
+
+    await test.step("Do not show a bell when the latest run is interrupted", async () => {
+      showPhase("A", phases[0], false);
+      await expectPhase("A", phases[0]);
+      host.setSessionPhase("A", "waiting-user", { atMs: Date.now(), aborted: true });
       await expectPhase("A", phases[2]);
     });
 
@@ -1651,7 +1663,7 @@ test(
       for (const phase of phases) {
         const { cwd, session } = host.sessions[phase.key];
         expect(cwd).toBe(workspaceCwd);
-        host.setSessionPhase(phase.key, phase.state);
+        showPhase(phase.key, phase, phase.key === "External");
         appendFileSync(
           session,
           JSON.stringify({

@@ -18,6 +18,7 @@ import {
 const TMUX_COMMAND_TIMEOUT_MS = 1_000;
 const RECOVERY_RETRY_INTERVAL_MS = 1_000;
 const PUBLICATION_PROCESS_KEY = Symbol.for("pi.session-state.publication-process");
+const LAST_RUN_ENTRY_TYPE = "pi-mux-last-run";
 
 interface ExecutionBoundary {
   settled: boolean;
@@ -77,12 +78,25 @@ probeLoadedVersion();
 
 export type { SessionState } from "./session-state-tmux.ts";
 
+interface SettledRun {
+  atMs: number;
+  aborted: boolean;
+}
+
+interface StateSnapshot {
+  state: SessionState;
+  title: string | null;
+  runRevision?: number;
+}
+
 interface PublicationGeneration {
   controller: AbortController;
   initializationStarted: boolean;
   binding?: ManagedPaneBinding;
   state?: SessionState;
-  lastPublished?: { state: SessionState; title: string | null };
+  runRevision: number;
+  settlementsBeforeBinding?: SettledRun[];
+  lastPublished?: StateSnapshot;
   pending: number;
   title: string | null;
   sessionId: string;
@@ -118,12 +132,7 @@ export function registerSessionState(pi: ExtensionAPI): void {
     if (!gen || !gen.initializationStarted) return;
     gen.state = state;
     gen.title = title;
-    if (
-      gen.pending === 0 &&
-      gen.lastPublished?.state === state &&
-      gen.lastPublished.title === title
-    )
-      return;
+    if (gen.pending === 0 && sameSnapshot(gen.lastPublished, stateSnapshot(gen, state))) return;
     const sessionId = gen.sessionId;
     probe("schedule", {
       sessionId,
@@ -138,12 +147,18 @@ export function registerSessionState(pi: ExtensionAPI): void {
       try {
         while (!gen.controller.signal.aborted && gen.binding) {
           if (!(await waitForPriorExecution(gen))) return;
-          const state = gen.state;
-          const title = gen.title;
-          if (!state || (gen.lastPublished?.state === state && gen.lastPublished.title === title))
-            return;
+          const { state } = gen;
+          if (!state) return;
+          const snapshot = stateSnapshot(gen, state);
+          if (sameSnapshot(gen.lastPublished, snapshot)) return;
           gen.lastPublished = undefined;
-          const outcome = await publishState(gen.run, gen.binding, sessionId, state, title);
+          const outcome = await publishState(
+            gen.run,
+            gen.binding,
+            sessionId,
+            state,
+            snapshot.title,
+          );
           probe("publish-outcome", {
             sessionId,
             pane: gen.binding?.paneId,
@@ -155,7 +170,7 @@ export function registerSessionState(pi: ExtensionAPI): void {
           const recovery = await recoveryRetry(gen, outcome.status !== "published");
           if (recovery === "aborted") return;
           if (recovery === "retry") continue;
-          gen.lastPublished = { state, title };
+          gen.lastPublished = snapshot;
         }
       } finally {
         gen.pending--;
@@ -182,8 +197,10 @@ export function registerSessionState(pi: ExtensionAPI): void {
       controller,
       initializationStarted: false,
       pending: 0,
-      sessionId: ctx.sessionManager.getSessionId(),
+      sessionId,
       title: ctx.sessionManager.getSessionName() ?? null,
+      runRevision: 0,
+      settlementsBeforeBinding: [],
       run: runner.run,
       lastFailure: runner.lastFailure,
       environment,
@@ -205,7 +222,13 @@ export function registerSessionState(pi: ExtensionAPI): void {
         const recovery = await recoveryRetry(gen, gen.lastFailure() !== undefined);
         if (recovery === "aborted") return;
         if (recovery === "retry") continue;
-        if (detection.status === "managed") gen.binding = detection.binding;
+        if (detection.status === "managed") {
+          gen.binding = detection.binding;
+          for (const settlement of gen.settlementsBeforeBinding ?? []) {
+            recordSettlement(pi, gen, settlement);
+          }
+        }
+        gen.settlementsBeforeBinding = undefined;
         probe("pane-detection", { ...identityFields(), status: detection.status });
         return;
       }
@@ -239,13 +262,23 @@ export function registerSessionState(pi: ExtensionAPI): void {
     probe("ui_prompt_end", { ...identityFields(), waitingApproval: isWaitingForApproval });
     scheduleStatePublication(isAgentRunActive ? "running" : "waiting-user");
   });
-  pi.on("agent_settled", (event) => {
+  pi.on("agent_settled", (event, ctx) => {
+    const settlement = { atMs: Date.now(), aborted: event.aborted };
+    const gen = generation;
+    if (
+      !gen ||
+      gen.controller.signal.aborted ||
+      gen.sessionId !== ctx.sessionManager.getSessionId()
+    )
+      return;
     probe("agent_settled", {
       ...identityFields(),
       aborted: event.aborted,
       waitingApproval: isWaitingForApproval,
     });
     isAgentRunActive = false;
+    if (gen.binding) recordSettlement(pi, gen, settlement);
+    else gen.settlementsBeforeBinding?.push(settlement);
     if (!isWaitingForApproval) scheduleStatePublication("waiting-user");
   });
   pi.on("session_shutdown", async () => {
@@ -284,6 +317,40 @@ export function registerSessionState(pi: ExtensionAPI): void {
     });
     await publicationProcess.queue;
   });
+}
+
+function stateSnapshot(gen: PublicationGeneration, state: SessionState): StateSnapshot {
+  return {
+    state,
+    title: gen.title,
+    runRevision: state === "waiting-user" ? gen.runRevision : undefined,
+  };
+}
+
+function sameSnapshot(published: StateSnapshot | undefined, snapshot: StateSnapshot): boolean {
+  return (
+    published?.state === snapshot.state &&
+    published.title === snapshot.title &&
+    published.runRevision === snapshot.runRevision
+  );
+}
+
+function recordSettlement(
+  pi: ExtensionAPI,
+  generation: PublicationGeneration,
+  settlement: SettledRun,
+): void {
+  const { sessionId } = generation;
+  const maxAttempts = 2;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      pi.appendEntry(LAST_RUN_ENTRY_TYPE, { sessionId, ...settlement });
+      generation.runRevision++;
+      return;
+    } catch (error) {
+      probe("settlement-append-error", { sessionId, message: errorMessage(error) });
+    }
+  }
 }
 
 async function recoveryRetry(

@@ -9,7 +9,7 @@ import {
   SwitchTargetExitedError,
   type TerminalRegistry,
 } from "../terminal-registry";
-import { errorMessage } from "../guards";
+import { errorMessage, isEpochMs } from "../guards";
 import { cwdGroupKey } from "../grouping";
 import { flattenPiMuxSessions, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../pi-mux";
 import {
@@ -32,6 +32,7 @@ export interface SessionWebviewDeps {
   extensionUri: string;
   registry: TerminalRegistry;
   workspaceStore: Pick<WorkspaceStore, "list" | "add" | "remove">;
+  sessionOpenState: Pick<vscode.Memento, "get" | "update">;
   startNewSession: (cwd: string, onPresented: () => void) => Promise<string | undefined>;
   onWorkspaces?: (cwds: readonly string[]) => void;
   onSessionFiles?: (files: readonly { id: string; file: string; cwd: string }[]) => void;
@@ -59,9 +60,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         state: WebviewState;
       }
     | undefined;
-  private runningSessionIds = new Set<string>();
-  private runningObservations = new Map<string, symbol>();
-  private unreadSessionIds = new Set<string>();
+  private readonly openedAtBySession = new Map<string, number>();
   private refreshVersion = 0;
   private latestSelection: symbol | undefined;
   private readonly pendingOpens = new Map<AbortController, string>();
@@ -123,9 +122,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     this.stopListPolling();
     clearTimeout(this.historyRetryTimer);
     this.view = undefined;
-    this.runningSessionIds.clear();
-    this.runningObservations.clear();
-    this.unreadSessionIds.clear();
     this.refreshVersion += 1;
   }
 
@@ -281,15 +277,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     this.temporarySessionIds = new Set(
       live.filter(({ temporary }) => temporary).map(({ id }) => id),
     );
-    if (!this.historyFailed) {
-      this.updateUnread(
-        live.map(({ id }) => ({ sessionId: id })),
-        {
-          archivedIds: this.temporarySessionIds,
-          livePhases: phasesFromWorkspaces(workspaces),
-        },
-      );
-    }
     return true;
   }
 
@@ -388,6 +375,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     const history = this.historySnapshot;
     const published = this.publishedSessions;
     const delayedIds = delayedSessionIdsFromWorkspaces(workspaces, Date.now());
+    const unreadIds = this.unreadIdsFor(workspaces);
     if (
       published !== undefined &&
       this.postedStateJson !== undefined &&
@@ -396,7 +384,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       this.deps.registry.displayedSessionId === published.state.displayedSessionId &&
       isDeepStrictEqual(workspaces, published.workspaces) &&
       isDeepStrictEqual(this.addedCwds, published.addedCwds) &&
-      isDeepStrictEqual(this.unreadSessionIds, published.unreadIds) &&
+      isDeepStrictEqual(unreadIds, published.unreadIds) &&
       isDeepStrictEqual(delayedIds, published.delayedIds)
     )
       return;
@@ -406,6 +394,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     if (
       this.disposed ||
       !this.view?.visible ||
+      this.listFailed ||
+      this.historyFailed ||
       version !== this.refreshVersion ||
       workspaces !== this.latestWorkspaces ||
       history !== this.historySnapshot ||
@@ -414,13 +404,14 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
     this.archivedSessionIds = archivedIds;
+    const currentUnreadIds = this.unreadIdsFor(workspaces);
     const state: WebviewState = {
       groups: sessionViewGroups(sessions, {
         registeredCwds: [...addedCwds],
         archivedIds,
         liveIds: new Set(flattenPiMuxSessions(workspaces).map(({ id }) => id)),
         phases: phasesFromWorkspaces(workspaces),
-        unreadIds: this.unreadSessionIds,
+        unreadIds: currentUnreadIds,
         delayedIds,
       }),
       displayedSessionId: this.deps.registry.displayedSessionId,
@@ -430,7 +421,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       workspaces,
       history,
       addedCwds,
-      unreadIds: new Set(this.unreadSessionIds),
+      unreadIds: currentUnreadIds,
       delayedIds,
       state,
     };
@@ -465,47 +456,54 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
   }
 
-  private updateUnread(
-    sessions: readonly Pick<SessionSummary, "sessionId">[],
-    snapshot: {
-      archivedIds: ReadonlySet<string>;
-      livePhases: ReadonlyMap<string, SessionPhase> | null;
-    },
-  ): void {
-    const runningIds = new Set<string>();
+  private unreadIdsFor(workspaces: readonly PiMuxWorkspace[]): Set<string> {
     const unreadIds = new Set<string>();
-    const runningObservations = new Map<string, symbol>();
-    for (const { sessionId } of sessions) {
-      if (snapshot.archivedIds.has(sessionId)) continue;
-      const phase = snapshot.livePhases?.get(sessionId);
-      const observation = phase === "running" ? Symbol() : this.runningObservations.get(sessionId);
-      if (observation !== undefined && (phase !== undefined || snapshot.livePhases === null)) {
-        runningObservations.set(sessionId, observation);
+    for (const { sessions } of workspaces) {
+      for (const { id, state, temporary, lastRun } of sessions) {
+        if (temporary || state !== "waiting-user" || lastRun?.aborted !== false) continue;
+        if (lastRun.atMs > this.lastOpenedAtMs(id)) unreadIds.add(id);
       }
-      const hasObservedRun = this.runningSessionIds.has(sessionId);
-      if (snapshot.livePhases === null) {
-        if (hasObservedRun) runningIds.add(sessionId);
-        if (this.unreadSessionIds.has(sessionId)) unreadIds.add(sessionId);
-        continue;
-      }
-      if (phase === "running" || (phase === "waiting-approval" && hasObservedRun)) {
-        runningIds.add(sessionId);
-      }
-      const isUnreadCompletion =
-        phase === "waiting-user" && (hasObservedRun || this.unreadSessionIds.has(sessionId));
-      if (isUnreadCompletion) unreadIds.add(sessionId);
     }
-    this.runningSessionIds = runningIds;
-    this.runningObservations = runningObservations;
-    this.unreadSessionIds = unreadIds;
+    return unreadIds;
   }
 
-  private async livePhases(): Promise<Map<string, SessionPhase> | null> {
+  private lastOpenedAtMs(sessionId: string): number {
+    const stored: unknown = this.deps.sessionOpenState.get(sessionOpenKey(sessionId));
+    return Math.max(this.openedAtBySession.get(sessionId) ?? 0, isEpochMs(stored) ? stored : 0);
+  }
+
+  private async saveSessionOpen(sessionId: string, openedAtMs: number): Promise<void> {
+    const latestOpenedAtMs = Math.max(openedAtMs, this.lastOpenedAtMs(sessionId));
+    this.openedAtBySession.set(sessionId, latestOpenedAtMs);
     try {
-      return phasesFromWorkspaces(await this.deps.registry.mux.list());
-    } catch {
-      return null;
+      await this.deps.sessionOpenState.update(sessionOpenKey(sessionId), latestOpenedAtMs);
+    } catch (error) {
+      this.deps.log?.error(
+        `Failed to save open time for Pi session ${sessionId}: ${errorMessage(error)}`,
+      );
     }
+  }
+
+  private acknowledgePublishedCompletion(sessionId: string): void {
+    const { state, publishedSessions } = this;
+    if (
+      state === undefined ||
+      !this.view?.visible ||
+      !publishedSessions?.unreadIds.has(sessionId) ||
+      this.unreadIdsFor(publishedSessions.workspaces).has(sessionId)
+    )
+      return;
+
+    this.postState({
+      ...state,
+      groups: state.groups.map((group) => ({
+        ...group,
+        sessions: group.sessions.map((row) =>
+          row.sessionId === sessionId ? { ...row, hasUnread: false } : row,
+        ),
+      })),
+      displayedSessionId: this.deps.registry.displayedSessionId,
+    });
   }
 
   private async handleMessage(message: unknown): Promise<void> {
@@ -632,9 +630,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
 
     this.refreshVersion += 1;
-    this.runningSessionIds.delete(sessionId);
-    this.runningObservations.delete(sessionId);
-    this.unreadSessionIds.delete(sessionId);
     if (this.state !== undefined) {
       this.postState({
         ...this.state,
@@ -743,7 +738,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     session: SessionSummary,
     intent: "select" | "unarchive",
     signal: AbortSignal,
-    present: (terminal: vscode.Terminal) => void,
+    present: (terminal: vscode.Terminal) => boolean,
   ): Promise<void> {
     const previousSessionId = this.deps.registry.displayedSessionId;
     const { sessionId } = session;
@@ -763,12 +758,11 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
 
-    let terminal: vscode.Terminal;
     try {
       signal.throwIfAborted();
       await requireWorkDirectory(session.cwd);
       signal.throwIfAborted();
-      ({ terminal } = await this.deps.registry.open(
+      const { terminal } = await this.deps.registry.open(
         {
           sessionId,
           cwd: session.cwd,
@@ -777,7 +771,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         },
         intent,
         signal,
-      ));
+      );
+      if (this.disposed || signal.aborted || !present(terminal)) return;
     } catch (error) {
       if (this.disposed || signal.aborted || error instanceof DisplayRecoveryCancelledError) return;
       this.postError(
@@ -787,22 +782,13 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     }
 
-    if (signal.aborted) return;
-    present(terminal);
+    const saving = this.saveSessionOpen(sessionId, Date.now());
+    this.acknowledgePublishedCompletion(sessionId);
     if (temporary) this.temporarySessionIds.add(sessionId);
     else this.temporarySessionIds.delete(sessionId);
     await this.stopTemporaryDisplayedSession(previousSessionId);
-    this.refreshVersion += 1;
-    this.stopListPolling();
-    const runningObservation = this.runningObservations.get(sessionId);
-    const phases = await this.livePhases();
-    if (runningObservation === this.runningObservations.get(sessionId)) {
-      if (phases?.get(sessionId) === "waiting-user") {
-        this.runningSessionIds.delete(sessionId);
-      }
-      this.unreadSessionIds.delete(sessionId);
-    }
     await this.refresh(false);
+    await saving;
   }
 
   private async stopTemporaryDisplayedSession(
@@ -859,6 +845,10 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     void vscode.window.showErrorMessage(message);
     this.post({ type: "error", message });
   }
+}
+
+function sessionOpenKey(sessionId: string): string {
+  return `sessionLastOpenedAtMs:${sessionId}`;
 }
 
 function phasesFromWorkspaces(workspaces: readonly PiMuxWorkspace[]): Map<string, SessionPhase> {

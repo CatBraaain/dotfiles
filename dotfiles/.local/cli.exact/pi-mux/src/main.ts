@@ -18,7 +18,13 @@ import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { HistorySummaryCache, readSessionHeader } from "./history-summary";
+import {
+  HistorySummaryCache,
+  parseLastRun,
+  readSessionHeader,
+  readSessionLastRun,
+  type LastRun,
+} from "./history-summary";
 import { platform } from "./platform";
 
 type ListOperation =
@@ -99,6 +105,7 @@ type ListedSession = {
   state: SessionState | null;
   title: string | null;
   publishPending: PublishPending | null;
+  lastRun?: LastRun;
   temporary?: true;
 };
 type EmptySession = { id: string; file: string; temporary?: true };
@@ -410,6 +417,7 @@ function mergeSessionLists(active: ListedWorkspace[], history: HistoryEntry[]): 
         state: entry.state ?? null,
         title: entry.title ?? saved?.title ?? null,
         publishPending: entry.publishPending ?? null,
+        ...(entry.lastRun ? { lastRun: entry.lastRun } : {}),
         btime: saved?.btime ?? null,
         mtime: saved?.mtime ?? null,
         size: saved?.size ?? null,
@@ -682,10 +690,9 @@ function parseStateOperation(argv: string[]): Operation {
   const id = argv[1];
   try {
     if (!id || !SESSION_ID_PATTERN.test(id)) throw new Error("Invalid complete conversation ID");
-    const clear = argv[2] === "--clear";
     const state = argv[2];
-    if (!clear && state !== "running" && state !== "waiting-approval" && state !== "waiting-user")
-      throw new Error("Invalid state");
+    const clear = state === "--clear";
+    if (!clear && !isSessionState(state)) throw new Error("Invalid state");
     const options = new Map<string, unknown>();
     for (let index = 3; index < argv.length; index += 2) {
       const key = argv[index]!;
@@ -694,19 +701,16 @@ function parseStateOperation(argv: string[]): Operation {
         throw new Error("Missing, duplicate, or unexpected state argument");
       options.set(key, JSON.parse(value));
     }
-    if (!options.has("--source") || (clear ? options.has("--title") : !options.has("--title")))
+    const hasRequiredOptions =
+      options.has("--source") && (clear ? options.size === 1 : options.has("--title"));
+    if (!hasRequiredOptions)
       throw new Error("State requires source and title; clear requires only source");
     const source = parseSource(options.get("--source"));
+    if (clear) return { kind: "state", id, source, notification: { clear: true } };
+
     const title = options.get("--title");
-    if (!clear && title !== null && typeof title !== "string") throw new Error("Invalid title");
-    return {
-      kind: "state",
-      id,
-      source,
-      notification: clear
-        ? { clear: true }
-        : { clear: false, state: state as SessionState, title: title as string | null },
-    };
+    if (title !== null && typeof title !== "string") throw new Error("Invalid title");
+    return { kind: "state", id, source, notification: { clear: false, state, title } };
   } catch (error) {
     throw new Error(`state ${id ?? "<missing>"}: ${errorMessage(error)}`);
   }
@@ -779,7 +783,7 @@ async function verifyStateSource(
   config: TmuxConfig,
   id: string,
   source: StateSource,
-): Promise<{ session: string; panePid: number }> {
+): Promise<{ session: string; panePid: number; file?: string }> {
   if (source.socket !== config.socket)
     throw new Error("Source socket does not match the dedicated socket");
   const server = await tmux(config, [
@@ -797,7 +801,7 @@ async function verifyStateSource(
   ).stdout.trimEnd();
   if (!/^\$\d+$/.test(session)) throw new Error("Source server or pane lifetime no longer matches");
   const target = await verifyStateTarget(config, id, source);
-  return { session, panePid: target.panePid };
+  return { session, panePid: target.panePid, file: target.file };
 }
 
 async function deferUnfinishedPublish(
@@ -845,7 +849,7 @@ async function notifyState(
   source: StateSource,
   notification: StateNotification,
 ): Promise<number> {
-  const { session, panePid } = await verifyStateSource(config, id, source);
+  const { session, panePid, file } = await verifyStateSource(config, id, source);
   const owner = JSON.stringify({ id, ...source });
   if (notification.clear) {
     const currentOwner = await tmux(config, [
@@ -857,12 +861,17 @@ async function notifyState(
     ]);
     if (currentOwner.stdout.trimEnd() !== owner) return 0;
   }
+  const lastRun =
+    !notification.clear && notification.state === "waiting-user" && file
+      ? readSessionLastRun(file, id)
+      : undefined;
   await runGuardedStateCommands(config, source, {
     id,
     owner,
     notification,
-    session,
     panePid,
+    file,
+    lastRun,
   });
   if (notification.clear || notification.state !== "running") return 0;
   const needsPromotion = await isTemporarySession(config, session, id);
@@ -942,7 +951,7 @@ async function verifyStateTarget(
   config: TmuxConfig,
   id: string,
   source: StateSource,
-): Promise<{ pane: string; pid: number; panePid: number }> {
+): Promise<{ pane: string; pid: number; panePid: number; file?: string }> {
   const result = await tmux(config, [
     "list-panes",
     "-a",
@@ -962,6 +971,7 @@ async function verifyStateTarget(
         processPid?: unknown;
         startup?: unknown;
         token?: unknown;
+        file?: unknown;
       };
       try {
         metadata = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
@@ -980,7 +990,9 @@ async function verifyStateTarget(
       const pid = typeof metadata.processPid === "number" ? metadata.processPid : Number(panePid);
       if (!Number.isSafeInteger(pid) || pid <= 0) return [];
       const token = launchRecordToken(launchEncoded) ?? metadata.token;
-      return [{ pane, pid, panePid: Number(panePid), token }];
+      const file =
+        typeof metadata.file === "string" && isAbsolute(metadata.file) ? metadata.file : undefined;
+      return [{ pane, pid, panePid: Number(panePid), token, file }];
     });
   if (
     matching.length !== 1 ||
@@ -1010,11 +1022,12 @@ async function runGuardedStateCommands(
     id: string;
     owner: string;
     notification: StateNotification;
-    session: string;
     panePid: number;
+    file?: string;
+    lastRun?: LastRun;
   },
 ): Promise<void> {
-  await verifyStateSource(config, plan.id, source);
+  const verified = await verifyStateSource(config, plan.id, source);
   const entity = paneEntityGuard(source.serverPid, source.pane, plan.panePid);
   const pane = source.pane;
   const lines: string[] = [];
@@ -1033,6 +1046,7 @@ async function runGuardedStateCommands(
       sessionId: plan.id,
       state: plan.notification.state,
       title: plan.notification.title,
+      lastRun: verified.file === plan.file ? plan.lastRun : undefined,
     });
     lines.push(
       guardedTmuxLine(
@@ -3174,25 +3188,21 @@ function parseSessionMetadata(
   encoded: string | undefined,
   id: string,
   file: string,
-): { state: SessionState | null; title: string | null } {
-  const state = parseSessionState(encoded, id);
-  const published = parsePublishedTitle(encoded, id);
-  const title = published !== null ? published : resolveSessionTitle(file);
-  return { state, title };
+): Pick<ListedSession, "state" | "title" | "lastRun"> {
+  const published = parseSessionOption(encoded, id);
+  const state = isSessionState(published?.state) ? published.state : null;
+  const title = typeof published?.title === "string" ? published.title : resolveSessionTitle(file);
+  const lastRun = parseLastRun(published?.lastRun);
+  return { state, title, ...(lastRun ? { lastRun } : {}) };
 }
 
 function parseSessionState(encoded: string | undefined, id: string): SessionState | null {
-  const metadata = parseSessionOption(encoded, id);
-  if (!metadata) return null;
-  const state = metadata.state;
-  return state === "running" || state === "waiting-approval" || state === "waiting-user"
-    ? state
-    : null;
+  const state = parseSessionOption(encoded, id)?.state;
+  return isSessionState(state) ? state : null;
 }
 
-function parsePublishedTitle(encoded: string | undefined, id: string): string | null {
-  const metadata = parseSessionOption(encoded, id);
-  return metadata && typeof metadata.title === "string" ? metadata.title : null;
+function isSessionState(state: unknown): state is SessionState {
+  return state === "running" || state === "waiting-approval" || state === "waiting-user";
 }
 
 function parsePublishPending(encoded: string | undefined, id: string): PublishPending | null {
@@ -3218,15 +3228,15 @@ function parsePublishPending(encoded: string | undefined, id: string): PublishPe
 function parseSessionOption(
   encoded: string | undefined,
   id: string,
-): { state?: unknown; title?: unknown } | undefined {
+): Record<string, unknown> | undefined {
   if (!encoded) return undefined;
-  let metadata: { version?: unknown; sessionId?: unknown; state?: unknown; title?: unknown } | null;
+  let metadata: unknown;
   try {
     metadata = JSON.parse(encoded);
   } catch {
     return undefined;
   }
-  if (metadata?.version !== 1 || metadata.sessionId !== id) return undefined;
+  if (!isRecord(metadata) || metadata.version !== 1 || metadata.sessionId !== id) return undefined;
   return metadata;
 }
 

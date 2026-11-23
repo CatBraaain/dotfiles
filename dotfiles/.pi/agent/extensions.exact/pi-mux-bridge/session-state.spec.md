@@ -21,7 +21,7 @@
 
 セッション一覧の正本は `pi-mux list` とし、復元用JSONの読込み・更新はpi-muxが担う。拡張は、自セッションの実行フェーズと保存済みタイトルを [pi-muxのstate操作](../../../../.local/cli.exact/pi-mux/SPEC.md#state) へ通知し、pane optionに公開する。状態metadataを直接書き換えず、終了時の除去も同じ公開CLIへ依頼する。
 
-起動・入力・実行フェーズ遷移・終了の全期間で、workspace登録と復元記録の取得・更新はpi-muxが担う。拡張自身は保存storeを直接読み書きせず、会話JSONLも変更・削除しない。`running` 通知に伴う一時再開からの昇格と復元記録更新はpi-muxが行う。
+起動・入力・実行フェーズ遷移・終了の全期間で、workspace登録と復元記録の取得・更新はpi-muxが担う。拡張自身は保存storeを直接読み書きせず、会話の既存エントリを変更・削除しない。`running` 通知に伴う一時再開からの昇格と復元記録更新はpi-muxが行う。
 
 ## 管理paneの初期照合
 
@@ -42,21 +42,23 @@ state操作の `--source` には、socket・server PID・pane ID・pi PIDとと�
 
 ## 状態通知の公開契約
 
-公開先の形式は [pi-muxのpane option公開契約](../../../../.local/cli.exact/pi-mux/SPEC.md#pane-optionの公開契約) に従う。通常の通知には `state <会話ID> <state> --source <JSON> --title <JSON>`、終了時には `state <会話ID> --clear --source <JSON>` を使う。
+公開先の形式は [pi-muxのpane option公開契約](../../../../.local/cli.exact/pi-mux/SPEC.md#pane-optionの公開契約) に従う。通常の通知には `state <会話ID> <state> --source <JSON> --title <JSON>` を使う。終了時には `state <会話ID> --clear --source <JSON>` を使う。
 
 タイトルの正本はpiの保存済みセッション名とし、名前がない場合は `null` を通知する。sourceとtitleはそれぞれJSON化し、単一のliteral引数として渡す。
 
-同じ世代では、直前に成功した通知とstate・titleの両方が同じで、未完了の通知がなければCLIを呼ばない。失敗した通知は成功済みと見なさず、同値の次の要求でも再送できる。titleだけが変わった場合は、現在のstateと会話IDを維持して通知する。その後のstate変更でも現在のtitleを保持する。世代開始時は、同じ会話ID・state・titleでも初期値を通知する。公開のためにpane optionを読み取らず、外部上書きだけでは再通知しない。
+同じ世代では、直前に成功した通知からstate・titleが変わらず、新しい確定終了も未完了の通知もなければCLIを呼ばない。失敗した通知は成功済みと見なさず、同値の次の要求でも再送できる。titleだけが変わった場合は、現在のstateと会話IDを維持して通知する。その後のstate変更でも現在のtitleを保持する。世代開始時は、同じ会話ID・state・titleでも初期値を通知する。公開のためにpane optionを読み取らず、外部上書きだけでは再通知しない。
 
 ### 最新状態への合流
 
-同じ世代で受け付けたstate・titleの組のうち、最後の組を最新値とする。実行中や復旧待ちにも受付を続け、未実行・再送待ちの通知は最新値へ置き換える。次に開始する通常公開ではその組を送り、置き換えた旧値は送らない。
+同じ世代で受け付けたstate・titleの組のうち、最後の組を最新値とする。確定終了後は同じ組でも再通知する。実行中や復旧待ちにも受付を続け、未実行・再送待ちの通知は最新値へ置き換える。次に開始する通常公開ではその組を送り、置き換えた旧値は送らない。
 
-公開成功は送信した組にだけ対応付ける。実行結果は受付済みの最新値を変更せず、送信値と異なる最新値は未反映として公開を続ける。
+公開成功は送信した組と、その通知開始時点までの確定終了にだけ対応付ける。実行結果は受付済みの最新値を変更しない。新しい組があるか、入力待ちの通知開始後に別の確定終了があった場合は、公開を続ける。
 
 ### 実行の区間とイベント
 
 run区間は `agent_start` から `agent_settled` までとし、中断による確定停止も含む。リトライ・自動圧縮・キュー継続をまたいで維持する。`agent_end` は確定停止を表さない。
+
+管理paneの自セッションは `agent_settled` の受信時刻（epoch ms）と `aborted` を中断時も含めて記録する。Pi のセッションファイルに `customType` が `pi-mux-last-run` の `custom` エントリを追記し、`data` は `sessionId`・`atMs`・`aborted` を持つ。記録後はstateとtitleが変わらなくても通知する。追記が失敗したら1回だけやり直し、再度失敗してもフェーズ遷移は継続する。CLI に終了記録は引数として渡さない。
 
 承認UI待ちは `ui_prompt_start` から `ui_prompt_end` までの外側の待ち区間とする。対象はSDKの `select`・`confirm`・`input`・`editor`・`custom` によるUI待ちである。
 
@@ -68,7 +70,7 @@ run区間は `agent_start` から `agent_settled` までとし、中断による
 | `agent_start` | run区間に入り、承認待ちでなければ `running` を公開する |
 | `ui_prompt_start` | 承認待ちに入り、`waiting-approval` を公開する |
 | `ui_prompt_end` | 承認待ちを解除し、run区間内なら `running`、区間外なら `waiting-user` を公開する |
-| `agent_settled` | run区間を終了し、承認待ちでなければ `waiting-user` を公開する |
+| `agent_settled` | run区間を終了し、確定終了を記録する。承認待ちでなければ `waiting-user` を公開する。承認待ちなら表示を維持し、UI 終了時の通知で確定終了を公開する |
 | `session_shutdown` | 新規公開と再送を止め、未実行分を失効させ、可能ならoptionを除去する |
 
 保存名の変更は標準の `session_info_changed` で受け取る。初回リクエストのagentループ終了より遅れて保存された場合も、セッションのアクティブ化や次のstate変更を待たずに公開する。初期照合前の保存名変更はtitleの現在値に反映し、公開CLIは `resources_discover` 以降に実行する。

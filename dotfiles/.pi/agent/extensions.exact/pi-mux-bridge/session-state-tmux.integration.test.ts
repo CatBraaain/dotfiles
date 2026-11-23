@@ -66,6 +66,7 @@ const pi = {
   getThinkingLevel() { return "off"; },
   events,
   exec: execProcess,
+  appendEntry() {},
   registerTool(tool) { tools.set(tool.name, tool); },
   on(name, handler) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
   registerCommand(name) { commandNames.push(name); },
@@ -117,7 +118,7 @@ async function dispatch(type, fields = {}) {
   currentContext = context();
   try {
     for (const handler of handlers.get(type) ?? []) {
-      await handler({ type, ...fields }, currentContext.ctx);
+      await handler({ type, ...(type === "agent_settled" ? { aborted: false } : {}), ...fields }, currentContext.ctx);
     }
     if (type === "session_start") for (const handler of handlers.get("resources_discover") ?? []) await handler({ type: "resources_discover" }, currentContext.ctx);
   } finally {
@@ -367,11 +368,13 @@ const loader = new DefaultResourceLoader({
   ],
 });
 await loader.reload();
-const { session } = await createAgentSession({
+const sessionOptions = {
   cwd: directory, agentDir: directory, modelRuntime: runtime,
   model: runtime.getModel("title-share", "parent"), thinkingLevel: "off",
-  settingsManager: settings, sessionManager: manager, resourceLoader: loader, tools: [],
-});
+  settingsManager: settings, resourceLoader: loader, tools: [],
+};
+const { session } = await createAgentSession({ ...sessionOptions, sessionManager: manager });
+let activeSession = session;
 try {
   const identity = {
     id: manager.getSessionId(),
@@ -384,10 +387,14 @@ try {
   await session.bindExtensions({ mode: "rpc", onError: error => errors.push(error) });
   await waitFor("initial state", () => readOption()?.state === "waiting-user");
   assert.equal(readOption().title, null);
+  const requestStartedMs = Date.now();
   const request = session.prompt("Discuss delayed session titles");
   await settled.promise;
   await titleStarted.promise;
-  await waitFor("settled before title", () => readOption()?.state === "waiting-user");
+  await waitFor("settled before title", () => readOption()?.state === "waiting-user" && readOption()?.lastRun);
+  const firstRun = readOption().lastRun;
+  assert.equal(firstRun.aborted, false);
+  assert.ok(firstRun.atMs >= requestStartedMs && firstRun.atMs <= Date.now());
   assert.equal(manager.getSessionName(), undefined);
   assert.equal(readOption().title, null);
   const beforeIdentity = cli("show-options", "-pqv", "-t", pane, "@pi-tmux-session");
@@ -395,16 +402,60 @@ try {
   releaseTitle.resolve();
   await request;
   await waitFor("late title publication", () => readOption()?.title === title);
-  assert.deepEqual(readOption(), { version: 1, sessionId: identity.id, state: "waiting-user", title });
+  assert.deepEqual(readOption(), { version: 1, sessionId: identity.id, state: "waiting-user", title, lastRun: firstRun });
   assert.ok(sandboxCommands.length > commandsBeforeTitle);
   assert.equal(manager.getSessionName(), title);
   assert.match(readFileSync(identity.file, "utf8"), /"type":"session_info".*"name":"Delayed SDK title"/);
   const cliPath = resolve(moduleDir, "../../../../.local/cli.exact/pi-mux/src/main.ts");
   const listed = JSON.parse(execFileSync(process.execPath, [cliPath, "list", "--active", "--json"], { encoding: "utf8" }));
-  assert.deepEqual(listed, [{ cwd: identity.cwd, sessions: [{ id: identity.id, file: identity.file, state: "waiting-user", title, publishPending: null }], empty: [] }]);
+  assert.deepEqual(listed, [{ cwd: identity.cwd, sessions: [{ id: identity.id, file: identity.file, state: "waiting-user", title, publishPending: null, lastRun: firstRun }], empty: [] }]);
   assert.equal(cli("show-options", "-pqv", "-t", pane, "@pi-tmux-session"), beforeIdentity);
+
   await session.prompt("Continue the same conversation");
-  await waitFor("later state retains title", () => readOption()?.state === "waiting-user" && readOption()?.title === title);
+  await waitFor("later state retains title", () => readOption()?.state === "waiting-user" && readOption()?.title === title && readOption()?.lastRun?.atMs > firstRun.atMs);
+  const secondRun = readOption().lastRun;
+  assert.equal(secondRun.aborted, false);
+
+  const replyStarted = Promise.withResolvers();
+  const releaseReply = Promise.withResolvers();
+  fake.state.beforeReply = async () => {
+    replyStarted.resolve();
+    await releaseReply.promise;
+  };
+  const interruptedRun = session.prompt("Interrupt this response");
+  await replyStarted.promise;
+  const abort = session.abort();
+  releaseReply.resolve();
+  await Promise.all([interruptedRun, abort]);
+  await waitFor("aborted settlement", () => readOption()?.state === "waiting-user" && readOption()?.lastRun?.aborted === true);
+  const latest = readOption();
+  assert.ok(latest.lastRun.atMs > secondRun.atMs);
+
+  const readRunRecords = () => readFileSync(identity.file, "utf8").trimEnd().split("\n").map(JSON.parse)
+    .filter(entry => entry.type === "custom" && entry.customType === "pi-mux-last-run")
+    .map(entry => entry.data);
+  const expectedRunRecords = [firstRun, secondRun, latest.lastRun].map(run => ({
+    sessionId: identity.id, ...run,
+  }));
+  assert.deepEqual(readRunRecords(), expectedRunRecords);
+
+  await session.reload();
+  await waitFor("reloaded settlement", () => readOption()?.lastRun);
+  assert.deepEqual(readOption(), latest);
+  await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+  session.dispose();
+  activeSession = undefined;
+  assert.equal(readOption(), null);
+
+  const reopened = SessionManager.open(identity.file);
+  assert.equal(reopened.getSessionId(), identity.id);
+  await loader.reload();
+  const { session: reopenedSession } = await createAgentSession({ ...sessionOptions, sessionManager: reopened });
+  activeSession = reopenedSession;
+  await reopenedSession.bindExtensions({ mode: "rpc", onError: error => errors.push(error) });
+  await waitFor("reopened run result", () => readOption()?.lastRun);
+  assert.deepEqual(readOption(), latest);
+  assert.deepEqual(readRunRecords(), expectedRunRecords);
   assert.deepEqual(errors, []);
   writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: true, sandboxCommands, executions }));
 } catch (error) {
@@ -412,14 +463,14 @@ try {
   process.exitCode = 1;
 } finally {
   releaseTitle.resolve();
-  await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
-  session.dispose();
+  await activeSession?.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+  activeSession?.dispose();
 }
 `;
 
 describe("session-state with a dedicated headless tmux and pi.exec", () => {
   it(
-    "shares a title generated after real SDK settlement without activation or identity changes",
+    "preserves real SDK settlements across title publication, reload, and a fresh reopen",
     async () => {
       const result = await runScenario("session-first", false, SDK_TITLE_SCENARIO);
       assert.equal(result.ok, true, result.error ?? "scenario failed");

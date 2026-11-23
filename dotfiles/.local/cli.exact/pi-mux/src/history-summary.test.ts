@@ -2,8 +2,8 @@ import { describe, it, spyOn } from "bun:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
-import { join } from "node:path";
-import { HistorySummaryCache } from "./history-summary";
+import { dirname, join } from "node:path";
+import { HistorySummaryCache, readSessionLastRun } from "./history-summary";
 
 const temporaryRoot = "/tmp/work/dotfiles/pi-mux-summary-race-tests";
 
@@ -55,6 +55,50 @@ function sessionInfo(name: unknown): unknown {
     name,
   };
 }
+
+describe("latest run lookup", () => {
+  const sessionId = "session";
+  const knownRun = { atMs: 200, aborted: false };
+  const header = { type: "session", id: sessionId };
+  function runEntry(run: { atMs: number; aborted: boolean }) {
+    return { type: "custom", customType: "pi-mux-last-run", data: { sessionId, ...run } };
+  }
+
+  it("retries a short read and returns the new final record", () => {
+    const { file } = writeSummaryFixture([header, runEntry(knownRun)]);
+    const newest = { atMs: 201, aborted: true };
+    const originalReadSync = fs.readSync;
+    let interrupted = false;
+    const read = spyOn(fs, "readSync").mockImplementation((...args: unknown[]) => {
+      if (!interrupted && Number(args[3]) > 1024 && args[4] === 0) {
+        interrupted = true;
+        fs.appendFileSync(file, JSON.stringify(runEntry(newest)) + "\n");
+        return 0;
+      }
+      return Reflect.apply(originalReadSync, fs, args);
+    });
+    try {
+      fs.appendFileSync(file, JSON.stringify(userMessage("z".repeat(2048))) + "\n");
+      assert.deepEqual(readSessionLastRun(file, sessionId), newest);
+      assert.equal(interrupted, true);
+    } finally {
+      read.mockRestore();
+      fs.rmSync(dirname(file), { recursive: true, force: true });
+    }
+  });
+
+  it("excludes records before the scan window but reads a recent record in a large file", () => {
+    const { file } = writeSummaryFixture([header, runEntry(knownRun)]);
+    try {
+      fs.truncateSync(file, 32 * 1024 * 1024);
+      assert.equal(readSessionLastRun(file, sessionId), undefined);
+      fs.appendFileSync(file, "\n" + JSON.stringify(runEntry(knownRun)) + "\n");
+      assert.deepEqual(readSessionLastRun(file, sessionId), knownRun);
+    } finally {
+      fs.rmSync(dirname(file), { recursive: true, force: true });
+    }
+  });
+});
 
 describe("history summary read consistency", () => {
   it("re-resolves a file appended to during reverse title lookup and saves only the stable result", () => {

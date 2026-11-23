@@ -35,8 +35,8 @@ CLIのsession-dirs記録と、稼働piの保存先を探索に使わない。
 | `pi-mux open [--temporary] [--detached] <session-id>` | 完全一致する会話IDのpi実体へ接続する。稼働していなければ、保存会話を元のcwdで再開する。`--temporary` は一時再開、`--detached` は非接続を指定する |
 | `pi-mux open --detached --expect-file <absolute-jsonl-path> <session-id>` | 指定した保存ファイルに限定して、非接続で旧会話を再開する |
 | `pi-mux inspect <session-id>` | 完全一致する会話IDの稼働状態と、停止中なら保存会話ファイルを調べる |
-| `pi-mux state <session-id> <state> --source <JSON> --title <JSON>` | 通知元を照合して実行フェーズとタイトルを公開する。`running` は一時再開を通常へ昇格させる |
-| `pi-mux state <session-id> --clear --source <JSON>` | 通知元が公開した実行フェーズとタイトルを除去する |
+| `pi-mux state <session-id> <state> --source <JSON> --title <JSON>` | 通知元を照合して実行フェーズ・タイトル・確定終了を公開する。`running` は一時再開を通常へ昇格させる |
+| `pi-mux state <session-id> --clear --source <JSON>` | 通知元が公開した実行フェーズ・タイトル・確定終了を除去する |
 | `pi-mux send [--wait <seconds>] <session-id> <text...>` | 稼働している対象会話へ短いメッセージを1件届ける。稼働はpi実体の生存を指し、エージェントの実行状態は送信の可否に影響しない。`--wait` は対象の受信拡張が消費するまで待つ |
 | `pi-mux close <session-id>` | 完全一致する会話IDのpiを非対話で終了し、その会話を復元対象から除く。保存会話・workspace登録を保持する |
 | `pi-mux close --if-temporary <session-id>` | 一時再開中のpiだけを `close` と同じ手順で終了し、復元対象から除く。通常状態のpiと稼働対象がないIDは、変更せず成功する |
@@ -235,7 +235,7 @@ state の処理は、排他ロックを要しない「pane 公開」と、必要
 
 #### pane optionの公開契約
 
-pane-local user option `@pi_session_state` に、次のJSON文字列を公開する。stateとtitleは同時に置き換え、tmux format展開は行わない。
+pane-local user option `@pi_session_state` に、次のJSON文字列を公開する。state・title・lastRunは同時に置き換え、tmux format展開は行わない。
 
 ```json
 {
@@ -252,6 +252,9 @@ pane-local user option `@pi_session_state` に、次のJSON文字列を公開す
 | `sessionId` | 通知で指定した会話ID |
 | `state` | 通知で指定した実行フェーズ |
 | `title` | 通知で指定した文字列または `null` |
+| `lastRun` | `waiting-user` の通知で、会話ファイルから取得した最後の確定終了。取得できなければ省略 |
+
+`waiting-user` を公開する際は、通知元に対応する会話ファイルから、`customType` が `pi-mux-last-run` の `custom` エントリを探す。ヘッダーと `data.sessionId` が対象 ID に一致し、`data.atMs` が正の安全な整数（epoch ms）、`data.aborted` が真偽値の記録のうち、最後に追記されたものの `atMs` と `aborted` を公開する。中断が最後ならその値を使い、非中断の終了へさかのぼらない。公開を長時間止めないよう、末尾16 MiB以内のエントリを対象にする。読み取り中の変更や失敗があれば1回だけ読み直す。対象の記録がない、またはファイルを読めない場合も、stateとtitleは公開する。`running`・`waiting-approval` では読み取らない。
 
 ロック部分の競合時は、pane-local user option `@pi_session_state_pending` に、次のJSON文字列を公開する。公開は source検証済みのpaneへガード付きで行い、tmux format展開は行わない。
 
@@ -396,7 +399,7 @@ register・unregisterの成功時はstdout・stderrへ出力せず終了コー�
 
 #### 統合一覧
 
-JSONは `[{cwd,sessions:[{id,file,active,saved,state,title,publishPending,btime,mtime,size,temporary?}]}]` の配列。セッション0件の登録済みworkspaceも含める。workspaceは稼働一覧の順とし、履歴だけに現れるcwdはその後に並べる。同じ会話IDはcwdが異なっても1件にまとめる。IDごとに稼働一覧と履歴の各先頭を採用し、所属cwdは稼働一覧の値を優先する。各workspaceでは稼働一覧の順に稼働中の会話を並べた後、保存済みだけの会話を `history` の順に並べる。
+JSONは `[{cwd,sessions:[{id,file,active,saved,state,title,publishPending,lastRun?,btime,mtime,size,temporary?}]}]` の配列。セッション0件の登録済みworkspaceも含める。workspaceは稼働一覧の順とし、履歴だけに現れるcwdはその後に並べる。同じ会話IDはcwdが異なっても1件にまとめる。IDごとに稼働一覧と履歴の各先頭を採用し、所属cwdは稼働一覧の値を優先する。各workspaceでは稼働一覧の順に稼働中の会話を並べた後、保存済みだけの会話を `history` の順に並べる。
 
 | 項目 | 値 |
 | --- | --- |
@@ -404,6 +407,7 @@ JSONは `[{cwd,sessions:[{id,file,active,saved,state,title,publishPending,btime,
 | `saved` | 会話ファイルの存在が稼働一覧で確認できるか、履歴で取得できる場合は `true`、それ以外は `false` |
 | `id`・`file` | 会話IDとファイルパス。履歴があれば履歴のパス、それ以外はpaneが公開するパス |
 | `state`・`publishPending` | 稼働一覧の値。値がないときは `null` |
+| `lastRun` | 稼働一覧に値があるときだけ、その値を含める |
 | `temporary` | 稼働一覧で一時再開中の場合にだけ `true` |
 | `title` | 稼働一覧のタイトル、なければ履歴のタイトル。どちらもなければ `null` |
 | `btime`・`mtime`・`size` | 履歴の値。値がないときは `null` |
@@ -418,7 +422,7 @@ JSONは `[{cwd,sessions:[{id,file,active,saved,state,title,publishPending,btime,
 
 JSONでは `[{"cwd":"/path/to/workspace","sessions":[{"id":"session-id","file":"/path/to/session.jsonl","state":null,"title":null,"publishPending":null}],"empty":[{"id":"empty-session-id","file":"/path/to/session.jsonl"}]}]` 形式のJSON配列と末尾改行を返す。workspaceの `cwd` は絶対パス、`sessions` は会話ファイルが存在する稼働piだけの配列であり、該当がなければ空配列になる。復元候補を稼働piとして代用しない。PID・tmux targetは内部検証に使う。
 
-各sessionは次の5項目を持ち、一時再開中だけ `temporary: true` を追加する。通常状態では `temporary` 属性を省略する。一時再開中も `sessions` に掲載し、`id`・`file`・`state`・`title`・`publishPending` の意味は維持する。
+各sessionは次の項目を持つ。一時再開中だけ `temporary: true` を追加する。通常状態では `temporary` 属性を省略する。一時再開中も `sessions` に掲載し、`id`・`file`・`state`・`title`・`publishPending` の意味は維持する。
 
 空新規（会話ファイルが未作成の稼働pi）は `sessions` に入れず、workspaceオブジェクトの `empty` 配列に置く。存在判定はmetadataの `file` パスに対する存在チェックによる。`empty` の各要素は `id` と `file` の2項目を持ち、`state`・`title`・`publishPending` は持たない。`temporary` の付与は `sessions` と同じで、一時再開中だけ `temporary: true` を追加する。`empty` も該当がなければ空配列になる。
 
@@ -429,6 +433,8 @@ JSONでは `[{"cwd":"/path/to/workspace","sessions":[{"id":"session-id","file":"
 | `state` | `string \| null` | `running`・`waiting-approval`・`waiting-user` のいずれか。確認できない場合は `null` |
 | `title` | `string \| null` | セッションのタイトル。公開値を優先し、公開値がなければ会話ファイルから解決したタイトル（保存済みセッション名、なければ最初の user メッセージ）を使う。いずれも確認できない場合は `null` |
 | `publishPending` | `{"attemptAt": number} \| null` | pane に未完了の昇格・修復の試行が記録されているとき、その試行時刻を含むオブジェクト。それ以外は `null` |
+
+`lastRun` は同じpane optionの会話 ID と version が一致し、`atMs` が正の安全な整数、`aborted` が真偽値のときだけ返す。保存会話を読んで補完しない。欠落や不正値は他の項目に影響しない。
 
 stateとtitleは、同じpane option `@pi_session_state` のJSONから取得する。titleは公開値を優先し、公開値がなければ会話ファイルから解決したタイトル（保存済みセッション名、なければ後述の最初の user メッセージ）を使う。公開形式と更新契約は「state」の「pane optionの公開契約」に従う。接続・セッションのアクティブ化・保存会話の再読み込みを行わず、タイトル公開後の `list` に反映する。
 

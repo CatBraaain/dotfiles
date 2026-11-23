@@ -192,6 +192,36 @@ describe("PiMux", () => {
     );
   });
 
+  it.each([false, true])("keeps a valid settlement with aborted=%s", async (aborted) => {
+    const session = { ...liveSession, lastRun: { atMs: 1_700_000_000_000, aborted } };
+    const workspaces = [{ cwd: "/project", sessions: [session], empty: [] }];
+    const mux = new PiMux(vi.fn().mockResolvedValue(JSON.stringify(workspaces)));
+    await expect(mux.list()).resolves.toEqual(workspaces);
+  });
+
+  it.each([
+    null,
+    [[]],
+    "now",
+    {},
+    { atMs: "1700000000000", aborted: false },
+    { atMs: -1, aborted: false },
+    { atMs: 0, aborted: false },
+    { atMs: 0.5, aborted: false },
+    { atMs: Number.MAX_SAFE_INTEGER + 1, aborted: false },
+    { atMs: 1 },
+    { atMs: 1, aborted: "false" },
+  ])("ignores an invalid optional settlement without rejecting the list: %j", async (lastRun) => {
+    const unaffected = { ...liveSession, id: "B", lastRun: { atMs: 1, aborted: false } };
+    const workspaces = [
+      { cwd: "/project", sessions: [{ ...liveSession, lastRun }, unaffected], empty: [] },
+    ];
+    const mux = new PiMux(vi.fn().mockResolvedValue(JSON.stringify(workspaces)));
+    await expect(mux.list()).resolves.toEqual([
+      { cwd: "/project", sessions: [liveSession, unaffected], empty: [] },
+    ]);
+  });
+
   it("rejects a legacy response without the empty section", async () => {
     const mux = new PiMux(
       vi.fn().mockResolvedValue(JSON.stringify([{ cwd: "/project", sessions: [liveSession] }])),
