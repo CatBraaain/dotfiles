@@ -100,10 +100,14 @@ function startServer(fixture: Fixture, env = fixture.env) {
   );
 }
 
-function cli(fixture: Fixture, args: string[], cwd = fixture.cwd, env = fixture.env) {
-  const command = process.env.TICKET_DISPATCH_BIN
+function cliCommand(): string[] {
+  return process.env.TICKET_DISPATCH_BIN
     ? [process.env.TICKET_DISPATCH_BIN]
     : [process.execPath, CLI];
+}
+
+function cli(fixture: Fixture, args: string[], cwd = fixture.cwd, env = fixture.env) {
+  const command = cliCommand();
   return spawnSync(command[0]!, [...command.slice(1), ...args], {
     cwd,
     env,
@@ -1099,6 +1103,274 @@ describe("global ticket dispatch", () => {
     },
     TIMEOUT_MS + 5000,
   );
+});
+
+function oneArgs(project: string, id: string): string[] {
+  return ["dispatch", "one", "--project", project, id];
+}
+
+async function concurrentCli(fixture: Fixture, commands: string[][]) {
+  const children = commands.map((args) =>
+    Bun.spawn([...cliCommand(), ...args], {
+      cwd: fixture.cwd,
+      env: fixture.env,
+      stdout: "ignore",
+      stderr: "pipe",
+    }),
+  );
+  return Promise.all(
+    children.map(async (child) => ({
+      code: await child.exited,
+      stderr: await new Response(child.stderr).text(),
+    })),
+  );
+}
+
+async function waitDispatchLog(fixture: Fixture, name: string, message: string) {
+  await waitFor(
+    () =>
+      isolatedTmux(fixture.socket, ["capture-pane", "-p", "-t", `=${name}:0.0`]).stdout.includes(
+        message,
+      ),
+    `missing dispatcher log: ${message}`,
+  );
+}
+
+function tmuxSessionId(fixture: Fixture, name: string): string {
+  return isolatedTmux(fixture.socket, [
+    "display-message",
+    "-p",
+    "-t",
+    `=${name}:0.0`,
+    "#{session_id}",
+  ]).stdout.trim();
+}
+
+describe("manual ticket dispatch", () => {
+  it.each([false, true])(
+    "exceeds max manually and waits for two releases before auto refill (global=%s)",
+    async (all) => {
+      const fixture = setupGlobal();
+      const { socket, store } = fixture;
+      const manualProject = all ? "beta" : "alpha";
+      const manualStore = globalStore(fixture, manualProject);
+      const manualKey = `${manualProject}/c`;
+      writeTicket(store, "a", "open");
+      writeTicket(store, "b", "open");
+      writeTicket(manualStore, "c", "open");
+      startServer(fixture);
+      const flags = all ? ["--all"] : [];
+      const worker = dispatcherName(all ? null : "alpha");
+      const started = cli(fixture, ["dispatch", "start", ...flags, "--max", "1"]);
+      assert.equal(started.status, 0, started.stderr);
+      await waitRecorded(fixture, "alpha/a");
+      const workerSession = tmuxSessionId(fixture, worker);
+      const autoDuplicate = cli(fixture, oneArgs("alpha", "a"));
+      assert.equal(autoDuplicate.status, 1);
+      assert.match(autoDuplicate.stderr, /ticket already running/);
+
+      const manual = cli(fixture, oneArgs(manualProject, "c"));
+      assert.equal(manual.status, 0, manual.stderr);
+      await waitRecorded(fixture, manualKey);
+      const manualName = sessionName("handle_", manualKey, true);
+      assert.notEqual(tmuxSessionId(fixture, manualName), "");
+      assert.deepEqual(recordedLaunches(fixture), ["alpha/a", manualKey]);
+      assert.deepEqual(
+        JSON.parse(readFileSync(join(fixture.records, `${manualKey}.json`), "utf8")),
+        {
+          args: [expectedPrompt("c")],
+          cwd: join(fixture.home, "projects", manualProject),
+        },
+      );
+
+      writeTicket(store, "a", "closed");
+      await waitDispatchLog(
+        fixture,
+        worker,
+        all ? "done alpha/a status=closed" : "done a status=closed",
+      );
+      const duplicate = cli(fixture, oneArgs(manualProject, "c"));
+      assert.equal(duplicate.status, 1);
+      assert.match(duplicate.stderr, /ticket already running/);
+      const queuedName = sessionName("handle_", all ? "alpha/b" : "b", all);
+      assert.notEqual(isolatedTmux(socket, ["has-session", "-t", `=${queuedName}`]).status, 0);
+
+      writeTicket(manualStore, "c", "closed");
+      await waitRecorded(fixture, "alpha/b");
+      assert.deepEqual(recordedLaunches(fixture), ["alpha/a", manualKey, "alpha/b"]);
+      assert.equal(tmuxSessionId(fixture, worker), workerSession);
+      assert.notEqual(tmuxSessionId(fixture, manualName), "");
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it(
+    "counts a new session for a previously released ID but never re-adopts the same session",
+    async () => {
+      const fixture = setupGlobal();
+      const { store, socket } = fixture;
+      writeTicket(store, "a", "open");
+      writeTicket(store, "b", "open");
+      writeTicket(store, "c", "open");
+      startServer(fixture);
+      const started = cli(fixture, ["dispatch", "start", "--max", "1"]);
+      assert.equal(started.status, 0, started.stderr);
+      await waitRecorded(fixture, "alpha/a");
+      const manual = cli(fixture, oneArgs("alpha", "b"));
+      assert.equal(manual.status, 0, manual.stderr);
+      await waitRecorded(fixture, "alpha/b");
+      const manualName = sessionName("handle_", "alpha/b", true);
+      const firstSession = tmuxSessionId(fixture, manualName);
+
+      writeTicket(store, "b", "closed");
+      const worker = dispatcherName("alpha");
+      await waitDispatchLog(fixture, worker, "done b status=closed");
+      writeTicket(store, "b", "open");
+      writeTicket(store, "a", "closed");
+      await waitRecorded(fixture, "alpha/c");
+
+      assert.equal(isolatedTmux(socket, ["kill-session", "-t", `=${manualName}`]).status, 0);
+      const retry = cli(fixture, oneArgs("alpha", "b"));
+      assert.equal(retry.status, 0, retry.stderr);
+      const replacementSession = tmuxSessionId(fixture, manualName);
+      assert.notEqual(replacementSession, "");
+      assert.notEqual(replacementSession, firstSession);
+      await waitFor(
+        () => recordedLaunches(fixture).filter((key) => key === "alpha/b").length === 2,
+        "replacement pi did not start",
+      );
+
+      writeTicket(store, "d", "open");
+      writeTicket(store, "c", "closed");
+      await waitDispatchLog(fixture, worker, "done c status=closed");
+      const duplicate = cli(fixture, oneArgs("alpha", "b"));
+      assert.equal(duplicate.status, 1);
+      assert.match(duplicate.stderr, /ticket already running/);
+      assert.notEqual(isolatedTmux(socket, ["has-session", "-t", "=handle_d"]).status, 0);
+
+      assert.equal(isolatedTmux(socket, ["kill-session", "-t", `=${manualName}`]).status, 0);
+      await waitDispatchLog(
+        fixture,
+        worker,
+        "incomplete b status=open session exited without close",
+      );
+      await waitRecorded(fixture, "alpha/d");
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it(
+    "starts at most one pi when manual requests race each other and project auto",
+    async () => {
+      const fixture = setupGlobal();
+      writeTicket(fixture.store, "same", "open");
+      writeTicket(fixture.store, "z-other", "open");
+      startServer(fixture);
+      const [first, second, start] = await concurrentCli(fixture, [
+        oneArgs("alpha", "same"),
+        oneArgs("alpha", "same"),
+        ["dispatch", "start", "--project", "alpha"],
+      ]);
+      assert.ok(first && second && start);
+      assert.equal(start.code, 0, start.stderr);
+      const rejected = [first, second].filter((entry) => entry.code !== 0);
+      assert.ok(rejected.length >= 1);
+      for (const entry of rejected) {
+        assert.equal(entry.code, 1);
+        assert.match(entry.stderr, /ticket already running/);
+      }
+      await waitRecorded(fixture, "alpha/same");
+      await waitRecorded(fixture, "alpha/z-other");
+      const duplicate = cli(fixture, oneArgs("alpha", "same"));
+      assert.equal(duplicate.status, 1);
+      assert.match(duplicate.stderr, /ticket already running/);
+      const manualName = sessionName("handle_", "alpha/same", true);
+      const sessions = ["handle_same", manualName].filter((name) => tmuxSessionId(fixture, name));
+      assert.equal(sessions.length, 1);
+      assert.deepEqual(recordedLaunches(fixture).sort(), ["alpha/same", "alpha/z-other"]);
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it(
+    "starts the same ID independently in each explicitly selected project",
+    async () => {
+      const fixture = setupGlobal();
+      writeTicket(fixture.store, "same", "open");
+      writeTicket(globalStore(fixture, "beta"), "same", "open");
+      startServer(fixture);
+      const results = await concurrentCli(fixture, [
+        oneArgs("alpha", "same"),
+        oneArgs("beta", "same"),
+      ]);
+      for (const result of results) assert.equal(result.code, 0, result.stderr);
+      await waitRecorded(fixture, "alpha/same");
+      await waitRecorded(fixture, "beta/same");
+      assert.deepEqual(recordedLaunches(fixture).sort(), ["alpha/same", "beta/same"]);
+      assert.equal(cli(fixture, ["dispatch", "list"]).stdout.trim(), "no dispatcher running");
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it(
+    "starts one pi without an existing tmux server",
+    async () => {
+      const fixture = setupGlobal();
+      writeTicket(fixture.store, "same", "open");
+      assert.equal(existsSync(fixture.socket), false);
+      const result = cli(fixture, oneArgs("alpha", "same"));
+      assert.equal(result.status, 0, result.stderr);
+      await waitRecorded(fixture, "alpha/same");
+      assert.deepEqual(recordedLaunches(fixture), ["alpha/same"]);
+      assert.equal(cli(fixture, ["dispatch", "list"]).stdout.trim(), "no dispatcher running");
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it("rejects a manual session-name collision without replacing the existing session", () => {
+    const fixture = setupGlobal();
+    writeTicket(fixture.store, "same", "open");
+    startServer(fixture);
+    const name = sessionName("handle_", "alpha/same", true);
+    const foreign = isolatedTmux(fixture.socket, ["new-session", "-d", "-s", name, "sleep 60"]);
+    assert.equal(foreign.status, 0, foreign.stderr);
+    const originalSession = tmuxSessionId(fixture, name);
+
+    const result = cli(fixture, oneArgs("alpha", "same"));
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /tmux new-session failed/);
+    assert.notEqual(originalSession, "");
+    assert.equal(tmuxSessionId(fixture, name), originalSession);
+    assert.deepEqual(recordedLaunches(fixture), []);
+  });
+
+  it("rejects invalid, missing, partial and non-actionable targets without starting tmux", () => {
+    const fixture = setupGlobal();
+    writeTicket(fixture.store, "real", "open");
+    writeTicket(fixture.store, "finished", "closed");
+    writeFileSync(join(fixture.store, "dependent.md"), "---\nstatus: open\nafter: real\n---\n");
+    const noProject = cli(fixture, ["dispatch", "one", "real"]);
+    assert.equal(noProject.status, 2);
+    assert.match(noProject.stderr, /usage: ticket dispatch/);
+
+    writeFileSync(join(fixture.home, "projects", "not-dir"), "");
+    const cases = [
+      { project: "../alpha", id: "real", error: /invalid project/ },
+      { project: "missing", id: "real", error: /I\/O error/ },
+      { project: "not-dir", id: "real", error: /I\/O error/ },
+      { project: "alpha", id: "rea", error: /ticket not found/ },
+      { project: "alpha", id: "missing", error: /ticket not found/ },
+      { project: "alpha", id: "finished", error: /not actionable/ },
+      { project: "alpha", id: "dependent", error: /not actionable/ },
+    ];
+    for (const { project, id, error } of cases) {
+      const result = cli(fixture, oneArgs(project, id));
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, error);
+    }
+    assert.equal(existsSync(fixture.socket), false);
+    assert.deepEqual(recordedLaunches(fixture), []);
+  });
 });
 
 describe("global dispatch dynamic projects", () => {

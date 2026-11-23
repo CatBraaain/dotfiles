@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { basename, join, relative } from "node:path";
 import {
   dispatch,
+  dispatchOne,
   DISPATCH_USAGE,
   dispatchSocket,
   formatDispatchers,
@@ -803,8 +804,11 @@ async function main(): Promise<void> {
     const isWorker = command === "__ticket_dispatch_worker";
     const dispatchArgs = isWorker ? argv.slice(1) : argv;
     const parsed = parseDispatchArgs(dispatchArgs);
-    if (parsed.error || !parsed.action)
-      throw new TicketError(2, `${parsed.error}\nusage: ${DISPATCH_USAGE}`);
+    const dispatchError =
+      parsed.error ??
+      (isWorker && parsed.action === "one" ? "one is not a dispatcher worker action" : undefined);
+    if (dispatchError || !parsed.action)
+      throw new TicketError(2, `${dispatchError}\nusage: ${DISPATCH_USAGE}`);
     if (parsed.action === "list") {
       const entries = listDispatchers(dispatchSocket());
       console.log(entries.length === 0 ? "no dispatcher running" : formatDispatchers(entries));
@@ -818,7 +822,6 @@ async function main(): Promise<void> {
     if (parsed.action === "stop") return stopDispatcher(project);
     if (!isWorker && project !== null && parsed.project !== undefined)
       process.chdir(join(homedir(), "projects", project));
-    const options = parsed.options!;
     async function loadSnapshot() {
       const projects = project === null ? await allProjects() : [project];
       const snapshots = await Promise.all(
@@ -842,7 +845,19 @@ async function main(): Promise<void> {
         });
       return tickets;
     }
-    if (isWorker) return dispatch(options, loadSnapshot, project);
+    if (parsed.action === "one") {
+      const id = parsed.ticketId!;
+      return dispatchOne({
+        project: project!,
+        id,
+        async validate() {
+          const ticket = (await loadSnapshot()).find((entry) => entry.id === id);
+          if (!ticket) fail(`ticket not found: ${id}`);
+          if (!ticket.actionable) fail(`ticket is not actionable: ${id}`);
+        },
+      });
+    }
+    if (isWorker) return dispatch(parsed.options!, loadSnapshot, project);
     return startDispatcher({
       project,
       loadSnapshot,

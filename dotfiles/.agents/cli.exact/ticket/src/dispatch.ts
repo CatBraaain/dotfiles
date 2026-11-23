@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { Database, SQLiteError } from "bun:sqlite";
 import dispatchPromptPath from "../dispatch-prompt.md" with { type: "file" };
@@ -18,7 +18,7 @@ export interface DispatchOptions {
 }
 
 export const DISPATCH_USAGE =
-  "ticket dispatch list\n       ticket dispatch [-p|--project <project>] [-a|--all] [--max N]\n       ticket dispatch start [-p|--project <project>] [-a|--all] [--max N]\n       ticket dispatch stop [-p|--project <project>] [-a|--all]";
+  "ticket dispatch list\n       ticket dispatch [-p|--project <project>] [-a|--all] [--max N]\n       ticket dispatch start [-p|--project <project>] [-a|--all] [--max N]\n       ticket dispatch stop [-p|--project <project>] [-a|--all]\n       ticket dispatch one --project <project> <id>";
 
 function tickMs(): number {
   const override = Number(process.env.TICKET_TEST_TICK_MS);
@@ -84,18 +84,18 @@ export interface PlanInput {
   started: ReadonlySet<string>;
   running: ReadonlyMap<string, string>;
   max: number;
-  hasSession(name: string): boolean;
+  hasSession(session: string): boolean;
 }
 
 export interface DoneEntry {
   id: string;
-  name: string;
+  session: string;
   status: string;
 }
 
 export interface IncompleteEntry {
   id: string;
-  name: string;
+  session: string;
   status: string | null;
 }
 
@@ -111,7 +111,7 @@ export function planTick(input: PlanInput): Plan {
   const incomplete: IncompleteEntry[] = [];
   const byId = new Map(input.tickets.map((ticket) => [ticket.id, ticket]));
 
-  for (const [id, name] of input.running) {
+  for (const [session, id] of input.running) {
     const status = byId.get(id)?.status ?? null;
     if (
       status === "closed" ||
@@ -119,17 +119,17 @@ export function planTick(input: PlanInput): Plan {
       status === "blocked" ||
       status === "draft"
     ) {
-      done.push({ id, name, status });
-    } else if (!input.hasSession(name)) {
-      incomplete.push({ id, name, status });
+      done.push({ id, session, status });
+    } else if (!input.hasSession(session)) {
+      incomplete.push({ id, session, status });
     }
   }
 
   const remainingRunning = input.running.size - done.length - incomplete.length;
+  const runningIds = new Set(input.running.values());
   const candidates = input.tickets
     .filter(
-      (ticket) =>
-        ticket.actionable && !input.started.has(ticket.id) && !input.running.has(ticket.id),
+      (ticket) => ticket.actionable && !input.started.has(ticket.id) && !runningIds.has(ticket.id),
     )
     .filter((ticket) => !input.skipped || !input.skipped.has(splitTicketKey(ticket.id)[0]));
   const launches = candidates
@@ -145,27 +145,31 @@ export function planTick(input: PlanInput): Plan {
 }
 
 export function parseDispatchArgs(argv: string[]): {
-  action?: "start" | "stop" | "list";
+  action?: "start" | "stop" | "list" | "one";
   project?: string;
+  ticketId?: string;
   all?: boolean;
   options?: DispatchOptions;
   error?: string;
 } {
+  const [subcommand] = argv;
   const action =
-    argv[0] === "stop" ? "stop" : argv[0] === "list" ? "list" : "start";
-  if (argv[0] === "start" || argv[0] === "stop" || argv[0] === "list")
-    argv = argv.slice(1);
+    subcommand === "stop" || subcommand === "list" || subcommand === "one" ? subcommand : "start";
+  if (subcommand === action) argv = argv.slice(1);
   const given = new Map<string, string>();
   let project: string | undefined;
+  let ticketId: string | undefined;
   let all = false;
   let optionsEnded = false;
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]!;
     if (action === "list") return { error: `unknown option: ${arg}` };
-    const isProject = arg === "-p" || arg === "--project";
-    if (optionsEnded) return { error: "positional arguments are not supported" };
-    if (arg === "--") optionsEnded = true;
-    else if (arg === "-a" || arg === "--all") all = true;
+    const isProject = arg === "--project" || (action !== "one" && arg === "-p");
+    const isTicketId = action === "one" && (optionsEnded || !arg.startsWith("-"));
+    if (isTicketId && ticketId === undefined) ticketId = arg;
+    else if (optionsEnded) return { error: "positional arguments are not supported" };
+    else if (arg === "--") optionsEnded = true;
+    else if (action !== "one" && (arg === "-a" || arg === "--all")) all = true;
     else if (isProject || (action === "start" && OPTION_KEYS.includes(arg))) {
       const value = argv[++index];
       if (
@@ -176,10 +180,17 @@ export function parseDispatchArgs(argv: string[]): {
         (isProject && value.startsWith("-"))
       )
         return { error: `missing value for ${arg}` };
-      if (isProject) project = value;
-      else given.set(arg, value);
+      if (isProject) {
+        if (action === "one" && project !== undefined) return { error: "duplicate --project" };
+        project = value;
+      } else given.set(arg, value);
     } else if (arg.startsWith("-")) return { error: `unknown option: ${arg}` };
     else return { error: "positional arguments are not supported" };
+  }
+  if (action === "one") {
+    if (project === undefined || !ticketId)
+      return { error: "one requires --project and a ticket ID" };
+    return { action, project, ticketId };
   }
   if (action !== "start") return { action, project, all };
   const max = given.has("--max") ? Number(given.get("--max")) : 5;
@@ -221,17 +232,18 @@ export function dispatcherName(project: string | null): string {
     : `ticket_dispatch_${Buffer.from(project).toString("hex")}`;
 }
 
-function sessionEnv(socket: string, name: string, key: string): string | undefined {
-  const result = tmux(socket, ["show-environment", "-t", `=${name}`, key]);
+function sessionEnv(socket: string, target: string, key: string): string | undefined {
+  const result = tmux(socket, ["show-environment", "-t", target, key]);
   if (!result.ok || !result.stdout.startsWith(`${key}=`)) return undefined;
   return result.stdout.slice(key.length + 1, -1);
 }
 
-function ownsSession(socket: string, name: string, project: string | null, role: string): boolean {
-  const owner = sessionEnv(socket, name, PROJECT_ENV);
-  const matchesProject =
-    project === null && role === "pi" ? Boolean(owner) : owner === (project ?? "");
-  return matchesProject && sessionEnv(socket, name, ROLE_ENV) === role;
+function ownsDispatcher(socket: string, name: string, project: string | null): boolean {
+  const target = `=${name}`;
+  return (
+    sessionEnv(socket, target, PROJECT_ENV) === (project ?? "") &&
+    sessionEnv(socket, target, ROLE_ENV) === "dispatcher"
+  );
 }
 
 function sessionEnvArgs(project: string | null, role: string): string[] {
@@ -258,7 +270,7 @@ const DISPATCH_LOCK_RETRY_MS = 10;
 
 async function withDispatcherLock<T>(socket: string, operation: () => Promise<T>): Promise<T> {
   const key = createHash("sha256").update(socket).digest("hex");
-  const database = new Database(join(tmpdir(), `ticket-dispatch-${key}.sqlite`));
+  const database = new Database(`/tmp/ticket-dispatch-${key}.sqlite`);
   const deadline = Date.now() + DISPATCH_LOCK_TIMEOUT_MS;
   try {
     while (true) {
@@ -278,13 +290,9 @@ async function withDispatcherLock<T>(socket: string, operation: () => Promise<T>
   }
 }
 
-function sessionNames(socket: string, allowMissing = false): string[] {
+function sessionNames(socket: string): string[] {
   const result = tmux(socket, ["list-sessions", "-F", "#{session_name}"]);
-  if (!result.ok) {
-    if (allowMissing) return [];
-    throw new Error(`cannot list dispatch sessions: ${result.stderr.trim()}`);
-  }
-  return result.stdout.trimEnd().split("\n");
+  return result.ok ? result.stdout.trimEnd().split("\n") : [];
 }
 
 export async function startDispatcher(input: {
@@ -296,28 +304,24 @@ export async function startDispatcher(input: {
   const socket = dispatchSocket();
   await withDispatcherLock(socket, async () => {
     const name = dispatcherName(project);
-    for (const other of sessionNames(socket, true)) {
+    for (const other of sessionNames(socket)) {
       if (other === name) continue;
-      if (sessionEnv(socket, other, ROLE_ENV) !== "dispatcher") continue;
-      const owner = sessionEnv(socket, other, PROJECT_ENV);
+      if (sessionEnv(socket, `=${other}`, ROLE_ENV) !== "dispatcher") continue;
+      const owner = sessionEnv(socket, `=${other}`, PROJECT_ENV);
       if (owner !== undefined && (project === null || owner === ""))
         throw new Error(`overlapping dispatcher already running: ${other}`);
     }
     let restarted = false;
-    if (ownsSession(socket, name, project, "dispatcher")) {
+    if (ownsDispatcher(socket, name, project)) {
       const killed = tmux(socket, ["kill-session", "-t", `=${name}`]);
-      if (!killed.ok && ownsSession(socket, name, project, "dispatcher"))
+      if (!killed.ok && ownsDispatcher(socket, name, project))
         throw new Error(`dispatcher restart failed for ${name}: ${killed.stderr.trim()}`);
       restarted = true;
     }
     await Bun.file(dispatchPromptPath).text();
     const tickets = await input.loadSnapshot();
     if (project === null)
-      await validateCwds(
-        tickets,
-        new Set(inheritedSessions(socket, project, true).keys()),
-        console.log,
-      );
+      await validateCwds(tickets, new Set(readPiSessions(socket, project).values()), console.log);
     const result = tmux(socket, [
       "new-session",
       "-d",
@@ -337,30 +341,38 @@ export async function stopDispatcher(project: string | null): Promise<void> {
   const socket = dispatchSocket();
   await withDispatcherLock(socket, async () => {
     const name = dispatcherName(project);
-    if (!ownsSession(socket, name, project, "dispatcher")) {
+    if (!ownsDispatcher(socket, name, project)) {
       console.log(`dispatcher already stopped: ${name}`);
       return;
     }
     const result = tmux(socket, ["kill-session", "-t", `=${name}`]);
-    if (!result.ok && ownsSession(socket, name, project, "dispatcher"))
+    if (!result.ok && ownsDispatcher(socket, name, project))
       throw new Error(`dispatcher stop failed for ${name}: ${result.stderr.trim()}`);
     console.log(`dispatcher stopped: ${name}`);
   });
 }
 
-function inheritedSessions(
-  socket: string,
-  project: string | null,
-  allowMissing = false,
-): Map<string, string> {
-  const running = new Map<string, string>();
-  for (const name of sessionNames(socket, allowMissing)) {
-    if (!ownsSession(socket, name, project, "pi")) continue;
-    const id = sessionEnv(socket, name, ID_ENV);
-    const owner = sessionEnv(socket, name, PROJECT_ENV);
-    if (id) running.set(project === null ? `${owner}/${id}` : id, name);
+function readPiSessions(socket: string, project: string | null): Map<string, string> {
+  const result = tmux(socket, ["list-sessions", "-F", "#{session_id}"]);
+  if (!result.ok) {
+    if (
+      /^no server running on |^error connecting to .*\(No such file or directory\)/.test(
+        result.stderr,
+      )
+    )
+      return new Map();
+    throw new Error(`cannot list dispatch sessions: ${result.stderr.trim()}`);
   }
-  return running;
+
+  const sessions = new Map<string, string>();
+  for (const session of result.stdout.trimEnd().split("\n")) {
+    if (sessionEnv(socket, session, ROLE_ENV) !== "pi") continue;
+    const owner = sessionEnv(socket, session, PROJECT_ENV);
+    if (!owner || (project !== null && owner !== project)) continue;
+    const id = sessionEnv(socket, session, ID_ENV);
+    if (id) sessions.set(session, project === null ? `${owner}/${id}` : id);
+  }
+  return sessions;
 }
 
 export function hasSession(socket: string, name: string): boolean {
@@ -408,8 +420,8 @@ export function listDispatchers(socket: string): DispatcherEntry[] {
     if (separator === -1) continue;
     const name = line.slice(0, separator);
     const created = Number(line.slice(separator + 1));
-    if (sessionEnv(socket, name, ROLE_ENV) !== "dispatcher") continue;
-    const owner = sessionEnv(socket, name, PROJECT_ENV);
+    if (sessionEnv(socket, `=${name}`, ROLE_ENV) !== "dispatcher") continue;
+    const owner = sessionEnv(socket, `=${name}`, PROJECT_ENV);
     if (owner === undefined || !Number.isFinite(created)) continue;
     entries.push({ project: owner === "" ? null : owner, name, created });
   }
@@ -421,21 +433,30 @@ export interface RunDeps {
   all?: boolean;
   loadSnapshot: LoadSnapshot;
   log(line: string): void;
-  hasSession(name: string): boolean;
-  initialRunning?: ReadonlyMap<string, string>;
-  launch(id: string, name: string, prompt: string): boolean | void;
+  withTickLock?(tick: () => Promise<boolean>): Promise<boolean>;
+  readPiSessions(): ReadonlyMap<string, string>;
+  launch(id: string, name: string, prompt: string): string | false;
   sleepMs(ms: number): Promise<void>;
 }
 
 export async function run(deps: RunDeps): Promise<void> {
   const { options } = deps;
   const template = await Bun.file(dispatchPromptPath).text();
-  const running = new Map(deps.initialRunning);
-  const started = new Set(running.keys());
+  const running = new Map<string, string>();
+  const started = new Set<string>();
+  const seenSessions = new Set<string>();
   deps.log(`dispatcher start max=${options.max}`);
 
-  while (true) {
+  async function tick(): Promise<boolean> {
     const tickets = await deps.loadSnapshot();
+    const liveSessions = deps.readPiSessions();
+    for (const [session, id] of liveSessions) {
+      if (seenSessions.has(session)) continue;
+      seenSessions.add(session);
+      started.add(id);
+      running.set(session, id);
+    }
+
     const skipped = deps.all ? await validateCwds(tickets, started, deps.log) : undefined;
     const plan = planTick({
       tickets,
@@ -443,31 +464,89 @@ export async function run(deps: RunDeps): Promise<void> {
       started,
       running,
       max: options.max,
-      hasSession: (name) => deps.hasSession(name),
+      hasSession: (session) => liveSessions.has(session),
     });
     for (const entry of plan.done) {
       deps.log(`done ${entry.id} status=${entry.status}`);
-      running.delete(entry.id);
+      running.delete(entry.session);
     }
     for (const entry of plan.incomplete) {
       deps.log(
         `incomplete ${entry.id} status=${entry.status ?? "none"} session exited without close`,
       );
-      running.delete(entry.id);
+      running.delete(entry.session);
     }
     for (const id of plan.launches) {
       const name = sessionName(SESSION_NAME_PREFIX, id, deps.all);
       const promptId = deps.all ? splitTicketKey(id)[1] : id;
       started.add(id);
-      if (deps.launch(id, name, buildPrompt(template, promptId)) !== false) {
-        running.set(id, name);
-        deps.log(`launched ${id} as ${name}`);
-      }
+      const session = deps.launch(id, name, buildPrompt(template, promptId));
+      if (session === false) continue;
+      running.set(session, id);
+      seenSessions.add(session);
+      deps.log(`launched ${id} as ${name}`);
     }
-    if (plan.finished) break;
+    return plan.finished;
+  }
+
+  while (true) {
+    const finished = await (deps.withTickLock ? deps.withTickLock(tick) : tick());
+    if (finished) break;
     await deps.sleepMs(tickMs());
   }
   deps.log("dispatcher finished");
+}
+
+function startPiSession(input: {
+  socket: string;
+  project: string;
+  id: string;
+  name: string;
+  cwd: string;
+  prompt: string;
+}) {
+  const { socket, project, id, name, cwd, prompt } = input;
+  return tmux(socket, [
+    "new-session",
+    "-d",
+    "-P",
+    "-F",
+    "#{session_id}",
+    "-s",
+    name,
+    "-c",
+    cwd,
+    ...sessionEnvArgs(project, "pi"),
+    "-e",
+    `${ID_ENV}=${id}`,
+    `exec pi ${shQuote(prompt)}`,
+  ]);
+}
+
+export async function dispatchOne(input: {
+  project: string;
+  id: string;
+  validate: () => Promise<void>;
+}): Promise<void> {
+  const { project, id } = input;
+  const socket = dispatchSocket();
+  const template = await Bun.file(dispatchPromptPath).text();
+  await withDispatcherLock(socket, async () => {
+    await input.validate();
+    if ([...readPiSessions(socket, project).values()].includes(id))
+      throw new Error(`ticket already running: ${project}/${id}`);
+
+    const name = sessionName(SESSION_NAME_PREFIX, `${project}/${id}`, true);
+    const result = startPiSession({
+      socket,
+      project,
+      id,
+      name,
+      cwd: process.cwd(),
+      prompt: buildPrompt(template, id),
+    });
+    if (!result.ok) throw new Error(`tmux new-session failed for ${name}: ${result.stderr.trim()}`);
+  });
 }
 
 export async function dispatch(
@@ -481,27 +560,15 @@ export async function dispatch(
     const stamped = `[${timestamp()}] ${line}`;
     console.log(stamped);
   }
-  function launch(key: string, name: string, prompt: string): boolean {
+  function launch(key: string, name: string, prompt: string): string | false {
     const [owner, id] = project === null ? splitTicketKey(key) : [project, key];
     const targetCwd = project === null ? join(homedir(), "projects", owner) : cwd;
-    const command = `exec pi ${shQuote(prompt)}`;
-    const result = tmux(socket, [
-      "new-session",
-      "-d",
-      "-s",
-      name,
-      "-c",
-      targetCwd,
-      ...sessionEnvArgs(owner, "pi"),
-      "-e",
-      `${ID_ENV}=${id}`,
-      command,
-    ]);
-    if (result.ok) return true;
+    const result = startPiSession({ socket, project: owner, id, name, cwd: targetCwd, prompt });
+    if (result.ok) return result.stdout.trim();
     const message = `tmux new-session failed for ${name}: ${result.stderr.trim()}`;
     console.error(message);
     log(message);
-    return !hasSession(socket, name);
+    return hasSession(socket, name) ? false : name;
   }
   try {
     await run({
@@ -509,8 +576,8 @@ export async function dispatch(
       all: project === null,
       loadSnapshot,
       log,
-      initialRunning: inheritedSessions(socket, project),
-      hasSession: (name) => hasSession(socket, name) && ownsSession(socket, name, project, "pi"),
+      withTickLock: (tick) => withDispatcherLock(socket, tick),
+      readPiSessions: () => readPiSessions(socket, project),
       launch,
       sleepMs: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     });

@@ -75,8 +75,11 @@ const deps = {
   options,
   loadSnapshot: async () => [{ id: "a", status: "open", actionable: true }],
   log() {},
-  hasSession() { return false; },
-  launch(id, name, prompt) { receivedPrompt = prompt; },
+  readPiSessions() { return new Map(); },
+  launch(id, name, prompt) {
+    receivedPrompt = prompt;
+    return name;
+  },
   async sleepMs() {},
 };
 for (const text of ["first {{ TICKET_ID }}", "second {{ TICKET_ID }}"]) {
@@ -111,6 +114,26 @@ await assert.rejects(startDispatcher({
 });
 
 describe("parseDispatchArgs", () => {
+  it("requires an explicit project and one ID for one", () => {
+    const ticketId = "20260920-120418";
+    assert.deepEqual(parseDispatchArgs(["one", "--project", "sample", ticketId]), {
+      action: "one",
+      project: "sample",
+      ticketId,
+    });
+
+    for (const args of [
+      ["one", ticketId],
+      ["one", "--project", "sample"],
+      ["one", "--project", "sample", ticketId, "extra"],
+      ["one", "--project", "sample", ticketId, "--all"],
+      ["one", "--project", "sample", ticketId, "--max", "1"],
+      ["one", "-p", "sample", ticketId],
+    ]) {
+      assert.ok(parseDispatchArgs(args).error, JSON.stringify(args));
+    }
+  });
+
   it("treats explicit start and the omitted action as equivalent", () => {
     const implicitStart = parseDispatchArgs([]);
     const explicitStart = parseDispatchArgs(["start"]);
@@ -295,11 +318,11 @@ describe("planTick", () => {
         tickets: [{ id: "a", status, actionable: false }, ...base.tickets.slice(1)],
         started: new Set(["a", "b"]),
         running: new Map([
-          ["a", "fix_a"],
-          ["b", "fix_b"],
+          ["fix_a", "a"],
+          ["fix_b", "b"],
         ]),
       });
-      assert.deepEqual(plan.done, [{ id: "a", name: "fix_a", status }]);
+      assert.deepEqual(plan.done, [{ id: "a", session: "fix_a", status }]);
       assert.deepEqual(plan.launches, ["c"]);
       assert.equal(plan.finished, false);
     },
@@ -309,10 +332,10 @@ describe("planTick", () => {
     const plan = planTick({
       ...base,
       started: new Set(["a", "b", "c"]),
-      running: new Map([["c", "fix_c"]]),
+      running: new Map([["fix_c", "c"]]),
       hasSession: () => false,
     });
-    assert.deepEqual(plan.incomplete, [{ id: "c", name: "fix_c", status: "open" }]);
+    assert.deepEqual(plan.incomplete, [{ id: "c", session: "fix_c", status: "open" }]);
     assert.deepEqual(plan.launches, []);
     assert.equal(plan.finished, true);
   });
@@ -327,7 +350,7 @@ describe("planTick", () => {
         { id: "d", status: "draft", actionable: false },
       ],
       started: new Set(["a"]),
-      running: new Map([["a", "fix_a"]]),
+      running: new Map([["fix_a", "a"]]),
     });
     assert.deepEqual(plan.launches, []);
     assert.equal(plan.finished, false);
@@ -337,9 +360,9 @@ describe("planTick", () => {
     const plan = planTick({
       ...base,
       running: new Map([
-        ["x", "fix_x"],
-        ["y", "fix_y"],
-        ["z", "fix_z"],
+        ["fix_x", "x"],
+        ["fix_y", "y"],
+        ["fix_z", "z"],
       ]),
     });
     assert.deepEqual(plan.launches, []);
@@ -357,10 +380,10 @@ describe("planTick", () => {
         ...base,
         tickets: [{ id: "a", status, actionable: false }],
         started: new Set(["a"]),
-        running: new Map([["a", "fix_a"]]),
+        running: new Map([["fix_a", "a"]]),
         hasSession: () => false,
       });
-      assert.deepEqual(plan.done, [{ id: "a", name: "fix_a", status }]);
+      assert.deepEqual(plan.done, [{ id: "a", session: "fix_a", status }]);
       assert.deepEqual(plan.incomplete, []);
       assert.equal(plan.finished, true);
     },
@@ -371,10 +394,10 @@ describe("planTick", () => {
       ...base,
       tickets: [],
       started: new Set(["a"]),
-      running: new Map([["a", "fix_a"]]),
+      running: new Map([["fix_a", "a"]]),
       hasSession: () => false,
     });
-    assert.deepEqual(plan.incomplete, [{ id: "a", name: "fix_a", status: null }]);
+    assert.deepEqual(plan.incomplete, [{ id: "a", session: "fix_a", status: null }]);
   });
 
   it("excludes tickets of skipped projects from launches", () => {
@@ -403,8 +426,11 @@ try {
     all: true,
     loadSnapshot: async () => ${JSON.stringify(tickets)},
     log: (line) => events.push(line),
-    hasSession: () => false,
-    launch(id) { events.push("launch " + id); },
+    readPiSessions: () => new Map(),
+    launch(id, name) {
+      events.push("launch " + id);
+      return name;
+    },
     async sleepMs() {},
   });
   console.log(JSON.stringify({ events }));
@@ -528,6 +554,7 @@ describe("dispatch execution", () => {
       const events: string[] = [];
       let sleeps = 0;
       let scans = 0;
+      const liveSessions = new Map<string, string>();
       await run({
         options,
         loadSnapshot: async () => {
@@ -535,12 +562,14 @@ describe("dispatch execution", () => {
           return tickets;
         },
         log: (line) => events.push(line),
-        hasSession: (name) => name !== "handle_b",
+        readPiSessions: () => liveSessions,
         launch: (id, name, prompt) => {
           assert.ok(prompt.startsWith(`ticket ${id} に対応する。`));
           assert.match(prompt, /user はticketを読んでいない前提で/);
           assert.doesNotMatch(prompt, /`closed` にするとセッションが終了する/);
           events.push(`start ${name}`);
+          if (id !== "b") liveSessions.set(name, id);
+          return name;
         },
         sleepMs: async (ms) => {
           assert.equal(ms, 3000);
@@ -586,7 +615,7 @@ describe("dispatch execution", () => {
       options,
       loadSnapshot: async () => [{ id: "a", status: "open", actionable: true }],
       log: (line) => logs.push(line),
-      hasSession: () => true,
+      readPiSessions: () => new Map(),
       launch: () => {
         launches++;
         return false;
@@ -603,12 +632,12 @@ describe("dispatch execution", () => {
     let launches = 0;
     await run({
       options,
-      initialRunning: new Map([["a", "existing_a"]]),
       loadSnapshot: async () => [{ id: "a", status: "closed", actionable: false }],
       log: (line) => events.push(line),
-      hasSession: () => true,
+      readPiSessions: () => new Map([["existing_a", "a"]]),
       launch: () => {
         launches++;
+        return false;
       },
       sleepMs: async () => {},
     });
