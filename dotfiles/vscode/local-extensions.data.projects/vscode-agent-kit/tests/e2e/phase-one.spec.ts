@@ -926,21 +926,14 @@ test(
     const folder = join(host.directory, "registered");
     await registerWorkFolder(host, folder);
 
-    await test.step("Toggle workspace actions and dismiss the context menu with the pointer", async () => {
+    await test.step("Open and dismiss the workspace context menu", async () => {
       const frame = await host.sessionFrame();
       const group = frame
         .locator("section.group")
         .filter({ has: frame.locator(`.group-header[title="${folder}"]`) })
         .describe("Registered work folder group");
       const header = group.locator(".group-header").describe("Workspace context menu trigger");
-      const trigger = group.locator(".group-workspace-menu").describe("Workspace menu toggle");
       const menu = frame.getByRole("menu").describe("Workspace context menu");
-      for (const expanded of [true, false, true]) {
-        await trigger.click();
-        await expect(menu).toHaveCount(expanded ? 1 : 0);
-        await expect(trigger).toHaveAttribute("aria-expanded", String(expanded));
-      }
-      await trigger.click();
       await header.click({ button: "right" });
       await expect(menu).toBeVisible();
       await frame.locator("#app").click({ position: { x: 0, y: 0 } });
@@ -965,9 +958,9 @@ test(
       ).toBeVisible();
       await expect(group.locator(".group-unregister")).toHaveCount(0);
       await group
-        .getByRole("button", { name: "Workspace actions", exact: true })
-        .describe("Registered group ellipsis menu trigger")
-        .click();
+        .locator(".group-title")
+        .describe("Registered group title")
+        .click({ button: "right" });
       const menu = frame.getByRole("menu").describe("Workspace actions menu");
       const unregister = menu
         .getByRole("menuitem", { name: "Unregister workspace", exact: true })

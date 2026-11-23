@@ -113,7 +113,6 @@ export function sessionListView(
   displayedSessionId: string | undefined = undefined,
   collapsedCwds: ReadonlySet<string> = new Set(),
   loadStatus: SessionLoadStatus = "loaded",
-  workspaceMenuCwd?: string,
   pendingNewSessionCwds: ReadonlySet<string> = new Set(),
   pendingArchiveIds: ReadonlySet<string> = new Set(),
   pendingUnarchiveIds: ReadonlySet<string> = new Set(),
@@ -124,7 +123,6 @@ export function sessionListView(
       modes.get(group.cwd) ?? "unarchived",
       displayedSessionId,
       collapsedCwds,
-      workspaceMenuCwd,
       pendingNewSessionCwds.has(group.cwd),
       pendingArchiveIds,
       pendingUnarchiveIds,
@@ -143,7 +141,6 @@ function groupDescriptor(
   mode: ViewMode,
   displayedSessionId: string | undefined,
   collapsedCwds: ReadonlySet<string>,
-  workspaceMenuCwd: string | undefined,
   isStartingSession: boolean,
   pendingArchiveIds: ReadonlySet<string> = new Set(),
   pendingUnarchiveIds: ReadonlySet<string> = new Set(),
@@ -161,50 +158,28 @@ function groupDescriptor(
         children: [
           {
             tag: "div",
-            attrs: { class: "group-identity" },
+            attrs: { class: "group-toggle" },
             children: [
               {
-                tag: "div",
-                attrs: { class: "group-toggle" },
-                children: [
-                  {
-                    tag: "button",
-                    attrs: {
-                      class: "group-chevron",
-                      type: "button",
-                      "data-toggle-group": group.cwd,
-                      "aria-expanded": String(isExpanded),
-                      "aria-label": `${isExpanded ? "Collapse" : "Expand"} ${group.label}`,
-                    },
-                    children: [chevronIcon(isExpanded ? "down" : "right")],
-                  },
-                  {
-                    tag: "button",
-                    attrs: {
-                      class: "group-title",
-                      type: "button",
-                      "data-toggle-group": group.cwd,
-                      "aria-expanded": String(isExpanded),
-                    },
-                    children: [group.label],
-                  },
-                ],
+                tag: "button",
+                attrs: {
+                  class: "group-chevron",
+                  type: "button",
+                  "data-toggle-group": group.cwd,
+                  "aria-expanded": String(isExpanded),
+                  "aria-label": `${isExpanded ? "Collapse" : "Expand"} ${group.label}`,
+                },
+                children: [chevronIcon(isExpanded ? "down" : "right")],
               },
               {
                 tag: "button",
                 attrs: {
-                  class: "group-workspace-menu",
+                  class: "group-title",
                   type: "button",
-                  tabIndex: "-1",
-                  "data-open-workspace-menu": group.cwd,
-                  title: "Workspace actions",
-                  "aria-label": "Workspace actions",
-                  "aria-haspopup": "menu",
-                  "aria-expanded": String(group.cwd === workspaceMenuCwd),
+                  "data-toggle-group": group.cwd,
+                  "aria-expanded": String(isExpanded),
                 },
-                children: [
-                  strokeIcon([{ tag: "path", attrs: { d: "M5 12h.01M12 12h.01M19 12h.01" } }]),
-                ],
+                children: [group.label],
               },
             ],
           },
@@ -485,7 +460,6 @@ interface DescriptorActions {
   onModeToggle(cwd: string): void;
   onNewSessionClick(cwd: string): void;
   onWorkspaceMenuOpen(menu: WorkspaceMenuState): void;
-  onWorkspaceMenuToggle(menu: WorkspaceMenuState): void;
   onSessionMenuOpen(menu: SessionMenuState): void;
   onSessionClick(sessionId: string): void;
   onArchiveClick(sessionId: string): void;
@@ -550,19 +524,6 @@ function descriptorToElement(
   const props: Record<string, unknown> = descriptorProps(descriptor);
   const onClick = descriptorOnClick(descriptor, actions);
   if (onClick !== undefined) props.onClick = onClick;
-  const menuTriggerCwd = descriptor.attrs?.["data-open-workspace-menu"];
-  if (menuTriggerCwd !== undefined) {
-    props.onClick = (event: ReactMouseEvent<HTMLElement>) => {
-      if (event.detail === 0) return;
-      const rect = event.currentTarget.getBoundingClientRect();
-      actions.onWorkspaceMenuToggle({
-        kind: "workspace",
-        cwd: menuTriggerCwd,
-        x: rect.left,
-        y: rect.bottom,
-      });
-    };
-  }
   const menuCwd = descriptor.attrs?.["data-workspace-menu"];
   if (menuCwd !== undefined) {
     props.onContextMenu = (event: ReactMouseEvent<HTMLElement>) => {
@@ -711,12 +672,6 @@ function ContextMenu({
   useEffect(() => {
     function onPointerDown(event: PointerEvent): void {
       if (!(event.target instanceof Node)) return;
-      if (
-        !isSessionMenu &&
-        event.target instanceof Element &&
-        event.target.closest("[data-open-workspace-menu]")
-      )
-        return;
       if (!menuRef.current?.contains(event.target)) onClose();
     }
     function onScroll(event: Event): void {
@@ -732,7 +687,7 @@ function ContextMenu({
       window.removeEventListener("resize", onClose);
       window.removeEventListener("blur", onClose);
     };
-  }, [isSessionMenu, onClose]);
+  }, [onClose]);
 
   return (
     <div
@@ -1102,7 +1057,6 @@ function SessionsApp({
   const [collapsedCwds, setCollapsedCwds] = useState<ReadonlySet<string>>(() => new Set<string>());
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
-  const workspaceMenuCwd = contextMenu?.kind === "workspace" ? contextMenu.cwd : undefined;
   const visibleGroups = useMemo(
     () =>
       snapshot.state.groups.map((group) => ({
@@ -1161,10 +1115,6 @@ function SessionsApp({
         bridge.postMessage({ type: "newSession", cwd, requestId });
       },
       onWorkspaceMenuOpen: setContextMenu,
-      onWorkspaceMenuToggle: (menu) =>
-        setContextMenu((previous) =>
-          previous?.kind === "workspace" && previous.cwd === menu.cwd ? null : menu,
-        ),
       onSessionMenuOpen: setContextMenu,
       onSessionClick: (sessionId) => bridge.postMessage({ type: "openSession", sessionId }),
       onArchiveClick: (sessionId) => {
@@ -1228,7 +1178,6 @@ function SessionsApp({
           mode,
           snapshot.state.displayedSessionId,
           collapsedCwds,
-          workspaceMenuCwd,
           pendingNewSessionCwds.has(group.cwd),
         );
         return createElement(

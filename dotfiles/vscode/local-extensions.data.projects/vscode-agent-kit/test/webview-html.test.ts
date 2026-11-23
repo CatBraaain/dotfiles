@@ -35,8 +35,6 @@ describe("webviewHtml", () => {
     expect(html).toContain("var(--vscode-menu-background, var(--vscode-sideBar-background))");
     expect(html).toContain(".workspace-menu button:hover");
     expect(html).not.toContain(".workspace-menu button:focus");
-    expect(html).toContain(".group-workspace-menu { opacity: 0; }");
-    expect(html).toContain(".group-workspace-menu:hover { opacity: 1; }");
     expect(html).not.toContain(".group-unregister");
   });
 

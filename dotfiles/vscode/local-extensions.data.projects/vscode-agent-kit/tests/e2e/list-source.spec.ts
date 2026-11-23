@@ -89,7 +89,7 @@ test(
       const group = frame
         .locator(`.group-header[title="${host.sessions.A.cwd}"]`)
         .describe("Retained workspace actions");
-      await group.getByRole("button", { name: "Workspace actions", exact: true }).click();
+      await group.click({ button: "right" });
       await frame
         .getByRole("menuitem", { name: "Unregister workspace", exact: true })
         .describe("Remove retained workspace")
