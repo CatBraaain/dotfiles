@@ -4,8 +4,7 @@ import type { ExecFile } from "./git-worktrees";
 import { errorMessage, isRecord } from "./guards";
 
 export const SELECT_SCM_REPOSITORIES = "agentKit.scm.selectRepositories";
-const DECLARATIONS_ENTRY = "session-worktree-declarations";
-const WORKTREE_NAME = /^(?!wt-(?:agents|copilot)-)[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const WORKTREE_METADATA_ENTRY = "session-worktree-metadata";
 
 export interface DisplayedScmSession {
   readonly sessionId: string;
@@ -25,7 +24,7 @@ export class SessionScmSelection {
   private version = 0;
   private requested = false;
   private pending: Promise<void> | undefined;
-  private declarations: { signature: string; paths: string[] } | undefined;
+  private worktreeMetadata: { signature: string; paths: string[] } | undefined;
   private hasSeenSessionFile = false;
   private lastAttempt: { key: string; result: "applied" | "pending" | "unavailable" } | undefined;
   private lastProblem: string | undefined;
@@ -38,7 +37,7 @@ export class SessionScmSelection {
     if (sameScope && previous?.filePath === session?.filePath) return;
     this.session = session;
     this.version += 1;
-    this.declarations = undefined;
+    this.worktreeMetadata = undefined;
     this.hasSeenSessionFile = false;
     if (!sameScope) {
       this.lastAttempt = undefined;
@@ -55,7 +54,7 @@ export class SessionScmSelection {
   onSessionFileChanged(filePath: string): void {
     if (filePath !== this.session?.filePath) return;
     this.version += 1;
-    this.declarations = undefined;
+    this.worktreeMetadata = undefined;
     void this.refresh();
   }
 
@@ -83,9 +82,9 @@ export class SessionScmSelection {
   }
 
   private async apply(session: DisplayedScmSession, version: number): Promise<void> {
-    const declarationPaths = await this.loadDeclarations(session.filePath, version);
+    const ownedPaths = await this.loadOwnedWorktreePaths(session, version);
     if (version !== this.version) return;
-    const paths = await resolveWorktreeScope(session.cwd, declarationPaths, this.deps.execFile);
+    const paths = await resolveWorktreeScope(session.cwd, ownedPaths, this.deps.execFile);
     if (version !== this.version) return;
 
     const detected = this.deps.detectedRoots();
@@ -110,7 +109,10 @@ export class SessionScmSelection {
     }
   }
 
-  private async loadDeclarations(filePath: string | undefined, version: number): Promise<string[]> {
+  private async loadOwnedWorktreePaths(
+    { filePath, sessionId }: DisplayedScmSession,
+    version: number,
+  ): Promise<string[]> {
     if (filePath === undefined) return [];
     try {
       const file = await stat(filePath);
@@ -118,15 +120,13 @@ export class SessionScmSelection {
       if (!file.isFile()) throw new Error("Session path is not a regular file");
       const { dev, ino, ctimeMs, mtimeMs, size } = file;
       const signature = JSON.stringify([dev, ino, ctimeMs, mtimeMs, size]);
-      if (this.declarations?.signature === signature) return this.declarations.paths;
-      const paths = parseDeclarationPaths(await readFile(filePath, "utf8"));
-      if (version === this.version) this.declarations = { signature, paths };
+      if (this.worktreeMetadata?.signature === signature) return this.worktreeMetadata.paths;
+      const paths = parseOwnedWorktreePaths(await readFile(filePath, "utf8"), sessionId);
+      if (version === this.version) this.worktreeMetadata = { signature, paths };
       return paths;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT" && !this.hasSeenSessionFile) return [];
-      throw new Error(
-        `Could not read worktree declarations from ${filePath}: ${errorMessage(error)}`,
-      );
+      throw new Error(`Could not read worktree metadata from ${filePath}: ${errorMessage(error)}`);
     }
   }
 
@@ -146,37 +146,34 @@ export class SessionScmSelection {
   }
 }
 
-function parseDeclarationPaths(jsonl: string): string[] {
+function parseOwnedWorktreePaths(jsonl: string, sessionId: string): string[] {
   const lines = jsonl.split("\n");
-  for (let index = lines.length - 1; index >= 0; index--) {
+  const headerIndex = lines.findIndex((line) => line.trim() !== "");
+  if (headerIndex === -1) return [];
+  const header: unknown = JSON.parse(lines[headerIndex]);
+  if (!isRecord(header) || header.type !== "session" || typeof header.id !== "string" || !header.id)
+    throw new Error("Invalid session header");
+  if (header.id !== sessionId)
+    throw new Error("Session header does not match the selected session");
+
+  for (let index = lines.length - 1; index > headerIndex; index--) {
     const line = lines[index];
     if (line.trim() === "") continue;
     const entry: unknown = JSON.parse(line);
-    if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== DECLARATIONS_ENTRY)
+    if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== WORKTREE_METADATA_ENTRY)
       continue;
-    return declarationPaths(entry.data);
+    if (!isRecord(entry.data) || entry.data.sessionId !== header.id) continue;
+    return validateWorktreePaths(entry.data.workspaces);
   }
   return [];
 }
 
-function declarationPaths(metadata: unknown): string[] {
-  if (!isRecord(metadata) || !Array.isArray(metadata.worktrees))
-    throw new Error("Invalid worktree declaration list");
-  const names = new Set<string>();
+function validateWorktreePaths(workspaces: unknown): string[] {
+  if (!Array.isArray(workspaces)) throw new Error("Invalid worktree metadata paths");
   const paths = new Set<string>();
-  for (const declaration of metadata.worktrees) {
-    if (!isRecord(declaration)) throw new Error("Invalid worktree declaration");
-    const { name, path } = declaration;
-    if (
-      typeof name !== "string" ||
-      !WORKTREE_NAME.test(name) ||
-      !isAbsolutePath(path) ||
-      resolve(path) !== path ||
-      names.has(name) ||
-      paths.has(path)
-    )
-      throw new Error("Invalid worktree declaration");
-    names.add(name);
+  for (const path of workspaces) {
+    if (!isAbsolutePath(path) || resolve(path) !== path || paths.has(path))
+      throw new Error("Invalid worktree metadata paths");
     paths.add(path);
   }
   return [...paths];
@@ -188,7 +185,7 @@ function isAbsolutePath(path: unknown): path is string {
 
 async function resolveWorktreeScope(
   cwd: string,
-  declarations: readonly string[],
+  ownedPaths: readonly string[],
   execFile: ExecFile,
 ): Promise<string[]> {
   const [list, root] = await Promise.all([
@@ -200,9 +197,8 @@ async function resolveWorktreeScope(
   if (main === undefined || (cwdRoot !== main && !linked.includes(cwdRoot)))
     throw new Error(`Could not resolve the main Git worktree from ${cwd}`);
 
-  const required = cwdRoot === main ? [main] : [main, cwdRoot];
-  const candidates = declarations.filter((path) => path !== cwdRoot && linked.includes(path));
-  if (candidates.length === 0) return required;
+  const candidates = ownedPaths.filter((path) => path !== main && linked.includes(path));
+  if (candidates.length === 0) return [main];
 
   const common = await execFile(
     "git",
@@ -223,7 +219,7 @@ async function resolveWorktreeScope(
       }
     }),
   );
-  return [...required, ...existing.filter((path) => path !== undefined)];
+  return [main, ...existing.filter((path) => path !== undefined)];
 }
 
 function worktreePaths(porcelain: string): (string | undefined)[] {

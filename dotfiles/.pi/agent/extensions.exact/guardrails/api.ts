@@ -34,7 +34,7 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
     name: "ask_permission",
     label: "ask_permission",
     description:
-      "Ask the user to grant write access to a directory subtree, or to approve a command rejected as requiring a reason. For a path: request access only when the effective write action is ask or unset and the path is not credentials; explicit deny and credentials cannot be granted. Use it before edit-heavy work on such a path; for a worktree, request its creation path or parent. Approval updates Guardrails write permissions for the subtree for the rest of the session. All tools using those permissions share the grant. Explicit deny and credentials remain protected. For a command: pass the exact rejected command; the user can approve it once (re-sending the same bash call runs it without another dialog) or approve its matched config pattern for this turn or the rest of the session. Turn approval expires at the next user message.",
+      "Ask the user to grant write access to a directory subtree, or to approve a command rejected as requiring a reason. For a path: request access only when the effective write action is ask or unset and the path is not credentials; explicit deny and credentials cannot be granted. Use it before edit-heavy work on such a path. Approval updates Guardrails write permissions for the subtree for the rest of the session. All tools using those permissions share the grant. Explicit deny and credentials remain protected. For a command: pass the exact rejected command; the user can approve it once (re-sending the same bash call runs it without another dialog) or approve its matched config pattern for this turn or the rest of the session. Turn approval expires at the next user message.",
     promptSnippet: "Ask the user for write access to a directory subtree or command approval",
     promptGuidelines: [
       writePermissionGuideline(guardrail.getWritePathsByFinalAction()),
@@ -359,7 +359,7 @@ function writePermissionGuideline(paths: {
     ...listPaths("deny", paths.deny),
     "The last matching rule determines each action, not path specificity. Credentials override listed ancestors and are never listed.",
     "allow needs no permission request; ask requires approval to update Guardrails write permissions for the approved scope; deny cannot be granted. A path with no matching write rule can be requested unless it is a credential path.",
-    'Before edit-heavy work on a requestable path, call ask_permission on the target subtree; for a worktree, use its creation path or parent. After bash reports "Read-only file system", request access only for a requestable path. All tools using Guardrails write permissions share the approved scope and lifetime. Do not rewrite the command to retry.',
+    'Before edit-heavy work on a requestable path, call ask_permission on the target subtree. After bash reports "Read-only file system", request access only for a requestable path. All tools using Guardrails write permissions share the approved scope and lifetime. Do not rewrite the command to retry.',
   ].join("\n");
 }
 

@@ -897,31 +897,68 @@ describe("§3.a パス文字列の解決", () => {
     );
   });
 
-  it("shipped config allows repository work notes without granting the worktree parent", () => {
-    const config = parseGuardrailConfig(
-      readFileSync(
-        sourcePathFromSymlink(
-          new URL("../../config.exact/guardrails.yaml.symlink", import.meta.url),
+  it(
+    "shipped config allows worktrees and work notes by repository name",
+    withLinkedWorktree((mainWorktreePath, linkedWorktreePath, workspacePath) => {
+      const config = parseGuardrailConfig(
+        readFileSync(
+          sourcePathFromSymlink(
+            new URL("../../config.exact/guardrails.yaml.symlink", import.meta.url),
+          ),
+          "utf8",
         ),
-        "utf8",
-      ),
-    );
-    const writeAllowPatterns = config.write
-      ?.filter((entry) => entry.action === "allow")
-      .flatMap((entry) => entry.patterns);
+      );
+      const name = basename(mainWorktreePath);
+      const otherMain = join(workspacePath, "other", name);
+      runGit(workspacePath, ["init", otherMain]);
+      const worktreesRoot = join(homedir(), ".agents", "worktrees");
+      const worktreeParent = join(worktreesRoot, name);
+      for (const cwd of [mainWorktreePath, linkedWorktreePath, otherMain]) {
+        const writeSection = expandPathSection(config.write, cwd);
+        assert.equal(resolvePathAction(writeSection, join(worktreeParent, "topic")), "allow");
+        assert.equal(
+          resolvePathAction(writeSection, join(homedir(), ".agents", "work", name)),
+          "allow",
+        );
+        assert.notEqual(
+          resolvePathAction(writeSection, join(worktreesRoot, `${name}-other`)),
+          "allow",
+        );
+        assert.notEqual(resolvePathAction(writeSection, worktreesRoot), "allow");
+      }
+    }),
+  );
 
-    assert.equal(writeAllowPatterns?.includes("~/.agents/worktrees/${REPOSITORY_NAME}"), false);
-    assert.equal(writeAllowPatterns?.includes("~/.agents/work/${REPOSITORY_NAME}"), true);
-    assert.equal(writeAllowPatterns?.includes("~/.agents/worktrees/${PROJECT_NAME}"), false);
-    assert.equal(writeAllowPatterns?.includes("~/.agents/work/${PROJECT_NAME}"), false);
-
-    const writeSection = expandPathSection(config.write, projectRoot);
-    const repositoryName = basename(projectRoot);
-    const workNotes = join(homedir(), ".agents", "work", repositoryName);
-    const worktreeParent = join(homedir(), ".agents", "worktrees", repositoryName);
-    assert.equal(resolvePathAction(writeSection, workNotes), "allow");
-    assert.notEqual(resolvePathAction(writeSection, worktreeParent), "allow");
-  });
+  realBwrapTest(
+    "creates a linked worktree through Bash in the repository name directory",
+    withLinkedWorktree(async (mainWorktreePath, linkedWorktreePath, workspacePath) => {
+      const worktreeRoot = join(workspacePath, "worktrees");
+      const worktreeParent = join(worktreeRoot, basename(mainWorktreePath));
+      const configPath = join(workspacePath, "config.yaml");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          read: [{ allow: "*" }],
+          write: [
+            { allow: ["${GIT_MAIN_WORKTREE_PATH}", join(worktreeRoot, "${REPOSITORY_NAME}")] },
+          ],
+          commands: [{ git: [{ allow: [] }] }],
+        }),
+      );
+      const guardrail = new Guardrail(linkedWorktreePath, configPath);
+      const runner = new SandboxRunner(linkedWorktreePath, (mode, commandCwd, readOnly) =>
+        guardrail.buildArgs(mode, commandCwd, readOnly),
+      );
+      const path = join(worktreeParent, "topic");
+      const command = `git -C ${JSON.stringify(mainWorktreePath)} worktree add --detach ${JSON.stringify(path)} HEAD`;
+      assert.equal(await guardrail.authorizeCommand(command, { cwd: linkedWorktreePath }), false);
+      const result = await runner.runTool("bash", { command }, { mode: "bash" });
+      const output = result.structuredContent as { exit_code: number; output: string };
+      assert.equal(output.exit_code, 0, output.output);
+      assert.equal(existsSync(join(path, ".git")), true);
+      assert.equal(guardrail.getDynamicPaths().size, 0);
+    }),
+  );
 
   it("allows writes to the Lazyweb token directory", () => {
     const config = parseGuardrailConfig(
@@ -4117,7 +4154,6 @@ commands:
     assert.match(permissionTool.description, /effective write action is ask or unset/i);
     assert.match(permissionTool.description, /explicit deny and credentials cannot be granted/i);
     assert.match(permissionTool.description, /before edit-heavy work/i);
-    assert.match(permissionTool.description, /worktree/i);
     assert.match(permissionTool.description, /exact rejected command/i);
     assert.equal(permissionTool.promptGuidelines?.length, 2);
     assert.match(
@@ -4131,8 +4167,7 @@ commands:
     );
     assert.match(permissionTool.promptGuidelines[0], /deny cannot be granted/);
     assert.match(permissionTool.promptGuidelines[0], /no matching write rule can be requested/);
-    assert.match(permissionTool.promptGuidelines[0], /worktree/i);
-    assert.match(permissionTool.promptGuidelines[0], /creation path or parent/);
+    assert.match(permissionTool.promptGuidelines[0], /requestable path/);
     assert.match(permissionTool.promptGuidelines[0], /Credentials override listed ancestors/);
     assert.match(permissionTool.promptGuidelines[0], /last matching rule determines each action/);
     assert.match(permissionTool.promptGuidelines[1], /Command requires a reason/);

@@ -64,7 +64,7 @@ user が実行する操作に触れるときは、その操作に対応する CL
 ## Git index の所有権
 
 - user は作業の合間にレビュー済みの範囲を自らstagingする。staged/unstaged の区分とその変化は想定内の user操作であり、エージェントは報告・調査せず、作業対象に影響させない
-- `git add`、`git reset`、`git restore --staged`、`git stash` など、index / staging状態を変更する操作は、commit の作成・分割など user が明示的に指示した場合に限り実行する
+- `git add`、`git reset`、`git restore --staged`、`git stash` など、index / staging状態を変更する操作は、commit の作成・分割など user が明示的に指示した場合に限り実行する。明示された引き継ぎでは、新規作成した受け取り先の index に限り、元のステージ済み差分をコピーしてよい
 - user が staged または unstaged にしている変更を、勝手に変更・解除・破棄しない
 - user から commit を明示的に依頼された場合は、必要なファイルだけを明示してstageする。`git add .` と `git add -A` は使わない
 - staging状態が想定外に見えても、勝手に修正せずuser に確認する
@@ -399,22 +399,35 @@ ASD-STE100 は方向性の参考とし、厳格な規格準拠や語彙・語数
 
 ## Git Worktree Strategy
 
-main worktree ではファイルを編集しない。編集を伴う作業は、1ファイルの軽微な修正も含め、常にサブワークツリーとブランチを作成して着手する。
+編集を伴うセッションは、最初の編集前に `git worktree add` で自分専用のサブworktree とブランチを作成する。main worktree や別セッションの worktree では編集しない。
 
-- 着手時: 「作成」の手順で worktree を作成する。セッションの cwd は main worktree に置いたまま、worktree を指定して作業する。
-- まとまった作業単位の完了時: 「finish・discard・close」の finish を、user の承認を得てから実行する。
-- 適用しない: 読み取りのみの調査・検索・検証、コミット・マージなど worktree を必要としない操作。
-
-pi では worktree の作成・削除に `session_worktree` を使い、Bash で `git worktree add`・`git worktree remove` を直接実行しない。ツールの `project` を省略するとセッション開始時の cwd が属するリポジトリを選ぶ。`project` には `~/projects` 直下のリポジトリのディレクトリ名を指定できるが、「Cross-Project Requests」の制約は変わらない。
+- 同じセッションは複数の worktree を担当できる。作業先を追加しても、以前に作成した担当 worktree は閉じない。再開時は、このセッションが作成した作業先から対象を選ぶ。別セッションとして作業を引き継ぐ場合は「引き継ぎ」に従う。開始 `cwd` が既存のサブworktree 内でも、その worktree を新しいセッションの編集先にしない。
+- まとまった作業単位の完了時は、user の承認を得てから「finish・discard・close」の finish を実行する。
+- 読み取りのみの調査・検索・検証、コミット・マージなど worktree を必要としない操作には適用しない。
 
 ### 作成
 
-1. branch名は取り組む機能を表すkebab-case英語（例: `add-export-command`）。リポジトリ規約があれば優先する。
-2. pi では `session_worktree` に `action: "add"` とブランチ名を `name` として渡す。指定したサブworktree があればそのまま利用し、なければ main worktree の HEAD から作成する。既存の worktree を引き継ぐ場合は、その名前を指定する。新規作業では、既存の別作業と衝突しない名前を選ぶ。すでにサブworktree 内を cwd として起動した場合は、その cwd 配下を再宣言せずに利用できる。
-3. pi 以外の環境では、既存作業と衝突しない名前で `git worktree add ~/.agents/worktrees/<リポジトリ名>/<branch> -b <branch>` を使う。フォルダ名が `agents-` / `copilot-` で始まる場合は branch 名を変えず、フォルダ名に `wt-` を前置する。
-4. worktree内のファイルは絶対パスで read/write/editする。相対パスはセッションcwd（main worktree）に解決されるため、worktree のファイル指定に使わない。git操作は `git -C <worktree のパス>` で実行する。
+1. リポジトリ規約に従い、セッション固有の接尾辞などを使い、別セッションが作った作業先と同じパスを再利用しないブランチ名を選ぶ。規約がなければ、取り組む機能を表す英語の kebab-case とする。作業先は `~/.agents/worktrees/<リポジトリ名>/<branch>` とする。リポジトリ名は `git worktree list --porcelain` の最初の `worktree` 行が示す main worktree のディレクトリ名とする。ブランチ名が `agents-` / `copilot-` で始まる場合はディレクトリ名だけに `wt-` を前置する。
+2. Bash で `git -C '<main worktree の絶対パス>' worktree add -b '<branch>' '<作業先の絶対パス>' HEAD` を実行する。引き継ぎ時は `-C` に引き継ぎ元の絶対パスを指定する。pi が作成先を追従できるよう、作成コマンドを Bash ツールに直接渡し、パスは変数やコマンド置換にせず、実際の絶対パスを書く。
+3. worktree 内の `read` / `write` / `edit` は絶対パスで指定し、Git 操作は `git -C <worktree のパス>` で実行する。main の未コミット変更はその場に残す。
 
-main の未コミット変更はその場に残す。worktree への持ち運びは行わない。
+### 引き継ぎ
+
+1. 元のサブworktree は読み取り専用として扱う。元の作業を止めた状態で、`git --no-optional-locks -C "$src" status --short` などで変更を確認する。競合中、`git add -N` で登録したパスがある、サブモジュール内に未コミット変更がある、または未追跡項目に入れ子の Git リポジトリや特殊ファイルがある場合は停止する。`git add -N` の有無は、元の `git diff --cached` を `--ita-visible-in-index` と `--ita-invisible-in-index` で比較して確認する。
+2. 元の `HEAD` から「作成」の手順で自分専用の worktree を作り、次の順で変更を新しい側にだけ複製する。`src` と `dst` はそれぞれ元と新しい worktree の絶対パスとする。
+
+   ```bash
+   set -e -o pipefail
+   git --no-optional-locks -C "$src" diff --cached --binary --no-ext-diff --no-textconv HEAD |
+     git -C "$dst" apply --index --allow-empty
+   git --no-optional-locks -C "$src" diff --binary --no-ext-diff --no-textconv |
+     git -C "$dst" apply --allow-empty
+   git -C "$src" ls-files --others --exclude-standard -z |
+     tar -C "$src" --no-recursion -cf - --null -T - |
+     tar -C "$dst" -xf -
+   ```
+
+3. コピーが成功したら、両側で `git --no-optional-locks -C <worktree のパス>` を使い、`status --short`・`diff`・`diff --cached` の結果を比較する。追跡済みの変更パスと未追跡パスは、ファイルの実バイト（`cmp`）、シンボリックリンクのリンク先（`readlink`）、削除されたパスの不在も照合する。ignored ファイルはコピーしない。失敗や不一致があれば引き継ぎ完了とはせず、両方の worktree を保持して停止する。元のファイル・index・ブランチは変更しない。
 
 ### 依存の準備
 
@@ -458,9 +471,9 @@ discard — 成果を捨てる判断が入るため、実行前に user の承�
 
 close — エディタのワークスペースから worktree を外す操作は本手順に含まず、user が手動で行う。
 
-1. worktree と対応するブランチを削除する。
-   - pi: `session_worktree` に `action: "remove"` と `name` を渡す。finish では `discard` を省略し、discard では `discard: true` を渡す。ツールの追加確認ダイアログはない。セッション開始時の cwd を含む worktree は削除できない。
-   - pi 以外: 対象外のディレクトリから Bash で実行する。finish では `git worktree remove <worktree のパス>`、成功後に `git branch -d <branch>` を実行する。discard では `git worktree remove --force <worktree のパス>`、成功後に `git branch -D <branch>` を実行する。
+1. 対象の worktree とブランチの対応を `git worktree list --porcelain` で確認する。自分のセッションの作業先だけを、対象外のディレクトリから操作する。セッション開始時の cwd を含む worktree は削除しない。
+   - finish: `git merge-base --is-ancestor <branch> <統合先>` で統合済みと確認する。削除直前に `git --no-optional-locks -C <worktree のパス> status --porcelain=v1 --untracked-files=all --ignored --ignore-submodules=none` が成功し、出力が空であることを確認する。確認できなければ worktree とブランチを残して停止する。`git worktree remove <worktree のパス>` が成功したら `git branch -d <branch>` を実行する。
+   - discard: `git worktree remove --force <worktree のパス>` が成功したら `git branch -D <branch>` を実行する。
 2. `git worktree list` に prunable な参照が残っていれば、Bash で `git worktree prune` を実行する。
 
 削除に失敗した場合は残った状態を確認し、close 単独で強制削除に切り替えない。成果を取り込むなら finish、捨てるなら user の承認を得て discard として扱う。
