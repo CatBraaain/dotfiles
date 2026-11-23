@@ -11,6 +11,18 @@ import { describe, it } from "bun:test";
 const TEST_TIMEOUT_MS = 30_000;
 const SDK_URL = import.meta.resolve("@earendil-works/pi-coding-agent");
 const MODULE_DIR = fileURLToPath(new URL(".", import.meta.url));
+const REPORT_FILENAME = "result.json";
+
+const SCENARIO_REPORT_WRITER = String.raw`
+import { renameSync } from "node:fs";
+
+function publishReport(report) {
+  const reportPath = join(directory, "${REPORT_FILENAME}");
+  const pendingReportPath = reportPath + ".tmp";
+  writeFileSync(pendingReportPath, JSON.stringify(report));
+  renameSync(pendingReportPath, reportPath);
+}
+`;
 
 const SCENARIO = String.raw`
 import assert from "node:assert/strict";
@@ -19,7 +31,7 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { join } from "node:path";
-
+${SCENARIO_REPORT_WRITER}
 const directory = process.env.PI_TEST_DIRECTORY;
 const moduleDir = process.env.PI_TEST_MODULE_DIR;
 const { createEventBus } = await import(process.env.PI_TEST_SDK_URL);
@@ -275,9 +287,9 @@ try {
   }
   assert.equal(trace.length, 0);
   assert.ok(sandboxCommands.length > 0);
-  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: true, trace, sandboxCommands, pane, executions }));
+  publishReport({ ok: true, trace, sandboxCommands, pane, executions });
 } catch (error) {
-  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: false, error: String(error.stack ?? error), trace, sandboxCommands }));
+  publishReport({ ok: false, error: String(error.stack ?? error), trace, sandboxCommands });
   process.exitCode = 1;
 } finally {
   bus.clear();
@@ -291,7 +303,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-
+${SCENARIO_REPORT_WRITER}
 const directory = process.env.PI_TEST_DIRECTORY;
 const moduleDir = process.env.PI_TEST_MODULE_DIR;
 const { createAgentSession, SessionManager, SettingsManager, DefaultResourceLoader } = await import(process.env.PI_TEST_SDK_URL);
@@ -457,9 +469,9 @@ try {
   assert.deepEqual(readOption(), latest);
   assert.deepEqual(readRunRecords(), expectedRunRecords);
   assert.deepEqual(errors, []);
-  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: true, sandboxCommands, executions }));
+  publishReport({ ok: true, sandboxCommands, executions });
 } catch (error) {
-  writeFileSync(join(directory, "result.json"), JSON.stringify({ ok: false, error: String(error.stack ?? error), sandboxCommands, executions }));
+  publishReport({ ok: false, error: String(error.stack ?? error), sandboxCommands, executions });
   process.exitCode = 1;
 } finally {
   releaseTitle.resolve();
@@ -535,7 +547,7 @@ async function runScenario(
   const socketPath = join(runtimeDir, "pi-tmux", "server.sock");
   mkdirSync(join(runtimeDir, "pi-tmux"), { recursive: true });
   const scriptPath = join(directory, "scenario.mjs");
-  const reportPath = join(directory, "result.json");
+  const reportPath = join(directory, REPORT_FILENAME);
   writeFileSync(scriptPath, scenario);
   if (initialRestoreRecord !== "absent") {
     const restoreDirectory = join(directory, "pi-tmux");
