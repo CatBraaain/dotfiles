@@ -898,13 +898,101 @@ describe("manual /title", () => {
     assert.deepEqual(h.selections, []);
   });
 
-  it("keeps the current name on empty input", async () => {
-    const h = harness();
-    h.manager.appendSessionInfo("Original title");
-    await h.title(" \t ");
-    assert.equal(h.manager.getSessionName(), "Original title");
-    assert.deepEqual(h.names, []);
-    assert.deepEqual(h.notifications, ["Usage: /title <title>"]);
+  it("opens an empty input field and saves its title without generation", async () => {
+    const h = harness({
+      input: async (prompt, placeholder) => {
+        assert.equal(prompt, "Session title");
+        assert.equal(placeholder, undefined);
+        return "  \x1b[31mManually chosen\x1b[0m\nTitle  ";
+      },
+    });
+    await h.title("");
+    assert.deepEqual(h.names, ["Manually chosen Title"]);
+    h.user();
+    await h.finish();
+    assert.equal(h.manager.getSessionName(), "Manually chosen Title");
+    assert.deepEqual(h.calls, []);
+    assert.deepEqual(h.selections, []);
+  });
+
+  for (const [action, input] of [
+    ["cancelling the dialog", undefined],
+    ["submitting blank text", " \t "],
+  ] as const) {
+    it(`keeps the current name when ${action}`, async () => {
+      const prompts: string[] = [];
+      const h = harness({
+        input: async (prompt) => {
+          prompts.push(prompt);
+          return input;
+        },
+      });
+      h.manager.appendSessionInfo("Original title");
+      await h.title(" \t ");
+      assert.deepEqual(prompts, ["Session title"]);
+      assert.equal(h.manager.getSessionName(), "Original title");
+      assert.deepEqual(h.names, []);
+      assert.deepEqual(h.notifications, []);
+    });
+  }
+
+  for (const change of ["session switch", "branch switch", "manual rename"]) {
+    it(`ignores stale input after a ${change}`, async () => {
+      const input = deferred<string>();
+      const h = harness({ input: () => input.promise });
+      const root = h.user();
+      h.manager.appendMessage(assistant());
+      const pendingTitle = h.title("");
+      if (change === "session switch") await h.switchSession();
+      if (change === "branch switch") {
+        h.manager.branch(root);
+        h.user("Alternative branch");
+      }
+      if (change === "manual rename") await h.title("Current title");
+      else h.manager.appendSessionInfo("Current title");
+      input.resolve("Stale title");
+      await pendingTitle;
+      assert.equal(h.manager.getSessionName(), "Current title");
+    });
+  }
+
+  it("ignores stale input after navigating forward to an existing branch", async () => {
+    const input = deferred<string>();
+    const h = harness({ input: () => input.promise });
+    h.manager.appendSessionInfo("Current title");
+    const root = h.user();
+    const existingLeaf = h.user("Existing branch");
+    h.manager.branch(root);
+    const pendingTitle = h.title("");
+    h.manager.branch(existingLeaf);
+    input.resolve("Stale title");
+    await pendingTitle;
+    assert.equal(h.manager.getSessionName(), "Current title");
+  });
+
+  it("ignores stale input after returning to the original branch point with a summary", async () => {
+    const input = deferred<string>();
+    const h = harness({ input: () => input.promise });
+    h.manager.appendSessionInfo("Current title");
+    const root = h.user();
+    const pendingTitle = h.title("");
+    h.manager.appendMessage(assistant());
+    h.manager.branchWithSummary(root, "Abandoned response", undefined, false);
+    input.resolve("Stale title");
+    await pendingTitle;
+    assert.equal(h.manager.getSessionName(), "Current title");
+  });
+
+  it("saves typed input when a generated title was added to the same branch", async () => {
+    const input = deferred<string>();
+    const h = harness({ input: () => input.promise });
+    h.user();
+    const pendingTitle = h.title("");
+    await h.retitle();
+    assert.deepEqual(h.names, ["Generated title"]);
+    input.resolve("Typed title");
+    await pendingTitle;
+    assert.equal(h.manager.getSessionName(), "Typed title");
   });
 
   it("reports usage on empty input without UI", async () => {

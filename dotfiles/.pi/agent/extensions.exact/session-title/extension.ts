@@ -97,12 +97,31 @@ export function registerSessionTitle(
   });
 
   pi.registerCommand("title", {
-    description: "Set the session title manually: /title <title>.",
+    description: "Set the session title. Run /title without a title to open an input field.",
     async handler(args, ctx) {
-      const title = normalizeManualTitle(args);
+      let title = normalizeManualTitle(args);
       if (!title) {
-        warn(ctx, "Usage: /title <title>");
-        return;
+        if (!ctx.hasUI) {
+          warn(ctx, "Usage: /title <title>");
+          return;
+        }
+        const target = {
+          generation,
+          sessionId: ctx.sessionManager.getSessionId(),
+          leafId: ctx.sessionManager.getLeafId(),
+        };
+        const entryCountAtOpen = ctx.sessionManager.getEntries().length;
+        const branchLengthAtOpen = ctx.sessionManager.getBranch().length;
+        const input = await ctx.ui.input("Session title");
+        title = normalizeManualTitle(input ?? "");
+        if (!title || !isCurrentTarget(ctx, target)) return;
+        const appended = ctx.sessionManager.getEntries().slice(entryCountAtOpen);
+        const branchSuffix = ctx.sessionManager.getBranch().slice(branchLengthAtOpen);
+        if (
+          branchSuffix.length !== appended.length ||
+          branchSuffix.some((entry, index) => entry.id !== appended[index]?.id)
+        )
+          return;
       }
       invalidate();
       pi.setSessionName(title);
