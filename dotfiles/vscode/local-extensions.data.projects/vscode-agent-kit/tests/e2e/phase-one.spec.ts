@@ -1346,11 +1346,15 @@ test(
       const row = rowIn(frame, aId);
       await expect(row).not.toHaveClass(/archived/);
       await expect(row.locator(`[data-archive="${aId}"]`)).toBeVisible();
-      const status = row.locator(".session-status").describe("Restored A empty status slot");
+      const status = row
+        .locator(".session-status")
+        .describe("Restored A waiting-for-user status slot");
+      await expect(status).toHaveAttribute("data-state", "waiting-user");
+      await expect(status).toHaveAttribute("data-unread", "false");
       await expect(status.locator("*")).toHaveCount(0);
-      await expect(status).not.toHaveAttribute("data-state");
       await expect(status).toHaveCSS("width", "12px");
       await expect(status).toHaveCSS("height", "12px");
+      await expect(row.locator(".session-button")).toHaveAttribute("title", /Waiting for user/);
       expect(aIsListed()).toBe(true);
       await host.expectNativeDisplay("A");
       await expect(
