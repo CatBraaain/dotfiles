@@ -389,42 +389,31 @@ describe("worktree detection", () => {
   });
 
   it("does not overlap detection runs", async () => {
-    api = new FakeVscode([AGENTS], untitledWorkspace());
-    git = createFakeGit([mainEntry, featEntry]);
-    engine = new FolderSyncEngine({
-      vscode: api,
-      execFile: git.exec,
-      homeDir: HOME,
-      // Synchronous identity keeps the chain microtask-only so a held git
-      // run deterministically blocks the serialized chain.
-      resolveIdentity: (folderPath) => Promise.resolve(folderPath),
-    });
-    disposable = engine.start();
-    await boot();
-    // A rejected application keeps the list cwd absent from the workspace,
-    // so the held detection run stays free of real file reads.
-    api.failNextUpdate = true;
-    engine.updateList([MAIN]);
-    await engine.idle();
-    expect(api.folderPaths).toEqual([AGENTS]);
+    const mainRepo = await tempDir("folder-sync-poll-");
+    try {
+      setup([AGENTS], { workspaceFile: untitledWorkspace(), entries: [wt(mainRepo)] });
+      await boot();
+      await pushList([mainRepo]);
 
-    const release = git.holdNext();
-    await vi.advanceTimersByTimeAsync(WORKTREE_DETECT_INTERVAL_MS);
-    // Drain pending work so the held git run has started without waiting
-    // for its completion; the main-repository resolution reads the real
-    // file system before the git call.
-    await vi.advanceTimersByTimeAsync(1);
-    expect(git.calls).toHaveLength(1);
-    // While the first run is held, no further detection runs: the next
-    // tick is scheduled only after the current run completes.
-    await vi.advanceTimersByTimeAsync(WORKTREE_DETECT_INTERVAL_MS * 4);
-    expect(git.calls).toHaveLength(1);
-    release();
-    // The held run completes and the next detection starts one interval
-    // later.
-    await vi.advanceTimersByTimeAsync(WORKTREE_DETECT_INTERVAL_MS);
-    await engine.idle();
-    expect(git.calls).toHaveLength(2);
+      const { started, release } = git.holdNext();
+      try {
+        await vi.advanceTimersByTimeAsync(WORKTREE_DETECT_INTERVAL_MS);
+        await started;
+        expect(git.calls).toHaveLength(1);
+
+        await vi.advanceTimersByTimeAsync(WORKTREE_DETECT_INTERVAL_MS * 4);
+        expect(git.calls).toHaveLength(1);
+      } finally {
+        release();
+      }
+
+      await engine.idle();
+      expect(git.calls).toHaveLength(1);
+      await detectOnce();
+      expect(git.calls).toHaveLength(2);
+    } finally {
+      await cleanup(mainRepo);
+    }
   });
 
   // SPEC: git コマンドが利用できない、実行が失敗する → worktree の検出を

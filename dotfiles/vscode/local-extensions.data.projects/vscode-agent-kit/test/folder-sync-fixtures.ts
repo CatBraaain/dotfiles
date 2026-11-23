@@ -217,8 +217,7 @@ export interface FakeGit {
   setEntries(entries: readonly WorktreeEntry[]): void;
   /** Makes the next exec call reject with an error. */
   failOnce(): void;
-  /** Makes the next exec call block until the returned release function is called. */
-  holdNext(): () => void;
+  holdNext(): { started: Promise<void>; release: () => void };
 }
 
 /** A git runner serving fixed porcelain output (per cwd when a resolver is given). */
@@ -227,7 +226,7 @@ export function createFakeGit(
 ): FakeGit {
   let current: readonly WorktreeEntry[] | ((cwd: string) => readonly WorktreeEntry[]) = entries;
   let failing = false;
-  let held: { release(): void } | undefined;
+  let held: { start(): void; released: Promise<void> } | undefined;
   const calls: FakeGit["calls"] = [];
   const exec: ExecFile = async (_file, args, options) => {
     calls.push({ at: Date.now(), cwd: options.cwd, args: [...args] });
@@ -238,9 +237,8 @@ export function createFakeGit(
     if (held !== undefined) {
       const gate = held;
       held = undefined;
-      await new Promise<void>((resolve) => {
-        gate.release = resolve;
-      });
+      gate.start();
+      await gate.released;
     }
     const list = typeof current === "function" ? current(options.cwd) : current;
     return { stdout: serializeEntries(list) };
@@ -255,9 +253,14 @@ export function createFakeGit(
       failing = true;
     },
     holdNext: () => {
-      const gate: { release(): void } = {} as { release(): void };
-      held = gate;
-      return () => gate.release();
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const started = new Promise<void>((resolve) => {
+        held = { start: resolve, released };
+      });
+      return { started, release };
     },
   };
 }
