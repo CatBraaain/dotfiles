@@ -30,7 +30,7 @@ apply の実行で、`managed-keys.data.yaml` に宣言した localStorage キ�
 - `Preferences` または `Local Storage` が存在するディレクトリを認識済みの userData とする
 - 未認識の userData では、宣言とインストール済みアプリの識別を検証した後、`status=skipped code=OK` と宣言の SHA-256 を返し、終了コード0 で終わる。英語の detail で OpenWhispr の起動・終了後に再実行するよう案内する。CLI はこの案内を色指定なしの stdout に表示し、stderr は空にする。エラー時の detail は stderr に表示する。hook lock の取得、harness の起動、shadow runtime の生成、登録・storage・SQLite・既存ファイルへの書き込みは行わない
 - 宣言の欠損・不正、アプリの未インストール・識別失敗は、userData の認識状態によらず `INVALID_INPUT` エラーとする。認識済みuserData での hook lock と入力検証の優先順位は維持する
-- 認識済みの userData で OpenWhispr が起動中のときはフックは何も書き換えず明確なエラー（LOCKED）で終わり、起動状態を変更しない。owner は必要に応じてアプリを終了してから applyする
+- 認識済みの userData で OpenWhispr のプロファイルが使用中で、アプリの単一起動ロックを取得できない場合は、設定とアプリの起動状態を変えずに反映をスキップする。CLI は `status=skipped code=LOCKED` と宣言の SHA-256 を stdout に、未反映であることとアプリを終了してから apply を再実行する案内を `Warning:` 付きで stderr に表示し、終了コード 0 を返す。別の設定登録処理との hook lock の競合は `status=error code=LOCKED` と終了コード 3 のままとする
 - 宣言した storage キーの値がすべて一致し、辞書DBの移行が不要で、辞書の正規化した有効語集合が宣言と一致していれば、何も変更せず `status=unchanged code=OK` を返す。辞書語の追加・削除だけを行った場合も `status=applied code=OK` を返す。宣言の検証後に返す `keys_sha256` は、storage キー群と辞書の宣言（省略と空配列の区別を含む）を含む SHA-256 とする
 - 変更するのは宣言に列挙した storage キーと、個人辞書に不足する宣言語の差分追加と、宣言にないすべての有効語の除去とする。ただし、アプリ既存のDB移行に伴う辞書以外のDB更新は許容する。provider・model・認証情報・既存の `.env` と、移行に伴わない他のデータは変更しない
 - 個人辞書の同一語は、前後の空白を除き、大文字小文字を無視して判定する。完全一致はこの正規化した語集合の一致とする。宣言に対応する既存の有効語は、表記・学習由来などの属性・共有状態・重複行を保持する。手動追加語を含め、宣言にない有効語は空白付き・大小文字違いの行もすべてアプリ既存の行単位削除APIで除去する。再実行で同一語を重複登録しない

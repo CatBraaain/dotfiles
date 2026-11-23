@@ -1143,7 +1143,6 @@ async function verifyInstalledRuntime(): Promise<void> {
       assert.deepEqual([status.status, status.code], ["unchanged", "OK"], result.stderr);
       assert.equal(result.exitCode, 0);
     }
-    // aborts with LOCKED before writing when the singleton lock is held
     {
       await seedProfile();
       const holdChild = await startHoldHelper();
@@ -1154,12 +1153,14 @@ async function verifyInstalledRuntime(): Promise<void> {
             OPENWHISPR_E2E_PROFILE: profileDir,
           }),
         );
-        const status = parseStatusLine(result.stdout);
-        assert.deepEqual([status.status, status.code], ["error", "LOCKED"], result.stderr);
-        assert.equal(result.exitCode, 3);
+        assert.equal(result.exitCode, 0, result.stderr);
         assert.equal(
-          result.stderr.trim(),
-          "the profile singleton lock is held by another process; OpenWhispr is likely running — quit it and run apply again",
+          result.stdout.trim(),
+          `status=skipped code=LOCKED keys_sha256=${managedKeysSha256(loadManagedKeys(keysDir))}`,
+        );
+        assert.match(
+          result.stderr,
+          /^Warning: .*settings were not applied\..*Quit OpenWhispr and run apply again\./,
         );
         assert.ok(
           holdChild?.exitCode === null || holdChild?.exitCode === undefined,
@@ -1433,8 +1434,9 @@ async function verifyInstalledRuntime(): Promise<void> {
       const holdChild = await startHoldHelper();
       try {
         const result = await runDeclaredHook();
-        assert.equal(result.exitCode, 3, result.stderr);
-        assert.equal(parseStatusLine(result.stdout).code, "LOCKED");
+        assert.equal(result.exitCode, 0, result.stderr);
+        const status = parseStatusLine(result.stdout);
+        assert.deepEqual([status.status, status.code], ["skipped", "LOCKED"]);
         assert.deepEqual(dictionarySnapshot(), before);
         assert.equal(holdChild?.exitCode, null);
       } finally {

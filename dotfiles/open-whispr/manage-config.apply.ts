@@ -1071,11 +1071,15 @@ export async function manageConfig(options: {
       env: options.env,
       timeoutMs: paths.timeouts.harnessMs,
     });
-    if (run.outcome.kind === "locked")
-      throw new HookError(
-        "LOCKED",
-        "the profile singleton lock is held by another process; OpenWhispr is likely running — quit it and run apply again",
-      );
+    if (run.outcome.kind === "locked") {
+      return {
+        status: "skipped",
+        code: "LOCKED",
+        keysSha256,
+        detail:
+          "The OpenWhispr profile is in use, so settings were not applied. Quit OpenWhispr and run apply again.",
+      };
+    }
     if (run.outcome.kind === "error")
       throw new HookError(
         "APPLY_FAILED",
@@ -1133,7 +1137,13 @@ async function main(): Promise<void> {
     process.exit(exitCodeByError.INVALID_INPUT);
   }
   const outcome = await manageConfig({ platform, env: process.env });
-  if (outcome.detail && outcome.status !== "error") console.log(outcome.detail);
+  if (outcome.detail && outcome.status !== "error") {
+    if (outcome.status === "skipped" && outcome.code === "LOCKED") {
+      console.warn(`Warning: ${outcome.detail}`);
+    } else {
+      console.log(outcome.detail);
+    }
+  }
   console.log(formatStatusLine(outcome));
   if (outcome.detail && outcome.status === "error") console.error(outcome.detail);
   if (outcome.status === "error") process.exit(exitCodeByError[outcome.code as HookErrorCode]);
