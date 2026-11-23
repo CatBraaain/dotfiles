@@ -340,32 +340,36 @@ async function runtimeHarness(withAgents = false) {
       ...(withAgents
         ? [
             (pi: ExtensionAPI) =>
-              agentsExtension(pi, {
-                config: {
-                  default: "main",
-                  defaultMode: "standard",
-                  modes: {
-                    standard: {
-                      middle: [{ provider: "handoff-test", model: "fake-model" }],
-                      high: [{ provider: "handoff-test", model: "high-model" }],
-                      low: [{ provider: "handoff-test", model: "low-model" }],
+              agentsExtension(
+                pi,
+                {
+                  config: {
+                    default: "main",
+                    defaultMode: "standard",
+                    modes: {
+                      standard: {
+                        middle: [{ provider: "handoff-test", model: "fake-model" }],
+                        high: [{ provider: "handoff-test", model: "high-model" }],
+                        low: [{ provider: "handoff-test", model: "low-model" }],
+                      },
+                      max: {
+                        middle: [{ provider: "handoff-test", model: "max-middle-model" }],
+                        high: [{ provider: "handoff-test", model: "max-high-model" }],
+                        low: [{ provider: "handoff-test", model: "max-low-model" }],
+                      },
                     },
-                    max: {
-                      middle: [{ provider: "handoff-test", model: "max-middle-model" }],
-                      high: [{ provider: "handoff-test", model: "max-high-model" }],
-                      low: [{ provider: "handoff-test", model: "max-low-model" }],
-                    },
-                  },
-                  agents: {
-                    main: {
-                      class: "middle",
-                      tools: ["recontext"],
-                      subagents: [],
-                      systemPrompt: [],
+                    agents: {
+                      main: {
+                        class: "middle",
+                        tools: ["recontext"],
+                        subagents: [],
+                        systemPrompt: [],
+                      },
                     },
                   },
                 },
-              }),
+                async () => ({ exitCode: 0, stdout: "[]" }),
+              ),
           ]
         : []),
       recontextExtension,

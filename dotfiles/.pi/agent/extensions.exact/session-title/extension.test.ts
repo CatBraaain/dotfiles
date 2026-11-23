@@ -1167,19 +1167,23 @@ describe("real SDK title command dispatch", () => {
       noContextFiles: true,
       extensionFactories: [
         (pi) => {
-          agentsExtension(pi, {
-            config: {
-              default: "main",
-              defaultMode: "standard",
-              modes: {
-                standard: {
-                  middle: [{ provider: "title-test", model: "parent" }],
-                  low: [{ provider: "title-test", model: "title" }],
+          agentsExtension(
+            pi,
+            {
+              config: {
+                default: "main",
+                defaultMode: "standard",
+                modes: {
+                  standard: {
+                    middle: [{ provider: "title-test", model: "parent" }],
+                    low: [{ provider: "title-test", model: "title" }],
+                  },
                 },
+                agents: { main: { class: "middle", tools: [], subagents: [], systemPrompt: [] } },
               },
-              agents: { main: { class: "middle", tools: [], subagents: [], systemPrompt: [] } },
             },
-          });
+            async () => ({ exitCode: 0, stdout: "[]" }),
+          );
           pi.on("session_start", () => {
             titleCommands = pi
               .getCommands()

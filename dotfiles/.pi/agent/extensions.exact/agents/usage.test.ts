@@ -43,16 +43,22 @@ describe("candidate scores", () => {
 describe("usage facts parsing", () => {
   const resetAt = "2026-06-17T12:00:00+09:00";
 
-  it("keeps the reset instant and window duration per provider", () => {
+  it("keeps short quota and long window facts per provider", () => {
     const facts = parseUsageFacts(
       JSON.stringify([
-        { provider: "zai", long: 50, longResetsAt: resetAt, longWindowMinutes: 300 },
-        { provider: "commandcode", long: null, longResetsAt: null, longWindowMinutes: null },
+        { provider: "zai", short: 0, long: 50, longResetsAt: resetAt, longWindowMinutes: 300 },
+        {
+          provider: "commandcode",
+          short: null,
+          long: null,
+          longResetsAt: null,
+          longWindowMinutes: null,
+        },
       ]),
     );
     const expected: Array<[string, ProviderUsageFacts]> = [
-      ["zai", { long: 50, longResetsAt: resetAt, longWindowMinutes: 300 }],
-      ["commandcode", { long: null, longResetsAt: null, longWindowMinutes: null }],
+      ["zai", { short: 0, long: 50, longResetsAt: resetAt, longWindowMinutes: 300 }],
+      ["commandcode", { short: null, long: null, longResetsAt: null, longWindowMinutes: null }],
     ];
     assert.deepEqual(facts, new Map(expected));
   });
@@ -99,6 +105,7 @@ describe("usage facts parsing", () => {
     "[[]]",
     '[{"provider":"","long":50,"longResetsAt":null,"longWindowMinutes":300}]',
     '[{"provider":"zai","long":"70","longResetsAt":null,"longWindowMinutes":300}]',
+    '[{"provider":"zai","short":"0","long":50,"longResetsAt":null,"longWindowMinutes":300}]',
     '[{"provider":"zai","long":50,"longResetsAt":12,"longWindowMinutes":300}]',
     '[{"provider":"zai","long":50,"longWindowMinutes":300}]',
     '[{"provider":"zai","long":50,"longResetsAt":null,"longWindowMinutes":1e400}]',

@@ -27,7 +27,7 @@ import agentsExtension, {
   initialAgent,
   loadAgentConfig,
   parseAgentConfig,
-  parseProviderUrgency,
+  parseRoutingUsage,
   urgencyOfFact,
   shouldBlockToolCall,
 } from "./index";
@@ -41,15 +41,20 @@ import { parseUsageJson } from "../provider-usage/index.ts";
 import type { ModelCandidate } from "./routing.ts";
 
 function usageFixture(
-  rows: Array<{ provider: string; long: number | null; remainingFraction: number | null }>,
+  rows: Array<{
+    provider: string;
+    short?: number | null;
+    long: number | null;
+    remainingFraction: number | null;
+  }>,
   nowMs = Date.now(),
 ): string {
   const longWindowMinutes = 10080;
   const windowMs = longWindowMinutes * 60_000;
   return JSON.stringify(
-    rows.map(({ provider, long, remainingFraction }) => ({
+    rows.map(({ provider, short = null, long, remainingFraction }) => ({
       provider,
-      short: null,
+      short,
       shortResetsAt: null,
       long,
       longResetsAt:
@@ -2760,65 +2765,95 @@ describe("mode routing boundaries", () => {
     }
   });
 
-  it("uses LATEST and usage scoring only within the selected mode and class", async () => {
-    let queries = 0;
-    const extension = captureAgentsExtension(
-      {
-        config: {
-          ...modeConfig,
-          modes: {
-            ...modeConfig.modes,
-            max: {
-              ...modeConfig.modes.max!,
-              middle: [
-                {
-                  provider: "openai-codex",
-                  model: "gpt-<LATEST>-astra",
-                  settings: [{ multiply: { provider: "openai-codex" } }],
-                },
-                {
-                  provider: "fallback",
-                  model: "local",
-                  settings: [{ multiply: { provider: "fallback" } }],
-                },
-              ],
+  it.each([
+    { manual: false, withBackup: false, expectedProvider: "fallback" },
+    { manual: true, withBackup: false, expectedProvider: "openai-codex" },
+    { manual: true, withBackup: true, expectedProvider: "backup" },
+  ])(
+    "resolves LATEST and applies usage rules to rate-limit fallback (manual=$manual, backup=$withBackup)",
+    async ({ manual, withBackup, expectedProvider }) => {
+      let queries = 0;
+      const extension = captureAgentsExtension(
+        {
+          config: {
+            ...modeConfig,
+            modes: {
+              ...modeConfig.modes,
+              max: {
+                ...modeConfig.modes.max!,
+                middle: [
+                  {
+                    provider: "openai-codex",
+                    model: "gpt-<LATEST>-astra",
+                    settings: [{ multiply: { provider: "openai-codex" } }],
+                  },
+                  {
+                    provider: "fallback",
+                    model: "local",
+                    settings: [{ multiply: { provider: "fallback" } }],
+                  },
+                  ...(withBackup ? [{ provider: "backup", model: "local", weight: 1.5 }] : []),
+                ],
+              },
             },
           },
         },
-      },
-      {
-        flags: { max: true },
-        models: [
-          { provider: "openai-codex", id: "gpt-6.1-astra" },
-          { provider: "openai-codex", id: "gpt-6.2-astra" },
-        ],
-        async executeUsage() {
-          queries++;
-          return {
-            exitCode: 0,
-            stdout: usageFixture([
-              { provider: "openai-codex", long: 50, remainingFraction: 0.5 },
-              { provider: "fallback", long: 100, remainingFraction: 1 },
-            ]),
-          };
+        {
+          flags: { max: true },
+          models: [
+            { provider: "openai-codex", id: "gpt-6.1-astra" },
+            { provider: "openai-codex", id: "gpt-6.2-astra" },
+          ],
+          async executeUsage() {
+            queries++;
+            return {
+              exitCode: 0,
+              stdout: usageFixture([
+                { provider: "openai-codex", long: 50, remainingFraction: 0.5 },
+                {
+                  provider: "fallback",
+                  short: manual ? 0 : null,
+                  long: 100,
+                  remainingFraction: 0.8,
+                },
+              ]),
+            };
+          },
         },
-      },
-    );
-    try {
-      await extension.sessionStart("startup");
-      assert.deepEqual(extension.context.model, { provider: "openai-codex", id: "gpt-6.2-astra" });
-      assert.equal(queries, 1);
-      await extension.providerResponse(429);
-      assert.deepEqual(extension.context.model, { provider: "fallback", id: "local" });
-      assert.equal(queries, 1);
-      await extension.providerResponse(429);
-      assert.deepEqual(extension.context.model, { provider: "fallback", id: "local" });
-    } finally {
-      extension.restore();
-    }
-  });
+      );
+      try {
+        await extension.sessionStart("startup");
+        assert.deepEqual(extension.context.model, {
+          provider: "openai-codex",
+          id: "gpt-6.2-astra",
+        });
+        assert.equal(queries, 1);
+        if (manual) await extension.modelSelect("set");
+        await extension.providerResponse(429);
+        assert.equal(extension.context.model?.provider, expectedProvider);
+        assert.equal(queries, 2);
+        if (expectedProvider === "openai-codex") {
+          await extension.messageEnd({
+            role: "assistant",
+            provider: "openai-codex",
+            model: "gpt-6.2-astra",
+            stopReason: "error",
+            errorMessage: "HTTP 429",
+          });
+          assert.ok(
+            extension.notifications.some((message) => message.includes("no fallback available")),
+          );
+        } else {
+          await extension.providerResponse(429);
+          assert.equal(extension.context.model?.provider, expectedProvider);
+        }
+      } finally {
+        extension.restore();
+      }
+    },
+  );
 
-  it("does not query usage for a single max candidate", async () => {
+  it("queries usage for a single max candidate on each resolution", async () => {
     let queries = 0;
     const extension = captureAgentsExtension(
       { config: modeConfig },
@@ -2834,7 +2869,7 @@ describe("mode routing boundaries", () => {
       await extension.sessionStart("startup");
       await extension.runClassCommand("low");
       await extension.input("next");
-      assert.equal(queries, 0);
+      assert.equal(queries, 3);
       assert.deepEqual(extension.context.model, { provider: "openai-codex", id: "sol" });
     } finally {
       extension.restore();
@@ -6716,7 +6751,7 @@ agents:
   });
 });
 
-describe("parseProviderUrgency", () => {
+describe("parseRoutingUsage", () => {
   const nowMs = Date.parse("2026-06-17T00:00:00Z");
 
   it("keeps exact provider names and calculates urgency with exponent 2.5", () => {
@@ -6731,7 +6766,7 @@ describe("parseProviderUrgency", () => {
       nowMs,
     );
     assert.deepEqual(
-      parseProviderUrgency(stdout, nowMs),
+      parseRoutingUsage(stdout, nowMs)?.urgencies,
       new Map([
         ["command-code", 2.82842712474619],
         ["commandcode", 0.5],
@@ -6750,11 +6785,11 @@ describe("parseProviderUrgency", () => {
     { long: 1e308, longResetsAt: "2026-06-17T01:00:00Z", longWindowMinutes: 1e6 },
   ])("keeps unavailable urgency unknown for %j", (facts) => {
     const stdout = JSON.stringify([{ provider: "zai", ...facts }]);
-    assert.deepEqual(parseProviderUrgency(stdout, nowMs), new Map([["zai", null]]));
+    assert.deepEqual(parseRoutingUsage(stdout, nowMs)?.urgencies, new Map([["zai", null]]));
   });
 
   it("keeps absent provider facts unknown", () => {
-    assert.deepEqual(parseProviderUrgency("[]", nowMs), new Map());
+    assert.deepEqual(parseRoutingUsage("[]", nowMs)?.urgencies, new Map());
   });
 
   it.each([
@@ -6767,7 +6802,7 @@ describe("parseProviderUrgency", () => {
     '[{"provider":"zai","long":50,"longResetsAt":"badZ","longWindowMinutes":300}]',
     '[{"provider":"zai","long":50,"longResetsAt":null,"longWindowMinutes":0}]',
   ])("rejects malformed provider JSON: %s", (stdout) => {
-    assert.equal(parseProviderUrgency(stdout, nowMs), null);
+    assert.equal(parseRoutingUsage(stdout, nowMs), null);
   });
 });
 
@@ -6898,7 +6933,7 @@ describe("usage scoring and ordering", () => {
         longResetsAt: new Date(nowMs + remainingMinutes * 60_000).toISOString(),
       })),
     );
-    const urgencies = parseProviderUrgency(stdout, nowMs);
+    const urgencies = parseRoutingUsage(stdout, nowMs)?.urgencies;
     assert.ok(urgencies);
     assert.equal(urgencies.get("openai-codex"), 4.056555530493307);
     assert.equal(urgencies.get("zai"), 6.74981443092305);
@@ -7896,7 +7931,7 @@ describe("zero-score input gates", () => {
   );
 
   it.each(["interactive", "extension", "image"])(
-    "blocks a single zero candidate for %s without querying usage",
+    "blocks a single zero-score candidate for %s even with unknown usage",
     async (source) => {
       const policy: AgentConfig = {
         ...config,
@@ -7932,7 +7967,101 @@ describe("zero-score input gates", () => {
         );
         assert.deepEqual(result, { action: "handled" });
         assert.deepEqual(extension.selectedModels, []);
-        assert.equal(calls, 0);
+        assert.equal(calls, 2);
+      } finally {
+        extension.restore();
+      }
+    },
+  );
+});
+
+describe("short quota routing", () => {
+  it.each([
+    { short: 0, selected: "fallback" },
+    { short: 1, selected: "preferred" },
+    { short: null, selected: "preferred" },
+  ])(
+    "resolves to $selected when the preferred provider has short=$short",
+    async ({ short, selected }) => {
+      const extension = captureAgentsExtension(
+        {
+          config: {
+            ...config,
+            modes: {
+              standard: {
+                ...config.modes.standard!,
+                middle: [
+                  {
+                    provider: "other",
+                    model: "fallback",
+                    settings: [{ multiply: { provider: "other" } }],
+                  },
+                  {
+                    provider: "commandcode",
+                    model: "preferred",
+                    settings: [{ multiply: { provider: "long-budget" } }],
+                  },
+                ],
+              },
+            },
+          },
+        },
+        {
+          async executeUsage() {
+            return {
+              exitCode: 0,
+              stdout: usageFixture([
+                { provider: "commandcode", short, long: 80, remainingFraction: 1 },
+                { provider: "long-budget", short: 0, long: 80, remainingFraction: 1 },
+                { provider: "other", short: 100, long: 20, remainingFraction: 1 },
+              ]),
+            };
+          },
+        },
+      );
+      try {
+        await extension.sessionStart();
+        assert.equal(extension.context.model?.id, selected);
+      } finally {
+        extension.restore();
+      }
+    },
+  );
+
+  it.each(["automatic", "manual"])(
+    "checks short for a single candidate in %s selection",
+    async (selection) => {
+      let short: number | null = null;
+      let queries = 0;
+      const extension = captureAgentsExtension(
+        { config },
+        {
+          flags: { agent: "worker" },
+          async executeUsage() {
+            queries++;
+            return {
+              exitCode: 0,
+              stdout: usageFixture([
+                { provider: "commandcode", short, long: 80, remainingFraction: 1 },
+              ]),
+            };
+          },
+        },
+      );
+      try {
+        await extension.sessionStart();
+        assert.equal(extension.context.model?.provider, "commandcode");
+        if (selection === "manual") await extension.modelSelect("set");
+        const before = queries;
+        short = 0;
+        const result = await extension.input("next");
+        if (selection === "automatic") {
+          assert.deepEqual(result, { action: "handled" });
+          assert.equal(queries, before + 1);
+        } else {
+          assert.notDeepEqual(result, { action: "handled" });
+          assert.equal(queries, before);
+        }
       } finally {
         extension.restore();
       }
@@ -8203,7 +8332,7 @@ describe("shipped agents.yaml through the shared usage entry", () => {
     { agent: "senior", model: "gpt-6.2-astra" },
     { agent: "junior", model: "gpt-6.2-sol" },
     { agent: "chat", model: "gpt-6.2-astra" },
-  ])("routes shipped max $agent to $model without usage queries", async ({ agent, model }) => {
+  ])("routes shipped max $agent to $model with unknown usage", async ({ agent, model }) => {
     const result = parseAgentConfig(
       readFileSync(
         new URL("../../../../.agents/config.exact/agents.yaml", import.meta.url),
@@ -8229,7 +8358,7 @@ describe("shipped agents.yaml through the shared usage entry", () => {
     try {
       await extension.sessionStart("startup");
       assert.deepEqual(extension.context.model, { provider: "openai-codex", id: model });
-      assert.equal(queries, 0);
+      assert.equal(queries, 1);
     } finally {
       extension.restore();
     }
@@ -8544,32 +8673,48 @@ describe("shared owner candidate selection for titles", () => {
     }
   });
 
-  it("excludes a single zero-score title candidate without a usage query", async () => {
-    const extension = captureAgentsExtension(
-      {
-        config: {
-          ...config,
-          modes: {
-            standard: {
-              ...config.modes.standard!,
-              low: [{ provider: "test", model: "zero", settings: [{ multiply: 0 }] }],
+  it.each(["score", "short quota"])(
+    "excludes a single title candidate with zero %s",
+    async (zero) => {
+      let queries = 0;
+      const extension = captureAgentsExtension(
+        {
+          config: {
+            ...config,
+            modes: {
+              standard: {
+                ...config.modes.standard!,
+                low: [
+                  {
+                    provider: "test",
+                    model: "zero",
+                    settings: [{ multiply: zero === "score" ? 0 : 1 }],
+                  },
+                ],
+              },
             },
           },
         },
-      },
-      {
-        async executeUsage() {
-          throw new Error("A single candidate must not query usage");
+        {
+          async executeUsage() {
+            queries++;
+            const stdout =
+              zero === "score"
+                ? "[]"
+                : usageFixture([{ provider: "test", short: 0, long: 80, remainingFraction: 1 }]);
+            return { exitCode: 0, stdout };
+          },
         },
-      },
-    );
-    try {
-      assert.equal(await extension.retitle(), undefined);
-      assert.match(extension.notifications.at(-1)!, /No available model for class low/);
-    } finally {
-      extension.restore();
-    }
-  });
+      );
+      try {
+        assert.equal(await extension.retitle(), undefined);
+        assert.match(extension.notifications.at(-1)!, /No available model for class low/);
+        assert.equal(queries, 1);
+      } finally {
+        extension.restore();
+      }
+    },
+  );
 });
 
 describe("provider-usage compatibility", () => {

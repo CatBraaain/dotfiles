@@ -297,15 +297,16 @@ export function parseAgentConfig(source: string): ConfigLoadResult {
   }
 }
 
-export function parseProviderUrgency(
-  stdout: string,
-  nowMs: number,
-): Map<string, number | null> | null {
+export function parseRoutingUsage(stdout: string, nowMs: number) {
   const facts = parseUsageFacts(stdout);
   if (facts === null) return null;
   const urgencies = new Map<string, number | null>();
-  for (const [provider, fact] of facts) urgencies.set(provider, urgencyOfFact(fact, nowMs));
-  return urgencies;
+  const shortExhaustedProviders = new Set<string>();
+  for (const [provider, fact] of facts) {
+    urgencies.set(provider, urgencyOfFact(fact, nowMs));
+    if (fact.short === 0) shortExhaustedProviders.add(provider);
+  }
+  return { urgencies, shortExhaustedProviders };
 }
 
 const USAGE_MINUTE_MS = 60_000;
@@ -1217,11 +1218,10 @@ export default function agentsExtension(
 
   async function routeCandidates(
     candidates: readonly ModelCandidate[],
-    ctx: ExtensionContext,
     signal?: AbortSignal,
   ): Promise<readonly ModelCandidate[]> {
     let usageStdout: string | undefined;
-    if (!routingUsageDisabled && candidates.length > 1) {
+    if (!routingUsageDisabled) {
       try {
         const { exitCode, stdout } = await executeUsage(pi, signal);
         if (exitCode === 127) routingUsageDisabled = true;
@@ -1231,14 +1231,14 @@ export default function agentsExtension(
       }
     }
     const nowMs = Date.now();
-    const providerUrgency =
-      usageStdout === undefined
-        ? new Map<string, number | null>()
-        : parseProviderUrgency(usageStdout, nowMs);
-    if (providerUrgency === null) routingUsageDisabled = true;
+    const usage = usageStdout === undefined ? undefined : parseRoutingUsage(usageStdout, nowMs);
+    if (usage === null) routingUsageDisabled = true;
+    const eligible = usage
+      ? candidates.filter(({ provider }) => !usage.shortExhaustedProviders.has(provider))
+      : candidates;
     return scoreCandidates(
-      candidates,
-      providerUrgency ?? new Map(),
+      eligible,
+      usage?.urgencies ?? new Map(),
       config.settings ?? {},
       new Date(nowMs),
     );
@@ -1272,7 +1272,7 @@ export default function agentsExtension(
       cooldowns,
       (provider, id) => ctx.modelRegistry.find(provider, id),
       Date.now(),
-      (survivors) => routeCandidates(survivors, ctx, signal),
+      (survivors) => routeCandidates(survivors, signal),
     );
   }
 

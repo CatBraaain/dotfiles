@@ -8,6 +8,7 @@ const USAGE_TIMEOUT_MS = 25_000;
 
 const usageRowSchema = Type.Object({
   provider: Type.String({ minLength: 1 }),
+  short: Type.Optional(Type.Union([Type.Integer({ minimum: 0, maximum: 100 }), Type.Null()])),
   long: Type.Union([Type.Number(), Type.Null()]),
   longResetsAt: Type.Union([Type.String({ pattern: "(?:Z|[+-]\\d{2}:\\d{2})$" }), Type.Null()]),
   longWindowMinutes: Type.Union([Type.Number({ exclusiveMinimum: 0 }), Type.Null()]),
@@ -29,9 +30,9 @@ export function parseUsageFacts(stdout: string): Map<string, ProviderUsageFacts>
   );
   if (hasInvalidReset) return null;
   return new Map(
-    parsed.map(({ provider, long, longResetsAt, longWindowMinutes }) => [
+    parsed.map(({ provider, short, long, longResetsAt, longWindowMinutes }) => [
       provider,
-      { long, longResetsAt, longWindowMinutes },
+      { ...(short === undefined ? {} : { short }), long, longResetsAt, longWindowMinutes },
     ]),
   );
 }
