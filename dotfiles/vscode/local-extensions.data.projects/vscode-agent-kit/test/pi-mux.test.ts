@@ -5,6 +5,19 @@ const liveSession = { id: "A", file: "/saved/A.jsonl", state: "running", title: 
 const emptySession = { id: "empty", file: "/saved/empty.jsonl" };
 
 describe("PiMux", () => {
+  it("reloads all sessions without extra arguments or requiring a completion line", async () => {
+    const execute = vi.fn().mockResolvedValue("");
+    await expect(new PiMux(execute).reloadAllSessions()).resolves.toBeUndefined();
+    expect(execute).toHaveBeenCalledExactlyOnceWith("pi-mux", ["reload"], undefined);
+  });
+
+  it("reports a failed all-session reload", async () => {
+    const execute = vi.fn().mockRejectedValue(new Error("reload denied"));
+    await expect(new PiMux(execute).reloadAllSessions()).rejects.toThrow(
+      "pi-mux reload: reload denied",
+    );
+  });
+
   it("runs reload with the exact ID and accepts its completion line", async () => {
     const execute = vi.fn().mockResolvedValue("reloaded chosen-id\r\n");
     await expect(new PiMux(execute).reloadSession("chosen-id")).resolves.toBeUndefined();

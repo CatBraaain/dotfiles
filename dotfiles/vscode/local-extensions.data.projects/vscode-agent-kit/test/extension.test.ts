@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import type * as vscode from "vscode";
 import manifest from "../package.json";
 import { activate } from "../src/extension";
+import { PiMux } from "../src/pi-mux";
 import { SessionWebviewProvider } from "../src/webview/session-webview-provider";
 import { cleanup, tempDir } from "./fixtures";
 
@@ -85,9 +86,8 @@ const api = vi.hoisted(() => ({
 
 vi.mock("node:os", { spy: true });
 
-const refreshTicketDispatch = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../src/ticket-dispatch", () => ({
-  registerTicketDispatch: () => refreshTicketDispatch,
+  registerTicketDispatch: vi.fn(),
 }));
 
 vi.mock("vscode", () => ({
@@ -145,7 +145,7 @@ describe("extension commands", () => {
         return watcher;
       },
     );
-    api.createOutputChannel.mockReturnValue({ dispose: vi.fn() });
+    api.createOutputChannel.mockReturnValue({ dispose: vi.fn(), error: vi.fn() });
     vi.spyOn(SessionWebviewProvider.prototype, "refresh").mockResolvedValue();
     vi.stubEnv("PI_CODING_AGENT_DIR", "/fixture/agent");
     vi.stubEnv("PI_CODING_AGENT_SESSION_DIR", "/fixture/sessions");
@@ -163,7 +163,7 @@ describe("extension commands", () => {
     return api.watchers.find(({ base }) => base.fsPath === directory);
   }
 
-  function register(commandId = "agentKit.refreshSessions") {
+  function register(commandId = "agentKit.reloadAllPiSessions") {
     const disposable = { dispose: vi.fn() };
     api.registerCommand.mockReturnValue(disposable);
     const context = {
@@ -377,16 +377,11 @@ describe("extension commands", () => {
     api.registerCommand.mockReturnValue({ dispose: vi.fn() });
     api.onDidCloseTerminal.mockReturnValue({ dispose: vi.fn() });
     api.registerWebviewViewProvider.mockReturnValue({ dispose: vi.fn() });
-    vi.spyOn(SessionWebviewProvider.prototype, "refreshManually").mockResolvedValue();
     activate(context);
     await vi.waitFor(() => expect(watcherFor(first)).toBeDefined());
     expect(api.watchers.map(({ pattern }) => pattern)).toEqual(["**/*.jsonl"]);
 
     await writeFile(settingsPath, JSON.stringify({ sessionDir: second }), "utf8");
-    const [, refresh] = api.registerCommand.mock.calls.find(
-      ([id]) => id === "agentKit.refreshSessions",
-    )!;
-    await refresh();
     expect(watcherFor(second)).toBeUndefined();
     expect(watcherFor(first)?.dispose).not.toHaveBeenCalled();
     expect(api.watchers).toHaveLength(1);
@@ -400,43 +395,58 @@ describe("extension commands", () => {
     for (const subscription of context.subscriptions) subscription.dispose();
   });
 
-  it("contributes a named refresh icon only to the Sessions view title", () => {
+  it("shows reload in the Sessions toolbar without a refresh action", () => {
     expect(manifest.contributes.commands).toContainEqual({
-      command: "agentKit.refreshSessions",
+      command: "agentKit.reloadAllPiSessions",
       category: "Agent Kit",
-      title: "Refresh Sessions",
-      icon: "$(refresh)",
+      title: "Reload All Pi Sessions",
+      icon: "$(debug-restart)",
     });
-    const forRefresh = ({ command }: { command: string }) => command === "agentKit.refreshSessions";
-    expect(manifest.contributes.menus["view/title"].filter(forRefresh)).toEqual([
-      {
-        command: "agentKit.refreshSessions",
-        when: "view == agentKit.sessions",
-        group: "navigation@2",
-      },
-    ]);
-    expect(manifest.contributes.menus.commandPalette.filter(forRefresh)).toEqual([
-      { command: "agentKit.refreshSessions", when: "false" },
-    ]);
+    expect(manifest.contributes.menus["view/title"]).toContainEqual({
+      command: "agentKit.reloadAllPiSessions",
+      when: "view == agentKit.sessions",
+      group: "navigation@2",
+    });
+    expect(
+      manifest.contributes.menus["view/title"].every(({ group }) =>
+        group.startsWith("navigation@"),
+      ),
+    ).toBe(true);
+    expect(manifest.contributes.menus.commandPalette).toContainEqual({
+      command: "agentKit.reloadAllPiSessions",
+      when: "false",
+    });
+    expect(manifest.contributes.commands.map(({ command }) => command)).not.toContain(
+      "agentKit.refreshSessions",
+    );
     expect(manifest.contributes.viewsContainers.activitybar[0].title).toBe("Agent Kit");
     expect(manifest.contributes.views.agentKitViews[0].name).toBe("Sessions");
   });
 
-  it("refreshes the registered Sessions provider manually from the native title command", async () => {
-    const refreshManually = vi
-      .spyOn(SessionWebviewProvider.prototype, "refreshManually")
-      .mockResolvedValue();
-    const command = register("agentKit.refreshSessions");
-    const provider = api.registerWebviewViewProvider.mock.calls[0][1];
-    refreshManually.mockClear();
+  it("notifies and starts all-session reload without waiting for confirmation", async () => {
+    const reloadAllSessions = vi.spyOn(PiMux.prototype, "reloadAllSessions").mockResolvedValue();
+    const command = register("agentKit.reloadAllPiSessions");
+    api.showInformationMessage.mockReturnValueOnce(new Promise(() => {}));
 
     await command();
 
-    expect(refreshManually).toHaveBeenCalledOnce();
-    expect(refreshManually.mock.instances[0]).toBe(provider);
-    expect(refreshTicketDispatch).toHaveBeenCalledOnce();
-    expect(api.showInformationMessage).not.toHaveBeenCalled();
+    expect(api.showInformationMessage).toHaveBeenCalledExactlyOnceWith(
+      "Reloading Pi sessions as they become idle.",
+    );
+    expect(api.showInformationMessage).toHaveBeenCalledBefore(reloadAllSessions);
+    expect(reloadAllSessions).toHaveBeenCalledExactlyOnceWith();
     expect(api.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it("notifies the user when all-session reload fails", async () => {
+    vi.spyOn(PiMux.prototype, "reloadAllSessions").mockRejectedValue(new Error("reload denied"));
+    const command = register("agentKit.reloadAllPiSessions");
+
+    await command();
+
+    expect(api.showErrorMessage).toHaveBeenCalledExactlyOnceWith(
+      "Could not reload all Pi sessions: reload denied",
+    );
   });
 
   // SPEC workspaceFolders 同期: verify the real activate() wiring from the

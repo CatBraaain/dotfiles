@@ -234,13 +234,6 @@ export class VSCodeFixture {
     return readyFrame!;
   }
 
-  async refreshSessions(): Promise<void> {
-    await this.page
-      .getByRole("button", { name: "Refresh Sessions", exact: true })
-      .describe("Native Sessions title refresh")
-      .click();
-  }
-
   async selectSession(key: string): Promise<void> {
     const frame = await this.sessionFrame();
     const session = this.sessions[key];
@@ -836,9 +829,11 @@ export const test = baseTest.extend<{
   host: VSCodeFixture;
   fixedResponse: boolean;
   folderMode: boolean;
+  withTicketCli: boolean;
 }>({
   fixedResponse: [false, { option: true }],
   folderMode: [false, { option: true }],
+  withTicketCli: [false, { option: true }],
   host: provideVSCodeFixture,
 });
 
@@ -847,7 +842,12 @@ export async function provideVSCodeFixture(
     playwright,
     fixedResponse,
     folderMode,
-  }: Pick<PlaywrightWorkerArgs, "playwright"> & { fixedResponse: boolean; folderMode?: boolean },
+    withTicketCli,
+  }: Pick<PlaywrightWorkerArgs, "playwright"> & {
+    fixedResponse: boolean;
+    folderMode?: boolean;
+    withTicketCli?: boolean;
+  },
   use: (host: VSCodeFixture) => Promise<void>,
   testInfo: TestInfo,
 ): Promise<void> {
@@ -858,6 +858,16 @@ export async function provideVSCodeFixture(
   let failed = false;
   try {
     host.prepare();
+    if (withTicketCli) {
+      const ticketSource = join(dotfiles, ".agents/cli.exact/ticket/src/main.ts");
+      execFileSync("bun", [
+        "build",
+        "--compile",
+        ticketSource,
+        "--outfile",
+        join(host.directory, "bin/ticket"),
+      ]);
+    }
     tracePath = testInfo.outputPath("electron-trace.zip");
     if (fixedResponse) {
       host.responseProvider = await startFixedResponseProvider();

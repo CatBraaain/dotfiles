@@ -37,10 +37,10 @@
   "contributes": {
     "commands": [
       {
-        "command": "agentKit.refreshSessions",
+        "command": "agentKit.reloadAllPiSessions",
         "category": "Agent Kit",
-        "title": "Refresh Sessions",
-        "icon": "$(refresh)"
+        "title": "Reload All Pi Sessions",
+        "icon": "$(debug-restart)"
       },
       {
         "command": "agentKit.startTicketDispatch",
@@ -70,14 +70,14 @@
           "group": "navigation@1"
         },
         {
-          "command": "agentKit.refreshSessions",
+          "command": "agentKit.reloadAllPiSessions",
           "when": "view == agentKit.sessions",
           "group": "navigation@2"
         }
       ],
       "commandPalette": [
         {
-          "command": "agentKit.refreshSessions",
+          "command": "agentKit.reloadAllPiSessions",
           "when": "false"
         },
         {

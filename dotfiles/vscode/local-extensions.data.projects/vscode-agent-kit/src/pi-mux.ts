@@ -104,6 +104,10 @@ export class PiMux {
     await this.command(["workspace", "unregister", cwd]);
   }
 
+  async reloadAllSessions(): Promise<void> {
+    await this.command(["reload"]);
+  }
+
   async reloadSession(sessionId: string): Promise<void> {
     const output = await this.command(["reload", sessionId]);
     if (!output.split(/\r?\n/).includes(`reloaded ${sessionId}`))

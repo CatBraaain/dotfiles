@@ -10,6 +10,7 @@ import { SELECT_SCM_REPOSITORIES, SessionScmSelection } from "./session-scm";
 import { TerminalRegistry } from "./terminal-registry";
 import { editorTerminals, isDisplayTerminal } from "./terminals";
 import { registerTicketDispatch } from "./ticket-dispatch";
+import { errorMessage } from "./guards";
 import { WorkspaceStore } from "./workspace-store";
 import { SessionWebviewProvider, VIEW_ID } from "./webview/session-webview-provider";
 
@@ -201,7 +202,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
-  const refreshTicketDispatch = registerTicketDispatch(
+  registerTicketDispatch(
     context,
     (args) => execFile("ticket", args, { cwd: homeDir, timeout: TICKET_DISPATCH_TIMEOUT_MS }),
     log,
@@ -222,8 +223,15 @@ export function activate(context: vscode.ExtensionContext): void {
         for (const watcher of historyWatchers.values()) watcher.dispose();
       },
     },
-    vscode.commands.registerCommand("agentKit.refreshSessions", async () => {
-      await Promise.all([provider.refreshManually(), refreshTicketDispatch()]);
+    vscode.commands.registerCommand("agentKit.reloadAllPiSessions", async () => {
+      void vscode.window.showInformationMessage("Reloading Pi sessions as they become idle.");
+      try {
+        await registry.mux.reloadAllSessions();
+      } catch (error) {
+        const message = `Could not reload all Pi sessions: ${errorMessage(error)}`;
+        log.error(message);
+        void vscode.window.showErrorMessage(message);
+      }
     }),
     vscode.window.registerWebviewViewProvider(VIEW_ID, provider, {
       webviewOptions: { retainContextWhenHidden: true },

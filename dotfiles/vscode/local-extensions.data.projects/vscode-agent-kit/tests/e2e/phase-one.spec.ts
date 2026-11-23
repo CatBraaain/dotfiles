@@ -110,7 +110,7 @@ test(
         0,
       );
       await expect(
-        host.page.getByRole("button", { name: "Refresh Sessions", exact: true }),
+        host.page.getByRole("button", { name: "Reload All Pi Sessions", exact: true }),
       ).toHaveCount(1);
       await expect(frame.locator(".session-scrollbar")).toHaveCSS("width", "12px");
       await testInfo.attach("Unarchived（切替前）", {
@@ -131,7 +131,6 @@ test(
         "data-mode",
         "unarchived",
       );
-      await host.refreshSessions();
       await expect(group.locator("[data-mode-toggle]")).toHaveAttribute("data-mode", "all");
       await expect(
         group
@@ -438,7 +437,7 @@ test(
 );
 
 test(
-  "SCM から Sessions へ戻っても、Refresh なしで一覧を復元する",
+  "SCM から Sessions へ戻ると一覧を自動で復元する",
   { annotation: { type: "spec", description: "E2E-3" } },
   async ({ host }) => {
     const selections = ["B", "A", "B", "A"];
@@ -1534,7 +1533,6 @@ test(
       }
       host.piMux(["workspace", "register", workspaceCwd]);
       const frame = await host.sessionFrame();
-      await host.refreshSessions();
       // Headers of workspaces unregistered through the CLI are retained in
       // the list, so scope to the shared workspace's own group.
       await expect(
@@ -1668,7 +1666,6 @@ test(
           }) + "\n",
         );
       }
-      await host.refreshSessions();
       const frame = await host.sessionFrame();
       const group = frame
         .locator("section.group")

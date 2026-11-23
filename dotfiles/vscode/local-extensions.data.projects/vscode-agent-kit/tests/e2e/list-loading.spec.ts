@@ -68,12 +68,17 @@ test(
     }
 
     await test.step("Hold the first response and show loading without an empty message", async () => {
-      const refresh = host.page
-        .getByRole("button", { name: "Refresh Sessions", exact: true })
-        .describe("Native Sessions refresh action");
-      await expect(refresh).toHaveCount(1);
-      await expect(refresh).toBeVisible();
-      await expect(refresh).toHaveClass(/codicon-refresh/);
+      const reload = host.page
+        .getByRole("button", { name: "Reload All Pi Sessions", exact: true })
+        .describe("Native all-session reload action");
+      await expect(reload).toHaveCount(1);
+      await expect(reload).toBeVisible();
+      await expect(reload).toHaveClass(/codicon-debug-restart/);
+      await expect(
+        host.page
+          .locator(".part.sidebar .composite.title")
+          .getByRole("button", { name: /More Actions/ }),
+      ).toHaveCount(0);
       await expect(content.locator("header, h1, [data-action=refresh]")).toHaveCount(0);
       await expect(sessions).toHaveText("Loading sessions…");
       await expect(sessions).not.toContainText("No sessions yet");
@@ -82,7 +87,7 @@ test(
       await capture("初回loading", "initial-loading.png");
     });
 
-    await test.step("Refresh while retaining the list, selection, modes and collapsed groups", async () => {
+    await test.step("Refresh automatically while retaining the list, selection, modes and collapsed groups", async () => {
       await expect
         .poll(() =>
           content.evaluate(() =>
@@ -125,9 +130,8 @@ test(
         .describe("Retained session names");
       const previousNames = await names.allTextContents();
       expect(previousNames.length).toBeGreaterThan(0);
-      await host.refreshSessions();
-      await receive({ type: "loading", manual: true, displayedSessionId: host.sessions.A.id });
-      await expect(status).toHaveText("Refreshing sessions…");
+      await receive({ type: "loading", manual: false, displayedSessionId: host.sessions.A.id });
+      await expect(status).toHaveText("");
       await expect(names).toHaveText(previousNames);
       await expect(
         content.locator(".selected .session-name").describe("Retained selected session"),
@@ -135,20 +139,7 @@ test(
       await expect(mode).toHaveAttribute("data-mode", "all");
       await expect(collapsed).toHaveAttribute("aria-expanded", "false");
       await expect(sessions).not.toContainText("No sessions yet");
-      await capture("一覧保持refreshing", "refreshing.png");
-    });
-
-    await test.step("Keep the status area quiet for an automatic refresh", async () => {
-      const names = content
-        .locator(".session-row .session-name")
-        .describe("Retained session names");
-      const previousNames = await names.allTextContents();
-      await receive({ type: "loading", manual: false, displayedSessionId: host.sessions.A.id });
-      await expect(status).toHaveText("");
-      await expect(names).toHaveText(previousNames);
-      await expect(
-        content.locator(".selected .session-name").describe("Retained selected session"),
-      ).toHaveText("Fixture A");
+      await capture("自動更新中の一覧保持", "refreshing.png");
     });
 
     await test.step("Show the empty message only after a successful zero-group response", async () => {
@@ -160,8 +151,7 @@ test(
     });
 
     await test.step("Show a retrieval error guidance in the list area", async () => {
-      await host.refreshSessions();
-      await receive({ type: "loading", manual: true, displayedSessionId: null });
+      await receive({ type: "loading", manual: false, displayedSessionId: null });
       await expect(sessions).toHaveText("Loading sessions…");
       await receive({ type: "sessionsError" });
       await expect(sessions).toHaveText("Failed to load sessions. Retrying…");

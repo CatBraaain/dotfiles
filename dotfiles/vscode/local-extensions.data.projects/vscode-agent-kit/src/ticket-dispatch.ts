@@ -13,7 +13,7 @@ export function registerTicketDispatch(
   context: vscode.ExtensionContext,
   runTicket: (args: readonly string[]) => Promise<{ stdout: string }>,
   log: vscode.LogOutputChannel,
-): () => Promise<void> {
+): void {
   let isBusy = false;
 
   async function readGlobalDispatcher(): Promise<boolean> {
@@ -64,5 +64,4 @@ export function registerTicketDispatch(
     vscode.commands.registerCommand("agentKit.stopTicketDispatch", () => update("stop", true)),
   );
   void update(undefined, false);
-  return () => update(undefined, true);
 }

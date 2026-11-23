@@ -1,15 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { expect, test } from "../support/vscode";
+
+test.use({ withTicketCli: true });
 
 test(
   "Controls only the global ticket dispatcher from the Sessions toolbar",
   { annotation: { type: "spec", description: "E2E-19" } },
   async ({ host }, testInfo) => {
     const ticket = join(host.directory, "bin/ticket");
-    const ticketSource = resolve(__dirname, "../../../../../.agents/cli.exact/ticket/src/main.ts");
-    execFileSync("bun", ["build", "--compile", ticketSource, "--outfile", ticket]);
     const home = host.env.HOME;
     const store = join(home, ".agents/tickets/alpha");
     mkdirSync(store, { recursive: true });
@@ -34,9 +34,9 @@ test(
     const ticketDispatch = (...args: string[]) =>
       execFileSync(ticket, ["dispatch", ...args], { cwd: home, env: host.env, encoding: "utf8" });
 
-    const refresh = host.page
-      .getByRole("button", { name: "Refresh Sessions", exact: true })
-      .describe("Sessions refresh action");
+    const reload = host.page
+      .getByRole("button", { name: "Reload All Pi Sessions", exact: true })
+      .describe("All-session reload action");
     const start = host.page
       .getByRole("button", { name: "Start Ticket Dispatch (All Projects)", exact: true })
       .describe("Start ticket dispatch action");
@@ -53,22 +53,21 @@ test(
       await testInfo.attach(name, { path, contentType: "image/png" });
     }
 
-    await test.step("Find the start action to the left of Refresh Sessions", async () => {
-      await refresh.click();
+    await test.step("Find the start action to the left of Reload All Pi Sessions", async () => {
       await expect(start).toBeVisible();
       await expect(start).toBeEnabled();
       await expect(start).toHaveClass(/codicon-debug-start/);
       await expect(stop).toHaveCount(0);
       await expect
         .poll(async () => {
-          const [startBounds, refreshBounds] = await Promise.all([
+          const [startBounds, reloadBounds] = await Promise.all([
             start.boundingBox(),
-            refresh.boundingBox(),
+            reload.boundingBox(),
           ]);
           return (
             startBounds !== null &&
-            refreshBounds !== null &&
-            startBounds.x + startBounds.width <= refreshBounds.x
+            reloadBounds !== null &&
+            startBounds.x + startBounds.width <= reloadBounds.x
           );
         })
         .toBe(true);
@@ -101,7 +100,7 @@ test(
       await expect(stop).toBeEnabled();
       expect(globalSessionId()).toBe(originalSessionId);
       ticketDispatch("stop", "--all");
-      await refresh.click();
+      await stop.click();
       await expect(start).toBeEnabled();
     });
 
@@ -127,20 +126,18 @@ test(
       expect(listTmuxSessions()).not.toContain("ticket_dispatch_all");
     });
 
-    await test.step("Disable dispatch when status is unavailable and recover with Refresh Sessions", async () => {
+    await test.step("Disable dispatch when status is unavailable", async () => {
       const savedTicket = `${ticket}.real`;
       renameSync(ticket, savedTicket);
       writeFileSync(ticket, "#!/bin/sh\necho 'Fixture status unavailable' >&2\nexit 1\n", {
         mode: 0o700,
       });
-      await refresh.click();
+      await start.click();
       await expect(start).toBeDisabled();
       await expect(
         host.page.getByRole("dialog", { name: /Fixture status unavailable/ }),
       ).toBeVisible();
       renameSync(savedTicket, ticket);
-      await refresh.click();
-      await expect(start).toBeEnabled();
     });
   },
 );

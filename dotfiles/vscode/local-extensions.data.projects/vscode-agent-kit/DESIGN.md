@@ -41,7 +41,7 @@ Layout: ワークスペースのメニュー — 一覧を押し下げず起動�
 | 対象 | 値 |
 | --- | --- |
 | 全体の余白 | Webview viewport を基準に、アプリが上と左右12pxを一度だけ確保する。`body` の padding は0。下はフッターの12pxで確保する。グループ間は12px |
-| ビュータイトル | VS Code 標準の `Sessions` タイトルと右側の操作アイコン。refresh の左に Ticket Dispatch のアイコンを1つ表示する。開始は再生（`debug-start`）、停止は一時停止（`debug-pause`）で示す。間隔・寸法・配色・hover・focus は VS Code 標準に従う |
+| ビュータイトル | VS Code 標準の `Sessions` タイトルと右側の操作アイコン。`Reload All Pi Sessions` のアイコン（`debug-restart`）の左に Ticket Dispatch のアイコンを1つ表示する。開始は再生（`debug-start`）、停止は一時停止（`debug-pause`）で示す。間隔・寸法・配色・hover・focus は VS Code 標準に従う |
 | フッター | 一覧の下。上境界線（境界トークン）と上下・左右12pxの余白で区切る。操作の下余白は、一覧の長さとスクロール位置によらず一覧の上余白と同じ12pxとする |
 | 取得状態・操作エラー表示 | 文字があるときだけフッターの操作より上に表示し、高さ16px以上、操作との間隔8pxとする。空のときは表示領域と間隔を確保せず、上境界線の下端から操作の上端まで12pxとする |
 | 通信エラー表示 | 一覧より前の document フローに配置する。12px文字・`errorForeground`・高さ16px以上とし、一覧との間隔は8px。空のときは表示領域と間隔を確保しない |
@@ -77,7 +77,7 @@ New workspace フッターの主操作はワークスペースの登録。情報
 | 日時 | 等幅（`editor-font-family` 代替 `ui-monospace`）、10px・tabular-nums、右端から36pxの位置に右寄せし、文字間隔を広げても全文を収める自然幅とする。行内では右側に `36px + 5ch + 8px` を予約する |
 | 行の操作（Archive・Unarchive） | 24px 四方の ghost 操作。12px の `currentColor` SVG、補助文字色、hover は本文色と hover 面。右端から4pxの位置に重ねる。Archive と Unarchive は同じ位置を占有率で切り替え、アーカイブ済みの行では Archive の代わりに Unarchive（アーカイブから取り出す矢印付きの SVG）を出す。SPEC「アーカイブ・未アーカイブアクション」の待機表示中は同じ位置・寸法・色で既存の spinner SVG に置き換え、操作領域と周囲の配置は保つ |
 
-セッション一覧の主操作はセッションを開くこと。情報の優先順はグループ、セッション名と状態、更新日時と行操作。標準ビュータイトルの Sessions・Refresh と、Webview のグループ見出し・モード切替・行操作・New workspace・フォームを保持する。スクロール位置の操作は補助操作とし、装飾や追加のツールバーは設けない。
+セッション一覧の主操作はセッションを開くこと。情報の優先順はグループ、セッション名と状態、更新日時と行操作。標準ビュータイトルの Sessions・操作アイコンと、Webview のグループ見出し・モード切替・行操作・New workspace・フォームを保持する。スクロール位置の操作は補助操作とし、装飾や追加のツールバーは設けない。
 
 ## Motion & Interaction
 
