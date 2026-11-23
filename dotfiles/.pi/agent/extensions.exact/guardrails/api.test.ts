@@ -5,6 +5,7 @@ import {
   createEventBus,
   type ExtensionAPI,
   type ExtensionToolContext,
+  type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import { execFileSync, spawn } from "node:child_process";
 import {
@@ -144,12 +145,18 @@ function captureRegisteredTools(
   handlers?: Map<string, (event: any, context?: any) => unknown>,
 ): Map<string, any> {
   const registered = new Map<string, any>();
-  const modelRegistry = {};
+  const sessionStartContext = {
+    modelRegistry: {},
+    sessionManager: { getSessionId: () => "test-session" },
+  };
   function on(event: string, handler: (event: any, context?: any) => unknown): void {
     const previous = handlers?.get(event);
     handlers?.set(event, async (payload, context) => {
       await previous?.(payload, context);
-      return handler(payload, event === "session_start" ? { modelRegistry, ...context } : context);
+      return handler(
+        payload,
+        event === "session_start" ? { ...sessionStartContext, ...context } : context,
+      );
     });
   }
   const api = {
@@ -6588,7 +6595,7 @@ describe("turn command approvals", () => {
     ["input", { source: "rpc", text: "next", streamingBehavior: "steer" }],
     ["input", { source: "extension", text: "next", streamingBehavior: "followUp" }],
     ["message_start", { message: { role: "user", content: "next" } }],
-    ["session_start", {}],
+    ["session_start", { type: "session_start", reason: "reload" } satisfies SessionStartEvent],
     ["session_shutdown", {}],
   ] as const;
   for (const [eventName, event] of expiryEvents) {
