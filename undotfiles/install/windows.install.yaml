@@ -14,7 +14,7 @@ dev:
   - winget: Microsoft.coreutils
   - winget: gerardog.gsudo
   - npm: "@earendil-works/pi-coding-agent"
-  - npm: "@playwright/cli"
+  - npm: "@playwright/cli@0.1.22"
 
 work:
   - winget:
@@ -46,6 +46,8 @@ work:
   - winget: dandavison.delta
   - winget: CatBraaain.runx
   - winget: CatBraaain.wintasks
+  - winget: astral-sh.uv
+  - custom: trafilatura
   - custom: camoufox
   - custom: openserp
   - custom: rustdesk

@@ -28,7 +28,19 @@ const refreshPath = [
 ];
 const npmInstall = ["cmd", "/c", "npm", "install", "-g", "--ignore-scripts"];
 const piInstall = [...npmInstall, "@earendil-works/pi-coding-agent"];
-const playwrightInstall = [...npmInstall, "@playwright/cli"];
+const playwrightInstall = [...npmInstall, "@playwright/cli@0.1.22"];
+const trafilaturaInstall = ["uv", "tool", "install", "trafilatura"];
+const uvUpdateShell = ["uv", "tool", "update-shell"];
+const camoufoxDownload = [
+  "gh",
+  "release",
+  "download",
+  "v158.0.1-beta.41",
+  "--repo",
+  "daijro/camoufox",
+  "--pattern",
+  "camoufox-158.0.1-beta.41-win.x86_64.zip",
+];
 
 function wingetInstall(packageIds: string, ...options: string[]): string[] {
   return ["winget", "install", ...packageIds.trim().split(/\s+/), ...options, "--source", "winget"];
@@ -40,7 +52,7 @@ const workManaged = `BluePointLilac.ContextMenuManager sordum.EasyContextMenu w4
   AdrienAllard.FileConverter DuongDieuPhap.ImageGlass LocalSend.LocalSend MPC-BE.MPC-BE
   M2Team.NanaZip OpenWhispr.OpenWhispr ShareX.ShareX Microsoft.Sysinternals.Autologon Rime.Weasel
   WinDirStat.WinDirStat Microsoft.WindowsTerminal ZedIndustries.Zed AutoHotkey.AutoHotkey
-  RussellBanks.Komac dandavison.delta CatBraaain.runx CatBraaain.wintasks`;
+  RussellBanks.Komac dandavison.delta CatBraaain.runx CatBraaain.wintasks astral-sh.uv`;
 const personalManaged = `Guru3D.Afterburner CPUID.CPU-Z Rem0o.FanControl GIMP.GIMP.3 ch.LosslessCut
   Mojang.MinecraftLauncher OBSProject.OBSStudio Guru3D.RTSS Meltytech.Shotcut Valve.Steam
   Devolutions.UniGetUI HaraldBoegeholz.h2testw`;
@@ -67,7 +79,14 @@ function windowsFixture(configText?: string) {
 
   async function run(
     profile: InstallProfile,
-    ...failingCommands: ("winget" | "pi" | "playwright" | "camoufox")[]
+    ...failingCommands: (
+      | "winget"
+      | "pi"
+      | "playwright"
+      | "camoufox"
+      | "trafilatura"
+      | "update-shell"
+    )[]
   ) {
     const previousPath = process.env.Path;
     const previousAppData = process.env.LOCALAPPDATA;
@@ -86,7 +105,9 @@ function windowsFixture(configText?: string) {
         (failingCommands.includes("winget") && command === "winget") ||
         (failingCommands.includes("pi") && args.at(-1) === piInstall.at(-1)) ||
         (failingCommands.includes("playwright") && args.at(-1) === playwrightInstall.at(-1)) ||
-        (failingCommands.includes("camoufox") && args.includes("daijro/camoufox"));
+        (failingCommands.includes("camoufox") && args.includes("daijro/camoufox")) ||
+        (failingCommands.includes("trafilatura") && args.at(-1) === "trafilatura") ||
+        (failingCommands.includes("update-shell") && args.at(-1) === "update-shell");
       return {
         stdout: Buffer.from(stdout),
         stderr: Buffer.alloc(0),
@@ -192,7 +213,7 @@ test.each(["work", "personal"] as const)(
       const app = join(fixture.appData, "Programs", "Camoufox");
       mkdirSync(app, { recursive: true });
       writeFileSync(join(app, "camoufox.exe"), "installed browser");
-      writeFileSync(join(app, "application.ini"), "Version=158.0.1-beta.41");
+      writeFileSync(join(app, "application.ini"), "[App]\nVersion=158.0.1-beta.41\n");
       const nonDevExecutable = fixture.packageExe(
         `dandavison.delta_${wingetSourceId}`,
         "delta.exe",
@@ -226,6 +247,8 @@ test.each(["work", "personal"] as const)(
         refreshPath,
         piInstall,
         playwrightInstall,
+        trafilaturaInstall,
+        uvUpdateShell,
       ];
       assert.deepEqual(commands.slice(0, installerCommands.length), installerCommands);
       assert.deepEqual(
@@ -233,7 +256,7 @@ test.each(["work", "personal"] as const)(
         wingetCommands.map((args) => `command failed with exit code 1: ${args.join(" ")}`),
       );
       assert.deepEqual(lookups, [
-        { executable: "openserp", after: playwrightInstall, path: "machine;user" },
+        { executable: "openserp", after: uvUpdateShell, path: "machine;user" },
       ]);
       assert.deepEqual(commands[installerCommands.length], [
         "gh",
@@ -251,6 +274,38 @@ test.each(["work", "personal"] as const)(
       assert.ok(existsSync(join(app, "version.json")));
       assert.equal(existsSync(fixture.desktopShortcut), false);
       assert.equal(realpathSync(replacedLink), realpathSync(nonDevExecutable));
+    } finally {
+      fixture.dispose();
+    }
+  },
+);
+
+test.each([
+  ["trafilatura", [trafilaturaInstall]],
+  ["update-shell", [trafilaturaInstall, uvUpdateShell]],
+] as const)(
+  "reports a failed uv %s command and continues installing",
+  async (failure, uvCommands) => {
+    const fixture = windowsFixture(`dev: []
+work:
+  - winget: astral-sh.uv
+  - custom: trafilatura
+  - npm: next-tool
+personal: []
+`);
+    try {
+      fixture.packageExe("test", "test.exe");
+      const { commands, errors } = await fixture.run("work", failure);
+      assert.deepEqual(commands, [
+        elevationCheck,
+        wingetInstall("astral-sh.uv"),
+        refreshPath,
+        ...uvCommands,
+        [...npmInstall, "next-tool"],
+      ]);
+      assert.deepEqual(errors, [
+        `trafilatura install failed: command failed with exit code 1: ${uvCommands.at(-1)!.join(" ")}`,
+      ]);
     } finally {
       fixture.dispose();
     }
@@ -326,7 +381,7 @@ test("runs npm and custom in cumulative config order and continues after nonfata
   - winget: Test.WorkOnly
 dev:
   - custom: camoufox
-  - npm: "@playwright/cli"
+  - npm: "@playwright/cli@0.1.22"
   - winget: Test.DevOnly
 personal:
   - npm: not-selected
@@ -335,13 +390,7 @@ personal:
     fixture.packageExe("test", "test.exe");
     const { commands, lookups, errors } = await fixture.run("work", "camoufox", "playwright");
     const camoufoxCommand = commands[3]!;
-    assert.deepEqual(camoufoxCommand.slice(0, 5), [
-      "gh",
-      "release",
-      "download",
-      "--repo",
-      "daijro/camoufox",
-    ]);
+    assert.deepEqual(camoufoxCommand.slice(0, camoufoxDownload.length), camoufoxDownload);
     assert.deepEqual(commands, [
       elevationCheck,
       wingetInstall("Test.DevOnly Test.WorkOnly"),
@@ -437,8 +486,16 @@ test.each([
   ["{ npm: 'cli%PATH%' }", /invalid npm package name/],
   ["{ npm: '@scope/--force' }", /invalid npm package name/],
   ["{ npm: 'cli@next' }", /invalid npm package name/],
+  ["{ npm: 'cli@^1.2.3' }", /invalid npm package name/],
+  ["{ npm: 'cli@1.2' }", /invalid npm package name/],
+  ["{ npm: 'cli@01.2.3' }", /invalid npm package name/],
   ["{ npm: 'scope/cli' }", /invalid npm package name/],
   ["{ npm: 'cli.tgz' }", /invalid npm package name/],
+  ["{ npm: 'cli.tgz@1.2.3' }", /invalid npm package name/],
+  ["{ npm: 'cli@file:./cli' }", /invalid npm package name/],
+  ["{ npm: 'cli@https://example.test/cli.tgz' }", /invalid npm package name/],
+  ["{ npm: 'cli@1.2.3&echo' }", /invalid npm package name/],
+  [`{ npm: ${JSON.stringify("@scope/cli@1.2.3\n")} }`, /invalid npm package name/],
   ["{ custom: true }", /custom name must be a string/],
   ["{ custom: constructor }", /unknown custom installer/],
 ])("rejects invalid entries before external operations: %s", async (entry, error) => {
@@ -485,7 +542,7 @@ test("repairs the metadata without replacing the installed Camoufox", async () =
 });
 
 test("leaves an existing version file intact", async () => {
-  const fixture = browserFixture("[App]\n");
+  const fixture = browserFixture("[App]\nVersion=158.0.1-beta.41\n");
   const existing = '{"version":"158.0.1","release":"beta.41"}';
   try {
     writeFileSync(fixture.versionFile, existing);
@@ -515,12 +572,79 @@ test("can retry after failing to publish the version file", async () => {
   }
 });
 
-test("rejects an unknown package version instead of inventing one", async () => {
-  const fixture = browserFixture("[App]\nVersion=158.0.1\n");
+test("rejects a version outside the App section instead of inventing one", async () => {
+  const fixture = browserFixture("[App]\n[Other]\nVersion=158.0.1-beta.41\n");
   try {
     await assert.rejects(installCamoufox(fixture.appData), /Invalid Camoufox version/);
     assert.equal(existsSync(fixture.versionFile), false);
   } finally {
     fixture.dispose();
+  }
+});
+
+test("keeps a different installed Camoufox without writing metadata", async () => {
+  const fixture = browserFixture("[App]\nVersion=159.0-beta.42\n");
+  try {
+    await assert.rejects(
+      installCamoufox(fixture.appData),
+      /Expected Camoufox 158\.0\.1-beta\.41, found 159\.0-beta\.42/,
+    );
+    assert.equal(existsSync(fixture.versionFile), false);
+    assert.equal(readFileSync(fixture.executable, "utf8"), "installed browser");
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test("rejects metadata that conflicts with the installed version without overwriting it", async () => {
+  const fixture = browserFixture("[App]\nVersion=158.0.1-beta.41\n");
+  const installed = '{"version":"159.0","release":"beta.42"}';
+  try {
+    writeFileSync(fixture.versionFile, installed);
+    await assert.rejects(
+      installCamoufox(fixture.appData),
+      /Expected Camoufox .* in .*version\.json/,
+    );
+    assert.equal(readFileSync(fixture.versionFile, "utf8"), installed);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test("requests and installs the exact Windows Camoufox release", async () => {
+  const appData = mkdtempSync(join(tmpdir(), "camoufox-new-install-test-"));
+  const commands: string[][] = [];
+  const spawn = spyOn(Bun, "spawnSync").mockImplementation((args) => {
+    assert.ok(Array.isArray(args));
+    commands.push(args);
+    if (args[0] === "tar.exe") {
+      const browser = args[4]!;
+      writeFileSync(join(browser, "camoufox.exe"), "fixture browser");
+      writeFileSync(join(browser, "application.ini"), "[App]\nVersion=158.0.1-beta.41\n");
+    }
+    return { exitCode: 0 } as ReturnType<typeof Bun.spawnSync>;
+  });
+  try {
+    await installCamoufox(appData);
+    assert.equal(commands.length, 2);
+    const archive = commands[0]?.at(-1);
+    assert.ok(archive?.endsWith("camoufox.zip"));
+    assert.deepEqual(commands[0], [...camoufoxDownload, "--output", archive]);
+    assert.deepEqual(commands[1], [
+      "tar.exe",
+      "-xf",
+      archive,
+      "-C",
+      join(dirname(archive!), "browser"),
+    ]);
+    const browser = join(appData, "Programs", "Camoufox");
+    assert.equal(readFileSync(join(browser, "camoufox.exe"), "utf8"), "fixture browser");
+    assert.deepEqual(JSON.parse(readFileSync(join(browser, "version.json"), "utf8")), {
+      version: "158.0.1",
+      release: "beta.41",
+    });
+  } finally {
+    spawn.mockRestore();
+    rmSync(appData, { recursive: true });
   }
 });

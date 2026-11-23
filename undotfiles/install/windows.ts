@@ -12,15 +12,14 @@ import { mkdtemp } from "node:fs/promises";
 import {
   constants,
   copyFileSync,
-  existsSync,
   linkSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   renameSync,
   rmSync,
-  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -38,13 +37,15 @@ const configPath = join(import.meta.dir, "windows.install.yaml");
 const profiles = ["dev", "work", "personal"] as const;
 const wingetPackageId = /^[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+$/i;
 const wingetVersion = /^[a-z0-9][a-z0-9.+_-]*$/i;
-const npmPackageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
+const npmPackageSpec =
+  /^((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)(?:@(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){2})?$/;
 const npmArchiveSuffix = /\.(?:tgz|tar\.gz|tar)$/;
 const wingetVersionFlag = "--version";
 const customInstallers = new Map<string, () => Promise<void>>([
   ["camoufox", installCamoufox],
   ["openserp", installOpenSerp],
   ["rustdesk", installRustDesk],
+  ["trafilatura", installTrafilatura],
 ]);
 
 async function main(): Promise<void> {
@@ -117,7 +118,8 @@ function parseInstallEntry(rawEntry: unknown, label: string): InstallEntry {
     case "winget":
       return parseWingetPackage(value, label);
     case "npm":
-      if (!isNpmPackageName(value)) throw new Error(`${label} has an invalid npm package name`);
+      if (!isNpmPackageSpec(value))
+        throw new Error(`${label} has an invalid npm package name or version`);
       return { key, name: value };
     case "custom": {
       if (typeof value !== "string") throw new Error(`${label} custom name must be a string`);
@@ -130,9 +132,10 @@ function parseInstallEntry(rawEntry: unknown, label: string): InstallEntry {
   }
 }
 
-function isNpmPackageName(name: unknown): name is string {
-  if (typeof name !== "string" || !npmPackageName.test(name)) return false;
-  return name.startsWith("@") || !npmArchiveSuffix.test(name);
+function isNpmPackageSpec(spec: unknown): spec is string {
+  if (typeof spec !== "string") return false;
+  const name = npmPackageSpec.exec(spec)?.[1];
+  return name !== undefined && (name.startsWith("@") || !npmArchiveSuffix.test(name));
 }
 
 function parseWingetPackage(rawPackage: unknown, label: string): WingetPackage {
@@ -226,16 +229,29 @@ function refreshProcessPath(): void {
   if (combined) process.env.Path = combined;
 }
 
+async function installTrafilatura(): Promise<void> {
+  run(["uv", "tool", "install", "trafilatura"]);
+  run(["uv", "tool", "update-shell"]);
+}
+
+const camoufoxVersion = { version: "158.0.1", release: "beta.41" };
+const camoufoxBuild = `${camoufoxVersion.version}-${camoufoxVersion.release}`;
+
 export async function installCamoufox(appDataDir: string = localAppData()): Promise<void> {
   const programsDir = join(appDataDir, "Programs");
   const installDir = join(programsDir, "Camoufox");
   const executable = "camoufox.exe";
-  if (statSync(join(installDir, executable), { throwIfNoEntry: false })?.isFile()) {
+  const existing = lstatSync(installDir, { throwIfNoEntry: false });
+  if (existing) {
+    if (
+      !existing.isDirectory() ||
+      !lstatSync(join(installDir, executable), { throwIfNoEntry: false })?.isFile()
+    ) {
+      throw new Error(`Keeping existing Camoufox path ${installDir}: expected ${executable}`);
+    }
     ensureCamoufoxVersionFile(installDir);
     return;
   }
-  if (existsSync(installDir))
-    throw new Error(`installation directory already exists: ${installDir}`);
 
   mkdirSync(programsDir, { recursive: true });
   const directory = await mkdtemp(join(programsDir, "bootstrap-camoufox-"));
@@ -246,16 +262,17 @@ export async function installCamoufox(appDataDir: string = localAppData()): Prom
       "gh",
       "release",
       "download",
+      `v${camoufoxBuild}`,
       "--repo",
       "daijro/camoufox",
       "--pattern",
-      "camoufox-*-win.x86_64.zip",
+      `camoufox-${camoufoxBuild}-win.x86_64.zip`,
       "--output",
       archive,
     ]);
     mkdirSync(browserDir);
     run(["tar.exe", "-xf", archive, "-C", browserDir]);
-    if (!statSync(join(browserDir, executable), { throwIfNoEntry: false })?.isFile()) {
+    if (!lstatSync(join(browserDir, executable), { throwIfNoEntry: false })?.isFile()) {
       throw new Error(`release archive is missing ${executable}`);
     }
     ensureCamoufoxVersionFile(browserDir);
@@ -267,19 +284,48 @@ export async function installCamoufox(appDataDir: string = localAppData()): Prom
 }
 
 function ensureCamoufoxVersionFile(browserDir: string): void {
-  const versionPath = join(browserDir, "version.json");
-  if (existsSync(versionPath)) return;
-
   const applicationPath = join(browserDir, "application.ini");
-  const application = readFileSync(applicationPath, "utf8");
-  const versionPattern =
-    /^[\t ]*Version[\t ]*=[\t ]*(\d+(?:\.\d+)+)-([a-z0-9]+(?:\.[a-z0-9]+)*)[\t ]*\r?$/im;
-  const [, version, release] = versionPattern.exec(application) ?? [];
-  if (!version || !release) throw new Error(`Invalid Camoufox version in ${applicationPath}`);
+  if (!lstatSync(applicationPath, { throwIfNoEntry: false })?.isFile()) {
+    throw new Error(
+      `Cannot verify Camoufox ${camoufoxBuild}: missing or invalid ${applicationPath}`,
+    );
+  }
+  const appSections = readFileSync(applicationPath, "utf8")
+    .replace(/^\uFEFF/, "")
+    .split(/(?=^[\t ]*\[)/m)
+    .filter((section) => /^[\t ]*\[App\][\t ]*(?:\r?\n|$)/i.test(section));
+  const versionEntries = [
+    ...(appSections[0] ?? "").matchAll(/^[\t ]*Version[\t ]*=[\t ]*(.*)$/gim),
+  ];
+  const installedBuild = versionEntries[0]?.[1]?.trim();
+  if (appSections.length !== 1 || versionEntries.length !== 1 || !installedBuild) {
+    throw new Error(`Invalid Camoufox version in ${applicationPath}; leaving it unchanged`);
+  }
+  if (installedBuild !== camoufoxBuild) {
+    throw new Error(
+      `Expected Camoufox ${camoufoxBuild}, found ${installedBuild} in ${applicationPath}; leaving it unchanged`,
+    );
+  }
+
+  const versionPath = join(browserDir, "version.json");
+  const metadata = lstatSync(versionPath, { throwIfNoEntry: false });
+  if (metadata) {
+    if (!metadata.isFile()) throw new Error(`Invalid Camoufox metadata: ${versionPath}`);
+    const installed: unknown = JSON.parse(readFileSync(versionPath, "utf8"));
+    if (
+      !isConfigMap(installed) ||
+      installed.version !== camoufoxVersion.version ||
+      installed.release !== camoufoxVersion.release
+    ) {
+      throw new Error(`Expected Camoufox ${camoufoxBuild} in ${versionPath}; leaving it unchanged`);
+    }
+    return;
+  }
+
   const stagingDir = mkdtempSync(join(browserDir, ".version-"));
   try {
     const stagedVersion = join(stagingDir, "version.json");
-    writeFileSync(stagedVersion, `${JSON.stringify({ version, release })}\n`);
+    writeFileSync(stagedVersion, `${JSON.stringify(camoufoxVersion)}\n`);
     linkSync(stagedVersion, versionPath);
   } finally {
     rmSync(stagingDir, { recursive: true, force: true });

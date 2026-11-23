@@ -1,7 +1,17 @@
-import { readdirSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { constants, lstatSync, readdirSync } from "node:fs";
+import {
+  access,
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { markingPath, readInstallProfile, type InstallProfile } from "./marking.ts";
 
 export type Key =
@@ -342,6 +352,7 @@ export class Bootstrap {
     return new Map<string, CustomHandler>([
       ["android-sdk", () => this.installAndroidSdk()],
       ["blender", () => this.installBlender()],
+      ["camoufox", () => installCamoufox(this.runtime)],
       ["drawio", (profile) => this.installDrawio(profile)],
       ["musescore", () => this.installMuseScore()],
       ["openwhispr", (profile) => this.installOpenWhispr(profile)],
@@ -843,6 +854,102 @@ export class Bootstrap {
   private finish(): number {
     return this.failures.length === 0 ? 0 : 1;
   }
+}
+
+const camoufoxVersion = { version: "152.0.4", release: "beta.30" };
+const camoufoxBuild = `${camoufoxVersion.version}-${camoufoxVersion.release}`;
+const camoufoxExecutable = "camoufox-bin";
+const camoufoxMetadata = "version.json";
+
+export async function installCamoufox(
+  runtime: Pick<Runtime, "execute" | "output">,
+  installDir = join(homedir(), ".cache", "camoufox"),
+): Promise<void> {
+  const existing = lstatSync(installDir, { throwIfNoEntry: false });
+  if (existing) {
+    try {
+      if (!existing.isDirectory()) throw new Error("expected a directory, not a symlink or file");
+      await validateCamoufoxBinary(await realpath(join(installDir, camoufoxExecutable)));
+      const metadataPath = join(installDir, camoufoxMetadata);
+      if (!(await lstat(metadataPath)).isFile()) throw new Error("invalid version.json file");
+      const metadata: unknown = JSON.parse(await readFile(metadataPath, "utf8"));
+      if (
+        !metadata ||
+        typeof metadata !== "object" ||
+        !("version" in metadata) ||
+        !("release" in metadata) ||
+        metadata.version !== camoufoxVersion.version ||
+        metadata.release !== camoufoxVersion.release
+      )
+        throw new Error(`expected version.json for ${camoufoxBuild}`);
+    } catch (error) {
+      throw new Error(`Keeping existing Camoufox path ${installDir}: ${message(error)}`);
+    }
+    return;
+  }
+
+  const machine = runtime.output(["uname", "-m"]);
+  if (machine !== "x86_64" && machine !== "aarch64")
+    throw new Error(`Camoufox Linux release does not support architecture: ${machine}`);
+  const arch = machine === "aarch64" ? "arm64" : machine;
+  const archive = `camoufox-${camoufoxBuild}-lin.${arch}.zip`;
+
+  const parent = dirname(installDir);
+  await mkdir(parent, { recursive: true });
+  const staging = await mkdtemp(join(parent, ".camoufox-install-"));
+  try {
+    const payload = join(staging, "browser");
+    await mkdir(payload);
+    runtime.execute([
+      "gh",
+      "release",
+      "download",
+      `v${camoufoxBuild}`,
+      "--repo",
+      "daijro/camoufox",
+      "--pattern",
+      archive,
+      "--dir",
+      staging,
+    ]);
+    runtime.execute(["unzip", "-q", join(staging, archive), "-d", payload]);
+
+    const binary = join(payload, camoufoxExecutable);
+    const binaryStats = await lstat(binary);
+    if (!binaryStats.isFile()) throw new Error(`expected a regular file: ${binary}`);
+    if (!(binaryStats.mode & 0o100)) await chmod(binary, (binaryStats.mode & 0o777) | 0o100);
+    await validateCamoufoxBinary(binary);
+    await writeFile(join(payload, camoufoxMetadata), JSON.stringify(camoufoxVersion) + "\n", {
+      flag: "wx",
+    });
+
+    runtime.execute(["mv", "-T", "-n", "--", payload, installDir]);
+    if (lstatSync(payload, { throwIfNoEntry: false }))
+      throw new Error(`Keeping Camoufox path created during installation: ${installDir}`);
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+async function validateCamoufoxBinary(binary: string): Promise<void> {
+  const stats = await lstat(binary);
+  if (!stats.isFile() || stats.size === 0) throw new Error(`expected a browser file: ${binary}`);
+  await access(binary, constants.X_OK);
+  const applicationPath = join(dirname(binary), "application.ini");
+  if (!(await lstat(applicationPath)).isFile()) throw new Error("invalid application.ini file");
+  const appSections = (await readFile(applicationPath, "utf8"))
+    .replace(/^\uFEFF/, "")
+    .split(/(?=^[\t ]*\[)/m)
+    .filter((section) => /^[\t ]*\[App\][\t ]*(?:\r?\n|$)/i.test(section));
+  const versions = [...(appSections[0] ?? "").matchAll(/^[\t ]*Version[\t ]*=[\t ]*(.*)$/gim)];
+  const name = /^[\t ]*Name[\t ]*=[\t ]*(.*)$/im.exec(appSections[0] ?? "")?.[1]?.trim();
+  if (
+    appSections.length !== 1 ||
+    name !== "Camoufox" ||
+    versions.length !== 1 ||
+    versions[0]?.[1]?.trim() !== camoufoxBuild
+  )
+    throw new Error(`expected application.ini for Camoufox ${camoufoxBuild}`);
 }
 
 export function coalesceEntries(entries: readonly Entry[]): InstallBatch[] {

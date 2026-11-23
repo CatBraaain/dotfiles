@@ -67,11 +67,11 @@ dev:
   - brew: watchexec
   - bun: "@earendil-works/pi-coding-agent"
   - bun: "@openai/codex"
-  - bun: "@playwright/cli"
+  - bun: "@playwright/cli@0.1.22"
   - bun: cursor-agent
   # Chromium browser for playwright-cli.
   # htmlshot also resolves ~/.cache/ms-playwright/chromium-* for its renders.
-  - run: "playwright-cli install-browser chrome-for-testing"
+  - run: '"$(bun pm bin -g)/playwright-cli" install-browser chrome-for-testing'
 
   # General CLI tools
   - brew: act
@@ -135,6 +135,7 @@ work:
   - uv: yt-dlp
 
   # Apps and SDKs
+  - custom: camoufox
   - custom: drawio
   - custom: openwhispr
   - custom: rustdesk

@@ -1,6 +1,20 @@
-import { describe, it } from "bun:test";
+import { afterEach, beforeEach, describe, it } from "bun:test";
 import assert from "node:assert/strict";
-import { parseConfig, run, type Runtime } from "./linux.ts";
+import { execFileSync } from "node:child_process";
+import {
+  accessSync,
+  constants,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+import { installCamoufox, parseConfig, run, type Runtime } from "./linux.ts";
 import type { InstallProfile } from "./marking.ts";
 
 const layeredConfig = `
@@ -91,12 +105,23 @@ function invoke(
 }
 
 describe("Linux install profile configuration", () => {
-  it("defines 74 dev entries, 24 work additions and three personal additions", async () => {
+  it("defines 74 dev entries, 25 work additions and three personal additions", async () => {
     const { dev, work, personal } = parseConfig(
       await Bun.file(new URL("./linux.install.yaml", import.meta.url)).text(),
     );
     assert.equal(dev.length, 74);
-    assert.equal(work.length, 24);
+    assert.equal(work.length, 25);
+    assert.ok(dev.some((entry) => entry.key === "brew" && entry.value === "gh"));
+    assert.deepEqual(
+      dev.filter((entry) => entry.key === "bun" && entry.value.startsWith("@playwright/cli")),
+      [{ key: "bun", value: "@playwright/cli@0.1.22" }],
+    );
+    for (const entries of [dev, work, personal]) {
+      assert.equal(
+        entries.filter((entry) => entry.key === "custom" && entry.value === "camoufox").length,
+        entries === work ? 1 : 0,
+      );
+    }
     assert.deepEqual(personal, [
       { key: "custom", value: "blender" },
       { key: "custom", value: "musescore" },
@@ -132,12 +157,17 @@ describe("Linux install profile configuration", () => {
 
 describe("Linux Playwright browser install", () => {
   it.each(["dev", "work", "personal"] as const)(
-    "only enables browser cache protection in dev (%s)",
+    "shows the selected browsers and only enables browser cache protection in dev (%s)",
     async (profile) => {
       const source = await Bun.file(new URL("./linux.install.yaml", import.meta.url)).text();
       const { runtime, logs } = mockRuntime();
       assert.equal(await invoke("diff", profile, source, runtime), 0);
-      const browserInstall = "playwright-cli install-browser chrome-for-testing";
+      assert.deepEqual(
+        logs.filter((line) => line.startsWith("install / update bun: @playwright/cli")),
+        ["install / update bun: @playwright/cli@0.1.22"],
+      );
+      assert.equal(logs.includes("custom: camoufox"), profile !== "dev");
+      const browserInstall = '"$(bun pm bin -g)/playwright-cli" install-browser chrome-for-testing';
       const runCalls = logs.filter((line) => line.startsWith("run: "));
       assert.deepEqual(
         runCalls,
@@ -150,6 +180,212 @@ describe("Linux Playwright browser install", () => {
       );
     },
   );
+});
+
+describe("Linux Camoufox install", () => {
+  const metadata = { version: "152.0.4", release: "beta.30" };
+  const build = "152.0.4-beta.30";
+  let root: string;
+  let installDir: string;
+
+  beforeEach(() => {
+    const testRoot = "/tmp/work/dotfiles";
+    mkdirSync(testRoot, { recursive: true });
+    root = mkdtempSync(join(testRoot, "linux-camoufox-test-"));
+    installDir = join(root, "camoufox");
+  });
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  function writeBrowser(directory: string, version = build, mode = 0o755): string {
+    mkdirSync(directory, { recursive: true });
+    const binary = join(directory, "camoufox-bin");
+    writeFileSync(binary, "browser fixture", { mode });
+    writeFileSync(
+      join(directory, "application.ini"),
+      `[App]\r\nName=Camoufox\r\nVersion=${version}\r\n`,
+    );
+    return binary;
+  }
+
+  function releaseFixture(
+    machine: string,
+    assetArch: string,
+    extract: (payload: string) => void = (payload) => writeBrowser(payload, build, 0o644),
+    beforePublish: () => void = () => {},
+  ) {
+    const archive = `camoufox-152.0.4-beta.30-lin.${assetArch}.zip`;
+    return {
+      output(command: readonly string[]) {
+        assert.deepEqual(command, ["uname", "-m"]);
+        return machine;
+      },
+      execute(command: readonly string[]) {
+        const [program, ...args] = command;
+        if (program === "gh") {
+          const staging = args.at(-1)!;
+          assert.equal(dirname(staging), root);
+          assert.deepEqual(args, [
+            "release",
+            "download",
+            "v152.0.4-beta.30",
+            "--repo",
+            "daijro/camoufox",
+            "--pattern",
+            archive,
+            "--dir",
+            staging,
+          ]);
+          writeFileSync(join(staging, archive), "release fixture");
+        } else if (program === "unzip") {
+          const payload = args.at(-1)!;
+          assert.deepEqual(args, ["-q", join(dirname(payload), archive), "-d", payload]);
+          assert.equal(readFileSync(args[1]!, "utf8"), "release fixture");
+          extract(payload);
+        } else if (program === "mv") {
+          beforePublish();
+          execFileSync("mv", args);
+        } else {
+          assert.fail(`Unexpected command: ${command.join(" ")}`);
+        }
+      },
+    };
+  }
+
+  const offlineRuntime = {
+    output: () => assert.fail("An existing installation must not query external commands"),
+    execute: () => assert.fail("An existing installation must not run external commands"),
+  };
+
+  it.each([
+    ["x86_64", "x86_64"],
+    ["aarch64", "arm64"],
+  ])(
+    "publishes the pinned Linux archive for %s as a complete executable install",
+    async (machine, assetArch) => {
+      await installCamoufox(releaseFixture(machine, assetArch), installDir);
+      assert.deepEqual(readdirSync(root), ["camoufox"]);
+      const binary = join(installDir, "camoufox-bin");
+      accessSync(binary, constants.X_OK);
+      assert.equal(readFileSync(binary, "utf8"), "browser fixture");
+      assert.deepEqual(
+        JSON.parse(readFileSync(join(installDir, "version.json"), "utf8")),
+        metadata,
+      );
+      await installCamoufox(offlineRuntime, installDir);
+    },
+  );
+
+  it("keeps an existing same-version browser symlink and user profile without downloading", async () => {
+    const binary = writeBrowser(join(installDir, "browsers", "official", `${build}-fixture`));
+    const link = join(installDir, "camoufox-bin");
+    symlinkSync(binary, link);
+    const existingMetadata = JSON.stringify(metadata, null, 2);
+    writeFileSync(join(installDir, "version.json"), existingMetadata);
+    mkdirSync(join(installDir, "profile"));
+    writeFileSync(join(installDir, "profile", "prefs.js"), "profile fixture");
+
+    await installCamoufox(offlineRuntime, installDir);
+
+    assert.equal(readlinkSync(link), binary);
+    assert.equal(readFileSync(join(installDir, "version.json"), "utf8"), existingMetadata);
+    assert.equal(readFileSync(join(installDir, "profile", "prefs.js"), "utf8"), "profile fixture");
+  });
+
+  it.each([
+    ["a different browser build", "156.0.1-beta.36", JSON.stringify(metadata), 0o755],
+    ["different version metadata", build, '{"version":"156.0.1","release":"beta.36"}', 0o755],
+    ["invalid version metadata", build, "{", 0o755],
+    ["a non-executable browser", build, JSON.stringify(metadata), 0o644],
+  ] as const)(
+    "rejects %s without modifying the existing installation",
+    async (_case, version, json, mode) => {
+      const binary = writeBrowser(installDir, version, mode);
+      const versionFile = join(installDir, "version.json");
+      writeFileSync(versionFile, json);
+
+      await assert.rejects(
+        installCamoufox(offlineRuntime, installDir),
+        /Keeping existing Camoufox/,
+      );
+
+      assert.equal(readFileSync(binary, "utf8"), "browser fixture");
+      assert.equal(readFileSync(versionFile, "utf8"), json);
+    },
+  );
+
+  it.each(["Version=156.0.1-beta.36\n", "[App]\nVersion=156.0.1-beta.36\n", "[App]"])(
+    "rejects ambiguous browser metadata without changing the existing installation (%s)",
+    async (extra) => {
+      const binary = writeBrowser(installDir);
+      const metadataPath = join(installDir, "version.json");
+      const applicationPath = join(installDir, "application.ini");
+      const application = readFileSync(applicationPath, "utf8") + extra;
+      writeFileSync(applicationPath, application);
+      writeFileSync(metadataPath, JSON.stringify(metadata));
+
+      await assert.rejects(
+        installCamoufox(offlineRuntime, installDir),
+        /Keeping existing Camoufox/,
+      );
+      assert.equal(readFileSync(binary, "utf8"), "browser fixture");
+      assert.equal(readFileSync(applicationPath, "utf8"), application);
+      assert.equal(readFileSync(metadataPath, "utf8"), JSON.stringify(metadata));
+    },
+  );
+
+  it("rejects a cache populated only by an existing profile and leaves it intact", async () => {
+    mkdirSync(installDir);
+    writeFileSync(join(installDir, "profile"), "profile fixture");
+    await assert.rejects(installCamoufox(offlineRuntime, installDir), /Keeping existing Camoufox/);
+    assert.deepEqual(readdirSync(installDir), ["profile"]);
+    assert.equal(readFileSync(join(installDir, "profile"), "utf8"), "profile fixture");
+  });
+
+  it("preserves a dangling symlink at the install path", async () => {
+    const target = join(root, "missing");
+    symlinkSync(target, installDir);
+    await assert.rejects(installCamoufox(offlineRuntime, installDir), /Keeping existing Camoufox/);
+    assert.equal(readlinkSync(installDir), target);
+    assert.deepEqual(readdirSync(root), ["camoufox"]);
+  });
+
+  it("rejects an unsupported architecture without staging a download", async () => {
+    await assert.rejects(
+      installCamoufox({ ...offlineRuntime, output: () => "riscv64" }, installDir),
+      /does not support architecture: riscv64/,
+    );
+    assert.deepEqual(readdirSync(root), []);
+  });
+
+  it("does not publish a partial extraction and allows a retry", async () => {
+    const partial = releaseFixture("x86_64", "x86_64", (payload) => {
+      writeFileSync(join(payload, "camoufox-bin"), "incomplete");
+      throw new Error("extraction failed");
+    });
+    await assert.rejects(installCamoufox(partial, installDir), /extraction failed/);
+    assert.deepEqual(readdirSync(root), []);
+    await installCamoufox(releaseFixture("x86_64", "x86_64"), installDir);
+    await installCamoufox(offlineRuntime, installDir);
+  });
+
+  it("does not publish an archive whose browser build differs from the pin", async () => {
+    const incorrect = releaseFixture("x86_64", "x86_64", (payload) =>
+      writeBrowser(payload, "156.0.1-beta.36"),
+    );
+    await assert.rejects(
+      installCamoufox(incorrect, installDir),
+      /expected application.ini for Camoufox/,
+    );
+    assert.deepEqual(readdirSync(root), []);
+  });
+
+  it("does not replace an empty directory created before publishing", async () => {
+    const concurrent = releaseFixture("x86_64", "x86_64", undefined, () => mkdirSync(installDir));
+    await assert.rejects(installCamoufox(concurrent, installDir));
+    assert.deepEqual(readdirSync(root), ["camoufox"]);
+    assert.deepEqual(readdirSync(installDir), []);
+  });
 });
 
 describe.each(["work", "personal"] as const)("Linux %s layered profile", (profile) => {

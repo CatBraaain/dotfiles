@@ -37,6 +37,8 @@
 | `custom` | Custom Handler名 | Handlerによる存在保証 |
 | `run` | シェルコマンド | 毎回実行 |
 
+現行の `dev` 配列は、Bun グローバルに `@playwright/cli@0.1.22` を導入し、Bun のグローバル実行ファイルディレクトリにある `playwright-cli` を直接呼び出して `chrome-for-testing` を導入する。`camoufox` Handler は `work` 配列に置き、`work` と `personal` で実行する。
+
 設定の例:
 
     dev:
@@ -65,7 +67,16 @@
 
 `uv`、`bun`、`cargo`、`go`、`brew`、`brew-cask`の値から得られるパッケージ識別子の集合を、それぞれのDeclarative ManagerのDesired Stateとする。`cargo`のパッケージ指定はcrates.ioのcrate名または`crate@version`とし、Desired Stateのパッケージ識別子は`@version`より前のcrate名とする。`work`と`personal`では、各Managerが現在のグローバル状態とこのDesired Stateとの差分を管理する。`brew`の現在状態は`brew leaves`で取得し、他のFormulaの依存先であるFormulaを削除対象に含めない。`cargo`の現在状態は`cargo install --list`で取得する。`go`の現在状態は`gup list --json`で取得する。Managerの状態取得に失敗したときは、そのManagerのUninstall Phaseの削除を行わず、失敗として記録する。
 
-`apt`と`flatpak`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`、`android-sdk`、`blender`、`musescore`、`openwhispr`、`rustdesk`、`surge-xt`は目的状態を保証する。
+`apt`と`flatpak`はDesired Stateにないパッケージを削除しない。`custom`と`run`はパッケージのDesired Stateを持たない。Custom Handlerの個別の目的状態は、この共通契約の対象外とする。`drawio`、`android-sdk`、`blender`、`camoufox`、`musescore`、`openwhispr`、`rustdesk`、`surge-xt`は目的状態を保証する。
+
+`camoufox` は `browse` の既定の実行パス `~/.cache/camoufox/camoufox-bin` に [Camoufox `v152.0.4-beta.30`](https://github.com/daijro/camoufox/releases/tag/v152.0.4-beta.30) を保証する。
+
+| 条件 | 結果 |
+| --- | --- |
+| 配置先がなく、Linux が x86_64 または ARM64 | 対応する固定版 ZIP を取得する。実行可能な通常ファイル `camoufox-bin` と固定版の `application.ini` を確認し、`version.json`（`{"version":"152.0.4","release":"beta.30"}`）が揃ってから配置する |
+| 配置先が実ディレクトリで、既存の実行ファイル（symlink の参照先も可）が実行可能な通常ファイルであり、実体と同じディレクトリの `application.ini` と配置先直下の `version.json` がともに固定版に一致 | 導入済みとして扱い、取得・変更を行わない |
+| 別版、不完全な配置、ディレクトリの symlink など、導入済みの条件を満たさない配置先がある | 失敗として記録し、取得・変更を行わない。プロファイルや symlink を含む既存物を維持する |
+| 配置先がなく、対応外のアーキテクチャ、または取得・展開・検証・配置に失敗 | 失敗として記録し、未完成の展開を公開しない。配置中に新たに現れた配置先も維持する |
 
 `blender`の目的状態は、download.blender.orgの最新安定版releaseのlinux-x64 tarballを`/opt/blender-{version}-linux-x64`（`{version}`は`数字.数字.数字`）へ展開し、`/usr/local/bin/blender`がその中の`blender`実行ファイルへのsymlinkであることとする。同じrelease versionが既に`/opt`に展開済みなら再取得せず、symlinkが目的と異なるときだけ張り直す。workプロファイルでの削除対象は、`/usr/local/bin/blender`のsymlink先が`/opt/blender-{version}-linux-x64/blender`に一致するときのsymlinkと、`/opt`直下で`blender-{version}-linux-x64`に一致するディレクトリであり、それ以外のblender関連パスは管理外として削除しない。releaseの一覧の取得に失敗した場合、またはx86_64以外のLinuxで実行した場合は失敗として記録する。
 
