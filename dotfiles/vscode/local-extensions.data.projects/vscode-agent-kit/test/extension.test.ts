@@ -145,6 +145,9 @@ describe("extension commands", () => {
         return watcher;
       },
     );
+    api.registerCommand.mockReturnValue({ dispose: vi.fn() });
+    api.onDidCloseTerminal.mockReturnValue({ dispose: vi.fn() });
+    api.registerWebviewViewProvider.mockReturnValue({ dispose: vi.fn() });
     api.createOutputChannel.mockReturnValue({ dispose: vi.fn(), error: vi.fn() });
     vi.spyOn(SessionWebviewProvider.prototype, "refresh").mockResolvedValue();
     vi.stubEnv("PI_CODING_AGENT_DIR", "/fixture/agent");
@@ -374,9 +377,6 @@ describe("extension commands", () => {
       extensionUri: { fsPath: "/extension" },
       globalStorageUri: { fsPath: join(root, "profile-storage") },
     } as unknown as vscode.ExtensionContext;
-    api.registerCommand.mockReturnValue({ dispose: vi.fn() });
-    api.onDidCloseTerminal.mockReturnValue({ dispose: vi.fn() });
-    api.registerWebviewViewProvider.mockReturnValue({ dispose: vi.fn() });
     activate(context);
     await vi.waitFor(() => expect(watcherFor(first)).toBeDefined());
     expect(api.watchers.map(({ pattern }) => pattern)).toEqual(["**/*.jsonl"]);
