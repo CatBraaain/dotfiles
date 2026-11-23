@@ -1132,10 +1132,16 @@ function SessionsApp({
   const menuItems: ContextMenuItem[] = [];
   if (contextMenu?.kind === "workspace") {
     const { cwd } = contextMenu;
-    menuItems.push({
-      label: "Unregister workspace",
-      run: () => bridge.postMessage({ type: "unregisterWorkspace", cwd }),
-    });
+    menuItems.push(
+      {
+        label: "Open Terminal",
+        run: () => bridge.postMessage({ type: "openWorkspaceTerminal", cwd }),
+      },
+      {
+        label: "Unregister workspace",
+        run: () => bridge.postMessage({ type: "unregisterWorkspace", cwd }),
+      },
+    );
   } else if (menuSession !== undefined) {
     const { sessionId, isArchived, isLive } = menuSession;
     if (isLive) {

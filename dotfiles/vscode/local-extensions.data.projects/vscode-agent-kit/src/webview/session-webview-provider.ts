@@ -553,6 +553,10 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       await this.deps.registry.run(() => this.addWorkspace(request.path));
       return;
     }
+    if (request.type === "openWorkspaceTerminal") {
+      await this.openWorkspaceTerminal(request.cwd);
+      return;
+    }
     if (request.type === "unregisterWorkspace") {
       this.deps.registry.cancelDisplayRecovery(request.cwd);
       for (const [controller, cwd] of this.pendingOpens) {
@@ -676,6 +680,24 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
     this.post({ type: "workspaceAdded" });
     await this.refresh(false);
+  }
+
+  private async openWorkspaceTerminal(cwd: string): Promise<void> {
+    try {
+      if (!this.addedCwds.has(cwd)) throw new Error("Workspace not found in the session list");
+      const directory = await requireWorkDirectory(cwd);
+      if (this.disposed) return;
+      if (!this.addedCwds.has(cwd)) throw new Error("Workspace not found in the session list");
+
+      const terminal = vscode.window.createTerminal({
+        cwd: vscode.Uri.file(directory),
+        location: vscode.TerminalLocation.Editor,
+      });
+      terminal.show();
+    } catch (error) {
+      if (this.disposed) return;
+      this.postError(`Failed to open terminal in ${cwd}: ${errorMessage(error)}`);
+    }
   }
 
   private async unregisterWorkspace(cwd: string): Promise<void> {

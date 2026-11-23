@@ -1704,9 +1704,12 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         await header.locator(".group-title").press("Enter");
         expect(await header.locator(".group-title").getAttribute("aria-expanded")).toBe("false");
         await header.click({ button: "right" });
-        await expect.poll(() => page.getByRole("menuitem").count()).toBe(1);
+        const items = page.getByRole("menuitem");
+        await expect
+          .poll(() => items.allTextContents())
+          .toEqual(["Open Terminal", "Unregister workspace"]);
         expect(
-          await page.getByRole("menuitem").evaluate((item) => item === document.activeElement),
+          await items.evaluateAll((items) => items.some((item) => item === document.activeElement)),
         ).toBe(false);
         await page.mouse.click(0, 0);
         expect(await page.getByRole("menu").count()).toBe(0);
@@ -1736,7 +1739,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         expect(bounds!.y).toBeGreaterThanOrEqual(4);
         expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width - 4);
         expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(636);
-        expect((await page.getByRole("menuitem").boundingBox())!.height).toBeGreaterThanOrEqual(32);
+        for (const item of await menu.getByRole("menuitem").all()) {
+          expect((await item.boundingBox())!.height).toBeGreaterThanOrEqual(32);
+        }
         expect(await firstHeader.boundingBox()).toEqual(before);
         expect(
           await page.evaluate(() => ({
@@ -1761,7 +1766,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await installBridgeMessageRecorder(page);
     const header = page.locator('.group-header[title="~/projects/agenda"]');
     await header.click({ button: "right" });
-    const item = page.getByRole("menuitem");
+    const item = page.getByRole("menuitem", { name: "Unregister workspace", exact: true });
     expect(await item.getAttribute("tabindex")).toBe("-1");
     expect(await item.evaluate((element) => element === document.activeElement)).toBe(false);
     for (const key of ["Enter", "Space", "Escape", "Tab", "Shift+Tab"]) {
@@ -1776,6 +1781,33 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     ).toEqual([]);
     await page.close();
   });
+
+  it.each(["~/.agents/worktrees/vscode-agent-kit", "~/projects/agenda"])(
+    "opens a terminal for %s from the group title context menu",
+    async (cwd) => {
+      const page = await openStory("sessions-sidebar--sample-sessions", {
+        width: 320,
+        height: 640,
+      });
+      await installBridgeMessageRecorder(page);
+      const header = page.locator(`.group-header[title="${cwd}"]`);
+      await header.locator(".group-title").click({ button: "right" });
+
+      await page.getByRole("menuitem", { name: "Open Terminal", exact: true }).click();
+
+      expect(await page.getByRole("menu").count()).toBe(0);
+      expect(await header.count()).toBe(1);
+      expect(
+        await page.locator(".session-row.selected [data-session]").getAttribute("data-session"),
+      ).toBe(atlasCurrentId);
+      expect(
+        await page.evaluate(
+          () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
+        ),
+      ).toEqual([{ type: "openWorkspaceTerminal", cwd }]);
+      await page.close();
+    },
+  );
 
   it.each([
     ["~/projects/agenda", 0],
@@ -1855,7 +1887,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       expect(await page.getByRole("menu").count()).toBe(1);
     }
     expect(await page.getByRole("menu").count()).toBe(1);
-    await page.getByRole("menuitem").click();
+    await page.getByRole("menuitem", { name: "Unregister workspace", exact: true }).click();
     expect(
       await page.evaluate(
         () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,

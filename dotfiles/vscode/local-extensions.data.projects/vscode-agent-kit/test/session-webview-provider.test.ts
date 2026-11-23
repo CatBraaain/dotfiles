@@ -3313,6 +3313,46 @@ describe("SessionWebviewProvider", () => {
       expect(await new WorkspaceStore(directory).list()).toEqual(new Set([root]));
     });
 
+    it("opens the default shell in a new editor terminal for a retained-only workspace", async () => {
+      const { provider, workspaces, groups, webview, mocks } = await fixture();
+      workspaces.clear();
+      await tick(provider);
+      const previousGroups = groups();
+      webview.postMessage.mockClear();
+      const show = vi.fn();
+      vscodeMocks.createTerminal.mockReturnValue({ show });
+
+      await webview.receive({ type: "openWorkspaceTerminal", cwd: root });
+
+      expect(vscodeMocks.createTerminal).toHaveBeenCalledExactlyOnceWith({
+        cwd: { fsPath: root },
+        location: 1,
+      });
+      expect(show).toHaveBeenCalledExactlyOnceWith();
+      expect(mocks.newSession).not.toHaveBeenCalled();
+      expect(mocks.open).not.toHaveBeenCalled();
+      expect(mocks.unregisterWorkspace).not.toHaveBeenCalled();
+      expect(await workspaceStorage.list()).toEqual(new Set([root]));
+      expect(previousGroups).toEqual([{ cwd: root, label: expect.any(String), sessions: [] }]);
+      expect(webview.postMessage).not.toHaveBeenCalled();
+    });
+
+    it.each(["not listed", "missing directory", "file"])(
+      "does not open a workspace terminal when the cwd is %s",
+      async (problem) => {
+        const cwd = join(root, "shell folder");
+        if (problem === "not listed") await mkdir(cwd);
+        if (problem === "file") await writeFile(cwd, "");
+        if (problem !== "not listed") await workspaceStorage.add(cwd);
+        const { webview } = await fixture();
+
+        await webview.receive({ type: "openWorkspaceTerminal", cwd });
+
+        expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();
+        expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(expect.stringContaining(cwd));
+      },
+    );
+
     it("removes a retained-only cwd through Unregister and adds it again on later registration", async () => {
       const current = await fixture();
       current.workspaces.clear();

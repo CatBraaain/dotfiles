@@ -3,7 +3,7 @@ export type WebviewRequest =
   | { type: "refresh" }
   | { type: "newSession"; cwd: string; requestId?: string }
   | { type: "addWorkspace"; path: string }
-  | { type: "unregisterWorkspace"; cwd: string }
+  | { type: "openWorkspaceTerminal" | "unregisterWorkspace"; cwd: string }
   | { type: "openSession" | "reloadSession" | "copySessionId"; sessionId: string }
   | { type: "archiveSession"; sessionId: string; requestId?: string }
   | { type: "unarchiveSession"; sessionId: string; requestId?: string };
@@ -67,8 +67,11 @@ export function parseWebviewRequest(value: unknown): WebviewRequest | undefined 
   if (value.type === "addWorkspace" && isNonEmptyPath(value.path)) {
     return { type: "addWorkspace", path: value.path };
   }
-  if (value.type === "unregisterWorkspace" && isNonEmptyPath(value.cwd)) {
-    return { type: "unregisterWorkspace", cwd: value.cwd };
+  if (
+    (value.type === "openWorkspaceTerminal" || value.type === "unregisterWorkspace") &&
+    isNonEmptyPath(value.cwd)
+  ) {
+    return { type: value.type, cwd: value.cwd };
   }
   if (!isSessionId(value.sessionId)) return undefined;
   if (

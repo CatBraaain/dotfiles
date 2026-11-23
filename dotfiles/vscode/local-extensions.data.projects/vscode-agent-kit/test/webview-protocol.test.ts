@@ -27,6 +27,10 @@ describe("parseWebviewRequest", () => {
       { type: "addWorkspace", path: "/home/user/project" },
     ],
     [
+      { type: "openWorkspaceTerminal", cwd: "/home/user/my project" },
+      { type: "openWorkspaceTerminal", cwd: "/home/user/my project" },
+    ],
+    [
       { type: "unregisterWorkspace", cwd: "/home/user/project" },
       { type: "unregisterWorkspace", cwd: "/home/user/project" },
     ],
@@ -128,6 +132,9 @@ describe("parseWebviewRequest", () => {
     { type: "addWorkspace", path: "" },
     { type: "addWorkspace", path: "   " },
     { type: "addWorkspace", path: 7 },
+    { type: "openWorkspaceTerminal" },
+    { type: "openWorkspaceTerminal", cwd: "  " },
+    { type: "openWorkspaceTerminal", cwd: 9 },
     { type: "unregisterWorkspace" },
     { type: "unregisterWorkspace", cwd: "" },
     { type: "unregisterWorkspace", cwd: "  " },
