@@ -211,8 +211,9 @@ function installWingetBatch(ids: readonly string[], args: readonly string[]): vo
 
 function installNpmPackage(name: string): void {
   const command = ["cmd", "/c", "npm", "install", "-g", "--ignore-scripts", name];
+  const cwd = process.cwd().startsWith("\\\\") ? process.env.SystemRoot : undefined;
   try {
-    run(command);
+    run(command, cwd);
   } catch (error) {
     if (name === "@earendil-works/pi-coding-agent") throw error;
     console.error(message(error));
@@ -451,8 +452,8 @@ function isElevated(): boolean {
   return status.exitCode === 0;
 }
 
-function run(command: readonly string[]): void {
-  const exitCode = runInheritingIO(command);
+function run(command: readonly string[], cwd?: string): void {
+  const exitCode = runInheritingIO(command, cwd);
   if (exitCode !== 0)
     throw new Error(`command failed with exit code ${exitCode}: ${command.join(" ")}`);
 }
@@ -463,8 +464,8 @@ function runAllowingFailure(command: readonly string[]): void {
     console.error(`command failed with exit code ${exitCode}: ${command.join(" ")}`);
 }
 
-function runInheritingIO(command: readonly string[]): number | null {
-  return Bun.spawnSync([...command], { stdout: "inherit", stderr: "inherit" }).exitCode;
+function runInheritingIO(command: readonly string[], cwd?: string): number | null {
+  return Bun.spawnSync([...command], { cwd, stdout: "inherit", stderr: "inherit" }).exitCode;
 }
 
 function localAppData(): string {

@@ -94,10 +94,12 @@ function windowsFixture(configText?: string) {
     const errors: string[] = [];
     const lookups: { executable: string; after: string[] | undefined; path: string | undefined }[] =
       [];
-    const spawn = spyOn(Bun, "spawnSync").mockImplementation((args) => {
+    const workingDirectoryOverrides: { command: string | undefined; cwd: string }[] = [];
+    const spawn = spyOn(Bun, "spawnSync").mockImplementation((args, options?: { cwd?: string }) => {
       assert.ok(Array.isArray(args), "expected an argument vector");
       commands.push(args);
       const [command] = args;
+      if (options?.cwd !== undefined) workingDirectoryOverrides.push({ command, cwd: options.cwd });
       if (command === "cmd") npmPaths.push(process.env.Path);
       const refreshesPath = command === "powershell" && args[3]?.startsWith("[Environment]");
       const stdout = refreshesPath ? "machine;user" : "1.0.0";
@@ -128,7 +130,7 @@ function windowsFixture(configText?: string) {
     try {
       const readConfig = configText === undefined ? undefined : async () => configText;
       await installWindows(profile, desktop, readConfig);
-      return { commands, npmPaths, errors, lookups };
+      return { commands, npmPaths, errors, lookups, workingDirectoryOverrides };
     } finally {
       stderr.mockRestore();
       which.mockRestore();
@@ -172,6 +174,31 @@ test("dev installs only its selected packages after the elevation check and refr
     fixture.dispose();
   }
 });
+
+test.each([
+  [
+    String.raw`\\wsl.localhost\Ubuntu\home\user\dotfiles`,
+    [{ command: "cmd", cwd: String.raw`C:\Windows` }],
+  ],
+  [String.raw`C:\Users\user\dotfiles`, []],
+])(
+  "sets a local working directory only for npm launched from a UNC path: %s",
+  async (cwd, expected) => {
+    const fixture = windowsFixture("dev: [{ npm: cli-tool }]\nwork: []\npersonal: []");
+    const getCwd = spyOn(process, "cwd").mockReturnValue(cwd);
+    const previousSystemRoot = process.env.SystemRoot;
+    process.env.SystemRoot = String.raw`C:\Windows`;
+    try {
+      const { workingDirectoryOverrides } = await fixture.run("dev");
+      assert.deepEqual(workingDirectoryOverrides, expected);
+    } finally {
+      if (previousSystemRoot === undefined) delete process.env.SystemRoot;
+      else process.env.SystemRoot = previousSystemRoot;
+      getCwd.mockRestore();
+      fixture.dispose();
+    }
+  },
+);
 
 test("pi installation failure is still fatal", async () => {
   const fixture = windowsFixture();
