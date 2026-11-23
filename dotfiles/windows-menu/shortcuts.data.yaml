@@ -2,4 +2,4 @@ shortcuts:
   - name: Main.ahk
     command: gsudo '\\wsl.localhost\Ubuntu\home\username\projects\ahkfiles\Main\Main.ahk'
   - name: ScreenLock.ahk
-    command: '\\wsl.localhost\Ubuntu\home\username\projects\ahkfiles\ScreenLock\ScreenLock.ahk'
+    command: gsudo '\\wsl.localhost\Ubuntu\home\username\projects\ahkfiles\ScreenLock\ScreenLock.ahk'
