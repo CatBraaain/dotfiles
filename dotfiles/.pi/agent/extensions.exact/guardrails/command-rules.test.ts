@@ -181,6 +181,336 @@ describe("structured whole-token command rules", () => {
   });
 });
 
+describe("ordered command arguments", () => {
+  for (const action of ["allow", "ask", "ask_with_reason", "deny"]) {
+    it(`matches relative order for ${action} before later matching rules override it`, () => {
+      const config = parseGuardrailConfig(`commands:
+  - tool:
+      - ${action === "allow" ? "deny" : "allow"}: []
+      - ${action}: [[first, second]]
+      - ask_with_reason: [override]
+`);
+      const entries = compileCommandRuleEntries(config.commands).entries;
+      const fallback = action === "allow" ? "deny" : "allow";
+      for (const command of ["tool first second", "tool before first between second after"])
+        assert.equal(resolveCommandAction(entries, command), action, command);
+      for (const command of ["tool second first", "tool first"])
+        assert.equal(resolveCommandAction(entries, command), fallback, command);
+      assert.equal(resolveCommandAction(entries, "tool first second override"), "ask_with_reason");
+    });
+  }
+
+  it("matches outer strings before, between, or after the sequence regardless of nesting position", () => {
+    const sources = ["[[first, second], outer]", "[outer, [first, second]]"];
+    const expectedPattern = JSON.stringify({
+      command: "tool",
+      args: [["first", "second"], "outer"],
+    });
+    for (const source of sources) {
+      const config = parseGuardrailConfig(`commands: [{tool: [{ask: ${source}}]}]`);
+      const entries = compileCommandRuleEntries(config.commands).entries;
+      for (const command of [
+        "tool outer first second",
+        "tool first outer second",
+        "tool first second outer",
+      ]) {
+        const match = resolveCommandActionMatch(entries, command);
+        assert.equal(match.action, "ask", command);
+        assert.equal(match.matched, expectedPattern);
+      }
+      assert.equal(resolveCommandAction(entries, "tool first second"), "deny");
+    }
+  });
+
+  it("consumes the first eligible position without reassigning it to satisfy an outer condition", () => {
+    const config = parseGuardrailConfig(
+      'commands: [{tool: [{ask: [["first|alternate", second], first]}]}]',
+    );
+    const entries = compileCommandRuleEntries(config.commands).entries;
+    assert.equal(resolveCommandAction(entries, "tool first alternate second"), "deny");
+    assert.equal(resolveCommandAction(entries, "tool alternate first second"), "ask");
+    assert.equal(resolveCommandAction(entries, "tool first first second"), "ask");
+  });
+
+  it("requires distinct positions for repeated ordered patterns", () => {
+    const config = parseGuardrailConfig("commands: [{tool: [{ask: [[repeat, repeat]]}]}]");
+    const entries = compileCommandRuleEntries(config.commands).entries;
+    assert.equal(resolveCommandAction(entries, "tool repeat extra"), "deny");
+    assert.equal(resolveCommandAction(entries, "tool repeat extra repeat"), "ask");
+  });
+
+  it("matches one nested pattern at the same literal positions as one flat pattern", () => {
+    const flat = commandEntries("tool", ["first"]);
+    const ordered = compileCommandRuleEntries([
+      { action: "ask", pattern: "tool", args: [["first"]] },
+    ]).entries;
+    for (const command of [
+      "tool before first",
+      "tool first after",
+      "tool before first after",
+      "tool before",
+    ]) {
+      assert.equal(
+        resolveCommandAction(ordered, command),
+        resolveCommandAction(flat, command),
+        command,
+      );
+    }
+  });
+
+  it("skips unresolved arguments before, between, and after ordered matches", () => {
+    const config = parseGuardrailConfig("commands: [{tool: [{ask: [[first, second], tail]}]}]");
+    const entries = compileCommandRuleEntries(config.commands).entries;
+    for (const command of [
+      "tool $UNRESOLVED first second tail",
+      "tool first $UNRESOLVED second tail",
+      "tool first second $UNRESOLVED tail",
+    ])
+      assert.equal(resolveCommandAction(entries, command), "ask", command);
+  });
+
+  it("keeps flat normalization but excludes expansion arguments from both ordered conditions", () => {
+    const entries = compileCommandRuleEntries([
+      { action: "allow", pattern: "tool", args: ["first", "tail"] },
+      { action: "ask", pattern: "tool", args: [["first"], "tail"] },
+    ]).entries;
+    for (const command of [
+      'tool first"$ITEM" tail',
+      'tool "first${ITEM}" tail',
+      'tool first tail"$ITEM"',
+      'tool first "tail${ITEM}"',
+      'tool first "tail$((1+2))"',
+    ]) {
+      assert.deepEqual(splitCommandSegments(command), [["tool", "first", "tail"]], command);
+      assert.equal(resolveCommandAction(entries, command), "allow", command);
+    }
+  });
+
+  it("matches quoted and escaped literal expansion characters", () => {
+    const entries = compileCommandRuleEntries([
+      { action: "ask", pattern: "tool", args: [[String.raw`first\$ITEM`], "tail"] },
+    ]).entries;
+    for (const command of ["tool 'first$ITEM' tail", "tool first\\$ITEM tail"]) {
+      assert.equal(resolveCommandAction(entries, command), "ask", command);
+    }
+  });
+
+  it("does not match an unresolved positional argument even with a wildcard or empty pattern", () => {
+    for (const pattern of [".*", ""]) {
+      const config = parseGuardrailConfig(
+        `commands: [{tool: [{ask: [[${JSON.stringify(pattern)}]]}]}]`,
+      );
+      const entries = compileCommandRuleEntries(config.commands).entries;
+      assert.equal(resolveCommandAction(entries, "tool $UNRESOLVED"), "deny", pattern);
+      assert.equal(resolveCommandAction(entries, 'tool ""'), "ask", pattern);
+    }
+  });
+
+  it("uses normalized whole tokens and reports only matched source ranges", () => {
+    const config = parseGuardrailConfig('commands: [{tool: [{ask: [["", "a b|c"], tail]}]}]');
+    const entries = compileCommandRuleEntries(config.commands).entries;
+    const command = `tool tail '' extra "a b"`;
+    const match = resolveCommandActionMatch(entries, command);
+    const matchedTokens = match.matchSpan?.ranges.map(({ index, length }) =>
+      command.slice(index, index + length),
+    );
+    assert.equal(match.action, "ask");
+    assert.deepEqual(matchedTokens, ["tool", "tail", "''", '"a b"']);
+    assert.equal(resolveCommandAction(entries, 'tool "" "a b extra" tail'), "deny");
+    assert.equal(
+      resolveCommandAction(entries, 'tool "" "a b\\n" tail'.replace("\\n", "\n")),
+      "deny",
+    );
+  });
+
+  it("rejects malformed argument conditions during config validation", () => {
+    for (const args of ["[[]]", "[[a], [b]]", "[[[a]]]", "[[1]]", "[[a], null]"]) {
+      assert.throws(
+        () => parseGuardrailConfig(`commands: [{tool: [{allow: ${args}}]}]`),
+        /guardrail config schema violation/,
+        args,
+      );
+    }
+  });
+
+  it("invalidates a rule with a malformed ordered regex without dropping other rules", () => {
+    const config = parseGuardrailConfig(
+      'commands: [{tool: [{allow: []}, {deny: [[first, "["]]}]}]',
+    );
+    const { entries, invalidPatterns } = compileCommandRuleEntries(config.commands);
+    assert.deepEqual(invalidPatterns, [
+      JSON.stringify({ command: "tool", args: [["first", "["]] }),
+    ]);
+    assert.equal(resolveCommandAction(entries, "tool first second"), "allow");
+  });
+
+  for (const option of ["Allow in this turn", "Allow in this session"]) {
+    it(
+      `keeps ordered and flat pattern approvals separate for ${option}`,
+      withGuardrail(
+        `commands:
+  - tool:
+      - ask: [first, second]
+      - ask: [[first, second]]`,
+        async (guardrail, cwd) => {
+          const prompts: string[] = [];
+          const context = {
+            cwd,
+            hasUI: true,
+            ui: {
+              confirm: async () => false,
+              select: async (title: string) => {
+                prompts.push(title);
+                return option;
+              },
+            },
+          };
+          await guardrail.authorizeCommand("tool second first", context);
+          await guardrail.authorizeCommand("tool first second", context);
+          await guardrail.authorizeCommand("tool first second extra", context);
+          await guardrail.authorizeCommand("tool extra second first", context);
+          assert.equal(prompts.length, 2);
+        },
+      ),
+    );
+  }
+
+  for (const option of ["Allow in this turn", "Allow in this session"]) {
+    it(
+      `scopes ${option} to every highest-ranked pattern in an ordered compound`,
+      withGuardrail(
+        `commands:
+  - flat:
+      - ask: [first]
+  - tail:
+      - ask: [last]
+      - ask: [other]
+  - tool:
+      - ask: [[second]]
+  - low:
+      - allow: [[extra]]`,
+        async (guardrail, cwd) => {
+          const prompts: string[] = [];
+          const context = {
+            cwd,
+            hasUI: true,
+            ui: {
+              confirm: async () => false,
+              select: async (title: string) => {
+                prompts.push(title);
+                return option;
+              },
+            },
+          };
+          await guardrail.authorizeCommand("flat first", context);
+          await guardrail.authorizeCommand("flat first; tail last", context);
+          assert.equal(prompts.length, 1);
+
+          const compound = "flat first; tool second; tail last";
+          await guardrail.authorizeCommand(compound, context);
+          assert.equal(prompts.length, 2);
+          assert.match(prompts[1]!, /matched: \{"command":"flat"/);
+          assert.match(prompts[1]!, /also required: \{"command":"tool".*\{"command":"tail"/);
+
+          assert.equal(await guardrail.authorizeCommand(`${compound}; low extra`, context), true);
+          assert.equal(prompts.length, 2);
+          await guardrail.authorizeCommand("tool second", context);
+          await guardrail.authorizeCommand("flat first; tool second; tail other", context);
+          assert.equal(prompts.length, 4);
+          await guardrail.authorizeCommand("tool second; low extra", context);
+          assert.equal(prompts.length, 5);
+          assert.match(prompts[4]!, /scope: compound commands only/);
+        },
+      ),
+    );
+  }
+
+  it(
+    "uses the compound pattern scope for both gated approval and bash authorization",
+    withGuardrail(
+      `commands:
+  - flat:
+      - ask_with_reason: [first]
+  - tool:
+      - ask_with_reason: [[second]]`,
+      async (guardrail, cwd) => {
+        const select = async () => "Allow in this session";
+        const context = { cwd, hasUI: true, ui: { confirm: async () => false, select } };
+        const single = "flat first";
+        const compound = "flat first; tool second";
+        await guardrail.requestCommandPermission(single, "fixture", context);
+        assert.throws(() => guardrail.authorizeCommand(compound, context), /requires a reason/);
+
+        const grant = await guardrail.requestCommandPermission(compound, "fixture", context);
+        assert.equal(grant.status, "granted");
+        assert.equal(
+          (await guardrail.requestCommandPermission(compound, "fixture", context)).status,
+          "already granted",
+        );
+        assert.equal(await guardrail.authorizeCommand(compound, context), true);
+        assert.throws(
+          () => guardrail.authorizeCommand("tool second", context),
+          /requires a reason/,
+        );
+      },
+    ),
+  );
+
+  it(
+    "preserves unresolved argument spellings and positions in compound ordered one-shot approvals",
+    withGuardrail(
+      "commands: [{flat: [{ask_with_reason: [check]}]}, {tool: [{ask_with_reason: [[first]]}]}]",
+      async (guardrail, cwd) => {
+        const context = { cwd, hasUI: true, ui: { confirm: async () => true } };
+        const command = 'flat check; tool first "part$UNRESOLVED" tail';
+        await guardrail.requestCommandPermission(command, "fixture", context);
+        for (const other of [
+          "flat check; tool first part tail",
+          'flat check; tool first "part$DIFFERENT" tail',
+          'flat check; tool first tail "part$UNRESOLVED"',
+        ])
+          assert.throws(() => guardrail.authorizeCommand(other, context), /requires a reason/);
+        assert.equal(
+          await guardrail.authorizeCommand(
+            'flat check; tool "first" "part$UNRESOLVED" tail',
+            context,
+          ),
+          true,
+        );
+      },
+    ),
+  );
+
+  it(
+    "keeps one-shot approvals on the matching argument rule despite identical normalized tokens",
+    withGuardrail(
+      `commands:
+  - tool:
+      - ask_with_reason: [first, second]
+      - ask_with_reason: [[first, second]]`,
+      async (guardrail, cwd) => {
+        const context = { cwd, hasUI: true, ui: { confirm: async () => true } };
+        const flat = 'tool "first$UNRESOLVED" second';
+        const ordered = "tool first second";
+        assert.equal(
+          (await guardrail.requestCommandPermission(flat, "fixture", context)).status,
+          "granted",
+        );
+        assert.throws(() => guardrail.authorizeCommand(ordered, context), /requires a reason/);
+        assert.equal(await guardrail.authorizeCommand(flat, context), true);
+
+        assert.equal(
+          (await guardrail.requestCommandPermission(ordered, "fixture", context)).status,
+          "granted",
+        );
+        assert.throws(() => guardrail.authorizeCommand(flat, context), /requires a reason/);
+        assert.equal(await guardrail.authorizeCommand('tool "first" second', context), true);
+        assert.throws(() => guardrail.authorizeCommand(ordered, context), /requires a reason/);
+      },
+    ),
+  );
+});
+
 describe("Tree-sitter command substitutions", () => {
   const entries = compileCommandRuleEntries([
     { action: "allow", pattern: ".*", args: [] },
@@ -772,7 +1102,7 @@ it(
   ),
 );
 
-it("preserves policy families with intentional unordered allow exceptions", () => {
+it("applies the shipped approvals and ordered allow exceptions", () => {
   const config = parseGuardrailConfig(
     readFileSync(
       new URL("../../../../.agents/config.exact/guardrails.yaml", import.meta.url),
@@ -799,24 +1129,42 @@ it("preserves policy families with intentional unordered allow exceptions", () =
     ["tool extra extra extra publish", "allow"],
     ['tool "x publish"', "allow"],
     ["git -C /repo push", "ask"],
+    ["git stash push", "allow"],
+    ['git -C "/example repo" stash push', "allow"],
+    ["git worktree prune --dry-run", "allow"],
+    ["git -C /repo worktree prune --dry-run", "allow"],
+    ["git -c color.ui=never stash push", "allow"],
+    ["git prune --dry-run", "ask_with_reason"],
+    ["git -C /repo reflog expire --dry-run", "ask_with_reason"],
+    ["git help expire reflog", "allow"],
     ["git --hard reset", "ask_with_reason"],
     ['git "reset --hard"', "allow"],
+    ["gh pr create --help", "ask"],
+    ["gh help create pr", "allow"],
     ["chmod path -R", "allow"],
     ["chmod path -Rf", "ask_with_reason"],
     ["chmod path -fR", "ask_with_reason"],
     ["chmod path -f -R", "ask_with_reason"],
     ["chmod path -f", "allow"],
-    ["systemctl start status", "allow"],
+    ["systemctl status example.service", "allow"],
+    ["systemctl --no-pager status example.service", "allow"],
+    ["systemctl --user --no-pager status example.service", "allow"],
+    ["systemctl --no-pager --system list-units", "allow"],
+    ["systemctl --plain status example.service", "allow"],
     ["systemctl status reboot", "deny"],
-    ["systemctl start list-units", "allow"],
     ["crontab /tmp/newtab -l", "allow"],
-    ['sudo -n sh -c "echo example" true', "allow"],
+    ["sudo -n true", "allow"],
+    ["sudo -n echo example", "ask_with_reason"],
     ["sudo-rs -n true", "allow"],
     ["mkfs.fat /dev/example", "deny"],
     ["mkfs-anything /dev/example", "deny"],
     ["mkfsword /dev/example", "allow"],
     ["/mnt/c/Windows/System32/CMD.EXE /c echo ok", "ask"],
-    ["/MNT/C/WINDOWS/SYSTEM32/REG.EXE delete QUERY", "allow"],
+    ["/MNT/C/WINDOWS/SYSTEM32/REG.EXE QUERY HKCU", "allow"],
+    ["/mnt/c/Windows/System32/sc.exe query Example", "allow"],
+    ["/mnt/c/Windows/System32/schtasks.exe /QUERY", "allow"],
+    ["/mnt/c/Windows/System32/wevtutil.exe el", "allow"],
+    ["/mnt/c/Windows/System32/netsh.exe interface show interface", "allow"],
     ["/mnt/c/Windows/System32/ipconfig.exe", "allow"],
     ["/mnt/c/Windows/System32/ipconfig.exe /all", "allow"],
     ["/mnt/c/Windows/System32/ipconfig.exe /all /release", "ask"],
@@ -828,7 +1176,10 @@ it("preserves policy families with intentional unordered allow exceptions", () =
     ["/mnt/c/Windows/System32/wsl.exe -d Ubuntu", "ask"],
     ["/mnt/c/Windows/System32/wsl.exe --exec ls", "ask"],
     ["/mnt/c/Windows/System32/wsl.exe --LIST --UNREGISTER Example", "ask"],
-    ["pi mcp remove list", "allow"],
+    ["pi list", "allow"],
+    ["pi mcp list", "allow"],
+    ["pi --no-session --list-models", "allow"],
+    ["pi --no-session list", "allow"],
     ["cat /mnt/c/example", "allow"],
   ] as const;
   for (const [command, expected] of cases)

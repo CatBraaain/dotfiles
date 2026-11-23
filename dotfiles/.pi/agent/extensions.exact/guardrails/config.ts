@@ -18,6 +18,8 @@ export type CommandActionMatch = {
   action: CommandAction;
   matched?: string;
   matchSpan?: MatchSpan;
+  ordered?: true;
+  compoundPatterns?: string[];
 };
 
 /** Commands add the reason-gated action: the call is returned to the agent,
@@ -37,15 +39,23 @@ export type ToolSession = {
 
 /** One `{action: pattern(s)}` element of the flat rule lists (SPEC §6). */
 type PathRuleEntry = { action: PathAction; patterns: string[] };
-export type CommandRuleEntry = { action: CommandAction; pattern: string; args: string[] };
+const OrderedArgumentsSchema = Type.Array(Type.String(), { minItems: 1 });
+const CommandArgumentsSchema = Type.Array(Type.Union([Type.String(), OrderedArgumentsSchema]), {
+  contains: OrderedArgumentsSchema,
+  minContains: 0,
+  maxContains: 1,
+});
+
+type CommandArguments = Static<typeof CommandArgumentsSchema>;
+export type CommandRuleEntry = { action: CommandAction; pattern: string; args: CommandArguments };
 
 /** One `{action: argPatterns}` rule item of a command family (SPEC §6). */
 const CommandRuleItemSchema = Type.Object(
   {
-    allow: Type.Optional(Type.Array(Type.String())),
-    ask: Type.Optional(Type.Array(Type.String())),
-    ask_with_reason: Type.Optional(Type.Array(Type.String())),
-    deny: Type.Optional(Type.Array(Type.String())),
+    allow: Type.Optional(CommandArgumentsSchema),
+    ask: Type.Optional(CommandArgumentsSchema),
+    ask_with_reason: Type.Optional(CommandArgumentsSchema),
+    deny: Type.Optional(CommandArgumentsSchema),
   },
   { additionalProperties: false, minProperties: 1, maxProperties: 1 },
 );
@@ -57,7 +67,12 @@ const CommandFamilySchema = Type.Record(
   { minProperties: 1, maxProperties: 1 },
 );
 
-export type CompiledCommandPattern = { source: string; command: RegExp; args: RegExp[] };
+export type CompiledCommandPattern = {
+  source: string;
+  command: RegExp;
+  unorderedArgs: RegExp[];
+  orderedSequence: RegExp[];
+};
 export type CompiledCommandRuleEntry = {
   action: CommandAction;
   patterns: CompiledCommandPattern[];
@@ -104,7 +119,7 @@ function toCommandEntries(family: Static<typeof CommandFamilySchema>): CommandRu
     Static<typeof CommandRuleItemSchema>[],
   ];
   return items.map((item) => {
-    const [action, args] = Object.entries(item)[0] as [CommandAction, string[]];
+    const [action, args] = Object.entries(item)[0] as [CommandAction, CommandArguments];
     return { action, pattern, args };
   });
 }
@@ -281,6 +296,24 @@ export function splitCommandSegments(command: string): string[][] {
   return parseCommandSegments(command).map((segment) => segment.tokens);
 }
 
+export function commandOnceApprovalKey(command: string, orderedPattern?: string): string {
+  if (orderedPattern === undefined) return JSON.stringify(splitCommandSegments(command));
+  const segments = parseCommandSegments(command).map((segment) => ({
+    command: segment.tokens[0],
+    args:
+      segment.orderedArguments?.map((argument) =>
+        "token" in argument ? argument.token : argument,
+      ) ?? segment.tokens.slice(1),
+  }));
+  return JSON.stringify({ orderedPattern, segments });
+}
+
+export function commandPatternApprovalKey(match: CommandActionMatch): string | undefined {
+  return match.compoundPatterns === undefined
+    ? match.matched
+    : JSON.stringify({ segments: match.compoundPatterns });
+}
+
 export function compileCommandRuleEntries(entries: CommandRuleEntry[] | undefined): {
   entries: CompiledCommandRuleEntry[];
   invalidPatterns: string[];
@@ -288,17 +321,20 @@ export function compileCommandRuleEntries(entries: CommandRuleEntry[] | undefine
   const compiled: CompiledCommandRuleEntry[] = [];
   const invalidPatterns: string[] = [];
   for (const entry of entries ?? []) {
-    const source = JSON.stringify({ command: entry.pattern, args: entry.args });
+    const orderedSequence = entry.args.find(Array.isArray);
+    const unorderedArgs = entry.args.filter((arg) => typeof arg === "string");
+    const args =
+      orderedSequence === undefined ? unorderedArgs : [orderedSequence, ...unorderedArgs];
+    const source = JSON.stringify({ command: entry.pattern, args });
     try {
-      new RegExp(entry.pattern);
-      for (const argument of entry.args) new RegExp(argument);
       compiled.push({
         action: entry.action,
         patterns: [
           {
             source,
-            command: new RegExp("^(?:" + entry.pattern + ")(?![\\s\\S])"),
-            args: entry.args.map((pattern) => new RegExp("^(?:" + pattern + ")(?![\\s\\S])")),
+            command: compileTokenPattern(entry.pattern),
+            unorderedArgs: unorderedArgs.map(compileTokenPattern),
+            orderedSequence: (orderedSequence ?? []).map(compileTokenPattern),
           },
         ],
       });
@@ -309,19 +345,50 @@ export function compileCommandRuleEntries(entries: CommandRuleEntry[] | undefine
   return { entries: compiled, invalidPatterns };
 }
 
+function compileTokenPattern(source: string): RegExp {
+  new RegExp(source);
+  return new RegExp("^(?:" + source + ")(?![\\s\\S])");
+}
+
 function findCommandPattern(
   patterns: CompiledCommandPattern[],
   candidate: CommandSegment,
-): { pattern: string; ranges: TokenRange[] } | undefined {
+): { pattern: CompiledCommandPattern; ranges: TokenRange[] } | undefined {
+  const [command, ...flatArgs] = candidate.tokens;
+  const flatArguments = flatArgs.map((token, index) => ({
+    token,
+    range: candidate.ranges[index + 1]!,
+  }));
   for (const pattern of patterns) {
-    if (!pattern.command.test(candidate.tokens[0]!)) continue;
-    const args = candidate.tokens.slice(1);
-    if (!pattern.args.every((regex) => args.some((argument) => regex.test(argument)))) continue;
-    const ranges = candidate.ranges.filter(
-      (_, index) =>
-        index === 0 || pattern.args.some((regex) => regex.test(candidate.tokens[index]!)),
-    );
-    return { pattern: pattern.source, ranges };
+    if (!pattern.command.test(command!)) continue;
+    const sequence = pattern.orderedSequence;
+    const args =
+      sequence.length > 0 ? (candidate.orderedArguments ?? flatArguments) : flatArguments;
+    const matchedRanges = [candidate.ranges[0]!];
+    const matchedUnordered = new Set<RegExp>();
+    let sequenceIndex = 0;
+
+    for (const argument of args) {
+      if (!("token" in argument)) continue;
+      if (sequence[sequenceIndex]?.test(argument.token)) {
+        sequenceIndex++;
+        matchedRanges.push(argument.range);
+        continue;
+      }
+      let matchesUnordered = false;
+      for (const regex of pattern.unorderedArgs) {
+        if (!regex.test(argument.token)) continue;
+        matchedUnordered.add(regex);
+        matchesUnordered = true;
+      }
+      if (matchesUnordered) matchedRanges.push(argument.range);
+    }
+
+    if (
+      sequenceIndex === sequence.length &&
+      pattern.unorderedArgs.every((regex) => matchedUnordered.has(regex))
+    )
+      return { pattern, ranges: matchedRanges };
   }
   return undefined;
 }
@@ -338,18 +405,27 @@ export function resolveCommandActionMatch(
       if (match !== undefined)
         resolved = {
           action: entry.action,
-          matched: match.pattern,
+          matched: match.pattern.source,
           matchSpan: { ranges: match.ranges },
+          ...(match.pattern.orderedSequence.length > 0 ? { ordered: true } : {}),
         };
     }
     return resolved;
   });
-  return (
-    results.find((result) => result.action === "deny") ??
+  const representative = results.find((result) => result.action === "deny") ??
     results.find((result) => result.action === "ask_with_reason") ??
     results.find((result) => result.action === "ask") ??
-    results.find((result) => result.action === "allow") ?? { action: "deny" }
-  );
+    results.find((result) => result.action === "allow") ?? { action: "deny" };
+  if (results.length < 2 || !["ask", "ask_with_reason"].includes(representative.action))
+    return representative;
+
+  const highestMatches = results.filter((result) => result.action === representative.action);
+  if (!highestMatches.some((result) => result.ordered)) return representative;
+  return {
+    ...representative,
+    ordered: true,
+    compoundPatterns: highestMatches.map(({ matched }) => matched!),
+  };
 }
 
 export function resolveCommandAction(

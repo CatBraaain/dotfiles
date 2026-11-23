@@ -102,20 +102,20 @@ commands:
   - git:
       - allow: []
       - ask: [push]
-      - allow: [stash, push]
+      - allow: [[stash, push]]
       - ask_with_reason: [reset, "--hard"]
       - ask_with_reason: [clean, "-[^-]*f[^-]*", "-[^-]*d[^-]*", "-[^-]*x[^-]*"]
       - ask_with_reason: ["replace|update-ref|gc|prune"]
-      - ask_with_reason: [reflog, expire]
-      - allow: [worktree, prune]
+      - ask_with_reason: [[reflog, expire]]
+      - allow: [[worktree, prune]]
 
   - gh:
       - allow: []
-      - ask: [pr, create]
+      - ask: [[pr, create]]
 
   - sudo:
       - ask_with_reason: []
-      - allow: ["-n", "true"]
+      - allow: [["-n", "true"]]
   - doas:
       - deny: []
 
@@ -173,4 +173,3 @@ commands:
       - ask: []
       - allow: ["--help|--version|-h|-v"]
       - allow: ["--list-models|list"]
-      - allow: [mcp, list]

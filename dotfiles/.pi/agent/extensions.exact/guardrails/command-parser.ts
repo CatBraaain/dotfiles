@@ -3,8 +3,13 @@ import { parse as parseShell } from "shell-quote";
 import { Language, Parser, type Node } from "web-tree-sitter";
 
 export type TokenRange = { index: number; length: number };
-export type CommandSegment = { tokens: string[]; ranges: TokenRange[] };
-type MappedSource = { text: string; offsets: number[] };
+type CommandArgument = { token: string; range: TokenRange } | { source: string };
+export type CommandSegment = {
+  tokens: string[];
+  ranges: TokenRange[];
+  orderedArguments?: CommandArgument[];
+};
+type MappedSource = { text: string; originalText: string; offsets: number[] };
 type SourceRange = { startIndex: number; endIndex: number };
 
 const require = createRequire(import.meta.url);
@@ -31,6 +36,7 @@ async function loadParser(): Promise<Parser> {
 export function parseCommandSegments(command: string): CommandSegment[] {
   return parseSource({
     text: command,
+    originalText: command,
     offsets: Array.from({ length: command.length }, (_, i) => i),
   });
 }
@@ -106,16 +112,38 @@ function visit(
         : [];
     const tokens: string[] = [];
     const ranges: TokenRange[] = [];
+    const orderedArguments: CommandArgument[] = [];
+    let hasUnresolvedArgument = false;
     for (const word of [...words, ...argumentsAfterHeredoc]) {
       if (word === null || word.type === "comment") continue;
       const normalized = normalizeWord(word);
+      const range = originalRange(source, word.startIndex, word.endIndex);
+      if (tokens.length === 0) {
+        if (normalized === undefined || normalized === "env" || ENV_ASSIGNMENT.test(normalized))
+          continue;
+      } else if (
+        normalized === undefined ||
+        EXPANSIONS.has(word.type) ||
+        word.descendantsOfType([...EXPANSIONS]).length > 0
+      ) {
+        const start = source.offsets[word.startIndex - 1]! + 1;
+        orderedArguments.push({
+          source: source.originalText.slice(start, range.index + range.length),
+        });
+        hasUnresolvedArgument = true;
+      } else {
+        orderedArguments.push({ token: normalized, range });
+      }
       if (normalized === undefined) continue;
-      if (tokens.length === 0 && (normalized === "env" || ENV_ASSIGNMENT.test(normalized)))
-        continue;
       tokens.push(normalized);
-      ranges.push(originalRange(source, word.startIndex, word.endIndex));
+      ranges.push(range);
     }
-    if (tokens.length > 0) segments.push({ tokens, ranges });
+    if (tokens.length > 0)
+      segments.push({
+        tokens,
+        ranges,
+        ...(hasUnresolvedArgument ? { orderedArguments } : {}),
+      });
   }
   const childDoubleQuoted = ["command_substitution", "process_substitution"].includes(node.type)
     ? false
@@ -262,5 +290,5 @@ function decodeBacktick(source: MappedSource, start: number, end: number): Mappe
     text += source.text[index];
     offsets.push(source.offsets[index]!);
   }
-  return { text, offsets };
+  return { text, originalText: source.originalText, offsets };
 }

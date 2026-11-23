@@ -9,8 +9,11 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
+  commandOnceApprovalKey,
+  commandPatternApprovalKey,
   compileCommandRuleEntries,
   defaultGuardrailConfigPath,
+  type CommandActionMatch,
   type CompiledCommandRuleEntry,
   type GuardrailConfig,
   type MatchSpan,
@@ -19,7 +22,6 @@ import {
   pathsMatchCandidate,
   resolveCommandActionMatch,
   resolvePathActionMatch,
-  splitCommandSegments,
 } from "./config.ts";
 import {
   type DynamicPaths,
@@ -111,6 +113,13 @@ function matchedPatternNote(matched: string | undefined): string {
   return matched === undefined ? "no matching pattern (default ask)" : `matched: ${matched}`;
 }
 
+function commandMatchNote({ matched, compoundPatterns }: CommandActionMatch): string {
+  const primary = matchedPatternNote(matched);
+  if (compoundPatterns === undefined) return primary;
+  if (compoundPatterns.length === 1) return `${primary}\nscope: compound commands only`;
+  return `${primary}\nalso required: ${compoundPatterns.slice(1).join(", ")}`;
+}
+
 // Invert + yellow: the inverted background stays visible on any terminal palette,
 // where basic yellow alone can sit too close to the dialog accent color. Selective
 // SGRs (no full reset) so the dialog's accent/bold styling survives.
@@ -135,7 +144,7 @@ export class Guardrail {
   private readonly dynamicPaths = new Map<string, Set<"read" | "write">>();
   private readonly directoryGrants = new Map<symbol, { path: string; isCurrent: () => boolean }>();
   /** One-shot ask_permission approvals, as normalized command segments (§3). */
-  private readonly approvedCommands: string[][][] = [];
+  private readonly approvedCommands: string[] = [];
   /**
    * Session-approved command patterns (§3): config pattern strings approved
    * via an "Allow in this session" selection. Commands matching one of these
@@ -488,17 +497,8 @@ export class Guardrail {
    * Quoting differences normalize away while token boundaries remain distinct.
    * Consumes the approval on an exact token-sequence match.
    */
-  private consumeApprovedCommand(command: string): boolean {
-    const segments = splitCommandSegments(command);
-    const index = this.approvedCommands.findIndex(
-      (approved) =>
-        approved.length === segments.length &&
-        approved.every(
-          (segment, i) =>
-            segment.length === segments[i]?.length &&
-            segment.every((token, j) => token === segments[i]?.[j]),
-        ),
-    );
+  private consumeApprovedCommand(command: string, orderedPattern?: string): boolean {
+    const index = this.approvedCommands.indexOf(commandOnceApprovalKey(command, orderedPattern));
     if (index === -1) return false;
     this.approvedCommands.splice(index, 1);
     return true;
@@ -514,22 +514,21 @@ export class Guardrail {
     reason: string,
     context: ToolContext,
   ): Promise<CommandPermissionRequest> {
-    const { action, matched, matchSpan } = resolveCommandActionMatch(this.commandEntries, command);
+    const match = resolveCommandActionMatch(this.commandEntries, command);
+    const { action } = match;
+    const approvalKey = commandPatternApprovalKey(match);
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     if (action === "allow") return { status: "already granted", command };
     if (action === "ask")
       throw new Error(`Command is confirmed when run via bash; no pre-approval needed: ${command}`);
     const generation = this.turnApprovalGeneration;
-    const existingApproval = this.commandPatternApproval(command, matched, generation);
+    const existingApproval = this.commandPatternApproval(command, approvalKey, generation);
     if (existingApproval) return existingApproval;
     if (!context.hasUI || !context.ui) throw new Error(`Access requires confirmation: ${command}`);
     const ui = context.ui;
     return this.withUiLock(async () => {
-      const approval = this.commandPatternApproval(command, matched, generation);
-      return (
-        approval ??
-        this.confirmCommandPermission(command, reason, ui, generation, matched, matchSpan)
-      );
+      const approval = this.commandPatternApproval(command, approvalKey, generation);
+      return approval ?? this.confirmCommandPermission(command, reason, ui, generation, match);
     });
   }
 
@@ -538,17 +537,19 @@ export class Guardrail {
     reason: string,
     ui: ToolUI,
     generation: number,
-    matched?: string,
-    matchSpan?: MatchSpan,
+    match: CommandActionMatch,
   ): Promise<CommandPermissionRequest> {
+    const { matchSpan, ordered } = match;
+    const approvalKey = commandPatternApprovalKey(match);
+    const orderedPattern = ordered ? approvalKey : undefined;
     const question = "Allow command execution?";
     // Same highlight rule as the `ask` dialog (§2.3): show where the pattern
-    // matched, unless the UI lacks a theme or NO_COLOR is set.
+    // approvalKey, unless the UI lacks a theme or NO_COLOR is set.
     const display =
       matchSpan !== undefined && ui.theme && !process.env.NO_COLOR
         ? highlightCommandMatch(command, matchSpan, ui.theme.getFgAnsi("accent"))
         : command;
-    const details = `${display}\nreason: ${reason}\n${matchedPatternNote(matched)}`;
+    const details = `${display}\nreason: ${reason}\n${commandMatchNote(match)}`;
     if (ui.select) {
       const selectedOption = await ui.select(`${question}\n${details}`, [
         ALLOW_ONCE_OPTION,
@@ -556,28 +557,28 @@ export class Guardrail {
         ALLOW_SESSION_OPTION,
         DENY_OPTION,
       ]);
-      if (selectedOption === ALLOW_TURN_OPTION && matched !== undefined) {
+      if (selectedOption === ALLOW_TURN_OPTION && approvalKey !== undefined) {
         if (generation !== this.turnApprovalGeneration)
           return { status: "denied", command, reason: EXPIRED_TURN_APPROVAL };
-        this.turnApprovedPatterns.add(matched);
-        return { status: "granted", command, grant: "turn", approvedPattern: matched };
+        this.turnApprovedPatterns.add(approvalKey);
+        return { status: "granted", command, grant: "turn", approvedPattern: approvalKey };
       }
-      if (selectedOption === ALLOW_SESSION_OPTION && matched !== undefined) {
-        this.sessionApprovedPatterns.push(matched);
-        return { status: "granted", command, grant: "session", approvedPattern: matched };
+      if (selectedOption === ALLOW_SESSION_OPTION && approvalKey !== undefined) {
+        this.sessionApprovedPatterns.push(approvalKey);
+        return { status: "granted", command, grant: "session", approvedPattern: approvalKey };
       }
       if (selectedOption === ALLOW_ONCE_OPTION || selectedOption === ALLOW_SESSION_OPTION)
-        return this.grantCommandApproval(command);
+        return this.grantCommandApproval(command, orderedPattern);
     } else if (await ui.confirm(question, details)) {
       // No select UI: no way to choose the scope, so fall back to "once".
-      return this.grantCommandApproval(command);
+      return this.grantCommandApproval(command, orderedPattern);
     }
     const denialReason = (await ui.input?.("Denied. Optional reason for the agent:"))?.trim();
     return { status: "denied", command, ...(denialReason ? { reason: denialReason } : {}) };
   }
 
-  private grantCommandApproval(command: string): CommandPermissionRequest {
-    this.approvedCommands.push(splitCommandSegments(command));
+  private grantCommandApproval(command: string, orderedPattern?: string): CommandPermissionRequest {
+    this.approvedCommands.push(commandOnceApprovalKey(command, orderedPattern));
     return { status: "granted", command, grant: "once" };
   }
 
@@ -600,37 +601,40 @@ export class Guardrail {
   }
 
   authorizeCommand(command: string, context: ToolContext): Promise<boolean> {
-    const { action, matched, matchSpan } = resolveCommandActionMatch(this.commandEntries, command);
+    const match = resolveCommandActionMatch(this.commandEntries, command);
+    const { action, matchSpan, ordered } = match;
+    const approvalKey = commandPatternApprovalKey(match);
     if (action === "allow") return Promise.resolve(false);
     if (action === "deny") throw new Error(`Command denied: ${command}`);
     const generation = this.turnApprovalGeneration;
-    if (this.commandPatternApproval(command, matched, generation)) return Promise.resolve(true);
+    if (this.commandPatternApproval(command, approvalKey, generation)) return Promise.resolve(true);
     if (action === "ask_with_reason") {
-      if (this.consumeApprovedCommand(command)) return Promise.resolve(true);
+      if (this.consumeApprovedCommand(command, ordered ? approvalKey : undefined))
+        return Promise.resolve(true);
       throw new Error(`Command requires a reason: ${command}\n${COMMAND_REASON_HINT}`);
     }
     if (!context.hasUI || !context.ui) throw new Error(`Command requires confirmation: ${command}`);
     const ui = context.ui;
-    const note = matchedPatternNote(matched);
+    const note = commandMatchNote(match);
     const display =
       matchSpan !== undefined && ui.theme && !process.env.NO_COLOR
         ? highlightCommandMatch(command, matchSpan, ui.theme.getFgAnsi("accent"))
         : command;
     return this.withUiLock(async () => {
-      if (this.commandPatternApproval(command, matched, generation)) return true;
+      if (this.commandPatternApproval(command, approvalKey, generation)) return true;
       if (ui.select) {
         const options =
-          matched === undefined
+          approvalKey === undefined
             ? [ALLOW_ONCE_OPTION, DENY_OPTION]
             : [ALLOW_ONCE_OPTION, ALLOW_TURN_OPTION, ALLOW_SESSION_OPTION, DENY_OPTION];
         const selectedOption = await ui.select(`Allow command?\n${display}\n${note}`, options);
-        if (selectedOption === ALLOW_TURN_OPTION && matched !== undefined) {
+        if (selectedOption === ALLOW_TURN_OPTION && approvalKey !== undefined) {
           if (generation !== this.turnApprovalGeneration)
             throw new Error(`Command denied: ${command}\n${EXPIRED_TURN_APPROVAL}`);
-          this.turnApprovedPatterns.add(matched);
+          this.turnApprovedPatterns.add(approvalKey);
         }
-        if (selectedOption === ALLOW_SESSION_OPTION && matched !== undefined)
-          this.sessionApprovedPatterns.push(matched);
+        if (selectedOption === ALLOW_SESSION_OPTION && approvalKey !== undefined)
+          this.sessionApprovedPatterns.push(approvalKey);
         if (selectedOption === undefined || selectedOption === DENY_OPTION)
           throw await this.deniedError(`Command denied by user: ${command}`, ui);
         return true;
