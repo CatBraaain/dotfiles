@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
-import { describe, it } from "bun:test";
-import type { SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
+import { setImmediate } from "node:timers/promises";
+import { stripVTControlCharacters } from "node:util";
+import { afterEach, describe, it, mock, spyOn } from "bun:test";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  SessionEntry,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
 import footerExtension, {
   buildFooterLines,
   collectUsageSummary,
@@ -123,36 +130,228 @@ describe("usage", () => {
   });
 });
 
-describe("extension lifecycle", () => {
-  it("TUI の session_start でカスタムフッターを登録する", () => {
-    const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
-    let setFooterCalls = 0;
-    footerExtension({
-      on(event: string, handler: (event: unknown, ctx: unknown) => void) {
-        handlers.set(event, handler);
+type FooterFactory = NonNullable<Parameters<ExtensionContext["ui"]["setFooter"]>[0]>;
+type ExecResult = Awaited<ReturnType<ExtensionAPI["exec"]>>;
+
+const SESSION_ID = "12345678-1234-1234-1234-abcdefabcdef";
+const EMPTY_ASSIGNMENTS = { worktrees: [], ticket: null };
+
+function createFooterHarness(mode = "tui", sessionFile: string | null = "/sessions/saved.jsonl") {
+  const timers = new Map<ReturnType<typeof setInterval>, () => void>();
+  const schedulePoll = spyOn(globalThis, "setInterval").mockImplementation(((
+    callback: () => void,
+  ) => {
+    const timer = {} as ReturnType<typeof setInterval>;
+    timers.set(timer, callback);
+    return timer;
+  }) as typeof setInterval);
+  spyOn(globalThis, "clearInterval").mockImplementation((timer) => {
+    timers.delete(timer as ReturnType<typeof setInterval>);
+  });
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => void | Promise<void>>();
+  const queries: Array<{
+    command: string;
+    args: string[];
+    signal: AbortSignal | undefined;
+    complete: (response: unknown) => void;
+    resolve: (result: ExecResult) => void;
+    reject: (reason: Error) => void;
+  }> = [];
+  let footer: ReturnType<FooterFactory> | undefined;
+  let renderRequests = 0;
+  let sessionId = SESSION_ID;
+  const ctx = {
+    mode,
+    cwd: "/workspace/project",
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getSessionFile: () => sessionFile,
+      getSessionName: () => undefined,
+      getCwd: () => "/workspace/project",
+      getEntries: () => [],
+    },
+    getContextUsage: () => undefined,
+    ui: {
+      setFooter(factory: FooterFactory) {
+        footer?.dispose?.();
+        footer = factory({ requestRender: () => renderRequests++ } as never, plainTheme as Theme, {
+          getGitBranch: () => null,
+          getExtensionStatuses: () => new Map(),
+          getAvailableProviderCount: () => 1,
+          onBranchChange: () => () => {},
+        });
       },
-    } as never);
+    },
+  };
 
-    handlers.get("session_start")!({}, { mode: "tui", ui: { setFooter: () => setFooterCalls++ } });
+  footerExtension({
+    on(event, handler) {
+      handlers.set(event, handler as never);
+    },
+    exec(command, args, options) {
+      const { promise, resolve, reject } = Promise.withResolvers<ExecResult>();
+      queries.push({ command, args, signal: options?.signal, complete, resolve, reject });
+      return promise;
 
-    assert.equal(setFooterCalls, 1);
+      function complete(response: unknown): void {
+        resolve({
+          code: 0,
+          killed: false,
+          stdout: JSON.stringify(response),
+          stderr: "",
+        });
+      }
+    },
+  } as ExtensionAPI);
+
+  return {
+    queries,
+    schedulePoll,
+    poll: () => timers.forEach((callback) => callback()),
+    timerCount: () => timers.size,
+    emit: (event: string, payload: unknown = {}) => handlers.get(event)!(payload, ctx),
+    render: () => footer?.render(120),
+    renderRequests: () => renderRequests,
+    setSessionId: (id: string) => {
+      sessionId = id;
+    },
+  };
+}
+
+function assignmentResponse(name: string) {
+  return { worktrees: [`/worktrees/${name}`], ticket: null };
+}
+
+describe("extension lifecycle", () => {
+  afterEach(() => mock.restore());
+  it("loads the full session ID on TUI startup and redraws from the successful response", async () => {
+    const harness = createFooterHarness();
+    harness.emit("session_start", { reason: "resume" });
+
+    assert.equal(harness.render()?.length, 2);
+    const query = harness.queries[0]!;
+    assert.equal(query.command, "pi-mux");
+    assert.deepEqual(query.args, ["metadata", SESSION_ID]);
+    assert.equal(harness.schedulePoll.mock.calls[0]?.[1], 5000);
+    query.complete({ ...assignmentResponse("saved"), unread: false, lastViewedAt: null });
+    await setImmediate();
+    assert.equal(harness.render()?.[2], "worktree: saved");
+    assert.equal(harness.renderRequests(), 1);
+    assert.equal(harness.queries.length, 1);
   });
 
-  it("TUI 以外ではカスタムフッターを登録しない", () => {
-    const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
-    let setFooterCalls = 0;
-    footerExtension({
-      on(event: string, handler: (event: unknown, ctx: unknown) => void) {
-        handlers.set(event, handler);
-      },
-    } as never);
+  it("does not install the footer or make a query outside the TUI", () => {
+    const harness = createFooterHarness("print");
+    harness.emit("session_start");
+    assert.equal(harness.render(), undefined);
+    assert.equal(harness.queries.length, 0);
+    assert.equal(harness.timerCount(), 0);
+  });
 
-    handlers.get("session_start")!(
-      {},
-      { mode: "print", ui: { setFooter: () => setFooterCalls++ } },
-    );
+  it("skips the CLI for an in-memory session", () => {
+    const harness = createFooterHarness("tui", null);
+    harness.emit("session_start");
+    assert.equal(harness.render()?.length, 2);
+    assert.equal(harness.queries.length, 0);
+    assert.equal(harness.timerCount(), 0);
+  });
 
-    assert.equal(setFooterCalls, 0);
+  it("replaces displayed values on a timer, including when metadata becomes empty", async () => {
+    const harness = createFooterHarness();
+    harness.emit("session_start");
+    harness.queries[0]!.complete(assignmentResponse("saved"));
+    await setImmediate();
+    assert.equal(harness.render()?.[2], "worktree: saved");
+    assert.equal(harness.queries.length, 1);
+
+    const latest = { worktrees: [], ticket: { project: "project", id: "ticket" } };
+    harness.poll();
+    harness.queries[1]!.complete(latest);
+    await setImmediate();
+    assert.equal(harness.render()?.[2], "ticket: project/ticket");
+
+    harness.poll();
+    harness.queries[2]!.complete(latest);
+    await setImmediate();
+    assert.equal(harness.renderRequests(), 2);
+
+    harness.poll();
+    harness.queries[3]!.complete(EMPTY_ASSIGNMENTS);
+    await setImmediate();
+    assert.equal(harness.render()?.length, 2);
+    assert.equal(harness.renderRequests(), 3);
+  });
+
+  it("skips timer ticks while a query is pending", async () => {
+    const harness = createFooterHarness();
+    harness.emit("session_start");
+    harness.poll();
+    harness.poll();
+    assert.equal(harness.queries.length, 1);
+
+    harness.queries[0]!.complete(assignmentResponse("first"));
+    await setImmediate();
+    assert.equal(harness.render()?.[2], "worktree: first");
+    assert.equal(harness.queries.length, 1);
+
+    harness.poll();
+    harness.queries[1]!.complete(assignmentResponse("latest"));
+    await setImmediate();
+    assert.equal(harness.render()?.[2], "worktree: latest");
+  });
+
+  it("cancels a pending query on switch and never shows the old session's assignments in the next footer", async () => {
+    const harness = createFooterHarness();
+    harness.emit("session_start");
+    harness.queries[0]!.complete(assignmentResponse("old"));
+    await setImmediate();
+    assert.equal(harness.render()?.[2], "worktree: old");
+    harness.poll();
+    const pending = harness.queries[1]!;
+    harness.setSessionId("new-session");
+    harness.emit("session_start", { reason: "fork" });
+    assert.equal(pending.signal?.aborted, true);
+    assert.equal(harness.timerCount(), 1);
+    assert.deepEqual(harness.queries[2]!.args, ["metadata", "new-session"]);
+    assert.equal(harness.render()?.length, 2);
+
+    pending.complete(assignmentResponse("too-late"));
+    await setImmediate();
+    assert.equal(harness.renderRequests(), 1);
+    assert.equal(harness.render()?.length, 2);
+
+    harness.emit("session_shutdown");
+    assert.equal(harness.timerCount(), 0);
+    assert.equal(harness.queries[2]!.signal?.aborted, true);
+    harness.poll();
+    assert.equal(harness.queries.length, 3);
+  });
+
+  it("silently retains a valid response when later CLI invocations or payloads fail", async () => {
+    const harness = createFooterHarness();
+    harness.emit("session_start");
+    const missingCli = harness.queries[0]!;
+    missingCli.reject(new Error("command not found"));
+    await setImmediate();
+    assert.equal(harness.render()?.length, 2);
+
+    harness.poll();
+    harness.queries[1]!.complete(assignmentResponse("retained"));
+    await setImmediate();
+
+    const failures: Array<(query: (typeof harness.queries)[number]) => void> = [
+      (query) => query.resolve({ code: 1, killed: false, stdout: "", stderr: "error" }),
+      (query) => query.resolve({ code: 0, killed: false, stdout: "{", stderr: "" }),
+      (query) => query.complete({ worktrees: [], ticket: { project: "project", id: 12 } }),
+      (query) => query.complete({ worktrees: ["relative/path"], ticket: null }),
+    ];
+    for (const fail of failures) {
+      harness.poll();
+      fail(harness.queries.at(-1)!);
+      await setImmediate();
+      assert.equal(harness.render()?.[2], "worktree: retained");
+    }
+    assert.equal(harness.renderRequests(), 1);
   });
 });
 
@@ -182,6 +381,48 @@ describe("footer", () => {
     );
 
     assert.equal(lines[2], "alpha zeta");
+  });
+
+  it("appends one dim assignment line after statuses and preserves worktree order", () => {
+    const lines = buildFooterLines(
+      120,
+      renderData({
+        extensionStatuses: new Map([["alpha", "alpha status"]]),
+        assignments: {
+          worktrees: ["/worktrees/zeta", "/worktrees/alpha"],
+          ticket: { project: "project", id: "ticket" },
+        },
+      }),
+      taggingTheme,
+    );
+    assert.equal(lines[2], "\x1b[2malpha status\x1b[0m");
+    assert.equal(lines[3], "\x1b[2mworktree: zeta, alpha  ticket: project/ticket\x1b[0m");
+    assert.equal(lines.length, 4);
+  });
+
+  it("escapes assignment characters that could affect the terminal or break a line", () => {
+    const lines = buildFooterLines(
+      120,
+      renderData({
+        assignments: {
+          worktrees: ["/worktrees/a\u001b[2J\nb"],
+          ticket: { project: "p\u202e", id: "t\u2028" },
+        },
+      }),
+      plainTheme,
+    );
+    assert.equal(lines[2], "worktree: a\\u001b[2J\\u000ab  ticket: p\\u202e/t\\u2028");
+  });
+
+  it("truncates the assignment line to the terminal's visible width", () => {
+    const width = 18;
+    const lines = buildFooterLines(
+      width,
+      renderData({ assignments: assignmentResponse("日本語の担当") }),
+      plainTheme,
+    );
+    assert.ok(visibleWidth(lines[2]!) <= width);
+    assert.match(stripVTControlCharacters(lines[2]!), /\.\.\.$/);
   });
 
   it("context usage が不明な場合は ? と上限を表示する", () => {

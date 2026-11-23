@@ -6,11 +6,25 @@ import type {
   SessionEntry,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import { relative, resolve, sep, isAbsolute } from "node:path";
+import { basename, relative, resolve, sep, isAbsolute } from "node:path";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Usage } from "@earendil-works/pi-ai";
+import { Type, type Static } from "typebox";
+import { Value } from "typebox/value";
 
 const MIN_LINE_PADDING = 2;
+const ASSIGNMENT_POLL_INTERVAL_MS = 5000;
+const ASSIGNMENT_QUERY_TIMEOUT_MS = 5000;
+const SESSION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
+const AssignmentSchema = Type.Object({
+  worktrees: Type.Array(Type.String({ minLength: 1 })),
+  ticket: Type.Union([
+    Type.Object({ project: Type.String({ minLength: 1 }), id: Type.String({ minLength: 1 }) }),
+    Type.Null(),
+  ]),
+});
+
+type Assignments = Static<typeof AssignmentSchema>;
 
 export interface UsageTotals {
   input: number;
@@ -44,6 +58,7 @@ export interface FooterRenderData {
   thinkingLevel: string | undefined;
   availableProviderCount: number;
   extensionStatuses: ReadonlyMap<string, string>;
+  assignments?: Assignments;
 }
 
 export type FooterTheme = Pick<Theme, "fg">;
@@ -216,7 +231,52 @@ export function buildFooterLines(
   if (data.extensionStatuses.size > 0) {
     lines.push(theme.fg("dim", truncateToWidth(statuses, width, "...")));
   }
+  if (data.assignments) {
+    const assignments = formatAssignments(data.assignments);
+    if (assignments) lines.push(theme.fg("dim", truncateToWidth(assignments, width, "...")));
+  }
   return lines;
+}
+
+function escapeAssignmentText(text: string): string {
+  return text.replace(/[\p{Cc}\p{Bidi_Control}\p{Zl}\p{Zp}]/gu, (char) => {
+    return `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`;
+  });
+}
+
+function formatAssignments({ worktrees, ticket }: Assignments): string {
+  const groups: string[] = [];
+  if (worktrees.length > 0) {
+    const names = worktrees.map((path) => escapeAssignmentText(basename(path) || path));
+    groups.push(`worktree: ${names.join(", ")}`);
+  }
+  if (ticket) groups.push(`ticket: ${escapeAssignmentText(`${ticket.project}/${ticket.id}`)}`);
+  return groups.join("  ");
+}
+
+async function loadAssignments(
+  pi: ExtensionAPI,
+  sessionId: string,
+  cwd: string,
+  signal: AbortSignal,
+): Promise<Assignments | undefined> {
+  try {
+    const result = await pi.exec("pi-mux", ["metadata", sessionId], {
+      cwd,
+      signal,
+      timeout: ASSIGNMENT_QUERY_TIMEOUT_MS,
+    });
+    if (result.code !== 0 || result.killed || ("truncated" in result && result.truncated === true))
+      return undefined;
+
+    const response: unknown = JSON.parse(result.stdout);
+    if (!Value.Check(AssignmentSchema, response)) return undefined;
+    if (!response.worktrees.every((path) => isAbsolute(path) && !path.includes("\0")))
+      return undefined;
+    return response;
+  } catch {
+    return undefined;
+  }
 }
 
 function getFooterRenderData(
@@ -247,18 +307,69 @@ function getFooterRenderData(
 }
 
 export default function footerExtension(pi: ExtensionAPI): void {
-  pi.on("session_start", (_event, ctx) => {
-    if (ctx.mode !== "tui") return;
+  let stopPolling: (() => void) | undefined;
 
-    ctx.ui.setFooter((tui, theme, footerData) => {
-      const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
-      return {
-        dispose: unsubscribe,
-        invalidate() {},
-        render(width) {
-          return buildFooterLines(width, getFooterRenderData(ctx, footerData), theme);
-        },
-      };
-    });
+  pi.on("session_start", (_event, ctx) => {
+    stopPolling?.();
+    stopPolling = ctx.mode === "tui" ? installFooter(pi, ctx) : undefined;
   });
+
+  pi.on("session_shutdown", () => {
+    stopPolling?.();
+    stopPolling = undefined;
+  });
+}
+
+function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): () => void {
+  const sessionId = ctx.sessionManager.getSessionId();
+  const controller = new AbortController();
+  let assignments: Assignments | undefined;
+  let requestRender: (() => void) | undefined;
+  let queryInFlight = false;
+  let pollTimer: ReturnType<typeof setInterval> | undefined;
+
+  ctx.ui.setFooter((tui, theme, footerData) => {
+    requestRender = () => tui.requestRender();
+    const unsubscribe = footerData.onBranchChange(requestRender);
+    return {
+      dispose() {
+        stop();
+        unsubscribe();
+      },
+      invalidate() {},
+      render(width) {
+        const footer = getFooterRenderData(ctx, footerData);
+        if (footer.sessionId === sessionId) footer.assignments = assignments;
+        return buildFooterLines(width, footer, theme);
+      },
+    };
+  });
+
+  if (ctx.sessionManager.getSessionFile() && SESSION_ID_PATTERN.test(sessionId)) {
+    void refresh();
+    pollTimer = setInterval(() => void refresh(), ASSIGNMENT_POLL_INTERVAL_MS);
+  }
+  return stop;
+
+  function stop(): void {
+    if (pollTimer !== undefined) clearInterval(pollTimer);
+    pollTimer = undefined;
+    controller.abort();
+    requestRender = undefined;
+  }
+
+  async function refresh(): Promise<void> {
+    if (queryInFlight || controller.signal.aborted) return;
+    queryInFlight = true;
+    try {
+      const next = await loadAssignments(pi, sessionId, ctx.cwd, controller.signal);
+      if (!next || controller.signal.aborted || ctx.sessionManager.getSessionId() !== sessionId)
+        return;
+      const previousLine = assignments ? formatAssignments(assignments) : "";
+      assignments = next;
+      if (formatAssignments(next) !== previousLine) requestRender?.();
+    } finally {
+      queryInFlight = false;
+    }
+  }
 }
