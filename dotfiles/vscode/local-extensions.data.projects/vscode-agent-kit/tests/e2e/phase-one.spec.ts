@@ -796,7 +796,7 @@ test.describe("First assistant response through a loopback fixture provider", ()
 });
 
 test(
-  "登録済みワークスペースの New session で、その cwd で新しい Pi を起動できる",
+  "New session starts or reuses an empty Pi in the registered workspace",
   { annotation: { type: "spec", description: "E2E-10" } },
   async ({ host }, testInfo) => {
     const folder = join(host.directory, "registered");
@@ -868,41 +868,45 @@ test(
       ).toHaveCount(0);
       const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
       const mux = new PiMux(async (_executable, args) => host.piMux(args));
-      await group.locator(".group-new-session").click();
-      await expect
-        .poll(() => mux.current(displayPid))
-        .toMatchObject({
-          cwd: folder,
-          id: expect.not.stringMatching(metadata.id),
+      const initialDisplay = { cwd: folder, id: metadata.id, target: runtime.target };
+
+      await test.step("Reuse the displayed empty Pi on the next request", async () => {
+        await newSession.evaluate((button) => {
+          button.setAttribute("data-observed-busy", "false");
+          window.addEventListener("message", ({ data }) => {
+            if (data?.type === "error" && data.message?.startsWith("Failed to start Pi session"))
+              button.setAttribute("data-new-session-error", data.message);
+          });
         });
-      await host.expectPiVisible(folder);
-      const second = (await mux.current(displayPid))!;
-      const secondRuntime = host.piProcesses().find(({ target }) => target === second.target)!;
-      expect(secondRuntime.pid).not.toBe(runtime.pid);
-      const folderProcesses = host.piProcesses().filter((entry) => entry.cwd === folder);
-      expect(folderProcesses).toHaveLength(2);
-      expect(folderProcesses.map(({ pid }) => pid)).toContain(runtime.pid);
-      expect(existsSync(metadata.file)).toBe(false);
-      const otherCwd = host.sessions.B.cwd;
-      await frame
-        .locator(`.group-header[title="${otherCwd}"] .group-new-session`)
-        .describe("Other cwd New session")
-        .click();
-      await host.expectPiVisible(otherCwd);
-      const other = host.piProcesses().find((entry) => entry.cwd === otherCwd)!;
-      expect(other.pid).not.toBe(runtime.pid);
-      expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual(
-        expect.arrayContaining([runtime, secondRuntime]),
-      );
-      await group.locator(".group-new-session").click();
-      await expect.poll(() => mux.current(displayPid)).toMatchObject({ cwd: folder });
-      await host.expectPiVisible(folder);
-      expect([metadata.id, second.id]).not.toContain((await mux.current(displayPid))!.id);
-      const remaining = host.piProcesses().filter((entry) => entry.cwd === folder);
-      expect(remaining).toHaveLength(3);
-      expect(remaining).toEqual(expect.arrayContaining([runtime, secondRuntime]));
-      expect(existsSync(metadata.file)).toBe(false);
-      await testInfo.attach("Unsaved same-cwd new sessions", {
+        await newSession.click({ steps: 15 });
+        await expect(newSession).toHaveAttribute("data-observed-busy", "true");
+        await expect(newSession).toHaveAttribute("aria-busy", "false");
+        expect(await newSession.getAttribute("data-new-session-error")).toBeNull();
+        await expect.poll(() => mux.current(displayPid)).toMatchObject(initialDisplay);
+        expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
+        expect(existsSync(metadata.file)).toBe(false);
+      });
+
+      await test.step("Open an empty Pi in a different workspace", async () => {
+        const otherCwd = host.sessions.B.cwd;
+        await frame
+          .locator(`.group-header[title="${otherCwd}"] .group-new-session`)
+          .describe("Other cwd New session")
+          .click({ steps: 15 });
+        await expect.poll(() => mux.current(displayPid)).toMatchObject({ cwd: otherCwd });
+        await host.expectPiVisible(otherCwd);
+        expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
+      });
+
+      await test.step("Return to the original empty Pi through New session", async () => {
+        await newSession.click({ steps: 15 });
+        await expect.poll(() => mux.current(displayPid)).toMatchObject(initialDisplay);
+        await host.expectPiVisible(folder);
+        expect(host.piProcesses().filter((entry) => entry.cwd === folder)).toEqual([runtime]);
+        expect(existsSync(metadata.file)).toBe(false);
+      });
+
+      await testInfo.attach("Reused empty Pi", {
         body: JSON.stringify({
           metadata,
           runtime,
