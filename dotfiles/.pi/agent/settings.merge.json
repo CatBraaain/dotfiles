@@ -4,6 +4,7 @@
   "tuiMode": "fullscreen",
   "fullscreenWheelScrollLines": 5,
   "defaultThinkingLevel": "high",
+  "hideThinkingBlock": true,
   "defaultProjectTrust": "always",
   "externalEditor": "code --wait",
   "quietStartup": false,
