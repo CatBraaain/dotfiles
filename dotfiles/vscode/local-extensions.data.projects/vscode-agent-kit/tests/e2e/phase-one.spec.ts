@@ -1233,6 +1233,7 @@ test(
       await host.selectSession("B");
       await host.selectSession("A");
       await host.activateSession("Deleted");
+      const selectingAAtMs = Date.now();
       await host.selectSession("A");
       await host.expectNativeDisplay("A");
       initialA = host.sessionRuntime("A")!;
@@ -1240,6 +1241,17 @@ test(
       sameCwdPid = host.sessionRuntime("Deleted")!.pid;
       expect(initialA).toBeDefined();
       expect(initialB).toBeDefined();
+      await expect
+        .poll(
+          () => {
+            const { viewedAt } = JSON.parse(host.piMux(["metadata", aId])) as {
+              viewedAt: string | null;
+            };
+            return viewedAt === null ? 0 : Date.parse(viewedAt);
+          },
+          { message: "A's latest selection is recorded before taking the Archive baseline" },
+        )
+        .toBeGreaterThanOrEqual(selectingAAtMs);
       sourceA = readFileSync(host.sessions.A.session, "utf8");
       sourceB = readFileSync(host.sessions.B.session, "utf8");
       host.tmux(["new-session", "-d", "-s", "ordinary-fixture", "sleep", "120"]);
