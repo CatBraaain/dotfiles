@@ -1792,9 +1792,11 @@ describe("send", () => {
       assert.equal(result.stderr, "");
       const options = messageOptions(fixture, pane);
       assert.equal(options.size, 1);
-      const [[optionName, value]] = [...options.entries()];
-      assert.match(optionName!, /^@pi-mux-msg-[0-9a-f-]{36}$/);
-      const envelope = decodeEnvelope(value!);
+      const [entry] = options;
+      assert.ok(entry);
+      const [optionName, value] = entry;
+      assert.match(optionName, /^@pi-mux-msg-[0-9a-f-]{36}$/);
+      const envelope = decodeEnvelope(value);
       assert.equal(envelope.v, 1);
       assert.equal(envelope.id, optionName!.slice("@pi-mux-msg-".length));
       assert.equal(envelope.from, "external");
@@ -1823,9 +1825,11 @@ describe("send", () => {
       });
       assert.equal(result.error, undefined);
       assert.equal(result.status, 0, result.stderr);
-      const [[, value]] = [...messageOptions(fixture, pane).entries()];
-      assert.equal(decodeEnvelope(value!).from, sender);
-      assert.equal(decodeEnvelope(value!).text, "stop now");
+      const [entry] = messageOptions(fixture, pane);
+      assert.ok(entry);
+      const envelope = decodeEnvelope(entry[1]);
+      assert.equal(envelope.from, sender);
+      assert.equal(envelope.text, "stop now");
     } finally {
       await fixture.cleanup();
     }
@@ -3424,18 +3428,17 @@ describe("state argument parsing", () => {
   it("accepts every documented state value and keeps literal titles", () => {
     const title = 'line1\n#{session_name} "quoted"';
     for (const state of ["running", "waiting-approval", "waiting-user"]) {
-      assert.deepEqual(
-        parseOperation([
-          "state",
-          "abc123",
-          state,
-          "--title",
-          JSON.stringify(title),
-          "--source",
-          JSON.stringify(validSource),
-        ]).notification,
-        { clear: false, state, title },
-      );
+      const operation = parseOperation([
+        "state",
+        "abc123",
+        state,
+        "--title",
+        JSON.stringify(title),
+        "--source",
+        JSON.stringify(validSource),
+      ]);
+      assert.ok(operation.kind === "state");
+      assert.deepEqual(operation.notification, { clear: false, state, title });
     }
   });
 

@@ -1278,13 +1278,20 @@ describe("pi-mux workspace list", () => {
           wrapper,
           previous.replace(
             'case "$*" in',
-            'case "$*" in\n  *"show-options -pqv"*) echo "state access refused" >&2; exit 1 ;;',
+            `case "$*" in
+  *'"show-options" "-pqv"'*)
+    socket="$2"
+    config="$4"
+    shift 9
+    exec ${quote([Bun.which("tmux")!])} -S "$socket" -f "$config" -C if-shell -F 1 \\
+      'show-options -pv -t %2147483647 @pi_session_state' "$@" ;;
+`,
           ),
         );
         const result = await f.run(["list", "--active", "--json"]);
         assert.equal(result.code, 1);
         assert.equal(result.out, "");
-        assert.match(result.err, /state access refused/);
+        assert.match(result.err, /tmux show-options failed: .*%2147483647/);
         assert.equal(existsSync(join(f.agent, "pi-tmux/pi-mux-restore.json")), false);
       });
     },
@@ -1479,16 +1486,18 @@ export default function (pi) {
         const wrapper = join(f.bin, "tmux");
         const ready = join(f.root, "list-state-ready");
         const released = join(f.root, "list-state-released");
+        const batchOutput = join(f.root, "list-state-output");
         writeFileSync(
           wrapper,
           readFileSync(wrapper, "utf8").replace(
             'case "$*" in',
             `case "$*" in
-  *"show-options -pqv"*)
+  *'"show-options" "-pqv"'*)
     if test "$TEST_PAUSE_LIST_STATE" = 1; then
-      ${quote([Bun.which("tmux")!])} "$@"; code=$?
+      ${quote([Bun.which("tmux")!])} "$@" > ${quote([batchOutput])}; code=$?
       touch ${quote([ready])}
       while ! test -f ${quote([released])}; do sleep 0.02; done
+      cat ${quote([batchOutput])}
       exit "$code"
     fi ;;
 `,
@@ -1506,6 +1515,7 @@ export default function (pi) {
         }
         const stale = await listing;
         assert.equal(stale.code, 0, stale.err);
+        assert.deepEqual(JSON.parse(stale.out), []);
         const after = await f.run(["list", "--active", "--json"]);
         assert.equal(after.code, 0, after.err);
         assert.deepEqual(JSON.parse(after.out), []);
