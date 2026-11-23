@@ -1,0 +1,3 @@
+target: powershell
+arguments: '-NoProfile -WindowStyle Hidden -Command "gsudo ''\\wsl.localhost\Ubuntu\home\username\projects\ahkfiles\ScreenLock\ScreenLock.ahk''"'
+windowStyle: minimized

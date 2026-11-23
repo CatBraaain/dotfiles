@@ -11,6 +11,7 @@ import { applyPathMap } from "./build-path-map.ts";
 import { applyReplacements, applyReplaceSidecars, parseReplaceSidecar } from "./build-replace.ts";
 import { collectHooks, runHooks } from "./build-hooks.ts";
 import { main } from "./build.ts";
+import { adoptHomeLnkBytes, convertLnkDeclarations } from "./lnk.ts";
 
 let root: string;
 let distRoot: string;
@@ -2194,7 +2195,92 @@ describe("manager CLI", () => {
   });
 });
 
+describe("lnk declarations", () => {
+  it.each([
+    ["Tools.exact", "tools/EDIT.LNK..executable"],
+    ["Tools.exact", "tools/EDIT.LNK .executable"],
+    ["Tools.exact", "tools .exact/EDIT.LNK.executable"],
+    ["ToolsΣ.exact", "toolsσ/EDIT.LNK.executable"],
+  ])(
+    "rejects a Windows home path collision between %s and %s",
+    async (directory, conflictingPath) => {
+      const declarationPath = `${directory}/Edit.lnk`;
+      await put(distRoot, declarationPath, "target: invalid\n");
+      await put(distRoot, conflictingPath, "other entry\n");
+
+      await assert.rejects(convertLnkDeclarations(distRoot, "windows"), {
+        message: `lnk ${declarationPath}: home path collision with ${conflictingPath}: ${directory.slice(0, -".exact".length)}/Edit.lnk`,
+      });
+    },
+  );
+
+  it.each(["linux", "darwin"] as const)(
+    "removes unparsed declarations for %s",
+    async (platform) => {
+      const source = join(root, "dotfiles");
+      const invalidDeclaration = Uint8Array.of(0xff);
+      const binaryLink = lnkBytes("pwsh.exe", "-Command menu");
+      await put(source, "Remove.LNK", invalidDeclaration);
+      await put(source, "Keep.lnk", binaryLink);
+
+      await main(root, platform, homeRoot);
+
+      await assert.rejects(readFile(join(distRoot, "Remove.LNK")), { code: "ENOENT" });
+      assert.deepEqual(new Uint8Array(await readFile(join(distRoot, "Keep.lnk"))), binaryLink);
+      assert.deepEqual(
+        new Uint8Array(await readFile(join(source, "Remove.LNK"))),
+        invalidDeclaration,
+      );
+    },
+  );
+});
+
 describe("lnk adoption", () => {
+  it("does not descend through a linked home directory", async () => {
+    const linkPath = "Menu/Edit.lnk";
+    const distBytes = lnkBytes("pwsh.exe", "-Command menu", 1000n);
+    const outside = join(root, "outside");
+    await put(distRoot, `Tools.exact/${linkPath}`, distBytes);
+    await put(outside, linkPath, lnkBytes("pwsh.exe", "-Command menu", 2000n));
+    await symlink(outside, join(homeRoot, "Tools"), "junction");
+
+    await adoptHomeLnkBytes(distRoot, homeRoot, new Set());
+
+    assert.deepEqual(
+      new Uint8Array(await readFile(join(distRoot, `Tools.exact/${linkPath}`))),
+      distBytes,
+    );
+  });
+
+  it("does not adopt a link through a mapped parent reference", async () => {
+    const distBytes = lnkBytes("pwsh.exe", "-Command menu", 1000n);
+    const distPath = "...exact/Edit.lnk";
+    await put(distRoot, distPath, distBytes);
+    await put(root, "Edit.lnk", lnkBytes("pwsh.exe", "-Command menu", 2000n));
+
+    await adoptHomeLnkBytes(distRoot, homeRoot, new Set());
+
+    assert.deepEqual(new Uint8Array(await readFile(join(distRoot, distPath))), distBytes);
+  });
+
+  it.each([false, true])(
+    "adopts generated link bytes only when differences are limited to times (other change: %s)",
+    async (hasOtherChange) => {
+      const distBytes = lnkBytes("pwsh.exe", "-Command menu", 1000n);
+      const homeBytes = lnkBytes("pwsh.exe", "-Command menu", 2000n);
+      if (hasOtherChange) homeBytes[0x34] = 1;
+      await put(distRoot, "Edit.lnk", distBytes);
+      await put(homeRoot, "Edit.lnk", homeBytes);
+
+      await adoptHomeLnkBytes(distRoot, homeRoot, new Set(["Edit.lnk"]));
+
+      assert.deepEqual(
+        new Uint8Array(await readFile(join(distRoot, "Edit.lnk"))),
+        hasOtherChange ? distBytes : homeBytes,
+      );
+    },
+  );
+
   it("adopts matching home link bytes into dist during build", async () => {
     await put(join(root, "dotfiles"), "Main.ahk.lnk", lnkBytes("pwsh.exe", "-Command main", 1000n));
     await put(homeRoot, "Main.ahk.lnk", lnkBytes("pwsh.exe", "-Command main", 2000n));
@@ -2222,22 +2308,22 @@ describe("lnk adoption", () => {
     );
   });
 
-  it("keeps generated link bytes when the readable text differs", async () => {
+  it("keeps binary link bytes when the readable text differs", async () => {
     const distBytes = lnkBytes("pwsh.exe", "-Command new");
     await put(join(root, "dotfiles"), "Main.ahk.lnk", distBytes);
     await put(homeRoot, "Main.ahk.lnk", lnkBytes("pwsh.exe", "-Command old"));
 
-    await main(root, "linux", homeRoot);
+    await main(root, "windows", homeRoot);
 
     assert.deepEqual(new Uint8Array(await readFile(join(distRoot, "Main.ahk.lnk"))), distBytes);
   });
 
-  it("keeps generated link bytes when a side has no readable strings", async () => {
-    const distBytes = new Uint8Array([0x00, 0x01, 0x02]);
+  it("keeps binary link bytes when neither side has readable strings", async () => {
+    const distBytes = lnkBytes("", "", 1000n);
     await put(join(root, "dotfiles"), "tool.lnk", distBytes);
-    await put(homeRoot, "tool.lnk", new Uint8Array([0x00, 0x01, 0x03]));
+    await put(homeRoot, "tool.lnk", lnkBytes("", "", 2000n));
 
-    await main(root, "linux", homeRoot);
+    await main(root, "windows", homeRoot);
 
     assert.deepEqual(new Uint8Array(await readFile(join(distRoot, "tool.lnk"))), distBytes);
   });
@@ -2246,6 +2332,8 @@ describe("lnk adoption", () => {
 function lnkBytes(relativePath: string, commandLineArguments: string, timeValue = 0n): Uint8Array {
   const header = new Uint8Array(0x4c);
   const headerView = new DataView(header.buffer);
+  headerView.setUint32(0, header.length, true);
+  header.set(Buffer.from("0114020000000000c000000000000046", "hex"), 4);
   headerView.setUint32(0x14, 0xa8, true);
   headerView.setBigInt64(0x1c, timeValue, true);
   headerView.setBigInt64(0x24, timeValue, true);

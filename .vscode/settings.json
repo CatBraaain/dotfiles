@@ -2,7 +2,8 @@
   "js/ts.validate.enabled": false,
   "files.associations": {
     // "dot_*": "ini",
-    "modify_*": "go-template"
+    "modify_*": "go-template",
+    "*.lnk": "yaml"
   },
   "yaml.disableSchemaDetection": ["**/cordis.patch.yml"],
   "[json][jsonc]": {

@@ -13,7 +13,7 @@
 
 ```mermaid
 flowchart LR
-  A[build: dist 生成<br>パス対応・外部取得・merge・置換 sidecar・ローカルフック・lnk の home 採用] --> B[差分検知]
+  A[build: dist 生成<br>パス対応・外部取得・merge・置換 sidecar・ローカルフック・lnk 宣言の変換・lnk の home 採用] --> B[差分検知]
   B --> D[適用]
   D --> E[apply スクリプト]
 ```
@@ -27,9 +27,10 @@ buildステージは、内部で次の順に処理する。
 5. merge変換
 6. 置換sidecar
 7. 保存済みローカルフックの実行
-8. lnk の home 採用（Windows の build のみ）
+8. lnk 宣言の変換
+9. lnk の home 採用（Windows 向けの build のみ）
 
-フック完了後はパス対応表・外部取得・merge・置換sidecar を再実行しない。フックと lnk の home 採用で整形・加工した完成済みdist が、そのまま差分検知の入力になる。パス対応表・外部取得・merge・置換sidecar が失敗した場合は、フックを実行せずbuild を異常終了する。
+フック完了後はパス対応表・外部取得・merge・置換sidecar を再実行しない。完成済みdist が、そのまま差分検知の入力になる。パス対応表・外部取得・merge・置換sidecar が失敗した場合は、フックを実行せずbuild を異常終了する。
 
 ## コマンド
 
@@ -109,11 +110,45 @@ dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ign
 
 フックが終了コード非0 で終了した、シグナルで終了した、またはエラーが発生したとき、エラーメッセージにフックのパス変換後の dist相対パスを含めて異常終了する。フックの stdout と stderr は §フックシステム の出力規則で転送する。エラー発生後は後続のフックを実行しない。dist の rollback と staging による原子的な置換は行わない。
 
+## build: lnk 宣言の変換
+
+`dotfiles/` 以下の `<名前>.lnk` に、Windows ショートカットを1件ずつ UTF-8 の YAML で宣言できる。たとえば `dotfiles/tools/Editor.lnk` の親フォルダをパス対応表で `Desktop` に移した場合、出力は `dist/Desktop/Editor.lnk` となる。
+
+宣言は次のキーを持つ1つの YAML マッピングとする。重複キーと未定義のキーはエラーとする。
+
+| キー | 値 |
+| --- | --- |
+| `target` | 必須。文字列で、ドライブ文字から始まる絶対パス、UNC パス、またはプリセット `powershell` を指定する。プリセットは `PATH` 上の `pwsh.exe` を優先し、見つからない場合は `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` を使う。 |
+| `arguments` | 任意。起動引数を表す文字列。空白と引用符を含め、YAML から読み取った値をそのままショートカットに保存する。既定値は空文字列。 |
+| `windowStyle` | 任意。`normal`（既定）または `minimized`。それぞれショートカットの `SW_SHOWNORMAL` または `SW_SHOWMINNOACTIVE` に対応する。 |
+
+```yaml
+target: powershell
+arguments: '-NoProfile -Command "Get-Date"'
+windowStyle: minimized
+```
+
+全フックの実行後、dist 内の管理対象の通常ファイルで、拡張子が `.lnk`（大文字小文字を区別しない）のものを処理する。走査は §差分検知 の対象外規則に従う。処理対象と内容はこの時点の dist で決まる。フックが宣言と同じパスにバイナリ `.lnk` を書いた場合は、その出力を使う。[Windows Shell Link ヘッダー](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink/c3376b21-0931-45e4-b2fc-a48ac0e60d15) の `HeaderSize` と `LinkCLSID` が規定値に一致するファイルはバイナリ `.lnk` として変換せず、その他は宣言として扱う。
+
+| 対象 OS | 宣言の処理 |
+| --- | --- |
+| Windows | Windows ホストでショートカットを生成し、dist の宣言を同じパスで置き換える。リンク先や引数は build 中に実行しない。 |
+| Linux / macOS | 宣言の内容は解析せず、dist から取り除く。 |
+
+Windows 向けで宣言があり、実行ホストが Windows ではない、宣言が不正、同じ home パスを指す別の管理対象エントリがある、またはショートカットを生成できない場合は、宣言の dist 相対パスと原因を表示し、build を異常終了する。Windows の home パスの衝突は大文字小文字を区別しない。`dotfiles/` の元ファイルは変更しない。
+
 ## build: lnk の home 採用
 
-Windows の build は、全フックの実行後に dist を再帰走査して拡張子 `.lnk`（大文字小文字を区別しない）の管理対象の通常ファイルを探す。走査は §差分検知 の対象外規則に従い、対象外のエントリとその配下は無視する。対応する home パスの解決も同節の対応関係に従う。Windows 以外の build ではこの処理を行わない。
+Windows 向けの build は、lnk 宣言の変換後に dist を再帰走査して拡張子 `.lnk`（大文字小文字を区別しない）の管理対象の通常ファイルを探す。走査は §差分検知 の対象外規則に従い、対象外のエントリとその配下は無視する。対応する home パスの解決も同節の対応関係に従う。Windows 以外を対象とする build ではこの処理を行わない。
 
-対応する home 側に通常ファイルが存在し、両側の内容から抽出した UTF-16 の表示可能文字列（4文字以上の連続）が一致し、バイト列が異なるとき、home の内容を dist へ書き込む。いずれかの側で文字列を1つも抽出できないときは何もしない。生成時に埋め込まれるタイムスタンプなどのバイナリ領域は抽出の対象外であり、これにより Windows 向けショートカットの再生成がバイト差分として現れない。
+対応する home 側に通常ファイルがあり、バイト列が異なるときは、次の条件で home の内容を dist へ書き込む。
+
+| dist の `.lnk` | home の内容を採用する条件 |
+| --- | --- |
+| lnk 宣言から生成されたもの | home 側もバイナリ `.lnk` であり、Shell Link ヘッダーの `CreationTime`、`AccessTime`、`WriteTime` を除いたバイト列が一致する。 |
+| それ以外 | 両側から抽出した UTF-16 の表示可能文字列（4文字以上の連続）が1つ以上あり、抽出結果が一致する。 |
+
+採用条件を満たさない場合は、dist のバイト列を保持する。
 
 ## build: パス対応表
 

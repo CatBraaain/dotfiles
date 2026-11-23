@@ -35,9 +35,5 @@
     "undotfiles/winconfig/engine.ts",
     "undotfiles/wintasks/src/*.ts"
   ],
-  "exclude": [
-    "dotfiles-manager/**/*.test.ts",
-    "dotfiles/windows-menu/create.build.ts",
-    "undotfiles/winconfig/engine.test.ts"
-  ]
+  "exclude": ["dotfiles-manager/**/*.test.ts", "undotfiles/winconfig/engine.test.ts"]
 }

@@ -10,7 +10,7 @@ import { applyExternals } from "./build-external.ts";
 import { composeMergeTargets } from "./build-merge.ts";
 import { applyReplaceSidecars } from "./build-replace.ts";
 import { collectHooks, runHooks, type HookEvent } from "./build-hooks.ts";
-import { adoptHomeLnkBytes } from "./lnk.ts";
+import { adoptHomeLnkBytes, convertLnkDeclarations } from "./lnk.ts";
 import { resolveGuestPath, resolveWsl, runWsl, uncDistro, type WslConnection } from "./wsl.ts";
 
 export type { Platform };
@@ -51,7 +51,8 @@ export async function main(
   await timed("merge", onPhase, () => composeMergeTargets(distDir, homeRoot, platform));
   await timed("replace", onPhase, () => applyReplaceSidecars(distDir, homeRoot));
   await runHooks(hooks, distDir, homeRoot, onHookEvent);
-  if (platform === "windows") await adoptHomeLnkBytes(distDir, homeRoot);
+  const generatedLinks = await convertLnkDeclarations(distDir, platform);
+  if (platform === "windows") await adoptHomeLnkBytes(distDir, homeRoot, generatedLinks);
 }
 
 async function removeDist(distDir: string, wsl: WslConnection | undefined): Promise<void> {
