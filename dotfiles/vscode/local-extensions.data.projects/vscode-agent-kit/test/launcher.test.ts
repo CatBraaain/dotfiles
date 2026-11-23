@@ -194,15 +194,19 @@ describe("SessionLauncher", () => {
 
   it("reveals each click immediately and focuses only after the latest switch", async () => {
     const terminal = await existingDisplay();
-    const switching = deferred<boolean>();
-    runtimes.mocks.switch.mockReturnValueOnce(switching.promise);
+    const switching = deferred<void>();
+    const switchImplementation = runtimes.mocks.switch.getMockImplementation()!;
+    runtimes.mocks.switch.mockImplementationOnce(async (...args) => {
+      await switching.promise;
+      return switchImplementation(...args);
+    });
     const first = launcher.start(root);
     await vi.waitFor(() => expect(runtimes.mocks.switch).toHaveBeenCalledOnce());
     const second = launcher.start(root);
     await vi.waitFor(() => expect(terminal.show.mock.calls).toEqual([[true], [true]]));
     expect(registry.displayedSessionId).toBe("old");
     expect(startedIds()).toEqual(new Set());
-    switching.resolve(true);
+    switching.resolve();
     await Promise.all([first, second]);
     expect(terminal.show.mock.calls).toEqual([[true], [true], [true], [false]]);
     expect(onSessionStarted.mock.calls.map(([id]) => id)).toEqual(["new-1", "new-2"]);
