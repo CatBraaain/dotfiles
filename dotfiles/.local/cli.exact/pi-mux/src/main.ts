@@ -29,7 +29,8 @@ import { platform } from "./platform";
 
 type ListOperation =
   | { kind: "list"; scope: "all" | "active"; json: boolean }
-  | { kind: "list"; scope: "saved"; cwd: string | undefined; json: boolean };
+  | { kind: "list"; scope: "saved"; cwd: string | undefined; json: boolean }
+  | { kind: "list"; scope: "displayed"; clientPid: number | undefined; json: boolean };
 
 type Operation =
   | { kind: "help" }
@@ -43,7 +44,6 @@ type Operation =
   | { kind: "close"; id: string; ifTemporary: boolean }
   | ListOperation
   | { kind: "switch"; id: string; clientPid: number | undefined }
-  | { kind: "current"; clientPid: number | undefined; json: boolean }
   | { kind: "history"; cwd: string | undefined; json: boolean }
   | { kind: "workspace"; action: "register" | "unregister"; cwd: string }
   | { kind: "snapshot"; generation?: string }
@@ -111,7 +111,7 @@ type ListedSession = {
 type EmptySession = { id: string; file: string; temporary?: true };
 type ListedWorkspace = { cwd: string; sessions: ListedSession[]; empty: EmptySession[] };
 type TmuxClient = { name: string; pid: number; session: string };
-type CurrentSession = { id: string; cwd: string; file: string; target: string };
+type DisplayedSession = Session & { clientPid: number; target: string };
 type HistoryEntry = {
   id: string;
   cwd: string;
@@ -189,8 +189,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux list [--json]
   pi-mux list --active [--json]
   pi-mux list --saved [--cwd <absolute-cwd>] [--json]
+  pi-mux list --displayed [--client-pid <pid>] [--json]
   pi-mux switch <session-id> [--client-pid <pid>]
-  pi-mux current [--client-pid <pid>] [--json]
   pi-mux history [--cwd <absolute-cwd>] [--json]
   pi-mux workspace register <cwd>
   pi-mux workspace unregister <cwd>
@@ -256,6 +256,24 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     if (operation.kind === "list") {
       const config = tmuxConfiguration();
+      if (operation.scope === "displayed") {
+        const sessions = await displayedSessions({ ...config, noStart: true }, operation.clientPid);
+        console.log(
+          operation.json
+            ? JSON.stringify(sessions)
+            : renderTable(
+                ["CLIENT PID", "WORKSPACE", "SESSION ID", "TMUX TARGET", "FILE"],
+                sessions.map(({ clientPid, cwd, id, target, file }) => [
+                  String(clientPid),
+                  cwd,
+                  id,
+                  target,
+                  file,
+                ]),
+              ),
+        );
+        return 0;
+      }
       const active = await listWorkspaces(config);
       if (operation.scope === "active") {
         console.log(operation.json ? JSON.stringify(active) : renderActiveTable(active));
@@ -275,18 +293,6 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         console.error(`pi-mux: ${error.message}`);
         return error.exitCode;
       }
-    }
-    if (operation.kind === "current") {
-      const session = await currentSession(tmuxConfiguration(), operation.clientPid);
-      console.log(
-        operation.json
-          ? JSON.stringify(session)
-          : renderTable(
-              ["WORKSPACE", "SESSION ID", "TMUX TARGET", "FILE"],
-              [[session.cwd, session.id, session.target, session.file]],
-            ),
-      );
-      return 0;
     }
     if (operation.kind === "close") {
       const config = tmuxConfiguration();
@@ -637,53 +643,57 @@ export function parseOperation(argv: string[]): Operation {
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] [--detached] <session-id> | open --detached --expect-file <absolute-jsonl-path> <session-id> | inspect <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | list --active [--json] | list --saved [--cwd <absolute-cwd>] [--json] | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] [--json] | history [--cwd <absolute-cwd>] [--json] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | reload [<session-id>] | restart [--force]]",
+    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] [--detached] <session-id> | open --detached --expect-file <absolute-jsonl-path> <session-id> | inspect <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | list --active [--json] | list --saved [--cwd <absolute-cwd>] [--json] | list --displayed [--client-pid <pid>] [--json] | switch <session-id> [--client-pid <pid>] | history [--cwd <absolute-cwd>] [--json] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | reload [<session-id>] | restart [--force]]",
   );
 }
 
 function parseListOperation(args: string[]): ListOperation | undefined {
-  let scope: "all" | "active" | "saved" = "all";
+  let scope: ListOperation["scope"] = "all";
   let cwd: string | undefined;
+  let clientPid: number | undefined;
   let json = false;
   for (let index = 0; index < args.length; index++) {
     const flag = args[index];
     if (flag === "--json" && !json) {
       json = true;
-    } else if ((flag === "--active" || flag === "--saved") && scope === "all") {
-      scope = flag === "--active" ? "active" : "saved";
+    } else if (
+      scope === "all" &&
+      (flag === "--active" || flag === "--saved" || flag === "--displayed")
+    ) {
+      if (flag === "--active") scope = "active";
+      else if (flag === "--saved") scope = "saved";
+      else scope = "displayed";
     } else if (flag === "--cwd" && cwd === undefined) {
       const value = args[++index];
       if (!value || !isAbsolute(value)) return;
       cwd = value;
+    } else if (flag === "--client-pid" && clientPid === undefined) {
+      const value = args[++index];
+      if (!value || !/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) return;
+      clientPid = Number(value);
     } else {
       return;
     }
   }
+  if (scope === "displayed" && cwd === undefined) return { kind: "list", scope, clientPid, json };
+  if (clientPid !== undefined) return;
   if (scope === "saved") return { kind: "list", scope, cwd, json };
-  if (cwd === undefined) return { kind: "list", scope, json };
+  if (scope !== "displayed" && cwd === undefined) return { kind: "list", scope, json };
 }
 
 function parseListingOperation(argv: string[]): Operation | undefined {
   const kind = argv[0];
   if (kind === "list") return parseListOperation(argv.slice(1));
-  if (kind !== "current" && kind !== "history") return;
+  if (kind !== "history") return;
 
   const jsonFirst = argv[1] === "--json";
   const jsonLast = argv.at(-1) === "--json";
   const json = jsonFirst || jsonLast;
   const args = jsonFirst ? argv.slice(2) : argv.slice(1, jsonLast ? -1 : undefined);
 
-  if (kind === "current") {
-    if (args.length === 0) return { kind, clientPid: undefined, json };
-    const [flag, pid] = args;
-    if (args.length === 2 && flag === "--client-pid" && pid && /^[1-9]\d*$/.test(pid))
-      return { kind, clientPid: Number(pid), json };
-  }
-  if (kind === "history") {
-    if (args.length === 0) return { kind, cwd: undefined, json };
-    const [flag, cwd] = args;
-    if (args.length === 2 && flag === "--cwd" && cwd && isAbsolute(cwd)) return { kind, cwd, json };
-  }
+  if (args.length === 0) return { kind, cwd: undefined, json };
+  const [flag, cwd] = args;
+  if (args.length === 2 && flag === "--cwd" && cwd && isAbsolute(cwd)) return { kind, cwd, json };
 }
 
 function parseStateOperation(argv: string[]): Operation {
@@ -2671,18 +2681,18 @@ class SwitchResolutionError extends Error {
   }
 }
 
+function clientsMatchingPid(clients: TmuxClient[], clientPid: number): TmuxClient[] {
+  return clients.filter(
+    (client) => client.pid === clientPid || platform.processParentPid(client.pid) === clientPid,
+  );
+}
+
 async function resolveClient(
   config: TmuxConfig,
   clientPid: number | undefined,
 ): Promise<TmuxClient> {
   const clients = await tmuxClients(config);
-  const matching =
-    clientPid === undefined
-      ? clients
-      : clients.filter(
-          (client) =>
-            client.pid === clientPid || platform.processParentPid(client.pid) === clientPid,
-        );
+  const matching = clientPid === undefined ? clients : clientsMatchingPid(clients, clientPid);
   if (matching.length === 1) return matching[0]!;
   const message =
     clientPid === undefined
@@ -2709,17 +2719,24 @@ async function switchSession(
   await tmux(config, ["switch-client", "-c", client.name, "-t", `=${targets[0]!.name}`]);
 }
 
-async function currentSession(
+async function displayedSessions(
   config: TmuxConfig,
   clientPid: number | undefined,
-): Promise<CurrentSession> {
-  const client = await resolveClient(config, clientPid);
-  const pane = (await livePanes(config, "list")).find(
-    (pane) => pane.active && pane.name === client.session,
-  );
-  if (!pane)
-    throw new Error(`The tmux client ${client.name} does not show a pi pane: ${client.session}`);
-  return { id: pane.id, cwd: pane.cwd, file: pane.file, target: pane.name };
+): Promise<DisplayedSession[]> {
+  const clients = await tmuxClients(config);
+  const matching = clientPid === undefined ? clients : clientsMatchingPid(clients, clientPid);
+  if (clientPid !== undefined && matching.length > 1)
+    throw new Error(`Multiple tmux clients match process ${clientPid}`);
+  if (matching.length === 0) return [];
+
+  const displayedIn = new Set(matching.map(({ session }) => session));
+  const panes = await livePanes(config, { displayedIn });
+  const displayBySession = new Map(panes.map((pane) => [pane.name, pane]));
+  return matching.flatMap(({ pid, session }) => {
+    const pane = displayBySession.get(session);
+    if (!pane) return [];
+    return [{ clientPid: pid, id: pane.id, cwd: pane.cwd, file: pane.file, target: pane.name }];
+  });
 }
 
 async function sendSessionMessage(
@@ -3087,7 +3104,7 @@ function serverIsAbsent(config: TmuxConfig, stderr: string): boolean {
 
 async function livePanes(
   config: TmuxConfig,
-  purpose: "startup" | "list" = "startup",
+  purpose: "startup" | "list" | { displayedIn: ReadonlySet<string> } = "startup",
   auditedSessions?: ManagedSession[],
 ): Promise<Pane[]> {
   const format = auditedSessions
@@ -3107,7 +3124,7 @@ async function livePanes(
   } else if (result.exitCode !== 0) {
     if (result.stderr.includes("no sessions") || result.stderr.includes("no current target"))
       return [];
-    if (purpose === "list" && serverIsAbsent(config, result.stderr)) return [];
+    if (purpose !== "startup" && serverIsAbsent(config, result.stderr)) return [];
   }
   if (result.exitCode !== 0) throw new Error(`Cannot inspect pi sessions: ${result.stderr.trim()}`);
   if (!rows) return [];
@@ -3129,6 +3146,8 @@ async function livePanes(
       }
     }
     if (!pane || !session || !name || !encoded || dead !== "0") return [];
+    const active = windowActive === "1" && paneActive === "1";
+    if (typeof purpose === "object" && (!active || !purpose.displayedIn.has(name))) return [];
     const metadata = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
     if (
       typeof metadata?.id !== "string" ||
@@ -3142,7 +3161,7 @@ async function livePanes(
       metadata.pid !== Number(pid) ||
       (metadata.startup !== "accepted" &&
         metadata.startup !== "ready" &&
-        !(purpose === "list" && metadata.startup === undefined))
+        !(purpose !== "startup" && metadata.startup === undefined))
     )
       throw new Error(`Invalid pi session metadata in pane ${pane}`);
     if (metadata.processPid !== undefined) {
@@ -3161,7 +3180,7 @@ async function livePanes(
         pane,
         session,
         name,
-        active: windowActive === "1" && paneActive === "1",
+        active,
         pid: metadata.processPid ?? Number(pid),
         panePid: Number(pid),
         id: metadata.id,

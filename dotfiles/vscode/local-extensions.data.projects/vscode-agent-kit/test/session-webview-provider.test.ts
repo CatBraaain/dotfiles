@@ -3654,15 +3654,18 @@ describe("SessionWebviewProvider", () => {
         ]);
       }
       if (args[0] === "list" && args[1] === "--saved") return JSON.stringify(historyEntries);
-      if (args[0] === "current") {
+      if (args.join(" ") === "list --displayed --json --client-pid 123") {
         const runtime = client.attachedId === undefined ? undefined : live.get(client.attachedId);
-        if (runtime === undefined) throw new Error("cannot resolve the client");
-        return JSON.stringify({
-          id: runtime.sessionId,
-          cwd: runtime.cwd,
-          file: join(cwdDir, `2024-12-03_${runtime.sessionId}.jsonl`),
-          target: `pi-${runtime.sessionId}`,
-        });
+        if (runtime === undefined) return "[]";
+        return JSON.stringify([
+          {
+            clientPid: client.pid,
+            id: runtime.sessionId,
+            cwd: runtime.cwd,
+            file: join(cwdDir, `2024-12-03_${runtime.sessionId}.jsonl`),
+            target: runtime.target,
+          },
+        ]);
       }
       throw new Error(`Unexpected pi-mux command: ${args.join(" ")}`);
     });

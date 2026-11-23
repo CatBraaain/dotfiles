@@ -43,8 +43,8 @@ CLIのsession-dirs記録と、稼働piの保存先を探索に使わない。
 | `pi-mux list [--json]` | 稼働中のpiと保存済み会話を統合して列挙する |
 | `pi-mux list --active [--json]` | 稼働中のpiを列挙する。JSONには空workspaceの登録も含める |
 | `pi-mux list --saved [--cwd <absolute-cwd>] [--json]` | 保存済み会話を列挙する |
+| `pi-mux list --displayed [--client-pid <pid>] [--json]` | 表示中のpi会話をクライアントごとに列挙する |
 | `pi-mux switch <session-id> [--client-pid <pid>]` | 接続クライアントが表示するtmuxセッションを、会話IDのpi実体のtmuxセッションへ切り替える |
-| `pi-mux current [--client-pid <pid>] [--json]` | 接続クライアントが表示中のpi実体のmetadataを返す |
 | `pi-mux history [--cwd <absolute-cwd>] [--json]` | 登録済みworkspaceの保存会話を列挙する |
 | `pi-mux workspace register <cwd>` | piを起動せずworkspaceを登録する |
 | `pi-mux workspace unregister <cwd>` | 対象workspaceの稼働piを終了し、登録と復元対象を除く。保存会話ファイルは保持する |
@@ -367,7 +367,7 @@ optionの書き込みは、対象paneのserver PID・pane ID・pane PIDの一致
 | 未登録workspaceをregister | `sessions: []` のworkspaceを復元記録に追加する。piとtmux serverを起動しない |
 | 登録済みworkspaceをregister | 既存の登録と復元候補を保持する |
 | `new`・`open` の起動・再接続成功 | そのcwdを登録する。復元記録の読取・検証に失敗した場合は下記の保存保留に従う |
-| 専用tmux内で外部から起動したpi | paneを直接占有するpiと、paneのシェル配下のpiを、拡張が公開したmetadataから `list` が検出し、そのcwdを登録する。専用tmux外のpiは取り込まない |
+| 専用tmux内で外部から起動したpi | paneを直接占有するpiと、paneのシェル配下のpiを、拡張が公開したmetadataから `list` の既定モードと `--active` が検出し、そのcwdを登録する。専用tmux外のpiは取り込まない |
 | workspaceをunregister | 全windowを対象に、そのcwdの稼働piと起動途中の管理piを終了する。終了を確認してからworkspace登録と同じcwdの復元候補を除く。他workspaceと保存会話ファイルを保持する |
 | 未登録workspaceをunregister | 稼働pi・復元候補があれば同じ終了・除去を行い、なければ成功する |
 | 起動途中の管理piのpaneを安全に特定できない | 他paneを終了せず、workspace登録と復元候補を保持して非0で終了する |
@@ -375,15 +375,15 @@ optionの書き込みは、対象paneのserver PID・pane ID・pane PIDの一致
 
 登録の追加・解除では、他workspaceの登録と復元候補、および保存済みのserver世代を保持する。不正な復元記録は上書きしない。通常のpi終了後もworkspace登録は保持する。解除後の新しい起動は再び登録対象になる。登録の変更はsnapshot・restore・new・open・close・stateと同じ排他で行い、同時更新による登録や復元候補の欠落を防ぐ。
 
-`new`・`open` では、復元記録を読み取れない、または内容が不正な場合も、起動・接続可能なpiへの接続と非接続起動の結果返却を継続する。既存記録を上書きせず、登録と復元候補の保存を保留し、理由をstderrへ表示する。記録の復旧後は、稼働cwdを取得する `list`、または次の `new`・`open` で登録を保存できる。復元保証は最後に保存完了した集合に従う。記録の書込み失敗、通知元の不一致、server世代の不一致はこの保存保留に含めず、各操作のエラーとして扱う。
+`new`・`open` では、復元記録を読み取れない、または内容が不正な場合も、起動・接続可能なpiへの接続と非接続起動の結果返却を継続する。既存記録を上書きせず、登録と復元候補の保存を保留し、理由をstderrへ表示する。記録の復旧後は、`list` の既定モードか `--active`、または次の `new`・`open` で登録を保存できる。復元保証は最後に保存完了した集合に従う。記録の書込み失敗、通知元の不一致、server世代の不一致はこの保存保留に含めず、各操作のエラーとして扱う。
 
 register・unregisterの成功時はstdout・stderrへ出力せず終了コード0、失敗時はstderrへ理由を表示して終了コード1で終了する。
 
 ### 一覧系コマンドの出力形式
 
-`list`・`current`・`history` は既定でstdoutへ見出し付きのプレーンテキスト表を出力する。データが0件の表は見出しだけを表示する。欠損値は `-` とし、セル中の制御文字（Unicodeの `Cc` と `Bidi_Control`）と行・段落区切り文字は `\uXXXX` 表記にする。
+`list`・`history` は既定でstdoutへ見出し付きのプレーンテキスト表を出力する。データが0件の表は見出しだけを表示する。欠損値は `-` とし、セル中の制御文字（Unicodeの `Cc` と `Bidi_Control`）と行・段落区切り文字は `\uXXXX` 表記にする。
 
-`--json` を付けると、表の代わりに各コマンドで定めるJSONと末尾改行をstdoutへ出力する。`list`・`current`・`history` のオプションの順序は問わない。
+`--json` を付けると、表の代わりに各コマンドで定めるJSONと末尾改行をstdoutへ出力する。`list`・`history` のオプションの順序は問わない。
 
 ### list
 
@@ -394,8 +394,9 @@ register・unregisterの成功時はstdout・stderrへ出力せず終了コー�
 | 指定なし | 稼働中と保存済みを1つの一覧にする |
 | `--active` | [稼働一覧](#稼働一覧)：履歴の列挙を行わない |
 | `--saved` | [history](#history) と同じ対象・並び・表・JSON。専用tmuxを参照しない。任意で `--cwd <absolute-cwd>` を指定できる |
+| `--displayed` | [表示中の会話一覧](#表示中の会話一覧)。任意で `--client-pid <pid>` を指定できる |
 
-`list` の各オプションは1回まで指定できる。`--active` と `--saved` は同時指定できない。`--cwd` は `--saved` と組み合わせる。
+`list` の各オプションは1回まで指定できる。`--active`・`--saved`・`--displayed` は同時指定できない。`--cwd` は `--saved` と、`--client-pid` は `--displayed` とだけ組み合わせる。
 
 #### 統合一覧
 
@@ -456,7 +457,22 @@ metadataは会話ID・絶対パスのcwdとfileを検証する。paneを直接�
 | 専用serverが未起動、または稼働piがない | 表は見出しだけを表示する。JSONは登録済みworkspaceを空の `sessions`・`empty` とともに返し、登録もなければ `[]` を返す。どちらも終了コード0とする |
 | tmuxからの取得に失敗 | 理由をstderrへ表示し、非0で終了する |
 
-`list` は未登録の稼働cwdがある場合だけworkspace登録を書き込む。workspace登録と「再取得とキャッシュ」で定めるタイトルキャッシュ以外のディレクトリ作成・JSON書込みを行わない。server起動・復元は行わない。登録の追加時は既存の復元候補とserver世代を保持する。
+`list` の既定モードと `--active` は未登録の稼働cwdがある場合だけworkspace登録を書き込む。workspace登録と「再取得とキャッシュ」で定めるタイトルキャッシュ以外のディレクトリ作成・JSON書込みを行わない。server起動・復元は行わない。登録の追加時は既存の復元候補とserver世代を保持する。
+
+#### 表示中の会話一覧
+
+専用tmuxに接続中のクライアントごとに、表示中のwindowのactive paneに稼働piがあれば1件を返す。同じ会話を複数のクライアントが表示していれば、クライアントごとに1件を返す。保存前の会話も対象とする。
+
+`--client-pid <pid>` を指定すると、[switch](#switch) のPID照合と同じ条件でクライアントを絞る。複数のクライアントが一致する場合は、表示内容にかかわらずエラーにする。
+
+表の列は `CLIENT PID`・`WORKSPACE`・`SESSION ID`・`TMUX TARGET`・`FILE` の順とする。JSONは件数とPID指定の有無にかかわらず `[{"clientPid":123,"id":"session-id","cwd":"/path/to/workspace","file":"/path/to/session.jsonl","target":"tmux-session-name"}]` 形式の配列を返す。`clientPid` は絞り込みに指定した値ではなくtmuxクライアント自身のPID、`target` は表示先のtmuxセッション名とする。`id`・`cwd`・`file` はactive paneのpiのmetadataの値とする。
+
+| 状態 | 結果 |
+| --- | --- |
+| 専用serverが未起動、対象クライアントがいない、または対象クライアントがpiを表示していない | 表は見出しだけ、JSONは `[]` を出力し、終了コード0 |
+| PIDが複数クライアントと一致、またはtmuxからの取得に失敗 | 理由をstderrへ表示し、非0で終了 |
+
+状態は変更しない。server・piの起動や接続、workspace登録、保存会話の探索は行わない。
 
 ### switch
 
@@ -479,21 +495,6 @@ metadataは会話ID・絶対パスのcwdとfileを検証する。paneを直接�
 | `2` | 生存 pane に指定 ID の Pi が見つからない |
 | `3` | 対象 Pi は見つかったが、該当する接続クライアントがない。接続を待つ場合は呼び出し側が再試行する |
 | `1` | その他の失敗（該当する Pi またはクライアントが複数ある場合を含む） |
-
-### current
-
-`current` は、クライアントが表示中のpaneのpi実体のmetadataを読む。表は `WORKSPACE`・`SESSION ID`・`TMUX TARGET`・`FILE` の順で1件を表示する。
-
-JSONでは `{"id":"session-id","cwd":"/path/to/workspace","file":"/path/to/session.jsonl","target":"tmux-session-name"}` 形式のJSONオブジェクト1件と末尾改行を返す。表示中のpaneは、クライアントが表示するwindowのactive paneとする。`target` は表示中のpaneが属するtmuxセッション名、`id`・`cwd`・`file` はmetadataの値とする。クライアントの特定は `switch` と同じ `--client-pid` の照合と省略時の唯一クライアント判定を使う。
-
-| 状態 | 結果 |
-| --- | --- |
-| 表示中のpaneがpi実体のmetadataを持つ | metadataの `id`・`cwd`・`file` と表示中のpaneが属するtmuxセッション名を指定の形式で返し、終了コード0で終了する |
-| 表示中のpaneがpi実体のmetadataを持たない、または表示中のpaneを特定できない | 何も出力せず理由をstderrへ表示し、非0で終了する |
-
-同一tmuxセッション内の複数のpaneでpi実体が稼働していても、表示中のpaneのpi実体を返す。
-
-serverの起動・復元、piの起動・接続、workspace登録は行わない。
 
 ### history
 
@@ -683,10 +684,10 @@ CLIは対象の状態を繰り返し確認し、置き換えの条件を満た�
 
 - `pi-mux -h` と `pi-mux --help`
 - `history` と `history --cwd <absolute-cwd>`（登録済みcwdと未登録cwdの両方）
-- `current` と `current --client-pid <pid>`
 - `list`・`list --active`・`list --saved`・`list --saved --cwd <absolute-cwd>`
+- `list --displayed` と `list --displayed --client-pid <pid>`
 
-`history`・`current`・`list` は表とJSONの両形式を対象とする。
+`history`・`list` は表とJSONの両形式を対象とする。
 
 応答時間は、コマンドの起動から結果の受信完了までの時間とする。保存会話1500件・登録workspace 3件・稼働pane 3枚の状態では、1回の呼び出しの応答時間は、次のとおりとする。
 

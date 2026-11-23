@@ -112,13 +112,17 @@ describe("external command environment", () => {
       timeout: 10_000,
       env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
     });
-    succeedWithStdout(JSON.stringify({ id: "A", cwd: "/p", file: "/f", target: "t" }) + "\n");
-    await new PiMux().current();
-    expect(spawnMock).toHaveBeenLastCalledWith("pi-mux", ["current", "--json"], {
-      cwd: undefined,
-      timeout: 10_000,
-      env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
-    });
+    succeedWithStdout("[]\n");
+    expect(await new PiMux().current(123)).toBeUndefined();
+    expect(spawnMock).toHaveBeenLastCalledWith(
+      "pi-mux",
+      ["list", "--displayed", "--json", "--client-pid", "123"],
+      {
+        cwd: undefined,
+        timeout: 10_000,
+        env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
+      },
+    );
     succeedWithStdout("");
     await new PiMux().switch("A");
     expect(spawnMock).toHaveBeenLastCalledWith("pi-mux", ["switch", "A"], {

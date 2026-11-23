@@ -314,34 +314,64 @@ describe("PiMux", () => {
     expect(execute).toHaveBeenCalledOnce();
   });
 
-  it("parses the current session for a client", async () => {
+  describe("current displayed session", () => {
     const current = { id: "A", cwd: "/project", file: "/saved/A.jsonl", target: "pi-A" };
-    const execute = vi.fn().mockResolvedValue(`${JSON.stringify(current)}\n`);
-    const mux = new PiMux(execute);
-    expect(await mux.current(456)).toEqual(current);
-    expect(execute).toHaveBeenCalledExactlyOnceWith(
-      "pi-mux",
-      ["current", "--json", "--client-pid", "456"],
-      undefined,
-    );
-  });
+    const displayed = { ...current, clientPid: 123 };
+    const terminalPid = 456;
 
-  it("returns undefined when current cannot resolve the client", async () => {
-    const execute = vi.fn().mockRejectedValue(Object.assign(new Error("no client"), { code: 1 }));
-    expect(await new PiMux(execute).current()).toBeUndefined();
-    expect(execute).toHaveBeenCalledExactlyOnceWith("pi-mux", ["current", "--json"], undefined);
-  });
+    it("returns the displayed session when the terminal PID differs from the client PID", async () => {
+      const execute = vi.fn().mockResolvedValue(`${JSON.stringify([displayed])}\n`);
+      expect(await new PiMux(execute).current(terminalPid)).toEqual(current);
+      expect(execute).toHaveBeenCalledExactlyOnceWith(
+        "pi-mux",
+        ["list", "--displayed", "--json", "--client-pid", String(terminalPid)],
+        undefined,
+      );
+    });
 
-  it.each([
-    "not json",
-    "null",
-    '{"id":"A"}',
-    '{"id":"A","cwd":"relative","file":"/f","target":"t"}',
-    '{"id":"A","cwd":"/c","file":"relative","target":"t"}',
-    '{"id":"A","cwd":"/c","file":"/f","target":""}',
-  ])("rejects an invalid current response: %s", async (output) => {
-    const mux = new PiMux(vi.fn().mockResolvedValue(output));
-    await expect(mux.current()).rejects.toThrow("Invalid pi-mux current response");
+    it("returns undefined when the CLI returns an empty list", async () => {
+      const execute = vi.fn().mockResolvedValue("[]\n");
+      expect(await new PiMux(execute).current(terminalPid)).toBeUndefined();
+    });
+
+    it("rejects multiple displayed sessions instead of choosing a client", async () => {
+      const execute = vi
+        .fn()
+        .mockResolvedValue(JSON.stringify([displayed, { ...displayed, clientPid: 124 }]));
+      await expect(new PiMux(execute).current(terminalPid)).rejects.toThrow(
+        "pi-mux list --displayed returned multiple sessions for PID 456",
+      );
+    });
+
+    it.each([
+      "not json",
+      "null",
+      JSON.stringify(current),
+      "[null]",
+      JSON.stringify([current]),
+      JSON.stringify([{ ...displayed, clientPid: "123" }]),
+      JSON.stringify([{ ...displayed, clientPid: 0 }]),
+      JSON.stringify([{ ...displayed, clientPid: 1.5 }]),
+      JSON.stringify([{ ...displayed, id: "" }]),
+      JSON.stringify([{ ...displayed, cwd: "relative" }]),
+      JSON.stringify([{ ...displayed, file: "relative" }]),
+      JSON.stringify([{ ...displayed, target: "" }]),
+    ])("rejects an invalid displayed list response: %s", async (output) => {
+      const mux = new PiMux(vi.fn().mockResolvedValue(output));
+      await expect(mux.current(terminalPid)).rejects.toThrow(
+        "Invalid pi-mux list --displayed response",
+      );
+    });
+
+    it.each([
+      Object.assign(new Error("tmux query failed"), { exitCode: 1 }),
+      Object.assign(new Error("spawn pi-mux ENOENT"), { code: "ENOENT" }),
+    ])("propagates a CLI failure: %s", async (failure) => {
+      const execute = vi.fn().mockRejectedValue(failure);
+      await expect(new PiMux(execute).current(terminalPid)).rejects.toThrow(
+        `pi-mux list --displayed --json --client-pid ${terminalPid}: ${failure.message}`,
+      );
+    });
   });
 
   it("parses the history list with numeric btime, mtime and size", async () => {

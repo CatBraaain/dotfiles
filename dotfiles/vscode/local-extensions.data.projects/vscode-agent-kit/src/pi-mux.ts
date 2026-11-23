@@ -5,7 +5,7 @@ import { errorMessage, isEpochMs, isRecord } from "./guards";
 const QUERY_TIMEOUT_MS = 10_000;
 const SWITCH_TARGET_MISSING_EXIT_CODE = 2;
 const SWITCH_CLIENT_MISSING_EXIT_CODE = 3;
-const QUERY_COMMANDS = new Set(["list", "history", "current", "switch"]);
+const QUERY_COMMANDS = new Set(["list", "history", "switch"]);
 
 export interface PiSession {
   sessionId: string;
@@ -51,7 +51,6 @@ export interface PiMuxWorkspace {
   empty: PiMuxEmptySession[];
 }
 
-/** `pi-mux current` response: the session a tmux client displays right now. */
 export interface PiMuxCurrentSession {
   id: string;
   cwd: string;
@@ -168,20 +167,24 @@ export class PiMux {
     }
   }
 
-  /** Resolve the session a tmux client displays. Undefined when it cannot be resolved. */
-  async current(clientPid?: number): Promise<PiMuxCurrentSession | undefined> {
-    const args = ["current", "--json", ...clientPidArgs(clientPid)];
-    let output: string;
-    try {
-      output = await this.execute("pi-mux", args, undefined);
-    } catch (error) {
-      if (isCliUnavailable(error))
-        throw new Error(`pi-mux ${args.join(" ")}: ${errorMessage(error)}`);
-      return undefined;
+  async current(clientPid: number): Promise<PiMuxCurrentSession | undefined> {
+    const output = await this.command([
+      "list",
+      "--displayed",
+      "--json",
+      ...clientPidArgs(clientPid),
+    ]);
+    const sessions = parseJsonOutput(output, "list --displayed");
+    if (!Array.isArray(sessions)) throw new Error("Invalid pi-mux list --displayed response");
+    if (sessions.length === 0) return undefined;
+    if (sessions.length > 1) {
+      throw new Error(`pi-mux list --displayed returned multiple sessions for PID ${clientPid}`);
     }
-    const session: unknown = parseJsonOutput(output, "current");
-    if (!isPiMuxCurrentSession(session)) throw new Error("Invalid pi-mux current response");
-    return session;
+    const [session] = sessions;
+    if (!isPiMuxDisplayedSession(session))
+      throw new Error("Invalid pi-mux list --displayed response");
+    const { id, cwd, file, target } = session;
+    return { id, cwd, file, target };
   }
 
   /** List saved conversations, newest first. Throws when the CLI fails. */
@@ -219,10 +222,6 @@ function parseJsonOutput(output: string, command: string): unknown {
   } catch {
     throw new Error(`Invalid pi-mux ${command} response`);
   }
-}
-
-function isCliUnavailable(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
 type PiMuxSessionPayload = Omit<PiMuxSession, "lastRun"> & { lastRun?: unknown };
@@ -273,9 +272,14 @@ function isPiMuxEmptySession(session: unknown): session is PiMuxEmptySession {
   );
 }
 
-function isPiMuxCurrentSession(session: unknown): session is PiMuxCurrentSession {
+function isPiMuxDisplayedSession(
+  session: unknown,
+): session is PiMuxCurrentSession & { clientPid: number } {
   return (
     isRecord(session) &&
+    typeof session.clientPid === "number" &&
+    Number.isSafeInteger(session.clientPid) &&
+    session.clientPid > 0 &&
     typeof session.id === "string" &&
     session.id.length > 0 &&
     typeof session.cwd === "string" &&
