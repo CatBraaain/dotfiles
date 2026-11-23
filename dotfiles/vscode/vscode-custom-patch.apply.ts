@@ -1,5 +1,6 @@
 import { $ } from "bun";
 import {
+  copyFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -9,6 +10,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, sep, win32 } from "node:path";
 
 const extensionId = "catbraaain.vscode-custom-patch";
@@ -127,9 +129,31 @@ async function installExtension(target: Target, vsixPath: string, run: Run): Pro
   console.log(`[${target.platform}] install ${extensionId}`);
   if (target.platform === "linux") {
     await run([...target.codeCommand, "--install-extension", vsixPath, "--force"]);
-  } else {
-    await runWindows(target, windowsInstallCommand(powerShellLiteral(vsixPath)), run);
+    return;
   }
+  if (!isWindowsUncPath(vsixPath)) {
+    await runWindows(target, windowsInstallCommand(powerShellLiteral(vsixPath)), run);
+    return;
+  }
+
+  const tempRoot = await realpath(tmpdir());
+  if (!/^[a-z]:\\$/i.test(win32.parse(tempRoot).root)) {
+    throw new Error(`VSIX staging requires a local Windows temp directory: ${tempRoot}`);
+  }
+  const stage = await mkdtemp(join(tempRoot, "dotfiles-vsix-"));
+  try {
+    const stagedVsix = join(stage, basename(vsixPath));
+    await copyFile(vsixPath, stagedVsix);
+    await runWindows(target, windowsInstallCommand(powerShellLiteral(stagedVsix)), run);
+  } finally {
+    await rm(stage, { recursive: true, force: true });
+  }
+}
+
+function isWindowsUncPath(path: string): boolean {
+  const normalized = win32.normalize(path);
+  if (/^\\\\[?.]\\/.test(normalized)) return /^\\\\[?.]\\UNC\\/i.test(normalized);
+  return normalized.startsWith("\\\\");
 }
 
 async function inject(target: Target, vscodeDir: string, run: Run): Promise<void> {
