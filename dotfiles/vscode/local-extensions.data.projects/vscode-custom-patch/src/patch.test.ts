@@ -124,9 +124,10 @@ describe("findWorkbenchHtml", () => {
   });
 
   it("returns null when nothing matches", () => {
-    const install = join(makeTempRoot("empty"), "install");
-    mkdirSync(install, { recursive: true });
-    assert.equal(findWorkbenchHtml(workbenchSearchDirs({ execPath: join(install, "code") })), null);
+    const versionDir = join(makeTempRoot("empty"), "install", "version");
+    mkdirSync(versionDir, { recursive: true });
+    const found = findWorkbenchHtml(workbenchSearchDirs({ execPath: join(versionDir, "code") }));
+    assert.equal(found, null);
   });
 
   it("resolves via require.main style out dir", () => {
