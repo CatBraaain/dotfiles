@@ -170,8 +170,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (operation.kind === "help") {
       console.log(`Usage:
   pi-mux
-  pi-mux -h
-  pi-mux --help
+  pi-mux -h | --help
   pi-mux new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request]
   pi-mux open [--temporary] [--detached] <session-id>
   pi-mux open --detached --expect-file <absolute-jsonl-path> <session-id>
