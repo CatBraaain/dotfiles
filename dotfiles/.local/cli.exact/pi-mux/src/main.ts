@@ -1013,23 +1013,43 @@ function tmuxConfiguration() {
 
 class LockBusyError extends Error {}
 
+type ReleaseLock = () => Promise<void>;
+
+function lockAddress(config: TmuxConfig, scope = ""): string {
+  const key = createHash("sha256")
+    .update(realpathSync(config.stateDirectory))
+    .update(scope)
+    .digest("hex");
+  return platform.lockAddress(key);
+}
+
+async function tryAcquireLock(address: string): Promise<ReleaseLock | undefined> {
+  const lock = createServer((socket) => socket.destroy());
+  try {
+    await new Promise<void>((resolve, reject) => {
+      lock.once("error", reject);
+      lock.listen(address, resolve);
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EADDRINUSE") return;
+    throw error;
+  }
+  return () =>
+    new Promise<void>((resolve, reject) => {
+      lock.close((error) => (error ? reject(error) : resolve()));
+    });
+}
+
 async function withLock<T>(
   config: TmuxConfig,
   action: () => Promise<T>,
   mode: "wait" | "try" = "wait",
 ): Promise<T> {
-  const key = createHash("sha256").update(realpathSync(config.stateDirectory)).digest("hex");
-  const address = platform.lockAddress(key);
+  const address = lockAddress(config);
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const lock = createServer((socket) => socket.destroy());
-    try {
-      await new Promise<void>((resolve, reject) => {
-        lock.once("error", reject);
-        lock.listen(address, resolve);
-      });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EADDRINUSE") throw error;
+    const release = await tryAcquireLock(address);
+    if (!release) {
       if (mode === "try") throw new LockBusyError("Another pi-mux operation holds the lock");
       await Bun.sleep(POLL_INTERVAL_MS);
       continue;
@@ -1037,9 +1057,7 @@ async function withLock<T>(
     try {
       return await action();
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        lock.close((error) => (error ? reject(error) : resolve()));
-      });
+      await release();
     }
   }
   throw new Error("Timed out waiting for another pi-mux operation");
@@ -1170,12 +1188,21 @@ async function restartServer(config: Config, force: boolean): Promise<number> {
   }
 }
 
-class ServerChangedError extends Error {}
+type ReloadTarget = { session: ManagedSession; pane: Pane };
 
-type ReloadScan =
-  | { kind: "target"; session: ManagedSession; pane: Pane }
-  | { kind: "done" }
-  | { kind: "wait" };
+type ReloadPublication = {
+  pane: Pane;
+  launchToken: string;
+  preserveWarm: boolean;
+  deadlineMs: number;
+};
+
+type InFlightReload = ReloadPublication & { release: ReleaseLock };
+type ReloadProgress = {
+  reloaded: Set<string>;
+  failed: Set<string>;
+  inFlight: Map<string, InFlightReload>;
+};
 
 async function reloadPanes(config: Config, onlyId?: string): Promise<number> {
   const original = await withLock(config, () => serverLifetime(config));
@@ -1195,20 +1222,60 @@ async function reloadPanes(config: Config, onlyId?: string): Promise<number> {
     if (onlyId) await validateReloadTarget(config, onlyId);
     await bootstrapServer(config, onlyId === undefined ? "start" : "existing");
   });
-  const reloaded = new Set<string>();
-  const failed = new Map<string, string>();
-  while (true) {
-    const scan = await withLock(config, async () => {
-      await verifyServerLifetime(config, original, "reload");
-      return await scanReloadTarget(config, reloaded, failed, onlyId);
-    });
-    if (scan.kind === "done") return failed.size > 0 ? 2 : 0;
-    if (scan.kind === "target")
-      await withLock(config, () =>
-        reloadTarget(config, original, scan.session, scan.pane, reloaded, failed),
-      );
-    await Bun.sleep(POLL_INTERVAL_MS);
+  const progress: ReloadProgress = { reloaded: new Set(), failed: new Set(), inFlight: new Map() };
+  let schedulingFailure: { cause: unknown } | undefined;
+  try {
+    while (true) {
+      const step = schedulingFailure
+        ? "done"
+        : await withLock(config, () => startNextReload(config, original, progress, onlyId)).catch(
+            (cause: unknown) => {
+              schedulingFailure = { cause };
+              return "done" as const;
+            },
+          );
+      await confirmReloadPublications(config, original, progress);
+      if (step === "done" && progress.inFlight.size === 0) {
+        if (schedulingFailure) throw schedulingFailure.cause;
+        return progress.failed.size > 0 ? 2 : 0;
+      }
+      if (step !== "started") await Bun.sleep(POLL_INTERVAL_MS);
+    }
+  } finally {
+    await Promise.all([...progress.inFlight.values()].map(({ release }) => release()));
   }
+}
+
+async function startNextReload(
+  config: Config,
+  original: ServerLifetime,
+  progress: ReloadProgress,
+  onlyId?: string,
+): Promise<"started" | "wait" | "done"> {
+  await verifyServerLifetime(config, original, "reload");
+  const targets = await scanReloadTargets(config, progress, onlyId);
+  if (!targets) return "done";
+  for (const target of targets) {
+    const { id } = target.pane;
+    const scope = `\0reload\0${original.pid}\0${original.generation}\0${id}`;
+    const release = await tryAcquireLock(lockAddress(config, scope));
+    if (!release) continue;
+    try {
+      const publication = await respawnReloadTarget(config, original, target, progress);
+      if (!publication) continue;
+      progress.inFlight.set(id, { ...publication, release });
+      return "started";
+    } finally {
+      if (!progress.inFlight.has(id)) await release();
+    }
+  }
+  return "wait";
+}
+
+function reportReloadFailure(progress: ReloadProgress, id: string, reason: string): void {
+  if (progress.failed.has(id)) return;
+  progress.failed.add(id);
+  console.error(`pi-mux: reload ${id}: ${reason}`);
 }
 
 async function validateReloadTarget(config: Config, id: string): Promise<void> {
@@ -1220,37 +1287,34 @@ async function validateReloadTarget(config: Config, id: string): Promise<void> {
   throw new Error(`Session not found (use the complete ID): ${id}`);
 }
 
-async function scanReloadTarget(
+async function scanReloadTargets(
   config: TmuxConfig,
-  reloaded: Set<string>,
-  failed: Map<string, string>,
+  progress: ReloadProgress,
   onlyId?: string,
-): Promise<ReloadScan> {
-  const panes = await livePanes(config, "list");
+): Promise<ReloadTarget[] | undefined> {
+  const { reloaded, failed, inFlight } = progress;
   const managed = (await managedSessions(config)).filter(
-    (session) => !onlyId || session.id === onlyId,
+    ({ id }) =>
+      (!onlyId || id === onlyId) && !reloaded.has(id) && !failed.has(id) && !inFlight.has(id),
   );
+  if (managed.length === 0) return;
+  const panes = await livePanes(config, "list");
   const owned = panes.filter((pane) =>
     managed.some((session) => session.session === pane.session && session.id === pane.id),
   );
-  const markFailed = (id: string, reason: string) => {
-    if (failed.has(id)) return;
-    failed.set(id, reason);
-    console.error(`pi-mux: reload ${id}: ${reason}`);
-  };
   for (const pane of owned) {
-    if (reloaded.has(pane.id) || failed.has(pane.id)) continue;
+    if (failed.has(pane.id)) continue;
     const conflicts = owned.filter((entry) => entry.id === pane.id);
     if (conflicts.length > 1) {
       const reason =
         new Set(conflicts.map((entry) => entry.cwd)).size > 1
           ? `Conflicting working directories for conversation ${pane.id}`
           : "Multiple pi processes match the conversation ID";
-      markFailed(pane.id, reason);
+      reportReloadFailure(progress, pane.id, reason);
     }
   }
-  const pending = managed.filter((session) => !reloaded.has(session.id) && !failed.has(session.id));
-  if (pending.length === 0) return { kind: "done" };
+  const pending = managed.filter(({ id }) => !failed.has(id));
+  if (pending.length === 0) return;
   const rowsOfSession = await tmuxQueries(
     config,
     pending.map((session) => [
@@ -1321,12 +1385,12 @@ async function scanReloadTarget(
       },
     ]),
   );
-  let candidate: { session: ManagedSession; pane: Pane } | undefined;
+  const targets: ReloadTarget[] = [];
   for (const [index, session] of pending.entries()) {
     const publishedRows = rows[index]!.filter((row) => row.published);
     if (publishedRows.length === 0) {
       if ((bootingBySession.get(session.id) ?? 0) > 0) continue;
-      markFailed(session.id, "The managed pi is not running");
+      reportReloadFailure(progress, session.id, "The managed pi is not running");
       continue;
     }
     for (const row of publishedRows) {
@@ -1341,22 +1405,19 @@ async function scanReloadTarget(
         parseSessionState(inspection.state.stdout.trimEnd(), pane.id) === "waiting-user" &&
         pane.startup !== "accepted";
       if (!ready) continue;
-      candidate ??= { session, pane };
+      targets.push({ session, pane });
       break;
     }
   }
-  if (candidate) return { kind: "target", ...candidate };
-  return { kind: "wait" };
+  return targets;
 }
 
-async function reloadTarget(
+async function respawnReloadTarget(
   config: Config,
   original: ServerLifetime,
-  session: ManagedSession,
-  pane: Pane,
-  reloaded: Set<string>,
-  failed: Map<string, string>,
-): Promise<void> {
+  { session, pane }: ReloadTarget,
+  progress: ReloadProgress,
+): Promise<ReloadPublication | undefined> {
   const state = await tmux(config, ["show-options", "-pqv", "-t", pane.pane, "@pi_session_state"]);
   if (state.exitCode !== 0) throw new Error(`Cannot inspect reload state: ${pane.id}`);
   const blocker = await tmux(config, [
@@ -1397,13 +1458,25 @@ async function reloadTarget(
     [config.pi, ...selection, "-e", config.extension, "--", `/${startupCommand}`],
     removed,
   );
+  const canRespawn = [
+    "#{==:#{@pi-mux-restart-veto},}",
+    `#{==:#{pane_id},${pane.pane}}`,
+    `#{==:#{pane_pid},${pane.panePid}}`,
+    "#{==:#{pane_dead},0}",
+    "#{==:#{@pi-mux-pending-restart-blocker},}",
+    '#{m:*"state":"waiting-user"*,#{@pi_session_state}}',
+  ].reduce((left, right) => `#{&&:${left},${right}}`);
+  const recoveryMarker = saved.sessions.some(({ id }) => id === pane.id)
+    ? [tmuxArguments(["set-option", "-g", `@pi-mux-restoring-${pane.id}`, "1"])]
+    : [];
   const reloadBranch = tmuxArguments([
     "if-shell",
     "-t",
     pane.pane,
     "-F",
-    `#{&&:#{==:#{@pi-mux-restart-veto},},#{==:#{pane_id},${pane.pane}},#{m:*"state":"waiting-user"*,#{@pi_session_state}}}`,
+    canRespawn,
     [
+      ...recoveryMarker,
       tmuxArguments(["set-option", "-pu", "-t", pane.pane, "@pi-tmux-session"]),
       tmuxArguments(["respawn-pane", "-k", "-t", pane.pane, "--", paneCommand]),
       tmuxArguments(["set-option", "-pu", "-t", pane.pane, "@pi_session_state"]),
@@ -1419,48 +1492,74 @@ async function reloadTarget(
     ].join(" ; "),
     "display-message -p PI_MUX_RELOAD_WAIT",
   ]);
-  try {
-    const respawned = await tmux(config, [
+  const respawned = await tmux(
+    config,
+    [
       "if-shell",
       "-F",
-      `#{==:#{@pi-mux-generation},${original.generation}}`,
+      `#{&&:#{==:#{pid},${original.pid}},#{==:#{@pi-mux-generation},${original.generation}}}`,
       reloadBranch,
       "display-message -p PI_MUX_RELOAD_SERVER_CHANGED",
-    ]);
-    if (respawned.stdout.includes("PI_MUX_RELOAD_SERVER_CHANGED")) throw new ServerChangedError();
-    if (respawned.stdout.includes("PI_MUX_RELOAD_WAIT")) return;
-    const deadline = Date.now() + STARTUP_TIMEOUT_MS;
-    while (true) {
-      const list = await tmux(config, [
-        "list-panes",
-        "-t",
-        session.session,
-        "-F",
-        "#{pane_id}\t#{pane_pid}\t#{pane_dead}\t#{@pi-tmux-session}\t#{@pi-mux-launch}",
-      ]);
-      const row = list.stdout
-        .trimEnd()
-        .split("\n")
-        .map((line) => line.split("\t"))
-        .find(([paneId]) => paneId === pane.pane);
-      if (!row || row[2] === "1")
-        throw new Error(`pi exited before reload was recorded: ${pane.id}`);
-      const [, pid, , metadata, launch] = row;
-      if (
-        matchesReloadPublication(pane, Number(pid), launchToken, preserveWarm, metadata, launch)
-      ) {
-        reloaded.add(pane.id);
-        console.log(`reloaded ${pane.id}`);
-        return;
-      }
-      if (Date.now() >= deadline) throw new Error(`pi startup timed out during reload: ${pane.id}`);
-      await Bun.sleep(POLL_INTERVAL_MS);
-    }
-  } catch (error) {
-    if (error instanceof ServerChangedError)
+    ],
+    true,
+  );
+  if (respawned.stdout.includes("PI_MUX_RELOAD_SERVER_CHANGED"))
+    throw new Error("Dedicated server changed during reload");
+  if (respawned.exitCode !== 0) {
+    await verifyServerLifetime(config, original, "reload");
+    reportReloadFailure(progress, pane.id, `tmux if-shell failed: ${respawned.stderr.trim()}`);
+    return;
+  }
+  if (respawned.stdout.includes("PI_MUX_RELOAD_WAIT")) return;
+  return { pane, launchToken, preserveWarm, deadlineMs: Date.now() + STARTUP_TIMEOUT_MS };
+}
+
+async function confirmReloadPublications(
+  config: Config,
+  original: ServerLifetime,
+  progress: ReloadProgress,
+): Promise<void> {
+  if (progress.inFlight.size === 0) return;
+  const list = await tmux(
+    config,
+    [
+      "list-panes",
+      "-a",
+      "-F",
+      "#{session_id}\t#{pane_id}\t#{pid}\t#{@pi-mux-generation}\t#{pane_pid}\t#{pane_dead}\t#{@pi-tmux-session}\t#{@pi-mux-launch}",
+    ],
+    true,
+  );
+  if (list.exitCode !== 0 || !list.stdout.trim()) {
+    await verifyServerLifetime(config, original, "reload");
+    const noPanes =
+      list.stderr.includes("no sessions") || list.stderr.includes("no current target");
+    if (list.exitCode !== 0 && !noPanes)
+      throw new Error(`tmux list-panes failed: ${list.stderr.trim()}`);
+  }
+  const rows = new Map<string, string[]>();
+  for (const line of list.stdout.trimEnd().split("\n").filter(Boolean)) {
+    const [session, paneId, serverPid, generation, ...publication] = line.split("\t");
+    if (Number(serverPid) !== original.pid || generation !== original.generation)
       throw new Error("Dedicated server changed during reload");
-    failed.set(pane.id, errorMessage(error));
-    console.error(`pi-mux: reload ${pane.id}: ${errorMessage(error)}`);
+    rows.set(`${session}:${paneId}`, publication);
+  }
+  for (const [id, { pane, launchToken, preserveWarm, deadlineMs, release }] of progress.inFlight) {
+    const [pid, dead, metadata, launch] = rows.get(`${pane.session}:${pane.pane}`) ?? [];
+    if (!pid || dead === "1") {
+      reportReloadFailure(progress, id, "pi exited before reload was recorded");
+    } else if (
+      matchesReloadPublication(pane, Number(pid), launchToken, preserveWarm, metadata, launch)
+    ) {
+      progress.reloaded.add(id);
+      console.log(`reloaded ${id}`);
+    } else if (Date.now() >= deadlineMs) {
+      reportReloadFailure(progress, id, "pi startup timed out during reload");
+    } else {
+      continue;
+    }
+    progress.inFlight.delete(id);
+    await release();
   }
 }
 
