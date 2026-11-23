@@ -890,7 +890,7 @@ describe("§3.a パス文字列の解決", () => {
     );
   });
 
-  it("shipped config uses REPOSITORY_NAME for work and worktrees paths", () => {
+  it("shipped config allows repository work notes without granting the worktree parent", () => {
     const config = parseGuardrailConfig(
       readFileSync(
         sourcePathFromSymlink(
@@ -903,10 +903,17 @@ describe("§3.a パス文字列の解決", () => {
       ?.filter((entry) => entry.action === "allow")
       .flatMap((entry) => entry.patterns);
 
-    assert.equal(writeAllowPatterns?.includes("~/.agents/worktrees/${REPOSITORY_NAME}"), true);
+    assert.equal(writeAllowPatterns?.includes("~/.agents/worktrees/${REPOSITORY_NAME}"), false);
     assert.equal(writeAllowPatterns?.includes("~/.agents/work/${REPOSITORY_NAME}"), true);
     assert.equal(writeAllowPatterns?.includes("~/.agents/worktrees/${PROJECT_NAME}"), false);
     assert.equal(writeAllowPatterns?.includes("~/.agents/work/${PROJECT_NAME}"), false);
+
+    const writeSection = expandPathSection(config.write, projectRoot);
+    const repositoryName = basename(projectRoot);
+    const workNotes = join(homedir(), ".agents", "work", repositoryName);
+    const worktreeParent = join(homedir(), ".agents", "worktrees", repositoryName);
+    assert.equal(resolvePathAction(writeSection, workNotes), "allow");
+    assert.notEqual(resolvePathAction(writeSection, worktreeParent), "allow");
   });
 
   it("allows writes to the Lazyweb token directory", () => {
