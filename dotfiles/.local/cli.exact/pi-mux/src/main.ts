@@ -7,6 +7,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   renameSync,
   statSync,
@@ -15,7 +16,7 @@ import {
 import { readdir, readFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve, win32 } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { HistorySummaryCache, readSessionHeader } from "./history-summary";
 import { platform } from "./platform";
@@ -27,7 +28,10 @@ type ListOperation =
 type Operation =
   | { kind: "help" }
   | { kind: "new"; detached: boolean; clientPid?: number; request?: string; cwd?: string }
-  | { kind: "open"; id: string; temporary: boolean }
+  | { kind: "open"; id: string; temporary: boolean; detached: boolean }
+  | { kind: "open-exact"; id: string; file: string }
+  | { kind: "inspect"; id: string }
+  | DispatchTicketOperation
   | { kind: "state"; id: string; source: StateSource; notification: StateNotification }
   | { kind: "send"; id: string; waitSeconds: number | undefined; text: string }
   | { kind: "close"; id: string; ifTemporary: boolean }
@@ -40,6 +44,16 @@ type Operation =
   | { kind: "restore" }
   | { kind: "reload"; id?: string }
   | { kind: "restart"; force: boolean };
+type DispatchTicketOperation = {
+  kind: "inspect-dispatch-ticket";
+  ownerId: string;
+  socket: string;
+  project: string;
+  ticketId: string;
+  sessionName: string;
+  cwd: string;
+  prompt: string;
+};
 type Candidate = { id: string; cwd: string };
 type ManagedSession = Candidate & { session: string; temporary: boolean };
 export type StateSource = {
@@ -109,9 +123,11 @@ type UnifiedSession = ListedSession & {
 };
 type UnifiedWorkspace = { cwd: string; sessions: UnifiedSession[] };
 type Config = ReturnType<typeof configuration>;
-type TmuxConfig = ReturnType<typeof tmuxConfiguration>;
+type TmuxConfig = ReturnType<typeof tmuxConfiguration> & { noStart?: true };
 
 const SESSION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
+const DISPATCH_TICKET_ID_PATTERN = /^[0-9]{8}-[0-9]{6}(?:[-._][A-Za-z0-9][A-Za-z0-9._-]*)?$/;
+const DISPATCH_TICKET_ID_MAX_LENGTH = 252;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const STARTUP_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 50;
@@ -141,6 +157,9 @@ const PARENT_ENV_KEYS = new Set([
   "PI_TMUX_STARTUP_MODE",
   "PI_TMUX_LAUNCH_TOKEN",
   "PI_TMUX_FIRST_INPUT",
+  "TICKET_DISPATCH_ROLE",
+  "TICKET_DISPATCH_PROJECT",
+  "TICKET_DISPATCH_ID",
 ]);
 const PANE_FORMAT =
   "#{pane_id}\t#{session_id}\t#{session_name}\t#{@pi-tmux-session}\t#{pane_pid}\t#{pane_dead}\t#{window_active}\t#{pane_active}";
@@ -154,7 +173,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux -h
   pi-mux --help
   pi-mux new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request]
-  pi-mux open [--temporary] <session-id>
+  pi-mux open [--temporary] [--detached] <session-id>
+  pi-mux open --detached --expect-file <absolute-jsonl-path> <session-id>
+  pi-mux inspect <session-id>
   pi-mux state <session-id> <state> --source <JSON> --title <JSON>
   pi-mux state <session-id> --clear --source <JSON>
   pi-mux send [--wait <seconds>] <session-id> <text...>
@@ -171,6 +192,34 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux restore
   pi-mux reload [<session-id>]
   pi-mux restart [--force]`);
+      return 0;
+    }
+    if (operation.kind === "inspect") {
+      try {
+        const result = await inspectSession(
+          { ...tmuxConfiguration(), noStart: true },
+          operation.id,
+        );
+        console.log(JSON.stringify(result));
+        return 0;
+      } catch (error) {
+        if (!(error instanceof LockBusyError)) throw error;
+        console.error(`pi-mux: Cannot inspect session ${operation.id}: ${errorMessage(error)}`);
+        return 75;
+      }
+    }
+    if (operation.kind === "open-exact") {
+      if (process.platform !== "linux") throw new Error("Exact session reopen requires Linux");
+      const config = { ...configuration(), noStart: true } as const;
+      printDetachedSession(config, await openExactSession(config, operation.id, operation.file));
+      return 0;
+    }
+    if (operation.kind === "inspect-dispatch-ticket") {
+      const result = await launchDispatchedTicket(
+        { ...tmuxConfiguration(), noStart: true },
+        operation,
+      );
+      console.log(JSON.stringify(result));
       return 0;
     }
     if (operation.kind === "state") {
@@ -304,18 +353,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         console.error(`pi-mux: workspace registration deferred: ${errorMessage(error)}`);
       }
       rememberSessionRoot(config, dirname(target.file));
-      if (operation.kind === "new" && (operation.detached || operation.clientPid !== undefined)) {
-        if (operation.clientPid !== undefined)
-          await switchSession(config, target.id, operation.clientPid);
-        const attach = platform.quoteCommand([
-          config.tmux,
-          "-S",
-          config.socket,
-          "attach-session",
-          "-t",
-          target.session,
-        ]);
-        console.log(`Pi session ${target.id}\nAttach with: ${attach}`);
+      const clientPid = operation.kind === "new" ? operation.clientPid : undefined;
+      if (operation.detached || clientPid !== undefined) {
+        if (clientPid !== undefined) await switchSession(config, target.id, clientPid);
+        printDetachedSession(config, target);
         return 0;
       }
       return target;
@@ -330,6 +371,18 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     console.error(`pi-mux: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
+}
+
+function printDetachedSession(config: TmuxConfig, target: Pane): void {
+  const attach = platform.quoteCommand([
+    config.tmux,
+    "-S",
+    config.socket,
+    "attach-session",
+    "-t",
+    target.session,
+  ]);
+  console.log(`Pi session ${target.id}\nAttach with: ${attach}`);
 }
 
 function mergeSessionLists(active: ListedWorkspace[], history: HistoryEntry[]): UnifiedWorkspace[] {
@@ -509,10 +562,35 @@ export function parseOperation(argv: string[]): Operation {
     }
   }
   if (argv[0] === "open") {
-    const temporary = argv[1] === "--temporary";
-    const id = argv[temporary ? 2 : 1];
-    if (argv.length === (temporary ? 3 : 2) && id && SESSION_ID_PATTERN.test(id))
-      return { kind: "open", id, temporary };
+    const [, mode, flag, file, exactId] = argv;
+    if (
+      argv.length === 5 &&
+      mode === "--detached" &&
+      flag === "--expect-file" &&
+      file &&
+      isAbsolute(file) &&
+      file.endsWith(".jsonl") &&
+      !file.includes("\0") &&
+      exactId &&
+      SESSION_ID_PATTERN.test(exactId)
+    )
+      return { kind: "open-exact", id: exactId, file };
+    let index = 1;
+    let temporary = false;
+    let detached = false;
+    for (; index < argv.length; index++) {
+      if (argv[index] === "--temporary" && !temporary) temporary = true;
+      else if (argv[index] === "--detached" && !detached) detached = true;
+      else break;
+    }
+    const id = argv[index];
+    if (argv.length === index + 1 && id && SESSION_ID_PATTERN.test(id))
+      return { kind: "open", id, temporary, detached };
+  }
+  if (argv[0] === "inspect") {
+    const id = argv[1];
+    if (argv.length === 2 && id && SESSION_ID_PATTERN.test(id)) return { kind: "inspect", id };
+    if (id === "--dispatch-ticket") return parseDispatchTicketOperation(argv.slice(2));
   }
   if (argv[0] === "close") {
     const conditional = argv[1] === "--if-temporary";
@@ -552,7 +630,7 @@ export function parseOperation(argv: string[]): Operation {
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | list --active [--json] | list --saved [--cwd <absolute-cwd>] [--json] | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] [--json] | history [--cwd <absolute-cwd>] [--json] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | reload [<session-id>] | restart [--force]]",
+    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] [--detached] <session-id> | open --detached --expect-file <absolute-jsonl-path> <session-id> | inspect <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | list --active [--json] | list --saved [--cwd <absolute-cwd>] [--json] | switch <session-id> [--client-pid <pid>] | current [--client-pid <pid>] [--json] | history [--cwd <absolute-cwd>] [--json] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | reload [<session-id>] | restart [--force]]",
   );
 }
 
@@ -1040,13 +1118,45 @@ async function tryAcquireLock(address: string): Promise<ReleaseLock | undefined>
     });
 }
 
+function canonicalSocketPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  const parent = dirname(path);
+  let link: string;
+  try {
+    link = readlinkSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || parent === path) throw error;
+    return join(canonicalSocketPath(parent), basename(path));
+  }
+  return canonicalSocketPath(resolve(canonicalSocketPath(parent), link));
+}
+
 async function withLock<T>(
   config: TmuxConfig,
   action: () => Promise<T>,
   mode: "wait" | "try" = "wait",
 ): Promise<T> {
-  const address = lockAddress(config);
+  const statePath = realpathSync(config.stateDirectory);
+  const socketPath = canonicalSocketPath(config.socket);
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+  return await withLockKey(`socket:${socketPath}`, deadline, mode, () =>
+    withLockKey(statePath, deadline, mode, action),
+  );
+}
+
+async function withLockKey<T>(
+  resource: string,
+  deadline: number,
+  mode: "wait" | "try",
+  action: () => Promise<T>,
+): Promise<T> {
+  const key = createHash("sha256").update(resource).digest("hex");
+  const address = platform.lockAddress(key);
   while (Date.now() < deadline) {
     const release = await tryAcquireLock(address);
     if (!release) {
@@ -1066,14 +1176,20 @@ async function withLock<T>(
 type ServerLifetime = { pid: number; generation: string };
 
 async function serverLifetime(config: TmuxConfig): Promise<ServerLifetime | undefined> {
-  const result = await tmux(config, ["display-message", "-p", "#{pid}"], true);
+  const query = ["display-message", "-p", "#{pid}"];
+  const generationOption = "@pi-mux-generation";
+  const batch = config.noStart && !platform.windows;
+  if (batch) query.push(";", "show-options", "-gqv", generationOption);
+  const result = await tmux(config, query, true);
   if (result.exitCode !== 0) {
     if (serverIsAbsent(config, result.stderr)) return undefined;
     throw new Error(`Cannot inspect dedicated server: ${result.stderr.trim()}`);
   }
-  const pid = Number(result.stdout.trim());
+  const [pidText, ...options] = result.stdout.trimEnd().split("\n");
+  const pid = Number(pidText);
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("Invalid dedicated server PID");
-  return { pid, generation: await serverOption(config, "@pi-mux-generation") };
+  const generation = batch ? options.join("\n") : await serverOption(config, generationOption);
+  return { pid, generation };
 }
 
 async function verifyServerLifetime(
@@ -1769,13 +1885,16 @@ async function setRestoringSessions(config: Config, candidates: Candidate[]): Pr
     await tmux(config, ["set-option", "-g", `@pi-mux-restoring-${id}`, "1"]);
 }
 
-async function managedSessions(config: TmuxConfig): Promise<ManagedSession[]> {
+async function managedSessions(config: TmuxConfig, strict = false): Promise<ManagedSession[]> {
   const listed = await tmux(config, ["list-sessions", "-F", "#{session_id}"], true);
   if (listed.exitCode !== 0) {
-    if (serverIsAbsent(config, listed.stderr) || listed.stderr.includes("no sessions")) return [];
+    if (!strict && (serverIsAbsent(config, listed.stderr) || listed.stderr.includes("no sessions")))
+      return [];
     throw new Error(`Cannot inspect managed sessions: ${listed.stderr.trim()}`);
   }
-  const targets = listed.stdout.trim().split("\n").filter(Boolean);
+  const targets = listed.stdout.trimEnd().split("\n").filter(Boolean);
+  if (strict && targets.some((session) => !/^\$\d+$/.test(session)))
+    throw new Error("Invalid tmux session inventory");
   const attributes = await tmuxQueries(
     config,
     targets.flatMap((session) => [
@@ -1792,7 +1911,7 @@ async function managedSessions(config: TmuxConfig): Promise<ManagedSession[]> {
       throw new Error(`Cannot inspect tmux session ${session}: ${environment.stderr.trim()}`);
     }
     const id = environment.stdout.replace(/\n$/, "").slice("PI_TMUX_SESSION_ID=".length);
-    if (!SESSION_ID_PATTERN.test(id))
+    if (!environment.stdout.startsWith("PI_TMUX_SESSION_ID=") || !SESSION_ID_PATTERN.test(id))
       throw new Error(`Invalid conversation ID in tmux session ${session}`);
     const path = attributes[index * 3 + 1]!;
     if (path.exitCode !== 0) throw new Error(`tmux display-message failed: ${path.stdout.trim()}`);
@@ -2082,12 +2201,195 @@ async function resolveSaved(
   return { running, managed, saved, recovery };
 }
 
-async function inspectRunningSession(config: Config, id: string) {
-  const managed = (await managedSessions(config)).filter((session) => session.id === id);
+function parseDispatchTicketOperation(args: string[]): DispatchTicketOperation {
+  const [ownerId, socket, project, ticketId, sessionName, cwd, prompt] = args;
+  if (args.length !== 7) throw new Error("Invalid argument count for inspect --dispatch-ticket");
+  if (!ownerId || ownerId !== ownerId.trim() || !SESSION_ID_PATTERN.test(ownerId))
+    throw new Error("Invalid ticket owner ID");
+  if (!socket || socket.includes("\0")) throw new Error("Invalid ticket dispatch socket");
+  if (!project || project === "." || project === ".." || /[/\\\0]/.test(project))
+    throw new Error("Invalid ticket project");
+  if (
+    !ticketId ||
+    ticketId.length > DISPATCH_TICKET_ID_MAX_LENGTH ||
+    ticketId !== ticketId.trim() ||
+    !DISPATCH_TICKET_ID_PATTERN.test(ticketId)
+  )
+    throw new Error("Invalid ticket ID");
+  const nameId = ticketId.replaceAll(".", "_");
+  const projectHex = Buffer.from(project, "utf8").toString("hex");
+  if (sessionName !== `handle_${nameId}` && sessionName !== `handle_${projectHex}_${nameId}`)
+    throw new Error("Invalid ticket tmux session name");
+  if (!cwd || !isAbsolute(cwd) || cwd.includes("\0"))
+    throw new Error("Ticket workspace must be an absolute path");
+  if (!prompt || prompt.includes("\0")) throw new Error("Invalid ticket dispatch prompt");
+  return {
+    kind: "inspect-dispatch-ticket",
+    ownerId,
+    socket,
+    project,
+    ticketId,
+    sessionName,
+    cwd,
+    prompt,
+  };
+}
+
+type SessionInspection = { state: "present" } | { state: "absent"; file: string | null };
+type DispatchTicketLaunch = { state: "present" } | { state: "launched"; session: string };
+
+async function withSessionAudit<T>(
+  config: TmuxConfig,
+  inspect: (lifetime: ServerLifetime) => Promise<T>,
+): Promise<T> {
+  const stateDirectory = lstatSync(config.stateDirectory);
+  platform.assertDirectorySafety(stateDirectory, config.stateDirectory);
+  return await withLock(
+    config,
+    async () => {
+      const lifetime = await serverLifetime(config);
+      if (!lifetime) throw new Error("The dedicated tmux server is not running");
+      if (!lifetime.generation)
+        throw new Error("Dedicated server has not been initialized by pi-mux");
+      return await inspect(lifetime);
+    },
+    "try",
+  );
+}
+
+async function inspectSession(config: TmuxConfig, id: string): Promise<SessionInspection> {
+  try {
+    return await withSessionAudit<SessionInspection>(config, async (lifetime) => {
+      const wasPresent = await auditSessionPresence(config, id);
+      const saved = wasPresent ? undefined : await findSaved(config, id);
+      const isPresent = wasPresent || (await auditSessionPresence(config, id));
+      await verifyServerLifetime(config, lifetime, "inspect");
+      return isPresent ? { state: "present" } : { state: "absent", file: saved?.file ?? null };
+    });
+  } catch (error) {
+    if (error instanceof LockBusyError) throw error;
+    throw new Error(`Cannot inspect session ${id}: ${errorMessage(error)}`);
+  }
+}
+
+async function launchDispatchedTicket(
+  config: TmuxConfig,
+  operation: DispatchTicketOperation,
+): Promise<DispatchTicketLaunch> {
+  if (process.platform !== "linux") throw new Error("Ticket dispatch launch requires Linux");
+  if (operation.socket !== config.socket)
+    throw new Error("Ticket dispatch socket does not match pi-mux");
+  const cwd = realpathSync(operation.cwd);
+  if (!statSync(cwd).isDirectory()) throw new Error(`Workspace is not a directory: ${cwd}`);
+  return await withSessionAudit<DispatchTicketLaunch>(config, async (lifetime) => {
+    const isPresent = await auditSessionPresence(config, operation.ownerId);
+    await verifyServerLifetime(config, lifetime, "ticket dispatch launch");
+    if (isPresent) return { state: "present" };
+
+    const args = dispatchTicketSessionArgs(config, operation, cwd);
+    registerWorkspaces(config, [cwd]);
+    const result = await tmux(config, args);
+    const session = result.stdout.trimEnd();
+    if (!/^\$[0-9]+$/.test(session))
+      throw new Error("Cannot identify the created ticket tmux session");
+    return { state: "launched", session };
+  });
+}
+
+function dispatchTicketSessionArgs(
+  config: TmuxConfig,
+  { project, ticketId, sessionName, prompt }: DispatchTicketOperation,
+  cwd: string,
+): string[] {
+  const desired: Record<string, string> = {
+    PI_CODING_AGENT_DIR: config.agentDir,
+    TICKET_DISPATCH_ROLE: "pi",
+    TICKET_DISPATCH_PROJECT: project,
+    TICKET_DISPATCH_ID: ticketId,
+  };
+  const unset = [...PARENT_ENV_KEYS].filter(
+    (key) => !GENERATED_ENV_KEYS.has(key) && !Object.hasOwn(desired, key),
+  );
+  for (const key of ["HOME", "PATH", "PI_CODING_AGENT_SESSION_DIR"]) {
+    const value = config.env[key];
+    if (value !== undefined) desired[key] = value;
+    else if (key === "PI_CODING_AGENT_SESSION_DIR") unset.push(key);
+  }
+  const environment = Object.entries(desired).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
+  const command = platform.paneCommand([executable("pi"), "--", prompt], unset);
+  return [
+    "new-session",
+    "-d",
+    "-P",
+    "-F",
+    "#{session_id}",
+    "-s",
+    sessionName,
+    "-c",
+    cwd.replaceAll("#", "##"),
+    ...environment,
+    "--",
+    `exec ${command}`,
+  ].map((arg) => (arg.endsWith(";") ? arg.slice(0, -1) + "\\;" : arg));
+}
+
+async function auditSessionPresence(config: TmuxConfig, id: string): Promise<boolean> {
+  const marker = await serverOption(config, `@pi-mux-restoring-${id}`);
+  if (marker !== "" && marker !== "1") throw new Error("Invalid in-memory restore state");
+  const { running, managed } = await inspectRunningSession(config, id, "audit");
+  return running !== undefined || managed !== undefined || marker === "1";
+}
+
+async function inspectRunningSession(
+  config: TmuxConfig,
+  id: string,
+  mode: "open" | "audit" = "open",
+) {
+  const isAudit = mode === "audit";
+  const allManaged = await managedSessions(config, isAudit);
+  const managed = allManaged.filter((session) => session.id === id);
   if (managed.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
-  const running = (await livePanes(config, "list")).filter((pane) => pane.id === id);
-  if (running.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
-  return { running: running[0], managed: managed[0] };
+  const running = (await livePanes(config, "list", isAudit ? allManaged : undefined)).filter(
+    (pane) => pane.id === id,
+  );
+  const [active] = running;
+  const [target] = managed;
+  if (running.length > 1 || (isAudit && active && target && active.session !== target.session))
+    throw new Error(`Multiple pi processes are running for session ${id}`);
+  if (isAudit && target && !active) {
+    const initializing = await initializingPanes(config, [target], []);
+    if (initializing.length !== 1)
+      throw new Error(`Cannot identify a single starting pi for managed session ${id}`);
+  }
+  return { running: active, managed: target };
+}
+
+async function openExactSession(config: Config, id: string, file: string): Promise<Pane> {
+  return await withSessionAudit(config, async (lifetime) => {
+    if ((await serverOption(config, "@pi-mux-restored")) !== lifetime.generation)
+      throw new Error("Dedicated server has not completed startup restore");
+    if (await serverOption(config, `@pi-mux-restoring-${id}`))
+      throw new Error(`Cannot confirm the exact file of a restoring session: ${id}`);
+    const { running, managed } = await inspectRunningSession(config, id, "audit");
+    const saved = await findExactSaved(config, id, file);
+    if (managed && !running)
+      throw new Error(`Cannot confirm the exact file of a starting session: ${id}`);
+    await verifyServerLifetime(config, lifetime, "exact session reopen");
+    const pane = running ?? (await startExactSession(config, saved));
+    if (pane.file !== saved.file || pane.cwd !== saved.cwd || pane.startup !== "ready")
+      throw new Error(`Running session does not match the expected file and cwd: ${id}`);
+    await verifyServerLifetime(config, lifetime, "exact session reopen");
+    return pane;
+  });
+}
+
+async function startExactSession(config: Config, saved: Session): Promise<Pane> {
+  const target = await createSession(config, saved, sessionName(saved.id));
+  if (!target) throw new Error(`Cannot confirm the exact file of a competing session: ${saved.id}`);
+  const pane = await waitForSession(config, target, saved.id);
+  if (pane.session !== target)
+    throw new Error(`Cannot confirm the session created for the expected file: ${saved.id}`);
+  return pane;
 }
 
 async function openSaved(
@@ -2773,62 +3075,100 @@ function serverIsAbsent(config: TmuxConfig, stderr: string): boolean {
 async function livePanes(
   config: TmuxConfig,
   purpose: "startup" | "list" = "startup",
+  auditedSessions?: ManagedSession[],
 ): Promise<Pane[]> {
-  const result = await tmux(config, ["list-panes", "-a", "-F", PANE_FORMAT], true);
-  if (result.exitCode !== 0) {
+  const format = auditedSessions
+    ? `${PANE_FORMAT}\t#{==:#{TICKET_DISPATCH_ROLE},pi}\t#{!=:#{PI_TMUX_SESSION_ID},}\t#{@pi-mux-launch}`
+    : PANE_FORMAT;
+  const result = await tmux(config, ["list-panes", "-a", "-F", format], true);
+  const rows = result.stdout.replace(/\n$/, "");
+  if (auditedSessions) {
+    const reportsEmpty =
+      result.exitCode === 0
+        ? !rows
+        : /^(no sessions|no current target)$/.test(result.stderr.trim());
+    if (reportsEmpty) {
+      if (!(await tmux(config, ["list-sessions", "-F", "#{session_id}"])).stdout.trim()) return [];
+      throw new Error("Cannot confirm an empty tmux pane inventory");
+    }
+  } else if (result.exitCode !== 0) {
     if (result.stderr.includes("no sessions") || result.stderr.includes("no current target"))
       return [];
     if (purpose === "list" && serverIsAbsent(config, result.stderr)) return [];
-    throw new Error(`Cannot inspect pi sessions: ${result.stderr.trim()}`);
   }
-  return result.stdout
-    .trimEnd()
-    .split("\n")
-    .flatMap((line) => {
-      const [pane, session, name, encoded, pid, dead, windowActive, paneActive] = line.split("\t");
-      if (!pane || !session || !name || !encoded || dead !== "0") return [];
-      const metadata = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
-      if (
-        typeof metadata?.id !== "string" ||
-        !SESSION_ID_PATTERN.test(metadata.id) ||
-        typeof metadata.cwd !== "string" ||
-        typeof metadata.file !== "string" ||
-        !isAbsolute(metadata.cwd) ||
-        !isAbsolute(metadata.file) ||
-        !pid ||
-        !/^[1-9]\d*$/.test(pid) ||
-        metadata.pid !== Number(pid) ||
-        (metadata.startup !== "accepted" &&
-          metadata.startup !== "ready" &&
-          !(purpose === "list" && metadata.startup === undefined))
-      )
-        throw new Error(`Invalid pi session metadata in pane ${pane}`);
-      if (metadata.processPid !== undefined) {
-        if (!Number.isSafeInteger(metadata.processPid) || metadata.processPid <= 0)
-          throw new Error(`Invalid pi session metadata in pane ${pane}`);
-        if (
-          platform.processAncestryAvailable &&
-          !platform.processDescendsFrom(metadata.processPid, Number(pid))
-        )
-          return [];
+  if (result.exitCode !== 0) throw new Error(`Cannot inspect pi sessions: ${result.stderr.trim()}`);
+  if (!rows) return [];
+  return rows.split("\n").flatMap((line) => {
+    const columns = line.split("\t");
+    const [pane, session, name, encoded, pid, dead, windowActive, paneActive, ...audit] = columns;
+    if (auditedSessions) {
+      const hasValidPane = /^%\d+$/.test(pane ?? "") && /^\$\d+$/.test(session ?? "") && name;
+      const [dispatcherPi, managedId, launch] = audit;
+      const hasAuditFlags =
+        audit.length === 3 &&
+        [dead, dispatcherPi, managedId].every((flag) => flag === "0" || flag === "1");
+      if (!hasValidPane || !hasAuditFlags) throw new Error("Invalid tmux pane inventory");
+      if (dead === "0" && !encoded) {
+        const managed = auditedSessions.find((entry) => entry.session === session);
+        const hasUnidentifiedPi = (dispatcherPi === "1" || managedId === "1") && !managed;
+        if (hasUnidentifiedPi || (launch && !launchMatchesManagedSession(launch, managed, pid)))
+          throw new Error(`Cannot identify the starting pi in pane ${pane}`);
       }
-      return [
-        {
-          pane,
-          session,
-          name,
-          active: windowActive === "1" && paneActive === "1",
-          pid: metadata.processPid ?? Number(pid),
-          panePid: Number(pid),
-          id: metadata.id,
-          cwd: metadata.cwd,
-          file: metadata.file,
-          startup: metadata.startup,
-          warm: metadata.warm === true,
-          metadata: encoded,
-        },
-      ];
-    });
+    }
+    if (!pane || !session || !name || !encoded || dead !== "0") return [];
+    const metadata = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+    if (
+      typeof metadata?.id !== "string" ||
+      !SESSION_ID_PATTERN.test(metadata.id) ||
+      typeof metadata.cwd !== "string" ||
+      typeof metadata.file !== "string" ||
+      !isAbsolute(metadata.cwd) ||
+      !isAbsolute(metadata.file) ||
+      !pid ||
+      !/^[1-9]\d*$/.test(pid) ||
+      metadata.pid !== Number(pid) ||
+      (metadata.startup !== "accepted" &&
+        metadata.startup !== "ready" &&
+        !(purpose === "list" && metadata.startup === undefined))
+    )
+      throw new Error(`Invalid pi session metadata in pane ${pane}`);
+    if (metadata.processPid !== undefined) {
+      if (!Number.isSafeInteger(metadata.processPid) || metadata.processPid <= 0)
+        throw new Error(`Invalid pi session metadata in pane ${pane}`);
+      if (
+        platform.processAncestryAvailable &&
+        !platform.processDescendsFrom(metadata.processPid, Number(pid))
+      ) {
+        if (auditedSessions) throw new Error(`Cannot confirm the pi process in pane ${pane}`);
+        return [];
+      }
+    }
+    return [
+      {
+        pane,
+        session,
+        name,
+        active: windowActive === "1" && paneActive === "1",
+        pid: metadata.processPid ?? Number(pid),
+        panePid: Number(pid),
+        id: metadata.id,
+        cwd: metadata.cwd,
+        file: metadata.file,
+        startup: metadata.startup,
+        warm: metadata.warm === true,
+        metadata: encoded,
+      },
+    ];
+  });
+}
+
+function launchMatchesManagedSession(
+  encoded: string,
+  managed: ManagedSession | undefined,
+  pid: string | undefined,
+): boolean {
+  if (!managed || !pid) return false;
+  return matchesLaunch(encoded, managed.id, Number(pid), launchRecordToken(encoded));
 }
 
 function parseSessionMetadata(
@@ -2966,8 +3306,35 @@ async function cwdGroupDirectories(config: TmuxConfig): Promise<string[]> {
     .map((entry) => join(root, entry.name));
 }
 
+async function findExactSaved(config: TmuxConfig, id: string, file: string): Promise<Session> {
+  const customRoot = await configuredSessionRoot(config);
+  const roots = await cwdGroupDirectories(config);
+  if (customRoot && existsSync(customRoot)) roots.push(customRoot);
+  const allowed = roots.some((root) => {
+    const directory = realpathSync(root);
+    return dirname(file) === directory || dirname(file) === join(directory, "archive");
+  });
+  if (!allowed)
+    throw new Error(`Expected file is outside the supported session directories: ${file}`);
+  if (!existsSync(file) || !lstatSync(file).isFile() || realpathSync(file) !== file)
+    throw new Error(`Expected session file is not a canonical regular file: ${file}`);
+  const header = readHeader(file);
+  if (
+    header?.type !== "session" ||
+    header.id !== id ||
+    typeof header.cwd !== "string" ||
+    !isAbsolute(header.cwd) ||
+    header.cwd.includes("\0")
+  )
+    throw new Error(`Expected file has an invalid or mismatched session header: ${file}`);
+  const cwd = realpathSync(header.cwd);
+  if (!statSync(cwd).isDirectory())
+    throw new Error(`Session working directory is not a directory: ${cwd}`);
+  return { id, file, cwd };
+}
+
 async function findSaved(
-  config: Config,
+  config: TmuxConfig,
   id: string,
   purpose: "open" | "restore" = "open",
 ): Promise<Session | undefined> {
@@ -3051,12 +3418,16 @@ function quoteTmuxArgument(argument: string): string {
 }
 
 async function tmux(config: TmuxConfig, args: string[], allowFailure = false, input?: string) {
-  const child = Bun.spawn([config.tmux, "-S", config.socket, "-f", config.tmuxConfig, ...args], {
-    env: config.env,
-    stdin: input === undefined ? "ignore" : new Blob([input]),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  const clientFlags = config.noStart && !platform.windows ? ["-N"] : [];
+  const child = Bun.spawn(
+    [config.tmux, "-S", config.socket, "-f", config.tmuxConfig, ...clientFlags, ...args],
+    {
+      env: config.env,
+      stdin: input === undefined ? "ignore" : new Blob([input]),
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),

@@ -10,9 +10,11 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -284,7 +286,10 @@ function runActiveList(fixture: CloseFixture) {
   });
 }
 
-async function holdSharedLock(fixture: CloseFixture, lock: ReturnType<typeof createServer>) {
+async function holdSharedLock(
+  fixture: { directory: string },
+  lock: ReturnType<typeof createServer>,
+) {
   const key = createHash("sha256").update(join(fixture.directory, "agent/pi-tmux")).digest("hex");
   await new Promise<void>((resolve, reject) => {
     lock.once("error", reject);
@@ -935,10 +940,10 @@ exec ${JSON.stringify(realTmux)} "$@"
     writeFileSync(wrapper, guardedCommand.replace("\nexec ", `\n${script}\nexec `));
   }
 
-  run(args: string[]) {
+  run(args: string[], environment: Record<string, string> = {}) {
     return spawnSync(process.execPath, ["run", source, ...args], {
       cwd: this.cwd,
-      env: this.env,
+      env: { ...this.env, ...environment },
       encoding: "utf8",
       timeout: 10_000,
     });
@@ -3045,6 +3050,777 @@ async function finishReload(child: Bun.Subprocess<"ignore", "pipe", "pipe">) {
   ]);
   return { status, stdout, stderr };
 }
+
+describe("inspect", () => {
+  it("requires exactly one complete conversation ID", () => {
+    assert.deepEqual(parseOperation(["inspect", "exact.id"]), { kind: "inspect", id: "exact.id" });
+    for (const args of [[], ["--json", "exact.id"], ["exact.id", "extra"], ["../exact.id"]])
+      assert.throws(() => parseOperation(["inspect", ...args]), /usage:/);
+  });
+
+  it("reports absence and resolves normal before archived saves without changing state", async () => {
+    const fixture = new SessionFixture();
+    try {
+      fixture.plainSession("plain");
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "stable"]);
+      const id = "stopped-conversation";
+      const archived = archiveConversation(conversationFile(fixture.agentDir, fixture.cwd, id));
+      const normal = conversationFile(fixture.agentDir, fixture.cwd, id);
+      const snapshot = JSON.stringify({
+        version: 1,
+        generation: "stable",
+        workspaces: [{ cwd: fixture.cwd, sessions: [id] }],
+      });
+      writeFileSync(restoreFile(fixture), snapshot);
+      const registry = join(fixture.agentDir, "pi-tmux/session-dirs");
+
+      for (const [target, file] of [
+        [id, normal],
+        ["stopped", null],
+      ] as const) {
+        const result = fixture.run(["inspect", target]);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stderr, "");
+        assert.deepEqual(JSON.parse(result.stdout), { state: "absent", file });
+      }
+      rmSync(normal);
+      const archivedResult = fixture.run(["inspect", id]);
+      assert.equal(archivedResult.status, 0, archivedResult.stderr);
+      assert.deepEqual(JSON.parse(archivedResult.stdout), { state: "absent", file: archived });
+      assert.equal(readFileSync(restoreFile(fixture), "utf8"), snapshot);
+      assert.deepEqual(readdirSync(registry), []);
+      assert.equal(fixture.tmux(["list-sessions", "-F", "#{session_name}"]), "plain");
+      assert.deepEqual(fixture.clients(), []);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("reports absence on an initialized server with no sessions", async () => {
+    const fixture = new SessionFixture();
+    try {
+      fixture.tmux(["start-server"]);
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "stable"]);
+      const result = fixture.run(["inspect", "missing"]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), { state: "absent", file: null });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("reports published, managed starting, and restoring conversations as present", async () => {
+    const fixture = new SessionFixture();
+    try {
+      fixture.plainSession("dispatcher-pi");
+      fixture.tmux(["set-environment", "-t", "dispatcher-pi", "TICKET_DISPATCH_ROLE", "pi"]);
+      fixture.piWindow("dispatcher-pi", {
+        id: "published",
+        file: join(fixture.cwd, "published.jsonl"),
+      });
+      fixture.tmux(["kill-pane", "-t", "dispatcher-pi:0"]);
+      const launchToken = randomUUID();
+      const pid = Number(
+        fixture.tmux([
+          "new-session",
+          "-d",
+          "-s",
+          "starting",
+          "-c",
+          fixture.cwd,
+          "-P",
+          "-F",
+          "#{pane_pid}",
+          "-e",
+          "PI_TMUX_SESSION_ID=initializing",
+          "-e",
+          `PI_TMUX_LAUNCH_TOKEN=${launchToken}`,
+          "/bin/sleep",
+          "300",
+        ]),
+      );
+      fixture.tmux([
+        "set-option",
+        "-p",
+        "-t",
+        "starting",
+        "@pi-mux-launch",
+        JSON.stringify({ id: "initializing", pid, token: launchToken }),
+      ]);
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "stable"]);
+      fixture.tmux(["set-option", "-g", "@pi-mux-restoring-restoring", "1"]);
+
+      for (const id of ["published", "initializing", "restoring"]) {
+        const result = fixture.run(["inspect", id]);
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(JSON.parse(result.stdout), { state: "present" });
+      }
+      assert.equal(fixture.tmux(["show-options", "-gqv", "@pi-mux-restoring-restoring"]), "1");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("cannot infer absence from an unpublished dispatcher pi or orphaned launch record", async () => {
+    const fixture = new SessionFixture();
+    try {
+      fixture.plainSession("unpublished");
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "stable"]);
+      fixture.tmux(["set-environment", "-t", "unpublished", "TICKET_DISPATCH_ROLE", "pi"]);
+      const dispatcher = fixture.run(["inspect", "unknown-id"]);
+      assert.equal(dispatcher.status, 1);
+      assert.equal(dispatcher.stdout, "");
+      assert.match(dispatcher.stderr, /Cannot identify the starting pi/);
+
+      fixture.tmux(["set-environment", "-u", "-t", "unpublished", "TICKET_DISPATCH_ROLE"]);
+      fixture.tmux(["set-option", "-p", "-t", "unpublished", "@pi-mux-launch", "orphan"]);
+      const orphan = fixture.run(["inspect", "unknown-id"]);
+      assert.equal(orphan.status, 1);
+      assert.equal(orphan.stdout, "");
+      assert.match(orphan.stderr, /Cannot identify the starting pi/);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("refuses duplicate saved and running matches", async () => {
+    const fixture = new SessionFixture();
+    try {
+      fixture.plainSession("plain");
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "stable"]);
+      const id = "duplicate";
+      const file = conversationFile(fixture.agentDir, fixture.cwd, id);
+      conversationFile(fixture.agentDir, fixture.directory, id);
+      const saved = fixture.run(["inspect", id]);
+      assert.equal(saved.status, 1);
+      assert.equal(saved.stdout, "");
+      assert.match(saved.stderr, /Ambiguous session ID/);
+
+      fixture.piWindow("plain", { id, file });
+      fixture.piWindow("plain", { id, file });
+      const running = fixture.run(["inspect", id]);
+      assert.equal(running.status, 1);
+      assert.equal(running.stdout, "");
+      assert.match(running.stderr, /Multiple pi processes/);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("fails without waiting during a concurrent pi-mux management operation", async () => {
+    const fixture = new SessionFixture();
+    const lock = createServer();
+    try {
+      fixture.plainSession("plain");
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "stable"]);
+      await holdSharedLock(fixture, lock);
+      const result = fixture.run(["inspect", "missing"]);
+      assert.equal(result.status, 75);
+      assert.equal(result.stdout, "");
+      assert.match(result.stderr, /holds the lock/);
+    } finally {
+      lock.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("cannot infer absence when an inventory query fails", async () => {
+    const fixture = new SessionFixture();
+    try {
+      fixture.plainSession("plain");
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "stable"]);
+      fixture.beforeCliTmux(`if [ "$6" = list-panes ]; then
+  printf '%s\\n' 'no current target' >&2
+  exit 1
+fi`);
+      const result = fixture.run(["inspect", "missing"]);
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, "");
+      assert.match(result.stderr, /Cannot confirm an empty tmux pane inventory/);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("rejects observations if the server generation changes during inspection", async () => {
+    const fixture = new SessionFixture();
+    try {
+      fixture.plainSession("plain");
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "before"]);
+      fixture.beforeCliTmux(`if [ "$6" = list-panes ]; then
+  ${JSON.stringify(realTmux)} -S "$2" set-option -g @pi-mux-generation after
+fi`);
+      const result = fixture.run(["inspect", "missing"]);
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, "");
+      assert.match(result.stderr, /Dedicated server changed during inspect/);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("does not create missing state or start an unavailable server", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const unavailable = fixture.run(["inspect", "missing"]);
+      assert.equal(unavailable.status, 1);
+      assert.equal(unavailable.stdout, "");
+      assert.match(unavailable.stderr, /dedicated tmux server is not running/);
+      assert.equal(existsSync(fixture.socket), false);
+      const state = join(fixture.agentDir, "pi-tmux");
+      rmSync(state, { recursive: true });
+      const missingState = fixture.run(["inspect", "missing"]);
+      assert.equal(missingState.status, 1);
+      assert.equal(missingState.stdout, "");
+      assert.match(missingState.stderr, /Cannot inspect session missing/);
+      assert.equal(existsSync(state), false);
+      assert.equal(existsSync(fixture.socket), false);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+});
+
+describe("inspect --dispatch-ticket", () => {
+  const ownerId = "ticket-owner";
+  const project = "調査;";
+  const ticketId = "20260920-120418.follow-up";
+  const scopedName = "handle_20260920-120418_follow-up";
+  const name = `handle_${Buffer.from(project, "utf8").toString("hex")}_20260920-120418_follow-up`;
+
+  function dispatchArgs(socket: string, cwd: string, prompt = "Investigate this ticket") {
+    return ["inspect", "--dispatch-ticket", ownerId, socket, project, ticketId, name, cwd, prompt];
+  }
+
+  function initialize(fixture: SessionFixture, firstSession = "plain"): void {
+    fixture.plainSession(firstSession);
+    fixture.tmux(["set-option", "-g", "@pi-mux-generation", "stable"]);
+  }
+
+  it("accepts only the fixed shape and validates each input", () => {
+    const args = dispatchArgs("/socket", "/workspace");
+    assert.deepEqual(parseOperation(args), {
+      kind: "inspect-dispatch-ticket",
+      ownerId,
+      socket: "/socket",
+      project,
+      ticketId,
+      sessionName: name,
+      cwd: "/workspace",
+      prompt: "Investigate this ticket",
+    });
+    const scopedArgs = args.with(6, scopedName);
+    assert.equal(parseOperation(scopedArgs).kind, "inspect-dispatch-ticket");
+    assert.throws(() => parseOperation(args.slice(0, -1)), /Invalid argument count/);
+    assert.throws(() => parseOperation([...args, "extra"]), /Invalid argument count/);
+    for (const [index, value, error] of [
+      [2, "--flag", /Invalid ticket owner ID/],
+      [2, "owner\n", /Invalid ticket owner ID/],
+      [3, "", /Invalid ticket dispatch socket/],
+      [4, "a/b", /Invalid ticket project/],
+      [4, "a\\b", /Invalid ticket project/],
+      [4, "..", /Invalid ticket project/],
+      [5, "20260920-120418/x", /Invalid ticket ID/],
+      [5, "20260920-120418\n", /Invalid ticket ID/],
+      [5, "20260920-120418-" + "a".repeat(237), /Invalid ticket ID/],
+      [6, "not-a-handle", /Invalid ticket tmux session name/],
+      [7, "./workspace", /absolute path/],
+      [8, "", /Invalid ticket dispatch prompt/],
+      [8, "prompt\0", /Invalid ticket dispatch prompt/],
+    ] as const) {
+      assert.throws(() => parseOperation(args.with(index, value)), error);
+    }
+  });
+
+  it("holds the lifecycle lock through tmux start and registers the normalized history cwd", async () => {
+    const fixture = new SessionFixture();
+    const gate = join(fixture.directory, "continue-start");
+    let launch: Bun.Subprocess<"ignore", "pipe", "pipe"> | undefined;
+    try {
+      initialize(fixture);
+      const actualCwd = join(fixture.directory, "workspace #{pid};");
+      const linkedCwd = join(fixture.directory, "workspace-link");
+      mkdirSync(actualCwd);
+      symlinkSync(actualCwd, linkedCwd);
+      const alternateAgent = join(fixture.directory, "other-agent");
+      mkdirSync(join(alternateAgent, "pi-tmux"), { recursive: true, mode: 0o700 });
+      const alternateRuntime = join(fixture.directory, "alias");
+      const aliasSocket = join(alternateRuntime, "pi-tmux/server.sock");
+      mkdirSync(dirname(aliasSocket), { recursive: true, mode: 0o700 });
+      symlinkSync(fixture.socket, aliasSocket);
+      const wrapper = join(fixture.directory, "bin/tmux");
+      const guardedTmux = readFileSync(wrapper, "utf8");
+      writeFileSync(
+        wrapper,
+        guardedTmux.replace(
+          `[ "$2" != ${JSON.stringify(fixture.socket)} ]`,
+          `{ [ "$2" != ${JSON.stringify(fixture.socket)} ] && [ "$2" != ${JSON.stringify(aliasSocket)} ]; }`,
+        ),
+      );
+      const alternateEnvironments = [
+        { PI_CODING_AGENT_DIR: alternateAgent, XDG_RUNTIME_DIR: fixture.env.XDG_RUNTIME_DIR! },
+        { PI_CODING_AGENT_DIR: alternateAgent, XDG_RUNTIME_DIR: alternateRuntime },
+      ];
+      for (const environment of alternateEnvironments) {
+        const audit = fixture.run(["inspect", ownerId], environment);
+        assert.equal(audit.status, 0, audit.stderr);
+        assert.deepEqual(JSON.parse(audit.stdout), { state: "absent", file: null });
+      }
+
+      const history = conversationFile(fixture.agentDir, actualCwd, "inspection-saved");
+      const hidden = fixture.run(["history", "--json"]);
+      assert.equal(hidden.status, 0, hidden.stderr);
+      assert.equal(hidden.stdout, "[]\n");
+
+      fixture.tmux(["set-environment", "-g", "HOME", "/stale-home"]);
+      fixture.tmux(["set-environment", "-g", "PATH", "/stale-path"]);
+      const staleKeys = ["PI_TMUX_SESSION_ID", "PI_TMUX_FIRST_INPUT", "PI_SESSION_ID"];
+      fixture.env.PI_TMUX_SESSION_ID = "stale-parent";
+      for (const key of staleKeys.slice(1)) fixture.tmux(["set-environment", "-g", key, "stale"]);
+
+      const reached = join(fixture.directory, "start-reached");
+      fixture.beforeCliTmux(`if [ "$6" = new-session ]; then
+  touch ${JSON.stringify(reached)}
+  while [ ! -f ${JSON.stringify(gate)} ]; do sleep 0.02; done
+fi`);
+      const captured = join(fixture.directory, "start.json");
+      const runner = join(fixture.directory, "fake-pi.ts");
+      writeFileSync(
+        join(fixture.directory, "bin/pi"),
+        `#!/bin/sh
+exec ${JSON.stringify(process.execPath)} ${JSON.stringify(runner)} -- "$@"
+`,
+        { mode: 0o700 },
+      );
+      writeFileSync(
+        runner,
+        `import { renameSync, writeFileSync } from "node:fs";
+const keys = ${JSON.stringify(["HOME", "PATH", "PI_CODING_AGENT_DIR", ...staleKeys])};
+const captured = ${JSON.stringify(captured)};
+writeFileSync(captured + ".tmp", JSON.stringify({
+  cwd: process.cwd(),
+  argv: process.argv.slice(2),
+  env: Object.fromEntries(keys.map((key) => [key, process.env[key] ?? null])),
+}));
+renameSync(captured + ".tmp", captured);
+await Bun.sleep(300000);
+`,
+      );
+      const prompt = "--literal 'quote' $(printf sentinel);\nsecond line;";
+
+      launch = Bun.spawn(
+        [process.execPath, "run", source, ...dispatchArgs(fixture.socket, linkedCwd, prompt)],
+        {
+          cwd: fixture.cwd,
+          env: fixture.env,
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      await waitUntil(() => existsSync(reached));
+      for (const environment of [{}, ...alternateEnvironments]) {
+        const blocked = fixture.run(["inspect", ownerId], environment);
+        assert.equal(blocked.status, 75);
+        assert.equal(blocked.stdout, "");
+        assert.match(blocked.stderr, /holds the lock/, blocked.stderr);
+      }
+      assert.equal(fixture.tmux(["list-sessions", "-F", "#{session_name}"]), "plain");
+      assert.ok(restoreDocument(fixture).workspaces.some(({ cwd }) => cwd === actualCwd));
+
+      writeFileSync(gate, "");
+      const stdout = await new Response(launch.stdout).text();
+      const stderr = await new Response(launch.stderr).text();
+      assert.equal(await launch.exited, 0, stderr);
+      assert.equal(stderr, "");
+      const session = fixture.tmux(["display-message", "-p", "-t", name, "#{session_id}"]);
+      assert.match(session, /^\$\d+$/);
+      assert.equal(stdout, JSON.stringify({ state: "launched", session }) + "\n");
+      await waitUntil(() => existsSync(captured));
+      assert.deepEqual(JSON.parse(readFileSync(captured, "utf8")), {
+        cwd: actualCwd,
+        argv: ["--", prompt],
+        env: {
+          HOME: fixture.env.HOME,
+          PATH: fixture.env.PATH,
+          PI_CODING_AGENT_DIR: fixture.agentDir,
+          PI_TMUX_SESSION_ID: null,
+          PI_TMUX_FIRST_INPUT: null,
+          PI_SESSION_ID: null,
+        },
+      });
+      for (const [key, value] of Object.entries({
+        TICKET_DISPATCH_ROLE: "pi",
+        TICKET_DISPATCH_PROJECT: project,
+        TICKET_DISPATCH_ID: ticketId,
+      })) {
+        assert.equal(fixture.tmux(["show-environment", "-t", session, key]), `${key}=${value}`);
+      }
+      const listed = fixture.run(["history", "--json"]);
+      assert.equal(listed.status, 0, listed.stderr);
+      const [{ file }] = JSON.parse(listed.stdout);
+      assert.equal(file, history);
+    } finally {
+      writeFileSync(gate, "");
+      if (launch) await launch.exited;
+      await fixture.cleanup();
+    }
+  });
+
+  it("does not register or launch for a present or restoring owner", async () => {
+    const fixture = new SessionFixture();
+    try {
+      initialize(fixture);
+      fixture.piSession("live-owner", { id: ownerId, file: join(fixture.cwd, "owner.jsonl") });
+      const before = readFileSync(restoreFile(fixture), "utf8");
+      const args = dispatchArgs(fixture.socket, fixture.directory);
+      for (const source of ["live", "restoring"]) {
+        if (source === "restoring") {
+          fixture.tmux(["kill-session", "-t", "live-owner"]);
+          fixture.tmux(["set-option", "-g", `@pi-mux-restoring-${ownerId}`, "1"]);
+        }
+        const result = fixture.run(args);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout, '{"state":"present"}\n');
+        assert.equal(readFileSync(restoreFile(fixture), "utf8"), before);
+        assert.equal(
+          fixture.tmux(["list-sessions", "-F", "#{session_name}"]).includes(name),
+          false,
+        );
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("fails closed on invalid input or unverifiable server state", async () => {
+    const fixture = new SessionFixture();
+    try {
+      initialize(fixture);
+      const before = readFileSync(restoreFile(fixture), "utf8");
+      const result = fixture.run(dispatchArgs(fixture.socket + "-other", fixture.directory));
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, "");
+      assert.match(result.stderr, /socket does not match/);
+      const missing = fixture.run(dispatchArgs(fixture.socket, join(fixture.directory, "missing")));
+      assert.equal(missing.status, 1);
+      assert.equal(missing.stdout, "");
+      assert.match(missing.stderr, /ENOENT/);
+      fixture.tmux(["set-option", "-g", `@pi-mux-restoring-${ownerId}`, "invalid"]);
+      const args = dispatchArgs(fixture.socket, fixture.directory);
+      const restore = fixture.run(args);
+      assert.equal(restore.status, 1);
+      assert.equal(restore.stdout, "");
+      assert.match(restore.stderr, /Invalid in-memory restore state/);
+      fixture.tmux(["set-option", "-gu", `@pi-mux-restoring-${ownerId}`]);
+      fixture.beforeCliTmux(`if [ "$6" = list-panes ]; then
+  ${JSON.stringify(realTmux)} -S "$2" set-option -g @pi-mux-generation changed
+fi`);
+      const generation = fixture.run(args);
+      assert.equal(generation.status, 1);
+      assert.equal(generation.stdout, "");
+      assert.match(generation.stderr, /Dedicated server changed/);
+      assert.equal(readFileSync(restoreFile(fixture), "utf8"), before);
+      assert.equal(fixture.tmux(["list-sessions", "-F", "#{session_name}"]), "plain");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("reports a tmux name collision without replacing the existing session", async () => {
+    const fixture = new SessionFixture();
+    try {
+      initialize(fixture, name);
+      prepareManagedPi(fixture);
+      const panePid = () => fixture.tmux(["display-message", "-p", "-t", name, "#{pane_pid}"]);
+      const before = panePid();
+      const result = fixture.run(dispatchArgs(fixture.socket, fixture.cwd));
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, "");
+      assert.match(result.stderr, /duplicate session/);
+      assert.equal(panePid(), before);
+      assert.equal(existsSync(join(fixture.directory, "launches.jsonl")), false);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+});
+
+describe("open detached with an expected file", () => {
+  it("requires the exact detached shape and an absolute JSONL path", () => {
+    assert.deepEqual(parseOperation(["open", "--detached", "--expect-file", "/old.jsonl", "id"]), {
+      kind: "open-exact",
+      id: "id",
+      file: "/old.jsonl",
+    });
+    for (const args of [
+      ["--expect-file", "/old.jsonl", "id"],
+      ["--detached", "--temporary", "--expect-file", "/old.jsonl", "id"],
+      ["--detached", "--expect-file", "old.jsonl", "id"],
+      ["--detached", "--expect-file", "/old.json", "id"],
+    ])
+      assert.throws(() => parseOperation(["open", ...args]), /usage:/);
+  });
+
+  it("reopens the expected default or custom archive file despite a same-ID custom save", async () => {
+    for (const archived of [false, true]) {
+      const fixture = new SessionFixture();
+      try {
+        const id = "same-id";
+        const normal = conversationFile(fixture.agentDir, fixture.cwd, id);
+        const customRoot = join(fixture.directory, "custom saves");
+        fixture.env.PI_CODING_AGENT_SESSION_DIR = customRoot;
+        mkdirSync(customRoot);
+        const custom = join(customRoot, "custom.jsonl");
+        writeFileSync(custom, readFileSync(normal));
+        const expected = archived ? archiveConversation(custom) : normal;
+        if (archived) writeFileSync(custom, readFileSync(normal));
+        prepareManagedPi(fixture);
+        fixture.plainSession("plain");
+        fixture.tmux(["set-option", "-g", "@pi-mux-generation", "stable"]);
+        fixture.tmux(["set-option", "-g", "@pi-mux-restored", "stable"]);
+        const command = ["open", "--detached", "--expect-file", expected, id];
+
+        const opened = fixture.run(command);
+        assert.equal(opened.status, 0, opened.stderr);
+        const reused = fixture.run(command);
+        assert.equal(reused.status, 0, reused.stderr);
+        assert.equal(reused.stdout, opened.stdout);
+        assert.deepEqual(fixture.clients(), []);
+        const different = fixture.run(["open", "--detached", "--expect-file", custom, id]);
+        assert.equal(different.status, 1, different.stderr);
+        assert.match(different.stderr, /does not match the expected file and cwd/);
+        assert.equal(different.stdout, "");
+        const launchLog = join(fixture.directory, "launches.jsonl");
+        await waitUntil(
+          () => existsSync(launchLog) && readFileSync(launchLog, "utf8").endsWith("\n"),
+        );
+        const launches = readFileSync(launchLog, "utf8").trim().split("\n");
+        assert.equal(launches.length, 1);
+        const launch = JSON.parse(launches[0]!);
+        assert.deepEqual(launch.args.slice(0, 2), ["--session", expected]);
+        assert.equal(launch.cwd, fixture.cwd);
+      } finally {
+        await fixture.cleanup();
+      }
+    }
+  });
+
+  it("rejects a stale server, unrelated paths, moved files, mismatched headers, and starting sessions without launching", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = "old-id";
+      const file = conversationFile(fixture.agentDir, fixture.cwd, id);
+      const other = conversationFile(fixture.agentDir, fixture.cwd, "other-id");
+      const outside = join(fixture.directory, "outside.jsonl");
+      writeFileSync(outside, readFileSync(file));
+      const link = join(dirname(file), "linked.jsonl");
+      symlinkSync(outside, link);
+      prepareManagedPi(fixture);
+      const run = (path: string) => fixture.run(["open", "--detached", "--expect-file", path, id]);
+      const noServer = run(file);
+      assert.equal(noServer.status, 1, noServer.stderr);
+      assert.match(noServer.stderr, /dedicated tmux server is not running/);
+      assert.equal(existsSync(fixture.socket), false);
+
+      fixture.plainSession("plain");
+      fixture.tmux(["set-option", "-g", "@pi-mux-generation", "stable"]);
+      const stale = run(file);
+      assert.equal(stale.status, 1, stale.stderr);
+      assert.match(stale.stderr, /has not completed startup restore/);
+      fixture.tmux(["set-option", "-g", "@pi-mux-restored", "stable"]);
+      const archived = archiveConversation(file);
+      const invalidCwd = join(dirname(archived), "invalid-cwd.jsonl");
+      writeFileSync(invalidCwd, JSON.stringify({ type: "session", id, cwd: "relative" }) + "\n");
+      for (const [path, error] of [
+        [outside, /outside the supported session directories/],
+        [file, /not a canonical regular file/],
+        [link, /not a canonical regular file/],
+        [other, /mismatched session header/],
+        [invalidCwd, /mismatched session header/],
+      ] as const) {
+        const result = run(path);
+        assert.equal(result.status, 1, result.stderr);
+        assert.match(result.stderr, error);
+        assert.equal(result.stdout, "");
+      }
+      const token = randomUUID();
+      const pid = Number(
+        fixture.tmux([
+          "new-session",
+          "-d",
+          "-s",
+          "initializing",
+          "-c",
+          fixture.cwd,
+          "-P",
+          "-F",
+          "#{pane_pid}",
+          "-e",
+          `PI_TMUX_SESSION_ID=${id}`,
+          "-e",
+          `PI_TMUX_LAUNCH_TOKEN=${token}`,
+          "/bin/sleep",
+          "300",
+        ]),
+      );
+      fixture.tmux([
+        "set-option",
+        "-p",
+        "-t",
+        "initializing",
+        "@pi-mux-launch",
+        JSON.stringify({ id, pid, token }),
+      ]);
+      const initializing = run(archived);
+      assert.equal(initializing.status, 1, initializing.stderr);
+      assert.equal(initializing.stdout, "");
+      assert.match(initializing.stderr, /Cannot confirm the exact file of a starting session/);
+      assert.equal(existsSync(join(fixture.directory, "launches.jsonl")), false);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+});
+
+describe("open detached", () => {
+  it("accepts both flag orders and rejects duplicate, trailing, or extra arguments", () => {
+    assert.deepEqual(parseOperation(["open", "id"]), {
+      kind: "open",
+      id: "id",
+      detached: false,
+      temporary: false,
+    });
+    for (const flags of [
+      ["--temporary", "--detached"],
+      ["--detached", "--temporary"],
+    ])
+      assert.deepEqual(parseOperation(["open", ...flags, "id"]), {
+        kind: "open",
+        id: "id",
+        detached: true,
+        temporary: true,
+      });
+    for (const args of [
+      ["--detached"],
+      ["id", "--detached"],
+      ["--detached", "--detached", "id"],
+      ["--temporary", "--temporary", "id"],
+      ["--detached", "id", "extra"],
+    ])
+      assert.throws(() => parseOperation(["open", ...args]), /usage:/);
+  });
+
+  it("reopens and reuses a saved pi without changing a connected client", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = "saved-session";
+      const savedCwd = join(fixture.directory, "original-cwd");
+      mkdirSync(savedCwd);
+      const file = conversationFile(fixture.agentDir, savedCwd, id);
+      prepareManagedPi(fixture);
+      fixture.plainSession("plain");
+      await fixture.attach("plain");
+      const clients = fixture.clients();
+      fixture.beforeCliTmux(`if [ "$3" = attach-session ]; then exit 93; fi`);
+
+      const opened = fixture.run(["open", "--detached", "--temporary", id]);
+      assert.equal(opened.status, 0, opened.stderr);
+      assert.deepEqual(fixture.clients(), clients);
+      const target = fixture
+        .tmux(["list-sessions", "-F", "#{session_id} #{session_name}"])
+        .split("\n")
+        .find((line) => line.includes(" pi-"))
+        ?.split(" ")[0];
+      assert.ok(target);
+      const pid = fixture.tmux(["display-message", "-p", "-t", target, "#{pane_pid}"]);
+      assert.equal(
+        fixture.tmux(["display-message", "-p", "-t", target, "#{session_path}"]),
+        savedCwd,
+      );
+      const metadata = fixture.tmux(["show-options", "-pqv", "-t", target, "@pi-tmux-session"]);
+      assert.equal(JSON.parse(Buffer.from(metadata, "base64").toString("utf8")).file, file);
+      assert.equal(
+        opened.stdout,
+        `Pi session ${id}\nAttach with: '${join(fixture.directory, "bin/tmux")}' '-S' '${fixture.socket}' 'attach-session' '-t' '${target}'\n`,
+      );
+      assert.equal(
+        fixture.tmux(["show-environment", "-t", target, "PI_TMUX_TEMPORARY"]),
+        `PI_TMUX_TEMPORARY=${id}`,
+      );
+      assert.ok(!restoreDocument(fixture).workspaces.some(({ sessions }) => sessions.includes(id)));
+
+      const defaultOpen = fixture.run(["open", id]);
+      assert.equal(defaultOpen.status, 93);
+      assert.equal(defaultOpen.stdout, "");
+      assert.deepEqual(
+        restoreDocument(fixture).workspaces.find(({ cwd }) => cwd === savedCwd)?.sessions,
+        [id],
+      );
+      const reopened = fixture.run(["open", "--temporary", "--detached", id]);
+      assert.equal(reopened.status, 0, reopened.stderr);
+      assert.equal(reopened.stdout, opened.stdout);
+      assert.equal(fixture.tmux(["display-message", "-p", "-t", target, "#{pane_pid}"]), pid);
+      assert.deepEqual(
+        restoreDocument(fixture).workspaces.find(({ cwd }) => cwd === savedCwd)?.sessions,
+        [id],
+      );
+      assert.deepEqual(fixture.clients(), clients);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("does not pass dispatch identity from the caller or tmux global environment to a reopened pi", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = "reopened";
+      prepareManagedPi(fixture);
+      conversationFile(fixture.agentDir, fixture.cwd, id);
+      fixture.plainSession("plain");
+      const dispatchKeys = [
+        "TICKET_DISPATCH_ROLE",
+        "TICKET_DISPATCH_PROJECT",
+        "TICKET_DISPATCH_ID",
+      ];
+      for (const key of dispatchKeys) {
+        fixture.env[key] = "from-caller";
+        fixture.tmux(["set-environment", "-g", key, "from-server"]);
+      }
+      fixture.env.PI_MUX_TEST_ALLOWED = "caller-value";
+
+      const result = fixture.run(["open", "--detached", id]);
+      assert.equal(result.status, 0, result.stderr);
+      const pid = fixture
+        .tmux(["list-panes", "-a", "-F", "#{session_name} #{pane_pid}"])
+        .split("\n")
+        .find((line) => line.startsWith("pi-"))
+        ?.split(" ")[1];
+      assert.ok(pid);
+      const environment = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0");
+      for (const key of dispatchKeys) {
+        assert.ok(!environment.some((entry) => entry.startsWith(`${key}=`)), key);
+        assert.equal(fixture.tmux(["show-environment", "-g", key]), `${key}=from-server`);
+      }
+      assert.ok(environment.includes("PI_MUX_TEST_ALLOWED=caller-value"));
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("does not print detached connection details when open fails", async () => {
+    const fixture = new SessionFixture();
+    try {
+      prepareManagedPi(fixture);
+      const result = fixture.run(["open", "--detached", "missing"]);
+      assert.equal(result.status, 1);
+      assert.equal(result.stdout, "");
+      assert.match(result.stderr, /Session not found/);
+      assert.deepEqual(fixture.clients(), []);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+});
 
 describe("new initial request", () => {
   it("treats help flags as a help request instead of an initial request", () => {

@@ -21,6 +21,7 @@ import {
   sessionName,
   shQuote,
   sortDispatchers,
+  type RunDeps,
   type TicketSnapshot,
 } from "./dispatch";
 
@@ -34,6 +35,370 @@ describe("sessionName", () => {
       sessionName("fix_", "beta/same", true),
     );
     assert.notEqual(dispatcherName(null), dispatcherName("all"));
+  });
+});
+
+function lockedDeps(
+  owners: Record<string, string>,
+  inspect: NonNullable<RunDeps["locked"]>["inspect"] = () => "absent",
+): NonNullable<RunDeps["locked"]> {
+  return {
+    async findOwners(targets) {
+      return {
+        owners: new Map(
+          targets.flatMap(({ project, ticketId }) => {
+            const ownerId = owners[ticketId];
+            return ownerId ? [[`${project}/${ticketId}`, { ownerId, file: "/tmp/old.jsonl" }]] : [];
+          }),
+        ),
+        async isOwnerFileCurrent() {
+          return true;
+        },
+      };
+    },
+    async readRevision() {
+      return "revision";
+    },
+    inspect,
+  };
+}
+
+describe("locked dispatch", () => {
+  it("launches only known absent owners and shares one slot with open tickets", async () => {
+    const launches: string[] = [];
+    const logs: string[] = [];
+    let live: [string, string] | undefined;
+    let ticks = 0;
+    await run({
+      options: { max: 1, statuses: ["locked", "open"] },
+      project: "demo",
+      loadSnapshot: async () => [
+        { id: "20261123-010001", status: "locked", actionable: false },
+        { id: "20261123-010002", status: "locked", actionable: false },
+        { id: "20261123-010003", status: "locked", actionable: false },
+        { id: "20261123-010004-case", status: "locked", actionable: false },
+        { id: "new", status: "open", actionable: true },
+      ],
+      locked: lockedDeps(
+        {
+          "20261123-010002": "alive",
+          "20261123-010003": "unreadable",
+          "20261123-010004-case": "prior-id",
+        },
+        (id) => (id === "alive" ? "present" : id === "unreadable" ? "unknown" : "absent"),
+      ),
+      log: (line) => logs.push(line),
+      readPiSessions: () => (live ? new Map([live]) : new Map()),
+      launch(id, name, prompt, assignment) {
+        assert.equal(live, undefined);
+        launches.push(id);
+        live = [name, id];
+        if (id === "20261123-010004-case") {
+          assert.deepEqual(assignment, { project: "demo", ticketId: id, ownerId: "prior-id" });
+          assert.match(prompt, /pi-mux open --detached/);
+          assert.match(prompt, /\/tmp\/old\.jsonl/);
+        } else {
+          assert.equal(assignment, undefined);
+          assert.match(prompt, /^ticket new /);
+        }
+        return name;
+      },
+      async sleepMs() {
+        if (++ticks >= 2) live = undefined;
+      },
+    });
+    assert.deepEqual(launches, ["20261123-010004-case", "new"]);
+    assert.ok(logs.includes("skipped 20261123-010001: lock owner unknown"));
+    assert.ok(logs.includes("skipped 20261123-010002: lock owner present"));
+    assert.ok(logs.includes("skipped 20261123-010003: lock owner lookup unavailable"));
+    assert.ok(
+      logs.includes("incomplete 20261123-010004-case status=locked session exited without close"),
+    );
+  });
+
+  it("retries a locked launch on a later tick without treating the rejected attempt as started", async () => {
+    const id = "20261123-010000";
+    let sleeps = 0;
+    const launchAtSleepCounts: number[] = [];
+    await run({
+      options: { max: 1, statuses: ["locked"] },
+      project: "demo",
+      loadSnapshot: async () => [{ id, status: "locked", actionable: false }],
+      readPiSessions: () => new Map(),
+      locked: lockedDeps({ [id]: "old" }),
+      log: () => {},
+      launch: (_id, name) => {
+        launchAtSleepCounts.push(sleeps);
+        return sleeps === 0 ? { retry: "lock owner present" } : name;
+      },
+      async sleepMs() {
+        assert.equal(++sleeps <= 2, true, "dispatcher did not finish");
+      },
+    });
+    assert.deepEqual(launchAtSleepCounts, [0, 1]);
+  });
+
+  for (const staysBusy of [false, true]) {
+    it(`rechecks a busy owner probe once when the lock ${staysBusy ? "stays busy" : "clears"}`, async () => {
+      const id = "20261123-010000";
+      let probes = 0;
+      let launches = 0;
+      let ticks = 0;
+      await run({
+        options: { max: 2, statuses: ["locked"] },
+        project: "demo",
+        loadSnapshot: async () => [{ id, status: "locked", actionable: false }],
+        readPiSessions: () => (staysBusy && ticks < 3 ? new Map([["$9", "other"]]) : new Map()),
+        locked: lockedDeps({ [id]: "old" }, () =>
+          ++probes <= (staysBusy ? 2 : 1) ? "busy" : "absent",
+        ),
+        log: () => {},
+        launch: (_id, name) => {
+          launches++;
+          return name;
+        },
+        async sleepMs() {
+          assert.ok(++ticks <= 4);
+        },
+      });
+      assert.equal(probes, 2);
+      assert.equal(launches, staysBusy ? 0 : 1);
+    });
+  }
+
+  it("probes outside the lock and rechecks manual sessions and capacity before launching", async () => {
+    const first = "20261123-010001";
+    const second = "20261123-010002";
+    const launches: string[] = [];
+    const probes: [number, string][] = [];
+    const batches: [number, string[]][] = [];
+    let live = new Map<string, string>();
+    let holdingLock = false;
+    let ticks = 0;
+    const locked = lockedDeps({ [first]: first, [second]: second }, (id) => {
+      assert.equal(holdingLock, false);
+      probes.push([ticks, id]);
+      if (id === first) live.set("$1", first);
+      return "absent";
+    });
+    await run({
+      options: { max: 1, statuses: ["locked"] },
+      project: "demo",
+      loadSnapshot: async () =>
+        [first, second].map((id) => ({ id, status: "locked", actionable: false })),
+      async withTickLock(tick) {
+        holdingLock = true;
+        try {
+          return await tick();
+        } finally {
+          holdingLock = false;
+        }
+      },
+      readPiSessions: () => live,
+      locked: {
+        ...locked,
+        findOwners(targets) {
+          assert.equal(holdingLock, false);
+          batches.push([ticks, targets.map(({ ticketId }) => ticketId)]);
+          return locked.findOwners(targets);
+        },
+      },
+      log: () => {},
+      launch(id) {
+        assert.equal(holdingLock, true);
+        assert.equal(
+          ticks,
+          2,
+          "do not launch while the manually started session occupies the slot",
+        );
+        launches.push(id);
+        return "$2";
+      },
+      async sleepMs() {
+        assert.ok(++ticks <= 3, "dispatcher did not finish");
+        if (ticks === 2) live = new Map();
+      },
+    });
+    assert.deepEqual(batches, [
+      [0, [first, second]],
+      [0, [first, second]],
+      [2, [second]],
+      [2, [second]],
+    ]);
+    assert.deepEqual(probes, [
+      [0, first],
+      [0, second],
+      [2, second],
+    ]);
+    assert.deepEqual(launches, [second]);
+  });
+
+  it("runs open tickets while the initial history read is pending without starting a second scan", async () => {
+    const id = "20261123-010000";
+    const open = "next";
+    const { promise: releaseScan, resolve } = Promise.withResolvers<void>();
+    const locked = lockedDeps({ [id]: "old" });
+    const previousTickMs = process.env.TICKET_TEST_TICK_MS;
+    process.env.TICKET_TEST_TICK_MS = "5";
+    let scans = 0;
+    let sleeps = 0;
+    let launchedOpen = false;
+    const launches: string[] = [];
+    try {
+      await run({
+        options: { max: 1, statuses: ["open", "locked"] },
+        project: "demo",
+        loadSnapshot: async () => [
+          { id, status: "locked", actionable: false },
+          { id: open, status: launchedOpen ? "closed" : "open", actionable: !launchedOpen },
+        ],
+        readPiSessions: () => new Map(),
+        locked: {
+          ...locked,
+          async findOwners(targets) {
+            if (++scans === 1) await releaseScan;
+            return locked.findOwners(targets);
+          },
+        },
+        log: () => {},
+        launch(ticketId, name) {
+          launches.push(ticketId);
+          if (ticketId === open) {
+            assert.equal(scans, 1);
+            launchedOpen = true;
+            resolve();
+          }
+          return name;
+        },
+        async sleepMs() {
+          assert.ok(++sleeps <= 2, "dispatcher did not finish");
+        },
+      });
+    } finally {
+      resolve();
+      if (previousTickMs === undefined) delete process.env.TICKET_TEST_TICK_MS;
+      else process.env.TICKET_TEST_TICK_MS = previousTickMs;
+    }
+    assert.deepEqual(launches, [open, id]);
+    assert.equal(scans, 2);
+  });
+
+  it.each(["scan", "file"] as const)(
+    "retries an unresolved history %s before launching",
+    async (unresolved) => {
+      const id = "20261123-010000";
+      const locked = lockedDeps({ [id]: "old" });
+      let holdingLock = false;
+      let scans = 0;
+      let validations = 0;
+      let sleeps = 0;
+      const logs: string[] = [];
+      const launches: [string, number][] = [];
+      await run({
+        options: { max: 1, statuses: ["locked"] },
+        project: "demo",
+        loadSnapshot: async () => [{ id, status: "locked", actionable: false }],
+        readPiSessions: () => new Map(),
+        locked: {
+          ...locked,
+          async findOwners(targets) {
+            assert.equal(holdingLock, false);
+            if (++scans === 1 && unresolved === "scan")
+              throw new Error("session changed while reading");
+            return {
+              ...(await locked.findOwners(targets)),
+              async isOwnerFileCurrent() {
+                assert.equal(holdingLock, true);
+                return ++validations > 1 || unresolved === "scan";
+              },
+            };
+          },
+        },
+        async withTickLock(tick) {
+          holdingLock = true;
+          try {
+            return await tick();
+          } finally {
+            holdingLock = false;
+          }
+        },
+        log: (line) => logs.push(line),
+        launch(ticketId, name) {
+          launches.push([ticketId, sleeps]);
+          return name;
+        },
+        async sleepMs() {
+          assert.ok(++sleeps <= 3, "dispatcher did not finish");
+        },
+      });
+      assert.deepEqual(launches, [[id, 1]]);
+      assert.equal(validations, unresolved === "scan" ? 1 : 2);
+      const reason =
+        unresolved === "scan"
+          ? "lock history lookup unavailable"
+          : "lock history changed before launch";
+      assert.ok(logs.includes(`skipped ${id}: ${reason}`));
+      assert.ok(logs.every((line) => !line.includes("lock owner unknown")));
+    },
+  );
+
+  it("defers a newly locked ticket without consuming the open ticket's slot", async () => {
+    const id = "20261123-010000";
+    const launches: [number, string][] = [];
+    let tickNumber = 0;
+    let reads = 0;
+    await run({
+      options: { max: 1, statuses: ["open", "locked"] },
+      project: "demo",
+      async loadSnapshot() {
+        const open = { id: "next", status: "open", actionable: true };
+        return reads++ === 0 ? [open] : [{ id, status: "locked", actionable: false }, open];
+      },
+      readPiSessions: () => new Map(),
+      locked: lockedDeps({ [id]: "old" }),
+      log: () => {},
+      launch: (ticketId, name) => {
+        launches.push([tickNumber, ticketId]);
+        return name;
+      },
+      async sleepMs() {
+        assert.ok(++tickNumber <= 2);
+      },
+    });
+    assert.deepEqual(launches, [
+      [0, "next"],
+      [1, id],
+    ]);
+  });
+
+  it("bounds retries and groups repeated atomic launch diagnostics", async () => {
+    const id = "20261123-010000";
+    let sleeps = 0;
+    const launches: string[] = [];
+    const logs: string[] = [];
+    await run({
+      options: { max: 1, statuses: ["locked", "open"] },
+      project: "demo",
+      loadSnapshot: async () => [
+        { id, status: "locked", actionable: false },
+        { id: "next", status: "open", actionable: true },
+      ],
+      readPiSessions: () => new Map(),
+      locked: lockedDeps({ [id]: "old" }),
+      log: (line) => logs.push(line),
+      launch: (ticketId, name) => {
+        launches.push(ticketId);
+        return ticketId === id ? { retry: "locked launch unavailable" } : name;
+      },
+      async sleepMs() {
+        assert.equal(++sleeps <= 3, true, "dispatcher did not finish");
+      },
+    });
+    assert.deepEqual(launches, [id, id, "next"]);
+    assert.equal(
+      logs.filter((line) => line === `skipped ${id}: locked launch unavailable`).length,
+      1,
+    );
   });
 });
 
@@ -63,7 +428,12 @@ describe("fixed prompt asset", () => {
     const sourceDir = join(home, "src");
     mkdirSync(sourceDir);
     copyFileSync(join(import.meta.dir, "dispatch.ts"), join(sourceDir, "dispatch.ts"));
+    copyFileSync(join(import.meta.dir, "lock-history.ts"), join(sourceDir, "lock-history.ts"));
     copyFileSync(join(import.meta.dir, "../dispatch-prompt.md"), join(home, "dispatch-prompt.md"));
+    copyFileSync(
+      join(import.meta.dir, "../dispatch-locked-prompt.md"),
+      join(home, "dispatch-locked-prompt.md"),
+    );
     const script = `
 import assert from "node:assert/strict";
 import { rmSync, writeFileSync } from "node:fs";
@@ -139,6 +509,30 @@ describe("parseDispatchArgs", () => {
     const explicitStart = parseDispatchArgs(["start"]);
     assert.deepEqual(explicitStart, implicitStart);
     assert.equal(explicitStart.action, "start");
+  });
+
+  it("selects multiple statuses and rejects unsupported statuses or actions", () => {
+    assert.deepEqual(
+      parseDispatchArgs([
+        "start",
+        "--status",
+        "locked",
+        "--status",
+        "open",
+        "--status",
+        "locked",
+        "--max",
+        "1",
+      ]).options,
+      { max: 1, statuses: ["locked", "open"] },
+    );
+    for (const args of [
+      ["start", "--status"],
+      ["start", "--status", "blocked"],
+      ["stop", "--status", "open"],
+      ["list", "--status", "locked"],
+    ])
+      assert.ok(parseDispatchArgs(args).error, JSON.stringify(args));
   });
 
   it("uses the max default without an explicit project", () => {
@@ -275,7 +669,10 @@ describe("dispatch list", () => {
       { project: null, name: "g", created: 2 },
       { project: "alpha", name: "a", created: 3 },
     ]);
-    assert.deepEqual(sorted.map((entry) => entry.project), [null, "alpha", "beta"]);
+    assert.deepEqual(
+      sorted.map((entry) => entry.project),
+      [null, "alpha", "beta"],
+    );
   });
 
   it("aligns columns and renders the global marker with local time", () => {
@@ -515,7 +912,11 @@ function invoke(home: string, args: string[], socket = join(home, "isolated.sock
   };
 }
 
-async function waitStopped(home: string, socket: string): Promise<void> {
+async function waitStopped(
+  home: string,
+  socket: string,
+  project: string | null = basename(home),
+): Promise<void> {
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline) {
     const session = Bun.spawnSync([
@@ -524,7 +925,7 @@ async function waitStopped(home: string, socket: string): Promise<void> {
       socket,
       "has-session",
       "-t",
-      `=${dispatcherName(basename(home))}`,
+      `=${dispatcherName(project)}`,
     ]);
     if (session.exitCode !== 0) return;
     await Bun.sleep(10);
@@ -889,6 +1290,24 @@ describe("global dispatch snapshot validation", () => {
       assert.equal(existsSync(join(home, "projects")), false);
     },
   );
+
+  it("rejects a file as the global cwd for a selected locked ticket before creating a dispatcher", async () => {
+    const { home, store, socket } = fixture();
+    const id = "20261123-010001";
+    const cwd = join(home, "projects", basename(home));
+    writeFileSync(join(store, `${id}.md`), "---\nstatus: locked\n---\n");
+    mkdirSync(join(home, "projects"));
+    writeFileSync(cwd, "not a directory");
+
+    const result = invoke(home, ["--all", "--status", "locked"]);
+    assert.equal(result.code, 1, result.stderr);
+    assert.equal(result.stderr.trimEnd(), `I/O error: not a directory: ${cwd}`);
+    assert.equal(existsSync(socket), false);
+
+    const openOnly = invoke(home, ["--all"]);
+    assert.equal(openOnly.code, 0, openOnly.stderr);
+    await waitStopped(home, socket, null);
+  });
 
   it.each(["missing", "invalid"])("fails before dispatching for a %s global store", (kind) => {
     const { home, store, socket } = fixture();

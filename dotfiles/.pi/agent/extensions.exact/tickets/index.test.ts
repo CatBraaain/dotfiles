@@ -36,6 +36,7 @@ interface CapturedTool {
   promptSnippet?: string;
   parameters?: unknown;
   executionMode?: string;
+  prepareLoadout?: () => { hiddenDeclarations?: string[] };
   execute?: (
     toolCallId: string,
     params: Record<string, unknown>,

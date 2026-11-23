@@ -861,6 +861,7 @@ async function main(): Promise<void> {
     return startDispatcher({
       project,
       loadSnapshot,
+      options: parsed.options,
       command: workerCommand(import.meta.path, dispatchArgs, project),
     });
   }

@@ -5,11 +5,11 @@
 ## ストアと安全境界
 
 - 1 ticket は `~/.agents/tickets/<project>/<YYYYMMDD-HHMMSS>.md`。ID は拡張子を除くファイル名、順序は ID の辞書順
-- frontmatter は `status`（必須）、`after`（任意、単一ID）を持つ。本文の最初の H1 を title とし、なければ ID を title とする
+- frontmatter は `status`（必須）と `after`（任意、単一ID）を持つ。本文の最初の H1 を title とし、なければ ID を title とする
 - `project` は空でなく、`/` と `\` を含まず、`.` と `..` ではない単一のパス要素である。`-p/--project`、cwd から解決したproject のいずれもこの制約に従い、違反時はストア外を読書きしない
 - `after` は同一project内の ID または一意な ID接頭辞で指定する。保存時は完全な ID に正規化する
 - `status` は `draft`、`open`、`blocked`、`locked`、`closed`、`cancelled` のいずれか
-- 同じfrontmatter内の `status`、`after` の重複は破損である。読み書きコマンドは失敗し、`check` は `invalid-frontmatter` として報告する
+- 同じfrontmatter内の `status` または `after` の重複は破損である。読み書きコマンドは失敗し、`check` は `invalid-frontmatter` として報告する
 
 ## 共通の振る舞い
 
@@ -90,8 +90,8 @@ dispatcher は ticket store から起動可能な ticket を探してプロン�
 | コマンド | 動作 |
 | --- | --- |
 | `ticket dispatch list` | 同じ tmux socket 上で動作中の dispatcher を一覧する |
-| `ticket dispatch start [-p\|--project <project>] [-a\|--all] [--max N]` | dispatcher を detached tmuxセッションで起動する |
-| `ticket dispatch [-p\|--project <project>] [-a\|--all] [--max N]` | `start` と同じ動作 |
+| `ticket dispatch start [-p\|--project <project>] [-a\|--all] [--max N] [--status <status>]...` | dispatcher を detached tmuxセッションで起動する |
+| `ticket dispatch [-p\|--project <project>] [-a\|--all] [--max N] [--status <status>]...` | `start` と同じ動作 |
 | `ticket dispatch stop [-p\|--project <project>] [-a\|--all]` | 指定した範囲の dispatcher を停止する |
 | `ticket dispatch one --project <project> <id>` | 指定した ticket 1件を手動で起動する |
 
@@ -113,11 +113,12 @@ stop は `--all` 指定時にグローバルdispatcher、それ以外では共�
 
 | オプション | 既定値 | 内容 |
 | --- | --- | --- |
-| `--max N` | `5` | 自動補充に使う稼働数の上限。1以上の整数。グローバルでは全project の合計に適用する |
+| `--max N` | `5` | 選択した状態で共有する、自動補充に使う稼働数の上限。1以上の整数。グローバルでは全project の合計に適用する |
+| `--status <status>` | `open` | `open` または `locked`。繰り返し指定した場合は指定値の集合を対象とする |
 
 | 入出力 | パス・規則 |
 | --- | --- |
-| 固定本文 | CLI同梱の `dispatch-prompt.md` の冒頭 `ticket {{ TICKET_ID }}` に ticket ID を文字どおり埋め込む |
+| 固定本文 | `open` は `dispatch-prompt.md` に ticket ID を埋め込む。`locked` は `dispatch-locked-prompt.md` に対象project、ticket ID、担当会話の完全な ID と履歴ファイルの絶対パスを渡す |
 | tmux socket | `/run/user/1000/pi-tmux/server.sock`。`TICKET_TEST_TMUX_SOCKET` 指定時はその socket を使う |
 | tick間隔の上書き（テスト用） | `TICKET_TEST_TICK_MS` に0より大きい数値を指定すると、その値をミリ秒としてtick間隔に使う。不正な値・0以下の場合は既定の3秒を使う |
 
@@ -125,11 +126,11 @@ stop は `--all` 指定時にグローバルdispatcher、それ以外では共�
 
 #### 固定プロンプト
 
-生成するプロンプトの内容の正本は CLI同梱の `dispatch-prompt.md` である。prompt の文言と、そこで指示されるpi の振る舞いは `dispatch-prompt.md` が定める。内容の変更は `dispatch-prompt.md` の編集で行い、本SPEC には記述しない。
+生成するプロンプトの内容の正本は CLI同梱の `dispatch-prompt.md`（`open`）と `dispatch-locked-prompt.md`（`locked`）とする。どちらも通常の pi セッションとして起動し、状態によって渡す初期プロンプトを選ぶ。`locked` のプロンプトはチケットと旧会話の記録を確認し、このセッションで対処を続けるか、旧セッションの再開を提案するかの判断を求める。旧セッションを開く場合だけ、その会話IDを示して会話内で新たにユーザーの承認を得るよう求める。
 
 #### list
 
-`ticket dispatch list` は同じ tmux socket 上のセッションから、この CLI が起動した dispatcher をすべて一覧する。範囲の指定・フィルタは行わず、`-p/--project`、`-a/--all`、`--max` は受け付けない。ticket store の読み取りや起動先ディレクトリの確認は行わず、tmux server 未起動や list-sessions の失敗も 0件として扱う。
+`ticket dispatch list` は同じ tmux socket 上のセッションから、この CLI が起動した dispatcher をすべて一覧する。範囲の指定・フィルタは行わず、`-p/--project`、`-a/--all`、`--max`、`--status` は受け付けない。ticket store の読み取りや起動先ディレクトリの確認は行わず、tmux server 未起動や list-sessions の失敗も 0件として扱う。
 
 1行を「project名・セッション名・起動時刻」の列とし、project単位は project名、グローバルは `(all)` を project名として表示する。並び順はグローバルを先に、project名の辞書順とする。起動時刻はローカル時刻の `YYYY-MM-DD HH:MM:SS`。dispatcher がないときは `no dispatcher running` を出す。
 
@@ -151,13 +152,15 @@ stop は指定した範囲の dispatcher だけを対象とする。グローバ
 
 引継ぎ対象は ticket CLI が起動したpiセッションであり、グローバルでは全project、project単位ではそのproject に限る。以前の起動がグローバルかproject単位かにかかわらず、対象範囲の残存pi を引き継ぐ。引き継いだpi のセッション名と cwd は保持する。残存pi の数が今回の `--max` 以上なら、その数が上限未満になるまで自動補充を待つ。
 
+`locked` の履歴検索は、Pi の通常の保存先と、対象 cwd に適用されるカスタム保存先の通常履歴・アーカイブを対象とする。カスタム保存先と新規会話の保存先は、呼び出し元の `PI_CODING_AGENT_SESSION_DIR` が空でなければその値を優先し、未設定・空文字なら通常の保存先設定に従う。tmux server の環境にだけある値は使わない。
+
 start の成功は dispatcher用tmuxセッションの作成成功を表し、その後の監視継続や pi起動成功を保証しない。ソースからのCLI起動とコンパイル済みCLI のどちらでも同じ動作を提供する。
 
 #### one
 
 `one` では `--project` と完全な ticket ID を必須とする。指定project の ticket store から該当する1件を選び、`~/projects/<project>` を cwd として「固定プロンプト」と「piセッションの起動」の規則で piセッションを起動する。dispatcher の起動・停止は行わず、稼働数が `--max` 以上でも手動起動できる。
 
-指定した ticket が存在しない、起動時点で actionable でない、または起動済みなら、終了コード1で拒否する。`one` で起動済みと判定するのは、同じ tmux socket に対象project と ID の組に対応する ticket CLI 所有の piセッションが現存する場合に限る。
+指定した ticket が存在しない、起動時点で `open` の actionable 条件を満たさない、または起動済みなら、終了コード1で拒否する。`one` で起動済みと判定するのは、同じ tmux socket に対象project と ID の組に対応する ticket CLI 所有の piセッションが現存する場合に限る。
 
 対象cwd が存在しない、ディレクトリでない、または移動できない場合と、tmux で piセッションの作成に失敗した場合は、新規セッションを作らず終了コード1で終了する。
 
@@ -171,7 +174,7 @@ piセッション名の接頭辞は `handle_` で固定であり、オプショ�
 
 存在確認は `has-session -t =<セッション名>` の完全一致で行う。他project または dispatcher管理外の既存セッションと名前が衝突する場合は、そのセッションを変更せず、その ticket の起動失敗を記録する。衝突したセッションを稼働中として扱わず、今回の実行中はその ticket を再起動しない。
 
-自動起動で tmux のセッション作成に失敗した場合は `tmux new-session failed for <セッション名>: <エラー内容>` を dispatcher の stderr と stdout へ出す。名前の衝突以外の失敗は稼働として登録し、以降の tick の解放条件で判定する。
+`open` の自動起動で tmux のセッション作成に失敗した場合、または `locked` の起動で名前が衝突した場合は、`tmux new-session failed for <セッション名>: <エラー内容>` を dispatcher の stderr と stdout へ出す。`open` で名前の衝突以外の失敗が起きた場合は稼働として登録し、以降の tick の解放条件で判定する。
 
 #### tick と終了
 
@@ -188,7 +191,26 @@ piセッション名の接頭辞は `handle_` で固定であり、オプショ�
 
 1の解放をすべて行ってから2へ進む。同じ tick で解放した稼働枠を3の補充に使う。
 
-起動可能ticket は、「セレクタ」の actionable の条件を満たし、稼働中でも今回の実行で起動済みでもない ticket である。after はticket が属する同一project 内で判定する。グローバルでは全project の候補をまとめて ID の辞書順に選び、同じ ID はproject名の辞書順にする。ID の日時部分を作成日時として扱う。
+起動可能ticket は、選択した状態の条件を満たし、稼働中でも今回の実行で起動済みでもない ticket である。
+
+| 状態 | 起動条件 |
+| --- | --- |
+| `open` | 「セレクタ」の actionable の条件を満たす。after は同一project 内で判定する |
+| `locked` | 履歴から担当会話を一意に特定でき、その会話が pi-mux の専用 tmux socket に存在しないと確認できる。担当不明、稼働中、起動・復元中、照会不明のときは除外して理由を記録する |
+
+担当会話は、そのチケットに `status: locked` を明示した直接の `ticket_set` が最後に成功した会話である。呼び出しと成功結果を照合し、結果のストア内パスと完全な ID でチケットを特定する。更新前の状態は履歴から区別できないため、すでに `locked` だったチケットへの明示的な指定も含む。その後に `locked` 以外への成功結果がある、記録がない、または元の会話を一意に特定できない場合は担当不明とする。手作業や別ツールの変更はこの履歴からは特定できない。稼働の確認範囲は専用 tmux 内に限り、専用 tmux 外での稼働は判定しない。
+
+空き枠があるとき、チケットのファイル世代を控えて候補の履歴をまとめて検索し、対象の起動先 cwd から担当会話を事前照会する。事前照会後、履歴を再検索する。担当会話か履歴パスに変化があった場合や、担当を特定できなくなった場合は、その照会結果を使わない。変化のない履歴の内容は読み直さない。読み取り中に変化した履歴ファイルは1回再読し、それでも検索を完了できなければ、担当不明とは区別して履歴照会不可を記録する。
+
+履歴検索と事前照会の間も、同じ socket 上で別の dispatch 操作を行える。`open` も選択している場合、次の tick までに最初の履歴検索が終わらなければ、検索を続けたまま `open` の起動判定を行う。検索中または新たに見つかった `locked` 候補は、空き枠を消費せず照会結果を待つ。
+
+再検索後は、同じ socket 上の dispatch 操作と排他して、チケットの状態と稼働セッションを読み直し、起動済みを除外して `--max` の空き枠を数え直す。最終確認を呼び出すのは、チケットが引き続き `locked` で、チケットのファイル世代が最初の検索前から変わらず、担当会話の履歴ファイルの世代も再検索時から変わっていない場合に限る。同じ内容への置換も変更とみなす。他の履歴ファイルと履歴の新規追加は再検索で確認できた範囲までを扱う。履歴やストアの書き込みとは排他しない。
+
+担当会話の不在の最終確認と新規 pi の起動は、同じ専用 tmux socket を使い、`pi-mux` の起動・復元など、同じロックを使う操作が間に入らないように一体で行う。この処理が完了するまで、同じ socket 上で別の dispatch 操作による起動・再起動・停止の判定を並行して行わない。
+
+事前照会で pi-mux のライフサイクルロックが競合した場合は、起動せず、後続の tick で1回再照会する。履歴照会不可、再確認での見送り、最終確認での担当会話の存在、または最終確認・起動の結果を確認できない場合は、理由を記録する。以降の tick で起動条件を満たせば1回だけ再試行する。ただし、tmux セッション名が衝突した場合は再試行しない。
+
+`open` と `locked` の両方を指定しても、同じチケットを同時に、または同じ実行中に繰り返し起動しない。グローバルでは全project の候補をまとめて ID の辞書順に選び、同じ ID はproject名の辞書順にする。ID の日時部分を作成日時として扱う。
 
 引き継いだ ticket、done や incomplete で解放した ticket も今回の起動済みに含まれ、再び起動しない。実行中に store へ追加された ticket と、`after` の解消で open になった ticket は、次の tick から起動可能になる。
 
@@ -198,7 +220,7 @@ piセッション名の接頭辞は `handle_` で固定であり、オプショ�
 
 | 条件 | 結果 |
 | --- | --- |
-| サブコマンドが受け付けない位置引数・オプションの指定、必須の引数・値の不足、`--max` の値の不正 | usage を呼出元CLI の stderr へ出し、終了コード2 |
+| サブコマンドが受け付けない位置引数・オプションの指定、必須の引数・値の不足、`--max` または `--status` の値の不正 | usage を呼出元CLI の stderr へ出し、終了コード2 |
 | project名がストアと安全境界の制約に違反 | 既存CLI と同じ validationエラーを呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動・停止しない |
 | start の cwd、またはグローバルで新規起動候補となるticket の対象cwd がディレクトリでない、または移動できない | `I/O error: <エラー内容>` を呼出元CLI の stderr へ出し、終了コード1。dispatcher は起動せず、pi も起動しない |
 | グローバルで新規起動候補となるticket の対象cwd が存在しない | そのticket は新規起動せず `skipped <project>: cwd not found: <cwd>` を出し、他の候補の確認・起動を続ける。start の事前確認では dispatcher も起動する。ログは start の事前確認では呼出元CLI の stdout へ、各 tick では時刻付きで dispatcher の stdout へ出す |
@@ -207,7 +229,7 @@ piセッション名の接頭辞は `handle_` で固定であり、オプショ�
 | dispatcher用tmuxセッションの作成、または稼働中dispatcher の停止に失敗 | 操作と理由を呼出元CLI の stderr へ出し、終了コード1 |
 | start成功後に ticket読取り、固定本文読込み、グローバルの新規起動候補の対象cwd確認などの継続不能なエラー | エラーを dispatcher の stderr と stdout へ出し、dispatcher用セッションを終了する。起動済みpi は作業を続け、呼出元CLI の終了コードは変化しない |
 
-グローバルの新規起動候補の対象cwd は、start の事前確認と各 tick の新規起動前にまとめて確認する。ディレクトリでない・移動できない対象cwd が1つでもあれば、その確認に続くpi起動を行わず、上表の失敗時の動作に従う。存在しない対象cwd のproject は上表のとおりスキップし、スキップは各確認で再評価するため、後から対象cwd が作られれば次の tick の起動候補に戻る。
+グローバルの新規起動候補の対象cwd は、start の事前確認と各 tick の新規起動前にまとめて確認する。`locked` を選択した場合は、起動対象にできる形式の未起動 `locked` チケットも対象とする。ディレクトリでない・移動できない対象cwd が1つでもあれば、その確認に続くpi起動を行わず、上表の失敗時の動作に従う。存在しない対象cwd のproject は上表のとおりスキップし、スキップは各確認で再評価するため、後から対象cwd が作られれば次の tick の起動候補に戻る。
 
 #### ライフサイクル
 

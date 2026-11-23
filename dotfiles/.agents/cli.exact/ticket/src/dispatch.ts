@@ -3,11 +3,22 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { Database, SQLiteError } from "bun:sqlite";
 import dispatchPromptPath from "../dispatch-prompt.md" with { type: "file" };
+import lockedPromptPath from "../dispatch-locked-prompt.md" with { type: "file" };
+import { LockHistory, type LockHistoryOwner, type LockHistoryTarget } from "./lock-history";
 
-const OPTION_KEYS = ["--max"];
+const OPTION_KEYS = ["--max", "--status"];
+const INSPECT_TIMEOUT_MS = 8_000;
+const MAX_LOCKED_LAUNCH_ATTEMPTS = 2;
+const SESSION_ID_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+type DispatchStatus = "open" | "locked";
+type OwnerInspection = "present" | "unknown" | "busy" | "absent";
+
+function includesStatus(options: DispatchOptions, status: DispatchStatus): boolean {
+  return (options.statuses ?? ["open"]).includes(status);
+}
 
 const SESSION_NAME_PREFIX = "handle_";
 
@@ -15,10 +26,11 @@ const DEFAULT_TICK_MS = 3_000;
 
 export interface DispatchOptions {
   max: number;
+  statuses?: DispatchStatus[];
 }
 
 export const DISPATCH_USAGE =
-  "ticket dispatch list\n       ticket dispatch [-p|--project <project>] [-a|--all] [--max N]\n       ticket dispatch start [-p|--project <project>] [-a|--all] [--max N]\n       ticket dispatch stop [-p|--project <project>] [-a|--all]\n       ticket dispatch one --project <project> <id>";
+  "ticket dispatch list\n       ticket dispatch [-p|--project <project>] [-a|--all] [--max N] [--status <open|locked>]...\n       ticket dispatch start [-p|--project <project>] [-a|--all] [--max N] [--status <open|locked>]...\n       ticket dispatch stop [-p|--project <project>] [-a|--all]\n       ticket dispatch one --project <project> <id>";
 
 function tickMs(): number {
   const override = Number(process.env.TICKET_TEST_TICK_MS);
@@ -36,19 +48,21 @@ function splitTicketKey(key: string): [string, string] {
   return [key.slice(0, separator), key.slice(separator + 1)];
 }
 
+function projectCwd(project: string): string {
+  return join(homedir(), "projects", project);
+}
+
 async function validateCwds(
   tickets: TicketSnapshot[],
-  started: ReadonlySet<string>,
+  isCandidate: (ticket: TicketSnapshot) => boolean,
   log: (line: string) => void,
 ): Promise<Set<string>> {
   const skipped = new Set<string>();
   const projects = new Set(
-    tickets
-      .filter((ticket) => ticket.actionable && !started.has(ticket.id))
-      .map((ticket) => splitTicketKey(ticket.id)[0]),
+    tickets.filter(isCandidate).map((ticket) => splitTicketKey(ticket.id)[0]),
   );
   for (const project of projects) {
-    const cwd = join(homedir(), "projects", project);
+    const cwd = projectCwd(project);
     let entry;
     try {
       entry = await stat(cwd);
@@ -157,6 +171,7 @@ export function parseDispatchArgs(argv: string[]): {
     subcommand === "stop" || subcommand === "list" || subcommand === "one" ? subcommand : "start";
   if (subcommand === action) argv = argv.slice(1);
   const given = new Map<string, string>();
+  const statuses = new Set<DispatchStatus>();
   let project: string | undefined;
   let ticketId: string | undefined;
   let all = false;
@@ -183,6 +198,10 @@ export function parseDispatchArgs(argv: string[]): {
       if (isProject) {
         if (action === "one" && project !== undefined) return { error: "duplicate --project" };
         project = value;
+      } else if (arg === "--status") {
+        if (value !== "open" && value !== "locked")
+          return { error: "--status must be open or locked" };
+        statuses.add(value);
       } else given.set(arg, value);
     } else if (arg.startsWith("-")) return { error: `unknown option: ${arg}` };
     else return { error: "positional arguments are not supported" };
@@ -195,7 +214,12 @@ export function parseDispatchArgs(argv: string[]): {
   if (action !== "start") return { action, project, all };
   const max = given.has("--max") ? Number(given.get("--max")) : 5;
   if (!Number.isInteger(max) || max < 1) return { error: "--max must be an integer >= 1" };
-  return { action: "start", project, all, options: { max } };
+  return {
+    action: "start",
+    project,
+    all,
+    options: statuses.size === 0 ? { max } : { max, statuses: [...statuses] },
+  };
 }
 
 function timestamp(date = new Date()): string {
@@ -221,6 +245,29 @@ export function tmux(socket: string, args: string[]) {
 const PROJECT_ENV = "TICKET_DISPATCH_PROJECT";
 const ROLE_ENV = "TICKET_DISPATCH_ROLE";
 const ID_ENV = "TICKET_DISPATCH_ID";
+
+function inspectOwner(id: string, cwd: string): OwnerInspection {
+  const result = spawnSync("pi-mux", ["inspect", id], {
+    cwd,
+    encoding: "utf8",
+    timeout: INSPECT_TIMEOUT_MS,
+  });
+  if (result.status === 75 && !result.error) return "busy";
+  if (result.status !== 0 || result.error) return "unknown";
+  try {
+    const value = JSON.parse(result.stdout);
+    if (value?.state === "present") return "present";
+    if (
+      value?.state === "absent" &&
+      (value.file === null ||
+        (typeof value.file === "string" && isAbsolute(value.file) && !value.file.includes("\0")))
+    )
+      return "absent";
+  } catch {
+    return "unknown";
+  }
+  return "unknown";
+}
 
 export function dispatchSocket(): string {
   return process.env.TICKET_TEST_TMUX_SOCKET ?? "/run/user/1000/pi-tmux/server.sock";
@@ -298,6 +345,7 @@ function sessionNames(socket: string): string[] {
 export async function startDispatcher(input: {
   project: string | null;
   loadSnapshot: LoadSnapshot;
+  options?: DispatchOptions;
   command: string[];
 }): Promise<void> {
   const { project } = input;
@@ -318,10 +366,34 @@ export async function startDispatcher(input: {
         throw new Error(`dispatcher restart failed for ${name}: ${killed.stderr.trim()}`);
       restarted = true;
     }
-    await Bun.file(dispatchPromptPath).text();
+    const options = input.options ?? { max: 5 };
+    const lockedEnabled = includesStatus(options, "locked");
+    if (includesStatus(options, "open")) await Bun.file(dispatchPromptPath).text();
+    if (lockedEnabled) await Bun.file(lockedPromptPath).text();
     const tickets = await input.loadSnapshot();
-    if (project === null)
-      await validateCwds(tickets, new Set(readPiSessions(socket, project).values()), console.log);
+    if (project === null) {
+      const started = new Set(readPiSessions(socket, project).values());
+      const openEnabled = includesStatus(options, "open");
+      await validateCwds(
+        tickets,
+        (ticket) =>
+          !started.has(ticket.id) &&
+          ((openEnabled && ticket.actionable) ||
+            (lockedEnabled && lockedTarget(ticket, null, process.cwd()) !== undefined)),
+        console.log,
+      );
+    }
+    const sessionDirKey = "PI_CODING_AGENT_SESSION_DIR";
+    const sessionDir = process.env[sessionDirKey];
+    const command = lockedEnabled
+      ? [
+          "/usr/bin/env",
+          ...(sessionDir === undefined
+            ? ["-u", sessionDirKey]
+            : [`${sessionDirKey}=${sessionDir}`]),
+          ...input.command,
+        ]
+      : input.command;
     const result = tmux(socket, [
       "new-session",
       "-d",
@@ -330,7 +402,15 @@ export async function startDispatcher(input: {
       "-c",
       process.cwd(),
       ...sessionEnvArgs(project, "dispatcher"),
-      `exec ${input.command.map(shQuote).join(" ")}`,
+      ...(lockedEnabled
+        ? [
+            "-e",
+            `XDG_RUNTIME_DIR=${process.env.XDG_RUNTIME_DIR ?? ""}`,
+            "-e",
+            `PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR ?? ""}`,
+          ]
+        : []),
+      `exec ${command.map(shQuote).join(" ")}`,
     ]);
     if (!result.ok) throw new Error(`dispatcher start failed for ${name}: ${result.stderr.trim()}`);
     console.log(`dispatcher ${restarted ? "restarted" : "started"}: ${name}`);
@@ -408,11 +488,7 @@ export function formatDispatchers(entries: DispatcherEntry[]): string {
 }
 
 export function listDispatchers(socket: string): DispatcherEntry[] {
-  const result = tmux(socket, [
-    "list-sessions",
-    "-F",
-    "#{session_name}\t#{session_created}",
-  ]);
+  const result = tmux(socket, ["list-sessions", "-F", "#{session_name}\t#{session_created}"]);
   if (!result.ok) return [];
   const entries: DispatcherEntry[] = [];
   for (const line of result.stdout.trimEnd().split("\n")) {
@@ -428,27 +504,223 @@ export function listDispatchers(socket: string): DispatcherEntry[] {
   return sortDispatchers(entries);
 }
 
+interface LockedAssignment {
+  project: string;
+  ticketId: string;
+  ownerId: string;
+}
+
+function lockedTarget(
+  ticket: TicketSnapshot,
+  scope: string | null | undefined,
+  cwd: string,
+): LockHistoryTarget | undefined {
+  if (ticket.status !== "locked") return undefined;
+  const [project, ticketId] = scope === null ? splitTicketKey(ticket.id) : [scope, ticket.id];
+  if (
+    !project ||
+    project.startsWith("-") ||
+    !/^[0-9]{8}-[0-9]{6}(?:[-._][A-Za-z0-9][A-Za-z0-9._-]*)?$/.test(ticketId)
+  )
+    return undefined;
+  return { project, ticketId, cwd: scope === null ? projectCwd(project) : cwd };
+}
+
+async function readTicketRevision(target: LockHistoryTarget): Promise<string | undefined> {
+  try {
+    const path = join(homedir(), ".agents", "tickets", target.project, `${target.ticketId}.md`);
+    const entry = await stat(path, { bigint: true });
+    if (entry.isFile()) return `${entry.dev}:${entry.ino}:${entry.mtimeNs}:${entry.ctimeNs}`;
+  } catch {
+    return undefined;
+  }
+}
+
+interface PreparedLock {
+  target: LockHistoryTarget;
+  revision: string;
+  owner: LockHistoryOwner;
+  inspection: OwnerInspection;
+  isOwnerFileCurrent(): Promise<boolean>;
+}
+
+type OwnerProbe = PreparedLock | { skip: string; retry?: true };
+
+async function waitForHistory<T>(history: Promise<T>, ms: number): Promise<T | undefined> {
+  const { promise: deadline, resolve } = Promise.withResolvers<undefined>();
+  const timer = setTimeout(() => resolve(undefined), ms);
+  try {
+    return await Promise.race([history, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+type LockedDeps = {
+  findOwners: LockHistory["findOwners"];
+  readRevision(target: LockHistoryTarget): Promise<string | undefined>;
+  inspect(id: string, cwd: string): OwnerInspection;
+};
+
+type InitialLookup = Awaited<ReturnType<LockedDeps["findOwners"]>>;
+type CandidateRevision = { target: LockHistoryTarget; revision: string };
+type OwnerScan = {
+  probes: Map<string, OwnerProbe>;
+  initial?: { lookup: InitialLookup; revisions: ReadonlyMap<string, CandidateRevision> };
+};
+
+type LaunchResult = string | false | { retry: string };
+
 export interface RunDeps {
   options: DispatchOptions;
   all?: boolean;
+  project?: string;
   loadSnapshot: LoadSnapshot;
   log(line: string): void;
   withTickLock?(tick: () => Promise<boolean>): Promise<boolean>;
   readPiSessions(): ReadonlyMap<string, string>;
-  launch(id: string, name: string, prompt: string): string | false;
+  locked?: LockedDeps;
+  launch(
+    id: string,
+    name: string,
+    prompt: string,
+    assignment?: LockedAssignment,
+  ): LaunchResult | Promise<LaunchResult>;
   sleepMs(ms: number): Promise<void>;
 }
 
 export async function run(deps: RunDeps): Promise<void> {
   const { options } = deps;
-  const template = await Bun.file(dispatchPromptPath).text();
+  const openTemplate = includesStatus(options, "open")
+    ? await Bun.file(dispatchPromptPath).text()
+    : undefined;
+  const locked =
+    includesStatus(options, "locked") && deps.locked
+      ? { ...deps.locked, template: await Bun.file(lockedPromptPath).text() }
+      : undefined;
   const running = new Map<string, string>();
   const started = new Set<string>();
   const seenSessions = new Set<string>();
+  const lockedLaunchAttempts = new Map<string, number>();
+  const busyProbes = new Map<string, { ownerId: string; revision: string; attempts: number }>();
+  const skippedLockReasons = new Map<string, string>();
+  function skipLock(id: string, reason: string): void {
+    if (skippedLockReasons.get(id) !== reason) deps.log(`skipped ${id}: ${reason}`);
+    skippedLockReasons.set(id, reason);
+  }
   deps.log(`dispatcher start max=${options.max}`);
 
-  async function tick(): Promise<boolean> {
-    const tickets = await deps.loadSnapshot();
+  const scope = deps.all ? null : deps.project;
+  const cwd = process.cwd();
+  function isPendingLocked(ticket: TicketSnapshot): boolean {
+    return (
+      locked !== undefined &&
+      ticket.status === "locked" &&
+      !started.has(ticket.id) &&
+      (lockedLaunchAttempts.get(ticket.id) ?? 0) < MAX_LOCKED_LAUNCH_ATTEMPTS
+    );
+  }
+
+  function retryLockedLaunch(id: string, reason: string): void {
+    skipLock(id, reason);
+    lockedLaunchAttempts.set(id, (lockedLaunchAttempts.get(id) ?? 0) + 1);
+  }
+
+  async function scanOwners(): Promise<OwnerScan> {
+    const probes = new Map<string, OwnerProbe>();
+    if (!locked) return { probes };
+
+    const snapshot = await deps.loadSnapshot();
+    const candidates = new Map<string, LockHistoryTarget>();
+    for (const ticket of snapshot) {
+      if (!isPendingLocked(ticket)) continue;
+      const target = lockedTarget(ticket, scope, cwd);
+      if (target) candidates.set(ticket.id, target);
+    }
+    if (candidates.size === 0) return { probes };
+
+    const liveSessions = deps.readPiSessions();
+    const newSessions = [...liveSessions].filter(([session]) => !seenSessions.has(session));
+    const observedRunning = new Map([...running, ...newSessions]);
+    const plan = planTick({
+      tickets: snapshot.map((ticket) => ({ ...ticket, actionable: candidates.has(ticket.id) })),
+      started,
+      running: observedRunning,
+      max: options.max,
+      hasSession: (session) => liveSessions.has(session),
+    });
+    if (plan.launches.length === 0) return { probes };
+
+    const liveIds = new Set(liveSessions.values());
+    const revisions = new Map<string, CandidateRevision>();
+    for (const [key, target] of candidates) {
+      if (liveIds.has(key)) continue;
+      const revision = await locked.readRevision(target);
+      if (revision === undefined) probes.set(key, { skip: "ticket revision unavailable" });
+      else revisions.set(key, { target, revision });
+    }
+    if (revisions.size === 0) return { probes };
+
+    const targets = [...revisions.values()].map(({ target }) => target);
+    const lookup = await locked.findOwners(targets).catch(() => undefined);
+    if (lookup) return { probes, initial: { lookup, revisions } };
+    for (const key of revisions.keys())
+      probes.set(key, { skip: "lock history lookup unavailable", retry: true });
+    return { probes };
+  }
+
+  async function probeOwners({ probes, initial }: OwnerScan): Promise<Map<string, OwnerProbe>> {
+    if (!locked || !initial) return probes;
+    const { lookup, revisions } = initial;
+    const inspected = new Map<string, Omit<PreparedLock, "isOwnerFileCurrent">>();
+    for (const [key, { target, revision }] of revisions) {
+      const owner = lookup.owners.get(`${target.project}/${target.ticketId}`);
+      if (
+        !owner ||
+        !SESSION_ID_PATTERN.test(owner.ownerId) ||
+        !isAbsolute(owner.file) ||
+        owner.file.includes("\0")
+      ) {
+        probes.set(key, { skip: "lock owner unknown" });
+        continue;
+      }
+      const busy = busyProbes.get(key);
+      if (busy?.ownerId === owner.ownerId && busy.revision === revision && busy.attempts >= 2) {
+        probes.set(key, { skip: "lock owner lookup busy" });
+        continue;
+      }
+      inspected.set(key, {
+        target,
+        revision,
+        owner,
+        inspection: locked.inspect(owner.ownerId, target.cwd),
+      });
+    }
+    if (inspected.size === 0) return probes;
+
+    const targets = [...revisions.values()].map(({ target }) => target);
+    const refreshed = await locked.findOwners(targets).catch(() => undefined);
+    for (const [key, probe] of inspected) {
+      if (!refreshed) {
+        probes.set(key, { skip: "lock history lookup unavailable", retry: true });
+        continue;
+      }
+      const { target, owner } = probe;
+      const current = refreshed.owners.get(`${target.project}/${target.ticketId}`);
+      if (current?.ownerId !== owner.ownerId || current.file !== owner.file) {
+        probes.set(key, { skip: "lock history changed since owner lookup", retry: true });
+        continue;
+      }
+      probes.set(key, {
+        ...probe,
+        isOwnerFileCurrent: () => refreshed.isOwnerFileCurrent(current),
+      });
+    }
+    return probes;
+  }
+
+  async function tick(probes: ReadonlyMap<string, OwnerProbe>): Promise<boolean> {
+    const snapshot = await deps.loadSnapshot();
     const liveSessions = deps.readPiSessions();
     for (const [session, id] of liveSessions) {
       if (seenSessions.has(session)) continue;
@@ -457,7 +729,67 @@ export async function run(deps: RunDeps): Promise<void> {
       running.set(session, id);
     }
 
-    const skipped = deps.all ? await validateCwds(tickets, started, deps.log) : undefined;
+    const skipped = deps.all
+      ? await validateCwds(
+          snapshot,
+          (ticket) =>
+            !started.has(ticket.id) &&
+            ((openTemplate !== undefined && ticket.actionable) ||
+              (isPendingLocked(ticket) && lockedTarget(ticket, scope, cwd) !== undefined)),
+          deps.log,
+        )
+      : undefined;
+
+    const readyLocks = new Map<string, PreparedLock>();
+    let needsAnotherTick = false;
+    function isLockedReady(ticket: TicketSnapshot): boolean {
+      const { id } = ticket;
+      if (skipped?.has(splitTicketKey(id)[0])) return false;
+      if (!lockedTarget(ticket, scope, cwd)) {
+        skipLock(id, "unsupported locked assignment");
+        return false;
+      }
+      const probe = probes.get(id);
+      if (!probe) {
+        needsAnotherTick = true;
+        return false;
+      }
+      if ("skip" in probe) {
+        if (probe.retry) {
+          retryLockedLaunch(id, probe.skip);
+          if (isPendingLocked(ticket)) needsAnotherTick = true;
+        } else {
+          skipLock(id, probe.skip);
+        }
+        return false;
+      }
+      const { owner, revision, inspection } = probe;
+      if (inspection === "busy") {
+        const previous = busyProbes.get(id);
+        const isSameProbe = previous?.ownerId === owner.ownerId && previous.revision === revision;
+        const attempts = isSameProbe ? previous.attempts + 1 : 1;
+        busyProbes.set(id, { ownerId: owner.ownerId, revision, attempts });
+        if (attempts === 1) needsAnotherTick = true;
+        skipLock(id, "lock owner lookup busy");
+        return false;
+      }
+      busyProbes.delete(id);
+      if (inspection !== "absent") {
+        skipLock(
+          id,
+          inspection === "present" ? "lock owner present" : "lock owner lookup unavailable",
+        );
+        return false;
+      }
+      readyLocks.set(id, probe);
+      return true;
+    }
+    const tickets = snapshot.map((ticket) => ({
+      ...ticket,
+      actionable: isPendingLocked(ticket)
+        ? isLockedReady(ticket)
+        : openTemplate !== undefined && ticket.actionable,
+    }));
     const plan = planTick({
       tickets,
       skipped,
@@ -479,20 +811,56 @@ export async function run(deps: RunDeps): Promise<void> {
     for (const id of plan.launches) {
       const name = sessionName(SESSION_NAME_PREFIX, id, deps.all);
       const promptId = deps.all ? splitTicketKey(id)[1] : id;
+      const prepared = readyLocks.get(id);
+      let prompt: string;
+      let assignment: LockedAssignment | undefined;
+      if (prepared && locked) {
+        const { target, owner, revision } = prepared;
+        assignment = { project: target.project, ticketId: target.ticketId, ownerId: owner.ownerId };
+        prompt = locked.template.replace("{{ ASSIGNMENT }}", () =>
+          JSON.stringify({ ...assignment, ownerSessionFile: owner.file }),
+        );
+        if ((await locked.readRevision(target)) !== revision) {
+          retryLockedLaunch(id, "ticket changed since lock history lookup");
+          continue;
+        }
+        if (!(await prepared.isOwnerFileCurrent())) {
+          retryLockedLaunch(id, "lock history changed before launch");
+          continue;
+        }
+      } else {
+        prompt = buildPrompt(openTemplate!, promptId);
+      }
+      const session = await deps.launch(id, name, prompt, assignment);
+      if (typeof session === "object") {
+        retryLockedLaunch(id, session.retry);
+        continue;
+      }
       started.add(id);
-      const session = deps.launch(id, name, buildPrompt(template, promptId));
       if (session === false) continue;
       running.set(session, id);
       seenSessions.add(session);
       deps.log(`launched ${id} as ${name}`);
     }
-    return plan.finished;
+    return plan.finished && !needsAnotherTick;
   }
 
+  let pendingScan: ReturnType<typeof scanOwners> | undefined;
   while (true) {
-    const finished = await (deps.withTickLock ? deps.withTickLock(tick) : tick());
-    if (finished) break;
-    await deps.sleepMs(tickMs());
+    pendingScan ??= scanOwners();
+    const scan =
+      locked && openTemplate !== undefined
+        ? await waitForHistory(pendingScan, tickMs())
+        : await pendingScan;
+    if (scan) pendingScan = undefined;
+    const probes = scan ? await probeOwners(scan) : new Map<string, OwnerProbe>();
+    const runTick = () => tick(probes);
+    const finished = await (deps.withTickLock ? deps.withTickLock(runTick) : runTick());
+    if (finished) {
+      await pendingScan;
+      break;
+    }
+    if (!pendingScan) await deps.sleepMs(tickMs());
   }
   deps.log("dispatcher finished");
 }
@@ -519,8 +887,57 @@ function startPiSession(input: {
     ...sessionEnvArgs(project, "pi"),
     "-e",
     `${ID_ENV}=${id}`,
-    `exec pi ${shQuote(prompt)}`,
+    `exec pi -- ${shQuote(prompt)}`,
   ]);
+}
+
+type LockedLaunch =
+  | { state: "launched"; session: string }
+  | { state: "present" }
+  | { state: "unknown"; detail: string };
+
+async function startLockedPiSession(
+  assignment: LockedAssignment,
+  socket: string,
+  name: string,
+  cwd: string,
+  prompt: string,
+): Promise<LockedLaunch> {
+  try {
+    const child = Bun.spawn(
+      [
+        "pi-mux",
+        "inspect",
+        "--dispatch-ticket",
+        assignment.ownerId,
+        socket,
+        assignment.project,
+        assignment.ticketId,
+        name,
+        cwd,
+        prompt,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [status, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    if (status !== 0)
+      return { state: "unknown", detail: stderr.trim().replace(/\s*\r?\n\s*/g, " ") };
+    const value = JSON.parse(stdout);
+    if (value?.state === "present") return { state: "present" };
+    if (
+      value?.state === "launched" &&
+      typeof value.session === "string" &&
+      /^\$\d+$/.test(value.session)
+    )
+      return { state: "launched", session: value.session };
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) return { state: "unknown", detail: String(error) };
+  }
+  return { state: "unknown", detail: "invalid pi-mux response" };
 }
 
 export async function dispatchOne(input: {
@@ -560,24 +977,53 @@ export async function dispatch(
     const stamped = `[${timestamp()}] ${line}`;
     console.log(stamped);
   }
-  function launch(key: string, name: string, prompt: string): string | false {
-    const [owner, id] = project === null ? splitTicketKey(key) : [project, key];
-    const targetCwd = project === null ? join(homedir(), "projects", owner) : cwd;
-    const result = startPiSession({ socket, project: owner, id, name, cwd: targetCwd, prompt });
-    if (result.ok) return result.stdout.trim();
-    const message = `tmux new-session failed for ${name}: ${result.stderr.trim()}`;
+  function reportSessionFailure(name: string, detail: string): void {
+    const message = `tmux new-session failed for ${name}: ${detail}`;
     console.error(message);
     log(message);
-    return hasSession(socket, name) ? false : name;
+  }
+  async function launch(
+    key: string,
+    name: string,
+    prompt: string,
+    assignment?: LockedAssignment,
+  ): Promise<LaunchResult> {
+    const [owner, id] = project === null ? splitTicketKey(key) : [project, key];
+    const targetCwd = project === null ? projectCwd(owner) : cwd;
+    if (!assignment) {
+      const result = startPiSession({ socket, project: owner, id, name, cwd: targetCwd, prompt });
+      if (result.ok) return result.stdout.trim();
+      reportSessionFailure(name, result.stderr.trim());
+      return hasSession(socket, name) ? false : name;
+    }
+
+    const result = await startLockedPiSession(assignment, socket, name, targetCwd, prompt);
+    if (result.state === "launched") return result.session;
+    if (result.state === "present") return { retry: "lock owner present" };
+    if (hasSession(socket, name)) {
+      reportSessionFailure(name, result.detail);
+      return false;
+    }
+    const detail = result.detail ? `: ${result.detail}` : "";
+    return { retry: `locked launch unavailable${detail}` };
   }
   try {
+    const history = includesStatus(options, "locked") ? new LockHistory() : undefined;
     await run({
       options,
       all: project === null,
+      project: project ?? undefined,
       loadSnapshot,
       log,
       withTickLock: (tick) => withDispatcherLock(socket, tick),
       readPiSessions: () => readPiSessions(socket, project),
+      locked: history
+        ? {
+            findOwners: (targets) => history.findOwners(targets),
+            inspect: inspectOwner,
+            readRevision: readTicketRevision,
+          }
+        : undefined,
       launch,
       sleepMs: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     });

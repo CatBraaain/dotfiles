@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -8,9 +10,10 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, describe, it } from "bun:test";
 import { dispatcherName, sessionName, shQuote } from "./dispatch";
 
@@ -39,16 +42,21 @@ function setup(project = "project", all = false) {
   const store = join(home, ".agents", "tickets", project);
   const bin = join(root, "stub-bin");
   const records = join(root, "records");
-  const socket = join(root, "tmux.sock");
-  for (const dir of [cwd, store, bin, records]) mkdirSync(dir, { recursive: true });
+  const runtime = join(root, "runtime");
+  const agent = join(root, "agent dir");
+  const sessions = join(root, "sessions");
+  const socket = join(runtime, "pi-tmux", "server.sock");
+  for (const dir of [cwd, store, bin, records, join(runtime, "pi-tmux"), agent])
+    mkdirSync(dir, { recursive: true });
   const stub = join(root, "stub.ts");
   writeFileSync(
     stub,
     `import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const args = process.argv.slice(2);
-if (!args[0].startsWith("ticket ")) throw new Error("ticket ID is missing");
-const id = args[0].split(" に")[0].slice("ticket ".length);
+if (args.length !== 2 || args[0] !== "--") throw new Error("Expected one pi prompt");
+const id = process.env.TICKET_DISPATCH_ID;
+if (!id) throw new Error("ticket ID is missing");
 const project = process.env.TICKET_DISPATCH_PROJECT;
 const recordDir = ${all} ? join(${JSON.stringify(records)}, project) : ${JSON.stringify(records)};
 mkdirSync(recordDir, { recursive: true });
@@ -60,14 +68,16 @@ if (id !== "b") {
   const store = ${all} ? join(${JSON.stringify(home)}, ".agents", "tickets", project) : ${JSON.stringify(store)};
   const path = join(store, id + ".md");
   const status = id === "c" ? "cancelled" : "closed";
-  writeFileSync(path, readFileSync(path, "utf8").replace("status: open", "status: " + status));
+  const ticket = readFileSync(path, "utf8");
+  if (ticket.startsWith("---\\nstatus: locked\\n")) process.exit(0);
+  writeFileSync(path, ticket.replace("status: open", "status: " + status));
   await Bun.sleep(60000);
 }
 `,
   );
   writeFileSync(
     join(bin, "pi"),
-    `#!/bin/sh\nexec ${shQuote(process.execPath)} ${shQuote(stub)} "$@"\n`,
+    `#!/bin/sh\nexec ${shQuote(process.execPath)} ${shQuote(stub)} -- "$@"\n`,
   );
   chmodSync(join(bin, "pi"), 0o755);
   const env = {
@@ -77,8 +87,11 @@ if (id !== "b") {
     PATH: `${bin}:${process.env.PATH ?? ""}`,
     TICKET_TEST_TMUX_SOCKET: socket,
     TICKET_TEST_TICK_MS: "50",
+    XDG_RUNTIME_DIR: runtime,
+    PI_CODING_AGENT_DIR: agent,
+    PI_CODING_AGENT_SESSION_DIR: sessions,
   };
-  return { root, home, cwd, project, store, socket, records, env };
+  return { root, home, cwd, project, store, socket, records, sessions, env };
 }
 
 type Fixture = ReturnType<typeof setup>;
@@ -87,10 +100,20 @@ function writeTicket(store: string, id: string, status: string) {
   writeFileSync(join(store, `${id}.md`), `---\nstatus: ${status}\n---\n\n# ${id}\n`);
 }
 
-function startServer(fixture: Fixture, env = fixture.env) {
+function startServer(fixture: Fixture, env: NodeJS.ProcessEnv = fixture.env) {
   const started = isolatedTmux(
     fixture.socket,
-    ["-f", "/dev/null", "new-session", "-d", "-s", "handle_a_v1_extra", "-c", fixture.cwd, "sleep 60"],
+    [
+      "-f",
+      "/dev/null",
+      "new-session",
+      "-d",
+      "-s",
+      "handle_a_v1_extra",
+      "-c",
+      fixture.cwd,
+      "sleep 60",
+    ],
     env,
   );
   assert.equal(started.status, 0, started.stderr);
@@ -106,7 +129,12 @@ function cliCommand(): string[] {
     : [process.execPath, CLI];
 }
 
-function cli(fixture: Fixture, args: string[], cwd = fixture.cwd, env = fixture.env) {
+function cli(
+  fixture: Fixture,
+  args: string[],
+  cwd = fixture.cwd,
+  env: NodeJS.ProcessEnv = fixture.env,
+) {
   const command = cliCommand();
   return spawnSync(command[0]!, [...command.slice(1), ...args], {
     cwd,
@@ -122,16 +150,649 @@ async function waitFor(condition: () => boolean, description: string) {
   assert.ok(condition(), description);
 }
 
-async function waitFinished(fixture: Fixture) {
+async function waitFinished(fixture: Fixture, project: string | null = fixture.project) {
   await waitFor(
     () =>
-      isolatedTmux(fixture.socket, ["has-session", "-t", `=${dispatcherName(fixture.project)}`])
-        .status !== 0,
+      isolatedTmux(fixture.socket, ["has-session", "-t", `=${dispatcherName(project)}`]).status !==
+      0,
     "finished dispatcher session survived",
   );
 }
 
+function inspectionStub(
+  fixture: Fixture,
+  options: {
+    all?: boolean;
+    failOnce?: boolean;
+    pausePreflight?: string;
+    changingTicket?: { id: string; close?: true };
+  } = {},
+) {
+  const inspectLog = join(fixture.records, "inspections");
+  const stub = join(fixture.root, "mux-stub.ts");
+  const expectedCwd = options.all ? join(fixture.home, "projects", fixture.project) : fixture.cwd;
+  writeFileSync(
+    stub,
+    `import assert from "node:assert/strict";
+import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { sessionName, shQuote } from ${JSON.stringify(join(import.meta.dir, "dispatch.ts"))};
+const [command, mode, ...args] = process.argv.slice(2);
+const log = ${JSON.stringify(inspectLog)};
+const failure = ${JSON.stringify(options.failOnce ?? false)};
+const pausePreflight = ${JSON.stringify(options.pausePreflight ?? null)};
+const changingTicket = ${JSON.stringify(options.changingTicket ? join(fixture.store, `${options.changingTicket.id}.md`) : null)};
+const answer = (value) => console.log(JSON.stringify(value));
+assert.equal(command, "inspect");
+assert.equal(process.env.XDG_RUNTIME_DIR, ${JSON.stringify(fixture.env.XDG_RUNTIME_DIR)});
+assert.equal(process.env.PI_CODING_AGENT_DIR, ${JSON.stringify(fixture.env.PI_CODING_AGENT_DIR)});
+if (mode !== "--dispatch-ticket") {
+  assert.equal(args.length, 0);
+  const alreadyProbed = existsSync(log) && readFileSync(log, "utf8").includes("preflight " + mode + "\\n");
+  appendFileSync(log, "preflight " + mode + "\\n");
+  while (pausePreflight && existsSync(${JSON.stringify(fixture.root)}) && !existsSync(pausePreflight))
+    await Bun.sleep(10);
+  if (mode === "present") answer({ state: "present" });
+  else if (mode === "failed") process.exitCode = 1;
+  else {
+    if (changingTicket && !alreadyProbed) {
+      const content = readFileSync(changingTicket, "utf8");
+      const nextContent = ${options.changingTicket?.close ?? false} ? content.replace("status: locked", "status: closed") : content;
+      const replacement = changingTicket + ".tmp";
+      writeFileSync(replacement, nextContent);
+      renameSync(replacement, changingTicket);
+    }
+    answer({ state: "absent", file: null });
+  }
+} else {
+  assert.equal(args.length, 7);
+  const [ownerId, socket, project, ticketId, name, cwd, prompt] = args;
+  const attempted = existsSync(log) && readFileSync(log, "utf8").includes("atomic " + ownerId + "\\n");
+  appendFileSync(log, "atomic " + ownerId + "\\n");
+  assert.equal(socket, join(process.env.XDG_RUNTIME_DIR, "pi-tmux", "server.sock"));
+  assert.equal(project, ${JSON.stringify(fixture.project)});
+  assert.equal(cwd, ${JSON.stringify(expectedCwd)});
+  assert.equal(name, sessionName("handle_", ${options.all ? "project + '/' + ticketId" : "ticketId"}, ${options.all ?? false}));
+  assert.ok(prompt.endsWith("\\n"));
+  if (ownerId === "arrived") answer({ state: "present" });
+  else if (failure && !attempted) {
+    console.error("temporary mux failure");
+    process.exitCode = 1;
+  } else {
+    const result = spawnSync("tmux", ["-S", socket, "new-session", "-d", "-P", "-F", "#{session_id}", "-s", name, "-c", cwd,
+      "-e", "HOME=" + process.env.HOME, "-e", "PATH=" + process.env.PATH,
+      "-e", "TICKET_DISPATCH_ROLE=pi", "-e", "TICKET_DISPATCH_PROJECT=" + project, "-e", "TICKET_DISPATCH_ID=" + ticketId,
+      "exec pi -- " + shQuote(prompt)], { encoding: "utf8" });
+    if (result.status === 0) answer({ state: "launched", session: result.stdout.trim() });
+    else {
+      console.error(result.stderr.trim());
+      process.exitCode = 1;
+    }
+  }
+}
+`,
+  );
+  writeFileSync(
+    join(fixture.root, "stub-bin", "pi-mux"),
+    `#!/bin/sh\nexec ${shQuote(process.execPath)} ${shQuote(stub)} "$@"\n`,
+    { mode: 0o700 },
+  );
+  return inspectLog;
+}
+
+function lockedTicket(id: string): string {
+  return `---\nstatus: locked\n---\n\n# ${id}\n`;
+}
+
+function lockHistoryRecords(cwd: string, ticketPath: string, ownerId: string, hour = "10") {
+  const ticketId = basename(ticketPath, ".md");
+  const project = basename(dirname(ticketPath));
+  const toolCallId = `call-${ownerId}`;
+  return [
+    { type: "session", id: ownerId, cwd, timestamp: `2026-11-23T${hour}:00:00.000Z` },
+    {
+      type: "message",
+      id: "call",
+      parentId: null,
+      timestamp: `2026-11-23T${hour}:00:01.000Z`,
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: toolCallId,
+            name: "ticket_set",
+            arguments: { selector: ticketId, project, status: "locked" },
+          },
+        ],
+      },
+    },
+    {
+      type: "message",
+      id: "result",
+      parentId: "call",
+      timestamp: `2026-11-23T${hour}:00:02.000Z`,
+      message: {
+        role: "toolResult",
+        toolCallId,
+        toolName: "ticket_set",
+        isError: false,
+        content: [
+          {
+            type: "text",
+            text: `updated ${ticketId}\nstatus: locked\nafter: null\npath: ${ticketPath}`,
+          },
+        ],
+      },
+    },
+  ];
+}
+
+function jsonl(entries: readonly object[]): string {
+  return entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n";
+}
+
+function writeLockHistory(file: string, cwd: string, ticketPath: string, ownerId: string): void {
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, jsonl(lockHistoryRecords(cwd, ticketPath, ownerId)));
+}
+
+function seedLockedTicket(
+  fixture: Fixture,
+  id: string,
+  ownerId: string,
+  cwd = fixture.cwd,
+): string {
+  const ticketPath = join(fixture.store, `${id}.md`);
+  const file = join(fixture.sessions, "archive", `${ownerId}.jsonl`);
+  writeFileSync(ticketPath, lockedTicket(id));
+  writeLockHistory(file, cwd, ticketPath, ownerId);
+  return file;
+}
+
+describe("ticket dispatch with real pi-mux", () => {
+  it.each(["custom", "unset", "empty", "project"] as const)(
+    "uses the caller or project session settings instead of the tmux global (%s)",
+    async (rootMode) => {
+      const global = rootMode === "project";
+      const fixture = setup("project", global);
+      try {
+        const workspace = global ? join(fixture.home, "projects", fixture.project) : fixture.cwd;
+        const projectSettings = join(workspace, ".pi", "settings.json");
+        const { PI_CODING_AGENT_DIR: agent, XDG_RUNTIME_DIR, PATH } = fixture.env;
+        const env: NodeJS.ProcessEnv = {
+          HOME: fixture.home,
+          LANG: "C.UTF-8",
+          SHELL: "/bin/sh",
+          PATH,
+          XDG_RUNTIME_DIR,
+          PI_CODING_AGENT_DIR: agent,
+          TICKET_TEST_TMUX_SOCKET: fixture.socket,
+          TICKET_TEST_TICK_MS: fixture.env.TICKET_TEST_TICK_MS,
+        };
+        const sessionDirKey = "PI_CODING_AGENT_SESSION_DIR";
+        const staleRoot = join(fixture.root, "stale sessions");
+        const settingsRoot = join(fixture.root, "settings sessions");
+        const customRoot = join(fixture.root, "caller sessions;");
+        if (rootMode === "custom" || rootMode === "empty")
+          env[sessionDirKey] = rootMode === "custom" ? customRoot : "";
+        const expectedRoot = rootMode === "custom" || global ? customRoot : settingsRoot;
+        for (const root of [staleRoot, settingsRoot, customRoot]) mkdirSync(root);
+        writeFileSync(join(agent, "settings.json"), JSON.stringify({ sessionDir: settingsRoot }));
+        if (global) {
+          mkdirSync(join(workspace, ".pi"), { recursive: true });
+          writeFileSync(projectSettings, JSON.stringify({ sessionDir: expectedRoot }));
+        }
+        mkdirSync(join(agent, "pi-tmux"), { mode: 0o700 });
+        for (const extension of ["guardrails", "tickets"]) {
+          const directory = join(agent, "extensions", extension);
+          mkdirSync(directory, { recursive: true });
+          writeFileSync(join(directory, "index.ts"), "export default function () {}\n");
+        }
+
+        const mux = join(import.meta.dir, "../../../../.local/cli.exact/pi-mux/src/main.ts");
+        const muxCommand = join(fixture.root, "stub-bin", "pi-mux");
+        writeFileSync(
+          muxCommand,
+          `#!/bin/sh\nexec ${shQuote(process.execPath)} ${shQuote(mux)} "$@"\n`,
+          { mode: 0o700 },
+        );
+        startServer(fixture, { ...env, [sessionDirKey]: staleRoot });
+        const initialized = isolatedTmux(
+          fixture.socket,
+          ["set-option", "-g", "@pi-mux-generation", randomUUID()],
+          env,
+        );
+        assert.equal(initialized.status, 0, initialized.stderr);
+
+        const createArgs = [
+          "create",
+          "--json",
+          JSON.stringify({ title: "Saved owner", status: "locked" }),
+        ];
+        const created = cli(fixture, createArgs, fixture.cwd, env);
+        assert.equal(created.status, 0, created.stderr);
+        const { id, path: ticketPath } = JSON.parse(created.stdout);
+        const ownerId = randomUUID();
+        const ownerFile = join(expectedRoot, "owner.jsonl");
+        const original = lockedTicket(id);
+        writeFileSync(ticketPath, original);
+        writeLockHistory(ownerFile, workspace, ticketPath, ownerId);
+
+        const reportId = randomUUID();
+        const capture = join(fixture.records, "launch.json");
+        writeFileSync(
+          join(fixture.root, "stub.ts"),
+          `import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const override = process.env.PI_CODING_AGENT_SESSION_DIR;
+const settingsPath = join(process.cwd(), ".pi", "settings.json");
+const settings = JSON.parse(readFileSync(existsSync(settingsPath) ? settingsPath : join(process.env.PI_CODING_AGENT_DIR, "settings.json"), "utf8"));
+const root = override || settings.sessionDir;
+const timestamp = new Date().toISOString();
+writeFileSync(join(root, "report.jsonl"), [
+  JSON.stringify({ type: "session", id: ${JSON.stringify(reportId)}, cwd: process.cwd(), timestamp }),
+  "",
+].join("\\n"));
+const capture = ${JSON.stringify(capture)};
+writeFileSync(capture + ".tmp", JSON.stringify({ override: override ?? null, args: process.argv.slice(2), legacyMode: process.env.TICKET_DISPATCH_INSPECTION ?? null }));
+renameSync(capture + ".tmp", capture);
+`,
+        );
+
+        const statuses =
+          rootMode === "unset"
+            ? ["--status", "open", "--status", "locked"]
+            : ["--status", "locked"];
+        const scope = global ? ["--all"] : [];
+        const started = cli(
+          fixture,
+          ["dispatch", "start", ...scope, ...statuses],
+          fixture.cwd,
+          env,
+        );
+        assert.equal(started.status, 0, started.stderr);
+        await waitFor(() => existsSync(capture), "real pi-mux did not launch pi");
+        await waitFinished(fixture, global ? null : fixture.project);
+        const template = readFileSync(
+          join(import.meta.dir, "../dispatch-locked-prompt.md"),
+          "utf8",
+        );
+        assert.deepEqual(JSON.parse(readFileSync(capture, "utf8")), {
+          override: env[sessionDirKey] ?? null,
+          legacyMode: null,
+          args: [
+            "--",
+            template.replace(
+              "{{ ASSIGNMENT }}",
+              JSON.stringify({
+                project: fixture.project,
+                ticketId: id,
+                ownerId,
+                ownerSessionFile: ownerFile,
+              }),
+            ),
+          ],
+        });
+        assert.equal(readFileSync(ticketPath, "utf8"), original);
+        assert.deepEqual(readdirSync(staleRoot), []);
+        const serverEnv = isolatedTmux(
+          fixture.socket,
+          ["show-environment", "-g", sessionDirKey],
+          env,
+        );
+        assert.equal(serverEnv.status, 0, serverEnv.stderr);
+        assert.equal(serverEnv.stdout.trimEnd(), `${sessionDirKey}=${staleRoot}`);
+
+        const history = spawnSync(muxCommand, ["history", "--cwd", workspace, "--json"], {
+          cwd: workspace,
+          env,
+          encoding: "utf8",
+          timeout: 5000,
+        });
+        assert.equal(history.status, 0, history.stderr);
+        const report = JSON.parse(history.stdout).find(
+          (entry: { id: string }) => entry.id === reportId,
+        );
+        assert.equal(report?.file, join(expectedRoot, "report.jsonl"));
+      } finally {
+        isolatedTmux(fixture.socket, ["kill-server"]);
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+    TIMEOUT_MS + 5000,
+  );
+});
+
 describe("ticket dispatch real tmux", () => {
+  it("launches the locked prompt only through the final mux command and leaves tickets unchanged", async () => {
+    const fixture = setup();
+    try {
+      startServer(fixture, {
+        ...fixture.env,
+        XDG_RUNTIME_DIR: fixture.root,
+        PI_CODING_AGENT_DIR: fixture.root,
+      });
+      const inspectLog = inspectionStub(fixture);
+      const absent = "20261123-100001";
+      const tickets = [
+        [absent, "departed"],
+        ["20261123-100002", "present"],
+        ["20261123-100003", "failed"],
+        ["20261123-100004", "arrived"],
+      ] as const;
+      const history = new Map(
+        tickets.map(([id, owner]) => [id, seedLockedTicket(fixture, id, owner)]),
+      );
+      writeTicket(fixture.store, "20261123-100005", "locked");
+      writeTicket(fixture.store, "a", "open");
+      const started = cli(fixture, ["dispatch", "start", "--status", "locked", "--max", "1"]);
+      assert.equal(started.status, 0, started.stderr);
+      const report = join(fixture.records, `${absent}.json`);
+      await waitFor(() => existsSync(report), "locked worker did not start");
+      await waitFinished(fixture);
+      const record = JSON.parse(readFileSync(report, "utf8"));
+      const template = readFileSync(join(import.meta.dir, "../dispatch-locked-prompt.md"), "utf8");
+      assert.deepEqual(record.args, [
+        "--",
+        template.replace(
+          "{{ ASSIGNMENT }}",
+          JSON.stringify({
+            project: fixture.project,
+            ticketId: absent,
+            ownerId: "departed",
+            ownerSessionFile: history.get(absent),
+          }),
+        ),
+      ]);
+      assert.equal(record.cwd, fixture.cwd);
+      assert.equal(readFileSync(join(fixture.records, "launches"), "utf8"), `${absent}\n`);
+      assert.deepEqual(
+        readFileSync(inspectLog, "utf8")
+          .trimEnd()
+          .split("\n")
+          .filter((line) => line.startsWith("atomic ")),
+        ["atomic departed", "atomic arrived", "atomic arrived"],
+      );
+      for (const [id] of tickets)
+        assert.equal(readFileSync(join(fixture.store, `${id}.md`), "utf8"), lockedTicket(id));
+    } finally {
+      isolatedTmux(fixture.socket, ["kill-server"]);
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+  it(
+    "does not block dispatch one on the same socket during a locked probe",
+    async () => {
+      const fixture = setup("project", true);
+      const gate = join(fixture.root, "resume-inspect");
+      try {
+        startServer(fixture);
+        const inspectLog = inspectionStub(fixture, { pausePreflight: gate });
+        const lockedId = "20261123-100001";
+        seedLockedTicket(fixture, lockedId, "departed");
+
+        const other = "other";
+        const openId = "20261123-100002";
+        const otherStore = join(fixture.home, ".agents", "tickets", other);
+        mkdirSync(otherStore, { recursive: true });
+        mkdirSync(join(fixture.home, "projects", other), { recursive: true });
+        writeTicket(otherStore, openId, "open");
+
+        const started = cli(fixture, ["dispatch", "start", "--status", "locked"]);
+        assert.equal(started.status, 0, started.stderr);
+        await waitFor(() => existsSync(inspectLog), "locked probe did not begin");
+
+        const manual = cli(fixture, ["dispatch", "one", "--project", other, openId]);
+        assert.equal(manual.status, 0, manual.stderr);
+        await waitFor(
+          () => existsSync(join(fixture.records, other, `${openId}.json`)),
+          "dispatch one did not launch",
+        );
+        assert.equal(readFileSync(inspectLog, "utf8"), "preflight departed\n");
+
+        writeFileSync(gate, "");
+        await waitFor(
+          () => existsSync(join(fixture.records, fixture.project, `${lockedId}.json`)),
+          "locked dispatch did not launch",
+        );
+        await waitFinished(fixture);
+      } finally {
+        writeFileSync(gate, "");
+        isolatedTmux(fixture.socket, ["kill-server"]);
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it("skips a missing global project and retries a transient launch failure in another", async () => {
+    const fixture = setup("調査 project", true);
+    try {
+      mkdirSync(join(fixture.home, "projects", fixture.project), { recursive: true });
+      startServer(fixture);
+      const probeLog = inspectionStub(fixture, { all: true, failOnce: true });
+      const id = "20261123-100001.v1";
+      const ticket = join(fixture.store, `${id}.md`);
+      const original = lockedTicket(id);
+      seedLockedTicket(fixture, id, "departed", join(fixture.home, "projects", fixture.project));
+      const missingId = "20261123-100000";
+      const missingStore = join(fixture.home, ".agents", "tickets", "missing");
+      mkdirSync(missingStore, { recursive: true });
+      const missingTicket = join(missingStore, `${missingId}.md`);
+      writeFileSync(missingTicket, lockedTicket(missingId));
+      writeLockHistory(
+        join(fixture.sessions, "missing.jsonl"),
+        join(fixture.home, "projects", "missing"),
+        missingTicket,
+        "missing-owner",
+      );
+
+      const started = cli(fixture, [
+        "dispatch",
+        "start",
+        "--all",
+        "--status",
+        "locked",
+        "--max",
+        "1",
+      ]);
+      assert.equal(started.status, 0, started.stderr);
+      assert.ok(
+        started.stdout.includes(
+          `skipped missing: cwd not found: ${join(fixture.home, "projects", "missing")}`,
+        ),
+      );
+      await waitFinished(fixture, null);
+      assert.equal(
+        readFileSync(probeLog, "utf8"),
+        "preflight departed\natomic departed\n".repeat(2),
+      );
+      assert.equal(
+        readFileSync(join(fixture.records, "launches"), "utf8"),
+        `${fixture.project}/${id}\n`,
+      );
+      assert.equal(readFileSync(ticket, "utf8"), original);
+    } finally {
+      isolatedTmux(fixture.socket, ["kill-server"]);
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("reruns preflight before atomically launching a replaced ticket with identical contents", async () => {
+    const fixture = setup();
+    try {
+      startServer(fixture);
+      const id = "20261123-100001";
+      const ticket = join(fixture.store, `${id}.md`);
+      const oldFile = seedLockedTicket(fixture, id, "previous");
+      const probeLog = inspectionStub(fixture, { changingTicket: { id } });
+      const started = cli(fixture, ["dispatch", "start", "--status", "locked"]);
+      assert.equal(started.status, 0, started.stderr);
+      await waitFinished(fixture);
+      assert.equal(
+        readFileSync(probeLog, "utf8"),
+        "preflight previous\npreflight previous\natomic previous\n",
+      );
+      const record = JSON.parse(readFileSync(join(fixture.records, `${id}.json`), "utf8"));
+      const assignment = JSON.parse(record.args[1].split("```json\n")[1].split("\n```")[0]);
+      assert.equal(assignment.ownerId, "previous");
+      assert.equal(assignment.ownerSessionFile, oldFile);
+      assert.equal(readFileSync(ticket, "utf8"), lockedTicket(id));
+    } finally {
+      isolatedTmux(fixture.socket, ["kill-server"]);
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["new-owner", "present"])(
+    "uses re-lock history appended during preflight without a ticket write (%s)",
+    async (ownerId) => {
+      const fixture = setup();
+      const gate = join(fixture.root, "resume-inspect");
+      try {
+        startServer(fixture);
+        const id = "20261123-100001";
+        const ticket = join(fixture.store, `${id}.md`);
+        seedLockedTicket(fixture, id, "previous");
+        const original = statSync(ticket, { bigint: true });
+        const ownerFile = join(fixture.sessions, `${ownerId}.jsonl`);
+        const [header, ...updates] = lockHistoryRecords(fixture.cwd, ticket, ownerId, "11");
+        writeFileSync(ownerFile, jsonl([header!]));
+        const probeLog = inspectionStub(fixture, { pausePreflight: gate });
+
+        const started = cli(fixture, ["dispatch", "start", "--status", "locked"]);
+        assert.equal(started.status, 0, started.stderr);
+        await waitFor(() => existsSync(probeLog), "initial owner probe did not begin");
+        assert.equal(readFileSync(probeLog, "utf8"), "preflight previous\n");
+
+        appendFileSync(ownerFile, jsonl(updates));
+        writeFileSync(gate, "");
+        await waitFinished(fixture);
+
+        const logs = readFileSync(probeLog, "utf8");
+        const recordPath = join(fixture.records, `${id}.json`);
+        if (ownerId === "present") {
+          assert.equal(logs, "preflight previous\npreflight present\n");
+          assert.equal(existsSync(recordPath), false);
+        } else {
+          assert.equal(logs, "preflight previous\npreflight new-owner\natomic new-owner\n");
+          const record = JSON.parse(readFileSync(recordPath, "utf8"));
+          const assignment = JSON.parse(record.args[1].split("```json\n")[1].split("\n```")[0]);
+          assert.equal(assignment.ownerId, ownerId);
+          assert.equal(assignment.ownerSessionFile, ownerFile);
+        }
+        const unchanged = statSync(ticket, { bigint: true });
+        assert.equal(unchanged.ino, original.ino);
+        assert.equal(unchanged.ctimeNs, original.ctimeNs);
+      } finally {
+        writeFileSync(gate, "");
+        isolatedTmux(fixture.socket, ["kill-server"]);
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+    TIMEOUT_MS + 5000,
+  );
+
+  it("does not send an atomic launch for a ticket closed after preflight", async () => {
+    const fixture = setup();
+    try {
+      startServer(fixture);
+      const id = "20261123-100001";
+      seedLockedTicket(fixture, id, "previous");
+      const probeLog = inspectionStub(fixture, { changingTicket: { id, close: true } });
+      const started = cli(fixture, ["dispatch", "start", "--status", "locked"]);
+      assert.equal(started.status, 0, started.stderr);
+      await waitFinished(fixture);
+      assert.equal(readFileSync(probeLog, "utf8"), "preflight previous\n");
+      assert.equal(existsSync(join(fixture.records, "launches")), false);
+    } finally {
+      isolatedTmux(fixture.socket, ["kill-server"]);
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("releases the shared slot on a locked ticket status change without stopping its pi", async () => {
+    const fixture = setup();
+    const id = "20261123-100001";
+    const openId = "a";
+    const env = { ...fixture.env, STUB_HOLD_ID: id };
+    try {
+      startServer(fixture, env);
+      inspectionStub(fixture);
+      seedLockedTicket(fixture, id, "departed");
+      writeTicket(fixture.store, openId, "open");
+      const started = cli(
+        fixture,
+        ["dispatch", "start", "--status", "locked", "--status", "open", "--max", "1"],
+        fixture.cwd,
+        env,
+      );
+      assert.equal(started.status, 0, started.stderr);
+
+      const lockedRecord = join(fixture.records, `${id}.json`);
+      const openRecord = join(fixture.records, `${openId}.json`);
+      await waitFor(() => existsSync(lockedRecord), "locked pi did not start");
+      assert.equal(existsSync(openRecord), false);
+      const closed = cli(fixture, ["set", id, '{"status":"closed"}'], fixture.cwd, env);
+      assert.equal(closed.status, 0, closed.stderr);
+      await waitFor(() => existsSync(openRecord), "ticket status did not release the slot");
+      await waitFinished(fixture);
+      assert.equal(readFileSync(join(fixture.records, "launches"), "utf8"), `${id}\n${openId}\n`);
+      assert.equal(isolatedTmux(fixture.socket, ["has-session", "-t", `=handle_${id}`]).status, 0);
+      const marker = isolatedTmux(fixture.socket, [
+        "show-environment",
+        "-t",
+        `=handle_${id}`,
+        "TICKET_DISPATCH_INSPECTION",
+      ]);
+      assert.notEqual(marker.status, 0);
+    } finally {
+      isolatedTmux(fixture.socket, ["kill-server"]);
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an existing tmux session and does not retry the atomic name collision", async () => {
+    const fixture = setup();
+    try {
+      startServer(fixture);
+      const id = "20261123-100001";
+      const ticket = join(fixture.store, `${id}.md`);
+      const original = lockedTicket(id);
+      seedLockedTicket(fixture, id, "departed");
+      const probeLog = inspectionStub(fixture);
+      const name = `handle_${id}`;
+      const collision = isolatedTmux(fixture.socket, [
+        "new-session",
+        "-d",
+        "-P",
+        "-F",
+        "#{session_id}",
+        "-s",
+        name,
+        "sleep 60",
+      ]);
+      assert.equal(collision.status, 0, collision.stderr);
+      const started = cli(fixture, ["dispatch", "start", "--status", "locked"]);
+      assert.equal(started.status, 0, started.stderr);
+      await waitFinished(fixture);
+      assert.equal(readFileSync(probeLog, "utf8"), "preflight departed\natomic departed\n");
+      const live = isolatedTmux(fixture.socket, [
+        "list-sessions",
+        "-F",
+        "#{session_name}:#{session_id}",
+      ]);
+      assert.ok(live.stdout.split("\n").includes(`${name}:${collision.stdout.trim()}`));
+      assert.equal(existsSync(join(fixture.records, "launches")), false);
+      assert.equal(readFileSync(ticket, "utf8"), original);
+    } finally {
+      isolatedTmux(fixture.socket, ["kill-server"]);
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it(
     "passes the fixed prompt as one pi argument without creating artifacts",
     async () => {
@@ -148,7 +809,7 @@ describe("ticket dispatch real tmux", () => {
         const recorded = JSON.parse(readFileSync(join(records, "a.v1.json"), "utf8"));
         assert.ok(expected.endsWith("\n"));
         assert.deepEqual(readdirSync(cwd), ["fix-prompt-template.txt"]);
-        assert.deepEqual(recorded, { args: [expected], cwd });
+        assert.deepEqual(recorded, { args: ["--", expected], cwd });
         for (const [key, value] of Object.entries({
           TICKET_DISPATCH_PROJECT: "project",
           TICKET_DISPATCH_ROLE: "pi",
@@ -194,18 +855,13 @@ describe("ticket dispatch real tmux", () => {
         writeTicket(callerStore, "wrong", "open");
         writeTicket(store, "a.v1", "open");
         startServer(fixture, env);
-        const result = cli(
-          fixture,
-          ["dispatch", ...action, flag, project],
-          caller,
-          env,
-        );
+        const result = cli(fixture, ["dispatch", ...action, flag, project], caller, env);
         assert.equal(result.status, 0, result.stderr);
         assert.equal(result.stdout, `dispatcher started: ${dispatcherName(project)}\n`);
         await waitFor(() => existsSync(join(records, "a.v1.json")), "target pi did not start");
         assert.equal(readFileSync(join(records, "launches"), "utf8"), "a.v1\n");
         assert.deepEqual(JSON.parse(readFileSync(join(records, "a.v1.json"), "utf8")), {
-          args: [expectedPrompt("a.v1")],
+          args: ["--", expectedPrompt("a.v1")],
           cwd: target,
         });
         const dispatcherCwd = isolatedTmux(socket, [
@@ -415,7 +1071,7 @@ describe("ticket dispatch real tmux", () => {
         for (const id of ["a.v1", "b", "c", "d"]) {
           const expected = expectedPrompt(id);
           assert.deepEqual(JSON.parse(readFileSync(join(records, `${id}.json`), "utf8")), {
-            args: [expected],
+            args: ["--", expected],
             cwd,
           });
           const name = `=handle_${id.replaceAll(".", "_")}`;
@@ -455,12 +1111,7 @@ describe("ticket dispatch real tmux", () => {
         writeTicket(store, "a.v1", "open");
         writeFileSync(join(store, "b.md"), "---\nstatus: blocked\nafter: a.v1\n---\n\n# b\n");
         startServer(fixture, env);
-        const start = cli(
-          fixture,
-          ["dispatch", "start", "--max", "1"],
-          cwd,
-          env,
-        );
+        const start = cli(fixture, ["dispatch", "start", "--max", "1"], cwd, env);
         assert.equal(start.status, 0, start.stderr);
         await waitFor(() => existsSync(join(records, "a.v1.json")), "first pi did not start");
         assert.equal(existsSync(join(records, "b.json")), false);
@@ -473,7 +1124,7 @@ describe("ticket dispatch real tmux", () => {
         assert.equal(readFileSync(join(records, "launches"), "utf8"), "a.v1\nb\nc\n");
         for (const id of ["a.v1", "b", "c"]) {
           assert.deepEqual(JSON.parse(readFileSync(join(records, `${id}.json`), "utf8")), {
-            args: [expectedPrompt(id)],
+            args: ["--", expectedPrompt(id)],
             cwd,
           });
           const name = `=handle_${id.replaceAll(".", "_")}`;
@@ -525,12 +1176,7 @@ describe("ticket dispatch real tmux", () => {
         assert.equal(added.status, 0, added.stderr);
         writeTicket(store, "a.v1", "open");
         startServer(fixture, env);
-        const first = cli(
-          fixture,
-          ["dispatch", "start", "--max", "2"],
-          cwd,
-          env,
-        );
+        const first = cli(fixture, ["dispatch", "start", "--max", "2"], cwd, env);
         assert.equal(first.status, 0, first.stderr);
         assert.match(first.stdout, /dispatcher started:/);
         await waitFor(() => existsSync(join(records, "a.v1.json")), "held pi did not start");
@@ -563,13 +1209,7 @@ describe("ticket dispatch real tmux", () => {
         if (explicitProject) mkdirSync(launchCwd, { recursive: true });
         const restart = cli(
           fixture,
-          [
-            "dispatch",
-            "start",
-            ...(explicitProject ? ["-p", "project"] : []),
-            "--max",
-            "1",
-          ],
+          ["dispatch", "start", ...(explicitProject ? ["-p", "project"] : []), "--max", "1"],
           otherCwd,
           env,
         );
@@ -590,11 +1230,11 @@ describe("ticket dispatch real tmux", () => {
         );
         assert.equal(isolatedTmux(socket, ["has-session", "-t", "=handle_c"]).status, 0);
         assert.deepEqual(JSON.parse(readFileSync(join(records, "c.json"), "utf8")), {
-          args: [expectedPrompt("c")],
+          args: ["--", expectedPrompt("c")],
           cwd: launchCwd,
         });
         assert.deepEqual(JSON.parse(readFileSync(join(records, "a.v1.json"), "utf8")), {
-          args: [expectedPrompt("a.v1")],
+          args: ["--", expectedPrompt("a.v1")],
           cwd,
         });
         assert.equal(cli(fixture, ["set", "a.v1", '{"status":"open"}']).status, 0);
@@ -778,7 +1418,7 @@ describe("global ticket dispatch", () => {
         assert.deepEqual(recordedLaunches(fixture), expected.slice(0, index + 1));
         const [project, id] = key.split("/");
         assert.deepEqual(JSON.parse(readFileSync(join(fixture.records, `${key}.json`), "utf8")), {
-          args: [expectedPrompt(id!)],
+          args: ["--", expectedPrompt(id!)],
           cwd: join(fixture.home, "projects", project!),
         });
         assert.equal(cli(fixture, ["set", id!, '{"status":"closed"}', "-p", project!]).status, 0);
@@ -857,7 +1497,7 @@ describe("global ticket dispatch", () => {
       assert.deepEqual(
         JSON.parse(readFileSync(join(fixture.records, "alpha/first.json"), "utf8")),
         {
-          args: [expectedPrompt("first")],
+          args: ["--", expectedPrompt("first")],
           cwd: fixture.cwd,
         },
       );
@@ -928,30 +1568,27 @@ describe("global ticket dispatch", () => {
     TIMEOUT_MS + 5000,
   );
 
-  it.each(["file", "inaccessible"])(
-    "fails before any pi launch for a %s candidate cwd",
-    (kind) => {
-      const fixture = setupGlobal();
-      writeTicket(fixture.store, "first", "open");
-      writeTicket(globalStore(fixture, "beta"), "second", "open");
-      const target = join(fixture.home, "projects", "beta");
-      rmSync(target, { recursive: true });
-      if (kind === "file") writeFileSync(target, "not a directory");
-      if (kind === "inaccessible") {
-        mkdirSync(target);
-        chmodSync(target, 0o600);
-      }
-      try {
-        const result = cli(fixture, ["dispatch", "--all", "--max", "1"]);
-        assert.equal(result.status, 1);
-        assert.match(result.stderr, /^I\/O error:/);
-        assert.equal(existsSync(fixture.socket), false);
-        assert.deepEqual(recordedLaunches(fixture), []);
-      } finally {
-        if (kind === "inaccessible") chmodSync(target, 0o700);
-      }
-    },
-  );
+  it.each(["file", "inaccessible"])("fails before any pi launch for a %s candidate cwd", (kind) => {
+    const fixture = setupGlobal();
+    writeTicket(fixture.store, "first", "open");
+    writeTicket(globalStore(fixture, "beta"), "second", "open");
+    const target = join(fixture.home, "projects", "beta");
+    rmSync(target, { recursive: true });
+    if (kind === "file") writeFileSync(target, "not a directory");
+    if (kind === "inaccessible") {
+      mkdirSync(target);
+      chmodSync(target, 0o600);
+    }
+    try {
+      const result = cli(fixture, ["dispatch", "--all", "--max", "1"]);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /^I\/O error:/);
+      assert.equal(existsSync(fixture.socket), false);
+      assert.deepEqual(recordedLaunches(fixture), []);
+    } finally {
+      if (kind === "inaccessible") chmodSync(target, 0o700);
+    }
+  });
 
   it(
     "skips a missing candidate cwd, logs the skip, and launches the other project",
@@ -988,10 +1625,7 @@ describe("global ticket dispatch", () => {
       const fixture = setupGlobal();
       writeTicket(fixture.store, "held", "open");
       startServer(fixture);
-      assert.equal(
-        cli(fixture, ["dispatch", "--all", "--max", "1"]).status,
-        0,
-      );
+      assert.equal(cli(fixture, ["dispatch", "--all", "--max", "1"]).status, 0);
       await waitRecorded(fixture, "alpha/held");
       const added = globalStore(fixture, "gamma");
       mkdirSync(added);
@@ -1017,10 +1651,7 @@ describe("global ticket dispatch", () => {
       const fixture = setupGlobal();
       writeTicket(fixture.store, "held", "open");
       startServer(fixture);
-      assert.equal(
-        cli(fixture, ["dispatch", "--all", "--max", "1"]).status,
-        0,
-      );
+      assert.equal(cli(fixture, ["dispatch", "--all", "--max", "1"]).status, 0);
       await waitRecorded(fixture, "alpha/held");
       const added = globalStore(fixture, "gamma");
       mkdirSync(added);
@@ -1178,7 +1809,7 @@ describe("manual ticket dispatch", () => {
       assert.deepEqual(
         JSON.parse(readFileSync(join(fixture.records, `${manualKey}.json`), "utf8")),
         {
-          args: [expectedPrompt("c")],
+          args: ["--", expectedPrompt("c")],
           cwd: join(fixture.home, "projects", manualProject),
         },
       );
@@ -1394,7 +2025,7 @@ describe("global dispatch dynamic projects", () => {
       assert.deepEqual(
         JSON.parse(readFileSync(join(fixture.records, project, "second.json"), "utf8")),
         {
-          args: [expectedPrompt("second")],
+          args: ["--", expectedPrompt("second")],
           cwd: join(fixture.home, "projects", project),
         },
       );
