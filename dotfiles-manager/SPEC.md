@@ -23,14 +23,15 @@ buildステージは、内部で次の順に処理する。
 1. dist再構築（コピー時にパス対応表を反映）
 2. パス対応表の再適用（入力設定とフックの配置を確定）
 3. ローカルフックを一度収集（名前・配置フォルダ・検出時の内容を保存）
-4. 外部取得
-5. merge変換
-6. 置換sidecar
-7. 保存済みローカルフックの実行
-8. lnk 宣言の変換
-9. lnk の home 採用（Windows 向けの build のみ）
+4. buildデータのマシン固有マージ
+5. 外部取得
+6. merge変換
+7. 置換sidecar
+8. 保存済みローカルフックの実行
+9. lnk 宣言の変換
+10. lnk の home 採用（Windows 向けの build のみ）
 
-フック完了後はパス対応表・外部取得・merge・置換sidecar を再実行しない。完成済みdist が、そのまま差分検知の入力になる。パス対応表・外部取得・merge・置換sidecar が失敗した場合は、フックを実行せずbuild を異常終了する。
+フック完了後は先行する処理を再実行しない。完成済みdist が、そのまま差分検知の入力になる。パス対応表・buildデータのマシン固有マージ・外部取得・merge変換・置換sidecar が失敗した場合は、フックを実行せずbuild を異常終了する。
 
 ## コマンド
 
@@ -45,7 +46,7 @@ buildステージは、内部で次の順に処理する。
 
 内部CLI の `apply` は、`--dry-run` を指定しない場合、適用ステージの差分検知後に `diff: <内訳> (<秒>s)` と §差分表示 に従う差分を表示する。`--ask` では続けて `Apply? [y/N]` を stdout に表示し、標準入力から 1行を読む。回答の前後の空白を除いた値が大文字小文字を問わず `y` のときだけ、適用と applyスクリプトの実行へ進む。`y` 以外の回答、または標準入力が回答の前に終端に達したときは `apply aborted` を表示し、home を変更せずapplyスクリプトを実行せず、終了コード0 で終了する。`apply --dry-run` は適用ステージの代わりに diffステージを実行する。最後の経過時間ログのコマンド名は `apply` とする。
 
-内部CLI の `apply` / `diff` / `managed` では、build の開始に `[build] Started`、成功時に `[build] Complete (<秒>s)`、失敗時に `[build] Failed (<秒>s)` を stdout に表示する。実行する各buildフックの開始には `  [<path>] Started`、成功時には `  [<path>] ✓ Complete (<秒>s)`、失敗時には `  [<path>] ✗ Failed (<秒>s)` を表示する。`<path>` はフックの dist相対パスであり、フック行の先頭には半角スペースを 2個置く。build の各フェーズの完了時には `  [build] <フェーズ> (<秒>s)` をフック行と同じインデントで表示する。`<フェーズ>` は dist再構築の `rebuild dist`、パス対応表の `path map`、外部取得の `externals`、merge変換の `merge`、置換sidecar の `replace` であり、行は実行順に現れる。フック自身の stdout / stderr は §フックシステム の出力規則に従う。
+内部CLI の `apply` / `diff` / `managed` では、build の開始に `[build] Started`、成功時に `[build] Complete (<秒>s)`、失敗時に `[build] Failed (<秒>s)` を stdout に表示する。実行する各buildフックの開始には `  [<path>] Started`、成功時には `  [<path>] ✓ Complete (<秒>s)`、失敗時には `  [<path>] ✗ Failed (<秒>s)` を表示する。`<path>` はフックの dist相対パスであり、フック行の先頭には半角スペースを 2個置く。build の各フェーズの完了時には `  [build] <フェーズ> (<秒>s)` をフック行と同じインデントで表示する。`<フェーズ>` は dist再構築の `rebuild dist`、パス対応表の `path map`、buildデータのマシン固有マージと外部取得の `externals`、merge変換の `merge`、置換sidecar の `replace` であり、行は実行順に現れる。フック自身の stdout / stderr は §フックシステム の出力規則に従う。
 
 build、フック、フェーズの秒数はそれぞれの開始から数え、小数第2位まで表示する。後続の applyステージは開始時に `[apply] Started`、成功時に `[apply] Complete (<秒>s)`、失敗時に `[apply] Failed (<秒>s)` を表示する。diff / managedステージは開始時に `stage <name> start`、成功または失敗時に `stage <name> <success|failure> (<秒>s)` を表示する。最後に `command <name> <success|failure> (<秒>s)` をコマンド開始からの経過秒数とともに stdout に表示する。applyステージと `command apply` の経過秒数には、確認プロンプトの表示から回答または標準入力の終端を受け取るまでの時間を含めない。ログは差分表示や `managed` のパス一覧と同じstdout に現れる。失敗時のエラー表示先は stderr、終了コードは従来どおりとする。引数が不正な場合は build前に終了し、経過時間ログを出さない。
 
@@ -157,7 +158,7 @@ lnk 宣言から生成したショートカットの比較では、Shell Link �
 
 ## build: パス対応表
 
-`dotfiles/` 以下の各フォルダに `remap.data.md` を置ける。各フォルダの `remap.data.md` の OS列は2度適用される。1回目は dist再構築のコピー時で、dist のルートから親フォルダを子フォルダより先に処理し、`-` の key はコピーせず、移動先が定まったkey は移動先へ直接配置する。2回目は dist再構築後・フック収集前に全表を再適用し、glob key を含む対応を反映して入力設定とフックの配置を確定する。すでに反映済みの key は2回目で変化しない。親の対応表がフォルダを移動したときは、移動後のフォルダで子の対応表を処理する。対応表のないフォルダは変更しない。すべてのパス対応表を終えてから外部取得、merge変換、置換sidecar を行う。パス対応自体はローカルフックではなく、フックの実行ログにも現れない。
+`dotfiles/` 以下の各フォルダに `remap.data.md` を置ける。各フォルダの `remap.data.md` の OS列は2度適用される。1回目は dist再構築のコピー時で、dist のルートから親フォルダを子フォルダより先に処理し、`-` の key はコピーせず、移動先が定まったkey は移動先へ直接配置する。2回目は dist再構築後・フック収集前に全表を再適用し、glob key を含む対応を反映して入力設定とフックの配置を確定する。すでに反映済みの key は2回目で変化しない。親の対応表がフォルダを移動したときは、移動後のフォルダで子の対応表を処理する。対応表のないフォルダは変更しない。すべてのパス対応表を終えてから buildデータのマシン固有マージ、外部取得、merge変換、置換sidecar を行う。パス対応自体はローカルフックではなく、フックの実行ログにも現れない。
 
 表の列は `key | linux | windows | macos` の順とし、各行の `key` はその表を置いたフォルダからの相対パス、各OS列は次の結果を表す。
 
@@ -177,9 +178,15 @@ Windows で実行するbuild と内部CLI は、外部取得と GitAlias のた�
 
 `wsl.exe` が実行環境に存在せず起動できないとき、および `wsl.exe` が存在してもディストリビューションが1つもインストールされていないとき、Windows は WSL接続を使わず、§build: 外部取得 の Windowsローカルmirror で外部取得と GitAlias を行う。ディストリビューションがインストールされているにもかかわらず distro・ユーザー・HOME・Bun・bridge のいずれかの解決や確認に失敗した場合は、Windowsローカルmirror へ切り替えず異常終了する。
 
+## build: buildデータのマシン固有マージ
+
+同じフォルダの `<name>.machine-merge-data.yaml` を、パス対応後の dist にある `<name>.data.yaml` に §パッチ適用 の規則でマージする。両方が通常ファイルのときだけ処理し、ホーム側は参照しない。合成結果で dist のベースを更新し、処理済みの sidecar は dist から削除する。この sidecar は `dotfiles/` 内の設置階層によらず gitignore の対象となる。
+
+`<name>.data.machine-merge.yaml` は §build: merge変換 の sidecar として、外部取得後に処理する。
+
 ## build: 外部取得
 
-すべてのパス対応表の適用後、残っている `external.data.yaml` をルートから親フォルダ優先で処理する。`dotfiles/` 以下の各フォルダに置ける。親の対応表で削除された設定は処理せず、移動された設定は移動後のフォルダから読み取る。取得先の `destination` は設定を置いたフォルダからの相対パス。したがって、Linux と Windows では移動後の Rimeフォルダへ辞書を取得し、macOS では Rime の設定が削除されるため取得しない。`.agents` が削除されるWindows と macOS では skills の外部取得および `run_after` を行わない。
+buildデータのマシン固有マージの後、`external.data.yaml` をルートから親フォルダ優先で処理する。`dotfiles/` 以下の各フォルダに置ける。親の対応表で削除された設定は処理せず、移動された設定は移動後のフォルダから読み取る。取得先の `destination` は設定を置いたフォルダからの相対パス。したがって、Linux と Windows では移動後の Rimeフォルダへ辞書を取得し、macOS では Rime の設定が削除されるため取得しない。`.agents` が削除されるWindows と macOS では skills の外部取得および `run_after` を行わない。
 
 `repos` の各リポジトリは GitHub mirror を使う。mirror の場所と更新方法は、Windows では WSL接続を解決できるかどうかで決まる（§Windows の WSL接続）。Linux/macOS と、WSL接続を解決できないWindows は、実行環境の home直下の `mirrors/github.com/<owner>/<repo>`（Windows は Windows側home）をローカルGit で使う。それ以外の Windows は選択済みWSLユーザーの `<HOME>/mirrors/github.com/<owner>/<repo>` を使い、Git を WSL内で実行し、その完了後に同じmirror を UNC経由で読み取ってWindows dist へコピーする。いずれの経路でも既存mirror の移動・削除は行わない。Windowsローカルmirror のGit は `core.longpaths=true` を渡して実行し、Windows の既定のパス長上限（260 文字）を超えるmirror 内パスの操作・削除を可能にする。
 
@@ -187,7 +194,7 @@ mirror がなければ shallow cloneし、存在するときは前回の取得�
 
 同じフォルダの `external.{platform}-data.yaml`（`linux`・`macos`・`windows` のいずれか）があれば、対応するOS の build でリポジトリ単位で共有設定を置き換える。他のOS の build では、このファイルは存在しないものとして扱う。
 
-同じフォルダの `external.machine-data.yaml` があればリポジトリ単位で共有設定を置き換える。このマシン固有ファイルは `dotfiles/` 内の設置階層によらずgitignore の対象となる。置換は共有設定 → `external.{platform}-data.yaml`（対応するOS のとき） → `external.machine-data.yaml` → `external.{platform}-machine-data.yaml` の順で行い、後段ほど優先する（machine ファイルの定義が最も具体性が高い）。
+同じフォルダの `external.machine-data.yaml` があればリポジトリ単位で共有設定を置き換える。このマシン固有ファイルは `dotfiles/` 内の設置階層によらずgitignore の対象となる。置換は 前段のマシン固有マージ後の `external.data.yaml`→ `external.{platform}-data.yaml`（対応するOS のとき）→ `external.machine-data.yaml` → `external.{platform}-machine-data.yaml` の順に行い、後段ほど優先する。
 
 同じ設定の repo は並列に処理し、失敗時は build を中断する。外部取得はローカルフックの実行ログに現れない。
 
@@ -411,7 +418,7 @@ merge変換の後、`<name>.replace.yaml` があるとき次を処理する。
 
 ## パッチ適用
 
-merge変換と置換sidecar の入力となる構造化データ（JSON/YAML/TOML/INI）は、ここで定義する1回分のパッチ適用に従う。
+buildデータのマシン固有マージ、merge変換、置換sidecar の入力となる構造化データ（JSON/YAML/TOML/INI）は、ここで定義する1回分のパッチ適用に従う。
 
 ### 1レイヤー内の処理順
 
@@ -427,7 +434,7 @@ merge変換と置換sidecar の入力となる構造化データ（JSON/YAML/TOM
 
 ### 操作キー（`$append` / `$remove` / `$replace` / `$unset`）
 
-操作キーはレイヤー内の任意のオブジェクトに置ける。キー名が次の形式で、かつ認識条件を満たすものだけが操作キーになる。
+操作キーはレイヤー内の任意のオブジェクトに置ける。ただし、buildデータのマシン固有マージで `external.data.yaml` を合成するときは、各リポジトリ定義の `edit`・`edit_markdown` 配下のキーを通常キーとして扱う。同一レイヤー内で通常キーが重複するとエラーになる。YAML エイリアスはレイヤー内で参照先の値に展開する。`sections` はベースの記載順を保ち、新しいキーを末尾に追加する。キー名が次の形式で、かつ認識条件を満たすものだけが操作キーになる。
 
 ```
 <local>.$<op>
@@ -632,7 +639,7 @@ dist を再帰走査し、home の対応するエントリと対照する。エ�
 - symlink は、リンク先（末尾改行1つを除いた内容）を比較する。
 - 実行権は、linux と darwin で owner実行権の有無を比較する。windows では実行権を比較しない。
 
-dist の相対パスの各要素が `.build` で始まるエントリ、名前に `.data.` を含むエントリ（`external.data.yaml`・`external.windows-data.yaml` 等の外部取得データファイルを含む）、§フックシステム の宣言ファイル名に一致するファイルは、差分検知と適用の対象外であり、管理対象の一覧にも含めない。`external.data.machine.yaml` は `.data.` を含むため同じく対象外となる。`.data.` は buildステージのデータファイルのための予約名であり、`.build` 接頭辞はリネーム前のデータファイル名との互換のために残す。フックが生成した `node_modules/` は通常のエントリと同じく差分検知・適用の対象になる。`<name>.machine.{json,yaml,toml,ini}` と `.edit.ts` は、上記の除外条件に当たらなければ通常のエントリとして差分検知・適用される。`.edit.ts` は buildフックとして実行されない。
+dist の相対パスの各要素が `.build` で始まるエントリ、名前に `.data.` を含むエントリ（`external.data.yaml`・`external.windows-data.yaml` 等の外部取得データファイルを含む）、`<name>.machine-merge-data.yaml`、§フックシステム の宣言ファイル名に一致するファイルは、差分検知と適用の対象外であり、管理対象の一覧にも含めない。`external.data.machine.yaml` は `.data.` を含むため同じく対象外となる。`.data.` は buildステージのデータファイルのための予約名であり、`.build` 接頭辞はリネーム前のデータファイル名との互換のために残す。フックが生成した `node_modules/` は通常のエントリと同じく差分検知・適用の対象になる。`<name>.machine.{json,yaml,toml,ini}` と `.edit.ts` は、上記の除外条件に当たらなければ通常のエントリとして差分検知・適用される。`.edit.ts` は buildフックとして実行されない。
 
 | dist | home | 分類 |
 | --- | --- | --- |

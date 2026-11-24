@@ -9,6 +9,7 @@ dotfiles/**/*.machine-postbuild.ts
 dotfiles/**/*.machine-apply.ts
 dotfiles/**/*.machine-postapply.ts
 dotfiles/**/external.machine-data.yaml
+dotfiles/**/*.machine-merge-data.yaml
 dotfiles/.secrets.sh
 dotfiles/.wslconfig
 dotfiles/**/*.machine-merge.json

@@ -851,13 +851,194 @@ replacements:
     assert.equal(await readFile(join(distRoot, "app.conf"), "utf8"), "EnableAutoUpdates=false\n");
     assert.equal(existsSync(join(distRoot, "app.conf.replace.yaml")), false);
   });
-  it("ignores external machine overlays in the root and arbitrary nested folders", () => {
+  it("merges a machine data sidecar after moving its folder", async () => {
+    await put(
+      root,
+      "dotfiles/remap.data.md",
+      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| source | moved |  |  |\n",
+    );
+    await put(
+      root,
+      "dotfiles/source/settings.data.yaml",
+      "nested: {shared: true}\nitems: [base]\n",
+    );
+    await put(
+      root,
+      "dotfiles/source/settings.machine-merge-data.yaml",
+      "nested: {machine: true}\nitems.$append: [machine]\n",
+    );
+
+    await main(root, "linux", homeRoot);
+
+    const merged = parseYaml(await readFile(join(distRoot, "moved/settings.data.yaml"), "utf8"));
+    assert.deepEqual(merged, {
+      nested: { shared: true, machine: true },
+      items: ["base", "machine"],
+    });
+    assert.equal(existsSync(join(distRoot, "moved/settings.machine-merge-data.yaml")), false);
+  });
+
+  it("does not read a machine data sidecar when its base is absent from dist", async () => {
+    await put(homeRoot, "settings.data.yaml", "from: home\n");
+    await put(root, "dotfiles/settings.machine-merge-data.yaml", "[\n");
+
+    await main(root, "linux", homeRoot);
+
+    assert.equal(existsSync(join(distRoot, "settings.data.yaml")), false);
+  });
+
+  it("stops before external acquisition when a machine data sidecar is invalid", async () => {
+    await put(root, "dotfiles/settings.data.yaml", "shared: true\n");
+    await put(root, "dotfiles/settings.machine-merge-data.yaml", "[\n");
+    const phases: string[] = [];
+
+    await assert.rejects(
+      main(root, "linux", homeRoot, { onPhase: (phase) => phases.push(phase) }),
+      /machine data merge failed: settings\.machine-merge-data\.yaml/,
+    );
+    assert.deepEqual(phases, ["rebuild dist", "path map"]);
+  });
+
+  it("uses the dedicated external data merge for acquisition without reinterpreting edit keys", async () => {
+    await put(
+      root,
+      "dotfiles/external.data.yaml",
+      `repos:
+  example/edited:
+    destination: output
+    entries: []
+    entries.$append: [files]
+    entries.$append: [extra.txt]
+    edit:
+      files/info.txt.$append: shared info
+      files/other.txt.$append: shared other
+    edit_markdown:
+      files/readme.md:
+        sections:
+          Note.$replace: machine notes
+          "20": twenty
+          "3": three
+`,
+    );
+    await put(
+      root,
+      "dotfiles/external.machine-merge-data.yaml",
+      `repos:
+  example/edited:
+    exclude: [files/skip.txt]
+    edit:
+      files/info.txt.$append: machine info
+    edit_markdown:
+      files/readme.md:
+        sections:
+          "1": &local_text updated text
+          "3": *local_text
+`,
+    );
+    const mirror = "mirrors/github.com/example/edited";
+    await put(homeRoot, `${mirror}/extra.txt`, "extra\n");
+    await put(homeRoot, `${mirror}/files/info.txt`, "info\n");
+    await put(homeRoot, `${mirror}/files/other.txt`, "other\n");
+    await put(homeRoot, `${mirror}/files/skip.txt`, "skip\n");
+    await put(homeRoot, `${mirror}/files/readme.md`, "## Note.$replace\n\nshared notes\n");
+    await put(homeRoot, `${mirror}/.git/build-pull-time`, `${Date.now()}\n`);
+
+    await runBuildInSubprocess("linux");
+
+    assert.equal(
+      await readFile(join(distRoot, "output/files/info.txt"), "utf8"),
+      "info\nmachine info",
+    );
+    assert.equal(
+      await readFile(join(distRoot, "output/files/other.txt"), "utf8"),
+      "other\nshared other",
+    );
+    assert.equal(
+      await readFile(join(distRoot, "output/files/readme.md"), "utf8"),
+      "## Note.$replace\n\nmachine notes\n\n## 20\n\ntwenty\n\n## 3\n\nupdated text\n\n## 1\n\nupdated text\n",
+    );
+    assert.equal(await readFile(join(distRoot, "output/extra.txt"), "utf8"), "extra\n");
+    assert.equal(existsSync(join(distRoot, "output/files/skip.txt")), false);
+    assert.equal(existsSync(join(distRoot, "external.machine-merge-data.yaml")), false);
+  });
+
+  it("rejects duplicate literal edit keys in a dedicated external data sidecar", async () => {
+    await put(root, "dotfiles/external.data.yaml", "repos: {}\n");
+    await put(
+      root,
+      "dotfiles/external.machine-merge-data.yaml",
+      `repos:
+  example/edited:
+    edit_markdown:
+      files/readme.md:
+        sections:
+          Note.$replace: first
+          Note.$replace: second
+`,
+    );
+
+    await assert.rejects(
+      main(root, "linux", homeRoot),
+      /machine data merge failed: external\.machine-merge-data\.yaml: duplicate external config key: Note\.\$replace/,
+    );
+  });
+
+  it("keeps the ordinary external data sidecar and its patch operations after acquisition", async () => {
+    await put(
+      root,
+      "dotfiles/external.data.yaml",
+      `repos:
+  example/edited:
+    destination: shared
+    entries: [files]
+    edit_markdown:
+      files/README:
+        sections: {Title: shared}
+`,
+    );
+    await put(
+      root,
+      "dotfiles/external.machine-merge-data.yaml",
+      "repos: {example/edited: {destination: early}}\n",
+    );
+    await put(
+      root,
+      "dotfiles/external.data.machine-merge.yaml",
+      `repos:
+  example/edited:
+    destination: late
+    edit_markdown:
+      files/README:
+        sections:
+          Title.$replace: late
+`,
+    );
+    const mirror = "mirrors/github.com/example/edited";
+    await put(homeRoot, `${mirror}/files/README`, "# Title\n\nbase\n");
+    await put(homeRoot, `${mirror}/.git/build-pull-time`, `${Date.now()}\n`);
+
+    await runBuildInSubprocess("linux");
+
+    assert.equal(
+      await readFile(join(distRoot, "early/files/README"), "utf8"),
+      "# Title\n\nshared\n",
+    );
+    assert.equal(existsSync(join(distRoot, "late")), false);
+    const merged = parseYaml(await readFile(join(distRoot, "external.data.yaml"), "utf8"));
+    assert.deepEqual(merged.repos["example/edited"].edit_markdown["files/README"].sections, {
+      Title: "late",
+    });
+  });
+
+  it("ignores machine data sidecars in the root and arbitrary nested folders", () => {
     const repoRoot = join(import.meta.dir, "../..");
     for (const path of [
       "dotfiles/external.machine-data.yaml",
       "dotfiles/rime/external.machine-data.yaml",
       "dotfiles/.agents/skills.exact/external.machine-data.yaml",
       "dotfiles/other/nested/external.machine-data.yaml",
+      "dotfiles/external.machine-merge-data.yaml",
+      "dotfiles/other/nested/settings.machine-merge-data.yaml",
     ]) {
       const result = Bun.spawnSync([
         "git",
@@ -882,7 +1063,7 @@ replacements:
     assert.equal(shared.exitCode, 1);
   });
 
-  it("prefers external.machine-data.yaml and ignores the obsolete machine filename", async () => {
+  it("prefers external.machine-data.yaml over a dedicated data merge and the obsolete name", async () => {
     await put(
       root,
       "dotfiles/external.data.yaml",
@@ -891,6 +1072,11 @@ replacements:
     destination: shared
     entries: [shared.txt]
 `,
+    );
+    await put(
+      root,
+      "dotfiles/external.machine-merge-data.yaml",
+      "repos: {example/repo: {exclude: [machine.txt]}}\n",
     );
     await put(
       root,

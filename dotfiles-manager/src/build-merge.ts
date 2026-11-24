@@ -5,12 +5,14 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { homeRelPath } from "./home-path.ts";
+import { machineMergeDataTarget } from "./path-mapping.ts";
 import { parse as parseIni, stringify as stringifyIni } from "js-ini";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { isMap, isNode, isScalar, parseDocument, visit, type Document, type YAMLMap } from "yaml";
 import { toJS, type ToJSContext } from "yaml/util";
 import {
   copyYamlNotation,
+  expandYamlAliases,
   ownEntries,
   readYamlValue,
   rememberYamlNotation,
@@ -25,13 +27,16 @@ type MergePath = string | (string | symbol)[];
 type RawJsonNumber = { readonly rawJSON: string };
 type Operation = { key: string; value: unknown };
 type Operations = Map<MergePath, Partial<Record<MergeOp, Operation>>>;
-type Entry = { path: string; isDirectory: boolean };
+type Entry = { path: string; isDirectory: boolean; isFile: boolean };
+type ExternalEditScope = "config" | "repos" | "repo";
+type ExternalLayer = { operationPairs: Set<unknown>; editScope?: ExternalEditScope };
 type Layer = { normal: unknown; operations: Operations };
 type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: string[] };
 
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
-const sidecarPattern = /\.(?:(linux|macos|windows)-)?(machine-)?(merge|merge-existing)\.(json|yaml|toml|ini)$/;;
+const sidecarPattern =
+  /\.(?:(linux|macos|windows)-)?(machine-)?(merge|merge-existing)\.(json|yaml|toml|ini)$/;
 const iniReservedNames = new Set([...Object.getOwnPropertyNames(Object.prototype), "prototype"]);
 const jsonNumberPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 const rawJson = JSON as typeof JSON & {
@@ -54,6 +59,29 @@ const fileFormats = {
     },
   },
 } as const;
+
+export async function mergeMachineData(distDir: string): Promise<void> {
+  const entries = await collectEntries(distDir);
+  const files = new Set(entries.filter((entry) => entry.isFile).map((entry) => entry.path));
+  for (const sidecarPath of files) {
+    const targetName = machineMergeDataTarget(basename(sidecarPath));
+    if (targetName === undefined) continue;
+    const targetPath = join(dirname(sidecarPath), targetName);
+    if (!files.has(targetPath)) continue;
+    try {
+      const isEarlyExternalConfig = targetName === "external.data.yaml";
+      await writeMergedLayers(targetPath, "yaml", [targetPath, sidecarPath], {
+        isEarlyExternalConfig,
+      });
+      await rm(sidecarPath);
+    } catch (error) {
+      throw new Error(
+        `machine data merge failed: ${relative(distDir, sidecarPath)}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
+    }
+  }
+}
 
 export async function composeMergeTargets(
   distDir: string,
@@ -103,18 +131,30 @@ async function composeMergeTarget(
 
   if (sidecars.length > 0) {
     const basePath = hasBase ? target.outputPath : homePath;
-    const layers: Layer[] = [await readLayer(basePath, target.format)];
-    for (const sidecar of sidecars) layers.push(await readLayer(sidecar, target.format));
-
-    let value: unknown = {};
-    for (const layer of layers) {
-      if (target.format === "ini") validateIniMerge(value, layer.normal);
-      value = applyLayer(value, layer);
-    }
-
-    await writeFile(target.outputPath, fileFormats[target.format].stringify(value));
+    await writeMergedLayers(target.outputPath, target.format, [basePath, ...sidecars]);
   }
   for (const sidecar of target.sidecarPaths) await rm(sidecar);
+}
+
+async function writeMergedLayers(
+  outputPath: string,
+  format: FileFormat,
+  layerPaths: string[],
+  { isEarlyExternalConfig = false } = {},
+): Promise<void> {
+  let value: unknown = {};
+  for (const path of layerPaths) {
+    const externalLayer: ExternalLayer | undefined = isEarlyExternalConfig
+      ? { operationPairs: new Set(), editScope: "config" }
+      : undefined;
+    const layer = await readLayer(path, format, externalLayer);
+    if (format === "ini") validateIniMerge(value, layer.normal);
+    value = applyLayer(value, layer);
+  }
+  const content = isEarlyExternalConfig
+    ? stringifyYamlValue(value, { preserveKeyOrder: true })
+    : fileFormats[format].stringify(value);
+  await writeFile(outputPath, content);
 }
 
 async function collectMergeTargets(distDir: string, platform: string): Promise<MergeTarget[]> {
@@ -145,7 +185,11 @@ async function collectMergeTargets(distDir: string, platform: string): Promise<M
   return [...targets.values()];
 }
 
-async function readLayer(path: string, format: FileFormat): Promise<Layer> {
+async function readLayer(
+  path: string,
+  format: FileFormat,
+  externalLayer?: ExternalLayer,
+): Promise<Layer> {
   if (!existsSync(path)) return { normal: {}, operations: new Map() };
   if (format === "ini") {
     const bytes = await readFile(path);
@@ -159,17 +203,19 @@ async function readLayer(path: string, format: FileFormat): Promise<Layer> {
   }
   const content = await readFile(path, "utf-8");
   if (content.trim() === "") return { normal: {}, operations: new Map() };
-  return parseLayer(content, format);
+  return parseLayer(content, format, externalLayer);
 }
 
-function parseLayer(content: string, format: FileFormat): Layer {
+function parseLayer(content: string, format: FileFormat, externalLayer?: ExternalLayer): Layer {
   if (format === "toml") return parseTomlLayer(content);
   const document = parseDocument(format === "json" ? stripJsonComments(content) : content, {
     uniqueKeys: false,
   });
   if (document.errors.length > 0) throw document.errors[0];
   if (format === "json") rewriteJsonNumbers(document);
+  if (externalLayer) expandYamlAliases(document);
   if (!isMap(document.contents)) {
+    if (externalLayer) validateExternalLayerKeys(document, externalLayer.operationPairs);
     const normal = format === "yaml" ? readYamlValue(document.contents) : document.toJSON();
     return { normal: normal ?? {}, operations: new Map() };
   }
@@ -188,8 +234,24 @@ function parseLayer(content: string, format: FileFormat): Layer {
     "",
     operations,
     format === "yaml" ? undefined : jsonContext,
+    externalLayer,
   );
+  if (externalLayer) validateExternalLayerKeys(document, externalLayer.operationPairs);
   return { normal, operations };
+}
+
+function validateExternalLayerKeys(document: Document, operationPairs: Set<unknown>): void {
+  visit(document, {
+    Map(_, map) {
+      const keys = new Set<string | symbol>();
+      for (const pair of map.items) {
+        if (operationPairs.has(pair)) continue;
+        const key = yamlKey(pair.key);
+        if (keys.has(key)) throw new Error(`duplicate external config key: ${String(key)}`);
+        keys.add(key);
+      }
+    },
+  });
 }
 
 function parseTomlLayer(content: string): Layer {
@@ -365,6 +427,7 @@ function parsePairs(
   prefix: MergePath,
   operations: Operations,
   context: ToJSContext | undefined,
+  externalLayer?: ExternalLayer,
 ): ParsedPairs {
   const normal: PlainObject = {};
   let hasOperations = false;
@@ -372,6 +435,7 @@ function parsePairs(
     const key = context ? String(pair.key?.toJSON()) : yamlKey(pair.key);
     const operation = typeof key === "string" ? matchOperationKey(key) : undefined;
     if (operation) {
+      externalLayer?.operationPairs.add(pair);
       const path = extendMergePath(prefix, operation.path);
       registerOperation(
         operations,
@@ -383,13 +447,16 @@ function parsePairs(
       hasOperations = true;
       continue;
     }
-    if (isMap(pair.value)) {
+    const editScope = externalLayer?.editScope;
+    const isExternalEdit = editScope === "repo" && (key === "edit" || key === "edit_markdown");
+    if (isMap(pair.value) && !isExternalEdit) {
       const path = extendMergePath(prefix, key);
       const child = parsePairs(
         pair.value,
         typeof path === "string" ? `${path}.` : path,
         operations,
         context,
+        externalLayer && { ...externalLayer, editScope: childExternalEditScope(editScope, key) },
       );
       if (child.hasOperations && ownEntries(child.normal).length === 0) {
         hasOperations = true;
@@ -403,6 +470,15 @@ function parsePairs(
   }
   if (!context) rememberYamlNotation(map, normal);
   return { normal, hasOperations };
+}
+
+function childExternalEditScope(
+  scope: ExternalEditScope | undefined,
+  key: string | symbol,
+): ExternalEditScope | undefined {
+  if (scope === "config" && key === "repos") return "repos";
+  if (scope === "repos") return "repo";
+  return undefined;
 }
 
 // Convert one pair value through the context (JSON layers) or keep the
@@ -671,7 +747,7 @@ async function collectEntries(directory: string): Promise<Entry[]> {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     const isDirectory = entry.isDirectory();
-    entries.push({ path, isDirectory });
+    entries.push({ path, isDirectory, isFile: entry.isFile() });
     if (isDirectory) entries.push(...(await collectEntries(path)));
   }
   return entries;

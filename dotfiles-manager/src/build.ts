@@ -7,7 +7,7 @@ import { dirname, isAbsolute, join, posix, relative, resolve, sep, win32 } from 
 import { applyPathMap, createCopyRouter, type CopyRouter } from "./build-path-map.ts";
 import { currentPlatform, mapSegment, type Platform } from "./path-mapping.ts";
 import { applyExternals } from "./build-external.ts";
-import { composeMergeTargets } from "./build-merge.ts";
+import { composeMergeTargets, mergeMachineData } from "./build-merge.ts";
 import { applyReplaceSidecars } from "./build-replace.ts";
 import { collectHooks, runHooks, type HookEvent } from "./build-hooks.ts";
 import { adoptHomeLnkBytes, convertLnkDeclarations } from "./lnk.ts";
@@ -47,7 +47,10 @@ export async function main(
   });
   await timed("path map", onPhase, () => applyPathMap(distDir, platform));
   const hooks = await collectHooks(distDir, platform);
-  await timed("externals", onPhase, () => applyExternals(distDir, wsl, platform));
+  await timed("externals", onPhase, async () => {
+    await mergeMachineData(distDir);
+    await applyExternals(distDir, wsl, platform);
+  });
   await timed("merge", onPhase, () => composeMergeTargets(distDir, homeRoot, platform));
   await timed("replace", onPhase, () => applyReplaceSidecars(distDir, homeRoot));
   await runHooks(hooks, distDir, homeRoot, onHookEvent);

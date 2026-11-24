@@ -9,12 +9,39 @@ import {
   Pair,
   Scalar,
   type Node,
+  visit,
   YAMLMap,
   YAMLSeq,
 } from "yaml";
 
 type Notation = { anchor?: string; keys?: Map<string | symbol, unknown> };
 const notation = new WeakMap<object, Notation>();
+
+export function expandYamlAliases(document: Document): void {
+  const targets = new Map<Alias, Node>();
+  visit(document, {
+    Alias(_, alias) {
+      const target = alias.resolve(document);
+      if (!target) throw new Error(`unresolved YAML alias: ${alias.source}`);
+      targets.set(alias, target);
+    },
+  });
+  if (targets.size === 0) return;
+  document.toJS({ mapAsMap: true });
+
+  visit(document, {
+    Alias(_, alias, ancestors) {
+      const target = targets.get(alias);
+      if (!target || ancestors.includes(target)) {
+        throw new Error(`circular YAML alias: ${alias.source}`);
+      }
+      return target.clone() as Node;
+    },
+    Value(_, node) {
+      if ("anchor" in node) delete node.anchor;
+    },
+  });
+}
 
 export function readYamlValue(node: Node | null): unknown {
   if (isAlias(node)) return new Alias(node.source);
@@ -81,30 +108,38 @@ export function ownEntries(value: object): [string | symbol, unknown][] {
     .map((key) => [key, (value as Record<string | symbol, unknown>)[key]]);
 }
 
-export function stringifyYamlValue(value: unknown): string {
+type YamlOutputOptions = { preserveKeyOrder?: boolean };
+
+export function stringifyYamlValue(value: unknown, options: YamlOutputOptions = {}): string {
   const document = new Document();
-  document.contents = createYamlNode(value, document);
+  document.contents = createYamlNode(value, document, options);
   return document.toString({ verifyAliasOrder: false });
 }
 
-function createYamlNode(value: unknown, document: Document): Node {
+function createYamlNode(value: unknown, document: Document, options: YamlOutputOptions): Node {
   if (isNode(value)) return value;
   if (typeof value !== "object" || value === null) return document.createNode(value);
   const original = notation.get(value);
   if (Array.isArray(value)) {
     const sequence = new YAMLSeq<Node>(document.schema);
-    sequence.items = value.map((item) => createYamlNode(item, document));
+    sequence.items = value.map((item) => createYamlNode(item, document, options));
     sequence.anchor = original?.anchor;
     return sequence;
   }
+  const entries = new Map(ownEntries(value));
+  const keys = options.preserveKeyOrder
+    ? new Set([...(original?.keys?.keys() ?? []), ...entries.keys()])
+    : entries.keys();
   const map = new YAMLMap<Node, Node>(document.schema);
-  map.items = ownEntries(value).map(
-    ([key, child]) =>
+  for (const key of keys) {
+    if (!entries.has(key)) continue;
+    map.items.push(
       new Pair(
-        createYamlNode(original?.keys?.get(key) ?? key, document),
-        createYamlNode(child, document),
+        createYamlNode(original?.keys?.get(key) ?? key, document, options),
+        createYamlNode(entries.get(key), document, options),
       ),
-  );
+    );
+  }
   map.anchor = original?.anchor;
   return map;
 }

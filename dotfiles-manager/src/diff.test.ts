@@ -162,6 +162,7 @@ describe("exclusions", () => {
     await put(distRoot, "remap.data.md", "map\n");
     await put(distRoot, "external.data.yaml", "config\n");
     await put(distRoot, "external.machine-data.yaml", "machine config\n");
+    await put(distRoot, "settings.machine-merge-data.yaml", "machine merge\n");
     await put(distRoot, "task.apply.sh", "script\n");
     await put(distRoot, "task.machine-apply.ts", "machine script\n");
 

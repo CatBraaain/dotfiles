@@ -55,6 +55,13 @@ export type SegmentMapping = {
 // External data files keep the shared name plus the platform/machine
 // modifiers: external.[<platform>-][machine-]data.yaml (spec: SPEC.md §build: 外部取得).
 const externalDataNamePattern = /^external\.(?:(linux|macos|windows)-)?(machine-)?data\.yaml$/;
+const machineMergeDataSuffix = ".machine-merge-data.yaml";
+
+export function machineMergeDataTarget(name: string): string | undefined {
+  if (name.length <= machineMergeDataSuffix.length || !name.endsWith(machineMergeDataSuffix))
+    return undefined;
+  return `${name.slice(0, -machineMergeDataSuffix.length)}.data.yaml`;
+}
 
 export function mapSegment(name: string, isDirectory: boolean): SegmentMapping {
   // .data. marks build-time data files (path map, external config, machine
@@ -63,7 +70,10 @@ export function mapSegment(name: string, isDirectory: boolean): SegmentMapping {
     excludedEntryPrefixes.some((prefix) => name.startsWith(prefix)) ||
     name.includes(".data.") ||
     externalDataNamePattern.test(name) ||
-    (!isDirectory && (isApplyScriptName(name) || isBuildHookName(name)));
+    (!isDirectory &&
+      (machineMergeDataTarget(name) !== undefined ||
+        isApplyScriptName(name) ||
+        isBuildHookName(name)));
   if (isExcluded)
     return {
       homeName: name,
