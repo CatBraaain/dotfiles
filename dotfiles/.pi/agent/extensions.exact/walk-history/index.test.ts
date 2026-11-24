@@ -247,22 +247,22 @@ describe("back", () => {
     assert.deepEqual(busyCapture.callLog, ["abort", "waitForIdle", "navigateTree"]);
   });
 
-  it("user 発言がないブランチでは、戻れないことを通知し会話を変えない", async () => {
+  it("does not notify or navigate when the branch has no user message", async () => {
     const capture = captureWalkHistory({ branchEntries: [assistantEntry("a1", null)] });
 
     await capture.runCommand("back");
 
-    assert.equal(capture.notifications.length, 1);
+    assert.equal(capture.notifications.length, 0);
     assert.deepEqual(capture.navigateTreeCalls, []);
     assert.deepEqual(capture.editorTexts, []);
   });
 
-  it("空のブランチでは、戻れないことを通知し会話を変えない", async () => {
+  it("does not notify or navigate when the branch is empty", async () => {
     const capture = captureWalkHistory();
 
     await capture.runCommand("back");
 
-    assert.equal(capture.notifications.length, 1);
+    assert.equal(capture.notifications.length, 0);
     assert.deepEqual(capture.navigateTreeCalls, []);
   });
 
@@ -276,7 +276,7 @@ describe("back", () => {
     await capture.runCommand("forward");
 
     assert.deepEqual(capture.editorTexts, []);
-    assert.equal(capture.notifications.length, 1);
+    assert.equal(capture.notifications.length, 0);
     assert.equal(capture.navigateTreeCalls.length, 1);
   });
 });
@@ -353,18 +353,18 @@ describe("forward", () => {
     ]);
   });
 
-  it("back していないときは、戻れないことを通知し会話を変えない", async () => {
+  it("does not notify or navigate when no back command has run", async () => {
     const capture = captureWalkHistory({
       branchEntries: [userEntry("u1", null, "はじめ"), assistantEntry("a1", "u1")],
     });
 
     await capture.runCommand("forward");
 
-    assert.equal(capture.notifications.length, 1);
+    assert.equal(capture.notifications.length, 0);
     assert.deepEqual(capture.navigateTreeCalls, []);
   });
 
-  it("放棄した対象がセッションから消えているときは飛ばし、戻せる対象がなければ通知する", async () => {
+  it("does not notify or navigate when all forward targets are gone", async () => {
     const capture = captureWalkHistory({
       branchEntries: [userEntry("u1", null, "はじめ"), assistantEntry("a1", "u1")],
       allEntriesAfterNavigate: [],
@@ -373,7 +373,7 @@ describe("forward", () => {
     await capture.runCommand("back");
     await capture.runCommand("forward");
 
-    assert.equal(capture.notifications.length, 1);
+    assert.equal(capture.notifications.length, 0);
     assert.deepEqual(capture.navigateTreeCalls.map((call) => call.entryId), ["u1"]);
   });
 
@@ -395,7 +395,7 @@ describe("forward", () => {
     assert.deepEqual(capture.navigateTreeCalls.map((call) => call.entryId), ["u2", "u1", "a2"]);
   });
 
-  it("session_start を迎えると forward 対象が消え、戻れないことを通知する", async () => {
+  it("does not notify or navigate after session_start clears forward targets", async () => {
     const capture = captureWalkHistory({
       branchEntries: [userEntry("u1", null, "はじめ"), assistantEntry("a1", "u1")],
     });
@@ -404,7 +404,7 @@ describe("forward", () => {
     capture.fireSessionStart();
     await capture.runCommand("forward");
 
-    assert.equal(capture.notifications.length, 1);
+    assert.equal(capture.notifications.length, 0);
     assert.deepEqual(capture.navigateTreeCalls.map((call) => call.entryId), ["u1"]);
   });
 

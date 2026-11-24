@@ -28,10 +28,7 @@ export default function (pi: ExtensionAPI): void {
     enqueue(async () => {
       const branchEntries = ctx.sessionManager.getBranch();
       const target = findBackTarget(branchEntries);
-      if (!target) {
-        ctx.ui.notify("Nothing to go back to: the active branch has no user message.", "warning");
-        return;
-      }
+      if (!target) return;
       const abandonedLeafId = branchEntries.at(-1)?.id;
       await waitIdle(ctx);
       const result = await ctx.navigateTree(target.entryId, { summarize: false });
@@ -59,7 +56,6 @@ export default function (pi: ExtensionAPI): void {
         }
         return;
       }
-      ctx.ui.notify("Nothing to go forward to.", "warning");
     });
 
   const dispatchBack = () => pi.sendUserMessage("/back", { expandPromptTemplates: true });
