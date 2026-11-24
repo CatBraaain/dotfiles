@@ -29,6 +29,9 @@ const refreshPath = [
 const npmInstall = ["cmd", "/c", "npm", "install", "-g", "--ignore-scripts"];
 const piInstall = [...npmInstall, "@earendil-works/pi-coding-agent"];
 const playwrightInstall = [...npmInstall, "@playwright/cli@0.1.22"];
+const vitePlusInstall = [...npmInstall, "vite-plus"];
+const prettierInstall = [...npmInstall, "prettier"];
+const markdownTableInstall = [...npmInstall, "prettier-markdown-table"];
 const trafilaturaInstall = ["uv", "tool", "install", "trafilatura"];
 const uvUpdateShell = ["uv", "tool", "update-shell"];
 const camoufoxDownload = [
@@ -175,12 +178,15 @@ test("dev installs only its selected packages after the elevation check and refr
       refreshPath,
       piInstall,
       playwrightInstall,
+      vitePlusInstall,
+      prettierInstall,
+      markdownTableInstall,
       trafilaturaInstall,
       uvUpdateShell,
     ]);
-    assert.deepEqual(npmPaths, ["machine;user", "machine;user"]);
+    assert.deepEqual(npmPaths, Array(5).fill("machine;user"));
     assert.deepEqual(lookups, [
-      { executable: "openserp", after: playwrightInstall, path: "machine;user" },
+      { executable: "openserp", after: markdownTableInstall, path: "machine;user" },
     ]);
     assert.deepEqual(errors, [`command failed with exit code 1: ${playwrightInstall.join(" ")}`]);
     assert.ok(existsSync(camoufoxVersionFile));
@@ -295,6 +301,9 @@ test.each(["work", "personal"] as const)(
         refreshPath,
         piInstall,
         playwrightInstall,
+        vitePlusInstall,
+        prettierInstall,
+        markdownTableInstall,
         trafilaturaInstall,
         uvUpdateShell,
       ];
@@ -304,7 +313,7 @@ test.each(["work", "personal"] as const)(
         wingetCommands.map((args) => `command failed with exit code 1: ${args.join(" ")}`),
       );
       assert.deepEqual(lookups, [
-        { executable: "openserp", after: playwrightInstall, path: "machine;user" },
+        { executable: "openserp", after: markdownTableInstall, path: "machine;user" },
       ]);
       assert.deepEqual(commands[installerCommands.length], [
         "gh",
