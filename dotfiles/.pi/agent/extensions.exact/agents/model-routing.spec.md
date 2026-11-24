@@ -210,7 +210,8 @@ modes:
 | `/agent:<name>` | 実効mode を維持してagent を切り替え、手動選択を解除し、実効class を切替先agent の既定class に戻してその候補を適用してから後続メッセージを送信する |
 | `/class:<name>` | agent・実効mode・cooldown を維持して実効class を `name` に切り替え、手動モデル選択を解除し、切り替え先class の候補を適用する |
 | `/mode:<name>` | agent・実効class・cooldown を維持して実効mode を `name` に切り替え、手動モデル選択を解除し、同じ実効class の候補を適用して完了を通知する。同じmodeの再指定でも再適用する |
-| コンテキスト切替（`recontext` で `class` 指定あり） | 実効mode を維持し、切替条件の確認後、同じクラス変更イベントへ要求し、適用完了を待ってから自動続行する。最初の続行ターンから指定クラスを使う。`preserveManualSelection: true`・`requiredAgent: "main"` とし、手動選択・同じclass・未定義class・main以外は変更しない |
+| コンテキスト切替（`recontext` で `class` 指定あり、実効modeの変更なし） | 実効mode を維持し、切替条件の確認後、同じクラス変更イベントへ要求し、適用完了を待ってから自動続行する。最初の続行ターンから指定クラスを使う。`preserveManualSelection: true`・`requiredAgent: "main"` とし、手動選択・同じclass・未定義class・main以外は変更しない |
+| コンテキスト切替（`recontext` で Max に切替） | [Max 指定](../recontext/SPEC.md#recontext-ツールの-max-指定)に従う |
 | 429受信時 | [レート制限（429）時のフォールバック](rate-limit.spec.md#レート制限429時のフォールバック)に従う |
 
 モデルの切り替えに成功したら `agent model → <provider>/<model>` を info で通知する。
@@ -238,7 +239,7 @@ stateDiagram-v2
 | --- | --- |
 | 自動 | 各プロンプト送信前に実効class の候補を再評価する |
 | 手動 | ユーザーが選んだモデルを使い続ける。プロンプト送信前の再評価を行わない |
-| 手動中のクラス指定（`recontext` の `class`） | クラスを変更せず、`class change to <class> ignored: manual model selection is active` を warning で通知する |
+| 手動中のクラス指定（`recontext` の `class`、実効modeの変更なし） | クラスを変更せず、`class change to <class> ignored: manual model selection is active` を warning で通知する |
 
 状態を変える操作とその時の全動作は「モデルの適用タイミング」の表が定め、この図は手動状態の遷移だけを示す。手動状態中の 429フォールバック後も手動状態を維持する。
 

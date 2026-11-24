@@ -7,6 +7,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { requestClassChange } from "../agents/class-change.ts";
+import { requestMaxHandoff } from "../agents/max-handoff.ts";
 import {
   createReplacement,
   REPLACEMENT_STATE,
@@ -31,6 +32,7 @@ export interface HandoffPayload {
   reason: string;
   handoff: string;
   class: string | undefined;
+  mode?: "max";
 }
 
 export default function recontextExtension(pi: ExtensionAPI): void {
@@ -115,10 +117,10 @@ export default function recontextExtension(pi: ExtensionAPI): void {
       "Do not use it for ordinary completion reports, owner decisions, or finish/discard worktree approval; " +
       "when only approval remains, report Ready or Waiting and ask normally. " +
       "Keep raw history in this session and replace prior model context with handoff, without LLM summarization. " +
-      "The first two context replacements after user input or approval are automatic; the third requires approval. " +
-      "That approval prompt is shown by this tool at the turn boundary, so do not ask the user for it in advance.",
+      "Approval is required on the third replacement or when switching to Max mode. " +
+      "The tool asks at the turn boundary; do not ask the user for approval in advance.",
     promptGuidelines: [
-      "Use recontext only before a substantial next phase, such as a convergence loop or long work after implementation or review. Do not call it just because work finished. For finish/discard approval, owner decisions, or completion reports, report Ready or Waiting and ask normally. Include the goal, approved spec and work file paths, decisions, completed work and checks, open questions, and completion conditions in handoff. Continue as the main agent and delegate the next phase to another senior. If approval is denied, the current agent receives no(<reason>). The approval prompt for the third replacement is shown by this tool at the end of the turn; do not ask the user for it in advance.",
+      "Use recontext only before a substantial next phase, such as a convergence loop or long work after implementation or review. Do not call it just because work finished. For finish/discard approval, owner decisions, or completion reports, report Ready or Waiting and ask normally. Include the goal, approved spec and work file paths, decisions, completed work and checks, open questions, and completion conditions in handoff. Continue as the main agent and delegate the next phase to another senior. If approval is denied, the current agent receives no(<reason>). The tool asks for approval at the end of the turn when switching to Max mode or on the third replacement. Do not ask the user for this approval in advance.",
     ],
     parameters: Type.Object({
       reason: Type.String({ description: "Why the context reset is needed (non-empty)" }),
@@ -132,6 +134,12 @@ export default function recontextExtension(pi: ExtensionAPI): void {
             'Use "high" for demanding phases like design, integration, or complex debugging, ' +
             '"middle" for ordinary work, and "low" for light routine work. ' +
             "Omit it to keep the current class.",
+        }),
+      ),
+      mode: Type.Optional(
+        Type.Literal("max", {
+          description:
+            "Hand off in Max mode and keep it for the session. Omit to keep the current mode.",
         }),
       ),
     }),
@@ -158,15 +166,25 @@ export default function recontextExtension(pi: ExtensionAPI): void {
           details: undefined,
         };
       }
-      pendingRequests.set(toolCallId, { reason, handoff, class: requestedClass });
+      if (params.mode !== undefined && params.mode !== "max") {
+        return {
+          content: [{ type: "text", text: 'mode must be "max" when provided.' }],
+          isError: true,
+          details: undefined,
+        };
+      }
+      const details = {
+        reason,
+        handoff,
+        ...(requestedClass === undefined ? {} : { class: requestedClass }),
+        ...(params.mode === undefined ? {} : { mode: params.mode }),
+      };
+      pendingRequests.set(toolCallId, { ...details, class: requestedClass });
       return {
         content: [
           { type: "text", text: "Context replacement requested for the end of this turn." },
         ],
-        details:
-          requestedClass === undefined
-            ? { reason, handoff }
-            : { reason, handoff, class: requestedClass },
+        details,
       };
     },
   });
@@ -269,46 +287,88 @@ export default function recontextExtension(pi: ExtensionAPI): void {
       }
       return !contextChanged;
     }
+    const { reason, handoff } = payload;
     const count = readCounter(branch);
-    const requiresApproval = count >= AUTO_HANDOFF_LIMIT;
-    if (requiresApproval) {
+    const needsCycleApproval = count >= AUTO_HANDOFF_LIMIT;
+    let approvedByUser = false;
+    async function approveHandoff(changesMode: boolean): Promise<boolean> {
+      if (!isCurrentRequest()) return false;
+      if (!needsCycleApproval && !changesMode) return true;
       const title = "Recontext";
-      const message = `Replace the model context in this session?\n\nReason:\n${payload.reason}\n\nPrompt for the next agent:\n${payload.handoff}`;
+      const question = changesMode
+        ? "Switch this session to Max mode and replace the model context? Max mode stays active after the handoff."
+        : "Replace the model context in this session?";
+      const cycleNotice =
+        changesMode && needsCycleApproval ? "\n\nThe handoff limit also requires approval." : "";
+      const message = `${question}${cycleNotice}\n\nReason:\n${reason}\n\nPrompt for the next agent:\n${handoff}`;
       try {
         const approved = ctx.ui.select
           ? (await ctx.ui.select(`${title}\n\n${message}`, [HANDOFF_OPTION, STAY_OPTION])) ===
             HANDOFF_OPTION
           : await ctx.ui.confirm(title, message);
-        if (!isCurrentRequest()) return;
+        if (!isCurrentRequest()) return false;
         if (!approved) {
-          const reason = (await ctx.ui.input("Denied. Optional reason for the agent:"))?.trim();
-          if (!isCurrentRequest()) return;
-          pi.sendUserMessage(`no(${reason ?? ""})`, { deliverAs: "followUp" });
+          const denialReason = (
+            await ctx.ui.input("Denied. Optional reason for the agent:")
+          )?.trim();
+          if (!isCurrentRequest()) return false;
+          pi.sendUserMessage(`no(${denialReason ?? ""})`, { deliverAs: "followUp" });
+          return false;
+        }
+        approvedByUser = true;
+        return true;
+      } catch (error) {
+        ctx.ui.notify(`recontext: confirmation failed (${errorMessage(error)})`, "error");
+        return false;
+      }
+    }
+    function isOnRequestBranch(): boolean {
+      return (
+        ctx.sessionManager.getSessionId() === sessionId &&
+        ctx.sessionManager.getBranch().some((entry) => entry.id === baselineLeafId)
+      );
+    }
+
+    if (payload.mode === "max") {
+      try {
+        const result = await requestMaxHandoff(pi.events, {
+          class: payload.class,
+          context: ctx,
+          approve: approveHandoff,
+          isCurrent: isCurrentRequest,
+          isOnRequestBranch,
+        });
+        if (result === "stopped" || ctx.signal?.aborted) return;
+        if (result === "unavailable") {
+          ctx.ui.notify(
+            "recontext: Max mode or its model is unavailable; keeping the current context",
+            "error",
+          );
           return;
         }
       } catch (error) {
-        ctx.ui.notify(`recontext: confirmation failed (${errorMessage(error)})`, "error");
+        ctx.ui.notify(`recontext: Max handoff failed (${errorMessage(error)})`, "error");
         return;
+      }
+    } else {
+      if (!(await approveHandoff(false)) || !isCurrentRequest()) return;
+      if (payload.class) {
+        try {
+          await requestClassChange(pi.events, {
+            class: payload.class,
+            context: ctx,
+            source: "agent",
+            preserveManualSelection: true,
+            requiredAgent: "main",
+          });
+        } catch (error) {
+          ctx.ui.notify(`recontext: class change failed (${errorMessage(error)})`, "error");
+          return;
+        }
       }
     }
-    if (!isCurrentRequest()) return;
-    if (payload.class) {
-      try {
-        await requestClassChange(pi.events, {
-          class: payload.class,
-          context: ctx,
-          source: "agent",
-          preserveManualSelection: true,
-          requiredAgent: "main",
-        });
-      } catch (error) {
-        ctx.ui.notify(`recontext: class change failed (${errorMessage(error)})`, "error");
-        return;
-      }
-      const baselineStillActive =
-        ctx.sessionManager.getSessionId() === sessionId &&
-        ctx.sessionManager.getBranch().some((entry) => entry.id === baselineLeafId);
-      if (!baselineStillActive) {
+    if (payload.mode || payload.class) {
+      if (!isOnRequestBranch()) {
         ctx.ui.notify(SESSION_CHANGED_NOTICE, "warning");
         return;
       }
@@ -347,7 +407,7 @@ export default function recontextExtension(pi: ExtensionAPI): void {
           {
             type: "custom",
             customType: STATE_TYPE,
-            data: { ...counterState(requiresApproval ? 0 : count + 1), requestId },
+            data: { ...counterState(approvedByUser ? 0 : count + 1), requestId },
           },
         ],
         continue: true,
@@ -402,7 +462,8 @@ export function isHandoffPayload(value: unknown): value is HandoffPayload {
     typeof value.handoff === "string" &&
     value.handoff.trim().length > 0 &&
     (value.class === undefined ||
-      (typeof value.class === "string" && value.class.trim().length > 0))
+      (typeof value.class === "string" && value.class.trim().length > 0)) &&
+    (value.mode === undefined || value.mode === "max")
   );
 }
 

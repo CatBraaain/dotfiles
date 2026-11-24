@@ -46,10 +46,12 @@ import { registerSessionTitle } from "../session-title/extension.ts";
 import {
   CLASS_CHANGE_EVENT,
   requestClassChange,
+  type ClassChangeOptions,
   type ClassChangeRequest,
   type ClassChangeResult,
   type SelectionSource,
 } from "./class-change.ts";
+import { MAX_HANDOFF_EVENT, type MaxHandoffRequest } from "./max-handoff.ts";
 import { truncateErrorOutput } from "../shared/tool-text.ts";
 import { isZaiConcurrencyLimited, isZaiProvider } from "../shared/zai-concurrency.ts";
 import { parseUsageFacts, runUsage, scoreCandidates, type ProviderUsageFacts } from "./usage.ts";
@@ -1270,8 +1272,9 @@ export default function agentsExtension(
     className: string,
     ctx: ExtensionContext,
     signal?: AbortSignal,
+    mode = currentMode,
   ): Promise<Model<Api>[]> {
-    const candidates = resolveCandidates(config.modes[currentMode]![className] ?? [], (provider) =>
+    const candidates = resolveCandidates(config.modes[mode]![className] ?? [], (provider) =>
       ctx.modelRegistry.getModelsOfType("chat", provider).map((model) => model.id),
     );
     return pickCandidates(
@@ -1290,13 +1293,16 @@ export default function agentsExtension(
       signal?: AbortSignal;
       notifySwitch?: boolean;
       reason?: "input" | "extension-input";
+      mode?: string;
+      className?: string;
+      isCurrent?: () => boolean;
     } = {},
   ): Promise<string | null> {
-    const { signal, notifySwitch = true, reason } = options;
-    const className = effectiveClass(agent);
+    const { signal, notifySwitch = true, reason, mode, isCurrent } = options;
+    const className = options.className ?? effectiveClass(agent);
     if (!className) return null;
-    const models = await resolveClassModels(className, ctx, signal);
-    if (signal?.aborted) return null;
+    const models = await resolveClassModels(className, ctx, signal, mode);
+    if (signal?.aborted || isCurrent?.() === false) return null;
     const currentModelKey = ctx.model ? modelKey(ctx.model) : undefined;
     const retainCurrent =
       reason === "extension-input" ||
@@ -1307,7 +1313,7 @@ export default function agentsExtension(
       return currentModelKey!;
     }
     for (const model of models) {
-      if (signal?.aborted) return null;
+      if (signal?.aborted || isCurrent?.() === false) return null;
       if (ctx.model && ctx.model.provider === model.provider && ctx.model.id === model.id) {
         return modelKey(model);
       }
@@ -1815,7 +1821,10 @@ export default function agentsExtension(
     if (!applied) notifyNoModel(currentAgent, ctx, "warning");
   }
 
-  async function handleClassChange(request: ClassChangeRequest): Promise<ClassChangeResult> {
+  async function handleClassChange(
+    request: ClassChangeOptions,
+    handoff?: MaxHandoffRequest,
+  ): Promise<ClassChangeResult> {
     const { class: className, context: ctx, preserveManualSelection, requiredAgent } = request;
     if (ctx.signal?.aborted) return "ignored";
     if (requiredAgent !== undefined && currentAgent !== requiredAgent) return "ignored";
@@ -1831,12 +1840,51 @@ export default function agentsExtension(
     if (className !== undefined && !Object.hasOwn(config.modes[currentMode]!, className))
       return "ignored";
     if (preserveManualSelection && effectiveClass(currentAgent) === className) return "unchanged";
+    if (handoff && (!className || !(await applyHandoffModel(currentMode, className, handoff)))) {
+      return "unavailable";
+    }
     currentClass = className;
     manual = false;
     selectionSource = request.source ?? "agent";
     tuiHandle?.requestRender();
-    await applyCurrentClass(ctx);
+    if (!handoff) await applyCurrentClass(ctx);
     return "applied";
+  }
+
+  async function applyHandoffModel(
+    mode: string,
+    className: string,
+    handoff: MaxHandoffRequest,
+  ): Promise<boolean> {
+    const ctx = handoff.context;
+    const applied = await applyClassModel(currentAgent, ctx, {
+      signal: ctx.signal,
+      mode,
+      className,
+      isCurrent: handoff.isCurrent,
+    });
+    return !!applied && !ctx.signal?.aborted && handoff.isOnRequestBranch();
+  }
+
+  async function applyMode(
+    mode: string,
+    ctx: ExtensionContext,
+    handoff?: MaxHandoffRequest,
+  ): Promise<boolean> {
+    if (ctx.signal?.aborted) return false;
+    if (handoff) {
+      const className = handoff.class ?? effectiveClass(currentAgent);
+      if (!className || !Object.hasOwn(config.modes[mode]!, className)) return false;
+      if (!(await applyHandoffModel(mode, className, handoff))) return false;
+      currentClass = handoff.class ?? currentClass;
+    }
+    currentMode = mode;
+    manual = false;
+    selectionSource = handoff ? "agent" : "manual";
+    tuiHandle?.requestRender();
+    if (!handoff) await applyCurrentClass(ctx);
+    if (ctx.hasUI) ctx.ui.notify(`agent mode → ${currentMode}`, "info");
+    return true;
   }
 
   function enqueueRoutingChange<T>(change: () => Promise<T>): Promise<T> {
@@ -1850,6 +1898,44 @@ export default function agentsExtension(
     if (data.class !== undefined && typeof data.class !== "string") return;
     const request = data as unknown as ClassChangeRequest;
     request.respond(enqueueRoutingChange(() => handleClassChange(request)));
+  });
+
+  pi.events.on(MAX_HANDOFF_EVENT, (data) => {
+    if (!isRecord(data) || !isRecord(data.context) || typeof data.respond !== "function") return;
+    if (typeof data.approve !== "function" || typeof data.isCurrent !== "function") return;
+    if (typeof data.isOnRequestBranch !== "function") return;
+    if (data.class !== undefined && typeof data.class !== "string") return;
+    const request = data as unknown as MaxHandoffRequest;
+    request.respond(
+      enqueueRoutingChange(async () => {
+        const ctx = request.context;
+        if (currentAgent !== "main" || !ctx.hasUI || !request.isCurrent()) return "stopped";
+        if (!Object.hasOwn(config.modes, "max")) return "unavailable";
+        const changesMode = currentMode !== "max";
+        if (
+          !(await request.approve(changesMode)) ||
+          currentAgent !== "main" ||
+          !request.isCurrent()
+        ) {
+          return "stopped";
+        }
+        if (changesMode) {
+          return (await applyMode("max", ctx, request)) ? "ready" : "unavailable";
+        }
+        if (request.class === undefined) return "ready";
+        const result = await handleClassChange(
+          {
+            class: request.class,
+            context: ctx,
+            source: "agent",
+            preserveManualSelection: true,
+            requiredAgent: "main",
+          },
+          request,
+        );
+        return result === "unavailable" ? "unavailable" : "ready";
+      }),
+    );
   });
 
   for (const agent of Object.keys(config.agents)) {
@@ -1878,15 +1964,7 @@ export default function agentsExtension(
     pi.registerCommand(`mode:${mode}`, {
       description: `Switch the effective agent mode to ${mode}.`,
       handler: async (_args, ctx) => {
-        await enqueueRoutingChange(async () => {
-          if (ctx.signal?.aborted) return;
-          currentMode = mode;
-          manual = false;
-          selectionSource = "manual";
-          tuiHandle?.requestRender();
-          await applyCurrentClass(ctx);
-          if (ctx.hasUI) ctx.ui.notify(`agent mode → ${currentMode}`, "info");
-        });
+        await enqueueRoutingChange(() => applyMode(mode, ctx));
       },
     });
   }

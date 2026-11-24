@@ -42,14 +42,18 @@ import recontextExtension from "./index";
 import { projectPendingMessages } from "./projection.ts";
 import { renderersOf } from "../chat-renderer/index.ts";
 
-function isHandoffEntry(
-  entry: SessionEntry,
-): entry is CustomEntry<{ count: number; requestId: string }> {
+function isHandoffEntry(entry: SessionEntry): entry is CustomEntry<{
+  count: number;
+  requestId: string;
+}> & {
+  data: { count: number; requestId: string };
+} {
   return (
     entry.type === "custom" &&
     entry.customType === "handoff-session-counter" &&
     !!entry.data &&
-    typeof (entry.data as { requestId?: unknown }).requestId === "string"
+    typeof (entry.data as { requestId?: unknown }).requestId === "string" &&
+    typeof (entry.data as { count?: unknown }).count === "number"
   );
 }
 
@@ -208,7 +212,7 @@ interface ProviderRequest {
   tools?: { name: string }[];
 }
 
-async function runtimeHarness(withAgents = false) {
+async function runtimeHarness(withAgents = false, unavailableModels: string[] = []) {
   const directory = mkdtempSync(join(tmpdir(), "handoff-runtime-"));
   mkdirSync(join(directory, ".git"));
   const requests: ProviderRequest[] = [];
@@ -224,6 +228,7 @@ async function runtimeHarness(withAgents = false) {
   } = {};
   let requestHandoff = false;
   let requestHandoffClass: string | undefined;
+  let requestHandoffMode: "max" | undefined;
   function fakeStream(model: Model<Api>, context: TranscriptContext) {
     const system = getCurrentSystemPrompt(context.messages);
     const isConversationRequest = system.includes("Keep this system marker.");
@@ -252,6 +257,7 @@ async function runtimeHarness(withAgents = false) {
                 reason: "phase done",
                 handoff: "new phase marker",
                 ...(requestHandoffClass !== undefined ? { class: requestHandoffClass } : {}),
+                ...(requestHandoffMode !== undefined ? { mode: requestHandoffMode } : {}),
               },
             },
           ]
@@ -311,18 +317,20 @@ async function runtimeHarness(withAgents = false) {
         "max-middle-model",
         "max-high-model",
         "max-low-model",
-      ].map((id) => ({
-        id,
-        provider: "handoff-test",
-        api: "anthropic-messages",
-        baseUrl: "https://fake.invalid",
-        name: id,
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 128000,
-        maxTokens: 1024,
-      }));
+      ]
+        .filter((id) => !unavailableModels.includes(id))
+        .map((id) => ({
+          id,
+          provider: "handoff-test",
+          api: "anthropic-messages",
+          baseUrl: "https://fake.invalid",
+          name: id,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128000,
+          maxTokens: 1024,
+        }));
     },
   });
   await modelRuntime.refresh({ allowNetwork: false });
@@ -422,9 +430,10 @@ async function runtimeHarness(withAgents = false) {
       errors.push(error);
     },
   });
-  async function handoff(options: { class?: string } = {}) {
+  async function handoff(options: { class?: string; mode?: "max" } = {}) {
     requestHandoff = true;
     requestHandoffClass = options.class;
+    requestHandoffMode = options.mode;
     await session.prompt("request the phase transition", { source: "extension" });
   }
   function dispose() {
@@ -445,6 +454,145 @@ async function runtimeHarness(withAgents = false) {
     dispose,
   };
 }
+
+describe("Max handoff", () => {
+  it("rejects modes other than max and stops if the approval UI is unavailable", async () => {
+    const h = harness();
+    const invalid = await h.request({
+      reason: "phase done",
+      handoff: "next phase",
+      mode: "standard",
+    });
+    assert.equal(invalid.isError, true);
+    h.ctx.hasUI = false;
+    const result = await h.boundary(
+      {},
+      { reason: "phase done", handoff: "next phase", mode: "max" },
+    );
+    assert.equal(result, undefined);
+    assert.match(h.notices.at(-1)!, /interactive UI is unavailable/);
+    assert.deepEqual(h.emitted, []);
+  });
+
+  it("approves before switching, then keeps Max for later turns and handoffs", async () => {
+    const h = await runtimeHarness(true);
+    try {
+      h.hooks.duringSelect = async () => {
+        assert.equal(h.session.model?.id, "fake-model");
+        assert.equal(h.manager.getEntries().filter(isHandoffEntry).length, 0);
+        return "Yes, recontext";
+      };
+      await h.handoff({ mode: "max" });
+      assert.equal(h.selections.length, 1);
+      assert.match(h.selections[0]!, /Max mode stays active after the handoff/);
+      assert.match(h.selections[0]!, /phase done[\s\S]*new phase marker/);
+      assert.equal(h.requests.at(-1)!.model, "max-middle-model");
+      assert.match(JSON.stringify(h.requests.at(-1)!.messages), /new phase marker/);
+      assert.equal(h.manager.getEntries().filter(isHandoffEntry).at(-1)?.data.count, 0);
+
+      await h.session.prompt("a later phase");
+      assert.equal(h.requests.at(-1)!.model, "max-middle-model");
+      await h.handoff({ mode: "max" });
+      assert.equal(h.selections.length, 1);
+      assert.equal(h.manager.getEntries().filter(isHandoffEntry).at(-1)?.data.count, 1);
+      assert.deepEqual(h.errors, []);
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("still asks on the third replacement when already in Max", async () => {
+    const h = await runtimeHarness(true);
+    try {
+      await h.session.prompt("/mode:max");
+      await h.handoff();
+      await h.handoff();
+      await h.handoff({ mode: "max" });
+      assert.equal(h.selections.length, 1);
+      assert.doesNotMatch(h.selections[0]!, /Switch this session to Max/);
+      assert.equal(h.manager.getEntries().filter(isHandoffEntry).at(-1)?.data.count, 0);
+      assert.equal(h.requests.at(-1)!.model, "max-middle-model");
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("combines the third-replacement and Max approvals and uses the requested class", async () => {
+    const h = await runtimeHarness(true);
+    try {
+      await h.handoff();
+      await h.handoff();
+      await h.handoff({ mode: "max", class: "high" });
+      assert.equal(h.selections.length, 1);
+      assert.match(h.selections[0]!, /Max mode[\s\S]*handoff limit also requires approval/);
+      assert.equal(h.requests.at(-1)!.model, "max-high-model");
+      assert.equal(h.manager.getEntries().filter(isHandoffEntry).at(-1)?.data.count, 0);
+      assert.deepEqual(h.errors, []);
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it("leaves the model, context and count unchanged when Max approval is denied", async () => {
+    const h = await runtimeHarness(true);
+    try {
+      await h.handoff();
+      h.hooks.duringSelect = async () => "No, stay (reason next)";
+      h.hooks.duringReason = async () => "stay here";
+      await h.handoff({ mode: "max" });
+      assert.equal(h.selections.length, 1);
+      assert.equal(h.session.model?.id, "fake-model");
+      assert.deepEqual(
+        h.manager
+          .getEntries()
+          .filter(isHandoffEntry)
+          .map((entry) => entry.data.count),
+        [1],
+      );
+      assert.ok(h.inputs.some((input) => input.text === "no(stay here)"));
+      assert.ok(h.requests.every((request) => request.model === "fake-model"));
+    } finally {
+      h.dispose();
+    }
+  });
+
+  it.each([true, false])(
+    "does not replace context if Max routing is unavailable (agents=%s)",
+    async (withAgents) => {
+      const h = await runtimeHarness(withAgents, ["max-middle-model"]);
+      try {
+        await h.session.prompt("old user marker");
+        await h.handoff({ mode: "max" });
+        assert.equal(h.selections.length, withAgents ? 1 : 0);
+        assert.equal(h.session.model?.id, "fake-model");
+        assert.match(h.notices.at(-1)!, /Max mode or its model is unavailable/);
+        assert.match(JSON.stringify(h.requests.at(-1)!.messages), /old user marker/);
+        assert.equal(h.manager.getEntries().filter(isHandoffEntry).length, 0);
+        assert.deepEqual(h.errors, []);
+      } finally {
+        h.dispose();
+      }
+    },
+  );
+
+  it("keeps context and routing when a requested class cannot be applied in Max", async () => {
+    const h = await runtimeHarness(true, ["max-high-model"]);
+    try {
+      await h.session.prompt("/mode:max");
+      await h.session.prompt("old user marker");
+      await h.handoff({ mode: "max", class: "high" });
+      assert.equal(h.selections.length, 0);
+      assert.match(h.notices.at(-1)!, /Max mode or its model is unavailable/);
+      assert.match(JSON.stringify(h.requests.at(-1)!.messages), /old user marker/);
+      assert.equal(h.manager.getEntries().filter(isHandoffEntry).length, 0);
+      await h.session.prompt("later input");
+      assert.equal(h.requests.at(-1)!.model, "max-middle-model");
+      assert.match(JSON.stringify(h.requests.at(-1)!.messages), /later input/);
+    } finally {
+      h.dispose();
+    }
+  });
+});
 
 describe("real AgentSession delivery with a memory fake provider", () => {
   it("preserves max mode for the first continuation after each class handoff", async () => {
