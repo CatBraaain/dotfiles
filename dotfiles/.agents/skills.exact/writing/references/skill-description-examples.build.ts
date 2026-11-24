@@ -14,8 +14,7 @@ import { rm } from "node:fs/promises";
 import { join } from "node:path";
 
 async function main(): Promise<void> {
-  const { buildHookContext } = await import(`${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`);
-  const { syncGithubMirror } = await buildHookContext();
+  const { syncGithubMirror } = await loadHookContext();
   const mirror = await syncGithubMirror("anthropics/skills");
   const output = join(process.cwd(), "skill-description-examples.md");
   const extractor = join(import.meta.dir, "skill-description-examples.extract.ts");

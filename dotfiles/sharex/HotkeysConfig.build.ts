@@ -7,8 +7,7 @@ const rawJson = JSON as typeof JSON & {
 };
 
 async function main(): Promise<void> {
-  const { buildHookContext } = await import(`${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`);
-  const { resolvePaths } = await buildHookContext();
+  const { resolvePaths } = await loadHookContext();
   const { distPath, homePath } = resolvePaths("HotkeysConfig.json");
   if (!existsSync(homePath)) return;
 

@@ -458,6 +458,26 @@ await writeFile("apply-out.txt", JSON.stringify([process.cwd(), import.meta.dir,
     assert.equal(await readFile(join(distRoot, "tools.exact/setup.apply.ts"), "utf8"), `${body}\n`);
   });
 
+  it.each(["apply", "postapply"])(
+    "provides shared context to a %s hook without an import",
+    async (phase) => {
+      await putApplyScript(
+        distRoot,
+        `tools/setup.${phase}.ts`,
+        `if (import.meta.main) {
+  const { distDir } = await loadHookContext();
+  await Bun.write("apply-out.txt", distDir);
+}`,
+      );
+      const declarations = await collectDeclarations(distRoot);
+
+      const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
+
+      assert.deepEqual(failures, []);
+      assert.equal(await readFile(join(homeRoot, "tools/apply-out.txt"), "utf8"), distRoot);
+    },
+  );
+
   it("runs a TypeScript hook regardless of its shebang", async () => {
     await putApplyScript(
       distRoot,

@@ -1,8 +1,5 @@
 async function main(): Promise<void> {
-  const { buildHookContext } = await import(
-    `${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`,
-  );
-  const { transform } = await buildHookContext();
+  const { transform } = await loadHookContext();
   await transform(".gitconfig", (content: string) => `${content}
 [user]
 name = USERNAME

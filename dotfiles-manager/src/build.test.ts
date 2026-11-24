@@ -1713,7 +1713,14 @@ co = checkout
         `Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });\n`,
       );
       const proc = Bun.spawn(
-        [process.execPath, "--preload", platformShim, join(root, "dotfiles/.gitconfig.build.ts")],
+        [
+          process.execPath,
+          "--preload",
+          platformShim,
+          "--preload",
+          join(import.meta.dir, "hook-context.ts"),
+          join(root, "dotfiles/.gitconfig.build.ts"),
+        ],
         {
           env: {
             ...process.env,
@@ -1921,8 +1928,7 @@ describe("local build hooks", () => {
     const call = `merge(${JSON.stringify(path)}, ${JSON.stringify(patch)})`;
     return `
       import assert from "node:assert/strict";
-      const { buildHookContext } = await import(process.env.DOTFILES_MANAGER_SRC + "/hook-context.ts");
-      const { merge } = await buildHookContext();
+      const { merge } = await loadHookContext();
       await ${expectedError ? `assert.rejects(async () => ${call}, ${expectedError})` : call};
     `;
   }
@@ -2043,8 +2049,7 @@ describe("local build hooks", () => {
       "dotfiles/app.conf.build.ts",
       [
         `if (import.meta.main) {`,
-        `  const { buildHookContext } = await import(process.env.DOTFILES_MANAGER_SRC + "/hook-context.ts");`,
-        `  const { transform } = await buildHookContext();`,
+        `  const { transform } = await loadHookContext();`,
         `  await transform("app.conf", (content: string) => content + "mode=prod\\n");`,
         `}`,
       ].join("\n"),
@@ -2061,8 +2066,7 @@ describe("local build hooks", () => {
       "dotfiles/minify.build.ts",
       [
         `if (import.meta.main) {`,
-        `  const { buildHookContext } = await import(process.env.DOTFILES_MANAGER_SRC + "/hook-context.ts");`,
-        `  const { transform } = await buildHookContext();`,
+        `  const { transform } = await loadHookContext();`,
         `  await transform("missing.json", (content: string) => content);`,
         `}`,
       ].join("\n"),
@@ -2090,9 +2094,8 @@ describe("local build hooks", () => {
       "dotfiles/paths.build.ts",
       [
         `import { writeFile } from "node:fs/promises";`,
-        `if (import.meta.main) {
-const { buildHookContext } = await import(process.env.DOTFILES_MANAGER_SRC + "/hook-context.ts");
-const context = await buildHookContext();`,
+        `if (import.meta.main) {`,
+        `  const context = await loadHookContext();`,
         `  const paths = ["missing.txt", ".agents/config.exact/agents.yaml", "bin/tool.executable", "links/current.symlink"];`,
         `  await writeFile("paths.json", JSON.stringify(paths.map((path) => context.resolvePaths(path))));`,
         `}`,
@@ -2122,9 +2125,8 @@ const context = await buildHookContext();`,
       "dotfiles/vscode/paths.build.ts",
       [
         `import { writeFile } from "node:fs/promises";`,
-        `if (import.meta.main) {
-const { buildHookContext } = await import(process.env.DOTFILES_MANAGER_SRC + "/hook-context.ts");
-const context = await buildHookContext();`,
+        `if (import.meta.main) {`,
+        `  const context = await loadHookContext();`,
         `  const paths = ["settings.json", "../sibling.txt"].map((path) => context.resolvePaths(path));`,
         `  await writeFile("paths.json", JSON.stringify(paths));`,
         `}`,
@@ -2149,9 +2151,8 @@ const context = await buildHookContext();`,
         root,
         "dotfiles/vscode/invalid.build.ts",
         [
-          `if (import.meta.main) {
-const { buildHookContext } = await import(process.env.DOTFILES_MANAGER_SRC + "/hook-context.ts");
-const context = await buildHookContext();`,
+          `if (import.meta.main) {`,
+          `  const context = await loadHookContext();`,
           `  context.resolvePaths(${JSON.stringify(path)});`,
           `}`,
         ].join("\n"),
@@ -2188,8 +2189,7 @@ const context = await buildHookContext();`,
       root,
       "dotfiles/vscode/format-settings.build.ts",
       `if (import.meta.main) {
-const { buildHookContext } = await import(process.env.DOTFILES_MANAGER_SRC + "/hook-context.ts");
-const context = await buildHookContext();
+  const context = await loadHookContext();
   const paths = context.resolvePaths("settings.json");
   const homeContent = await Bun.file(paths.homePath).text();
   await Bun.write("hook-ran.txt", JSON.stringify({ cwd: process.cwd(), paths, homeContent }));

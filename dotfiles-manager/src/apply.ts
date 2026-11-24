@@ -29,7 +29,7 @@ import {
 } from "./compare.ts";
 import { collectDifferences, main as diffMain, type DiffEntry, type DiffResult } from "./diff.ts";
 import { renderDiffs } from "./diff-render.ts";
-import { forwardHookOutput } from "./hook-runner.ts";
+import { forwardHookOutput, hookCommand } from "./hook-runner.ts";
 import {
   currentPlatform,
   hookPlatform,
@@ -258,7 +258,7 @@ async function executePrepared(
   const errors: string[] = [];
   try {
     await spawnChild(
-      [process.execPath, copyPath],
+      hookCommand(copyPath),
       dirname(copyPath),
       {
         ...process.env,

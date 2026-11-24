@@ -19,6 +19,9 @@
   "include": [
     "dotfiles-manager/**/*.ts",
     "dotfiles/**/*.build.ts",
+    "dotfiles/.gitconfig.build.ts",
+    "dotfiles/.playwright/cli.config.windows-build.ts",
+    "dotfiles/.agents/skills.exact/writing/references/skill-description-examples.build.ts",
     "dotfiles/**/*.postbuild.ts",
     "dotfiles/**/*.postbuild-machine.ts",
     "dotfiles/vscode/**/*.apply.ts",

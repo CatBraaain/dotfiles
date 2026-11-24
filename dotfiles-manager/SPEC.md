@@ -111,7 +111,9 @@ dist を削除し、`dotfiles/` をコピーして作り直す。名前が `.ign
 - `cwd`: パス変換後のフック配置に対応するdist内のフォルダ
 - 環境変数: §フックシステム のとおり `DOTFILES_DIST_DIR`・`DOTFILES_HOME_ROOT`・`DOTFILES_MANAGER_SRC` を受け取る
 - フックは `cwd` のフォルダ以下を生成・変更・移動・削除の対象として使う。Bun実行時の `process.cwd()` はそのフォルダに解決され、`import.meta.dir` から自身の dist内コピー（実行用スナップショット）を参照できる
-- `buildHookContext()`: `DOTFILES_MANAGER_SRC` から `hook-context.ts` を動的 import して構築した共有コンテキストを返す。`context.distDir` は distルートの絶対パスである
+
+ローカルフックが `loadHookContext()` で取得する共有コンテキストの操作を以下に示す。
+
 - `context.syncGithubMirror(repo)`: GitHub の `<owner>/<repo>` mirror を §build: 外部取得 の既定6時間・強制更新・pull失敗規則で同期し、読み取り用の絶対パスを返す。mirror同期方法は §build: 外部取得 と同じくWSL接続の自己解決を含む。GitAliasフックは Windows でこの method を使う
 - `context.resolvePaths(path)`: `path` に `cwd` 相対のファイルパスを渡すと、対応するdist と home の絶対パスを `{ distPath, homePath }` で返す。home側は §差分検知 の対応関係を使い、親ディレクトリの `.exact`、末尾ファイルの `.executable` / `.symlink` を変換する。現在のファイルの有無にかかわらず解決し、ファイル内容の読み書きや symlink の実体追跡は行わない。`..` を含むパスは dist内に解決される場合に使える。絶対パス、dist外に解決されるパス、ファイルを指定しない空パスや末尾が `/`・`.`・`..` のパスはエラーになる。パスの解決はフックの生成・変更・移動・削除の対象範囲を広げない
 - `context.transform(path, edit)`: `context.resolvePaths(path)` の `distPath` で解決される dist側ファイルの内容を読み、`edit` の返り値を書き戻す。`edit` は読み込んだ内容の文字列を受け取り、変換後の文字列を返す。読み込みと書き込みの両方で、内容が空文字列でないとき末尾の改行は1つに正規化される。dist側ファイルが存在しないときは何もせず、`edit` は呼ばれない。書き込みはフックの生成・変更の対象範囲に含まれる
@@ -809,6 +811,8 @@ dist の `<name>.executable` ファイルの展開名は、Windows を含むす�
 通常・post とも、`machine-` の有無によって実行規則は変わらない。OS 修飾（`linux-`・`macos-`・`windows-`）を付けたフックは、修飾が実行 platform と一致するときだけ実行し、それ以外の build・apply では実行しない。build / apply のフックは `.ts` ファイルだけをサポートし、Bun で実行する。`.sh`、`.bash`、`.ps1` を含むその他の拡張子は未対応である。shebang の有無や内容は実行に影響しない。未対応拡張子はエラーにし、build ではパス変換後の dist相対パス、apply では dist相対パスをエラーメッセージに含める。
 
 フックは独立した bun プロセスとして、実行用コピーから直接実行される。コピーの配置と `cwd` は §build: ローカルフック と §applyスクリプト に従う。実行プロセスには、通常の親プロセス環境に加えて環境変数で `DOTFILES_DIST_DIR`（distルートの絶対パス）、`DOTFILES_HOME_ROOT`（homeルートの絶対パス）、`DOTFILES_MANAGER_SRC`（dotfiles-managerの `src` ディレクトリの絶対パス）を渡す。build / apply のフックが必要とする外部パッケージは、実行時に Bun の auto-install で解決する。auto-install は依存のバージョン固定ができない。
+
+build / apply の通常・postフックでは、import せずに `await loadHookContext()` で共有コンテキストを取得できる。たとえば build フックでは `const { merge } = await loadHookContext()` で取り出した `merge` は、`merge(path, patch)` として直接呼び出せる。`context.distDir` は distルートの絶対パスである。コンテキストの各操作は §build: ローカルフック を参照する。
 
 ### フックの出力
 

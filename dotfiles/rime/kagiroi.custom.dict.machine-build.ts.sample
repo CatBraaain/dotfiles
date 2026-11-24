@@ -1,8 +1,5 @@
 async function main(): Promise<void> {
-  const { buildHookContext } = await import(
-    `${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`,
-  );
-  const { transform } = await buildHookContext();
+  const { transform } = await loadHookContext();
 
   // User dictionary entries. Each entry is [phrase, reading] and becomes the
   // TSV row `phrase|1851 1851<TAB>reading<TAB>1`, matching existing entries.

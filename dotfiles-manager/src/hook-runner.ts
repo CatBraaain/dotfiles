@@ -5,6 +5,10 @@ import { mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
+export function hookCommand(scriptPath: string): string[] {
+  return [process.execPath, "--preload", join(import.meta.dir, "hook-context.ts"), scriptPath];
+}
+
 export async function forwardHookOutput(
   proc: Bun.Subprocess<"ignore", "pipe", "pipe">,
   path: string,

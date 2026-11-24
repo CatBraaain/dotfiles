@@ -5,6 +5,7 @@ import { compareCodeUnits } from "./compare.ts";
 import {
   ensureHookDirectory,
   forwardHookOutput,
+  hookCommand,
   removeEmptyHookDirectories,
   removeHookSnapshot,
   writeHookSnapshot,
@@ -97,7 +98,7 @@ async function runHook(
       const snapshotPath = await writeHookSnapshot(hookDistDir, hook.name, hook.contents);
       try {
         await runChildProcess(
-          [process.execPath, resolve(snapshotPath)],
+          hookCommand(resolve(snapshotPath)),
           hookDistDir,
           {
             ...process.env,

@@ -5,7 +5,7 @@ import { readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { resolvePaths } from "./home-path.ts";
 
-export type HookContext = {
+type HookContext = {
   distDir: string;
   resolvePaths(path: string): { distPath: string; homePath: string };
   syncGithubMirror(repo: string): Promise<string>;
@@ -65,7 +65,11 @@ function hookEnv(name: string): string {
   return value;
 }
 
-export async function buildHookContext(): Promise<HookContext> {
+declare global {
+  function loadHookContext(): Promise<HookContext>;
+}
+
+async function createHookContext(): Promise<HookContext> {
   const distDir = resolve(hookEnv("DOTFILES_DIST_DIR"));
   const homeRoot = resolve(hookEnv("DOTFILES_HOME_ROOT"));
   return {
@@ -84,3 +88,5 @@ export async function buildHookContext(): Promise<HookContext> {
     },
   };
 }
+
+globalThis.loadHookContext = createHookContext;

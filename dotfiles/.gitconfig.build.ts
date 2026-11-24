@@ -42,10 +42,7 @@ async function main(): Promise<void> {
 
   let sourceMirror = mirrorDir;
   if (process.platform === "win32") {
-    const { buildHookContext } = await import(
-      `${process.env.DOTFILES_MANAGER_SRC}/hook-context.ts`
-    );
-    const { syncGithubMirror } = await buildHookContext();
+    const { syncGithubMirror } = await loadHookContext();
     sourceMirror = await syncGithubMirror(repo);
   } else {
     await syncMirror();
