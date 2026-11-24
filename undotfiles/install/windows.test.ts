@@ -46,16 +46,15 @@ function wingetInstall(packageIds: string, ...options: string[]): string[] {
   return ["winget", "install", ...packageIds.trim().split(/\s+/), ...options, "--source", "winget"];
 }
 
-const devManaged = `Microsoft.VisualStudioCode Oven-sh.Bun Git.Git Casey.Just OpenJS.NodeJS.LTS
-  Microsoft.PowerShell marlocarlo.psmux Canonical.Ubuntu GitHub.cli Microsoft.coreutils gerardog.gsudo`;
-const workManaged = `BluePointLilac.ContextMenuManager sordum.EasyContextMenu w4po.ExplorerTabUtility
-  AdrienAllard.FileConverter DuongDieuPhap.ImageGlass LocalSend.LocalSend MPC-BE.MPC-BE
-  M2Team.NanaZip OpenWhispr.OpenWhispr ShareX.ShareX Microsoft.Sysinternals.Autologon Rime.Weasel
-  WinDirStat.WinDirStat Microsoft.WindowsTerminal ZedIndustries.Zed AutoHotkey.AutoHotkey
-  RussellBanks.Komac CatBraaain.runx CatBraaain.wintasks astral-sh.uv`;
-const personalManaged = `Guru3D.Afterburner CPUID.CPU-Z Rem0o.FanControl GIMP.GIMP.3 ch.LosslessCut
+const devBeforeDocker = "Oven-sh.Bun Microsoft.coreutils";
+const devAfterDocker = `Git.Git GitHub.cli gerardog.gsudo Casey.Just OpenJS.NodeJS.LTS
+  Microsoft.PowerShell marlocarlo.psmux Canonical.Ubuntu astral-sh.uv Microsoft.VisualStudioCode`;
+const workAfterFirefox = `DuongDieuPhap.ImageGlass RussellBanks.Komac LocalSend.LocalSend MPC-BE.MPC-BE
+  M2Team.NanaZip OpenWhispr.OpenWhispr CatBraaain.runx ShareX.ShareX Rime.Weasel WinDirStat.WinDirStat
+  Microsoft.WindowsTerminal CatBraaain.wintasks ZedIndustries.Zed`;
+const personalAfterDiscord = `Rem0o.FanControl GIMP.GIMP.3 HaraldBoegeholz.h2testw ch.LosslessCut
   Mojang.MinecraftLauncher OBSProject.OBSStudio Guru3D.RTSS Meltytech.Shotcut Valve.Steam
-  Devolutions.UniGetUI HaraldBoegeholz.h2testw`;
+  Devolutions.UniGetUI`;
 
 function windowsFixture(configText?: string) {
   const appData = mkdtempSync(join(tmpdir(), "windows-installer-test-"));
@@ -73,6 +72,14 @@ function windowsFixture(configText?: string) {
     mkdirSync(dirname(executable), { recursive: true });
     writeFileSync(executable, "installed app");
     return executable;
+  }
+
+  function seedCamoufox() {
+    const app = join(appData, "Programs", "Camoufox");
+    mkdirSync(app, { recursive: true });
+    writeFileSync(join(app, "camoufox.exe"), "installed browser");
+    writeFileSync(join(app, "application.ini"), "[App]\nVersion=158.0.1-beta.41\n");
+    return join(app, "version.json");
   }
 
   const commands: string[][] = [];
@@ -149,6 +156,7 @@ function windowsFixture(configText?: string) {
     commands,
     links,
     packageExe,
+    seedCamoufox,
     run,
     dispose: () => rmSync(appData, { recursive: true }),
   };
@@ -157,18 +165,25 @@ function windowsFixture(configText?: string) {
 test("dev installs only its selected packages after the elevation check and refreshes PATH for npm", async () => {
   const fixture = windowsFixture();
   try {
+    const camoufoxVersionFile = fixture.seedCamoufox();
     const { commands, npmPaths, errors, lookups } = await fixture.run("dev", "playwright");
     assert.deepEqual(commands, [
       elevationCheck,
+      wingetInstall(devBeforeDocker),
       wingetInstall("Docker.DockerDesktop", "--no-upgrade"),
-      wingetInstall(devManaged),
+      wingetInstall(devAfterDocker),
       refreshPath,
       piInstall,
       playwrightInstall,
+      trafilaturaInstall,
+      uvUpdateShell,
     ]);
     assert.deepEqual(npmPaths, ["machine;user", "machine;user"]);
-    assert.deepEqual(lookups, []);
+    assert.deepEqual(lookups, [
+      { executable: "openserp", after: playwrightInstall, path: "machine;user" },
+    ]);
     assert.deepEqual(errors, [`command failed with exit code 1: ${playwrightInstall.join(" ")}`]);
+    assert.ok(existsSync(camoufoxVersionFile));
     assert.equal(readFileSync(fixture.desktopShortcut, "utf8"), "desktop shortcut");
   } finally {
     fixture.dispose();
@@ -216,6 +231,7 @@ test("pi installation failure is still fatal", async () => {
 test("dev leaves WinGet links unchanged", async () => {
   const fixture = windowsFixture();
   try {
+    fixture.seedCamoufox();
     const bunFolder = `Oven-sh.Bun_${wingetSourceId}`;
     const installedExe = fixture.packageExe(bunFolder, "bun.exe");
     fixture.packageExe(bunFolder, "bunx.exe");
@@ -237,10 +253,7 @@ test.each(["work", "personal"] as const)(
   async (profile) => {
     const fixture = windowsFixture();
     try {
-      const app = join(fixture.appData, "Programs", "Camoufox");
-      mkdirSync(app, { recursive: true });
-      writeFileSync(join(app, "camoufox.exe"), "installed browser");
-      writeFileSync(join(app, "application.ini"), "[App]\nVersion=158.0.1-beta.41\n");
+      const camoufoxVersionFile = fixture.seedCamoufox();
       const nonDevExecutable = fixture.packageExe(
         `RussellBanks.Komac_${wingetSourceId}`,
         "komac.exe",
@@ -257,15 +270,23 @@ test.each(["work", "personal"] as const)(
           "1.1.37.02",
           "--no-upgrade",
         ),
+        wingetInstall(devBeforeDocker),
         wingetInstall("Docker.DockerDesktop", "--no-upgrade"),
-        wingetInstall(devManaged),
-        wingetInstall("Google.Chrome Mozilla.Firefox", "--no-upgrade"),
-        wingetInstall(workManaged),
+        wingetInstall(`${devAfterDocker} AutoHotkey.AutoHotkey Microsoft.Sysinternals.Autologon`),
+        wingetInstall("Google.Chrome", "--no-upgrade"),
+        wingetInstall(`BluePointLilac.ContextMenuManager sordum.EasyContextMenu
+          w4po.ExplorerTabUtility AdrienAllard.FileConverter`),
+        wingetInstall("Mozilla.Firefox", "--no-upgrade"),
+        wingetInstall(
+          profile === "personal"
+            ? `${workAfterFirefox} Guru3D.Afterburner CPUID.CPU-Z`
+            : workAfterFirefox,
+        ),
       ];
       if (profile === "personal") {
         wingetCommands.push(
           wingetInstall("Discord.Discord", "--no-upgrade"),
-          wingetInstall(personalManaged),
+          wingetInstall(personalAfterDiscord),
         );
       }
       const installerCommands = [
@@ -283,7 +304,7 @@ test.each(["work", "personal"] as const)(
         wingetCommands.map((args) => `command failed with exit code 1: ${args.join(" ")}`),
       );
       assert.deepEqual(lookups, [
-        { executable: "openserp", after: uvUpdateShell, path: "machine;user" },
+        { executable: "openserp", after: playwrightInstall, path: "machine;user" },
       ]);
       assert.deepEqual(commands[installerCommands.length], [
         "gh",
@@ -298,7 +319,7 @@ test.each(["work", "personal"] as const)(
       ]);
       assert.equal(commands[installerCommands.length + 1]?.[0], "powershell");
       assert.equal(commands.length, installerCommands.length + 2);
-      assert.ok(existsSync(join(app, "version.json")));
+      assert.ok(existsSync(camoufoxVersionFile));
       assert.equal(existsSync(fixture.desktopShortcut), false);
       assert.equal(realpathSync(replacedLink), realpathSync(nonDevExecutable));
     } finally {

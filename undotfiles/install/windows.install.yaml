@@ -1,64 +1,68 @@
 dev:
+  - winget: Oven-sh.Bun
+  - winget: Microsoft.coreutils
   - winget:
       id: Docker.DockerDesktop
       args: [--no-upgrade]
-  - winget: Microsoft.VisualStudioCode
-  - winget: Oven-sh.Bun
   - winget: Git.Git
+  - winget: GitHub.cli
+  - winget: gerardog.gsudo
   - winget: Casey.Just
   - winget: OpenJS.NodeJS.LTS
   - winget: Microsoft.PowerShell
   - winget: marlocarlo.psmux
   - winget: Canonical.Ubuntu
-  - winget: GitHub.cli
-  - winget: Microsoft.coreutils
-  - winget: gerardog.gsudo
+  - winget: astral-sh.uv
+  - winget: Microsoft.VisualStudioCode
+
   - npm: "@earendil-works/pi-coding-agent"
   - npm: "@playwright/cli@0.1.22"
+
+  - custom: camoufox
+  - custom: openserp
+  - custom: trafilatura
 
 work:
   - winget:
       id: AutoHotkey.AutoHotkey
       args: [--silent, --version, "1.1.37.02", --no-upgrade]
+  - winget: AutoHotkey.AutoHotkey
+  - winget: Microsoft.Sysinternals.Autologon
   - winget:
       id: Google.Chrome
-      args: [--no-upgrade]
-  - winget:
-      id: Mozilla.Firefox
       args: [--no-upgrade]
   - winget: BluePointLilac.ContextMenuManager
   - winget: sordum.EasyContextMenu
   - winget: w4po.ExplorerTabUtility
   - winget: AdrienAllard.FileConverter
+  - winget:
+      id: Mozilla.Firefox
+      args: [--no-upgrade]
   - winget: DuongDieuPhap.ImageGlass
+  - winget: RussellBanks.Komac
   - winget: LocalSend.LocalSend
   - winget: MPC-BE.MPC-BE
   - winget: M2Team.NanaZip
   - winget: OpenWhispr.OpenWhispr
+  - winget: CatBraaain.runx
   - winget: ShareX.ShareX
-  - winget: Microsoft.Sysinternals.Autologon
   - winget: Rime.Weasel
   - winget: WinDirStat.WinDirStat
   - winget: Microsoft.WindowsTerminal
-  - winget: ZedIndustries.Zed
-  - winget: AutoHotkey.AutoHotkey
-  - winget: RussellBanks.Komac
-  - winget: CatBraaain.runx
   - winget: CatBraaain.wintasks
-  - winget: astral-sh.uv
-  - custom: trafilatura
-  - custom: camoufox
-  - custom: openserp
+  - winget: ZedIndustries.Zed
+
   - custom: rustdesk
 
 personal:
+  - winget: Guru3D.Afterburner
+  - winget: CPUID.CPU-Z
   - winget:
       id: Discord.Discord
       args: [--no-upgrade]
-  - winget: Guru3D.Afterburner
-  - winget: CPUID.CPU-Z
   - winget: Rem0o.FanControl
   - winget: GIMP.GIMP.3
+  - winget: HaraldBoegeholz.h2testw
   - winget: ch.LosslessCut
   - winget: Mojang.MinecraftLauncher
   - winget: OBSProject.OBSStudio
@@ -66,4 +70,3 @@ personal:
   - winget: Meltytech.Shotcut
   - winget: Valve.Steam
   - winget: Devolutions.UniGetUI
-  - winget: HaraldBoegeholz.h2testw
