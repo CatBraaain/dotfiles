@@ -203,6 +203,26 @@ describe("run", () => {
   });
 
   it.each([
+    ["darwin", "macos"],
+    ["linux", "shared"],
+    ["windows", "shared"],
+  ] as const)(
+    "selects the macOS YAML merge sidecar only for macOS (%s)",
+    async (platform, source) => {
+      await put(root, "dotfiles/settings.merge.yaml", "source: shared\nshared: true\n");
+      await put(root, "dotfiles/settings.macos-merge.yaml", "source: macos\n");
+
+      await main(root, platform, homeRoot);
+
+      assert.deepEqual(parseYaml(await readFile(join(distRoot, "settings.yaml"), "utf8")), {
+        source,
+        shared: true,
+      });
+      assert.equal(existsSync(join(distRoot, "settings.macos-merge.yaml")), false);
+    },
+  );
+
+  it.each([
     ["linux", "linux"],
     ["windows", "windows"],
     ["darwin", "macos"],
@@ -1107,6 +1127,36 @@ replacements:
     assert.equal(existsSync(join(distRoot, "shared/shared.txt")), false);
     assert.equal(existsSync(join(distRoot, "old/old.txt")), false);
   });
+
+  for (const overlay of ["external.macos-data.yaml", "external.macos-machine-data.yaml"]) {
+    it.each([
+      ["darwin", "macos", "shared"],
+      ["linux", "shared", "macos"],
+      ["windows", "shared", "macos"],
+    ] as const)(`selects ${overlay} only for macOS (%s)`, async (platform, selected, ignored) => {
+      await put(
+        root,
+        "dotfiles/external.data.yaml",
+        "repos:\n  example/repo:\n    destination: shared\n    entries: [payload.txt]\n",
+      );
+      await put(
+        root,
+        `dotfiles/${overlay}`,
+        "repos:\n  example/repo:\n    destination: macos\n    entries: [payload.txt]\n",
+      );
+      await put(homeRoot, "mirrors/github.com/example/repo/payload.txt", "payload\n");
+      await put(
+        homeRoot,
+        "mirrors/github.com/example/repo/.git/build-pull-time",
+        `${Date.now()}\n`,
+      );
+
+      await runBuildInSubprocess(platform);
+
+      assert.equal(await readFile(join(distRoot, selected, "payload.txt"), "utf8"), "payload\n");
+      assert.equal(existsSync(join(distRoot, ignored, "payload.txt")), false);
+    });
+  }
 
   for (const { name, mode } of [
     { name: "runs run_after after a successful isolated external clone", mode: "clone" },

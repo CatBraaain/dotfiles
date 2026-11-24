@@ -47,11 +47,12 @@ export async function main(
   });
   await timed("path map", onPhase, () => applyPathMap(distDir, platform));
   const hooks = await collectHooks(distDir, platform);
+  const sidecarPlatform = platform === "darwin" ? "macos" : platform;
   await timed("externals", onPhase, async () => {
     await mergeMachineData(distDir);
-    await applyExternals(distDir, wsl, platform);
+    await applyExternals(distDir, wsl, sidecarPlatform);
   });
-  await timed("merge", onPhase, () => composeMergeTargets(distDir, homeRoot, platform));
+  await timed("merge", onPhase, () => composeMergeTargets(distDir, homeRoot, sidecarPlatform));
   await timed("replace", onPhase, () => applyReplaceSidecars(distDir, homeRoot));
   await runHooks(hooks, distDir, homeRoot, onHookEvent);
   const generatedLinks = await convertLnkDeclarations(distDir, platform);
