@@ -91,6 +91,82 @@ it("uses only the native Windows CLI to sync the Windows allowlist", async () =>
   ]);
 });
 
+async function syncWithUninstallFailure(stderr: string) {
+  const root = await mkdtemp(join(tmpdir(), "vscode-extension-uninstall-"));
+  try {
+    const code = join(root, "code-fixture");
+    await writeFile(join(root, "failure.txt"), stderr);
+    await writeFile(
+      code,
+      `#!/bin/sh
+case "$1:$2" in
+  --list-extensions:--show-versions)
+    printf '%s\\n' ms-vscode-remote.remote-wsl@1 tomoki1207.pdf@1 pack.parent@1 pack.child@1 pack.remaining@1 ;;
+  --uninstall-extension:pack.child)
+    printf '%s\\n' 'Removed pack.child and pack.parent' ;;
+  --uninstall-extension:pack.parent)
+    cat "\${0%/*}/failure.txt" >&2
+    exit 1 ;;
+  --uninstall-extension:pack.remaining)
+    printf '%s\\n' 'Removed pack.remaining' ;;
+  *) exit 99 ;;
+esac
+`,
+      { mode: 0o755 },
+    );
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `import { applyExtensions } from ${JSON.stringify(new URL("../extensions.apply.ts", import.meta.url).href)};
+         await applyExtensions("win32", false, {
+           selectTarget: async () => ({ label: "windows", code: process.argv[1] }),
+         });`,
+        code,
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [exitCode, stdout, stderrOutput] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    return { exitCode, stdout, stderr: stderrOutput };
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+it.skipIf(process.platform === "win32")(
+  "does not report a bundled extension already removed by the preceding uninstall",
+  async () => {
+    const result = await syncWithUninstallFailure(
+      "Extension 'pack.parent' is not installed.\r\n" +
+        "Make sure you use the full extension ID, including the publisher, e.g.: ms-dotnettools.csharp\r\n",
+    );
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    assert.doesNotMatch(result.stdout, /is not installed/);
+    assert.match(result.stdout, /Removed pack\.child and pack\.parent/);
+    assert.match(result.stdout, /Removed pack\.remaining/);
+  },
+);
+
+it.skipIf(process.platform === "win32")("reports other uninstall failures", async () => {
+  const result = await syncWithUninstallFailure("Permission denied\n");
+  assert.equal(result.exitCode, 1);
+  assert.match(result.stderr, /Permission denied/);
+});
+
+it.skipIf(process.platform === "win32")(
+  "reports a missing extension with a different ID",
+  async () => {
+    const result = await syncWithUninstallFailure("Extension 'pack.other' is not installed.\n");
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /Extension 'pack\.other' is not installed\./);
+  },
+);
+
 const powershell = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe";
 
 function bridgeCommand(argv: string[]) {
@@ -120,13 +196,16 @@ it("syncs each WSL and Windows extension list with its own CLI and policy", asyn
     installLocal: async (target) => {
       localInstalls.push(target.code);
     },
-    run: async (argv) => {
+    run: async (argv, options) => {
       if (argv[0] === server) {
         wslCalls.push(argv.slice(1));
         return "tomoki1207.pdf@1.0.0";
       }
       const command = bridgeCommand(argv);
       windowsCalls.push(command);
+      if (command === "'--uninstall-extension' 'some.other'") {
+        assert.equal(options?.ignoreFailure?.("Extension 'some.other' is not installed."), true);
+      }
       return "ms-vscode-remote.remote-wsl@1.0.0\r\ncatbraaain.vscode-custom-patch@1.0.0\r\nsome.other@1.0.0";
     },
   });

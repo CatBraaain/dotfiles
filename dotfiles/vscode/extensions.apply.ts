@@ -64,7 +64,11 @@ type Target = {
   code: string;
   entries?: [string, string][];
 };
-type Run = (argv: string[], quiet?: boolean) => Promise<string>;
+type RunOptions = {
+  quiet?: boolean;
+  ignoreFailure?: (stderr: string) => boolean;
+};
+type Run = (argv: string[], options?: RunOptions) => Promise<string>;
 
 async function main() {
   const platform = process.platform;
@@ -122,14 +126,14 @@ async function syncWindowsExtensionsFromWsl(powershell: string | undefined, run:
     console.warn("[windows] Windows PowerShell not found; skipping");
     return;
   }
-  await syncMarketplaceExtensions({ label: "windows", code: powershell }, (argv, quiet) =>
-    runWindowsCode(argv, quiet, run),
+  await syncMarketplaceExtensions({ label: "windows", code: powershell }, (argv, options) =>
+    runWindowsCode(argv, options, run),
   );
 }
 
 export function runWindowsCode(
   [powershell, ...args]: string[],
-  quiet = false,
+  options?: RunOptions,
   run: Run = runCommand,
 ) {
   if (!powershell || args.some((arg) => arg.length === 0 || /[^a-z0-9.-]/i.test(arg))) {
@@ -146,7 +150,7 @@ export function runWindowsCode(
     "exit $LASTEXITCODE",
   ].join("; ");
   const encoded = Buffer.from(script, "utf16le").toString("base64");
-  return run([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], quiet);
+  return run([powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], options);
 }
 
 export async function selectExtensionTarget(
@@ -351,9 +355,22 @@ export async function syncMarketplaceExtensions(target: Target, run: Run = runCo
   for (const extension of installedMarketplace) {
     if (!desiredMarketplace.includes(extension)) {
       console.log(`[${label}] uninstall ${extension}`);
-      await runCode(target, ["--uninstall-extension", extension], run);
+      await runCode(target, ["--uninstall-extension", extension], run, {
+        ignoreFailure: (stderr) => isExtensionAlreadyUninstalled(stderr, extension),
+      });
     }
   }
+}
+
+function isExtensionAlreadyUninstalled(stderr: string, extension: string): boolean {
+  const [message, hint, ...otherLines] = stderr.trim().split(/\r?\n/);
+  const useFullExtensionId =
+    "Make sure you use the full extension ID, including the publisher, e.g.: ms-dotnettools.csharp";
+  return (
+    message === `Extension '${extension}' is not installed.` &&
+    (hint === undefined || hint === useFullExtensionId) &&
+    otherLines.length === 0
+  );
 }
 
 async function ensureRepo(url: string, repo: string) {
@@ -394,7 +411,7 @@ async function readExtensionEntries(
   const argv = [target.code, "--list-extensions", "--show-versions"];
   let listing: string;
   try {
-    listing = await run(argv, true);
+    listing = await run(argv, { quiet: true });
   } catch (error) {
     if (!requireSuccess) return [];
     throw new Error(`could not list ${target.label} extensions: ${error}`, { cause: error });
@@ -410,17 +427,27 @@ async function readExtensionEntries(
   return entries;
 }
 
-async function runCode(target: Target, args: string[], run: Run) {
-  await run([target.code, ...args]);
+async function runCode(target: Target, args: string[], run: Run, options?: RunOptions) {
+  await run([target.code, ...args], options);
   delete target.entries;
 }
 
-async function runCommand(argv: string[], quiet = false): Promise<string> {
+async function runCommand(
+  argv: string[],
+  { quiet = false, ignoreFailure }: RunOptions = {},
+): Promise<string> {
   const command = $`${argv}`.nothrow();
-  if (quiet) command.quiet();
+  if (quiet || ignoreFailure) command.quiet();
   const { exitCode, stdout, stderr } = await command;
-  if (exitCode !== 0)
-    throw new Error(`${argv[0]} exited with code ${exitCode}: ${stderr.toString().trim()}`);
+  const errorOutput = stderr.toString();
+  const ignoredFailure = exitCode !== 0 && ignoreFailure?.(errorOutput);
+  if (ignoreFailure && !quiet) {
+    if (stdout.length > 0) process.stdout.write(stdout);
+    if (stderr.length > 0 && !ignoredFailure) process.stderr.write(stderr);
+  }
+  if (exitCode !== 0 && !ignoredFailure) {
+    throw new Error(`${argv[0]} exited with code ${exitCode}: ${errorOutput.trim()}`);
+  }
   return stdout.toString();
 }
 
