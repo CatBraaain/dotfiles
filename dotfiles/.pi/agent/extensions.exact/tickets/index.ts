@@ -201,8 +201,8 @@ export const ticketToolDescriptions = {
   ticket_create:
     "Create a ticket via the `ticket create` CLI subcommand and return the created id, status, after, and path. " +
     "title becomes the ticket H1; body is optional text placed after the H1; " +
-    "status defaults to open (draft/open/blocked/locked/closed/cancelled); " +
-    "after lists the single ticket ID this ticket waits on (same project, unique prefix allowed) and makes it blocked unless a status is given. " +
+    "status defaults to open for immediate handoff. Set locked if you are starting the work yourself. " +
+    "To wait for another ticket, set after to its ID (same project, unique prefix allowed) and omit status to create a blocked ticket. " +
     "project selects the ticket store (defaults to the project resolved from the session cwd). " +
     "The CLI validates the fields, so creation can fail with the CLI's error text.",
   ticket_set:

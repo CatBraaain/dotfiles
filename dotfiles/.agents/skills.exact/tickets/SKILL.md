@@ -10,8 +10,8 @@ description: >-
 
 ## 最短経路（頻出フロー）
 
-1. 起票: `ticket_create`（status `open`）
-2. 着手: user の承認を得て `ticket_set` で `locked` にし、作業を始める
+1. 起票: すぐ別の担当に任せるなら `ticket_create` の既定の `open`、自分ですぐ着手するなら `locked` を明示する。依存先の完了を待つなら `after` を指定し、`status` は省略する
+2. 着手: 既存ticket に自分で着手するなら、user の承認を得て `ticket_set` で `locked` にしてから作業を始める
 3. 完了: `ticket_edit` で対処記録を本文へ追記し、`ticket_set` で `closed` にする
 
 対処記録はグローバルAGENTS.md の Report Format を流用する（実施要約の本文数行・変更表・検証表・commit参照）。報告見出し（`## <絵文字> <ラベル> — <要約>`）と `worktree:` 行・`ticket:` 行はチャット報告の形式のため含めない。追記を要する遷移（`closed`・`blocked`・`cancelled`）は、追記してから status を変更する。
@@ -58,16 +58,16 @@ description: >-
 
 「ticket にしといて」「タスク積んどいて」「これクローズして」等の依頼で、起票・一覧・着手・更新・完了・取り下げを行う。問題に限らず、user が予定した作業も対処すべきこととして起票する。起票時は user の指示内容を優先する。
 
-即座に対処しないアイデア・メモの依頼（「アイデアを溜めといて」等）は `status: draft` で起票する。draft は即座に取り掛からない途中段階で、発見時の記録では使わない。「あの draft を着手して」等の依頼では `open` へ昇格させてから「状態」の着手フローに従う。
+即座に対処しないアイデア・メモの依頼（「アイデアを溜めといて」等）は `status: draft` で起票する。draft は即座に取り掛からない途中段階で、発見時の記録では使わない。
 
 ## 状態
 
 使用できるstatusは6種。
 
 - `draft`: アイデア蓄積の途中段階。即座に取り掛からない
-- `open`: 未着手
+- `open`: 割り当て待ちの作業。すぐ別の担当へ任せるときに使う。dispatcher の通常の対象になる
 - `blocked`: 外部要因（依存ticket の未完了を含む）の解消待ち。着手しない
-- `locked`: 別のセッションが対処を保持（排他）。着手しない
+- `locked`: 自分で対応する作業を確保している。他のセッションは着手しない
 - `closed`: 完了
 - `cancelled`: 中止
 
@@ -75,15 +75,15 @@ description: >-
 
 - 調査で再現せず、具体的な追加調査・修正を行わない → 解消済みとはせず、見送りとして `cancelled` を推奨する
 - 対処を続けるが、依存ticket の完了や必要な権限の付与を待つ → 具体的な外部要因と解除条件を示して `blocked` にする。単なる再発待ちは、この外部要因に含めない
-- 修正案やworktree を破棄する → ticket への対処も中止するなら `cancelled`、別案で対処を続けると決まっているなら `open`。成果の未反映だけを理由に `open` へ戻さない
+- 修正案やworktree を破棄しても、ticket の状態は次の対応に合わせて選ぶ。自分で別案を進めるなら `locked` のまま、すぐに別の担当へ任せるなら `open`、対処も中止するなら `cancelled`
 
 `after` は、着手前に完了を待つ同一 `<project>/` 内の ticket の ID を frontmatter に単一の文字列で指定する。依存がなければ省略する。存在する未完了の ticket（`closed`・`cancelled` を除く）だけを指定でき、複数依存は不可。status の同時明示が優先される。
 
 遷移のタイミング:
 
-- 起票 → `open`（アイデア蓄積の明示依頼のみ `draft`）
-- draft の昇格（明示依頼）→ `open`
-- 対処に着手（調査を含む）→ `locked`
+- 起票 → `status` と `after` を省略すると `open`
+- 既存ticket をすぐに別の担当へ任せる → `open`
+- 自分で対処に着手する（調査を含む）→ `locked`。`draft` からは `open` を経由しない
 - 外部要因の解消待ち → `blocked`（待つ理由と解除条件を本文に）
 - 未解決 `after` の指定 → `blocked`（status 未指定時。依存先ID と解除条件を本文に）
 - blocked の外部要因が解消 → `open`
@@ -94,7 +94,7 @@ description: >-
 
 `open` から `locked` を経由せず直接 `closed` にしてよい（外部要因で解消した場合など）。単純なstatus変更（`draft` から `open` 等）では本文を編集しない。自動解放や、対処を伴わない解消の `closed` には不要な追記をしない。
 
-着手はまずuser の承認を得る。agent が自ら選んだticket では、ticket ID・タイトル・内容の要約・考えている進め方を示して承認を求め、user が特定の ticket を明示した依頼なら依頼自体が承認にあたる。着手できるのは `open` かつ `after` が未設定か依存先が `closed` の ticket のみで、`draft`・`blocked`・`locked` には着手しない（draft は明示依頼で `open` へ昇格後に着手）。承認後は、ファイル編集の開始を待たず調査など対処に向けた作業を始めた時点で `locked` にする（重複着手・バッティングの防止）。コード修正を伴う対処は、worktree規約に従いworktree と branch を作る。`locked` は完了（`closed`）か取り下げ（`cancelled`）で外れ、異常終了などで残れば user の指示で `open` に戻す。
+着手はまずuser の承認を得る。agent が自ら選んだticket では、ticket ID・タイトル・内容の要約・考えている進め方を示して承認を求め、user が特定の ticket を明示した依頼なら依頼自体が承認にあたる。着手できる既存ticket は `draft` または `open` で、`after` が未設定か依存先が `closed` のものに限る。`draft` はユーザーが着手を明示した場合だけ選ぶ。承認後は、調査を含む作業を始める前に `ticket_set` で `locked` にし、重複着手を防ぐ。コード修正を伴う対処は、worktree規約に従いworktree と branch を作る。異常終了などで `locked` が残った場合は、user の指示に従って次の対応に合う状態へ変更する。
 
 `ticket_set` で依存先を `closed` にすると、同一project内でその ID を `after` に持つ `blocked` ticket は自動で `open` に解放される。手動では解放しない。解放の確認は `ticket_list`（CLI: `ticket list --status blocked,open`）で候補を絞り、`ticket_show`（CLI: `ticket show <id>`）で `after` と status を読む。通常の一覧に `after` は表示されない。
 
