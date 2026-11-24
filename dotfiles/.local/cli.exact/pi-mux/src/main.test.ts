@@ -18,6 +18,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { parseOperation, type StateSource } from "./main";
 
@@ -2670,6 +2671,29 @@ describe("unified workspace persistence", () => {
       ]);
     } finally {
       await fixture.cleanup();
+    }
+  });
+
+  it.skipIf(process.platform !== "win32")("persists workspace registration on Windows", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-mux-register-"));
+    const agentDir = join(cwd, "agent");
+    try {
+      assert.ok(realTmux, "psmux must be available as tmux on PATH");
+      const result = spawnSync(process.execPath, [source, "workspace", "register", cwd], {
+        cwd,
+        env: { ...process.env, USERPROFILE: cwd, PI_CODING_AGENT_DIR: agentDir },
+        encoding: "utf8",
+      });
+      assert.ifError(result.error);
+      assert.equal(result.status, 0, result.stderr);
+      const restore = join(agentDir, "pi-tmux", "pi-mux-restore.json");
+      assert.deepEqual(JSON.parse(readFileSync(restore, "utf8")), {
+        version: 1,
+        generation: "",
+        workspaces: [{ cwd, sessions: [] }],
+      });
+    } finally {
+      rmSync(cwd, { recursive: true });
     }
   });
 

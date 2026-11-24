@@ -2,9 +2,9 @@
 import { $ } from "bun";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
-import { mkdir, readdir, readFile, realpath } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, delimiter, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { cp, mkdir, mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { basename, delimiter, dirname, isAbsolute, join, relative, sep, win32 } from "node:path";
 
 const extensionsForWindows = ["ms-vscode-remote.remote-wsl", "tomoki1207.pdf"];
 
@@ -86,6 +86,7 @@ export async function applyExtensions(
   {
     selectTarget = selectExtensionTarget,
     installLocal = installLocalExtensions,
+    installWindowsAgentKit = installAgentKit,
     run = runCommand,
     findPowerShell = findWindowsPowerShell,
   } = {},
@@ -102,6 +103,9 @@ export async function applyExtensions(
     }
     if (target.label !== "windows") await installLocal(target);
     await syncMarketplaceExtensions(target, run);
+    if (platform === "win32" && !isWsl && target.label === "windows") {
+      await installWindowsAgentKit(target, run);
+    }
   }
 
   if (!isWsl) return syncPrimaryTarget();
@@ -249,7 +253,7 @@ async function installTodoLsp(target: Target) {
   });
 }
 
-async function installAgentKit(target: Target) {
+async function installAgentKit(target: Target, run = runCommand) {
   const { DOTFILES_HOME_ROOT: homeRoot, DOTFILES_DIST_DIR: distRoot } = process.env;
   if (!homeRoot || !distRoot) throw new Error("apply hook paths are not set");
   const vscodeRelativeDir = relative(homeRoot, import.meta.dir);
@@ -265,21 +269,72 @@ async function installAgentKit(target: Target) {
     vscodeRelativeDir,
     "local-extensions.data.projects/vscode-agent-kit",
   );
+  await syncAgentKit(target, { homeRoot, project }, { run });
+}
+
+const agentKitVsixName = "agent-kit.vsix";
+const generatedAgentKitEntries = new Set([
+  "node_modules",
+  "dist",
+  "dist-webview",
+  "storybook-static",
+  agentKitVsixName,
+]);
+
+export async function syncAgentKit(
+  target: Target,
+  { homeRoot, project }: { homeRoot: string; project: string },
+  { run = runCommand, runStep = runAgentKitStep } = {},
+) {
   const manifest = await Bun.file(join(project, "package.json")).json();
-  const vsixName = "agent-kit.vsix";
-  const contentHash = await hashAgentKitBuildInputs(project, vsixName);
-  const receipt = join(homeRoot, ".cache/dotfiles/vscode-extensions/linux", `${agentKitId}.sha256`);
-  const installed = (await readExtensionEntries(target, true)).some(
+  const contentHash = await hashAgentKitBuildInputs(project);
+  const receipt = join(
+    homeRoot,
+    ".cache/dotfiles/vscode-extensions",
+    target.label === "windows" ? "windows" : "linux",
+    `${agentKitId}.sha256`,
+  );
+  const installed = (await readExtensionEntries(target, true, run)).some(
     ([id, version]) => id === agentKitId && version === manifest.version,
   );
   if (installed && (await readReceipt(receipt)) === contentHash) return;
 
   console.log(`[${target.label}] build and install ${agentKitId}`);
-  const vsixPath = join(project, vsixName);
+  if (target.label === "windows" && win32.parse(project).root.startsWith("\\\\")) {
+    const tempRoot = await realpath(tmpdir());
+    if (!/^[a-z]:\\$/i.test(win32.parse(tempRoot).root)) {
+      throw new Error(`Agent Kit staging requires a local Windows temp directory: ${tempRoot}`);
+    }
+    const stage = await mkdtemp(join(tempRoot, "dotfiles-agent-kit-"));
+    try {
+      const stagedProject = join(stage, "vscode-agent-kit");
+      await cp(project, stagedProject, {
+        recursive: true,
+        filter: (path) =>
+          !generatedAgentKitEntries.has(relative(project, path).split(sep)[0] ?? ""),
+      });
+      await buildAndInstallAgentKit(target, stagedProject, run, runStep);
+    } finally {
+      await rm(stage, { recursive: true, force: true });
+    }
+  } else {
+    await buildAndInstallAgentKit(target, project, run, runStep);
+  }
+  await mkdir(dirname(receipt), { recursive: true });
+  await Bun.write(receipt, `${contentHash}\n`);
+}
+
+async function buildAndInstallAgentKit(
+  target: Target,
+  project: string,
+  run: Run,
+  runStep: typeof runAgentKitStep,
+) {
+  const vsixPath = join(project, agentKitVsixName);
   rmSync(vsixPath, { force: true });
-  await runAgentKitStep("Install dependencies", ["bun", "install", "--frozen-lockfile"], project);
-  await runAgentKitStep("Build extension", ["bun", "run", "build"], project);
-  await runAgentKitStep(
+  await runStep("Install dependencies", ["bun", "install", "--frozen-lockfile"], project);
+  await runStep("Build extension", ["bun", "run", "build"], project);
+  await runStep(
     "Package VSIX",
     [
       "bunx",
@@ -293,23 +348,20 @@ async function installAgentKit(target: Target) {
     ],
     project,
   );
-  await installVsix(target, vsixPath, (argv) => runAgentKitStep("Install VSIX", argv));
-  await mkdir(dirname(receipt), { recursive: true });
-  await Bun.write(receipt, `${contentHash}\n`);
+  if (target.label === "windows") {
+    await installVsix(target, vsixPath, (argv, options) =>
+      runNativeVsixInstall(argv, options, run),
+    );
+  } else {
+    await installVsix(target, vsixPath, (argv) => runStep("Install VSIX", argv));
+  }
 }
 
-async function hashAgentKitBuildInputs(project: string, vsixName: string): Promise<string> {
-  const generatedEntries = new Set([
-    "node_modules",
-    "dist",
-    "dist-webview",
-    "storybook-static",
-    vsixName,
-  ]);
+async function hashAgentKitBuildInputs(project: string): Promise<string> {
   const paths: string[] = [];
   const childFiles = new Bun.Glob("**/*");
   for (const entry of await readdir(project, { withFileTypes: true })) {
-    if (generatedEntries.has(entry.name)) continue;
+    if (generatedAgentKitEntries.has(entry.name)) continue;
     if (entry.isDirectory()) {
       const cwd = join(project, entry.name);
       for await (const path of childFiles.scan({ cwd, dot: true })) {
@@ -387,6 +439,36 @@ async function ensureRepo(url: string, repo: string) {
 async function installVsix(target: Target, vsixPath: string, run: Run) {
   if (!isFile(vsixPath)) throw new Error(`error: VSIX was not created: ${vsixPath}`);
   await runCode(target, ["--install-extension", vsixPath, "--force"], run);
+}
+
+function runNativeVsixInstall(
+  [code, flag, vsixPath, force]: string[],
+  options: RunOptions | undefined,
+  run: Run,
+) {
+  if (!code || !vsixPath || flag !== "--install-extension" || force !== "--force") {
+    throw new Error("Invalid native VS Code VSIX arguments");
+  }
+  if (!/\.(cmd|bat)$/i.test(code)) return run([code, flag, vsixPath, force], options);
+
+  function pathLiteral(path: string) {
+    if (/["\0\r\n]/.test(path)) throw new Error("Invalid Windows path");
+    return `'${path.replace(/['‘’‚‛]/g, "$&$&")}'`;
+  }
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()",
+    "Set-Location -LiteralPath $env:SystemRoot",
+    `$env:DOTFILES_VSCODE_CODE = ${pathLiteral(code)}`,
+    `$env:DOTFILES_VSCODE_VSIX = ${pathLiteral(vsixPath)}`,
+    `& $env:ComSpec /d /v:off /s /c '""%DOTFILES_VSCODE_CODE%" --install-extension "%DOTFILES_VSCODE_VSIX%" --force"'`,
+    "exit $LASTEXITCODE",
+  ].join("; ");
+  const encoded = Buffer.from(script, "utf16le").toString("base64");
+  return run(
+    ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+    options,
+  );
 }
 
 async function runAgentKitStep(step: string, argv: string[], cwd?: string): Promise<string> {

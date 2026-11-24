@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, win32 } from "node:path";
+import { promisify } from "node:util";
 
 export type PlatformApi = ReturnType<typeof platformFor>;
 
@@ -9,10 +11,66 @@ function shLiteral(value: string): string {
 }
 
 function powerShellLiteral(value: string): string {
-  return "'" + value.replaceAll("'", "''") + "'";
+  return "'" + value.replace(/['‘’‚‛]/g, "$&$&") + "'";
 }
 
 const ENVIRONMENT_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const PROCESS_QUERY_TIMEOUT_MS = 5_000;
+const MAX_WINDOWS_PID = 0xffff_ffff;
+const execFileAsync = promisify(execFile);
+const windowsPowerShell = win32.join(
+  process.env.SystemRoot || "C:\\Windows",
+  "System32",
+  "WindowsPowerShell",
+  "v1.0",
+  "powershell.exe",
+);
+
+function encodePowerShell(script: string): string {
+  return Buffer.from(script, "utf16le").toString("base64");
+}
+
+async function windowsChildPids(parentPid: number, clientPids: number[]): Promise<number[]> {
+  const candidates = clientPids.filter(
+    (pid) => Number.isInteger(pid) && pid > 0 && pid <= MAX_WINDOWS_PID,
+  );
+  if (
+    candidates.length === 0 ||
+    !Number.isInteger(parentPid) ||
+    parentPid <= 0 ||
+    parentPid > MAX_WINDOWS_PID
+  )
+    return [];
+
+  const filter = [parentPid, ...candidates].map((pid) => `ProcessId = ${pid}`).join(" OR ");
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    `$processes = Get-CimInstance Win32_Process -Filter '${filter}'`,
+    `$parent = $processes | Where-Object ProcessId -eq ${parentPid}`,
+    "if (!$parent) { exit 0 }",
+    "foreach ($client in $processes) {",
+    `  if ($client.ProcessId -eq ${parentPid} -or $client.ParentProcessId -ne ${parentPid}) { continue }`,
+    "  if (!$parent.CreationDate -or !$client.CreationDate -or !$parent.ExecutablePath) { throw 'Cannot verify parent process identity' }",
+    "  if ($parent.CreationDate -lt $client.CreationDate -and $parent.ExecutablePath -eq $env:PI_MUX_QUERY_EXE) { [Console]::WriteLine($client.ProcessId) }",
+    "}",
+  ].join("\n");
+  try {
+    const { stdout } = await execFileAsync(
+      windowsPowerShell,
+      ["-NoProfile", "-NonInteractive", "-EncodedCommand", encodePowerShell(script)],
+      {
+        env: { ...process.env, PI_MUX_QUERY_EXE: realpathSync(process.execPath) },
+        timeout: PROCESS_QUERY_TIMEOUT_MS,
+        windowsHide: true,
+      },
+    );
+    const matching = stdout.trim().split(/\r?\n/).filter(Boolean).map(Number);
+    if (matching.some((pid) => !candidates.includes(pid))) throw new Error("Invalid process IDs");
+    return matching;
+  } catch (error) {
+    throw new Error(`Cannot verify Windows client parent process ${parentPid}`, { cause: error });
+  }
+}
 
 export function platformFor(platformName: string) {
   const windows = platformName === "win32";
@@ -74,9 +132,12 @@ export function platformFor(platformName: string) {
       if (windows) return true;
       return stat.uid === process.getuid!() && (stat.mode & 0o077) === 0;
     },
-    processParentPid(pid: number): number | undefined {
-      if (windows) return undefined;
-      return readParentPid(pid);
+    async clientPidsFor(parentPid: number, clientPids: number[]): Promise<number[]> {
+      const children = clientPids.filter((pid) => pid !== parentPid);
+      const matches = windows
+        ? await windowsChildPids(parentPid, children)
+        : children.filter((pid) => readParentPid(pid) === parentPid);
+      return clientPids.includes(parentPid) ? [parentPid, ...matches] : matches;
     },
     processIsAlive(pid: number): boolean {
       return isAlive(pid);
@@ -94,21 +155,47 @@ export function platformFor(platformName: string) {
       if (windows) return undefined;
       return realpathSync(`/proc/${pid}/cwd`);
     },
+    acceptsTmuxEnvironmentKey(key: string): boolean {
+      return !windows || ENVIRONMENT_KEY_PATTERN.test(key);
+    },
     quoteCommand(tokens: string[]): string {
       if (windows) return ["&", ...tokens.map(powerShellLiteral)].join(" ");
       return tokens.map(shLiteral).join(" ");
     },
-    paneCommand(command: string[], unsetEnvironment: string[]): string {
+    paneCommand(
+      command: string[],
+      unsetEnvironment: string[],
+      desiredEnvironment: Record<string, string> = {},
+    ): string {
       if (windows) {
         const invocation = ["&", ...command.map(powerShellLiteral)].join(" ");
-        const removable = unsetEnvironment.filter((key) => ENVIRONMENT_KEY_PATTERN.test(key));
-        if (removable.length === 0) return invocation;
-        const removals = removable.map((key) => `$env:${key}=$null`).join("; ");
-        return `& { ${removals}; ${invocation} }`;
+        const removals = unsetEnvironment.map((key) =>
+          ENVIRONMENT_KEY_PATTERN.test(key)
+            ? `$env:${key}=$null`
+            : `[Environment]::SetEnvironmentVariable(${powerShellLiteral(key)}, $null)`,
+        );
+        const assignments = Object.entries(desiredEnvironment)
+          .filter(([key]) => !ENVIRONMENT_KEY_PATTERN.test(key))
+          .map(
+            ([key, value]) =>
+              `[Environment]::SetEnvironmentVariable(${powerShellLiteral(key)}, ${powerShellLiteral(value)})`,
+          );
+        const setup = [...removals, ...assignments];
+        return setup.length === 0 ? invocation : `& { ${[...setup, invocation].join("; ")} }`;
       }
       return ["/usr/bin/env", ...unsetEnvironment.flatMap((key) => ["-u", key]), ...command]
         .map(shLiteral)
         .join(" ");
+    },
+    tmuxPaneCommand(script: string): string[] {
+      if (!windows) return [script];
+      return [
+        windowsPowerShell,
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        encodePowerShell(`${script}; exit $LASTEXITCODE`),
+      ];
     },
     hookCommand(invocation: string[], environment: Record<string, string>): string {
       if (windows) {

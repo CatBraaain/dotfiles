@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { it } from "bun:test";
 import {
   applyExtensions,
   selectExtensionTarget,
+  syncAgentKit,
   syncMarketplaceExtensions,
 } from "../extensions.apply.ts";
 
@@ -121,6 +122,7 @@ esac
         `import { applyExtensions } from ${JSON.stringify(new URL("../extensions.apply.ts", import.meta.url).href)};
          await applyExtensions("win32", false, {
            selectTarget: async () => ({ label: "windows", code: process.argv[1] }),
+           installWindowsAgentKit: async () => {},
          });`,
         code,
       ],
@@ -258,15 +260,60 @@ it("finishes WSL sync without mutating Windows when Windows listing fails", asyn
   assert.deepEqual(windowsCalls, ["'--list-extensions' '--show-versions'"]);
 });
 
-it("does not try Windows interop outside WSL", async () => {
+it("installs Agent Kit on Windows without WSL interop or other local extensions", async () => {
+  const target = { label: "windows", code: "code.cmd" } as const;
+  const installs: string[] = [];
   await applyExtensions("win32", false, {
-    selectTarget: async () => ({ label: "windows", code: "code.cmd" }),
+    selectTarget: async () => target,
     findPowerShell: () => assert.fail("Windows interop should not run"),
+    installLocal: async () => assert.fail("Other local extensions should not be installed"),
+    installWindowsAgentKit: async (selected) => {
+      installs.push(selected.code);
+    },
     run: async (argv) => {
       assert.deepEqual(argv, ["code.cmd", "--list-extensions", "--show-versions"]);
       return "ms-vscode-remote.remote-wsl@1.0.0\ntomoki1207.pdf@1.0.0";
     },
   });
+  assert.deepEqual(installs, [target.code]);
+});
+
+it("uses a separate Agent Kit receipt for Windows and reuses it after install", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agent-kit-receipt-"));
+  const project = join(root, "source");
+  const receiptDir = join(root, ".cache", "dotfiles", "vscode-extensions");
+  const windowsReceipt = join(receiptDir, "windows", "agent-kit.agent-kit.sha256");
+  const linuxReceipt = join(receiptDir, "linux", "agent-kit.agent-kit.sha256");
+  const buildSteps: string[] = [];
+  const installCalls: string[][] = [];
+  try {
+    await mkdir(project);
+    await writeFile(join(project, "package.json"), JSON.stringify({ version: "1.0.0" }));
+    const options = {
+      run: async (argv: string[]) => {
+        if (argv.includes("--list-extensions")) return "agent-kit.agent-kit@1.0.0";
+        installCalls.push(argv);
+        return "";
+      },
+      runStep: async (step: string, argv: string[]) => {
+        buildSteps.push(step);
+        if (step === "Package VSIX") await writeFile(argv.at(-1)!, "vsix");
+        return "";
+      },
+    };
+    const target = { label: "windows", code: "code.exe" } as const;
+    await syncAgentKit({ ...target }, { homeRoot: root, project }, options);
+    const receipt = await readFile(windowsReceipt, "utf8");
+    assert.match(receipt, /^[a-f0-9]{64}\n$/);
+    await assert.rejects(readFile(linuxReceipt), { code: "ENOENT" });
+    await syncAgentKit({ ...target }, { homeRoot: root, project }, options);
+    assert.deepEqual(buildSteps, ["Install dependencies", "Build extension", "Package VSIX"]);
+    assert.deepEqual(installCalls, [
+      ["code.exe", "--install-extension", join(project, "agent-kit.vsix"), "--force"],
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 it("does not change Windows or WSL extensions if listing fails", async () => {

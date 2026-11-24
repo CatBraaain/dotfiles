@@ -15,9 +15,12 @@ describe("runtime paths", () => {
     );
   });
 
-  it("falls back to /run/user on POSIX without XDG_RUNTIME_DIR", () => {
-    assert.equal(linux.runtimeStateRoot({}), `/run/user/${process.getuid!()}`);
-  });
+  it.skipIf(process.platform === "win32")(
+    "falls back to /run/user on POSIX without XDG_RUNTIME_DIR",
+    () => {
+      assert.equal(linux.runtimeStateRoot({}), `/run/user/${process.getuid!()}`);
+    },
+  );
 
   it("rejects a relative POSIX runtime root", () => {
     assert.throws(
@@ -33,21 +36,23 @@ describe("runtime paths", () => {
     );
   });
 
-  it("uses an abstract socket on POSIX and a named pipe on Windows", () => {
-    const key = "abc123";
-    assert.equal(linux.lockAddress(key), `\0pi-mux-${process.getuid!()}-${key}`);
-    assert.equal(windows.lockAddress(key), `\\\\.\\pipe\\pi-mux-${key}`);
+  it.skipIf(process.platform === "win32")("uses an abstract socket on POSIX", () => {
+    assert.equal(linux.lockAddress("abc123"), `\0pi-mux-${process.getuid!()}-abc123`);
+  });
+
+  it("uses a named pipe on Windows", () => {
+    assert.equal(windows.lockAddress("abc123"), "\\\\.\\pipe\\pi-mux-abc123");
   });
 });
 
 describe("directory and file safety", () => {
-  const uid = process.getuid!();
+  const uid = process.getuid?.() ?? 1000;
   const owned = { isDirectory: () => true, uid, mode: 0o700 };
   const foreign = { isDirectory: () => true, uid: uid + 1, mode: 0o700 };
   const groupReadable = { isDirectory: () => true, uid, mode: 0o750 };
   const notDirectory = { isDirectory: () => false, uid, mode: 0o700 };
 
-  it("enforces ownership and mode on POSIX", () => {
+  it.skipIf(process.platform === "win32")("enforces ownership and mode on POSIX", () => {
     linux.assertDirectorySafety(owned, "/runtime");
     for (const stat of [foreign, groupReadable, notDirectory])
       assert.throws(
@@ -65,32 +70,56 @@ describe("directory and file safety", () => {
     );
   });
 
-  it("verifies cache entry ownership on POSIX only", () => {
-    assert.equal(linux.ownedFileEntry(owned), true);
-    assert.equal(linux.ownedFileEntry(groupReadable), false);
+  it.skipIf(process.platform === "win32")(
+    "verifies cache entry ownership and mode on POSIX",
+    () => {
+      assert.equal(linux.ownedFileEntry(owned), true);
+      assert.equal(linux.ownedFileEntry(groupReadable), false);
+    },
+  );
+
+  it("accepts group-readable cache entries on Windows", () => {
     assert.equal(windows.ownedFileEntry(groupReadable), true);
   });
 });
 
 describe("process inspection", () => {
   const dead = (() => {
-    const child = Bun.spawn(["true"]);
+    const child = Bun.spawn([process.execPath, "-e", ""]);
     return { pid: child.pid, exited: child.exited };
   })();
 
-  it("resolves the parent pid on POSIX only", () => {
-    assert.equal(linux.processParentPid(process.pid), process.ppid);
-    assert.equal(windows.processParentPid(process.pid), undefined);
+  it.skipIf(process.platform !== "linux")("resolves the client parent pid on POSIX", async () => {
+    assert.deepEqual(await linux.clientPidsFor(process.ppid, [process.pid]), [process.pid]);
   });
 
-  it("walks the ancestry on POSIX and disables it on Windows", () => {
-    assert.equal(linux.processDescendsFrom(process.pid, process.ppid), true);
-    assert.equal(linux.processDescendsFrom(process.pid, process.pid), true);
-    assert.equal(linux.processDescendsFrom(process.ppid, process.pid), false);
-    assert.equal(linux.processAncestryAvailable, true);
-    assert.equal(windows.processAncestryAvailable, false);
-    assert.equal(windows.processDescendsFrom(process.pid, process.ppid), false);
-  });
+  it.skipIf(process.platform !== "win32")(
+    "matches Windows client PIDs and verified direct children",
+    async () => {
+      const child = Bun.spawn([process.execPath, "-e", "await Bun.sleep(15_000)"]);
+      try {
+        assert.deepEqual(await windows.clientPidsFor(process.pid, [child.pid]), [child.pid]);
+        assert.deepEqual(await windows.clientPidsFor(child.pid, [child.pid]), [child.pid]);
+        assert.deepEqual(await windows.clientPidsFor(process.ppid, [child.pid]), []);
+      } finally {
+        child.kill();
+        await child.exited;
+      }
+    },
+    16_000,
+  );
+
+  it.skipIf(process.platform !== "linux")(
+    "walks the ancestry on POSIX and disables it on Windows",
+    () => {
+      assert.equal(linux.processDescendsFrom(process.pid, process.ppid), true);
+      assert.equal(linux.processDescendsFrom(process.pid, process.pid), true);
+      assert.equal(linux.processDescendsFrom(process.ppid, process.pid), false);
+      assert.equal(linux.processAncestryAvailable, true);
+      assert.equal(windows.processAncestryAvailable, false);
+      assert.equal(windows.processDescendsFrom(process.pid, process.ppid), false);
+    },
+  );
 
   it("checks liveness on both platforms", async () => {
     assert.equal(linux.processIsAlive(process.pid), true);
@@ -133,10 +162,34 @@ describe("shell command generation", () => {
     assert.equal(windows.paneCommand(["C:\\bin\\pi.exe"], []), `& 'C:\\bin\\pi.exe'`);
   });
 
-  it("ignores invalid environment names on Windows", () => {
+  it("only forwards environment names that psmux accepts on Windows", () => {
+    assert.equal(windows.acceptsTmuxEnvironmentKey("PI_MUX_PROBE"), true);
+    assert.equal(windows.acceptsTmuxEnvironmentKey("ProgramFiles(x86)"), false);
+    assert.equal(linux.acceptsTmuxEnvironmentKey("ProgramFiles(x86)"), true);
+  });
+
+  it("restores Windows environment names that psmux cannot accept in the pane", () => {
     assert.equal(
-      windows.paneCommand(["pi"], ["ok_name", "bad name; calc"]),
-      `& { $env:ok_name=$null; & 'pi' }`,
+      windows.paneCommand(["pi"], [], { PATH: "C:\\bin", "ProgramFiles(x86)": "It's here”" }),
+      `& { [Environment]::SetEnvironmentVariable('ProgramFiles(x86)', 'It''s here”'); & 'pi' }`,
+    );
+  });
+
+  it("quotes Windows environment names removed from the pane", () => {
+    assert.equal(
+      windows.paneCommand(["pi"], ["ok_name", "with 'quotes’ and spaces"]),
+      `& { $env:ok_name=$null; [Environment]::SetEnvironmentVariable('with ''quotes’’ and spaces', $null); & 'pi' }`,
+    );
+  });
+
+  it("passes a Windows pane command as PowerShell executable and arguments", () => {
+    const script = `& 'C:\\Program Files\\pi.exe'`;
+    const [executable, ...args] = windows.tmuxPaneCommand(script);
+    assert.match(executable!, /\\powershell\.exe$/i);
+    assert.deepEqual(args.slice(0, -1), ["-NoProfile", "-NonInteractive", "-EncodedCommand"]);
+    assert.equal(
+      Buffer.from(args.at(-1)!, "base64").toString("utf16le"),
+      `${script}; exit $LASTEXITCODE`,
     );
   });
 

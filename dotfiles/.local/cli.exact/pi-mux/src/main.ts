@@ -424,10 +424,12 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return target;
     });
     if (typeof result === "number") return result;
-    const client = Bun.spawn(
-      [config.tmux, "-S", config.socket, "attach-session", "-t", result.session],
-      { env: config.env, stdin: "inherit", stdout: "inherit", stderr: "inherit" },
-    );
+    const client = Bun.spawn(attachCommand(config, result), {
+      env: config.env,
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
     return await client.exited;
   } catch (error) {
     console.error(`pi-mux: ${error instanceof Error ? error.message : String(error)}`);
@@ -436,15 +438,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 }
 
 function printDetachedSession(config: TmuxConfig, target: Pane): void {
-  const attach = platform.quoteCommand([
-    config.tmux,
-    "-S",
-    config.socket,
-    "attach-session",
-    "-t",
-    target.session,
-  ]);
+  const attach = platform.quoteCommand(attachCommand(config, target));
   console.log(`Pi session ${target.id}\nAttach with: ${attach}`);
+}
+
+function attachCommand(config: TmuxConfig, target: Pane): string[] {
+  const sessionTarget = platform.windows ? `=${target.name}` : target.session;
+  return [config.tmux, "-S", config.socket, "attach-session", "-t", sessionTarget];
 }
 
 function mergeSessionLists(active: ListedWorkspace[], history: HistoryEntry[]): UnifiedWorkspace[] {
@@ -1674,6 +1674,7 @@ async function respawnReloadTarget(
   const paneCommand = platform.paneCommand(
     [config.pi, ...selection, "-e", config.extension, "--", `/${startupCommand}`],
     removed,
+    desired,
   );
   const canRespawn = [
     "#{==:#{@pi-mux-restart-veto},}",
@@ -1695,7 +1696,14 @@ async function respawnReloadTarget(
     [
       ...recoveryMarker,
       tmuxArguments(["set-option", "-pu", "-t", pane.pane, "@pi-tmux-session"]),
-      tmuxArguments(["respawn-pane", "-k", "-t", pane.pane, "--", paneCommand]),
+      tmuxArguments([
+        "respawn-pane",
+        "-k",
+        "-t",
+        pane.pane,
+        "--",
+        ...platform.tmuxPaneCommand(paneCommand),
+      ]),
       tmuxArguments(["set-option", "-pu", "-t", pane.pane, "@pi_session_state"]),
       tmuxArguments(["set-option", "-pu", "-t", pane.pane, "@pi-mux-state-source"]),
       tmuxArguments([
@@ -1838,10 +1846,14 @@ async function refreshSessionEnvironment(
     if (key) existing.set(key, line.slice(key.length + 1));
   }
   for (const [key, value] of Object.entries(desired))
-    if (existing.get(key) !== value)
+    if (platform.acceptsTmuxEnvironmentKey(key) && existing.get(key) !== value)
       await tmux(config, ["set-environment", "-t", session, key, value]);
   for (const [key, value] of existing)
-    if (value !== undefined && !Object.hasOwn(desired, key))
+    if (
+      value !== undefined &&
+      !Object.hasOwn(desired, key) &&
+      platform.acceptsTmuxEnvironmentKey(key)
+    )
       await tmux(config, ["set-environment", "-u", "-t", session, key]);
 }
 
@@ -1849,7 +1861,13 @@ async function bootstrapServer(
   config: Config,
   mode: "start" | "existing" = "start",
 ): Promise<string> {
-  if (mode === "start") await tmux(config, ["start-server"]);
+  if (mode === "start") {
+    if (platform.windows) {
+      if (!(await serverLifetime({ ...config, noStart: true }))) {
+        await tmux(config, ["start-server", ";", "set-option", "-g", "exit-empty", "off"]);
+      }
+    } else await tmux(config, ["start-server"]);
+  }
   await tmux(config, ["source-file", config.tmuxConfig]);
   const existing = await serverOption(config, "@pi-mux-generation");
   const generation = existing || randomUUID();
@@ -2159,6 +2177,7 @@ function writeSnapshot(config: TmuxConfig, state: RestoreState): void {
     closeSync(fd);
   }
   renameSync(temporary, snapshotPath(config));
+  if (platform.windows) return;
   const directory = openSync(config.stateDirectory, "r");
   try {
     fsyncSync(directory);
@@ -2547,7 +2566,9 @@ async function createSession(
     ...(session.warm ? { PI_TMUX_STARTUP_MODE: "warm" } : {}),
   };
   const removed = await excludedGlobalEnvironment(config, desired);
-  const environment = Object.entries(desired).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
+  const environment = Object.entries(desired)
+    .filter(([key]) => platform.acceptsTmuxEnvironmentKey(key))
+    .flatMap(([key, value]) => ["-e", `${key}=${value}`]);
   const selection = session.file ? ["--session", session.file] : ["--session-id", session.id];
   const paneCommand = platform.paneCommand(
     [
@@ -2560,6 +2581,7 @@ async function createSession(
         : ["--agent", "main", "--", session.request]),
     ],
     removed,
+    desired,
   );
   const result = await tmux(
     config,
@@ -2581,7 +2603,7 @@ async function createSession(
       String(process.stdout.rows || 24),
       ...environment,
       "--",
-      paneCommand,
+      ...(session.request === undefined ? platform.tmuxPaneCommand(paneCommand) : [paneCommand]),
     ],
     true,
   );
@@ -2759,10 +2781,12 @@ class SwitchResolutionError extends Error {
   }
 }
 
-function clientsMatchingPid(clients: TmuxClient[], clientPid: number): TmuxClient[] {
-  return clients.filter(
-    (client) => client.pid === clientPid || platform.processParentPid(client.pid) === clientPid,
+async function clientsMatchingPid(clients: TmuxClient[], clientPid: number): Promise<TmuxClient[]> {
+  const matchingPids = await platform.clientPidsFor(
+    clientPid,
+    clients.map(({ pid }) => pid),
   );
+  return clients.filter(({ pid }) => matchingPids.includes(pid));
 }
 
 async function resolveClient(
@@ -2770,7 +2794,7 @@ async function resolveClient(
   clientPid: number | undefined,
 ): Promise<TmuxClient> {
   const clients = await tmuxClients(config);
-  const matching = clientPid === undefined ? clients : clientsMatchingPid(clients, clientPid);
+  const matching = clientPid === undefined ? clients : await clientsMatchingPid(clients, clientPid);
   if (matching.length === 1) return matching[0]!;
   const message =
     clientPid === undefined
@@ -2802,7 +2826,7 @@ async function displayedSessions(
   clientPid: number | undefined,
 ): Promise<DisplayedSession[]> {
   const clients = await tmuxClients(config);
-  const matching = clientPid === undefined ? clients : clientsMatchingPid(clients, clientPid);
+  const matching = clientPid === undefined ? clients : await clientsMatchingPid(clients, clientPid);
   if (clientPid !== undefined && matching.length > 1)
     throw new Error(`Multiple tmux clients match process ${clientPid}`);
   if (matching.length === 0) return [];
