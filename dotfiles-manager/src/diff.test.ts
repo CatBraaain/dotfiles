@@ -162,7 +162,7 @@ describe("exclusions", () => {
     await put(distRoot, "remap.data.md", "map\n");
     await put(distRoot, "external.data.yaml", "config\n");
     await put(distRoot, "external.machine-data.yaml", "machine config\n");
-    await put(distRoot, "settings.machine-merge-data.yaml", "machine merge\n");
+    await put(distRoot, "settings.data.machine-merge.yaml", "machine merge\n");
     await put(distRoot, "task.apply.sh", "script\n");
     await put(distRoot, "task.machine-apply.ts", "machine script\n");
 
@@ -170,6 +170,21 @@ describe("exclusions", () => {
 
     assert.deepEqual(result.unchanged, []);
     assert.deepEqual(result.added, []);
+  });
+
+  it("treats combined OS and machine names as ordinary entries", async () => {
+    const ordinaryNames = [
+      "external.linux-machine-data.yaml",
+      "settings.linux-machine-merge.yaml",
+      "settings.linux-machine-merge-existing.yaml",
+      "task.linux-machine-apply.ts",
+      "task.linux-machine-build.ts",
+      "task.linux-machine-postapply.ts",
+      "task.linux-machine-postbuild.ts",
+    ];
+    for (const name of ordinaryNames) await put(distRoot, name, "ordinary\n");
+
+    assertOnly(await diff(), "added", ordinaryNames.toSorted());
   });
 
   it("treats the retired machine sidecar name as an ordinary entry", async () => {

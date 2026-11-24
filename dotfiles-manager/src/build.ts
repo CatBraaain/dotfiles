@@ -89,8 +89,7 @@ async function copyDir(
   await router.enter(sourceDir, destinationDir);
   await mkdir(destinationDir, { recursive: true });
   for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
-    if (entry.name.endsWith(".ignore") || (entry.isDirectory() && entry.name === "node_modules"))
-      continue;
+    if (entry.name.endsWith(".ignore")) continue;
 
     const route = await router.route(entry.name, entry.isFile());
     if (route.kind === "skip") continue;

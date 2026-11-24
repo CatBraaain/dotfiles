@@ -5,7 +5,6 @@ import { existsSync } from "node:fs";
 import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { homeRelPath } from "./home-path.ts";
-import { machineMergeDataTarget } from "./path-mapping.ts";
 import { parse as parseIni, stringify as stringifyIni } from "js-ini";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { isMap, isNode, isScalar, parseDocument, visit, type Document, type YAMLMap } from "yaml";
@@ -36,7 +35,8 @@ type MergeTarget = { outputPath: string; format: FileFormat; sidecarPaths: strin
 const mergeOps = new Set<MergeOp>(["append", "remove", "replace", "unset"]);
 const operationKeyPattern = new RegExp(`^(.+)\\.\\$(${[...mergeOps].join("|")})$`);
 const sidecarPattern =
-  /\.(?:(linux|macos|windows)-)?(machine-)?(merge|merge-existing)\.(json|yaml|toml|ini)$/;
+  /\.(?:(linux|macos|windows)-|machine-)?(?:merge|merge-existing)\.(json|yaml|toml|ini)$/;
+const machineDataSidecarSuffix = ".data.machine-merge.yaml";
 const iniReservedNames = new Set([...Object.getOwnPropertyNames(Object.prototype), "prototype"]);
 const jsonNumberPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 const rawJson = JSON as typeof JSON & {
@@ -59,6 +59,12 @@ const fileFormats = {
     },
   },
 } as const;
+
+function machineMergeDataTarget(name: string): string | undefined {
+  if (name.length <= machineDataSidecarSuffix.length || !name.endsWith(machineDataSidecarSuffix))
+    return undefined;
+  return name.slice(0, -machineDataSidecarSuffix.length) + ".data.yaml";
+}
 
 export async function mergeMachineData(distDir: string): Promise<void> {
   const entries = await collectEntries(distDir);
@@ -120,14 +126,12 @@ async function composeMergeTarget(
     "merge-existing",
     `${platform}-merge-existing`,
     "machine-merge",
-    `${platform}-machine-merge`,
     "machine-merge-existing",
-    `${platform}-machine-merge-existing`,
   ];
   const sidecars = suffixes
     .filter((suffix) => hasHome || !suffix.includes("merge-existing"))
     .map((suffix) => `${stem}.${suffix}.${target.format}`)
-    .filter((path) => existsSync(path));
+    .filter((path) => machineMergeDataTarget(basename(path)) === undefined && existsSync(path));
 
   if (sidecars.length > 0) {
     const basePath = hasBase ? target.outputPath : homePath;
@@ -162,7 +166,7 @@ async function collectMergeTargets(distDir: string, platform: string): Promise<M
   for (const entry of await collectEntries(distDir)) {
     const name = basename(entry.path);
     const match = sidecarPattern.exec(name);
-    if (entry.isDirectory || !match) continue;
+    if (entry.isDirectory || !match || machineMergeDataTarget(name) !== undefined) continue;
     // OS modifiers apply only on the matching platform (spec: SPEC.md
     // §build: merge変換); on other platforms the sidecar is absent — remove
     // it from dist like any other sidecar.
@@ -172,7 +176,7 @@ async function collectMergeTargets(distDir: string, platform: string): Promise<M
       continue;
     }
 
-    const format = match[4] as FileFormat;
+    const format = match[2] as FileFormat;
     const outputPath = join(dirname(entry.path), name.replace(sidecarPattern, `.${format}`));
     const target = targets.get(outputPath) ?? {
       outputPath,

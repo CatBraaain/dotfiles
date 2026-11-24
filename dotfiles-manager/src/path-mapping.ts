@@ -14,16 +14,12 @@ export function currentPlatform(): Platform {
       : "linux";
 }
 
-// Build and apply hooks stay in dist and are not copied to home.
-// Modifier order is fixed: [platform-][machine-] before the point name
-// (spec: SPEC.md §フックシステム).
-const buildHookNamePattern = /\.(?:(linux|macos|windows)-)?(machine-)?(?:post)?build\.[^.]+$/;
-const applyScriptNamePattern = /\.(?:(linux|macos|windows)-)?(machine-)?(?:post)?apply\.[^.]+$/;
-const postHookNamePattern = /\.(?:(linux|macos|windows)-)?(machine-)?post(?:build|apply)\.[^.]+$/;
+const buildHookNamePattern = /\.(?:(?:linux|macos|windows|machine)-)?(?:post)?build\.[^.]+$/;
+const applyScriptNamePattern = /\.(?:(?:linux|macos|windows|machine)-)?(?:post)?apply\.[^.]+$/;
+const postHookNamePattern = /\.(?:(?:linux|macos|windows|machine)-)?post(?:build|apply)\.[^.]+$/;
 // The OS modifier only applies when it matches the current platform
 // (spec: SPEC.md §フックシステム); callers filter by the current platform.
-const hookPlatformPattern =
-  /\.(?:(linux|macos|windows)-)(?:machine-)?(?:post)?(?:build|apply)\.[^.]+$/;
+const hookPlatformPattern = /\.(linux|macos|windows)-(?:post)?(?:build|apply)\.[^.]+$/;
 
 export function hookPlatform(name: string): Platform | undefined {
   const modifier = hookPlatformPattern.exec(name)?.[1];
@@ -52,16 +48,7 @@ export type SegmentMapping = {
   isExcluded: boolean;
 };
 
-// External data files keep the shared name plus the platform/machine
-// modifiers: external.[<platform>-][machine-]data.yaml (spec: SPEC.md §build: 外部取得).
-const externalDataNamePattern = /^external\.(?:(linux|macos|windows)-)?(machine-)?data\.yaml$/;
-const machineMergeDataSuffix = ".machine-merge-data.yaml";
-
-export function machineMergeDataTarget(name: string): string | undefined {
-  if (name.length <= machineMergeDataSuffix.length || !name.endsWith(machineMergeDataSuffix))
-    return undefined;
-  return `${name.slice(0, -machineMergeDataSuffix.length)}.data.yaml`;
-}
+const externalDataNamePattern = /^external\.(?:(?:linux|macos|windows|machine)-)?data\.yaml$/;
 
 export function mapSegment(name: string, isDirectory: boolean): SegmentMapping {
   // .data. marks build-time data files (path map, external config, machine
@@ -70,10 +57,7 @@ export function mapSegment(name: string, isDirectory: boolean): SegmentMapping {
     excludedEntryPrefixes.some((prefix) => name.startsWith(prefix)) ||
     name.includes(".data.") ||
     externalDataNamePattern.test(name) ||
-    (!isDirectory &&
-      (machineMergeDataTarget(name) !== undefined ||
-        isApplyScriptName(name) ||
-        isBuildHookName(name)));
+    (!isDirectory && (isApplyScriptName(name) || isBuildHookName(name)));
   if (isExcluded)
     return {
       homeName: name,

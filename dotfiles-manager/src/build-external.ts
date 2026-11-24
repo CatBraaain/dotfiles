@@ -135,18 +135,16 @@ export async function applyExternals(
   }
 }
 
-export async function loadExternalConfig(configPath: string, platform: string): Promise<ExternalConfig> {
+export async function loadExternalConfig(
+  configPath: string,
+  platform: string,
+): Promise<ExternalConfig> {
   const repos = await readExternalRepos(configPath);
   // Replacement layers per repo key, later ones win (spec: SPEC.md §build: 外部取得):
-  // shared -> platform layer (matching build platform only) -> machine layer
-  // -> platform machine layer.
+  // shared -> platform layer (matching build platform only) -> machine layer.
   const dir = dirname(configPath);
   const byRepo = new Map(repos.map((repo) => [repo.repo, repo]));
-  const replacementNames = [
-    `external.${platform}-data.yaml`,
-    "external.machine-data.yaml",
-    `external.${platform}-machine-data.yaml`,
-  ];
+  const replacementNames = [`external.${platform}-data.yaml`, externalMachineFileName];
   for (const name of replacementNames) {
     const path = join(dir, name);
     if (!existsSync(path)) continue;

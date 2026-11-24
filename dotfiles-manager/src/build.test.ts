@@ -226,27 +226,39 @@ describe("run", () => {
     ["linux", "linux"],
     ["windows", "windows"],
     ["darwin", "macos"],
-  ] as const)("collects only shared and matching build hooks on %s", async (platform, modifier) => {
-    const hookPrefixes = ["common.", "hook.linux-", "hook.windows-", "hook.macos-"];
-    await Promise.all(
-      hookPrefixes.flatMap((prefix) => [
-        put(distRoot, `${prefix}build.ts`, ""),
-        put(distRoot, `${prefix}postbuild.ts`, ""),
-      ]),
-    );
+  ] as const)(
+    "collects shared, machine and matching OS build hooks on %s",
+    async (platform, modifier) => {
+      const hookPrefixes = [
+        "common.",
+        "hook.linux-",
+        "hook.windows-",
+        "hook.macos-",
+        "machine.machine-",
+        `unrecognized.${modifier}-machine-`,
+      ];
+      await Promise.all(
+        hookPrefixes.flatMap((prefix) => [
+          put(distRoot, `${prefix}build.ts`, ""),
+          put(distRoot, `${prefix}postbuild.ts`, ""),
+        ]),
+      );
 
-    const hooks = await collectHooks(distRoot, platform);
+      const hooks = await collectHooks(distRoot, platform);
 
-    assert.deepEqual(
-      hooks.map((hook) => hook.name),
-      [
-        "common.build.ts",
-        `hook.${modifier}-build.ts`,
-        "common.postbuild.ts",
-        `hook.${modifier}-postbuild.ts`,
-      ],
-    );
-  });
+      assert.deepEqual(
+        hooks.map((hook) => hook.name),
+        [
+          "common.build.ts",
+          `hook.${modifier}-build.ts`,
+          "machine.machine-build.ts",
+          "common.postbuild.ts",
+          `hook.${modifier}-postbuild.ts`,
+          "machine.machine-postbuild.ts",
+        ],
+      );
+    },
+  );
 
   it("runs a windows-build hook only on the Windows build", async () => {
     await put(
@@ -262,17 +274,45 @@ describe("run", () => {
     assert.equal(await readFile(join(distRoot, "ran.txt"), "utf8"), "windows\n");
   });
 
-  it("skips node_modules directories without excluding files of the same name", async () => {
-    await put(root, "dotfiles/node_modules/pkg/index.js", "excluded\n");
-    await put(root, "dotfiles/nested/node_modules/pkg/index.js", "excluded\n");
+  it("copies node_modules when no remap rule excludes it", async () => {
+    await put(root, "dotfiles/node_modules/pkg/index.js", "kept\n");
+    await put(root, "dotfiles/nested/node_modules/pkg/index.js", "kept\n");
     await put(root, "dotfiles/other/node_modules", "kept\n");
 
     await main(root, "linux", homeRoot);
 
-    assert.equal(existsSync(join(distRoot, "node_modules")), false);
-    assert.equal(existsSync(join(distRoot, "nested/node_modules")), false);
+    assert.equal(await readFile(join(distRoot, "node_modules/pkg/index.js"), "utf8"), "kept\n");
+    assert.equal(
+      await readFile(join(distRoot, "nested/node_modules/pkg/index.js"), "utf8"),
+      "kept\n",
+    );
     assert.equal(await readFile(join(distRoot, "other/node_modules"), "utf8"), "kept\n");
   });
+
+  it.each(["linux", "windows", "darwin"] as const)(
+    "excludes paths matching the node_modules remap glob during the copy on %s",
+    async (platform) => {
+      await put(
+        root,
+        "dotfiles/remap.data.md",
+        "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| **/node_modules | - | - | - |\n",
+      );
+      const excludedPaths = ["node_modules", "nested/node_modules", "other/node_modules"];
+      await put(root, "dotfiles/node_modules/pkg/index.js", "excluded\n");
+      await put(root, "dotfiles/nested/node_modules/pkg/index.js", "excluded\n");
+      await put(root, "dotfiles/other/node_modules", "excluded\n");
+
+      let copiedPaths: string[] | undefined;
+      await main(root, platform, homeRoot, {
+        onPhase(phase) {
+          if (phase === "rebuild dist")
+            copiedPaths = excludedPaths.filter((path) => existsSync(join(distRoot, path)));
+        },
+      });
+
+      assert.deepEqual(copiedPaths, []);
+    },
+  );
 
   it("skips entries ending in .ignore", async () => {
     await put(root, "dotfiles/plain.txt", "plain\n");
@@ -884,7 +924,7 @@ replacements:
     );
     await put(
       root,
-      "dotfiles/source/settings.machine-merge-data.yaml",
+      "dotfiles/source/settings.data.machine-merge.yaml",
       "nested: {machine: true}\nitems.$append: [machine]\n",
     );
 
@@ -895,26 +935,36 @@ replacements:
       nested: { shared: true, machine: true },
       items: ["base", "machine"],
     });
-    assert.equal(existsSync(join(distRoot, "moved/settings.machine-merge-data.yaml")), false);
+    assert.equal(existsSync(join(distRoot, "moved/settings.data.machine-merge.yaml")), false);
   });
 
   it("does not read a machine data sidecar when its base is absent from dist", async () => {
     await put(homeRoot, "settings.data.yaml", "from: home\n");
-    await put(root, "dotfiles/settings.machine-merge-data.yaml", "[\n");
+    await put(root, "dotfiles/settings.data.machine-merge.yaml", "[\n");
 
     await main(root, "linux", homeRoot);
 
     assert.equal(existsSync(join(distRoot, "settings.data.yaml")), false);
   });
 
+  it("does not use the early sidecar in a later merge that creates its base", async () => {
+    await put(root, "dotfiles/settings.data.machine-merge.yaml", "[\n");
+    await put(root, "dotfiles/settings.data.merge.yaml", "from: late\n");
+
+    await main(root, "linux", homeRoot);
+
+    const merged = parseYaml(await readFile(join(distRoot, "settings.data.yaml"), "utf8"));
+    assert.deepEqual(merged, { from: "late" });
+  });
+
   it("stops before external acquisition when a machine data sidecar is invalid", async () => {
     await put(root, "dotfiles/settings.data.yaml", "shared: true\n");
-    await put(root, "dotfiles/settings.machine-merge-data.yaml", "[\n");
+    await put(root, "dotfiles/settings.data.machine-merge.yaml", "[\n");
     const phases: string[] = [];
 
     await assert.rejects(
       main(root, "linux", homeRoot, { onPhase: (phase) => phases.push(phase) }),
-      /machine data merge failed: settings\.machine-merge-data\.yaml/,
+      /machine data merge failed: settings\.data\.machine-merge\.yaml/,
     );
     assert.deepEqual(phases, ["rebuild dist", "path map"]);
   });
@@ -942,7 +992,7 @@ replacements:
     );
     await put(
       root,
-      "dotfiles/external.machine-merge-data.yaml",
+      "dotfiles/external.data.machine-merge.yaml",
       `repos:
   example/edited:
     exclude: [files/skip.txt]
@@ -979,14 +1029,14 @@ replacements:
     );
     assert.equal(await readFile(join(distRoot, "output/extra.txt"), "utf8"), "extra\n");
     assert.equal(existsSync(join(distRoot, "output/files/skip.txt")), false);
-    assert.equal(existsSync(join(distRoot, "external.machine-merge-data.yaml")), false);
+    assert.equal(existsSync(join(distRoot, "external.data.machine-merge.yaml")), false);
   });
 
   it("rejects duplicate literal edit keys in a dedicated external data sidecar", async () => {
     await put(root, "dotfiles/external.data.yaml", "repos: {}\n");
     await put(
       root,
-      "dotfiles/external.machine-merge-data.yaml",
+      "dotfiles/external.data.machine-merge.yaml",
       `repos:
   example/edited:
     edit_markdown:
@@ -999,11 +1049,11 @@ replacements:
 
     await assert.rejects(
       main(root, "linux", homeRoot),
-      /machine data merge failed: external\.machine-merge-data\.yaml: duplicate external config key: Note\.\$replace/,
+      /machine data merge failed: external\.data\.machine-merge\.yaml: duplicate external config key: Note\.\$replace/,
     );
   });
 
-  it("keeps the ordinary external data sidecar and its patch operations after acquisition", async () => {
+  it("keeps the shared external data sidecar and its patch operations after acquisition", async () => {
     await put(
       root,
       "dotfiles/external.data.yaml",
@@ -1018,12 +1068,12 @@ replacements:
     );
     await put(
       root,
-      "dotfiles/external.machine-merge-data.yaml",
+      "dotfiles/external.data.machine-merge.yaml",
       "repos: {example/edited: {destination: early}}\n",
     );
     await put(
       root,
-      "dotfiles/external.data.machine-merge.yaml",
+      "dotfiles/external.data.merge.yaml",
       `repos:
   example/edited:
     destination: late
@@ -1057,8 +1107,8 @@ replacements:
       "dotfiles/rime/external.machine-data.yaml",
       "dotfiles/.agents/skills.exact/external.machine-data.yaml",
       "dotfiles/other/nested/external.machine-data.yaml",
-      "dotfiles/external.machine-merge-data.yaml",
-      "dotfiles/other/nested/settings.machine-merge-data.yaml",
+      "dotfiles/external.data.machine-merge.yaml",
+      "dotfiles/other/nested/settings.data.machine-merge.yaml",
     ]) {
       const result = Bun.spawnSync([
         "git",
@@ -1095,7 +1145,7 @@ replacements:
     );
     await put(
       root,
-      "dotfiles/external.machine-merge-data.yaml",
+      "dotfiles/external.data.machine-merge.yaml",
       "repos: {example/repo: {exclude: [machine.txt]}}\n",
     );
     await put(
@@ -1128,12 +1178,13 @@ replacements:
     assert.equal(existsSync(join(distRoot, "old/old.txt")), false);
   });
 
-  for (const overlay of ["external.macos-data.yaml", "external.macos-machine-data.yaml"]) {
-    it.each([
-      ["darwin", "macos", "shared"],
-      ["linux", "shared", "macos"],
-      ["windows", "shared", "macos"],
-    ] as const)(`selects ${overlay} only for macOS (%s)`, async (platform, selected, ignored) => {
+  it.each([
+    ["darwin", "macos", "shared"],
+    ["linux", "shared", "macos"],
+    ["windows", "shared", "macos"],
+  ] as const)(
+    "selects external.macos-data.yaml only for macOS (%s)",
+    async (platform, selected, ignored) => {
       await put(
         root,
         "dotfiles/external.data.yaml",
@@ -1141,7 +1192,7 @@ replacements:
       );
       await put(
         root,
-        `dotfiles/${overlay}`,
+        "dotfiles/external.macos-data.yaml",
         "repos:\n  example/repo:\n    destination: macos\n    entries: [payload.txt]\n",
       );
       await put(homeRoot, "mirrors/github.com/example/repo/payload.txt", "payload\n");
@@ -1155,8 +1206,29 @@ replacements:
 
       assert.equal(await readFile(join(distRoot, selected, "payload.txt"), "utf8"), "payload\n");
       assert.equal(existsSync(join(distRoot, ignored, "payload.txt")), false);
+    },
+  );
+
+  it("does not use combined OS and machine names as external or merge inputs", async () => {
+    await put(root, "dotfiles/external.data.yaml", "repos: {}\n");
+    await put(root, "dotfiles/settings.merge.yaml", "from: shared\n");
+    await put(homeRoot, "settings.yaml", "home: true\n");
+    const ordinaryNames = [
+      "external.linux-machine-data.yaml",
+      "settings.linux-machine-merge.yaml",
+      "settings.linux-machine-merge-existing.yaml",
+    ];
+    for (const name of ordinaryNames) await put(root, `dotfiles/${name}`, "[\n");
+
+    await main(root, "linux", homeRoot);
+
+    assert.deepEqual(parseYaml(await readFile(join(distRoot, "settings.yaml"), "utf8")), {
+      home: true,
+      from: "shared",
     });
-  }
+    for (const name of ordinaryNames)
+      assert.equal(await readFile(join(distRoot, name), "utf8"), "[\n", name);
+  });
 
   for (const { name, mode } of [
     { name: "runs run_after after a successful isolated external clone", mode: "clone" },
