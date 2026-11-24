@@ -193,6 +193,100 @@ describe("shell command generation", () => {
     );
   });
 
+  it("passes all POSIX new-session assignments through unchanged", () => {
+    const launch = linux.newSessionLaunch(["pi"], { Path: "/bin", "other-name": "value" }, []);
+    assert.deepEqual(launch.environmentArgs, ["-e", "Path=/bin", "-e", "other-name=value"]);
+    assert.equal(launch.paneCommand, linux.paneCommand(["pi"], []));
+  });
+
+  it("uses only psmux-compatible names for Windows new-session assignments", () => {
+    const value = "C:\\Program Files (x86)";
+    const launch = windows.newSessionLaunch(
+      ["pi"],
+      { Path: "C:\\bin", "ProgramFiles(x86)": value },
+      [],
+    );
+    assert.deepEqual(launch.environmentArgs.slice(0, 2), ["-e", "Path=C:\\bin"]);
+    assert.equal(launch.environmentArgs.length, 4);
+    assert.equal(launch.environmentArgs[2], "-e");
+    const [key, encoded] = launch.environmentArgs[3]!.split(/=(.*)/s);
+    assert.match(key!, /^[A-Za-z_][A-Za-z0-9_]*$/);
+    assert.ok(encoded);
+    const encodedCommand = windows.tmuxPaneCommand(launch.paneCommand).at(-1)!;
+    const script = Buffer.from(encodedCommand, "base64").toString("utf16le");
+    assert.ok(!script.includes(value));
+    assert.ok(!script.includes(encoded));
+  });
+
+  it("leaves the Windows pane command unchanged when no names need transport", () => {
+    const launch = windows.newSessionLaunch(["pi"], { Path: "C:\\bin" }, ["TMUX"]);
+    assert.deepEqual(launch.environmentArgs, ["-e", "Path=C:\\bin"]);
+    assert.equal(launch.paneCommand, windows.paneCommand(["pi"], ["TMUX"]));
+  });
+
+  const powerShell = Bun.which("pwsh") ?? Bun.which("powershell");
+  it.skipIf(!powerShell)(
+    "restores Windows names as literal data and hides the transport from pi",
+    async () => {
+      const value = "C:\\Program Files (x86)\\日本語'\"; $name = data\n";
+      const envKey = "ProgramFiles(x86)";
+      const staleKey = "CommonProgramFiles(x86)";
+      const dateKey = "2025-01-02T03:04:05Z";
+      const probe = `console.log(JSON.stringify([process.env['${envKey}'], process.env['${staleKey}'], process.env['${dateKey}'], Object.keys(process.env).some(name => name.startsWith('PI_TMUX_ENV_'))]))`;
+      const launch = windows.newSessionLaunch(
+        [process.execPath, "-e", probe],
+        { [envKey]: value, [dateKey]: dateKey },
+        [staleKey],
+      );
+      const assignment = launch.environmentArgs[1]!;
+      const equalsAt = assignment.indexOf("=");
+      const transportKey = assignment.slice(0, equalsAt);
+      const pane = Bun.spawn(
+        [powerShell!, ...windows.tmuxPaneCommand(launch.paneCommand).slice(1)],
+        {
+          env: {
+            ...process.env,
+            [envKey]: "old",
+            [staleKey]: "old",
+            [transportKey]: assignment.slice(equalsAt + 1),
+          },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(pane.stdout).text(),
+        new Response(pane.stderr).text(),
+        pane.exited,
+      ]);
+      assert.equal(code, 0, stderr);
+      assert.deepEqual(JSON.parse(stdout), [value, null, dateKey, false]);
+    },
+  );
+
+  it.skipIf(!powerShell)(
+    "does not launch pi when the Windows environment transport is missing",
+    async () => {
+      const launch = windows.newSessionLaunch(
+        [process.execPath, "-e", "console.log('launched')"],
+        { "ProgramFiles(x86)": "C:\\Program Files (x86)" },
+        [],
+      );
+      const pane = Bun.spawn(
+        [powerShell!, ...windows.tmuxPaneCommand(launch.paneCommand).slice(1)],
+        { stdout: "pipe", stderr: "pipe" },
+      );
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(pane.stdout).text(),
+        new Response(pane.stderr).text(),
+        pane.exited,
+      ]);
+      assert.notEqual(code, 0);
+      assert.equal(stdout, "");
+      assert.match(stderr, /Cannot restore pi-mux session environment/);
+    },
+  );
+
   it("builds POSIX hook commands with environment assignments", () => {
     assert.equal(
       linux.hookCommand(["/usr/bin/pi-mux", "snapshot"], { HOME: "/home/u", PATH: "/bin" }),

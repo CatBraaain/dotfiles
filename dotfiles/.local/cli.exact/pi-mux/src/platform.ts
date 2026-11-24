@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, win32 } from "node:path";
@@ -70,6 +71,64 @@ async function windowsChildPids(parentPid: number, clientPids: number[]): Promis
   } catch (error) {
     throw new Error(`Cannot verify Windows client parent process ${parentPid}`, { cause: error });
   }
+}
+
+const WINDOWS_ENVIRONMENT_KEY_PATTERN = /^[^=\0]+$/;
+const WINDOWS_ENVIRONMENT_TEXT_PREFIX = "=";
+const WINDOWS_SET_EMPTY_ENVIRONMENT_MEMBER =
+  '[DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)] ' +
+  "public static extern bool SetEnvironmentVariableW(string name, string value);";
+
+function sessionEnvironmentArgs(entries: [string, string][]): string[] {
+  return entries.flatMap(([name, value]) => ["-e", `${name}=${value}`]);
+}
+
+function restoreWindowsEnvironment(transportKey: string): string {
+  const prefixLength = WINDOWS_ENVIRONMENT_TEXT_PREFIX.length;
+  return [
+    `$encodedEnvironment = $env:${transportKey};`,
+    `$env:${transportKey} = $null;`,
+    "try {",
+    "  if (!$encodedEnvironment) { throw 'Missing transport' };",
+    "  $json = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedEnvironment));",
+    "  $entries = ConvertFrom-Json -InputObject $json -ErrorAction Stop;",
+    "  if (!$entries) { throw 'Empty transport' };",
+    "  foreach ($entry in $entries) {",
+    `    $name = $entry.name.Substring(${prefixLength});`,
+    "    if ($null -eq $entry.value) {",
+    "      [Environment]::SetEnvironmentVariable($name, [NullString]::Value); continue",
+    "    };",
+    `    $value = $entry.value.Substring(${prefixLength});`,
+    "    [Environment]::SetEnvironmentVariable($name, $value);",
+    "    if ($value.Length -eq 0 -and $null -eq [Environment]::GetEnvironmentVariable($name)) {",
+    "      if (!('PiMux.NativeEnvironment' -as [type])) {",
+    `        Add-Type -Name NativeEnvironment -Namespace PiMux -MemberDefinition ${powerShellLiteral(WINDOWS_SET_EMPTY_ENVIRONMENT_MEMBER)} -ErrorAction Stop`,
+    "      };",
+    "      if (![PiMux.NativeEnvironment]::SetEnvironmentVariableW($name, $value)) {",
+    "        throw 'Cannot set an empty environment variable'",
+    "      }",
+    "    }",
+    "  }",
+    "} catch { throw 'Cannot restore pi-mux session environment' }",
+  ].join(" ");
+}
+
+function windowsPaneCommand(
+  command: string[],
+  unsetEnvironment: string[],
+  transportKey?: string,
+): string {
+  const steps = unsetEnvironment
+    .filter((name) => ENVIRONMENT_KEY_PATTERN.test(name))
+    .map((name) => `$env:${name}=$null`);
+  if (transportKey) steps.push(restoreWindowsEnvironment(transportKey));
+  const invocation = ["&", ...command.map(powerShellLiteral)].join(" ");
+  if (steps.length === 0) return invocation;
+  return `& { ${[...steps, invocation].join("; ")} }`;
+}
+
+function needsWindowsEnvironmentTransport(name: string): boolean {
+  return WINDOWS_ENVIRONMENT_KEY_PATTERN.test(name) && !ENVIRONMENT_KEY_PATTERN.test(name);
 }
 
 export function platformFor(platformName: string) {
@@ -186,6 +245,49 @@ export function platformFor(platformName: string) {
       return ["/usr/bin/env", ...unsetEnvironment.flatMap((key) => ["-u", key]), ...command]
         .map(shLiteral)
         .join(" ");
+    },
+    newSessionLaunch(
+      command: string[],
+      environment: Record<string, string>,
+      unsetEnvironment: string[],
+    ) {
+      const entries = Object.entries(environment);
+      if (!windows) {
+        return {
+          environmentArgs: sessionEnvironmentArgs(entries),
+          paneCommand: this.paneCommand(command, unsetEnvironment),
+          transportKey: undefined,
+        };
+      }
+
+      // psmux new-session -e rejects valid Windows names like ProgramFiles(x86): https://github.com/marlocarlo/psmux/blob/7d7dd94ca919b6111774150fbbd18bba325fd0f1/src/util.rs#L954-L967
+      const environmentArgs = sessionEnvironmentArgs(
+        entries.filter(([name]) => ENVIRONMENT_KEY_PATTERN.test(name)),
+      );
+      const transported = [
+        ...unsetEnvironment
+          .filter(needsWindowsEnvironmentTransport)
+          .map((name) => ({ name: WINDOWS_ENVIRONMENT_TEXT_PREFIX + name, value: null })),
+        ...entries
+          .filter(([name]) => needsWindowsEnvironmentTransport(name))
+          .map(([name, value]) => ({
+            name: WINDOWS_ENVIRONMENT_TEXT_PREFIX + name,
+            value: WINDOWS_ENVIRONMENT_TEXT_PREFIX + value,
+          })),
+      ];
+
+      let transportKey: string | undefined;
+      if (transported.length > 0) {
+        transportKey = `PI_TMUX_ENV_${randomUUID().replaceAll("-", "")}`;
+        const encoded = Buffer.from(JSON.stringify(transported), "utf8").toString("base64");
+        environmentArgs.push("-e", `${transportKey}=${encoded}`);
+      }
+
+      return {
+        environmentArgs,
+        paneCommand: windowsPaneCommand(command, unsetEnvironment, transportKey),
+        transportKey,
+      };
     },
     tmuxPaneCommand(script: string): string[] {
       if (!windows) return [script];

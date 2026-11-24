@@ -2566,11 +2566,8 @@ async function createSession(
     ...(session.warm ? { PI_TMUX_STARTUP_MODE: "warm" } : {}),
   };
   const removed = await excludedGlobalEnvironment(config, desired);
-  const environment = Object.entries(desired)
-    .filter(([key]) => platform.acceptsTmuxEnvironmentKey(key))
-    .flatMap(([key, value]) => ["-e", `${key}=${value}`]);
   const selection = session.file ? ["--session", session.file] : ["--session-id", session.id];
-  const paneCommand = platform.paneCommand(
+  const launch = platform.newSessionLaunch(
     [
       config.pi,
       ...selection,
@@ -2580,8 +2577,8 @@ async function createSession(
         ? ["--", `/${startupCommand}`]
         : ["--agent", "main", "--", session.request]),
     ],
-    removed,
     desired,
+    removed,
   );
   const result = await tmux(
     config,
@@ -2601,9 +2598,11 @@ async function createSession(
       String(process.stdout.columns || 80),
       "-y",
       String(process.stdout.rows || 24),
-      ...environment,
+      ...launch.environmentArgs,
       "--",
-      ...(session.request === undefined ? platform.tmuxPaneCommand(paneCommand) : [paneCommand]),
+      ...(session.request === undefined
+        ? platform.tmuxPaneCommand(launch.paneCommand)
+        : [launch.paneCommand]),
     ],
     true,
   );
@@ -2618,6 +2617,8 @@ async function createSession(
       !/^[1-9]\d*$/.test(pid)
     )
       throw new Error("Cannot identify the created tmux session and pane");
+    if (launch.transportKey)
+      await tmux(config, ["set-environment", "-u", "-t", target, launch.transportKey]);
     if (!platform.processIsAlive(Number(pid)))
       throw new Error(`pi exited before launch was recorded: ${session.id}`);
     await tmux(config, [
