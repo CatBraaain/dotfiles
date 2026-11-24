@@ -13,9 +13,11 @@ import assert from "node:assert/strict";
 import {
   buildPrompt,
   dispatcherName,
+  DispatchInventoryUnavailable,
   formatDispatchers,
   hasSession,
   parseDispatchArgs,
+  parseWindowsDispatchInventory,
   planTick,
   run,
   sessionName,
@@ -24,6 +26,63 @@ import {
   type RunDeps,
   type TicketSnapshot,
 } from "./dispatch";
+
+describe("Windows dispatch inventory", () => {
+  it("rejects a partial or duplicate result instead of reducing the tracked session count", () => {
+    const session = { name: "handle_old", project: "a", ticketId: "20260626-123456", created: 17 };
+    const inventory = (sessions: unknown[]) => JSON.stringify({ sessions });
+    assert.deepEqual(parseWindowsDispatchInventory(inventory([session])), [session]);
+    assert.throws(
+      () => parseWindowsDispatchInventory(inventory([session, { name: "handle_other" }])),
+      /Malformed/,
+    );
+    assert.throws(() => parseWindowsDispatchInventory(inventory([session, session])), /duplicate/);
+    assert.throws(() => parseWindowsDispatchInventory("{}"), /Malformed/);
+  });
+
+  it("defers releasing capacity and launching until an authoritative inventory returns", async () => {
+    const ticket = { id: "existing", status: "open", actionable: true };
+    const candidate = { id: "candidate", status: "open", actionable: true };
+    const trace: string[] = [];
+    let snapshot = 0;
+    await run({
+      options: { max: 1 },
+      async loadSnapshot() {
+        if (snapshot >= 3)
+          return [
+            { ...ticket, status: "closed", actionable: false },
+            { ...candidate, status: "closed", actionable: false },
+          ];
+        return [ticket, candidate];
+      },
+      async readPiSessions() {
+        trace.push(`inventory ${snapshot}`);
+        if (snapshot === 1) throw new DispatchInventoryUnavailable("inventory incomplete");
+        if (snapshot === 0 || snapshot === 2) return new Map([["retained", ticket.id]]);
+        return new Map();
+      },
+      launch(id) {
+        trace.push(`launch ${id}`);
+        return "new";
+      },
+      async sleepMs() {
+        snapshot++;
+      },
+      log(line) {
+        trace.push(line);
+      },
+    });
+    assert.deepEqual(
+      trace.filter((line) => /^(?:inventory|launch)/.test(line)),
+      ["inventory 0", "inventory 1", "inventory incomplete", "inventory 2", "inventory 3"],
+    );
+    assert.ok(trace.includes("done existing status=closed"));
+    assert.equal(
+      trace.some((line) => line.startsWith("incomplete ")),
+      false,
+    );
+  });
+});
 
 describe("sessionName", () => {
   it("prefixes the id and replaces dots with underscores", () => {
@@ -429,6 +488,10 @@ describe("fixed prompt asset", () => {
     mkdirSync(sourceDir);
     copyFileSync(join(import.meta.dir, "dispatch.ts"), join(sourceDir, "dispatch.ts"));
     copyFileSync(join(import.meta.dir, "lock-history.ts"), join(sourceDir, "lock-history.ts"));
+    copyFileSync(
+      join(import.meta.dir, "windows-dispatch.ts"),
+      join(sourceDir, "windows-dispatch.ts"),
+    );
     copyFileSync(join(import.meta.dir, "../dispatch-prompt.md"), join(home, "dispatch-prompt.md"));
     copyFileSync(
       join(import.meta.dir, "../dispatch-locked-prompt.md"),

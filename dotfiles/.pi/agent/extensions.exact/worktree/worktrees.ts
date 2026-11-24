@@ -1,15 +1,28 @@
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, isAbsolute } from "node:path";
 import { quote } from "shell-quote";
 import { splitCommandSegments } from "../guardrails/config.ts";
 
-export type BashQuery = (command: string) => Promise<string>;
 export type WorktreeAction = "add" | "move" | "remove";
-export interface WorktreeScope {
-  cwd: string;
-  actions: WorktreeAction[];
+export interface WorktreeSnapshotRequest {
+  shellDirectories: string[];
+  gitDirectories: string[];
   paths: string[];
+}
+export interface WorktreeScope extends WorktreeSnapshotRequest {
+  actions: WorktreeAction[];
+  destinationIndexes: number[];
+}
+export type SnapshotQuery = (request: WorktreeSnapshotRequest) => Promise<WorktreeSnapshot>;
+
+export class WorktreeDirectoryUnavailable extends Error {
+  constructor(
+    readonly reason: "missing" | "not-repository",
+    readonly directory: string,
+    readonly paths: string[],
+  ) {
+    super(`Worktree directory ${reason}: ${directory}`);
+  }
 }
 export interface Worktree {
   path: string;
@@ -18,6 +31,7 @@ export interface Worktree {
 export interface WorktreeSnapshot {
   cwd: string;
   worktrees: Worktree[];
+  paths: string[];
 }
 export interface WorkspaceChanges {
   added: string[];
@@ -25,89 +39,116 @@ export interface WorkspaceChanges {
   removed: string[];
 }
 
-function resolveScopePath(path: string, cwd: string): string | undefined {
-  if (path.length === 0 || path.includes("\0")) return undefined;
-  return resolveWorktreePath(path, cwd);
-}
-
-export function findWorktreeScopes(command: string, cwd: string): WorktreeScope[] {
-  let shellCwd = cwd;
-  const scopes = new Map<string, WorktreeScope>();
-  for (const segment of splitCommandSegments(expandBashHome(command))) {
+export function findWorktreeScopes(command: string): WorktreeScope[] {
+  const home = process.env.HOME || homedir();
+  let shellDirectories: string[] = [];
+  const scopes: WorktreeScope[] = [];
+  let lastKey: string | undefined;
+  for (const segment of splitCommandSegments(expandBashHome(command, home))) {
     if (segment[0] === "cd") {
       const path = segment[1] === "--" ? segment[2] : segment[1];
       if (path === "-") continue;
-      shellCwd = resolve(shellCwd, path ?? homedir());
+      const directory = path ?? home;
+      if (isPathWord(directory)) shellDirectories = [...shellDirectories, directory];
       continue;
     }
     const words = unwrapCommand(segment);
     if (basename(words[0] ?? "") !== "git") continue;
-    let gitCwd = resolveWorktreePath(shellCwd, cwd);
+    const gitDirectories: string[] = [];
     let cursor = 1;
     let unusable = false;
     while (words[cursor]?.startsWith("-")) {
       const option = words[cursor++]!;
-      if (option === "-C") {
-        if (words[cursor] === undefined) break;
-        const next = resolveScopePath(words[cursor++]!, gitCwd);
-        if (next === undefined) {
+      if (option === "-C" || option.startsWith("-C")) {
+        const directory = option === "-C" ? words[cursor++] : option.slice(2);
+        if (!isPathWord(directory)) {
           unusable = true;
           break;
         }
-        gitCwd = next;
-      } else if (option.startsWith("-C") && option.length > 2) {
-        const next = resolveScopePath(option.slice(2), gitCwd);
-        if (next === undefined) {
-          unusable = true;
-          break;
-        }
-        gitCwd = next;
+        gitDirectories.push(directory);
       } else if (option === "-c" || option === "--git-dir" || option === "--work-tree") {
         cursor++;
       }
     }
-    if (unusable) continue;
-    if (words[cursor] !== "worktree") continue;
+    if (unusable || words[cursor] !== "worktree") continue;
     const action = words[cursor + 1];
     if (action !== "add" && action !== "move" && action !== "remove") continue;
     const operands = mutationOperands(words.slice(cursor + 2));
     const pathCount = action === "move" ? 2 : 1;
-    const paths = operands
-      .slice(0, pathCount)
-      .map((path) => resolveScopePath(path, gitCwd))
-      .filter((path): path is string => path !== undefined);
-    if (paths.length === 0) continue;
-    const scope: WorktreeScope = scopes.get(gitCwd) ?? { cwd: gitCwd, actions: [], paths: [] };
-    scope.actions = [...new Set<WorktreeAction>([...scope.actions, action])];
-    scope.paths.push(...paths);
-    scopes.set(gitCwd, scope);
+    const targets = operands.slice(0, pathCount);
+    if (!targets.some(isPathWord)) continue;
+
+    const key = JSON.stringify([shellDirectories, gitDirectories]);
+    const previous = lastKey === key ? scopes.at(-1) : undefined;
+    const scope: WorktreeScope = previous ?? {
+      shellDirectories,
+      gitDirectories,
+      actions: [],
+      paths: [],
+      destinationIndexes: [],
+    };
+    if (!scope.actions.includes(action)) scope.actions.push(action);
+    const destinationIndex = action === "move" ? 1 : action === "add" ? 0 : -1;
+    for (const [index, path] of targets.entries()) {
+      if (!isPathWord(path)) continue;
+      if (index === destinationIndex) scope.destinationIndexes.push(scope.paths.length);
+      scope.paths.push(path);
+    }
+    if (!previous) scopes.push(scope);
+    lastKey = key;
   }
-  return [...scopes.values()];
+  return scopes;
 }
 
-export async function loadWorktreeSnapshot(cwd: string, run: BashQuery): Promise<WorktreeSnapshot> {
-  const output = await run(quote(["git", "-C", cwd, "worktree", "list", "--porcelain", "-z"]));
-  const roots = parseWorktreeRoots(output, cwd);
-  const worktrees = roots
-    .filter((root) => !root.bare)
-    .flatMap(({ path }) => {
-      const identity = worktreeIdentity(path);
-      return identity ? [{ path: realpathSync(path), identity }] : [];
-    });
-  return { cwd: roots[0]!.path, worktrees };
+export function parseWorktreeSnapshot(output: string, pathCount: number): WorktreeSnapshot {
+  const parsed: unknown = JSON.parse(output);
+  if (typeof parsed === "object" && parsed !== null) {
+    const { cwd, worktrees, paths } = parsed as Record<string, unknown>;
+    if (
+      isAbsolutePath(cwd) &&
+      Array.isArray(worktrees) &&
+      worktrees.every(isWorktree) &&
+      new Set(worktrees.map(({ path }) => path)).size === worktrees.length &&
+      new Set(worktrees.map(({ identity }) => identity)).size === worktrees.length &&
+      isResolvedPathList(paths, pathCount)
+    )
+      return { cwd, worktrees, paths };
+  }
+  throw new Error("Invalid pi-mux worktree snapshot");
 }
 
-export function parseWorktreeRoots(output: string, cwd: string): { path: string; bare: boolean }[] {
-  if (!output.startsWith("worktree ") || !output.endsWith("\0\0"))
-    throw new Error(`Invalid or incomplete Git worktree list for ${cwd}`);
-  const records = output.split("\0\0").filter(Boolean);
-  return records.map((record) => {
-    const fields = record.split("\0");
-    const path = fields[0]!.slice("worktree ".length);
-    if (!fields[0]!.startsWith("worktree ") || !isAbsolute(path))
-      throw new Error(`Invalid Git worktree path for ${cwd}`);
-    return { path, bare: fields.includes("bare") };
-  });
+export function parseUnavailableDirectory(stderr: string, pathCount: number) {
+  const prefix = "pi-mux: Worktree directory unavailable: ";
+  if (!stderr.startsWith(prefix)) return undefined;
+  const parsed: unknown = JSON.parse(stderr.slice(prefix.length));
+  if (typeof parsed === "object" && parsed !== null) {
+    const { reason, directory, paths } = parsed as Record<string, unknown>;
+    if (
+      (reason === "missing" || reason === "not-repository") &&
+      isAbsolutePath(directory) &&
+      isResolvedPathList(paths, pathCount)
+    )
+      return new WorktreeDirectoryUnavailable(reason, directory, paths);
+  }
+  throw new Error("Invalid pi-mux worktree directory error");
+}
+
+function isResolvedPathList(paths: unknown, count: number): paths is string[] {
+  return Array.isArray(paths) && paths.length === count && paths.every(isAbsolutePath);
+}
+
+function isWorktree(value: unknown): value is Worktree {
+  if (typeof value !== "object" || value === null) return false;
+  const { path, identity } = value as Record<string, unknown>;
+  return isAbsolutePath(path) && isPathWord(identity);
+}
+
+function isAbsolutePath(path: unknown): path is string {
+  return isPathWord(path) && isAbsolute(path);
+}
+
+function isPathWord(path: unknown): path is string {
+  return typeof path === "string" && path.length > 0 && !path.includes("\0");
 }
 
 export function detectWorkspaceChanges(
@@ -156,7 +197,7 @@ export function applyWorkspaceChanges(workspaces: string[], changes: WorkspaceCh
 
 export async function retainLiveWorkspaces(
   workspaces: string[],
-  run: BashQuery,
+  query: SnapshotQuery,
   snapshots: WorktreeSnapshot[] = [],
 ): Promise<string[]> {
   const live = new Set(
@@ -164,33 +205,27 @@ export async function retainLiveWorkspaces(
   );
   const retained: string[] = [];
   for (const path of workspaces) {
-    if (!worktreeIdentity(path)) continue;
-    const canonical = realpathSync(path);
-    if (!live.has(canonical)) {
-      const snapshot = await loadWorktreeSnapshot(canonical, run);
-      snapshot.worktrees.forEach((worktree) => live.add(worktree.path));
+    if (live.has(path)) {
+      retained.push(path);
+      continue;
     }
-    if (live.has(canonical)) retained.push(canonical);
+    try {
+      const snapshot = await query({
+        shellDirectories: [],
+        gitDirectories: [path],
+        paths: [path],
+      });
+      snapshot.worktrees.forEach((worktree) => live.add(worktree.path));
+      const canonical = snapshot.paths[0]!;
+      if (live.has(canonical)) retained.push(canonical);
+    } catch (error) {
+      if (!(error instanceof WorktreeDirectoryUnavailable)) throw error;
+    }
   }
   return [...new Set(retained)];
 }
 
-function resolveWorktreePath(path: string, cwd: string): string {
-  if (path.length === 0 || path.includes("\0"))
-    throw new Error("Invalid empty or NUL-containing worktree path");
-  const absolute = isAbsolute(path) ? path : `${cwd}${sep}${path}`;
-  let ancestor = absolute;
-  const missing: string[] = [];
-  while (!existsSync(ancestor)) {
-    const parent = dirname(ancestor);
-    if (parent === ancestor) return resolve(absolute);
-    missing.unshift(basename(ancestor));
-    ancestor = parent;
-  }
-  return resolve(realpathSync.native(ancestor), ...missing);
-}
-
-function expandBashHome(command: string): string {
+function expandBashHome(command: string, home: string): string {
   let result = "";
   let activeQuote: string | undefined;
   let wordStart = true;
@@ -222,7 +257,7 @@ function expandBashHome(command: string): string {
       character === "~" &&
       (command[index + 1] === "/" || /\s|[;&|()<>]|^$/.test(command[index + 1] ?? ""))
     ) {
-      result += quote([homedir()]);
+      result += quote([home]);
       wordStart = false;
       continue;
     }
@@ -248,14 +283,4 @@ function unwrapCommand(words: string[]): string[] {
   if (words[0] === "command") return words.slice(1);
   if (words[0] !== "rtk") return words;
   return words[1] === "proxy" ? words.slice(2) : words.slice(1);
-}
-
-function worktreeIdentity(path: string): string | undefined {
-  const gitPath = join(path, ".git");
-  if (!existsSync(gitPath) || !statSync(path).isDirectory()) return undefined;
-  if (statSync(gitPath).isDirectory()) return realpathSync(gitPath);
-  const pointer = readFileSync(gitPath, "utf8").trim();
-  if (!pointer.startsWith("gitdir: ")) return undefined;
-  const directory = resolve(path, pointer.slice("gitdir: ".length));
-  return existsSync(directory) ? realpathSync(directory) : undefined;
 }

@@ -97,6 +97,32 @@ describe("dedicated tmux paths", () => {
     assert.equal(pane, undefined);
   });
 
+  it("identifies the same Windows socket when psmux uses a forward slash before its label", async () => {
+    const socketPath = "C:\\Profile\\.local\\state\\pi-tmux\\server.sock";
+    const paths = { socketPath, directory: "C:\\Profile", configPath: "C:\\Profile\\pi.conf" };
+    const token = randomUUID();
+    const env = { TMUX: `${socketPath},55123,0`, TMUX_PANE: "%1", PI_TMUX_LAUNCH_TOKEN: token };
+    const identity = await inspectManagedPane(
+      reply(
+        { socketPath: "c:\\profile\\.local\\state\\pi-tmux/server.sock" },
+        launchRecordOf(token),
+      ),
+      paths,
+      env,
+      "win32",
+    );
+    assert.deepEqual(identity, { pane: "%1", pid: 4242, serverPid: 123 });
+    assert.equal(
+      await inspectManagedPane(
+        reply({ socketPath: "C:\\Other\\server.sock" }, ""),
+        paths,
+        env,
+        "win32",
+      ),
+      undefined,
+    );
+  });
+
   it("uses ~/.local/state on Windows regardless of XDG_RUNTIME_DIR", () => {
     const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated" }, "win32");
     assert.equal(paths.socketPath, join(homedir(), ".local", "state", "pi-tmux", "server.sock"));

@@ -9,12 +9,12 @@ import { link, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/p
 import { homedir } from "node:os";
 import { basename, join, relative } from "node:path";
 import {
-  dispatch,
   dispatchOne,
   DISPATCH_USAGE,
   dispatchSocket,
+  dispatchWorker,
   formatDispatchers,
-  listDispatchers,
+  listCurrentDispatchers,
   parseDispatchArgs,
   startDispatcher,
   stopDispatcher,
@@ -806,13 +806,24 @@ async function main(): Promise<void> {
     const parsed = parseDispatchArgs(dispatchArgs);
     const dispatchError =
       parsed.error ??
-      (isWorker && parsed.action === "one" ? "one is not a dispatcher worker action" : undefined);
+      (isWorker && parsed.action === "one" ? "one is not a dispatcher worker action" : undefined) ??
+      (process.platform === "win32" && isWorker && parsed.action !== "start"
+        ? "not a dispatcher worker action"
+        : undefined);
     if (dispatchError || !parsed.action)
       throw new TicketError(2, `${dispatchError}\nusage: ${DISPATCH_USAGE}`);
     if (parsed.action === "list") {
-      const entries = listDispatchers(dispatchSocket());
+      const entries = await listCurrentDispatchers(dispatchSocket());
       console.log(entries.length === 0 ? "no dispatcher running" : formatDispatchers(entries));
       return;
+    }
+    if (process.platform === "win32") {
+      if (parsed.action === "one") fail("Ticket dispatch one is not supported on Windows");
+      if (
+        parsed.action === "start" &&
+        (parsed.options?.statuses?.length !== 1 || parsed.options.statuses[0] !== "locked")
+      )
+        fail("Ticket dispatch start on Windows requires --status locked");
     }
     const project = parsed.all
       ? null
@@ -857,7 +868,7 @@ async function main(): Promise<void> {
         },
       });
     }
-    if (isWorker) return dispatch(parsed.options!, loadSnapshot, project);
+    if (isWorker) return dispatchWorker(parsed.options!, loadSnapshot, project);
     return startDispatcher({
       project,
       loadSnapshot,

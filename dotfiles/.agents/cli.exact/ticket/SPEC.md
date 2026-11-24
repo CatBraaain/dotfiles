@@ -97,6 +97,8 @@ dispatcher は ticket store から起動可能な ticket を探してプロン�
 
 start と stop では、`-a/--all` 指定時は全project を対象とするグローバルdispatcher、未指定時は1 project を対象とするproject単位dispatcher を操作する。操作範囲が同じなら、別のディレクトリ・worktree からも同じ dispatcher を操作する。
 
+Windows ネイティブでは、[pi-mux の専用管理先](../../../.local/cli.exact/pi-mux/SPEC.md#管理先と起動権) を使い、`--status locked` のみを選ぶ start と、その dispatcher の list・stop に対応する。WSL を必要としない。専用管理先が初期復元済みで稼働中でなければ、start は管理先を初期化せず、理由を stderr に表示して終了コード1を返す。`open` を含む start または `one` も、既存セッションを変更せず、理由を stderr に表示して終了コード1を返す。
+
 #### 入力と配置
 
 start と stop は共通の `-p/--project <name>` と `-a/--all` を受け付ける。start は、さらに次のオプションを受け付ける。
@@ -119,7 +121,7 @@ stop は `--all` 指定時にグローバルdispatcher、それ以外では共�
 | 入出力 | パス・規則 |
 | --- | --- |
 | 固定本文 | `open` は `dispatch-prompt.md` に ticket ID を埋め込む。`locked` は `dispatch-locked-prompt.md` に対象project、ticket ID、担当会話の完全な ID と履歴ファイルの絶対パスを渡す |
-| tmux socket | `/run/user/1000/pi-tmux/server.sock`。`TICKET_TEST_TMUX_SOCKET` 指定時はその socket を使う |
+| tmux socket | Windows では `~/.local/state/pi-tmux/server.sock`、それ以外では `/run/user/1000/pi-tmux/server.sock`。`TICKET_TEST_TMUX_SOCKET` 指定時はその socket を使う |
 | tick間隔の上書き（テスト用） | `TICKET_TEST_TICK_MS` に0より大きい数値を指定すると、その値をミリ秒としてtick間隔に使う。不正な値・0以下の場合は既定の3秒を使う |
 
 固定本文は dispatch の実行ごとに読み込む。作業ディレクトリにテンプレートを用意する必要はなく、ソースからの実行とコンパイル済みCLI のどちらでも同梱本文を使う。dispatch は ticket と作業ディレクトリの既存ファイルを変更しない。dispatch の引数、ticket読取り、ログ、終了条件は本節に従う。
@@ -143,18 +145,20 @@ stop は `--all` 指定時にグローバルdispatcher、それ以外では共�
 | 同じ範囲の dispatcher が起動済みで start | 既存の dispatcher用セッションだけを終了し、今回の start のオプションで作り直す。`dispatcher restarted: <セッション名>` を stdout へ出して終了コード0。稼働済みpi は stop 後の start と同じ規則で引き継ぐ |
 | グローバル起動中にproject単位を start、またはproject単位が1つでも起動中にグローバルを start | 重複する範囲の dispatcher が起動中である旨を stderr へ出して終了コード1。既存セッションを保持する |
 | dispatcher が未起動で start | 固定本文・対象範囲のticket store を読み、その範囲を識別する名前の detached tmuxセッションを作る |
-| dispatcher用tmuxセッションの作成成功 | セッション名を stdout へ出し、呼出元CLI は終了コード0で戻る。全ticket の完了を待たない |
+| dispatcher の起動確定 | セッション名を stdout へ出し、呼出元CLI は終了コード0で戻る。起動確定は Windows 以外では dispatcher用tmuxセッションの作成成功、Windows では開始した worker の照合を指す。全ticket の完了を待たない |
 | dispatcher が起動中で stop | dispatcher用セッションだけを終了し、停止した旨を stdout へ出して終了コード0。起動済みpi は作業を続ける |
 | dispatcher が未起動で stop | 停止済みである旨を stdout へ出して終了コード0 |
 | stop 後に start | 対象範囲の残存piセッションを起動済み・稼働中として引き継ぎ、同じticket の pi を二重起動しない |
 
 stop は指定した範囲の dispatcher だけを対象とする。グローバルの stop でproject単位dispatcher を停止せず、project単位の stop でグローバルdispatcher を停止しない。
 
+Windows では start が同じ管理先と範囲の起動権を確保し、開始した worker を照合してから成功を返す。stop と、同じ範囲の start による置き換えでは、照合した worker への同じ接続にだけ停止を送る。切断後に名前で停止対象を引き直さない。旧 worker が未起動か終了済みと確認できた場合だけ、停止成功や置き換えに進む。照合不能や一覧の空・部分結果だけでは不在と判定しない。
+
 引継ぎ対象は ticket CLI が起動したpiセッションであり、グローバルでは全project、project単位ではそのproject に限る。以前の起動がグローバルかproject単位かにかかわらず、対象範囲の残存pi を引き継ぐ。引き継いだpi のセッション名と cwd は保持する。残存pi の数が今回の `--max` 以上なら、その数が上限未満になるまで自動補充を待つ。
 
 `locked` の履歴検索は、Pi の通常の保存先と、対象 cwd に適用されるカスタム保存先の通常履歴・アーカイブを対象とする。カスタム保存先と新規会話の保存先は、呼び出し元の `PI_CODING_AGENT_SESSION_DIR` が空でなければその値を優先し、未設定・空文字なら通常の保存先設定に従う。tmux server の環境にだけある値は使わない。
 
-start の成功は dispatcher用tmuxセッションの作成成功を表し、その後の監視継続や pi起動成功を保証しない。ソースからのCLI起動とコンパイル済みCLI のどちらでも同じ動作を提供する。
+start の成功は、その後の監視継続や pi起動成功を保証しない。ソースからのCLI起動とコンパイル済みCLI のどちらでも同じ動作を提供する。
 
 #### one
 

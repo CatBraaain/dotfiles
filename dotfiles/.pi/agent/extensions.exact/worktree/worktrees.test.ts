@@ -1,55 +1,70 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, it } from "bun:test";
-import { parse } from "shell-quote";
+import { describe, it } from "bun:test";
 import {
   applyWorkspaceChanges,
   detectWorkspaceChanges,
   findWorktreeScopes,
-  loadWorktreeSnapshot,
+  parseUnavailableDirectory,
+  parseWorktreeSnapshot,
+  WorktreeDirectoryUnavailable,
   retainLiveWorkspaces,
   type WorktreeSnapshot,
 } from "./worktrees.ts";
 
-const directories: string[] = [];
-afterEach(() =>
-  directories.splice(0).forEach((path) => rmSync(path, { recursive: true, force: true })),
-);
-
-function fixture() {
-  mkdirSync("/tmp/work/dotfiles/session-metadata-custom-qa", { recursive: true });
-  const directory = mkdtempSync("/tmp/work/dotfiles/session-metadata-custom-qa/worktrees-");
-  directories.push(directory);
-  const root = join(directory, "main repo");
-  const linked = join(directory, "linked\nworktree");
-  const identity = join(root, ".git/worktrees/linked");
-  mkdirSync(identity, { recursive: true });
-  mkdirSync(linked);
-  writeFileSync(join(linked, ".git"), `gitdir: ${identity}\n`);
-  const output = `worktree ${root}\0HEAD abc\0branch refs/heads/main\0\0worktree ${linked}\0HEAD abc\0detached\0\0`;
-  return { directory, root, linked, identity, output };
-}
+const rootScope = { shellDirectories: [], gitDirectories: [] };
+const home = process.env.HOME || homedir();
 
 describe("worktree command scopes", () => {
   it("finds ordinary git mutations but not mentions in echo or scripts", () => {
     const scopes = findWorktreeScopes(
       'echo "git worktree add /x"; ./script.sh; git worktree add /x',
-      "/repo",
     );
-    assert.deepEqual(scopes, [{ cwd: "/repo", actions: ["add"], paths: ["/x"] }]);
+    assert.deepEqual(scopes, [
+      { ...rootScope, actions: ["add"], destinationIndexes: [0], paths: ["/x"] },
+    ]);
   });
 
-  it("resolves git -C and cd paths including quotes and multiple mutations", () => {
+  it("preserves git -C and cd operands separately for multiple mutations", () => {
     const command =
       'cd "main repo" && git -c core.autocrlf=false -C sub -C .. worktree add /a; git -C. worktree move /a /b; git worktree remove /b';
-    const scopes = findWorktreeScopes(command, "/repo");
+    const scopes = findWorktreeScopes(command);
     assert.deepEqual(scopes, [
       {
-        cwd: "/repo/main repo",
-        actions: ["add", "move", "remove"],
-        paths: ["/a", "/a", "/b", "/b"],
+        shellDirectories: ["main repo"],
+        gitDirectories: ["sub", ".."],
+        actions: ["add"],
+        destinationIndexes: [0],
+        paths: ["/a"],
+      },
+      {
+        shellDirectories: ["main repo"],
+        gitDirectories: ["."],
+        actions: ["move"],
+        destinationIndexes: [1],
+        paths: ["/a", "/b"],
+      },
+      {
+        shellDirectories: ["main repo"],
+        gitDirectories: [],
+        actions: ["remove"],
+        destinationIndexes: [],
+        paths: ["/b"],
+      },
+    ]);
+  });
+
+  it("passes Git Bash and Windows drive paths to pi-mux without host normalization", () => {
+    const scopes = findWorktreeScopes(
+      'cd "/c/work space" && git -C "C:/main repo" worktree move "sub dir" "C:/move here"',
+    );
+    assert.deepEqual(scopes, [
+      {
+        shellDirectories: ["/c/work space"],
+        gitDirectories: ["C:/main repo"],
+        actions: ["move"],
+        destinationIndexes: [1],
+        paths: ["sub dir", "C:/move here"],
       },
     ]);
   });
@@ -57,13 +72,14 @@ describe("worktree command scopes", () => {
   it("keeps Bash reference characters literal in cd, git -C and mutation paths", () => {
     const scopes = findWorktreeScopes(
       "cd '@repo' && git -C '~/nested' worktree add --detach '@feature' HEAD",
-      "/repo",
     );
     assert.deepEqual(scopes, [
       {
-        cwd: "/repo/@repo/~/nested",
+        shellDirectories: ["@repo"],
+        gitDirectories: ["~/nested"],
         actions: ["add"],
-        paths: ["/repo/@repo/~/nested/@feature"],
+        destinationIndexes: [0],
+        paths: ["@feature"],
       },
     ]);
   });
@@ -71,68 +87,103 @@ describe("worktree command scopes", () => {
   it("expands only an unquoted Bash home prefix", () => {
     const scopes = findWorktreeScopes(
       "git worktree add --detach ~/feature HEAD; git worktree add --detach '~/quoted' HEAD; git worktree add --detach \\~/escaped HEAD",
-      "/repo",
     );
     assert.deepEqual(scopes, [
       {
-        cwd: "/repo",
+        ...rootScope,
         actions: ["add"],
-        paths: [join(homedir(), "feature"), "/repo/~/quoted", "/repo/~/escaped"],
+        destinationIndexes: [0, 1, 2],
+        paths: [home + "/feature", "~/quoted", "~/escaped"],
       },
     ]);
+  });
+
+  it("uses Git Bash HOME rather than USERPROFILE for cd and unquoted tilde", () => {
+    const previousHome = process.env.HOME;
+    const previousProfile = process.env.USERPROFILE;
+    try {
+      process.env.HOME = "C:/Bash Home";
+      process.env.USERPROFILE = "C:/Windows Profile";
+      const scopes = findWorktreeScopes(
+        "cd && git worktree add ~/feature && git worktree add '~/quoted' && git worktree add \\~/escaped",
+      );
+      assert.deepEqual(scopes, [
+        {
+          ...rootScope,
+          shellDirectories: ["C:/Bash Home"],
+          actions: ["add"],
+          paths: ["C:/Bash Home/feature", "~/quoted", "~/escaped"],
+          destinationIndexes: [0, 1, 2],
+        },
+      ]);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previousProfile;
+    }
   });
 
   it("keeps home expansion independent of quotes in shell comments", () => {
     const scopes = findWorktreeScopes(
       "# don't expand '~/comment'\ngit worktree add --detach ~/feature HEAD",
-      "/repo",
     );
     assert.deepEqual(scopes, [
-      { cwd: "/repo", actions: ["add"], paths: [join(homedir(), "feature")] },
+      { ...rootScope, actions: ["add"], destinationIndexes: [0], paths: [home + "/feature"] },
     ]);
   });
 
   it("does not mistake option values and start points for worktree paths", () => {
     const scopes = findWorktreeScopes(
       "git worktree add --lock --reason reason -b branch ../target HEAD",
-      "/repo",
     );
-    assert.deepEqual(scopes, [{ cwd: "/repo", actions: ["add"], paths: ["/target"] }]);
+    assert.deepEqual(scopes, [
+      { ...rootScope, actions: ["add"], destinationIndexes: [0], paths: ["../target"] },
+    ]);
   });
 
   it("recognizes newline-separated commands and RTK pass-through wrappers", () => {
     const command =
       "rtk git -C /one worktree add /a\nrtk proxy git -C /two worktree remove /b\ncommand git worktree move /a /b";
-    assert.deepEqual(findWorktreeScopes(command, "/repo"), [
-      { cwd: "/one", actions: ["add"], paths: ["/a"] },
-      { cwd: "/two", actions: ["remove"], paths: ["/b"] },
-      { cwd: "/repo", actions: ["move"], paths: ["/a", "/b"] },
+    assert.deepEqual(findWorktreeScopes(command), [
+      {
+        ...rootScope,
+        gitDirectories: ["/one"],
+        actions: ["add"],
+        destinationIndexes: [0],
+        paths: ["/a"],
+      },
+      {
+        ...rootScope,
+        gitDirectories: ["/two"],
+        actions: ["remove"],
+        destinationIndexes: [],
+        paths: ["/b"],
+      },
+      { ...rootScope, actions: ["move"], destinationIndexes: [1], paths: ["/a", "/b"] },
     ]);
   });
 
   it("does not treat worktree list as a mutation or reinterpret an explicit git command string", () => {
-    assert.deepEqual(
-      findWorktreeScopes('git worktree list; echo "git worktree remove /x"', "/repo"),
-      [],
-    );
+    assert.deepEqual(findWorktreeScopes('git worktree list; echo "git worktree remove /x"'), []);
   });
 
   it("skips quoted empty git -C operands instead of throwing", () => {
-    assert.deepEqual(findWorktreeScopes('git -C "$d" status', "/repo"), []);
-    assert.deepEqual(findWorktreeScopes('git -C "$d" worktree add /a', "/repo"), []);
-    assert.deepEqual(findWorktreeScopes('git -C "" worktree add /a', "/repo"), []);
+    assert.deepEqual(findWorktreeScopes('git -C "$d" status'), []);
+    assert.deepEqual(findWorktreeScopes('git -C "$d" worktree add /a'), []);
+    assert.deepEqual(findWorktreeScopes('git -C "" worktree add /a'), []);
   });
 
   it("scans loop commands over quoted variables without throwing", () => {
     const command =
       'for d in ~/mirrors/github.com/*/*/; do [ -d "$d/.git" ] || continue; n=$(git -C "$d" status --porcelain 2>/dev/null | wc -l); [ "$n" -gt 0 ] && echo "$n $d"; done; echo "scan done"';
-    assert.deepEqual(findWorktreeScopes(command, "/repo"), []);
+    assert.deepEqual(findWorktreeScopes(command), []);
   });
 
   it("ignores empty worktree mutation paths instead of throwing", () => {
-    assert.deepEqual(findWorktreeScopes('git worktree add ""', "/repo"), []);
-    assert.deepEqual(findWorktreeScopes('git worktree move "" /b', "/repo"), [
-      { cwd: "/repo", actions: ["move"], paths: ["/b"] },
+    assert.deepEqual(findWorktreeScopes('git worktree add ""'), []);
+    assert.deepEqual(findWorktreeScopes('git worktree move "" /b'), [
+      { ...rootScope, actions: ["move"], destinationIndexes: [0], paths: ["/b"] },
     ]);
   });
 });
@@ -140,6 +191,7 @@ describe("worktree command scopes", () => {
 describe("Git snapshot changes", () => {
   const before: WorktreeSnapshot = {
     cwd: "/repo",
+    paths: [],
     worktrees: [
       { path: "/repo", identity: "/repo/.git" },
       { path: "/a", identity: "/repo/.git/worktrees/a" },
@@ -205,63 +257,88 @@ describe("Git snapshot changes", () => {
   });
 });
 
-describe("Git worktree queries", () => {
-  it("reads NUL-delimited paths including newlines through the supplied Bash runner", async () => {
-    const input = fixture();
-    const commands: string[] = [];
-    const snapshot = await loadWorktreeSnapshot(input.root, async (command) => {
-      commands.push(command);
-      return input.output;
-    });
-    assert.deepEqual(parse(commands[0]!), [
-      "git",
-      "-C",
-      input.root,
-      "worktree",
-      "list",
-      "--porcelain",
-      "-z",
-    ]);
-    assert.deepEqual(snapshot, {
-      cwd: input.root,
-      worktrees: [
-        { path: input.root, identity: join(input.root, ".git") },
-        { path: input.linked, identity: input.identity },
-      ],
-    });
+describe("pi-mux snapshot responses", () => {
+  const snapshot = {
+    cwd: "/repo",
+    worktrees: [{ path: "/repo", identity: "/repo/.git" }],
+    paths: ["/target"],
+  };
+
+  it("accepts a snapshot with absolute resolved paths and stable identities", () => {
+    assert.deepEqual(parseWorktreeSnapshot(JSON.stringify(snapshot), 1), snapshot);
   });
 
-  it("excludes prunable paths and bare repositories from live worktrees", async () => {
-    const input = fixture();
-    const output = `worktree ${input.root}\0bare\0\0worktree ${input.directory}/missing\0HEAD abc\0prunable gitdir file points to non-existent location\0\0`;
-    const snapshot = await loadWorktreeSnapshot(input.root, async () => output);
-    assert.deepEqual(snapshot, { cwd: input.root, worktrees: [] });
+  it("rejects malformed replies instead of applying partial changes", () => {
+    const invalidSnapshots = [
+      { ...snapshot, cwd: "relative" },
+      { ...snapshot, worktrees: [{ path: "relative", identity: "/repo/.git" }] },
+      { ...snapshot, worktrees: [{ path: "/repo", identity: "bad\0identity" }] },
+      { ...snapshot, worktrees: [...snapshot.worktrees, ...snapshot.worktrees] },
+      { ...snapshot, paths: [] },
+      { ...snapshot, paths: ["/a\0b"] },
+    ];
+    for (const invalid of invalidSnapshots)
+      assert.throws(
+        () => parseWorktreeSnapshot(JSON.stringify(invalid), 1),
+        /Invalid pi-mux worktree snapshot/,
+      );
   });
 
-  it("rejects truncated or non-porcelain output", async () => {
-    await assert.rejects(
-      loadWorktreeSnapshot("/repo", async () => "worktree /repo\0HEAD abc"),
-      /incomplete/,
+  it("only interprets the fixed unavailable-directory diagnostic", () => {
+    assert.equal(parseUnavailableDirectory("Git failed", 1), undefined);
+    const prefix = "pi-mux: Worktree directory unavailable: ";
+    assert.throws(
+      () =>
+        parseUnavailableDirectory(
+          prefix + JSON.stringify({ reason: "missing", directory: "/absent", paths: [] }),
+          1,
+        ),
+      /Invalid pi-mux worktree directory error/,
     );
+    const missing = { reason: "missing", directory: "/absent", paths: ["/target"] };
+    const error = parseUnavailableDirectory(prefix + JSON.stringify(missing) + "\n", 1);
+    assert.ok(error instanceof WorktreeDirectoryUnavailable);
+    assert.equal(error.directory, missing.directory);
+    assert.deepEqual(error.paths, missing.paths);
   });
+});
 
-  it("prunes missing worktrees and checks a surviving registration against Git", async () => {
-    const input = fixture();
+describe("live workspace checks", () => {
+  it("checks other registrations with pi-mux and drops missing paths", async () => {
     const queries: string[] = [];
     const retained = await retainLiveWorkspaces(
-      [input.linked, join(input.directory, "missing"), input.linked],
-      async (command) => {
-        queries.push(command);
-        return input.output;
+      ["/linked", "/missing", "/linked"],
+      async (request) => {
+        const path = request.gitDirectories[0]!;
+        queries.push(path);
+        assert.deepEqual(request, { ...rootScope, gitDirectories: [path], paths: [path] });
+        if (path === "/missing") throw new WorktreeDirectoryUnavailable("missing", path, [path]);
+        return {
+          cwd: "/repo",
+          worktrees: [{ path: "/linked", identity: "/repo/.git/worktrees/linked" }],
+          paths: [path],
+        };
       },
     );
-    assert.deepEqual(retained, [input.linked]);
-    assert.equal(queries.length, 1);
+    assert.deepEqual(retained, ["/linked"]);
+    assert.deepEqual(queries, ["/linked", "/missing"]);
   });
 
-  it("does not keep a directory merely because it still exists", async () => {
-    const input = fixture();
-    const output = `worktree ${input.root}\0HEAD abc\0branch refs/heads/main\0\0`;
-    assert.deepEqual(await retainLiveWorkspaces([input.linked], async () => output), []);
+  it("does not retain a directory absent from the Git listing", async () => {
+    const retained = await retainLiveWorkspaces(["/repo/subdir"], async () => ({
+      cwd: "/repo",
+      worktrees: [{ path: "/repo", identity: "/repo/.git" }],
+      paths: ["/repo/subdir"],
+    }));
+    assert.deepEqual(retained, []);
+  });
+
+  it("propagates real query errors instead of pruning the registration", async () => {
+    await assert.rejects(
+      retainLiveWorkspaces(["/linked"], async () => {
+        throw new Error("fixture failure");
+      }),
+      /fixture failure/,
+    );
   });
 });

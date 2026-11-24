@@ -1,3 +1,5 @@
+import { statSync } from "node:fs";
+import { win32 } from "node:path";
 import { type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -7,9 +9,11 @@ import {
   applyWorkspaceChanges,
   detectWorkspaceChanges,
   findWorktreeScopes,
-  loadWorktreeSnapshot,
+  parseUnavailableDirectory,
+  parseWorktreeSnapshot,
   retainLiveWorkspaces,
-  type BashQuery,
+  WorktreeDirectoryUnavailable,
+  type SnapshotQuery,
   type WorkspaceChanges,
   type WorktreeAction,
   type WorktreeScope,
@@ -22,6 +26,7 @@ interface Observation {
   snapshot: WorktreeSnapshot;
   actions: WorktreeAction[];
   paths: string[];
+  destinations: string[];
 }
 interface PendingCall {
   generation: number;
@@ -43,18 +48,23 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
     return generation === expected && ctx.sessionManager.getSessionId() === sessionId;
   }
 
-  function backgroundRunner(ctx: ExtensionContext): BashQuery {
-    return async function run(command) {
+  function snapshotQuery(ctx: ExtensionContext): SnapshotQuery {
+    return async function query(request) {
       ctx.signal?.throwIfAborted();
-      const result = await pi.exec("bash", ["-c", command], { cwd: ctx.cwd, signal: ctx.signal });
+      const args = ["worktree", "snapshot", JSON.stringify(request)];
+      const result = await pi.exec(piMuxExecutable(), args, { cwd: ctx.cwd, signal: ctx.signal });
       ctx.signal?.throwIfAborted();
-      if (
-        result.code !== 0 ||
-        result.killed ||
-        ("truncated" in result && result.truncated === true)
-      )
-        throw new Error(`Git worktree query failed: ${result.stderr || result.stdout}`);
-      return result.stdout;
+      const truncated = "truncated" in result && result.truncated === true;
+      if (!result.killed && !truncated) {
+        if (result.code === 0) return parseWorktreeSnapshot(result.stdout, request.paths.length);
+        if (result.code === 1 && result.stdout === "") {
+          const unavailable = parseUnavailableDirectory(result.stderr, request.paths.length);
+          if (unavailable) throw unavailable;
+        }
+      }
+      throw new Error(
+        `Git worktree query failed: ${result.stderr || result.stdout || result.code}`,
+      );
     };
   }
 
@@ -77,11 +87,15 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
     try {
       await enqueueMetadata(async () => {
         if (!isCurrent(call.generation, ctx, call.sessionId)) return;
-        const run = backgroundRunner(ctx);
+        const query = snapshotQuery(ctx);
         const after: WorktreeSnapshot[] = [];
         const changes: WorkspaceChanges = { added: [], moved: [], removed: [] };
         for (const observation of call.observations) {
-          const snapshot = await loadWorktreeSnapshot(observation.snapshot.cwd, run);
+          const snapshot = await query({
+            shellDirectories: [],
+            gitDirectories: [observation.snapshot.cwd],
+            paths: [],
+          });
           after.push(snapshot);
           const delta = detectWorkspaceChanges(
             observation.snapshot,
@@ -96,7 +110,7 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
         if (!isCurrent(call.generation, ctx, call.sessionId)) return;
         const previous = getWorkspaces(ctx.sessionManager);
         const proposed = applyWorkspaceChanges(previous, changes);
-        const live = await retainLiveWorkspaces(proposed, run, after);
+        const live = await retainLiveWorkspaces(proposed, query, after);
         if (!isCurrent(call.generation, ctx, call.sessionId)) return;
         const update = saveWorkspaces(pi, ctx.sessionManager, call.sessionId, live);
         if (update.changed) notifyUpdated(pi, previous, update, changes);
@@ -115,28 +129,17 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
     const sessionId = ctx.sessionManager.getSessionId();
     let scopes: WorktreeScope[];
     try {
-      scopes = findWorktreeScopes(event.input.command, ctx.cwd);
+      scopes = findWorktreeScopes(event.input.command);
     } catch {
       return;
     }
     if (scopes.length === 0) return;
     try {
       const observations: Observation[] = [];
+      const query = snapshotQuery(ctx);
       for (const scope of scopes) {
-        const known = observations.find(
-          (observation) =>
-            observation.snapshot.cwd === scope.cwd ||
-            observation.snapshot.worktrees.some((worktree) => worktree.path === scope.cwd) ||
-            observation.paths.includes(scope.cwd),
-        );
-        const snapshot =
-          known?.snapshot ?? (await loadWorktreeSnapshot(scope.cwd, backgroundRunner(ctx)));
-        const existing =
-          known ?? observations.find((observation) => observation.snapshot.cwd === snapshot.cwd);
-        if (existing) {
-          existing.actions = [...new Set([...existing.actions, ...scope.actions])];
-          existing.paths.push(...scope.paths);
-        } else observations.push({ snapshot, actions: scope.actions, paths: scope.paths });
+        if (!isCurrent(expected, ctx, sessionId)) return;
+        await observeScope(observations, scope, query);
       }
       if (isCurrent(expected, ctx, sessionId))
         pending.set(event.toolCallId, { generation: expected, sessionId, observations });
@@ -162,6 +165,59 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
       : "Worktree metadata";
     return new Text(theme.fg("dim", options.expanded ? content : summary), options.outputPad, 0);
   });
+}
+
+export function piMuxExecutable(
+  platform = process.platform,
+  path = process.env.PATH ?? "",
+  isFile = (candidate: string) => statSync(candidate, { throwIfNoEntry: false })?.isFile() ?? false,
+): string {
+  if (platform !== "win32") return "pi-mux";
+  for (const entry of path.split(";")) {
+    const directory = entry.replace(/^"(.*)"$/, "$1");
+    if (!win32.isAbsolute(directory) || win32.parse(directory).root.length === 1) continue;
+    const candidate = win32.join(directory, "pi-mux.exe");
+    if (isFile(candidate)) return candidate;
+  }
+  throw new Error("pi-mux.exe not found on absolute Windows PATH directories");
+}
+
+async function observeScope(
+  observations: Observation[],
+  { actions, destinationIndexes, ...request }: WorktreeScope,
+  query: SnapshotQuery,
+): Promise<void> {
+  let snapshot: WorktreeSnapshot;
+  try {
+    snapshot = await query(request);
+  } catch (error) {
+    if (!(error instanceof WorktreeDirectoryUnavailable)) throw error;
+    const creating = observations.find((observation) =>
+      observation.destinations.includes(error.directory),
+    );
+    if (!creating) throw error;
+    mergeObservation(creating, actions, error.paths, destinationIndexes);
+    return;
+  }
+
+  const existing = observations.find((observation) => observation.snapshot.cwd === snapshot.cwd);
+  if (existing) {
+    mergeObservation(existing, actions, snapshot.paths, destinationIndexes);
+  } else {
+    const destinations = destinationIndexes.map((index) => snapshot.paths[index]!);
+    observations.push({ snapshot, actions, paths: [...snapshot.paths], destinations });
+  }
+}
+
+function mergeObservation(
+  observation: Observation,
+  actions: WorktreeAction[],
+  paths: string[],
+  destinationIndexes: number[],
+): void {
+  observation.actions = [...new Set([...observation.actions, ...actions])];
+  observation.paths.push(...paths);
+  observation.destinations.push(...destinationIndexes.map((index) => paths[index]!));
 }
 
 function serialQueue() {

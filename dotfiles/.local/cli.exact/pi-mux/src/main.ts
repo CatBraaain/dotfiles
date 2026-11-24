@@ -29,6 +29,25 @@ import {
 } from "./history-summary";
 import { platform } from "./platform";
 import {
+  conversationLaunchKey,
+  launchBasisStillLive,
+  SpawnDidNotStartError,
+  ticketLaunchKey,
+  type WindowsLaunchRights,
+  type WindowsLaunchStatus,
+  type WindowsManagementBasis,
+} from "./windows-launch-rights";
+import { inspectWindowsProcess, observeWindowsIdentity } from "./windows-process";
+import { waitForPsmuxClient } from "./windows-psmux";
+import { WindowsManagement } from "./windows-management";
+import {
+  captureWindowsProcesses,
+  configureWindowsPeer,
+  stopWindowsPeers,
+  waitForWindowsExit,
+  WINDOWS_BOOTSTRAP_PROOF,
+} from "./windows-lifecycle";
+import {
   isViewReceipt,
   metadataFileIdentity,
   metadataFileRevision,
@@ -38,6 +57,11 @@ import {
   type UnresolvedFile,
   type ViewReceipt,
 } from "./session-metadata";
+import {
+  getWorktreeSnapshot,
+  parseWorktreeSnapshotRequest,
+  type WorktreeSnapshotRequest,
+} from "./worktree-snapshot";
 
 type ListOperation =
   | { kind: "list"; scope: "all" | "active"; json: boolean }
@@ -50,7 +74,12 @@ type Operation =
   | { kind: "open"; id: string; temporary: boolean; detached: boolean }
   | { kind: "open-exact"; id: string; file: string }
   | { kind: "inspect"; id: string }
+  | { kind: "inspect-management"; socket: string }
+  | { kind: "inspect-dispatch-inventory"; socket: string }
+  | WindowsCreateDispatchWorker
+  | { kind: "windows-claim-launch"; token: string; command: string[] }
   | { kind: "metadata"; id: string; viewFile?: string }
+  | { kind: "worktree-snapshot"; request: WorktreeSnapshotRequest }
   | { kind: "record-view"; id: string; receipt: ViewReceipt }
   | DispatchTicketOperation
   | { kind: "state"; id: string; source: StateSource; notification: StateNotification }
@@ -73,6 +102,17 @@ type DispatchTicketOperation = {
   sessionName: string;
   cwd: string;
   prompt: string;
+};
+type WindowsCreateDispatchWorker = {
+  kind: "inspect-create-dispatch-worker";
+  socket: string;
+  generation: string;
+  name: string;
+  project: string;
+  token: string;
+  cwd: string;
+  powershell: string;
+  command: string;
 };
 type Candidate = { id: string; cwd: string };
 type ManagedSession = Candidate & { session: string; temporary: boolean };
@@ -144,7 +184,7 @@ type UnifiedSession = ListedSession & {
 };
 type UnifiedWorkspace = { cwd: string; sessions: UnifiedSession[] };
 type Config = ReturnType<typeof configuration>;
-type TmuxConfig = ReturnType<typeof tmuxConfiguration> & { noStart?: true };
+type TmuxConfig = ReturnType<typeof tmuxConfiguration> & { noStart?: true; timeout?: number };
 type SavedSessionConfig = Pick<TmuxConfig, "agentDir"> & {
   env: NodeJS.ProcessEnv;
 };
@@ -184,9 +224,20 @@ const PARENT_ENV_KEYS = new Set([
   "PI_TMUX_STARTUP_MODE",
   "PI_TMUX_LAUNCH_TOKEN",
   "PI_TMUX_FIRST_INPUT",
+  "PI_MUX_WINDOWS_START_RIGHT",
+  "PI_MUX_WINDOWS_BOOTSTRAP",
   "TICKET_DISPATCH_ROLE",
   "TICKET_DISPATCH_PROJECT",
   "TICKET_DISPATCH_ID",
+]);
+const WINDOWS_RIGHT_ENV = "PI_MUX_WINDOWS_START_RIGHT";
+const WINDOWS_RIGHT_OPTION = "@pi-mux-windows-start-right";
+const PSMUX_ROUTING = new Set([
+  "TMUX",
+  "TMUX_PANE",
+  "PSMUX_TARGET_SESSION",
+  "PSMUX_TARGET_FULL",
+  "PSMUX_ROUTE_WARM",
 ]);
 const PANE_FORMAT =
   "#{pane_id}\t#{session_id}\t#{session_name}\t#{@pi-tmux-session}\t#{pane_pid}\t#{pane_dead}\t#{window_active}\t#{pane_active}";
@@ -235,6 +286,47 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         return 75;
       }
     }
+    if (operation.kind === "inspect-management") {
+      if (!platform.windows) throw new Error("This management query requires Windows");
+      const config = { ...tmuxConfiguration(), noStart: true } as const;
+      if (operation.socket !== config.socket)
+        throw new Error("Ticket dispatch socket does not match pi-mux");
+      await withLock(config, async () => {
+        const management = windowsManagement(config);
+        const basis = await management.currentBasis();
+        if (!basis || !management.startupState(basis)?.restored)
+          throw new Error("The dedicated psmux management generation is not restored and running");
+        console.log(JSON.stringify({ state: "ready", generation: basis.instance }));
+      });
+      return 0;
+    }
+    if (
+      operation.kind === "inspect-dispatch-inventory" ||
+      operation.kind === "inspect-create-dispatch-worker"
+    ) {
+      if (!platform.windows) throw new Error("This dispatch operation requires Windows");
+      const config = { ...tmuxConfiguration(), noStart: true } as const;
+      if (operation.socket !== config.socket)
+        throw new Error("Ticket dispatch socket does not match pi-mux");
+      await withLock(
+        config,
+        async () => {
+          if (operation.kind === "inspect-dispatch-inventory") {
+            console.log(JSON.stringify({ sessions: await readWindowsDispatchInventory(config) }));
+          } else await createWindowsDispatchWorker(config, operation);
+        },
+        "try",
+      );
+      return 0;
+    }
+    if (operation.kind === "windows-claim-launch") {
+      if (!platform.windows) throw new Error("This launch operation requires Windows");
+      return await claimWindowsLaunch(operation.token, operation.command);
+    }
+    if (operation.kind === "worktree-snapshot") {
+      console.log(JSON.stringify(getWorktreeSnapshot(operation.request)));
+      return 0;
+    }
     if (operation.kind === "metadata") {
       const { id, viewFile } = operation;
       if (viewFile !== undefined) {
@@ -265,7 +357,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return 0;
     }
     if (operation.kind === "open-exact") {
-      if (process.platform !== "linux") throw new Error("Exact session reopen requires Linux");
+      if (!platform.windows && process.platform !== "linux")
+        throw new Error("Exact session reopen requires Linux or Windows");
       const config = { ...configuration(), noStart: true } as const;
       printDetachedSession(config, await openExactSession(config, operation.id, operation.file));
       return 0;
@@ -389,20 +482,40 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         if (preferred) rememberSessionRoot(config, preferred);
       }
       let temporaryTarget: string | undefined;
+      let bootstrap: WindowsBootstrap = "start";
       if (operation.kind === "open" && operation.temporary) {
         const selected = await resolveSaved(config, operation.id);
         if (!selected.running && !selected.managed) temporaryTarget = operation.id;
+        if (platform.windows) bootstrap = selected.windowsBasis ?? "fresh";
       }
-      const failures = await startAndRestore(config, operation.kind === "restore", temporaryTarget);
+      const { failures, basis } = await startAndRestore(
+        config,
+        operation.kind === "restore",
+        temporaryTarget,
+        bootstrap,
+      );
       if (operation.kind === "restore") return failures > 0 ? 2 : 0;
+      const management = basis ? windowsManagement(config) : undefined;
       const target =
         operation.kind === "open"
-          ? await openSaved(config, operation.id, operation.temporary ? "temporary" : "normal")
-          : await createNew(config, operation.request);
+          ? await openSaved(
+              config,
+              operation.id,
+              operation.temporary ? "temporary" : "normal",
+              basis,
+            )
+          : await createNew(config, operation.request, basis);
+      if (management && basis) await management.assertLive(basis);
       if (operation.kind === "open") {
         try {
+          if (management && target.startup === "ready") {
+            if (!basis || !management.startupState(basis)?.restored)
+              throw new Error("Cannot verify the Windows pi-mux startup state");
+            if (management.startupState(basis)?.restoring.includes(target.id.toLowerCase()))
+              await management.clearRestoring(basis, target.id, windowsClaimLock(management));
+          }
           if (!operation.temporary) await promoteSession(config, target.session, target.id);
-          await snapshotSessions(config, undefined, "repair");
+          await snapshotSessions(config, basis?.instance, "repair");
         } catch (error) {
           if (!(error instanceof SnapshotReadError))
             throw new Error(`Cannot update open session ${operation.id}: ${errorMessage(error)}`);
@@ -415,9 +528,16 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         console.error(`pi-mux: workspace registration deferred: ${errorMessage(error)}`);
       }
       rememberSessionRoot(config, dirname(target.file));
+      if (management && basis) await management.assertLive(basis);
       const clientPid = operation.kind === "new" ? operation.clientPid : undefined;
       if (operation.detached || clientPid !== undefined) {
-        if (clientPid !== undefined) await switchSession(config, target.id, clientPid);
+        if (clientPid !== undefined) {
+          if (platform.windows) {
+            if (!management || !basis)
+              throw new Error("Missing Windows pi-mux management generation");
+            await switchWindowsNewClient(config, target, clientPid, management, basis);
+          } else await switchSession(config, target.id, clientPid);
+        }
         printDetachedSession(config, target);
         return 0;
       }
@@ -654,6 +774,37 @@ export function parseOperation(argv: string[]): Operation {
     const id = argv[1];
     if (argv.length === 2 && id && SESSION_ID_PATTERN.test(id)) return { kind: "inspect", id };
     if (id === "--dispatch-ticket") return parseDispatchTicketOperation(argv.slice(2));
+    if (
+      id === "--management" &&
+      argv.length === 3 &&
+      isAbsolute(argv[2]!) &&
+      !argv[2]!.includes("\0")
+    )
+      return { kind: "inspect-management", socket: argv[2]! };
+    if (
+      id === "--dispatch-inventory" &&
+      argv.length === 3 &&
+      isAbsolute(argv[2]!) &&
+      !argv[2]!.includes("\0")
+    )
+      return { kind: "inspect-dispatch-inventory", socket: argv[2]! };
+    if (id === "--create-dispatch-worker") return parseWindowsCreateDispatchWorker(argv.slice(2));
+  }
+  if (argv[0] === "windows-claim-launch" && argv.length === 3 && UUID.test(argv[1]!)) {
+    const command: unknown = JSON.parse(Buffer.from(argv[2]!, "base64").toString("utf8"));
+    if (
+      !Array.isArray(command) ||
+      !isAbsolute(command[0] ?? "") ||
+      !command.every((arg) => typeof arg === "string" && !arg.includes("\0"))
+    )
+      throw new Error("Invalid Windows pi launch command");
+    return { kind: "windows-claim-launch", token: argv[1]!, command };
+  }
+  if (argv[0] === "worktree") {
+    const [, action, encoded] = argv;
+    if (argv.length !== 3 || action !== "snapshot" || encoded === undefined)
+      throw new Error("usage: pi-mux worktree snapshot <JSON>");
+    return { kind: "worktree-snapshot", request: parseWorktreeSnapshotRequest(encoded) };
   }
   if (argv[0] === "metadata") {
     const [, first, id, viewFile] = argv;
@@ -1175,7 +1326,9 @@ function tmuxConfiguration() {
   const env = Object.fromEntries(
     Object.entries(process.env).filter(
       (entry): entry is [string, string] =>
-        entry[1] !== undefined && !PARENT_ENV_KEYS.has(entry[0]),
+        entry[1] !== undefined &&
+        !PARENT_ENV_KEYS.has(entry[0]) &&
+        (!platform.windows || !PSMUX_ROUTING.has(entry[0])),
     ),
   );
   return {
@@ -1242,9 +1395,15 @@ async function withLock<T>(
   action: () => Promise<T>,
   mode: "wait" | "try" = "wait",
 ): Promise<T> {
+  const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+  if (platform.windows) {
+    const statePath = canonicalSocketPath(config.stateDirectory).toLowerCase();
+    return await withLockKey(windowsManagement(config).lockResource, deadline, mode, () =>
+      withLockKey(statePath, deadline, mode, action),
+    );
+  }
   const statePath = realpathSync(config.stateDirectory);
   const socketPath = canonicalSocketPath(config.socket);
-  const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   return await withLockKey(`socket:${socketPath}`, deadline, mode, () =>
     withLockKey(statePath, deadline, mode, action),
   );
@@ -1274,9 +1433,486 @@ async function withLockKey<T>(
   throw new Error("Timed out waiting for another pi-mux operation");
 }
 
+function windowsManagement(config: TmuxConfig): WindowsManagement {
+  return new WindowsManagement({ ...config, query: (argv) => tmux(config, argv, true) });
+}
+
+function windowsClaimLock(management: WindowsManagement) {
+  return <T>(action: () => Promise<T>) =>
+    withLockKey(management.claimLockResource, Date.now() + STARTUP_TIMEOUT_MS, "wait", action);
+}
+
+async function claimWindowsLaunch(token: string, command: string[]): Promise<number> {
+  const config = tmuxConfiguration();
+  const management = windowsManagement(config);
+  const route = process.env.PSMUX_TARGET_SESSION;
+  const pane = process.env.TMUX_PANE;
+  const [socket, port, index] = (process.env.TMUX ?? "").split(",");
+  const localAlias = /^\/tmp\/psmux-\d+\/([A-Za-z0-9_.-]+)$/.exec(socket ?? "")?.[1];
+  const intoNamespace =
+    socket === config.socket ||
+    (localAlias !== undefined &&
+      localAlias === management.scope.namespace &&
+      win32.basename(config.socket) === localAlias);
+  if (
+    !intoNamespace ||
+    !/^[1-9]\d{0,4}$/.test(port ?? "") ||
+    Number(port) > 65535 ||
+    !/^\d+$/.test(index ?? "") ||
+    !/^%\d+$/.test(pane ?? "") ||
+    process.env[WINDOWS_RIGHT_ENV] !== token ||
+    !route
+  )
+    throw new Error("Cannot identify a Windows pi launch pane");
+  const prefix = `${management.scope.namespace}__`;
+  if (!route.startsWith(prefix)) throw new Error("Invalid Windows pi launch pane scope");
+  const name = route.slice(prefix.length);
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) throw new Error("Invalid Windows pi launch pane name");
+  const routed = {
+    ...config,
+    env: { ...config.env, TMUX: process.env.TMUX!, PSMUX_TARGET_SESSION: route },
+  };
+  const identity = await tmux(routed, [
+    "display-message",
+    "-p",
+    "-t",
+    pane!,
+    `#{session_name}\t#{pane_id}\t#{pane_pid}\t#{${WINDOWS_RIGHT_ENV}}`,
+  ]);
+  const [sessionName, paneId, panePid, paneToken] = identity.stdout.trimEnd().split("\t");
+  if (
+    sessionName !== name ||
+    paneId !== pane ||
+    paneToken !== token ||
+    !/^[1-9]\d*$/.test(panePid ?? "")
+  )
+    throw new Error("Windows pi launch pane identity changed");
+  const prepare = async () => {
+    const launchToken = process.env.PI_TMUX_LAUNCH_TOKEN;
+    const id = process.env.PI_TMUX_SESSION_ID;
+    if (id && launchToken)
+      await tmux(routed, [
+        "set-option",
+        "-p",
+        "-t",
+        pane!,
+        "@pi-mux-launch",
+        JSON.stringify({ id, pid: Number(panePid), token: launchToken }),
+      ]);
+    await tmux(routed, ["set-option", "-p", "-t", pane!, WINDOWS_RIGHT_OPTION, token]);
+  };
+  const rights = management.createLaunchRights(windowsClaimLock(management));
+  const started = await rights.claimAndStart(
+    token,
+    randomUUID(),
+    () => {
+      const env = { ...process.env };
+      delete env[WINDOWS_RIGHT_ENV];
+      env.TMUX = `${config.socket},${port},${index}`;
+      try {
+        return Bun.spawn(command, { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+      } catch (error) {
+        if (["ENOENT", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? ""))
+          throw new SpawnDidNotStartError(errorMessage(error), { cause: error });
+        throw error;
+      }
+    },
+    prepare,
+  );
+  return started ? await started.started.exited : 1;
+}
+
+type WindowsLaunch = {
+  keys: string[];
+  basis: WindowsManagementBasis;
+  name: string;
+  cwd: string;
+  ownerId?: string;
+  environment: Record<string, string>;
+  command: string[];
+  requireRestored?: boolean;
+};
+
+async function startWindowsLaunch(config: TmuxConfig, action: WindowsLaunch): Promise<string> {
+  const { basis, keys, cwd, name, environment, command, ownerId, requireRestored = true } = action;
+  const management = windowsManagement(config);
+  const rights = management.createLaunchRights(windowsClaimLock(management));
+  const right = await rights.reserveAfterLifecycleAudit(keys, basis, { requireRestored });
+  if (right.state !== "reserved") throw new Error("A competing Windows pi launch is still running");
+  const { token } = right;
+  try {
+    const env: Record<string, string> = { ...environment, [WINDOWS_RIGHT_ENV]: token };
+    const unset = [
+      ...new Set([
+        ...(await excludedGlobalEnvironment(config, env)).filter((key) => !PSMUX_ROUTING.has(key)),
+        ...[...PARENT_ENV_KEYS].filter(
+          (key) => !GENERATED_ENV_KEYS.has(key) && !Object.hasOwn(env, key),
+        ),
+        ...(env.PI_CODING_AGENT_SESSION_DIR === undefined ? ["PI_CODING_AGENT_SESSION_DIR"] : []),
+      ]),
+    ];
+    const invocation = compiledEntry()
+      ? [process.execPath]
+      : [process.execPath, fileURLToPath(import.meta.url)];
+    const payload = Buffer.from(JSON.stringify(command), "utf8").toString("base64");
+    const launch = platform.newSessionLaunch(
+      [...invocation, "windows-claim-launch", token, payload],
+      env,
+      unset,
+    );
+    await tmux(config, [
+      "new-session",
+      "-d",
+      "-s",
+      name,
+      "-n",
+      "pi",
+      "-c",
+      cwd.replaceAll("#", "##"),
+      "-x",
+      String(process.stdout.columns || 80),
+      "-y",
+      String(process.stdout.rows || 24),
+      ...launch.environmentArgs,
+      "--",
+      ...platform.tmuxPaneCommand(launch.paneCommand),
+    ]);
+    const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const status = await rights.status(token);
+      if (status.state === "live" && "receipt" in status) {
+        const audit = await management.audit(
+          `#{session_id}\t#{@pi-mux-windows-start-right}\t#{pane_dead}`,
+          { requireRestored },
+        );
+        const launched = audit.panes.find(({ peer }) => peer.name === name);
+        const target = launched?.rows
+          .map((row) => row.split("\t"))
+          .filter(([, recorded, dead]) => recorded === token && dead === "0");
+        if (!target || target.length !== 1 || !/^\$\d+$/.test(target[0]?.[0] ?? ""))
+          throw new Error("Cannot confirm the Windows pi launch pane");
+        await management.assertLive(basis);
+        await rights.complete(token, status.receipt, ownerId);
+        if (launch.transportKey)
+          await tmux(config, ["set-environment", "-u", "-t", `=${name}`, launch.transportKey]);
+        return target[0]![0]!;
+      }
+      if (status.state === "missing" || status.state === "ended" || status.state === "unknown")
+        throw new Error("The Windows pi launch did not remain active");
+      await Bun.sleep(POLL_INTERVAL_MS);
+    }
+    throw new Error("Timed out confirming the Windows pi launch");
+  } finally {
+    await rights.cancelUnclaimed(token);
+  }
+}
+
+function parseWindowsCreateDispatchWorker(args: string[]): WindowsCreateDispatchWorker {
+  const [socket, generation, name, project, token, cwd, powershell, command] = args;
+  if (
+    args.length !== 8 ||
+    !socket ||
+    !generation ||
+    !/^[0-9a-f]{16}$/.test(generation) ||
+    project === undefined ||
+    [".", ".."].includes(project) ||
+    /[\\/\0\t\r\n]/.test(project) ||
+    name !== `ticket_dispatch_${project ? Buffer.from(project).toString("hex") : "all"}` ||
+    !token ||
+    !UUID.test(token) ||
+    !cwd ||
+    !isAbsolute(cwd) ||
+    cwd.includes("\0") ||
+    !powershell ||
+    !command ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(command)
+  )
+    throw new Error("Invalid Windows dispatcher worker arguments");
+  return {
+    kind: "inspect-create-dispatch-worker",
+    socket,
+    generation,
+    name,
+    project,
+    token,
+    cwd,
+    powershell,
+    command,
+  };
+}
+
+async function createWindowsDispatchWorker(
+  config: TmuxConfig,
+  worker: WindowsCreateDispatchWorker,
+): Promise<void> {
+  const powershell = join(
+    process.env.SystemRoot || "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  if (win32.normalize(worker.powershell).toLowerCase() !== powershell.toLowerCase())
+    throw new Error("Unexpected Windows dispatcher worker shell");
+  const cwd = realpathSync(worker.cwd);
+  if (!statSync(cwd).isDirectory()) throw new Error("Invalid Windows dispatcher workspace");
+  const management = windowsManagement(config);
+  const audit = await management.audit("#{session_id}");
+  if (audit.basis.instance !== worker.generation)
+    throw new Error("Windows pi-mux management changed before dispatcher creation");
+  if (audit.panes.some(({ peer }) => peer.name === worker.name))
+    throw new Error(`Dispatcher session already exists: ${worker.name}`);
+  await tmux(config, [
+    "new-session",
+    "-d",
+    "-s",
+    worker.name,
+    "-c",
+    cwd.replaceAll("#", "##"),
+    "-e",
+    `TICKET_DISPATCH_WORKER_TOKEN=${worker.token}`,
+    "-e",
+    "TICKET_DISPATCH_ROLE=dispatcher",
+    "-e",
+    `TICKET_DISPATCH_PROJECT=${worker.project}`,
+    "--",
+    powershell,
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+    worker.command,
+  ]);
+  await management.assertLive(audit.basis);
+}
+async function selectWindowsLaunchPanes<
+  T extends {
+    token: string | undefined;
+    paneToken: string | undefined;
+    hasPiMetadata?: boolean;
+  },
+>(name: string, rows: T[], rights: WindowsLaunchRights) {
+  const groups = new Map<string, T[]>();
+  const selected: { row: T; status?: Extract<WindowsLaunchStatus, { receipt: unknown }> }[] = [];
+  for (const row of rows) {
+    const { token, paneToken } = row;
+    if (paneToken && paneToken !== token)
+      throw new Error(`Conflicting Windows pi launch markers in ${name}`);
+    if (!token) {
+      selected.push({ row });
+      continue;
+    }
+    if (!UUID.test(token)) throw new Error(`Invalid Windows pi launch token in ${name}`);
+    const group = groups.get(token) ?? [];
+    group.push(row);
+    groups.set(token, group);
+  }
+  for (const [token, group] of groups) {
+    const status = await rights.status(token);
+    if (status.state === "missing" || status.state === "ended" || status.state === "reserved") {
+      if (
+        group.some(({ hasPiMetadata }) => hasPiMetadata) ||
+        (status.state === "missing" && group.some(({ paneToken }) => paneToken))
+      )
+        throw new Error(`Windows pi pane has no verifiable live launch in ${name}`);
+      continue;
+    }
+    const marked = group.filter(({ paneToken }) => paneToken === token);
+    if (
+      status.state !== "live" ||
+      !("receipt" in status) ||
+      marked.length !== 1 ||
+      group.some(({ paneToken, hasPiMetadata }) => !paneToken && hasPiMetadata)
+    )
+      throw new Error(`Cannot confirm the Windows pi launch outcome in ${name}`);
+    selected.push({ row: marked[0]!, status });
+  }
+  return selected;
+}
+
+async function readWindowsDispatchInventory(config: TmuxConfig) {
+  const management = windowsManagement(config);
+  const rights = management.createLaunchRights(windowsClaimLock(management));
+  const unaccounted = new Set(await rights.fenceForDispatchInventory());
+  const audit = await management.audit(
+    `#{TICKET_DISPATCH_ROLE}\t#{TICKET_DISPATCH_PROJECT}\t#{TICKET_DISPATCH_ID}\t#{session_created}\t#{pane_dead}\t#{${WINDOWS_RIGHT_ENV}}\t#{${WINDOWS_RIGHT_OPTION}}`,
+  );
+  const sessions: { name: string; project: string; ticketId: string; created: number }[] = [];
+  for (const { peer, rows } of audit.panes) {
+    const parsed = rows.flatMap((row) => {
+      const parts = row.split("\t");
+      if (parts.length !== 7 || !["0", "1"].includes(parts[4]!))
+        throw new Error(`Invalid Windows ticket dispatch pane in ${peer.name}`);
+      const [role, project, ticketId, time, dead, token, paneToken] = parts;
+      return role === "pi" && dead === "0" ? [{ project, ticketId, time, token, paneToken }] : [];
+    });
+    let entry: (typeof sessions)[number] | undefined;
+    for (const {
+      row: { project, ticketId, time, token },
+      status,
+    } of await selectWindowsLaunchPanes(peer.name, parsed, rights)) {
+      const created = Number(time);
+      if (
+        !project ||
+        [".", ".."].includes(project) ||
+        /[\\/\0\r\n]/.test(project) ||
+        !ticketId ||
+        ticketId.length > DISPATCH_TICKET_ID_MAX_LENGTH ||
+        !DISPATCH_TICKET_ID_PATTERN.test(ticketId) ||
+        !/^[1-9]\d*$/.test(time ?? "") ||
+        !Number.isSafeInteger(created)
+      )
+        throw new Error(`Invalid Windows ticket dispatch metadata in ${peer.name}`);
+      if (token && status) {
+        if (!unaccounted.delete(token))
+          throw new Error(`Unexpected or duplicate Windows dispatch launch in ${peer.name}`);
+        await rights.completeDispatched(
+          token,
+          status.receipt,
+          audit.basis,
+          ticketLaunchKey(project, ticketId),
+        );
+      }
+      const candidate = { name: peer.name, project, ticketId, created };
+      if (entry && JSON.stringify(entry) !== JSON.stringify(candidate))
+        throw new Error(`Ambiguous Windows ticket dispatch metadata in ${peer.name}`);
+      entry = candidate;
+    }
+    if (entry) sessions.push(entry);
+  }
+  for (const token of unaccounted) {
+    if ((await rights.status(token)).state !== "ended")
+      throw new Error("Cannot locate a live Windows ticket launch in the pane inventory");
+  }
+  await management.assertLive(audit.basis);
+  return sessions;
+}
+
+async function inspectWindowsBeforeOpen(
+  config: TmuxConfig,
+  id: string,
+  expected?: WindowsManagementBasis,
+) {
+  const basis = expected ?? (await windowsManagement(config).currentBasis());
+  if (!basis) return { running: undefined, managed: undefined, basis: undefined };
+  return await inspectWindowsRunningSession(config, id, false, basis);
+}
+
+async function inspectWindowsRunningSession(
+  config: TmuxConfig,
+  id: string,
+  requireRestored = true,
+  expected?: WindowsManagementBasis,
+) {
+  const management = windowsManagement(config);
+  const audit = await management.audit(
+    `${PANE_FORMAT}\t#{PI_TMUX_SESSION_ID}\t#{TICKET_DISPATCH_ROLE}\t#{${WINDOWS_RIGHT_ENV}}\t#{@pi-mux-launch}\t#{session_path}\t#{${WINDOWS_RIGHT_OPTION}}\t#{TICKET_DISPATCH_PROJECT}\t#{TICKET_DISPATCH_ID}`,
+    { requireRestored },
+  );
+  if (expected && !launchBasisStillLive(expected, audit.basis))
+    throw new Error("The dedicated psmux management generation changed during inspection");
+  const rights = management.createLaunchRights(windowsClaimLock(management));
+  const allPanes: string[] = [];
+  const candidates = new Map<string, ManagedSession>();
+  const seenTokens = new Set<string>();
+  for (const { peer, rows } of audit.panes) {
+    const live = rows.flatMap((row) => {
+      const fields = row.split("\t");
+      if (fields.length !== 16) throw new Error("Invalid Windows pi pane inventory");
+      const [pane, session, name, metadata, pid, dead, , , , , token, launch, , paneToken] = fields;
+      if (!pane || !session || !name || !pid || !["0", "1"].includes(dead!))
+        throw new Error("Invalid Windows pi pane identity");
+      return dead === "0"
+        ? [
+            {
+              fields,
+              pane,
+              session,
+              name,
+              pid,
+              token,
+              paneToken,
+              hasPiMetadata: !!(metadata || launch),
+            },
+          ]
+        : [];
+    });
+    for (const {
+      row: { fields, session, name, pid, token },
+      status,
+    } of await selectWindowsLaunchPanes(peer.name, live, rights)) {
+      const [, , , metadata, , , , , managedId, role, , launch, cwd, , project, ticketId] = fields;
+      if (metadata) allPanes.push(fields.slice(0, 8).join("\t"));
+      if (managedId && (!SESSION_ID_PATTERN.test(managedId) || !isAbsolute(cwd ?? "")))
+        throw new Error("Invalid Windows managed conversation or workspace");
+      if (token && status) {
+        if (seenTokens.has(token)) throw new Error(`Duplicate Windows pi launch token in ${name}`);
+        seenTokens.add(token);
+        if (role === "pi") {
+          if (!project || !ticketId)
+            throw new Error(`Cannot identify a Windows ticket dispatch in ${name}`);
+          if (!status.completed)
+            await rights.completeDispatched(
+              token,
+              status.receipt,
+              audit.basis,
+              ticketLaunchKey(project, ticketId),
+            );
+          if (!metadata) continue;
+        }
+        if (metadata) {
+          const published = parseLivePaneRows(fields.slice(0, 8).join("\t"), "list");
+          if (
+            published.length !== 1 ||
+            published[0]!.pid !== status.receipt.child.pid ||
+            (managedId !== undefined && managedId !== "" && published[0]!.id !== managedId)
+          )
+            throw new Error(
+              `Published metadata does not correspond to the Windows launch in ${name}`,
+            );
+        }
+      }
+      if (
+        !metadata &&
+        (role === "pi" ||
+          (launch &&
+            (!managedId ||
+              !matchesLaunch(launch, managedId, Number(pid), launchRecordToken(launch)))))
+      )
+        throw new Error(`Cannot identify the starting pi in ${name}`);
+      if (!metadata && managedId && !launch)
+        throw new Error(`Cannot identify the starting managed conversation in ${name}`);
+      if (managedId?.toLowerCase() === id.toLowerCase())
+        candidates.set(session, { session, id: managedId, cwd: cwd!, temporary: false });
+    }
+  }
+  const running = parseLivePaneRows(allPanes.join("\n"), "list").filter(
+    (pane) => pane.id.toLowerCase() === id.toLowerCase(),
+  );
+  if (
+    running.length > 1 ||
+    candidates.size > 1 ||
+    (running[0] && candidates.size > 0 && !candidates.has(running[0].session))
+  )
+    throw new Error(`Multiple pi processes are running for session ${id}`);
+  const starting = (await rights.inspect([conversationLaunchKey(id)])) === "present";
+  await management.assertLive(audit.basis);
+  return {
+    running: running[0],
+    managed: [...candidates.values()][0],
+    starting,
+    restoring: audit.startup?.restoring.includes(id.toLowerCase()),
+    basis: audit.basis,
+  };
+}
+
 type ServerLifetime = { pid: number; generation: string };
 
 async function serverLifetime(config: TmuxConfig): Promise<ServerLifetime | undefined> {
+  if (platform.windows) {
+    const basis = await windowsManagement(config).currentBasis();
+    if (!basis) return;
+    return { pid: Number(basis.witnesses[0]!.split(":")[0]), generation: basis.instance };
+  }
   const query = ["display-message", "-p", "#{pid}"];
   const generationOption = "@pi-mux-generation";
   const batch = config.noStart && !platform.windows;
@@ -1299,7 +1935,11 @@ async function verifyServerLifetime(
   phase = "restart",
 ): Promise<void> {
   const current = await serverLifetime(config);
-  if (!current || current.pid !== expected.pid || current.generation !== expected.generation)
+  if (
+    !current ||
+    (!platform.windows && current.pid !== expected.pid) ||
+    current.generation !== expected.generation
+  )
     throw new Error(`Dedicated server changed during ${phase}`);
 }
 
@@ -1327,7 +1967,116 @@ async function restartIsWaiting(config: TmuxConfig): Promise<boolean> {
   });
 }
 
+const WINDOWS_LIFECYCLE_FORMAT = `${PANE_FORMAT}\t#{PI_TMUX_SESSION_ID}\t#{PI_TMUX_TEMPORARY}\t#{session_path}`;
+
+async function auditWindowsLifecycle(management: WindowsManagement) {
+  const audit = await management.audit(WINDOWS_LIFECYCLE_FORMAT, { requireRestored: false });
+  if (!audit.startup) throw new Error("Dedicated psmux management has not been initialized");
+  const managed: ManagedSession[] = [];
+  const pids: number[] = [];
+  const activeIds = new Set<string>();
+  for (const { peer, rows } of audit.panes) {
+    let session: ManagedSession | undefined;
+    for (const row of rows) {
+      const fields = row.split("\t");
+      const [, sessionId, name, metadata, pid, dead, , , id, temporary, cwd] = fields;
+      if (
+        fields.length !== 11 ||
+        !sessionId ||
+        name !== peer.name ||
+        !["0", "1"].includes(dead ?? "") ||
+        (id && (!SESSION_ID_PATTERN.test(id) || !isAbsolute(cwd ?? ""))) ||
+        (temporary && temporary !== id)
+      )
+        throw new Error(`Invalid Windows pi-mux lifecycle inventory in ${peer.name}`);
+      if (id) {
+        const candidate = { id, cwd: cwd!, session: sessionId, temporary: Boolean(temporary) };
+        if (session && JSON.stringify(session) !== JSON.stringify(candidate))
+          throw new Error(`Conflicting Windows conversation ownership in ${peer.name}`);
+        session = candidate;
+      }
+      if (dead !== "0") continue;
+      if (!/^[1-9]\d*$/.test(pid ?? ""))
+        throw new Error(`Cannot identify a live pane process in ${peer.name}`);
+      pids.push(Number(pid));
+      if (metadata) {
+        const [pane] = parseLivePaneRows(fields.slice(0, 8).join("\t"), "list");
+        if (!pane || activeIds.has(pane.id.toLowerCase()))
+          throw new Error(`Cannot uniquely identify Windows pi in ${peer.name}`);
+        activeIds.add(pane.id.toLowerCase());
+        pids.push(pane.pid);
+      }
+    }
+    if (session) managed.push(session);
+  }
+  if (new Set(managed.map(({ id }) => id.toLowerCase())).size !== managed.length)
+    throw new Error("Multiple Windows psmux sessions own the same conversation");
+  return { ...audit, startup: audit.startup, managed, pids };
+}
+
+async function restartWindowsServer(config: Config, force: boolean): Promise<number> {
+  return await withLock(config, async () => {
+    const previous = readSnapshot(config);
+    const management = windowsManagement(config);
+    const rights = management.createLaunchRights(windowsClaimLock(management));
+    const original = await management.currentBasis();
+    if (original) {
+      const audit = await auditWindowsLifecycle(management);
+      if (!launchBasisStillLive(original, audit.basis))
+        throw new Error("Dedicated psmux generation changed during restart");
+      if (!force && audit.panes.some(({ peer }) => !peer.held))
+        throw new Error(
+          "Cannot safely restart live sessions on this psmux build: no atomic waiting-user shutdown guard; use restart --force to skip the wait",
+        );
+      if (previous?.generation && previous.generation !== original.instance)
+        throw new Error("Snapshot belongs to another psmux generation");
+      const excluded = new Set(
+        audit.managed.filter(({ temporary }) => temporary).map(({ id }) => id.toLowerCase()),
+      );
+      const restoring = new Set(audit.startup.restoring);
+      const candidates = uniqueCandidates([
+        ...(previous?.sessions ?? []).filter(
+          ({ id }) => restoring.has(id.toLowerCase()) && !excluded.has(id.toLowerCase()),
+        ),
+        ...audit.managed.filter(({ temporary }) => !temporary).map(({ id, cwd }) => ({ id, cwd })),
+      ]);
+      const panes = captureWindowsProcesses(audit.pids);
+      const activeLaunches = await rights.fenceForRestart(force);
+      await management.assertLive(audit.basis);
+      writeSnapshot(config, {
+        version: 1,
+        generation: original.instance,
+        cwds: previous?.cwds ?? [],
+        sessions: candidates,
+      });
+      await management.prepareStartup(
+        audit.basis,
+        candidates.map(({ id }) => id),
+        windowsClaimLock(management),
+      );
+      const current = await management.currentBasis();
+      if (
+        current?.instance !== audit.basis.instance ||
+        JSON.stringify(current.witnesses) !== JSON.stringify(audit.basis.witnesses)
+      )
+        throw new Error("Dedicated psmux peers changed before restart stop");
+      const peers = await stopWindowsPeers(management.scope, audit);
+      await waitForWindowsExit([...panes, ...activeLaunches, ...peers], {
+        timeoutMs: STARTUP_TIMEOUT_MS,
+        pollMs: POLL_INTERVAL_MS,
+      });
+    } else {
+      await rights.fenceForRestart(false);
+    }
+    if (await management.currentBasis())
+      throw new Error("Dedicated psmux did not remain stopped during restart");
+    prepareDirectory(config.directory);
+    return (await startAndRestore(config, true, undefined, "fresh")).failures > 0 ? 2 : 0;
+  });
+}
+
 async function restartServer(config: Config, force: boolean): Promise<number> {
+  if (platform.windows) return await restartWindowsServer(config, force);
   const original = await withLock(config, () => serverLifetime(config));
   while (true) {
     const result = await withLock(config, async () => {
@@ -1335,7 +2084,7 @@ async function restartServer(config: Config, force: boolean): Promise<number> {
         if (await serverLifetime(config))
           throw new Error("Dedicated server changed during restart");
         prepareDirectory(config.directory);
-        return (await startAndRestore(config, true)) > 0 ? 2 : 0;
+        return (await startAndRestore(config, true)).failures > 0 ? 2 : 0;
       }
       await verifyServerLifetime(config, original);
       readSnapshot(config);
@@ -1398,7 +2147,7 @@ async function restartServer(config: Config, force: boolean): Promise<number> {
       if (await serverLifetime(config))
         throw new Error("Dedicated server did not remain stopped during restart");
       prepareDirectory(config.directory);
-      return (await startAndRestore(config, true)) > 0 ? 2 : 0;
+      return (await startAndRestore(config, true)).failures > 0 ? 2 : 0;
     });
     if (result !== undefined) return result;
     await Bun.sleep(POLL_INTERVAL_MS);
@@ -1421,7 +2170,35 @@ type ReloadProgress = {
   inFlight: Map<string, InFlightReload>;
 };
 
+async function reloadWindowsPanes(config: Config, onlyId?: string): Promise<number> {
+  return await withLock(config, async () => {
+    const management = windowsManagement(config);
+    if (!(await management.currentBasis())) {
+      if (onlyId !== undefined)
+        throw new Error(`Cannot reload session ${onlyId}: the dedicated server is not running`);
+      await management.createLaunchRights(windowsClaimLock(management)).fenceForRestart(false);
+      if (await management.currentBasis())
+        throw new Error("Dedicated psmux generation changed during reload");
+      prepareDirectory(config.directory);
+      return (await startAndRestore(config, true, undefined, "fresh")).failures > 0 ? 2 : 0;
+    }
+    const snapshot = readSnapshot(config);
+    if (onlyId) {
+      const audit = await auditWindowsLifecycle(management);
+      if (!audit.managed.some(({ id }) => id === onlyId)) {
+        if (snapshot?.sessions.some(({ id }) => id === onlyId) || (await findSaved(config, onlyId)))
+          throw new Error(`The conversation is not running: ${onlyId}`);
+        throw new Error(`Session not found (use the complete ID): ${onlyId}`);
+      }
+    }
+    throw new Error(
+      "Cannot safely reload live panes on this psmux build: no atomic waiting-user respawn guard",
+    );
+  });
+}
+
 async function reloadPanes(config: Config, onlyId?: string): Promise<number> {
+  if (platform.windows) return await reloadWindowsPanes(config, onlyId);
   const original = await withLock(config, () => serverLifetime(config));
   if (!original) {
     if (onlyId !== undefined)
@@ -1429,7 +2206,7 @@ async function reloadPanes(config: Config, onlyId?: string): Promise<number> {
     return await withLock(config, async () => {
       if (await serverLifetime(config)) throw new Error("Dedicated server changed during reload");
       prepareDirectory(config.directory);
-      return (await startAndRestore(config, true)) > 0 ? 2 : 0;
+      return (await startAndRestore(config, true)).failures > 0 ? 2 : 0;
     });
   }
   if (!original.generation) throw new Error("Dedicated server has not been initialized by pi-mux");
@@ -1857,21 +2634,12 @@ async function refreshSessionEnvironment(
       await tmux(config, ["set-environment", "-u", "-t", session, key]);
 }
 
+type WindowsBootstrap = "start" | "fresh" | WindowsManagementBasis;
+
 async function bootstrapServer(
   config: Config,
-  mode: "start" | "existing" = "start",
-): Promise<string> {
-  if (mode === "start") {
-    if (platform.windows) {
-      if (!(await serverLifetime({ ...config, noStart: true }))) {
-        await tmux(config, ["start-server", ";", "set-option", "-g", "exit-empty", "off"]);
-      }
-    } else await tmux(config, ["start-server"]);
-  }
-  await tmux(config, ["source-file", config.tmuxConfig]);
-  const existing = await serverOption(config, "@pi-mux-generation");
-  const generation = existing || randomUUID();
-  if (!existing) await tmux(config, ["set-option", "-g", "@pi-mux-generation", generation]);
+  mode: WindowsBootstrap | "existing" = "start",
+): Promise<{ generation: string; basis?: WindowsManagementBasis }> {
   const invocation = compiledEntry()
     ? [process.execPath]
     : [process.execPath, fileURLToPath(import.meta.url)];
@@ -1886,38 +2654,88 @@ async function bootstrapServer(
           PI_CODING_AGENT_DIR: config.agentDir,
         },
   );
+  if (platform.windows) {
+    const management = windowsManagement(config);
+    const existing = typeof mode === "object" ? mode : await management.currentBasis();
+    let proof: string | undefined;
+    if (existing) {
+      if (mode === "fresh")
+        throw new Error("A different psmux generation appeared before fresh bootstrap");
+    } else if (mode !== "existing") {
+      proof = randomUUID();
+      await tmux({ ...config, env: { ...config.env, [WINDOWS_BOOTSTRAP_PROOF]: proof } }, [
+        "start-server",
+      ]);
+      const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+      while (!(await management.currentBasis()) && Date.now() < deadline) {
+        await Bun.sleep(POLL_INTERVAL_MS);
+      }
+    }
+    const audit = await management.audit("#{pane_id}", { requireRestored: false });
+    if (existing && !launchBasisStillLive(existing, audit.basis))
+      throw new Error("The dedicated psmux management generation changed during startup");
+    await configureWindowsPeer(management.scope, audit, {
+      configFile: config.tmuxConfig,
+      hookCommand,
+      proof,
+    });
+    await management.assertLive(audit.basis);
+    return { generation: audit.basis.instance, basis: audit.basis };
+  }
+  if (mode !== "existing") await tmux(config, ["start-server"]);
+  await tmux(config, ["source-file", config.tmuxConfig]);
+  const existing = await serverOption(config, "@pi-mux-generation");
+  const generation = existing || randomUUID();
+  if (!existing) await tmux(config, ["set-option", "-g", "@pi-mux-generation", generation]);
   await tmux(config, ["set-option", "-g", "@pi-mux-snapshot", hookCommand]);
-  return generation;
+  return { generation };
 }
 
 async function startAndRestore(
   config: Config,
   restoreRequested: boolean,
   temporaryTarget?: string,
-): Promise<number> {
-  const generation = await bootstrapServer(config);
-  const restored = await serverOption(config, "@pi-mux-restored");
-  if (!restoreRequested && restored === generation) return 0;
+  bootstrap: WindowsBootstrap = "start",
+): Promise<{ failures: number; basis?: WindowsManagementBasis }> {
+  const { generation, basis } = await bootstrapServer(config, bootstrap);
+  const management = basis ? windowsManagement(config) : undefined;
+  if (management && basis) {
+    await management.assertLive(basis);
+    if (!restoreRequested && management.startupState(basis)?.restored)
+      return { failures: 0, basis };
+    const restoring = (readSnapshot(config)?.sessions ?? [])
+      .filter(({ id }) => id !== temporaryTarget)
+      .map(({ id }) => id);
+    await management.prepareStartup(basis, restoring, windowsClaimLock(management));
+  }
+  const restored = platform.windows ? "" : await serverOption(config, "@pi-mux-restored");
+  if (!restoreRequested && restored === generation) return { failures: 0 };
   let failures = 0;
   try {
-    failures = await restoreSessions(config, generation, temporaryTarget);
+    failures = await restoreSessions(config, generation, temporaryTarget, basis);
   } catch (error) {
     console.error(`pi-mux: restore failed: ${errorMessage(error)}`);
     failures++;
   }
-  await tmux(config, ["set-option", "-g", "@pi-mux-restored", generation]);
-  return failures;
+  if (management && basis) {
+    await management.markRestored(basis, windowsClaimLock(management));
+    await management.assertLive(basis);
+  } else await tmux(config, ["set-option", "-g", "@pi-mux-restored", generation]);
+  return { failures, basis };
 }
 
 async function restoreSessions(
   config: Config,
   generation: string,
   temporaryTarget?: string,
+  windowsBasis?: WindowsManagementBasis,
 ): Promise<number> {
+  const management = windowsBasis ? windowsManagement(config) : undefined;
   const previous = readSnapshot(config);
   const temporaryIds = new Set(
     (await managedSessions(config)).filter((entry) => entry.temporary).map((entry) => entry.id),
   );
+  if (management && windowsBasis) await management.assertLive(windowsBasis);
   if (temporaryTarget) temporaryIds.add(temporaryTarget);
   const candidates = uniqueCandidates(previous?.sessions ?? []).filter(
     (entry) => !temporaryIds.has(entry.id),
@@ -1934,17 +2752,26 @@ async function restoreSessions(
   let failures = 0;
   for (const candidate of candidates) {
     try {
-      const resolution = await resolveSaved(config, candidate.id, candidate.cwd);
+      const resolution = await resolveSaved(config, candidate.id, candidate.cwd, windowsBasis);
       if (resolution.saved) {
-        const restored = await openResolvedSession(config, candidate.id, resolution);
+        const restored = await openResolvedSession(
+          config,
+          candidate.id,
+          resolution,
+          "normal",
+          windowsBasis,
+        );
         if (restored.startup !== "ready")
           throw new Error("Running pi has not confirmed initialization completion");
       } else {
         console.error(`pi-mux: restore ${candidate.id}: saved conversation not found; removed`);
         state = { ...state, sessions: state.sessions.filter((entry) => entry.id !== candidate.id) };
       }
+      if (management && windowsBasis) await management.assertLive(windowsBasis);
       writeSnapshot(config, state);
-      await tmux(config, ["set-option", "-gu", `@pi-mux-restoring-${candidate.id}`]);
+      if (management && windowsBasis) {
+        await management.clearRestoring(windowsBasis, candidate.id, windowsClaimLock(management));
+      } else await tmux(config, ["set-option", "-gu", `@pi-mux-restoring-${candidate.id}`]);
     } catch (error) {
       failures++;
       console.error(`pi-mux: restore ${candidate.id}: ${errorMessage(error)}`);
@@ -1973,10 +2800,18 @@ async function snapshotSessions(
   const candidates = (previous?.sessions ?? []).filter(
     (candidate) => !temporaryIds.has(candidate.id),
   );
-  const markers = await tmuxQueries(
-    config,
-    candidates.map(({ id }) => ["show-options", "-gqv", `@pi-mux-restoring-${id}`]),
-  );
+  const markers = platform.windows
+    ? await Promise.all(
+        candidates.map(async ({ id }) => ({
+          exitCode: 0,
+          stderr: "",
+          stdout: await serverOption(config, `@pi-mux-restoring-${id}`),
+        })),
+      )
+    : await tmuxQueries(
+        config,
+        candidates.map(({ id }) => ["show-options", "-gqv", `@pi-mux-restoring-${id}`]),
+      );
   const restoring = candidates.filter((_, index) => {
     const result = markers[index]!;
     if (result.exitCode !== 0) throw new Error(`tmux show-options failed: ${result.stderr.trim()}`);
@@ -2000,11 +2835,53 @@ async function snapshotSessions(
 }
 
 async function setRestoringSessions(config: Config, candidates: Candidate[]): Promise<void> {
+  if (platform.windows) return;
   for (const { id } of candidates)
     await tmux(config, ["set-option", "-g", `@pi-mux-restoring-${id}`, "1"]);
 }
 
 async function managedSessions(config: TmuxConfig, strict = false): Promise<ManagedSession[]> {
+  if (platform.windows) {
+    const management = windowsManagement(config);
+    const basis = await management.currentBasis();
+    if (!basis && !strict) return [];
+    const audit = await management.audit(
+      "#{session_id}\t#{PI_TMUX_SESSION_ID}\t#{PI_TMUX_TEMPORARY}\t#{session_path}\t#{pane_dead}\t#{PI_MUX_WINDOWS_START_RIGHT}",
+      { requireRestored: false },
+    );
+    const rights = management.createLaunchRights(windowsClaimLock(management));
+    const managed: ManagedSession[] = [];
+    for (const { peer, rows } of audit.panes) {
+      let candidate: ManagedSession | undefined;
+      for (const row of rows) {
+        const parts = row.split("\t");
+        const [session, id, temporary, cwd, dead, token] = parts;
+        if (parts.length !== 6 || !/^\$\d+$/.test(session ?? "") || !["0", "1"].includes(dead!))
+          throw new Error(`Invalid Windows managed session in ${peer.name}`);
+        if (!id || dead === "1") continue;
+        if (
+          !SESSION_ID_PATTERN.test(id) ||
+          !isAbsolute(cwd ?? "") ||
+          (temporary && temporary !== id)
+        )
+          throw new Error(`Invalid Windows conversation metadata in ${peer.name}`);
+        if (token) {
+          if (!UUID.test(token)) throw new Error(`Invalid Windows launch token in ${peer.name}`);
+          const status = await rights.status(token);
+          if (["missing", "ended", "reserved"].includes(status.state)) continue;
+          if (status.state !== "live")
+            throw new Error(`Cannot verify Windows launch in ${peer.name}`);
+        }
+        const current = { session: session!, id, cwd: cwd!, temporary: temporary === id };
+        if (candidate && JSON.stringify(candidate) !== JSON.stringify(current))
+          throw new Error(`Ambiguous Windows conversation metadata in ${peer.name}`);
+        candidate = current;
+      }
+      if (candidate) managed.push(candidate);
+    }
+    await management.assertLive(audit.basis);
+    return managed;
+  }
   const listed = await tmux(config, ["list-sessions", "-F", "#{session_id}"], true);
   if (listed.exitCode !== 0) {
     if (!strict && (serverIsAbsent(config, listed.stderr) || listed.stderr.includes("no sessions")))
@@ -2083,6 +2960,19 @@ async function tmuxQueries(config: TmuxConfig, commands: string[][]) {
 }
 
 async function serverOption(config: TmuxConfig, option: string): Promise<string> {
+  if (
+    platform.windows &&
+    (option === "@pi-mux-generation" || option.startsWith("@pi-mux-restor"))
+  ) {
+    const management = windowsManagement(config);
+    const basis = await management.currentBasis();
+    if (option === "@pi-mux-generation") return basis?.instance ?? "";
+    const state = basis && management.startupState(basis);
+    if (option === "@pi-mux-restored") return state?.restored ? state.instance : "";
+    return state?.restoring.includes(option.slice("@pi-mux-restoring-".length).toLowerCase())
+      ? "1"
+      : "";
+  }
   return (await tmux(config, ["show-options", "-gqv", option])).stdout.trim();
 }
 
@@ -2186,7 +3076,11 @@ function writeSnapshot(config: TmuxConfig, state: RestoreState): void {
   }
 }
 
-async function createNew(config: Config, request?: string): Promise<Pane> {
+async function createNew(
+  config: Config,
+  request?: string,
+  windowsBasis?: WindowsManagementBasis,
+): Promise<Pane> {
   const cwd = process.cwd();
   if (request === undefined) {
     const candidates = (await livePanes(config, "list")).filter(
@@ -2222,6 +3116,7 @@ async function createNew(config: Config, request?: string): Promise<Pane> {
       ...(request === undefined ? { warm: true } : { request }),
     },
     name,
+    windowsBasis,
   );
   if (request !== undefined) return await waitForSession(config, created ?? name, id, "accepted");
   return await waitForSession(config, created ?? name, id);
@@ -2287,6 +3182,7 @@ function errorMessage(error: unknown): string {
 }
 
 type SavedSessionResolution = {
+  windowsBasis?: WindowsManagementBasis;
   running?: Pane;
   managed?: ManagedSession;
   saved?: Session;
@@ -2297,8 +3193,13 @@ async function resolveSaved(
   config: Config,
   id: string,
   restoreCwd?: string,
+  expected?: WindowsManagementBasis,
 ): Promise<SavedSessionResolution> {
-  const inspection = await inspectRunningSession(config, id).catch((error: unknown) => {
+  const inspection = await (
+    platform.windows
+      ? inspectWindowsBeforeOpen(config, id, expected)
+      : inspectRunningSession(config, id).then((result) => ({ ...result, basis: undefined }))
+  ).catch((error: unknown) => {
     if (restoreCwd === undefined) throw error;
     return { error };
   });
@@ -2318,7 +3219,13 @@ async function resolveSaved(
     if (!existsSync(candidate.cwd) || !statSync(candidate.cwd).isDirectory())
       throw new Error(`Session working directory does not exist: ${candidate.cwd}`);
   }
-  return { running, managed, saved, recovery };
+  return {
+    running,
+    managed,
+    saved,
+    recovery,
+    windowsBasis: inspection.basis,
+  };
 }
 
 function parseDispatchTicketOperation(args: string[]): DispatchTicketOperation {
@@ -2379,6 +3286,19 @@ async function withSessionAudit<T>(
 
 async function inspectSession(config: TmuxConfig, id: string): Promise<SessionInspection> {
   try {
+    if (platform.windows)
+      return await withLock(
+        config,
+        async () => {
+          const { running, managed, starting, restoring, basis } =
+            await inspectWindowsRunningSession(config, id);
+          const present = running || managed || starting || restoring;
+          const saved = present ? undefined : await findSaved(config, id);
+          await windowsManagement(config).assertLive(basis!);
+          return present ? { state: "present" } : { state: "absent", file: saved?.file ?? null };
+        },
+        "try",
+      );
     return await withSessionAudit<SessionInspection>(config, async (lifetime) => {
       const wasPresent = await auditSessionPresence(config, id);
       const saved = wasPresent ? undefined : await findSaved(config, id);
@@ -2396,11 +3316,46 @@ async function launchDispatchedTicket(
   config: TmuxConfig,
   operation: DispatchTicketOperation,
 ): Promise<DispatchTicketLaunch> {
-  if (process.platform !== "linux") throw new Error("Ticket dispatch launch requires Linux");
+  if (!platform.windows && process.platform !== "linux")
+    throw new Error("Ticket dispatch launch requires Linux or Windows");
   if (operation.socket !== config.socket)
     throw new Error("Ticket dispatch socket does not match pi-mux");
   const cwd = realpathSync(operation.cwd);
   if (!statSync(cwd).isDirectory()) throw new Error(`Workspace is not a directory: ${cwd}`);
+  if (platform.windows)
+    return await withLock(
+      config,
+      async () => {
+        const keys = [
+          conversationLaunchKey(operation.ownerId),
+          ticketLaunchKey(operation.project, operation.ticketId),
+        ];
+        const management = windowsManagement(config);
+        const rights = management.createLaunchRights(windowsClaimLock(management));
+        await rights.discardUnclaimed(keys);
+        const { running, managed, starting, restoring, basis } = await inspectWindowsRunningSession(
+          config,
+          operation.ownerId,
+        );
+        if (running || managed || starting || restoring) return { state: "present" };
+        const audit = await management.audit(PANE_FORMAT);
+        if (audit.panes.some(({ peer }) => peer.name === operation.sessionName))
+          throw new Error(`Ticket tmux session already exists: ${operation.sessionName}`);
+        prepareDirectory(config.stateDirectory);
+        registerWorkspaces(config, [cwd]);
+        const session = await startWindowsLaunch(config, {
+          keys,
+          basis: basis!,
+          name: operation.sessionName,
+          cwd,
+          ownerId: operation.ownerId,
+          environment: { ...config.env, ...dispatchTicketEnvironment(config, operation) },
+          command: [executable("pi"), "--", operation.prompt],
+        });
+        return { state: "launched", session };
+      },
+      "try",
+    );
   return await withSessionAudit<DispatchTicketLaunch>(config, async (lifetime) => {
     const isPresent = await auditSessionPresence(config, operation.ownerId);
     await verifyServerLifetime(config, lifetime, "ticket dispatch launch");
@@ -2416,25 +3371,37 @@ async function launchDispatchedTicket(
   });
 }
 
-function dispatchTicketSessionArgs(
+function dispatchTicketEnvironment(
   config: TmuxConfig,
-  { project, ticketId, sessionName, prompt }: DispatchTicketOperation,
-  cwd: string,
-): string[] {
+  { project, ticketId }: DispatchTicketOperation,
+): Record<string, string> {
   const desired: Record<string, string> = {
     PI_CODING_AGENT_DIR: config.agentDir,
     TICKET_DISPATCH_ROLE: "pi",
     TICKET_DISPATCH_PROJECT: project,
     TICKET_DISPATCH_ID: ticketId,
   };
+  const keys = ["HOME", "PATH", "PI_CODING_AGENT_SESSION_DIR"];
+  if (platform.windows) keys.push("USERPROFILE", "PSMUX_DATA_DIR", "PSMUX_NO_WARM");
+  for (const key of keys) {
+    const value = config.env[key];
+    if (value !== undefined) desired[key] = value;
+  }
+  return desired;
+}
+
+function dispatchTicketSessionArgs(
+  config: TmuxConfig,
+  operation: DispatchTicketOperation,
+  cwd: string,
+): string[] {
+  const { sessionName, prompt } = operation;
+  const desired = dispatchTicketEnvironment(config, operation);
   const unset = [...PARENT_ENV_KEYS].filter(
     (key) => !GENERATED_ENV_KEYS.has(key) && !Object.hasOwn(desired, key),
   );
-  for (const key of ["HOME", "PATH", "PI_CODING_AGENT_SESSION_DIR"]) {
-    const value = config.env[key];
-    if (value !== undefined) desired[key] = value;
-    else if (key === "PI_CODING_AGENT_SESSION_DIR") unset.push(key);
-  }
+  if (config.env.PI_CODING_AGENT_SESSION_DIR === undefined)
+    unset.push("PI_CODING_AGENT_SESSION_DIR");
   const environment = Object.entries(desired).flatMap(([key, value]) => ["-e", `${key}=${value}`]);
   const command = platform.paneCommand([executable("pi"), "--", prompt], unset);
   return [
@@ -2485,6 +3452,30 @@ async function inspectRunningSession(
 }
 
 async function openExactSession(config: Config, id: string, file: string): Promise<Pane> {
+  if (platform.windows)
+    return await withLock(
+      config,
+      async () => {
+        const key = conversationLaunchKey(id);
+        const management = windowsManagement(config);
+        await management.createLaunchRights(windowsClaimLock(management)).discardUnclaimed([key]);
+        const { running, managed, starting, restoring, basis } = await inspectWindowsRunningSession(
+          config,
+          id,
+        );
+        if (restoring)
+          throw new Error(`Cannot confirm the exact file of a restoring session: ${id}`);
+        const saved = await findExactSaved(config, id, file);
+        if ((managed || starting) && !running)
+          throw new Error(`Cannot confirm the exact file of a starting session: ${id}`);
+        const pane = running ?? (await startExactSession(config, saved, basis));
+        if (pane.file !== saved.file || pane.cwd !== saved.cwd || pane.startup !== "ready")
+          throw new Error(`Running session does not match the expected file and cwd: ${id}`);
+        await management.assertLive(basis!);
+        return pane;
+      },
+      "try",
+    );
   return await withSessionAudit(config, async (lifetime) => {
     if ((await serverOption(config, "@pi-mux-restored")) !== lifetime.generation)
       throw new Error("Dedicated server has not completed startup restore");
@@ -2503,8 +3494,12 @@ async function openExactSession(config: Config, id: string, file: string): Promi
   });
 }
 
-async function startExactSession(config: Config, saved: Session): Promise<Pane> {
-  const target = await createSession(config, saved, sessionName(saved.id));
+async function startExactSession(
+  config: Config,
+  saved: Session,
+  basis?: WindowsManagementBasis,
+): Promise<Pane> {
+  const target = await createSession(config, saved, sessionName(saved.id), basis);
   if (!target) throw new Error(`Cannot confirm the exact file of a competing session: ${saved.id}`);
   const pane = await waitForSession(config, target, saved.id);
   if (pane.session !== target)
@@ -2516,17 +3511,27 @@ async function openSaved(
   config: Config,
   id: string,
   mode: "normal" | "temporary" = "normal",
+  expected?: WindowsManagementBasis,
 ): Promise<Pane> {
-  const resolution = await resolveSaved(config, id);
+  if (platform.windows) {
+    const management = windowsManagement(config);
+    await management
+      .createLaunchRights(windowsClaimLock(management))
+      .discardUnclaimed([conversationLaunchKey(id)]);
+  }
+  const resolution = await resolveSaved(config, id, undefined, expected);
   return await openResolvedSession(config, id, resolution, mode);
 }
 
 async function openResolvedSession(
   config: Config,
   id: string,
-  { running, managed, saved, recovery }: SavedSessionResolution,
+  { running, managed, saved, recovery, windowsBasis: resolutionBasis }: SavedSessionResolution,
   mode: "normal" | "temporary" = "normal",
+  restoringBasis?: WindowsManagementBasis,
 ): Promise<Pane> {
+  const basis = restoringBasis ?? resolutionBasis;
+  if (basis) await windowsManagement(config).assertLive(basis);
   if (running) return running;
   if (managed) return await waitForSession(config, managed.session, id);
   const candidate = saved ?? recovery;
@@ -2536,6 +3541,8 @@ async function openResolvedSession(
     config,
     { id, cwd: candidate.cwd, file: saved?.file, temporary: mode === "temporary" },
     name,
+    basis,
+    restoringBasis === undefined,
   );
   return await waitForSession(config, created ?? name, id);
 }
@@ -2551,6 +3558,8 @@ async function createSession(
     warm?: boolean;
   },
   name: string,
+  windowsBasis?: WindowsManagementBasis,
+  requireRestored = true,
 ): Promise<string | undefined> {
   const startupCommand =
     session.request === undefined ? `pi-mux-startup-${randomUUID()}` : undefined;
@@ -2565,21 +3574,31 @@ async function createSession(
       : { PI_TMUX_STARTUP_COMMAND: startupCommand }),
     ...(session.warm ? { PI_TMUX_STARTUP_MODE: "warm" } : {}),
   };
-  const removed = await excludedGlobalEnvironment(config, desired);
   const selection = session.file ? ["--session", session.file] : ["--session-id", session.id];
-  const launch = platform.newSessionLaunch(
-    [
-      config.pi,
-      ...selection,
-      "-e",
-      config.extension,
-      ...(session.request === undefined
-        ? ["--", `/${startupCommand}`]
-        : ["--agent", "main", "--", session.request]),
-    ],
-    desired,
-    removed,
-  );
+  const command = [
+    config.pi,
+    ...selection,
+    "-e",
+    config.extension,
+    ...(session.request === undefined
+      ? ["--", `/${startupCommand}`]
+      : ["--agent", "main", "--", session.request]),
+  ];
+  if (platform.windows) {
+    const management = windowsManagement(config);
+    const basis = windowsBasis ?? (await management.audit(PANE_FORMAT, { requireRestored })).basis;
+    return await startWindowsLaunch(config, {
+      keys: [conversationLaunchKey(session.id)],
+      basis,
+      name: `${name}-${launchToken.slice(0, 12)}`,
+      cwd: session.cwd,
+      environment: desired,
+      command,
+      requireRestored,
+    });
+  }
+  const removed = await excludedGlobalEnvironment(config, desired);
+  const launch = platform.newSessionLaunch(command, desired, removed);
   const result = await tmux(
     config,
     [
@@ -2820,6 +3839,51 @@ async function switchSession(
   if (targets.length > 1) throw new Error(`Multiple pi processes are running for session ${id}`);
   const client = await resolveClient(config, clientPid);
   await tmux(config, ["switch-client", "-c", client.name, "-t", `=${targets[0]!.name}`]);
+}
+
+async function switchWindowsNewClient(
+  config: TmuxConfig,
+  target: Pane,
+  clientPid: number,
+  management: WindowsManagement,
+  basis: WindowsManagementBasis,
+): Promise<void> {
+  const audit = await management.audit(PANE_FORMAT);
+  const targets = audit.panes.flatMap(({ peer, rows }) =>
+    parseLivePaneRows(rows.join("\n"), "list")
+      .filter((pane) => pane.id === target.id)
+      .map((pane) => ({ pane, peer })),
+  );
+  const [match] = targets;
+  if (
+    !launchBasisStillLive(basis, audit.basis) ||
+    targets.length !== 1 ||
+    !match ||
+    match.pane.name !== target.name ||
+    match.peer.name !== target.name ||
+    match.pane.pid !== target.pid
+  )
+    throw new Error("Cannot verify the Windows client switch destination");
+  const client = await resolveClient(config, clientPid);
+  const process = inspectWindowsProcess(client.pid);
+  if (process.state !== "live") throw new Error("Cannot identify the Windows client process");
+  const [pid, creationTime] = match.peer.identity.split(":") as [string, string];
+  const server = { pid: Number(pid), creationTime };
+  const source = audit.panes.find(({ peer }) => !peer.held && peer.name === client.session);
+  if (!source) throw new Error("Cannot verify the Windows client switch source");
+  const routed = {
+    ...config,
+    env: { ...config.env, TMUX: `${config.socket},${source.peer.port},0` },
+  };
+  await tmux(routed, ["switch-client", "-c", client.name, "-t", `=${target.name}`]);
+  await waitForPsmuxClient(
+    (args, timeout) => tmux({ ...config, timeout }, args, true),
+    { clientPid: client.pid, name: target.name, serverPid: server.pid, instance: basis.instance },
+    () =>
+      [server, process.identity].every(
+        (identity) => observeWindowsIdentity(identity, inspectWindowsProcess) === "present",
+      ),
+  );
 }
 
 async function displayedSessions(
@@ -3289,6 +4353,14 @@ async function livePanes(
     if (purpose !== "startup" && serverIsAbsent(config, result.stderr)) return [];
   }
   if (result.exitCode !== 0) throw new Error(`Cannot inspect pi sessions: ${result.stderr.trim()}`);
+  return parseLivePaneRows(rows, purpose, auditedSessions);
+}
+
+function parseLivePaneRows(
+  rows: string,
+  purpose: "startup" | "list" | { displayedIn: ReadonlySet<string> },
+  auditedSessions?: ManagedSession[],
+): Pane[] {
   if (!rows) return [];
   return rows.split("\n").flatMap((line) => {
     const columns = line.split("\t");
@@ -3672,6 +4744,7 @@ async function tmux(config: TmuxConfig, args: string[], allowFailure = false, in
     [config.tmux, "-S", config.socket, "-f", config.tmuxConfig, ...clientFlags, ...args],
     {
       env: config.env,
+      timeout: config.timeout,
       stdin: input === undefined ? "ignore" : new Blob([input]),
       stdout: "pipe",
       stderr: "pipe",
@@ -3683,7 +4756,9 @@ async function tmux(config: TmuxConfig, args: string[], allowFailure = false, in
     child.exited,
   ]);
   if (exitCode !== 0 && !allowFailure) throw new Error(`tmux ${args[0]} failed: ${stderr.trim()}`);
-  return { stdout, stderr, exitCode };
+  return platform.windows
+    ? { stdout: stdout.replaceAll("\r\n", "\n"), stderr: stderr.replaceAll("\r\n", "\n"), exitCode }
+    : { stdout, stderr, exitCode };
 }
 
 if (import.meta.main) process.exitCode = await main();

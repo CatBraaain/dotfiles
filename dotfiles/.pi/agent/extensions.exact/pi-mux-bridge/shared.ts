@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, win32 } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { quote } from "shell-quote";
 
@@ -63,6 +63,7 @@ export async function inspectManagedPane(
   execute: Execute,
   paths: TmuxPaths,
   env: NodeJS.ProcessEnv = process.env,
+  platform = process.platform,
 ): Promise<ManagedPaneIdentity | undefined> {
   const [socket] = (env.TMUX ?? "").split(",");
   if (socket !== paths.socketPath || !env.TMUX_PANE) return undefined;
@@ -82,7 +83,11 @@ export async function inspectManagedPane(
   const [actualSocket, serverPid, pane, launch, pid] = result.stdout.trimEnd().split("\t");
   const recorded = launchRecordToken(launch);
   const verified =
-    actualSocket === paths.socketPath &&
+    (actualSocket === paths.socketPath ||
+      (platform === "win32" &&
+        actualSocket !== undefined &&
+        win32.normalize(actualSocket).toLowerCase() ===
+          win32.normalize(paths.socketPath).toLowerCase())) &&
     pane === env.TMUX_PANE &&
     (recorded === undefined || recorded === env.PI_TMUX_LAUNCH_TOKEN);
   return verified && pane ? { pane, pid: Number(pid), serverPid: Number(serverPid) } : undefined;

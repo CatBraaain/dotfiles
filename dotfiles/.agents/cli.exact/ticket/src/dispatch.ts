@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, mkdirSync } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -8,6 +8,15 @@ import { Database, SQLiteError } from "bun:sqlite";
 import dispatchPromptPath from "../dispatch-prompt.md" with { type: "file" };
 import lockedPromptPath from "../dispatch-locked-prompt.md" with { type: "file" };
 import { LockHistory, type LockHistoryOwner, type LockHistoryTarget } from "./lock-history";
+import {
+  requireWindowsManagement,
+  runWindowsInspection,
+  windowsDispatchDirectory,
+  windowsPsmuxEnvironment,
+  WindowsWorkerRights,
+  windowsWorkerSocket,
+  WORKER_TOKEN_ENV,
+} from "./windows-dispatch";
 
 const OPTION_KEYS = ["--max", "--status"];
 const INSPECT_TIMEOUT_MS = 8_000;
@@ -234,7 +243,15 @@ export function shQuote(value: string): string {
 }
 
 export function tmux(socket: string, args: string[]) {
-  const result = spawnSync("tmux", ["-S", socket, ...args], { encoding: "utf8" });
+  const result =
+    process.platform === "win32"
+      ? spawnSync("psmux.exe", ["-S", socket, ...args], {
+          encoding: "utf8",
+          env: windowsPsmuxEnvironment(),
+          timeout: INSPECT_TIMEOUT_MS,
+          windowsHide: true,
+        })
+      : spawnSync("tmux", ["-S", socket, ...args], { encoding: "utf8" });
   return {
     ok: result.status === 0,
     stdout: result.stdout ?? "",
@@ -270,7 +287,12 @@ function inspectOwner(id: string, cwd: string): OwnerInspection {
 }
 
 export function dispatchSocket(): string {
-  return process.env.TICKET_TEST_TMUX_SOCKET ?? "/run/user/1000/pi-tmux/server.sock";
+  return (
+    process.env.TICKET_TEST_TMUX_SOCKET ??
+    (process.platform === "win32"
+      ? join(homedir(), ".local", "state", "pi-tmux", "server.sock")
+      : "/run/user/1000/pi-tmux/server.sock")
+  );
 }
 
 export function dispatcherName(project: string | null): string {
@@ -282,6 +304,8 @@ export function dispatcherName(project: string | null): string {
 function sessionEnv(socket: string, target: string, key: string): string | undefined {
   const result = tmux(socket, ["show-environment", "-t", target, key]);
   if (!result.ok || !result.stdout.startsWith(`${key}=`)) return undefined;
+  if (process.platform === "win32")
+    return result.stdout.slice(key.length + 1).replace(/\r?\n$/, "");
   return result.stdout.slice(key.length + 1, -1);
 }
 
@@ -308,16 +332,28 @@ function sessionEnvArgs(project: string | null, role: string): string[] {
 }
 
 export function workerCommand(entry: string, argv: string[], project: string | null): string[] {
-  const executable = entry.startsWith("/$bunfs/") ? [process.execPath] : [process.execPath, entry];
-  return [...executable, "__ticket_dispatch_worker", project ?? "", ...argv];
+  const compiled =
+    entry.startsWith("/$bunfs/") ||
+    (process.platform === "win32" && /^[a-z]:[\\/]~bun[\\/]/i.test(entry));
+  const executable = compiled ? [process.execPath] : [process.execPath, entry];
+  const workerProject = project ?? (process.platform === "win32" ? "-" : "");
+  return [...executable, "__ticket_dispatch_worker", workerProject, ...argv];
 }
 
 const DISPATCH_LOCK_TIMEOUT_MS = 4_000;
 const DISPATCH_LOCK_RETRY_MS = 10;
 
 async function withDispatcherLock<T>(socket: string, operation: () => Promise<T>): Promise<T> {
-  const key = createHash("sha256").update(socket).digest("hex");
-  const database = new Database(`/tmp/ticket-dispatch-${key}.sqlite`);
+  let path: string;
+  if (process.platform === "win32") {
+    const directory = windowsDispatchDirectory(socket);
+    mkdirSync(directory, { recursive: true });
+    path = join(directory, "lifecycle.sqlite");
+  } else {
+    const key = createHash("sha256").update(socket).digest("hex");
+    path = `/tmp/ticket-dispatch-${key}.sqlite`;
+  }
+  const database = new Database(path);
   const deadline = Date.now() + DISPATCH_LOCK_TIMEOUT_MS;
   try {
     while (true) {
@@ -342,14 +378,44 @@ function sessionNames(socket: string): string[] {
   return result.ok ? result.stdout.trimEnd().split("\n") : [];
 }
 
-export async function startDispatcher(input: {
+interface StartDispatcherInput {
   project: string | null;
   loadSnapshot: LoadSnapshot;
   options?: DispatchOptions;
   command: string[];
-}): Promise<void> {
+}
+
+async function startWindowsDispatcher(socket: string, input: StartDispatcherInput): Promise<void> {
+  if (input.options?.statuses?.length !== 1 || input.options.statuses[0] !== "locked")
+    throw new Error("Ticket dispatch start on Windows requires --status locked");
+  const generation = await requireWindowsManagement(socket);
+  const { project } = input;
+  const name = dispatcherName(project);
+  await withDispatcherLock(socket, async () => {
+    if ((await requireWindowsManagement(socket)) !== generation)
+      throw new Error("Windows pi-mux management changed before dispatcher start");
+    await Bun.file(lockedPromptPath).text();
+    const tickets = await input.loadSnapshot();
+    if (project === null) {
+      const sessions = await readWindowsDispatchInventory(socket);
+      const started = new Set(sessions.map((entry) => `${entry.project}/${entry.ticketId}`));
+      await validateCwds(
+        tickets,
+        (ticket) =>
+          !started.has(ticket.id) && lockedTarget(ticket, null, process.cwd()) !== undefined,
+        console.log,
+      );
+    }
+    const rights = new WindowsWorkerRights(windowsDispatchDirectory(socket));
+    const restarted = await rights.start(socket, { project, name, generation }, input.command);
+    console.log(`dispatcher ${restarted ? "restarted" : "started"}: ${name}`);
+  });
+}
+
+export async function startDispatcher(input: StartDispatcherInput): Promise<void> {
   const { project } = input;
   const socket = dispatchSocket();
+  if (process.platform === "win32") return startWindowsDispatcher(socket, input);
   await withDispatcherLock(socket, async () => {
     const name = dispatcherName(project);
     for (const other of sessionNames(socket)) {
@@ -421,6 +487,14 @@ export async function stopDispatcher(project: string | null): Promise<void> {
   const socket = dispatchSocket();
   await withDispatcherLock(socket, async () => {
     const name = dispatcherName(project);
+    if (process.platform === "win32") {
+      const stopped = await new WindowsWorkerRights(windowsDispatchDirectory(socket)).stop(
+        socket,
+        project,
+      );
+      console.log(`dispatcher ${stopped ? "stopped" : "already stopped"}: ${name}`);
+      return;
+    }
     if (!ownsDispatcher(socket, name, project)) {
       console.log(`dispatcher already stopped: ${name}`);
       return;
@@ -453,6 +527,77 @@ function readPiSessions(socket: string, project: string | null): Map<string, str
     if (id) sessions.set(session, project === null ? `${owner}/${id}` : id);
   }
   return sessions;
+}
+
+type DispatchSession = { name: string; project: string; ticketId: string; created: number };
+
+export class DispatchInventoryUnavailable extends Error {}
+
+export function parseWindowsDispatchInventory(stdout: string): DispatchSession[] {
+  const data: unknown = JSON.parse(stdout);
+  if (!data || typeof data !== "object" || !("sessions" in data) || !Array.isArray(data.sessions))
+    throw new Error("Malformed pi-mux dispatch inventory");
+  const names = new Set<string>();
+  return data.sessions.map((value: Partial<DispatchSession> | null) => {
+    if (
+      !value ||
+      typeof value.name !== "string" ||
+      !/^[A-Za-z0-9_-]+$/.test(value.name) ||
+      typeof value.project !== "string" ||
+      !value.project ||
+      /[\\/\0]/.test(value.project) ||
+      value.project === "." ||
+      value.project === ".." ||
+      typeof value.ticketId !== "string" ||
+      !/^[0-9]{8}-[0-9]{6}(?:[-._][A-Za-z0-9][A-Za-z0-9._-]*)?$/.test(value.ticketId) ||
+      typeof value.created !== "number" ||
+      !Number.isSafeInteger(value.created) ||
+      value.created <= 0 ||
+      names.has(value.name)
+    )
+      throw new Error("Malformed or duplicate pi-mux dispatch inventory entry");
+    const { name, project, ticketId, created } = value;
+    names.add(name);
+    return { name, project, ticketId, created };
+  });
+}
+
+async function readWindowsDispatchInventory(socket: string): Promise<DispatchSession[]> {
+  try {
+    const result = await runWindowsInspection(["--dispatch-inventory", socket], INSPECT_TIMEOUT_MS);
+    if (result.exitCode !== 0 || result.stderr.trim())
+      throw new Error(result.stderr.trim() || "pi-mux rejected inventory request");
+    return parseWindowsDispatchInventory(result.stdout);
+  } catch (error) {
+    throw new DispatchInventoryUnavailable(
+      "cannot verify Windows dispatch inventory: " + (error as Error).message,
+    );
+  }
+}
+
+function windowsPiSessions(socket: string, project: string | null) {
+  const accepted = new Map<string, { id: string; created?: number }>();
+  return {
+    launched(name: string, id: string): string {
+      accepted.set(name, { id });
+      return name;
+    },
+    async read(): Promise<ReadonlyMap<string, string>> {
+      const rows = await readWindowsDispatchInventory(socket);
+      const sessions = new Map<string, string>();
+      for (const { name, project: owner, ticketId, created } of rows) {
+        if (project !== null && project.toLowerCase() !== owner.toLowerCase()) continue;
+        const id = project === null ? owner + "/" + ticketId : ticketId;
+        const launch = accepted.get(name);
+        if (launch?.id === id) launch.created ??= created;
+        const identity =
+          launch?.id === id && launch.created === created ? name : JSON.stringify([name, created]);
+        sessions.set(identity, id);
+      }
+      for (const name of accepted.keys()) if (!sessions.has(name)) accepted.delete(name);
+      return sessions;
+    },
+  };
 }
 
 export function hasSession(socket: string, name: string): boolean {
@@ -502,6 +647,28 @@ export function listDispatchers(socket: string): DispatcherEntry[] {
     entries.push({ project: owner === "" ? null : owner, name, created });
   }
   return sortDispatchers(entries);
+}
+
+export async function listCurrentDispatchers(socket: string): Promise<DispatcherEntry[]> {
+  if (process.platform !== "win32") return listDispatchers(socket);
+  return await withDispatcherLock(socket, async () => {
+    const rights = new WindowsWorkerRights(windowsDispatchDirectory(socket));
+    return sortDispatchers(await rights.list(socket));
+  });
+}
+
+export async function dispatchWorker(
+  options: DispatchOptions,
+  loadSnapshot: LoadSnapshot,
+  project: string | null,
+): Promise<void> {
+  if (process.platform !== "win32") return dispatch(options, loadSnapshot, project);
+  const socket = windowsWorkerSocket();
+  if (!socket) throw new Error("Missing Windows dispatcher worker socket");
+  const rights = new WindowsWorkerRights(windowsDispatchDirectory(socket));
+  await rights.runWorker(socket, project, process.env[WORKER_TOKEN_ENV] ?? "", () =>
+    dispatch(options, loadSnapshot, project, socket),
+  );
 }
 
 interface LockedAssignment {
@@ -578,7 +745,7 @@ export interface RunDeps {
   loadSnapshot: LoadSnapshot;
   log(line: string): void;
   withTickLock?(tick: () => Promise<boolean>): Promise<boolean>;
-  readPiSessions(): ReadonlyMap<string, string>;
+  readPiSessions(): ReadonlyMap<string, string> | Promise<ReadonlyMap<string, string>>;
   locked?: LockedDeps;
   launch(
     id: string,
@@ -639,7 +806,7 @@ export async function run(deps: RunDeps): Promise<void> {
     }
     if (candidates.size === 0) return { probes };
 
-    const liveSessions = deps.readPiSessions();
+    const liveSessions = await deps.readPiSessions();
     const newSessions = [...liveSessions].filter(([session]) => !seenSessions.has(session));
     const observedRunning = new Map([...running, ...newSessions]);
     const plan = planTick({
@@ -721,7 +888,7 @@ export async function run(deps: RunDeps): Promise<void> {
 
   async function tick(probes: ReadonlyMap<string, OwnerProbe>): Promise<boolean> {
     const snapshot = await deps.loadSnapshot();
-    const liveSessions = deps.readPiSessions();
+    const liveSessions = await deps.readPiSessions();
     for (const [session, id] of liveSessions) {
       if (seenSessions.has(session)) continue;
       seenSessions.add(session);
@@ -846,21 +1013,31 @@ export async function run(deps: RunDeps): Promise<void> {
   }
 
   let pendingScan: ReturnType<typeof scanOwners> | undefined;
+  let inventoryError: string | undefined;
   while (true) {
-    pendingScan ??= scanOwners();
-    const scan =
-      locked && openTemplate !== undefined
-        ? await waitForHistory(pendingScan, tickMs())
-        : await pendingScan;
-    if (scan) pendingScan = undefined;
-    const probes = scan ? await probeOwners(scan) : new Map<string, OwnerProbe>();
-    const runTick = () => tick(probes);
-    const finished = await (deps.withTickLock ? deps.withTickLock(runTick) : runTick());
-    if (finished) {
-      await pendingScan;
-      break;
+    try {
+      pendingScan ??= scanOwners();
+      const scan =
+        locked && openTemplate !== undefined
+          ? await waitForHistory(pendingScan, tickMs())
+          : await pendingScan;
+      if (scan) pendingScan = undefined;
+      const probes = scan ? await probeOwners(scan) : new Map<string, OwnerProbe>();
+      const runTick = () => tick(probes);
+      const finished = await (deps.withTickLock ? deps.withTickLock(runTick) : runTick());
+      inventoryError = undefined;
+      if (finished) {
+        await pendingScan;
+        break;
+      }
+      if (!pendingScan) await deps.sleepMs(tickMs());
+    } catch (error) {
+      if (!(error instanceof DispatchInventoryUnavailable)) throw error;
+      pendingScan = undefined;
+      if (inventoryError !== error.message) deps.log(error.message);
+      inventoryError = error.message;
+      await deps.sleepMs(tickMs());
     }
-    if (!pendingScan) await deps.sleepMs(tickMs());
   }
   deps.log("dispatcher finished");
 }
@@ -970,9 +1147,11 @@ export async function dispatch(
   options: DispatchOptions,
   loadSnapshot: LoadSnapshot,
   project: string | null,
+  socket = dispatchSocket(),
 ): Promise<void> {
-  const socket = dispatchSocket();
   const cwd = process.cwd();
+  const windowsSessions =
+    process.platform === "win32" ? windowsPiSessions(socket, project) : undefined;
   function log(line: string): void {
     const stamped = `[${timestamp()}] ${line}`;
     console.log(stamped);
@@ -998,7 +1177,7 @@ export async function dispatch(
     }
 
     const result = await startLockedPiSession(assignment, socket, name, targetCwd, prompt);
-    if (result.state === "launched") return result.session;
+    if (result.state === "launched") return windowsSessions?.launched(name, key) ?? result.session;
     if (result.state === "present") return { retry: "lock owner present" };
     if (hasSession(socket, name)) {
       reportSessionFailure(name, result.detail);
@@ -1016,7 +1195,7 @@ export async function dispatch(
       loadSnapshot,
       log,
       withTickLock: (tick) => withDispatcherLock(socket, tick),
-      readPiSessions: () => readPiSessions(socket, project),
+      readPiSessions: windowsSessions?.read ?? (() => readPiSessions(socket, project)),
       locked: history
         ? {
             findOwners: (targets) => history.findOwners(targets),

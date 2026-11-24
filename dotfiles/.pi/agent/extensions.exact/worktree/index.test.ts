@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, it } from "bun:test";
 import { quote } from "shell-quote";
 import {
@@ -13,12 +14,13 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { getWorkspaces, WORKSPACES_ENTRY_TYPE } from "./metadata.ts";
-import sessionMetadataExtension from "./index.ts";
+import sessionMetadataExtension, { piMuxExecutable } from "./index.ts";
 
 type Handler = (event: Record<string, unknown>, context: ExtensionContext) => unknown;
 type SentMessage = Parameters<ExtensionAPI["sendMessage"]>;
 type Renderer = Parameters<ExtensionAPI["registerMessageRenderer"]>[1];
 const cleanup: (() => void)[] = [];
+const piMuxCli = new URL("../../../../.local/cli.exact/pi-mux/src/main.ts", import.meta.url);
 const gitEnvironment = {
   ...process.env,
   GIT_CONFIG_GLOBAL: "/dev/null",
@@ -128,10 +130,15 @@ async function createHarness(persist = true) {
   const pi = {
     async exec(command: string, args: string[], options: { cwd: string }) {
       if (execError) throw execError;
-      if (command !== "bash" || args[0] !== "-c")
+      if (
+        command !== "pi-mux" ||
+        args[0] !== "worktree" ||
+        args[1] !== "snapshot" ||
+        args.length !== 3
+      )
         throw new Error(`Unexpected process command: ${command} ${args.join(" ")}`);
-      queries.push(args[1]!);
-      const output = spawnSync(command, args, {
+      queries.push(args[2]!);
+      const output = spawnSync(process.execPath, [fileURLToPath(piMuxCli), ...args], {
         cwd: options.cwd,
         env: gitEnvironment,
         encoding: "utf8",
@@ -238,6 +245,30 @@ async function createHarness(persist = true) {
     },
   };
 }
+
+describe("pi-mux snapshot executable", () => {
+  it("checks only fully qualified Windows PATH entries in order", () => {
+    const checked: string[] = [];
+    const expected = "C:\\Installed tools\\pi-mux.exe";
+    const selected = piMuxExecutable(
+      "win32",
+      '.;;bin;C:relative;\\rooted;"C:\\Missing tools";"C:\\Installed tools";D:\\Later',
+      (candidate) => {
+        checked.push(candidate);
+        return candidate === expected;
+      },
+    );
+    assert.equal(selected, expected);
+    assert.deepEqual(checked, ["C:\\Missing tools\\pi-mux.exe", expected]);
+  });
+
+  it("does not fall back to a working-directory executable", () => {
+    assert.throws(
+      () => piMuxExecutable("win32", ";.;bin;C:;\\rooted", () => assert.fail("Unexpected lookup")),
+      /pi-mux\.exe not found/,
+    );
+  });
+});
 
 describe("session metadata extension", () => {
   it("starts with an empty association without appending or modifying the header", async () => {
@@ -384,7 +415,7 @@ describe("session metadata extension", () => {
     const module = new URL("./worktrees.ts", import.meta.url).href;
     const script = `import { findWorktreeScopes } from ${JSON.stringify(module)};
       console.log(JSON.stringify({
-        scopes: findWorktreeScopes(${JSON.stringify(command)}, ${JSON.stringify(h.root)})
+        scopes: findWorktreeScopes(${JSON.stringify(command)})
       }));`;
     const parsed = JSON.parse(
       execFileSync(process.execPath, ["--eval", script], { env, encoding: "utf8" }),
@@ -393,7 +424,22 @@ describe("session metadata extension", () => {
     const expected = [join(home, "feature"), join(h.root, "~/feature")];
     assert.equal(result.isError, false, result.result.content[0]!.text);
     expected.forEach((target) => assert.ok(existsSync(join(target, ".git"))));
-    assert.deepEqual(parsed.scopes, [{ cwd: h.root, actions: ["add"], paths: expected }]);
+    assert.deepEqual(parsed.scopes, [
+      {
+        shellDirectories: [],
+        gitDirectories: [],
+        actions: ["add"],
+        paths: [expected[0], "~/feature"],
+        destinationIndexes: [0, 1],
+      },
+    ]);
+    const [{ actions: _actions, destinationIndexes: _destinations, ...request }] = parsed.scopes;
+    const snapshot = execFileSync(
+      process.execPath,
+      [fileURLToPath(piMuxCli), "worktree", "snapshot", JSON.stringify(request)],
+      { cwd: h.root, env, encoding: "utf8" },
+    );
+    assert.deepEqual(JSON.parse(snapshot).paths, expected);
   });
 
   it("appends multiple additions in observed Git list order after existing registrations", async () => {
@@ -497,6 +543,44 @@ describe("session metadata extension", () => {
     );
     assert.deepEqual(getWorkspaces(h.manager), [destination]);
     assert.equal(h.messages.length, 1);
+  });
+
+  it("records both worktrees when the first is added to an existing empty directory", async () => {
+    const h = await createHarness();
+    const first = join(h.directory, "existing empty");
+    const second = join(h.directory, "second");
+    mkdirSync(first);
+    const addFirst = quote(["git", "worktree", "add", "--detach", first, "HEAD"]);
+    const addSecond = quote(["git", "-C", first, "worktree", "add", "--detach", second, "HEAD"]);
+    const result = await h.bash(addFirst + " && " + addSecond);
+    assert.equal(result.outcome.isError, false, result.outcome.result.content[0]!.text);
+    assert.deepEqual(getWorkspaces(h.manager), [first, second]);
+    assert.equal(h.messages.length, 1);
+    assert.match(String(h.messages[0]![0].content), /metadata updated/);
+  });
+
+  it("does not treat a later addition as the cause of an earlier non-repository scope", async () => {
+    const h = await createHarness();
+    const later = join(h.directory, "later");
+    const existing = join(h.directory, "first");
+    const unobserved = join(h.directory, "unobserved");
+    mkdirSync(later);
+    const addFirst = quote(["git", "worktree", "add", "--detach", existing, "HEAD"]);
+    const addThroughMissingRepository = quote([
+      "git",
+      "-C",
+      later,
+      "worktree",
+      "add",
+      "--detach",
+      unobserved,
+      "HEAD",
+    ]);
+    const addLater = quote(["git", "worktree", "add", "--detach", later, "HEAD"]);
+    await h.bash(addFirst + "; " + addThroughMissingRepository + "; " + addLater);
+    assert.deepEqual(getWorkspaces(h.manager), []);
+    assert.equal(h.messages.length, 1);
+    assert.match(String(h.messages[0]![0].content), /not-repository/);
   });
 
   it("does not claim a concurrent worktree created outside the calling command", async () => {
@@ -608,7 +692,7 @@ describe("session metadata extension", () => {
     assert.doesNotMatch(String(h.messages[0]![0].content), /metadata updated/);
   });
 
-  it("automatically tracks worktrees through pi.exec without a background Bash registration", async () => {
+  it("automatically tracks worktrees through pi-mux without a background Bash process", async () => {
     const h = await createHarness();
     const path = join(h.directory, "unregistered");
     const result = await h.bash(quote(["git", "worktree", "add", "-b", "unregistered", path]));
