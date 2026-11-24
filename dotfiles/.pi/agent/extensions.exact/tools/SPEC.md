@@ -24,7 +24,7 @@ Tools は SKILL判定、UTF-8全文IO、成功結果の組立てを所有する�
 
 Tools は pi の標準tool factory からツール定義（schema・説明文）を取り込み、既存ツールの execute を差し替える。取り込んだ説明文にはサンドボックスの挙動ガイドを追記する: `read` には画像ファイルを Vision入力として読める旨と、画像入力非対応モデルでは `vision` への委譲を促すエラーを返す旨を、`bash` には書き込み失敗（read-only file system）時、対象の最終アクションが `ask` または未設定の場合だけ `ask_permission` で許可要求できること、明示 `deny` と credentials は要求不可であること、承認により Guardrails の共通書込許可が更新され、その許可を利用するすべてのツールに適用されることを、理由必須ゲート（`ask_with_reason`）で差し戻されたときは元のコマンドと理由で `ask_permission` に要求することを追記する。`write` / `edit` には、最終アクションが `ask` または未設定のパスは許可確認の対象になり、承認により Guardrails の共通書込許可が選択したスコープに対してセッション内で有効になること、明示 `deny` と credentials は許可ダイアログを出さず拒否すること（承認スコープ内でも拒否は維持する。[Guardrails仕様](../guardrails/SPEC.md) のbind契約に従う）を追記する。
 
-read / write / edit / grep / find / ls / bash の実行を Guardrails公開APIへ直接依頼する。通常のSDK経路の引数検証・tool hooks・実行イベント・履歴はSDKのまま維持する。codemodeを登録し、結果は呼び出し元へ返す。Guardrails初期化が失敗した場合は原因を通知し、7ツールを同じ初期化エラーで実行不可にする。
+read / write / edit / grep / find / ls / bash の実行を Guardrails公開APIへ直接依頼する。通常のSDK経路の引数検証・tool hooks・実行イベント・履歴はSDKのまま維持する。Guardrails初期化が失敗した場合は原因を通知し、7ツールを同じ初期化エラーで実行不可にする。
 
 ## BashのRTK書換え
 

@@ -15,7 +15,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { registerCodemode } from "./codemode.ts";
 import { codemodeRenderers } from "../chat-renderer/index.ts";
 
 type CodemodeDefinition = ToolDefinition<
@@ -117,7 +116,7 @@ function renderResult(
 const standard = standardDefinition();
 const shortened = codemodeRenderers(() => standard)!;
 
-describe("codemode registration", () => {
+describe("codemode renderer and settings", () => {
   it("preserves the standard call body and wraps the result renderer", () => {
     const args = { code: "return 1;" };
     const expected = renderLines(standard.renderCall!(args, plainTheme, renderContext()));
@@ -126,39 +125,15 @@ describe("codemode registration", () => {
     assert.notStrictEqual(shortened.renderResult, standard.renderResult);
   });
 
-  it("registers once per factory invocation and retains the public schema and call renderer", () => {
-    for (let load = 0; load < 2; load++) {
-      const registered: CodemodeDefinition[] = [];
-      const api: Partial<ExtensionAPI> = {
-        registerTool: (tool) => {
-          registered.push(tool as unknown as CodemodeDefinition);
-        },
-      };
-      registerCodemode(api as ExtensionAPI);
-      assert.equal(registered.length, 1);
-      const definition = registered[0]!;
-      assert.equal(definition.name, "codemode");
-      assert.strictEqual(definition.parameters, standard.parameters);
-      assert.strictEqual(definition.renderCall, standard.renderCall);
-      assert.equal(definition.defaultActive, false);
-      assert.equal(definition.exposure, standard.exposure);
-      assert.deepEqual(definition.constrainedSampling, standard.constrainedSampling);
-    }
-  });
-
-  it("preserves dynamic codemode mode and inline budget settings through the facade", () => {
+  it("applies dynamic codemode mode and inline budget settings", () => {
     let mode: "on" | "only" = "on";
     let settingsReads = 0;
-    let definition: CodemodeDefinition | undefined;
-    registerCodemode({
-      registerTool: (tool) => {
-        definition = tool as unknown as CodemodeDefinition;
-      },
+    const definition = standardDefinition({
       getSettings: () => {
         settingsReads++;
         return { codemode: { mode, inlineBudget: 0 } };
       },
-    } as ExtensionAPI);
+    });
     assert.equal(settingsReads, 0);
     const fake = {
       name: "fake_tool",
@@ -175,9 +150,9 @@ describe("codemode registration", () => {
       getNamespace: () => undefined,
       getPromptGuidelines: () => [],
     };
-    assert.deepEqual(definition!.prepareLoadout!(loadout)?.hiddenDeclarations, []);
+    assert.deepEqual(definition.prepareLoadout!(loadout)?.hiddenDeclarations, []);
     mode = "only";
-    const prepared = definition!.prepareLoadout!(loadout)!;
+    const prepared = definition.prepareLoadout!(loadout)!;
     assert.deepEqual(prepared.hiddenDeclarations, ["fake_tool"]);
     assert.match(prepared.descriptions!.codemode!, /models/);
     assert.ok(settingsReads >= 4);
@@ -447,11 +422,7 @@ describe("codemode standard execution delegation", () => {
   it("retains executeTool delegation, namespace lookup, store, and model globals without a model request", async () => {
     const entries: { type: string; customType: string; data: unknown }[] = [];
     let namespaceReads = 0;
-    const registered: CodemodeDefinition[] = [];
-    const api: Partial<ExtensionAPI> = {
-      registerTool: (tool) => {
-        registered.push(tool as unknown as CodemodeDefinition);
-      },
+    const definition = standardDefinition({
       getAllTools: () => {
         namespaceReads++;
         return [
@@ -473,8 +444,7 @@ describe("codemode standard execution delegation", () => {
       appendEntry: (customType, data) => {
         entries.push({ type: "custom", customType, data });
       },
-    };
-    registerCodemode(api as ExtensionAPI);
+    });
     const fake = {
       name: "fake_tool",
       label: "Fake",
@@ -505,7 +475,6 @@ describe("codemode standard execution delegation", () => {
         };
       },
     } as unknown as ExtensionToolContext;
-    const definition = registered[0]!;
     const updates: CodemodeResult[] = [];
     const result = await definition.execute(
       "script",

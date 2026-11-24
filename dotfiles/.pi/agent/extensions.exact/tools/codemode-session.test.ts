@@ -236,7 +236,7 @@ function observeNestedCalls(
 
 describe("codemode resource ownership through the standard loader", () => {
   it(
-    "keeps standard codemode rendering while ownership switches when guardrail is enabled, disabled, and reloaded",
+    "loads builtin codemode once with or without the tools extension and after reload",
     withTemporarySession(async (directory, sessions) => {
       const extensionDirectory = join(directory, "agent", "extensions", "tools");
       mkdirSync(join(directory, "agent", "extensions"), { recursive: true });
@@ -255,6 +255,7 @@ describe("codemode resource ownership through the standard loader", () => {
       const settingsManager = SettingsManager.inMemory({ codemode: { mode: "on" } });
       const loader = resourceLoader(directory, settingsManager);
       const session = await createSession(directory, settingsManager, loader, sessions);
+      assert.ok(!session.getActiveToolNames().includes("codemode"));
       const result: AgentToolResult<CodemodeToolDetails> = {
         content: [
           { type: "text", text: "Script completed\nWall time 1.2 seconds\nOutput:\n" },
@@ -271,23 +272,27 @@ describe("codemode resource ownership through the standard loader", () => {
         const owners = loader
           .getExtensions()
           .extensions.filter((extension) => extension.tools.has("codemode"));
-        assert.equal(owners.length, 1);
-        assert.equal(owners[0]!.tools.has("ask_permission"), enabled);
+        assert.deepEqual(
+          owners.map((extension) => extension.path),
+          ["builtin:codemode"],
+        );
+        assert.equal(
+          loader
+            .getExtensions()
+            .extensions.some((extension) => extension.tools.has("ask_permission")),
+          enabled,
+        );
         assert.equal(
           loader
             .getExtensions()
             .extensions.some((extension) => extension.path.includes("/guardrails/")),
           false,
         );
-        assert.equal(owners[0]!.path, enabled ? extensionPath : "builtin:codemode");
         const definition = session.getToolDefinition("codemode")!;
         assert.equal(definition.defaultActive, false);
         assert.equal(definition.exposure, "model-only");
         session.setActiveToolsByName(["codemode"]);
         assert.ok(session.getActiveToolNames().includes("codemode"));
-        // Shortening moved to the chat-renderer extension (resolver-based, pi
-        // 1.4+). Under the pinned runner without it, codemode always renders
-        // with the standard renderer regardless of guardrail ownership.
         const lines = renderLines(definition, result);
         assert.match(lines.join("\n"), /read file/);
         assert.doesNotMatch(lines.join("\n"), /^1\.2s/m);

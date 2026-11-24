@@ -16,7 +16,7 @@ pi の全built-in fsツール（read / write / edit / grep / find / ls / bash）
 | `bash` | 置き換え | あり | 開放 |
 | LLM API / piプロセス本体 | 対象外 | — | 開放 |
 | `ask_permission` | 追加 | あり | — |
-| `codemode` | 登録のみ。結果表示の変更は chat-renderer 拡張（§8） | 呼び出したツールに従う | 呼び出したツールに従う |
+| `codemode` | pi の組み込み拡張。結果表示は chat-renderer 拡張（§8） | 呼び出したツールに従う | 呼び出したツールに従う |
 
 置き換え対象は pi の **全built-in fsツール**（`read` `write` `edit` `grep` `find` `ls` `bash`）。`read` は画像ファイルを Vision入力として返す（§2.1）。
 

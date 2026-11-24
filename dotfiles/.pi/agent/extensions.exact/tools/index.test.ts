@@ -32,7 +32,6 @@ describe("tools with the guardrails public API", () => {
       assert.deepEqual([...tools.keys()].sort(), [
         "ask_permission",
         "bash",
-        "codemode",
         "edit",
         "find",
         "grep",

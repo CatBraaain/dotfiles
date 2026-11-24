@@ -21,12 +21,10 @@ import {
   type GuardedToolRequest,
   type GuardrailsAPI,
 } from "../guardrails/api.ts";
-import { registerCodemode } from "./codemode.ts";
 import { rewriteBashCommand } from "./rtk.ts";
 
 export default function toolsExtension(pi: ExtensionAPI, configPath?: string): void {
   const { guardrails, initializationError } = initializeGuardrails(pi, configPath);
-  registerCodemode(pi);
   const cwd = process.cwd();
   const bash = createBashTool(cwd);
   const definitions = [
