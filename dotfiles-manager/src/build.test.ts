@@ -2305,7 +2305,15 @@ describe("local build hooks", () => {
 
 async function runManager(
   args: string | string[],
-  { captureLogTimes = false, stdin }: { captureLogTimes?: boolean; stdin?: string } = {},
+  {
+    captureLogTimes = false,
+    stdin,
+    onOutput,
+  }: {
+    captureLogTimes?: boolean;
+    stdin?: string;
+    onOutput?: (channel: "stdout" | "stderr", output: string) => Promise<void>;
+  } = {},
 ): Promise<{
   code: number;
   stdout: string;
@@ -2337,17 +2345,30 @@ process.stderr.write("\\n__LOG_TIMES__" + JSON.stringify(logTimes));`;
   });
   const [code, stdout, stderrOutput] = await Promise.all([
     child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
+    readOutput(child.stdout, "stdout"),
+    readOutput(child.stderr, "stderr"),
   ]);
   const marker = stderrOutput.lastIndexOf("\n__LOG_TIMES__");
   const logTimes = marker === -1 ? [] : JSON.parse(stderrOutput.slice(marker + 14));
   const stderr = marker === -1 ? stderrOutput : stderrOutput.slice(0, marker);
   return { code, stdout, stderr, logTimes };
+
+  async function readOutput(
+    stream: ReadableStream<Uint8Array>,
+    channel: "stdout" | "stderr",
+  ): Promise<string> {
+    if (!onOutput) return new Response(stream).text();
+    let output = "";
+    for await (const chunk of stream.pipeThrough(new TextDecoderStream())) {
+      output += chunk;
+      await onOutput(channel, output);
+    }
+    return output;
+  }
 }
 
 describe("manager CLI", () => {
-  for (const command of ["apply", "diff", "managed"]) {
+  for (const command of ["diff", "managed"]) {
     it(`logs each stage and build hook in order for ${command}`, async () => {
       await put(root, "dotfiles/nested/01-local.machine-build.ts", "if (import.meta.main) {};");
       await put(root, "dotfiles/nested/02-shared.build.ts", "if (import.meta.main) {};");
@@ -2372,13 +2393,180 @@ describe("manager CLI", () => {
         "  [nested/02-shared.build.ts] Started",
         "  [nested/02-shared.build.ts] ✓ Complete (TIME)",
         "[build] Complete (TIME)",
-        command === "apply" ? "[apply] Started" : `stage ${command} start`,
-        command === "apply" ? "[apply] Complete (TIME)" : `stage ${command} success (TIME)`,
+        `stage ${command} start`,
+        `stage ${command} success (TIME)`,
         `command ${command} success (TIME)`,
       ]);
       assert.doesNotMatch(result.stdout, new RegExp(`^stage ${command} start \\(`, "m"));
     });
   }
+
+  it("groups timed build steps separately from compact hook outcomes", async () => {
+    await put(root, "dotfiles/alpha/cli.build.ts", 'console.log("cache reused");');
+    await put(root, "dotfiles/beta/cli.build.ts", "");
+    await put(root, "dotfiles/gitconfig.machine-build.ts", "");
+    await put(root, "dotfiles/sync.apply.ts", 'process.stdout.write("unchanged");');
+    await put(homeRoot, "alpha/ignored.txt", "keep");
+    await put(homeRoot, "beta/ignored.txt", "keep");
+
+    const result = await runManager("apply");
+
+    assert.equal(result.code, 0, result.stderr);
+    const output = result.stdout
+      .trimEnd()
+      .split("\n")
+      .map((line) =>
+        line
+          .replace(/\d+\.\d{2}s/g, "TIME")
+          .replace(/ {2,}(?=\S)/g, " ")
+          .trim(),
+      );
+    assert.deepEqual(output, [
+      "Build",
+      "Steps",
+      "rebuild dist TIME",
+      "path map TIME",
+      "externals TIME",
+      "merge TIME",
+      "replace TIME",
+      "Hooks",
+      "gitconfig.machine TIME",
+      "alpha/cli",
+      "cache reused",
+      "complete TIME",
+      "beta/cli TIME",
+      "✓ Build complete TIME",
+      "",
+      "Apply",
+      "Check differences (TIME)",
+      "No managed file changes",
+      "Hooks",
+      "sync",
+      "unchanged",
+      "complete TIME",
+      "✓ Apply complete TIME",
+      "",
+      "✓ Done TIME",
+    ]);
+  });
+
+  it("keeps the hook paths when normal and post hook names would collide", async () => {
+    await put(root, "dotfiles/tool/refresh.apply.ts", "");
+    await put(root, "dotfiles/tool/refresh.postapply.ts", "");
+
+    const result = await runManager("apply");
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /tool\/refresh\.apply\.ts +\d+\.\d{2}s/);
+    assert.match(result.stdout, /tool\/refresh\.postapply\.ts +\d+\.\d{2}s/);
+  });
+
+  it("preserves multiline or long hook stdout and forwards hook stderr", async () => {
+    const longLine = "x".repeat(81);
+    await put(
+      root,
+      "dotfiles/multiline.build.ts",
+      'process.stdout.write("fir"); await Bun.sleep(30); process.stdout.write("st\\n\\n  second");',
+    );
+    await put(
+      root,
+      "dotfiles/long.apply.ts",
+      "console.log(" + JSON.stringify(longLine) + '); console.error("warning");',
+    );
+
+    const result = await runManager("apply");
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(
+      result.stdout,
+      /^    multiline\n      first\n      \n        second\n      complete +\d+\.\d{2}s$/m,
+    );
+    assert.ok(result.stdout.includes("    long\n      " + longLine + "\n"), result.stdout);
+    assert.equal(result.stderr, "    long\n      warning\n");
+  });
+
+  it("retains errors and the full path when an apply hook fails", async () => {
+    await put(
+      root,
+      "dotfiles/broken.apply.ts",
+      'console.log("diagnostics"); console.error("original error"); process.exit(9);',
+    );
+    await put(root, "dotfiles/after.postapply.ts", 'console.log("ran");');
+
+    const result = await runManager("apply");
+
+    assert.equal(result.code, 1);
+    assert.match(result.stdout, /^    broken\n      diagnostics\n      ✗ Failed +\d+\.\d{2}s/m);
+    assert.ok(result.stdout.includes(join(distRoot, "broken.apply.ts")), result.stdout);
+    assert.match(result.stdout, /^    after\n      ran\n      complete +\d+\.\d{2}s$/m);
+    assert.match(result.stdout, /^✗ Apply failed +\d+\.\d{2}s$/m);
+    assert.match(result.stdout, /^✗ Failed +\d+\.\d{2}s$/m);
+    assert.equal(
+      result.stderr,
+      "    broken\n      original error\napply script failed: broken.apply.ts (exit code 9)\n",
+    );
+  });
+
+  it("preserves the original hook stdout when cleanup fails after a successful process", async () => {
+    await put(
+      root,
+      "dotfiles/cleanup.apply.ts",
+      `import { mkdir, unlink } from "node:fs/promises";
+await unlink(import.meta.path);
+await mkdir(import.meta.path);
+process.stdout.write("child finished\\r\\n");`,
+    );
+
+    const result = await runManager("apply");
+
+    assert.equal(result.code, 1);
+    assert.ok(result.stdout.includes("    cleanup\n      child finished\r\n"), result.stdout);
+    assert.match(result.stderr, /apply script failed: cleanup\.apply\.ts: copy cleanup failed:/);
+  });
+
+  it("streams nested stdout and stderr before parallel hooks can finish", async () => {
+    const stdoutSeen = join(root, "stdout-seen");
+    const stderrSeen = join(root, "stderr-seen");
+    const waitForMarker =
+      'async function waitForMarker(path) { const deadline = Date.now() + 3000; while (!(await Bun.file(path).exists())) { if (Date.now() > deadline) throw new Error("output was not streamed"); await Bun.sleep(10); } }';
+    await put(
+      root,
+      "dotfiles/first.apply.ts",
+      waitForMarker +
+        '\nconsole.log("first line"); await waitForMarker(' +
+        JSON.stringify(stderrSeen) +
+        '); console.log("last line");',
+    );
+    await put(
+      root,
+      "dotfiles/second.apply.ts",
+      waitForMarker +
+        "\nawait waitForMarker(" +
+        JSON.stringify(stdoutSeen) +
+        '); console.error("warning"); await waitForMarker(' +
+        JSON.stringify(stderrSeen) +
+        ");",
+    );
+
+    const result = await runManager("apply", {
+      onOutput: async (channel, output) => {
+        if (channel === "stdout" && output.includes("    first\n      first line\n")) {
+          await writeFile(stdoutSeen, "");
+        }
+        if (channel === "stderr" && output.includes("    second\n      warning\n")) {
+          await writeFile(stderrSeen, "");
+        }
+      },
+    });
+
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(
+      result.stdout,
+      /^    first\n      first line\n[\s\S]*^    first\n      last line$/m,
+    );
+    assert.match(result.stdout, /^    second\n      complete +\d+\.\d{2}s$/m);
+    assert.equal(result.stderr, "    second\n      warning\n");
+  });
 
   it("logs build completion without hook lines when there are no hooks", async () => {
     const result = await runManager("managed");
@@ -2501,8 +2689,11 @@ describe("manager CLI", () => {
       const result = await runManager(args, shouldAsk ? { stdin: "y\n" } : {});
 
       assert.equal(result.code, 0, result.stderr);
-      assert.match(result.stdout, /diff: [\s\S]*file\.txt/);
+      assert.match(result.stdout, /Check differences [\s\S]*file\.txt/);
+      assert.match(result.stdout, /^  1 added$/m);
+      assert.doesNotMatch(result.stdout, /0 (?:changed|removed)|surplus \(ignored\)/);
       assert.equal(result.stdout.includes("Apply? [y/N]"), shouldAsk);
+      if (shouldAsk) assert.match(result.stdout, /^Apply\? \[y\/N\] \n  1 added$/m);
       assert.equal(await readFile(join(homeRoot, "file.txt"), "utf8"), "new\n");
       assert.equal(await readFile(join(homeRoot, "done.txt"), "utf8"), "ran\n");
       assert.equal(existsSync(join(distRoot, "old.txt")), false);
@@ -2519,7 +2710,10 @@ describe("manager CLI", () => {
 
       assert.equal(result.code, 0, result.stderr);
       assert.match(result.stdout, /^stage diff start$/m);
-      assert.match(result.stdout, new RegExp(`^command ${command[0]} success`, "m"));
+      assert.match(
+        result.stdout,
+        command[0] === "apply" ? /^✓ Done +\d+\.\d{2}s$/m : /^command diff success /m,
+      );
       assert.match(result.stdout, /file\.txt/);
       assert.match(result.stdout, /old/);
       assert.match(result.stdout, /new/);
@@ -2539,6 +2733,7 @@ describe("manager CLI", () => {
       const result = await runManager(["apply", "--ask"], { stdin });
 
       assert.equal(result.code, 0, result.stderr);
+      assert.match(result.stdout, /Check differences .*1 changed/);
       assert.match(result.stdout, /file\.txt[\s\S]*Apply\? \[y\/N\][\s\S]*apply aborted/);
       assert.equal(await readFile(join(homeRoot, "file.txt"), "utf8"), "old\n");
       assert.equal(existsSync(join(homeRoot, "done.txt")), false);
@@ -2575,13 +2770,13 @@ describe("manager CLI", () => {
     assert.equal(result.code, 1);
     assert.match(result.stderr, /hook-error\n/);
     assert.match(result.stderr, /local build hook failed: 01-fail\.build\.ts/);
-    assert.match(result.stdout, /^\[build\] Started$/m);
-    assert.match(result.stdout, /^  \[01-fail\.build\.ts\] Started$/m);
-    assert.match(result.stdout, /^  \[01-fail\.build\.ts\] ✗ Failed \(\d+\.\d{2}s\)$/m);
-    assert.match(result.stdout, /^\[build\] Failed \(\d+\.\d{2}s\)$/m);
-    assert.match(result.stdout, /^command apply failure \(\d+\.\d{2}s\)$/m);
-    assert.doesNotMatch(result.stdout, /^  \[02-late\.build\.ts\] Started$/m);
-    assert.doesNotMatch(result.stdout, /^\[apply\] Started$/m);
+    assert.match(result.stdout, /^Build$/m);
+    assert.match(result.stdout, /^    01-fail\n      ✗ Failed +\d+\.\d{2}s /m);
+    assert.ok(result.stdout.includes(join(distRoot, "01-fail.build.ts")), result.stdout);
+    assert.match(result.stdout, /^✗ Build failed +\d+\.\d{2}s$/m);
+    assert.match(result.stdout, /^✗ Failed +\d+\.\d{2}s$/m);
+    assert.doesNotMatch(result.stdout, /02-late/);
+    assert.doesNotMatch(result.stdout, /^Apply$/m);
     assert.equal(existsSync(join(distRoot, "late.txt")), false);
     assert.equal(existsSync(join(homeRoot, "file.txt")), false);
     assert.equal(existsSync(join(homeRoot, "done.txt")), false);

@@ -20,6 +20,7 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, join, normalize, relative, resolve, sep } from "node:path";
 import { Stream } from "node:stream";
+import { formatCounts, type ApplyHookLog } from "./apply-log.ts";
 import { expandHomeRoot, positionalArguments } from "./args.ts";
 import {
   compareCodeUnits,
@@ -112,7 +113,7 @@ export async function collectDeclarations(distRoot: string): Promise<Declaration
   return declarations;
 }
 
-type StartedScript = { script: ApplyScript; startedAt: number };
+type StartedScript = { script: ApplyScript; startedAt: number; hookLog?: ApplyHookLog };
 
 type ScriptTarget = StartedScript & { copyPath: string } & (
     | { canonicalCopyPath: string; pathError?: never }
@@ -129,12 +130,14 @@ export async function runApplyScripts(
   scripts: ApplyScript[],
   distRoot: string,
   homeRoot: string,
+  hookLog?: ApplyHookLog,
 ): Promise<string[]> {
   if (scripts.length === 0) return [];
+  hookLog?.begin(scripts.map(({ distPath }) => distPath));
   const startedScripts = scripts.map((script) => {
     const startedAt = performance.now();
-    writeLine(`  [${script.distPath}] Started`);
-    return { script, startedAt };
+    if (!hookLog) writeLine(`  [${script.distPath}] Started`);
+    return { script, startedAt, hookLog };
   });
   const requestedHome = resolve(homeRoot);
   const canonicalHome = resolveScriptDirectory(requestedHome);
@@ -197,10 +200,10 @@ async function prepareScript(
   distPaths: ReadonlySet<string>,
   targetCounts: ReadonlyMap<string, number>,
 ): Promise<PreparedScript | string> {
-  const { script, startedAt, copyPath, canonicalCopyPath, pathError } = target;
+  const { script, startedAt, hookLog, copyPath, canonicalCopyPath, pathError } = target;
   const label = `apply script failed: ${script.distPath}`;
   if (!script.distPath.endsWith(".ts")) {
-    writeScriptResult(script, startedAt, false);
+    await writeScriptResult(target, false);
     return `apply hook has unsupported extension: ${script.distPath}`;
   }
   try {
@@ -221,9 +224,9 @@ async function prepareScript(
     }
 
     const stagingCleanupError = await placeScriptCopy(sourcePath, copyPath);
-    return { script, startedAt, copyPath, canonicalCopyPath, stagingCleanupError };
+    return { script, startedAt, hookLog, copyPath, canonicalCopyPath, stagingCleanupError };
   } catch (error) {
-    writeScriptResult(script, startedAt, false);
+    await writeScriptResult(target, false);
     return `${label}: ${messageOf(error)}`;
   }
 }
@@ -253,7 +256,7 @@ async function executePrepared(
   distRoot: string,
   homeRoot: string,
 ): Promise<string | null> {
-  const { script, startedAt, copyPath, canonicalCopyPath, stagingCleanupError } = entry;
+  const { script, hookLog, copyPath, canonicalCopyPath, stagingCleanupError } = entry;
   const label = `apply script failed: ${script.distPath}`;
   const errors: string[] = [];
   try {
@@ -266,8 +269,8 @@ async function executePrepared(
         DOTFILES_HOME_ROOT: resolve(homeRoot),
         DOTFILES_MANAGER_SRC: import.meta.dir,
       },
-      label,
       script.distPath,
+      hookLog,
     );
   } catch (error) {
     errors.push(messageOf(error));
@@ -281,7 +284,7 @@ async function executePrepared(
     }
   }
   if (stagingCleanupError) errors.push(stagingCleanupError);
-  writeScriptResult(script, startedAt, errors.length === 0);
+  await writeScriptResult(entry, errors.length === 0);
   if (errors.length === 0) return null;
   const diagnostic = errors.join("; ");
   return diagnostic.startsWith(label) ? diagnostic : `${label}: ${diagnostic}`;
@@ -322,7 +325,14 @@ function normalizePathKey(path: string): string {
   return ignoresCase ? normalized.toLowerCase() : normalized;
 }
 
-function writeScriptResult(script: ApplyScript, startedAt: number, succeeded: boolean): void {
+async function writeScriptResult(
+  { script, startedAt, hookLog }: StartedScript,
+  succeeded: boolean,
+): Promise<void> {
+  if (hookLog) {
+    await hookLog.finish(script.distPath, succeeded, elapsedSeconds(startedAt));
+    return;
+  }
   writeLine(
     `  [${script.distPath}] ${succeeded ? "✓ Complete" : "✗ Failed"} (${elapsedSeconds(startedAt)}s)`,
   );
@@ -355,6 +365,7 @@ export function parseArgs(argv: readonly string[]): {
 export async function main(
   argv: readonly string[],
   confirmApply: () => Promise<boolean> = confirmApplyStdin,
+  hookLog?: ApplyHookLog,
 ): Promise<number> {
   const options = parseArgs(argv);
   if (options.dryRun) return diffMain(options.rest);
@@ -363,11 +374,25 @@ export async function main(
 
   const diffStarted = performance.now();
   const result = await collectDifferences(distRoot, homeRoot);
-  writeLine(
-    `diff: ${result.changed.length} changed, ${result.typeMismatches.length} type mismatches, ` +
-      `${result.added.length} added, ${result.removedExact.length} surplus (exact), ` +
-      `${result.removedIgnored.length} surplus (ignored) (${elapsedSeconds(diffStarted)}s)`,
-  );
+  if (hookLog) {
+    const expectedChanges = options.yes
+      ? ""
+      : formatCounts({
+          added: result.added.length,
+          changed: result.changed.length,
+          "type mismatches": result.typeMismatches.length,
+          "to remove": result.removedExact.length,
+        });
+    writeLine(
+      `  Check differences (${elapsedSeconds(diffStarted)}s)${expectedChanges ? `  ${expectedChanges}` : ""}`,
+    );
+  } else {
+    writeLine(
+      `diff: ${result.changed.length} changed, ${result.typeMismatches.length} type mismatches, ` +
+        `${result.added.length} added, ${result.removedExact.length} surplus (exact), ` +
+        `${result.removedIgnored.length} surplus (ignored) (${elapsedSeconds(diffStarted)}s)`,
+    );
+  }
   await renderDiffs(result, { distRoot, homeRoot });
 
   const proceed = options.yes || (await confirmApply());
@@ -379,16 +404,27 @@ export async function main(
   const declarations = await collectDeclarations(distRoot);
   const applyStarted = performance.now();
   const applied = await applyDifferences(distRoot, homeRoot, result);
-  writeLine(
-    `apply: ${applied.added.length} added, ${applied.changed.length} changed, ` +
-      `${applied.removed.length} removed (${elapsedSeconds(applyStarted)}s)`,
-  );
+  if (hookLog) {
+    const changes = formatCounts({
+      added: applied.added.length,
+      changed: applied.changed.length,
+      removed: applied.removed.length,
+    });
+    writeLine(`  ${changes || "No managed file changes"}`);
+  } else {
+    writeLine(
+      `apply: ${applied.added.length} added, ${applied.changed.length} changed, ` +
+        `${applied.removed.length} removed (${elapsedSeconds(applyStarted)}s)`,
+    );
+  }
 
   const scriptsStarted = performance.now();
-  const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot);
-  writeLine(
-    `apply scripts: ${declarations.applyScripts.length} scripts (${elapsedSeconds(scriptsStarted)}s)`,
-  );
+  const failures = await runApplyScripts(declarations.applyScripts, distRoot, homeRoot, hookLog);
+  if (!hookLog) {
+    writeLine(
+      `apply scripts: ${declarations.applyScripts.length} scripts (${elapsedSeconds(scriptsStarted)}s)`,
+    );
+  }
   for (const failure of failures) console.error(failure);
   return failures.length === 0 ? 0 : 1;
 }
@@ -557,8 +593,8 @@ async function spawnChild(
   command: string[],
   cwd: string,
   env: Record<string, string | undefined>,
-  label: string,
   path: string,
+  hookLog?: ApplyHookLog,
 ): Promise<void> {
   const proc = Bun.spawn(command, {
     cwd,
@@ -567,10 +603,10 @@ async function spawnChild(
     stdout: "pipe",
     stderr: "pipe",
   });
-  const exitCode = await forwardHookOutput(proc, path);
+  const exitCode = await forwardHookOutput(proc, path, hookLog);
   if (exitCode !== 0) {
     const reason = proc.signalCode ? `signal ${proc.signalCode}` : `exit code ${exitCode}`;
-    throw new Error(`${label} (${reason})`);
+    throw new Error(`apply script failed: ${path} (${reason})`);
   }
 }
 

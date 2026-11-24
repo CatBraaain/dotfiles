@@ -4,6 +4,7 @@
 import { cp, mkdir, open, readdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path";
+import type { ApplyHookLog } from "./apply-log.ts";
 import { applyPathMap, createCopyRouter, type CopyRouter } from "./build-path-map.ts";
 import { currentPlatform, mapSegment, type Platform } from "./path-mapping.ts";
 import { applyExternals } from "./build-external.ts";
@@ -20,6 +21,7 @@ export type PhaseEvent = (phase: BuildPhase, elapsedSeconds: number) => void;
 
 type BuildOptions = {
   onHookEvent?: HookEvent;
+  hookLog?: ApplyHookLog;
   onPhase?: PhaseEvent;
   connection?: WslConnection;
 };
@@ -54,7 +56,7 @@ export async function main(
   });
   await timed("merge", onPhase, () => composeMergeTargets(distDir, homeRoot, sidecarPlatform));
   await timed("replace", onPhase, () => applyReplaceSidecars(distDir, homeRoot));
-  await runHooks(hooks, distDir, homeRoot, onHookEvent);
+  await runHooks(hooks, distDir, homeRoot, onHookEvent, options.hookLog);
   const generatedLinks = await convertLnkDeclarations(distDir, platform);
   if (platform === "windows") await adoptHomeLnkBytes(distDir, homeRoot, generatedLinks);
 }

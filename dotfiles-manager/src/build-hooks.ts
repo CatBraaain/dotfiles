@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import type { ApplyHookLog } from "./apply-log.ts";
 import { compareCodeUnits } from "./compare.ts";
 import {
   ensureHookDirectory,
@@ -10,11 +11,7 @@ import {
   removeHookSnapshot,
   writeHookSnapshot,
 } from "./hook-runner.ts";
-import {
-  hookPlatform,
-  isBuildHookName,
-  isPostHookName,
-} from "./path-mapping.ts";
+import { hookPlatform, isBuildHookName, isPostHookName } from "./path-mapping.ts";
 
 type Hook = { absolutePath: string; relativeParent: string; name: string; contents: string };
 
@@ -68,14 +65,16 @@ export async function runHooks(
   distDir: string,
   homeRoot: string,
   onHookEvent?: HookEvent,
+  hookLog?: ApplyHookLog,
 ): Promise<void> {
+  hookLog?.begin(hooks.map(hookRelativePath));
   for (const hook of hooks) {
     const hookDistDir =
       hook.relativeParent === "" ? distDir : join(distDir, ...hook.relativeParent.split("/"));
     // Skip hooks whose folder an earlier hook removed or moved (spec:
     // SPEC.md §build: ローカルフック 検出と順序).
     if (!existsSync(hookDistDir)) continue;
-    await runHook(hook, hookDistDir, distDir, homeRoot, onHookEvent);
+    await runHook(hook, hookDistDir, distDir, homeRoot, onHookEvent, hookLog);
   }
 }
 
@@ -85,6 +84,7 @@ async function runHook(
   distDir: string,
   homeRoot: string,
   onHookEvent?: HookEvent,
+  hookLog?: ApplyHookLog,
 ): Promise<void> {
   const relativePath = hookRelativePath(hook);
   const started = performance.now();
@@ -107,7 +107,7 @@ async function runHook(
             DOTFILES_MANAGER_SRC: import.meta.dir,
           },
           relativePath,
-          "local build hook",
+          hookLog,
         );
       } finally {
         await removeHookSnapshot(snapshotPath, distDir);
@@ -115,10 +115,16 @@ async function runHook(
     } finally {
       await removeEmptyHookDirectories(createdDirectories);
     }
-    onHookEvent?.(relativePath, "success", (performance.now() - started) / 1000);
   } catch (error) {
-    onHookEvent?.(relativePath, "failure", (performance.now() - started) / 1000);
+    await report(false);
     throw error;
+  }
+  await report(true);
+
+  async function report(succeeded: boolean): Promise<void> {
+    const seconds = (performance.now() - started) / 1000;
+    onHookEvent?.(relativePath, succeeded ? "success" : "failure", seconds);
+    await hookLog?.finish(relativePath, succeeded, seconds.toFixed(2));
   }
 }
 
@@ -127,7 +133,7 @@ async function runChildProcess(
   cwd: string,
   env: Record<string, string | undefined>,
   relativePath: string,
-  kind: string,
+  hookLog?: ApplyHookLog,
 ): Promise<void> {
   const proc = Bun.spawn(command, {
     cwd,
@@ -136,9 +142,9 @@ async function runChildProcess(
     stdout: "pipe",
     stderr: "pipe",
   });
-  const exitCode = await forwardHookOutput(proc, relativePath);
+  const exitCode = await forwardHookOutput(proc, relativePath, hookLog);
   if (exitCode !== 0) {
     const reason = proc.signalCode ? `signal ${proc.signalCode}` : `exit code ${exitCode}`;
-    throw new Error(`${kind} failed: ${relativePath} (${reason})`);
+    throw new Error(`local build hook failed: ${relativePath} (${reason})`);
   }
 }

@@ -1,6 +1,7 @@
 // Internal command entry point for the dotfiles manager.
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { ApplyHookLog, writeOutcome, writeTimedRow } from "./apply-log.ts";
 import { confirmApplyStdin, main as apply } from "./apply.ts";
 import { main as build } from "./build.ts";
 import { main as diff } from "./diff.ts";
@@ -26,6 +27,8 @@ export async function main(
   }
 
   const stage = isDryRun ? "diff" : command;
+  const distRoot = join(root, "dist");
+  const hookLog = command === "apply" ? new ApplyHookLog(distRoot) : undefined;
 
   const started = performance.now();
   let confirmationWaitMs = 0;
@@ -33,29 +36,34 @@ export async function main(
   // (spec: §Windows の WSL 接続); Linux/macOS resolve no connection.
   const connection = await resolveWsl(root);
   try {
-    await logBuild(root, homeRoot, connection);
+    await logBuild(root, homeRoot, connection, hookLog);
 
-    const distRoot = join(root, "dist");
     const code = await logStage(
       stage,
       () => {
         if (stage === "apply") {
           const applyArgs = shouldAsk ? [distRoot, homeRoot] : [distRoot, homeRoot, "--yes"];
-          return apply(applyArgs, confirmApply);
+          return apply(applyArgs, confirmApply, hookLog);
         }
         return diff(stage === "managed" ? ["--managed", distRoot, homeRoot] : [distRoot, homeRoot]);
       },
       elapsedWithoutConfirmation,
     );
-    logElapsed(
-      `command ${command}`,
-      code === 0 ? "success" : "failure",
-      elapsedWithoutConfirmation(started),
-    );
+    logCommandOutcome(code === 0);
     return code;
   } catch (error) {
-    logElapsed(`command ${command}`, "failure", elapsedWithoutConfirmation(started));
+    logCommandOutcome(false);
     throw error;
+  }
+
+  function logCommandOutcome(succeeded: boolean): void {
+    const seconds = elapsedWithoutConfirmation(started);
+    if (command === "apply") {
+      console.log();
+      writeOutcome(succeeded ? "Done" : "Failed", succeeded, seconds);
+    } else {
+      logElapsed(`command ${command}`, succeeded ? "success" : "failure", seconds);
+    }
   }
 
   async function confirmApply(): Promise<boolean> {
@@ -64,6 +72,7 @@ export async function main(
       return await confirmApplyStdin();
     } finally {
       confirmationWaitMs = performance.now() - waitStarted;
+      if (!process.stdin.isTTY || !process.stdout.isTTY) console.log();
     }
   }
 
@@ -72,27 +81,43 @@ export async function main(
   }
 }
 
-async function logBuild(root: string, homeRoot: string, wsl?: WslConnection): Promise<void> {
+async function logBuild(
+  root: string,
+  homeRoot: string,
+  wsl: WslConnection | undefined,
+  hookLog?: ApplyHookLog,
+): Promise<void> {
   const started = performance.now();
-  console.log("[build] Started");
+  console.log(hookLog ? "Build\n  Steps" : "[build] Started");
   try {
     await build(root, undefined, homeRoot, {
-      onHookEvent: (path, status, elapsedSeconds) => {
-        if (status === "start") {
-          console.log(`  [${path}] Started`);
-          return;
-        }
-        const outcome = status === "success" ? "✓ Complete" : "✗ Failed";
-        console.log(`  [${path}] ${outcome} (${elapsedSeconds.toFixed(2)}s)`);
+      hookLog,
+      onHookEvent: hookLog
+        ? undefined
+        : (path, status, seconds) => {
+            if (status === "start") {
+              console.log(`  [${path}] Started`);
+              return;
+            }
+            const outcome = status === "success" ? "✓ Complete" : "✗ Failed";
+            console.log(`  [${path}] ${outcome} (${seconds.toFixed(2)}s)`);
+          },
+      onPhase: (phase, seconds) => {
+        if (hookLog) writeTimedRow(phase, seconds.toFixed(2));
+        else console.log(`  [build] ${phase} (${seconds.toFixed(2)}s)`);
       },
-      onPhase: (phase, elapsedSeconds) =>
-        console.log(`  [build] ${phase} (${elapsedSeconds.toFixed(2)}s)`),
       connection: wsl,
     });
-    console.log(`[build] Complete (${elapsedSeconds(started)}s)`);
+    report(true);
   } catch (error) {
-    console.log(`[build] Failed (${elapsedSeconds(started)}s)`);
+    report(false);
     throw error;
+  }
+
+  function report(succeeded: boolean): void {
+    const seconds = elapsedSeconds(started);
+    if (hookLog) writeOutcome(succeeded ? "Build complete" : "Build failed", succeeded, seconds);
+    else console.log(`[build] ${succeeded ? "Complete" : "Failed"} (${seconds}s)`);
   }
 }
 
@@ -102,7 +127,7 @@ async function logStage(
   elapsedSince: (started: number) => string,
 ): Promise<number> {
   const started = performance.now();
-  console.log(name === "apply" ? "[apply] Started" : `stage ${name} start`);
+  console.log(name === "apply" ? "\nApply" : `stage ${name} start`);
   try {
     const code = await action();
     logStageOutcome(name, code === 0 ? "success" : "failure", elapsedSince(started));
@@ -115,7 +140,11 @@ async function logStage(
 
 function logStageOutcome(name: string, status: "success" | "failure", seconds: string): void {
   if (name === "apply") {
-    console.log(`[apply] ${status === "success" ? "Complete" : "Failed"} (${seconds}s)`);
+    writeOutcome(
+      status === "success" ? "Apply complete" : "Apply failed",
+      status === "success",
+      seconds,
+    );
     return;
   }
   logElapsed(`stage ${name}`, status, seconds);

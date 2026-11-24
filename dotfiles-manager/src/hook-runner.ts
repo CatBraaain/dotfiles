@@ -4,19 +4,28 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import type { ApplyHookLog, HookOutputChannel } from "./apply-log.ts";
 
 export function hookCommand(scriptPath: string): string[] {
   return [process.execPath, "--preload", join(import.meta.dir, "hook-context.ts"), scriptPath];
 }
 
+const newline = 10;
+const trailingNewline = Buffer.from("\n");
+
 export async function forwardHookOutput(
   proc: Bun.Subprocess<"ignore", "pipe", "pipe">,
   path: string,
+  hookLog?: ApplyHookLog,
 ): Promise<number> {
   const pending = [
     proc.exited,
-    forwardLines(proc.stdout, Bun.stdout, path),
-    forwardLines(proc.stderr, Bun.stderr, path),
+    hookLog
+      ? forwardNestedLines(proc.stdout, path, "stdout", hookLog)
+      : forwardLines(proc.stdout, Bun.stdout, path),
+    hookLog
+      ? forwardNestedLines(proc.stderr, path, "stderr", hookLog)
+      : forwardLines(proc.stderr, Bun.stderr, path),
   ] as const;
   try {
     const [exitCode] = await Promise.all(pending);
@@ -28,13 +37,43 @@ export async function forwardHookOutput(
   }
 }
 
+async function forwardNestedLines(
+  stream: AsyncIterable<Uint8Array>,
+  path: string,
+  channel: HookOutputChannel,
+  hookLog: ApplyHookLog,
+): Promise<void> {
+  const partial: Uint8Array[] = [];
+  for await (const chunk of stream) {
+    let start = 0;
+    while (start < chunk.length) {
+      const newlineIndex = chunk.indexOf(newline, start);
+      if (newlineIndex === -1) {
+        partial.push(chunk.subarray(start));
+        break;
+      }
+      const segment = chunk.subarray(start, newlineIndex + 1);
+      if (partial.length === 0) await hookLog.writeLine(path, channel, segment);
+      else {
+        partial.push(segment);
+        await hookLog.writeLine(path, channel, Buffer.concat(partial));
+        partial.length = 0;
+      }
+      start = newlineIndex + 1;
+    }
+  }
+  if (partial.length > 0) {
+    partial.push(trailingNewline);
+    await hookLog.writeLine(path, channel, Buffer.concat(partial));
+  }
+}
+
 async function forwardLines(
   stream: AsyncIterable<Uint8Array>,
   destination: Bun.BunFile,
   path: string,
 ): Promise<void> {
   const prefix = Buffer.from(`  [${path}] `);
-  const newline = 10;
   let atLineStart = true;
   for await (const chunk of stream) {
     const parts: Uint8Array[] = [];
