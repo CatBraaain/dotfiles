@@ -52,7 +52,7 @@ const workManaged = `BluePointLilac.ContextMenuManager sordum.EasyContextMenu w4
   AdrienAllard.FileConverter DuongDieuPhap.ImageGlass LocalSend.LocalSend MPC-BE.MPC-BE
   M2Team.NanaZip OpenWhispr.OpenWhispr ShareX.ShareX Microsoft.Sysinternals.Autologon Rime.Weasel
   WinDirStat.WinDirStat Microsoft.WindowsTerminal ZedIndustries.Zed AutoHotkey.AutoHotkey
-  RussellBanks.Komac dandavison.delta CatBraaain.runx CatBraaain.wintasks astral-sh.uv`;
+  RussellBanks.Komac CatBraaain.runx CatBraaain.wintasks astral-sh.uv`;
 const personalManaged = `Guru3D.Afterburner CPUID.CPU-Z Rem0o.FanControl GIMP.GIMP.3 ch.LosslessCut
   Mojang.MinecraftLauncher OBSProject.OBSStudio Guru3D.RTSS Meltytech.Shotcut Valve.Steam
   Devolutions.UniGetUI HaraldBoegeholz.h2testw`;
@@ -242,10 +242,10 @@ test.each(["work", "personal"] as const)(
       writeFileSync(join(app, "camoufox.exe"), "installed browser");
       writeFileSync(join(app, "application.ini"), "[App]\nVersion=158.0.1-beta.41\n");
       const nonDevExecutable = fixture.packageExe(
-        `dandavison.delta_${wingetSourceId}`,
-        "delta.exe",
+        `RussellBanks.Komac_${wingetSourceId}`,
+        "komac.exe",
       );
-      const replacedLink = join(fixture.links, "delta.exe");
+      const replacedLink = join(fixture.links, "komac.exe");
       writeFileSync(replacedLink, "previous file");
 
       const { commands, lookups, errors } = await fixture.run(profile, "winget");

@@ -120,7 +120,6 @@ work:
   - brew: gup
 
   # LLM-only CLI tools
-  - brew: git-delta
   - brew: officecli
   - brew: pdfcpu
   - uv: "trafilatura[all]"

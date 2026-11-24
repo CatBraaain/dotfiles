@@ -43,7 +43,6 @@ work:
   - winget: ZedIndustries.Zed
   - winget: AutoHotkey.AutoHotkey
   - winget: RussellBanks.Komac
-  - winget: dandavison.delta
   - winget: CatBraaain.runx
   - winget: CatBraaain.wintasks
   - winget: astral-sh.uv

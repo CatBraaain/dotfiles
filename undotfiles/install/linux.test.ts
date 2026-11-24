@@ -105,12 +105,12 @@ function invoke(
 }
 
 describe("Linux install profile configuration", () => {
-  it("defines 74 dev entries, 25 work additions and three personal additions", async () => {
+  it("defines 74 dev entries, 24 work additions and three personal additions", async () => {
     const { dev, work, personal } = parseConfig(
       await Bun.file(new URL("./linux.install.yaml", import.meta.url)).text(),
     );
     assert.equal(dev.length, 74);
-    assert.equal(work.length, 25);
+    assert.equal(work.length, 24);
     assert.ok(dev.some((entry) => entry.key === "brew" && entry.value === "gh"));
     assert.deepEqual(
       dev.filter((entry) => entry.key === "bun" && entry.value.startsWith("@playwright/cli")),
