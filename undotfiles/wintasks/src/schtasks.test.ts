@@ -1,6 +1,15 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
-import { decode, decodeWithCodePage, encodeTaskXml } from "./schtasks.ts";
+import { decode, decodeWithCodePage, encodeTaskXml, extractTasks } from "./schtasks.ts";
+
+const TASK_NS = "http://schemas.microsoft.com/windows/2004/02/mit/task";
+
+function taskDocument(uri: string, body: string): string {
+  return (
+    '<?xml version="1.0" encoding="UTF-16"?>\n' +
+    `<Task xmlns="${TASK_NS}"><RegistrationInfo><URI>${uri}</URI></RegistrationInfo>${body}</Task>`
+  );
+}
 
 describe("schtasks encoding", () => {
   it("writes schtasks xml as utf16 le with matching declaration", () => {
@@ -41,5 +50,73 @@ describe("query decoding", () => {
     assert.equal(decode(littleEndian), text);
     assert.equal(decode(bigEndian), text);
     assert.equal(decode(utf8), text);
+  });
+});
+
+describe("extractTasks", () => {
+  it("extracts each task document with its declaration from the query output", () => {
+    const first = taskDocument("\\a", "");
+    const second = taskDocument("\\b", "");
+    const tasks = extractTasks([first, second].join("\r\n"));
+    assert.deepEqual(
+      tasks.map((task) => task.path),
+      ["\\a", "\\b"],
+    );
+    assert.deepEqual(
+      tasks.map((task) => task.xml),
+      [first, second],
+    );
+  });
+
+  it("does not split a task document at XML declaration text in CDATA or a comment", () => {
+    const declaration = '<?xml version="1.0"?>';
+    const first = taskDocument(
+      "\\a",
+      `<Data><![CDATA[${declaration}]]></Data><!-- ${declaration} -->`,
+    );
+    const second = taskDocument("\\b", "");
+    assert.deepEqual(extractTasks([first, second].join("\r\n")), [
+      { path: "\\a", xml: first },
+      { path: "\\b", xml: second },
+    ]);
+  });
+
+  it("decodes entities and cdata in the task uri", () => {
+    const cdata =
+      '<?xml version="1.0" encoding="UTF-16"?>\n<Task xmlns="' +
+      TASK_NS +
+      '"><RegistrationInfo><URI><![CDATA[\\d]]></URI></RegistrationInfo></Task>';
+    const tasks = extractTasks([taskDocument("\\a&amp;b", ""), cdata].join("\r\n"));
+    assert.deepEqual(
+      tasks.map((task) => task.path),
+      ["\\a&b", "\\d"],
+    );
+  });
+
+  it("parses a single document without a declaration", () => {
+    const document = `<Task xmlns="${TASK_NS}"><RegistrationInfo><URI>\\a</URI></RegistrationInfo></Task>`;
+    const tasks = extractTasks(document);
+    assert.deepEqual(
+      tasks.map((task) => task.path),
+      ["\\a"],
+    );
+    assert.deepEqual(
+      tasks.map((task) => task.xml),
+      [document],
+    );
+  });
+
+  it("skips documents whose root is not a task", () => {
+    const other = '<?xml version="1.0" encoding="UTF-16"?>\n<NotTask><URI>\\x</URI></NotTask>';
+    const tasks = extractTasks([other, taskDocument("\\a", "")].join("\r\n"));
+    assert.deepEqual(
+      tasks.map((task) => task.path),
+      ["\\a"],
+    );
+  });
+
+  it("fails on a malformed task document", () => {
+    const broken = '<?xml version="1.0" encoding="UTF-16"?>\n<Task><Triggers></Trigger></Task>';
+    assert.throws(() => extractTasks(broken), /failed to parse schtasks query output/);
   });
 });

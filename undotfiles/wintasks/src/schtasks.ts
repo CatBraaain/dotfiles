@@ -1,10 +1,10 @@
-// schtasks invocation and best-effort query parsing.
+// schtasks invocation and query parsing.
 
 import { dlopen, FFIType } from "bun:ffi";
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { tokenize } from "./xml.ts";
+import { parseXml, textContent, type XNode } from "./xml.ts";
 
 const UTF8_XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8"?>';
 const UTF16_XML_DECLARATION = '<?xml version="1.0" encoding="UTF-16"?>';
@@ -152,77 +152,48 @@ export function encodeTaskXml(xml: string): Uint8Array {
   return bytes;
 }
 
-// Parses Task XML documents until the first malformed document.
+// Parses each Task XML document in the concatenated query output.
 export function extractTasks(xmlText: string): ExistingTask[] {
-  const { tokens, error } = tokenize(xmlText);
-  if (error !== null) {
-    // Keep the tasks parsed before the malformed document.
-  }
-  let depth = 0;
-  let taskDepth: number | null = null;
-  let registrationInfoDepth: number | null = null;
-  let path = "";
-  let captureUri = false;
-  let capture: string[] | null = null;
   const tasks: ExistingTask[] = [];
-
-  for (const token of tokens) {
-    switch (token.kind) {
-      case "start": {
-        depth++;
-        const name = localName(token.name);
-        if (taskDepth === null && name === "Task") {
-          capture = [token.raw];
-          taskDepth = depth;
-          path = "";
-        } else if (capture !== null) {
-          capture.push(token.raw);
-        }
-        if (taskDepth === depth - 1 && name === "RegistrationInfo") {
-          registrationInfoDepth = depth;
-        }
-        captureUri = registrationInfoDepth === depth - 1 && name === "URI";
-        break;
-      }
-      case "empty": {
-        if (capture !== null) capture.push(token.raw);
-        break;
-      }
-      case "text": {
-        if (capture !== null) capture.push(token.raw);
-        if (captureUri) path += unescapeEntityText(token.raw);
-        break;
-      }
-      case "cdata": {
-        if (capture !== null) capture.push(token.raw);
-        if (captureUri) path += token.text;
-        break;
-      }
-      case "end": {
-        const name = localName(token.name);
-        if (capture !== null) capture.push(token.raw);
-        if (taskDepth === depth && name === "Task") {
-          if (path.length > 0 && capture !== null) {
-            tasks.push({ path: uriToTaskPath(path), xml: capture.join("") });
-          }
-          capture = null;
-          taskDepth = null;
-          registrationInfoDepth = null;
-        } else if (registrationInfoDepth === depth && name === "RegistrationInfo") {
-          registrationInfoDepth = null;
-        }
-        captureUri = false;
-        depth = Math.max(0, depth - 1);
-        break;
-      }
-      case "skip":
-      case "reference": {
-        if (capture !== null && token.kind === "reference") capture.push(token.raw);
-        break;
-      }
+  for (const document of splitXmlDocuments(xmlText)) {
+    let root: XNode;
+    try {
+      root = parseXml(document);
+    } catch (error) {
+      throw new Error(`failed to parse schtasks query output: ${(error as Error).message}`);
     }
+    if (localName(root.name) !== "Task") continue;
+    const path = registrationUri(root);
+    if (path.length > 0) tasks.push({ path: uriToTaskPath(path), xml: document });
   }
   return tasks;
+}
+
+function splitXmlDocuments(xmlText: string): string[] {
+  const markup = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g;
+  const documents: string[] = [];
+  let start = 0;
+  for (const match of xmlText.matchAll(markup)) {
+    if (!/^<\?xml\s/.test(match[0])) continue;
+    const document = xmlText.slice(start, match.index).trim();
+    if (document.length > 0) documents.push(document);
+    start = match.index;
+  }
+  const lastDocument = xmlText.slice(start).trim();
+  if (lastDocument.length > 0) documents.push(lastDocument);
+  return documents;
+}
+
+function registrationUri(root: XNode): string {
+  let path = "";
+  for (const item of root.content) {
+    if (item.kind !== "element" || localName(item.node.name) !== "RegistrationInfo") continue;
+    for (const child of item.node.content) {
+      if (child.kind !== "element" || localName(child.node.name) !== "URI") continue;
+      path += textContent(child.node);
+    }
+  }
+  return path;
 }
 
 function localName(name: string): string {
@@ -232,30 +203,4 @@ function localName(name: string): string {
 
 function uriToTaskPath(uri: string): string {
   return uri.trim().replaceAll("/", "\\");
-}
-
-function unescapeEntityText(raw: string): string {
-  return raw.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g, (full, entity: string) => {
-    switch (entity) {
-      case "amp":
-        return "&";
-      case "lt":
-        return "<";
-      case "gt":
-        return ">";
-      case "quot":
-        return '"';
-      case "apos":
-        return "'";
-    }
-    if (entity.startsWith("#x")) {
-      const code = parseInt(entity.slice(2), 16);
-      if (Number.isFinite(code)) return String.fromCodePoint(code);
-    }
-    if (entity.startsWith("#")) {
-      const code = parseInt(entity.slice(1), 10);
-      if (Number.isFinite(code)) return String.fromCodePoint(code);
-    }
-    return full;
-  });
 }

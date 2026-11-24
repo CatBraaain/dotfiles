@@ -1,5 +1,6 @@
 // Task Scheduler XML rendering and comparison.
 
+import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { formatDateTime, type DateTime } from "./datetime.ts";
 import { effectiveSetting, logonXmlName, resolveWorkingDirectory, type TaskDef } from "./def.ts";
 import {
@@ -248,17 +249,13 @@ function attrString(attributes: Array<[string, string]>): string {
 
 // Normalized comparison.
 
-interface XNode {
+export interface XNode {
   name: string;
   attributes: Array<[string, string]>;
   content: XContent[];
 }
 
-type XContent =
-  | { kind: "element"; node: XNode }
-  | { kind: "text"; raw: string }
-  | { kind: "cdata"; text: string }
-  | { kind: "reference"; raw: string };
+export type XContent = { kind: "element"; node: XNode } | { kind: "text" | "cdata"; text: string };
 
 export function normalizedTaskXml(xml: string): string {
   if (xml.length === 0) return "";
@@ -270,28 +267,24 @@ export function normalizedTaskXml(xml: string): string {
 }
 
 function writeNormalizedNode(writer: IndentWriter, node: XNode): void {
+  const attributes = node.attributes.map(([name, value]): [string, string] => [
+    name,
+    escapeXmlText(value).replaceAll('"', "&quot;"),
+  ]);
   if (node.content.length === 0) {
-    writer.empty(node.name, node.attributes);
+    writer.empty(node.name, attributes);
     return;
   }
-  writer.open(node.name, node.attributes);
+  writer.open(node.name, attributes);
   for (const item of node.content) {
-    switch (item.kind) {
-      case "element":
-        writeNormalizedNode(writer, item.node);
-        break;
-      case "text":
-        writer.text(item.raw);
-        break;
-      case "cdata":
-        writer.text(item.text);
-        break;
-      case "reference":
-        writer.text(item.raw);
-        break;
-    }
+    if (item.kind === "element") writeNormalizedNode(writer, item.node);
+    else writer.text(escapeXmlText(item.text));
   }
   writer.close(node.name);
+}
+
+function escapeXmlText(text: string): string {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 function localName(name: string): string {
@@ -351,11 +344,10 @@ function keepChild(parent: string, child: XNode): boolean {
   }
 }
 
-function textContent(node: XNode): string {
+export function textContent(node: XNode): string {
   let out = "";
   for (const item of node.content) {
-    if (item.kind === "text") out += item.raw;
-    if (item.kind === "cdata") out += item.text;
+    if (item.kind !== "element") out += item.text;
   }
   return out;
 }
@@ -405,252 +397,89 @@ function stableSortBy(content: XContent[], key: (item: XContent) => number): voi
   content.sort((left, right) => key(left) - key(right));
 }
 
-// Tokenizer shared by the parser and extractTasks. Mirrors quick-xml's event
-// stream: raw text is preserved (entity references split into their own
-// tokens), so escaping is not resolved or re-applied.
-
-type Token =
-  | {
-      kind: "start" | "empty" | "end";
-      name: string;
-      attributes: Array<[string, string]>;
-      raw: string;
-    }
-  | { kind: "cdata"; text: string; raw: string }
-  | { kind: "text"; raw: string }
-  | { kind: "reference"; raw: string }
-  | { kind: "skip"; raw: string };
-
-export function tokenize(xml: string): { tokens: Token[]; error: string | null } {
-  const tokens: Token[] = [];
-  let pos = 0;
-  while (pos < xml.length) {
-    const lt = xml.indexOf("<", pos);
-    if (lt === -1) {
-      tokens.push(...textTokens(xml.slice(pos)));
-      return { tokens, error: null };
-    }
-    if (lt > pos) tokens.push(...textTokens(xml.slice(pos, lt)));
-    const parsed = parseTagToken(xml, lt);
-    if ("error" in parsed) return { tokens, error: parsed.error };
-    tokens.push(parsed.token);
-    pos = parsed.pos;
-  }
-  return { tokens, error: null };
-}
-
-function textTokens(raw: string): Token[] {
-  const tokens: Token[] = [];
-  let pos = 0;
-  while (pos < raw.length) {
-    const amp = raw.indexOf("&", pos);
-    if (amp === -1) {
-      tokens.push({ kind: "text", raw: raw.slice(pos) });
-      break;
-    }
-    if (amp > pos) tokens.push({ kind: "text", raw: raw.slice(pos, amp) });
-    const semi = raw.indexOf(";", amp + 1);
-    if (semi === -1) {
-      tokens.push({ kind: "text", raw: raw.slice(amp) });
-      break;
-    }
-    tokens.push({ kind: "reference", raw: raw.slice(amp, semi + 1) });
-    pos = semi + 1;
-  }
-  return tokens;
-}
-
-function parseTagToken(
-  xml: string,
-  pos: number,
-): { token: Token; pos: number } | { error: string } {
-  if (xml.startsWith("<?", pos)) {
-    const end = xml.indexOf("?>", pos + 2);
-    if (end === -1) return { error: "unterminated XML declaration" };
-    return { token: { kind: "skip", raw: xml.slice(pos, end + 2) }, pos: end + 2 };
-  }
-  if (xml.startsWith("<!--", pos)) {
-    const end = xml.indexOf("-->", pos + 4);
-    if (end === -1) return { error: "unterminated comment" };
-    return { token: { kind: "skip", raw: xml.slice(pos, end + 3) }, pos: end + 3 };
-  }
-  if (xml.startsWith("<![CDATA[", pos)) {
-    const end = xml.indexOf("]]>", pos + 9);
-    if (end === -1) return { error: "unterminated CDATA section" };
-    return {
-      token: { kind: "cdata", text: xml.slice(pos + 9, end), raw: xml.slice(pos, end + 3) },
-      pos: end + 3,
-    };
-  }
-  if (xml.startsWith("<!", pos)) {
-    if (/^<!DOCTYPE/i.test(xml.slice(pos, pos + 9))) {
-      const end = xml.indexOf(">", pos);
-      if (end === -1) return { error: "unterminated doctype declaration" };
-      return { token: { kind: "skip", raw: xml.slice(pos, end + 1) }, pos: end + 1 };
-    }
-    return { error: "unrecognized markup declaration" };
-  }
-  if (xml.startsWith("</", pos)) {
-    const gt = xml.indexOf(">", pos);
-    if (gt === -1) return { error: "unterminated closing tag" };
-    const name = xml.slice(pos + 2, gt).trim();
-    if (!/^[^\s>]+$/.test(name)) return { error: "invalid closing tag" };
-    return {
-      token: { kind: "end", name, attributes: [], raw: xml.slice(pos, gt + 1) },
-      pos: gt + 1,
-    };
-  }
-  const gt = findTagEnd(xml, pos + 1);
-  if (gt === -1) return { error: "unterminated tag" };
-  const tag = xml.slice(pos + 1, gt);
-  const selfClosing = tag.endsWith("/");
-  const parsed = parseTagAttributes(selfClosing ? tag.slice(0, -1) : tag);
-  if (parsed === null) return { error: "invalid tag" };
-  return {
-    token: {
-      kind: selfClosing ? "empty" : "start",
-      name: parsed.name,
-      attributes: parsed.attributes,
-      raw: xml.slice(pos, gt + 1),
-    },
-    pos: gt + 1,
-  };
-}
-
-function findTagEnd(xml: string, start: number): number {
-  let quote: string | null = null;
-  for (let i = start; i < xml.length; i++) {
-    const c = xml[i];
-    if (quote !== null) {
-      if (c === quote) quote = null;
-    } else if (c === '"' || c === "'") {
-      quote = c;
-    } else if (c === ">") {
-      return i;
-    }
-  }
-  return -1;
-}
-
-function parseTagAttributes(
-  body: string,
-): { name: string; attributes: Array<[string, string]> } | null {
-  const nameMatch = /^[^\s/>]+/.exec(body);
-  if (!nameMatch) return null;
-  const name = nameMatch[0];
-  const attributes: Array<[string, string]> = [];
-  let pos = name.length;
-  while (pos < body.length) {
-    while (pos < body.length && /\s/.test(body[pos]!)) pos++;
-    if (pos >= body.length) break;
-    if (body[pos] === "/") break;
-    const attrMatch = /^[^\s=/]+/.exec(body.slice(pos));
-    if (!attrMatch) return null;
-    const attrName = attrMatch[0];
-    pos += attrName.length;
-    while (pos < body.length && /\s/.test(body[pos]!)) pos++;
-    let value = "";
-    if (body[pos] === "=") {
-      pos++;
-      while (pos < body.length && /\s/.test(body[pos]!)) pos++;
-      const quote = body[pos];
-      if (quote === '"' || quote === "'") {
-        const endQuote = body.indexOf(quote, pos + 1);
-        if (endQuote === -1) return null;
-        value = body.slice(pos + 1, endQuote);
-        pos = endQuote + 1;
-      } else {
-        const end = /[\s/>]/.exec(body.slice(pos))?.index ?? body.length - pos;
-        value = body.slice(pos, pos + end);
-        pos += end;
-      }
-    }
-    attributes.push([attrName, value]);
-  }
-  return { name, attributes };
-}
-
-function unescapeXml(raw: string): string {
-  return raw.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g, (full, entity: string) => {
-    switch (entity) {
-      case "amp":
-        return "&";
-      case "lt":
-        return "<";
-      case "gt":
-        return ">";
-      case "quot":
-        return '"';
-      case "apos":
-        return "'";
-    }
-    if (entity.startsWith("#x")) {
-      const code = parseInt(entity.slice(2), 16);
-      if (Number.isFinite(code)) return String.fromCodePoint(code);
-    }
-    if (entity.startsWith("#")) {
-      const code = parseInt(entity.slice(1), 10);
-      if (Number.isFinite(code)) return String.fromCodePoint(code);
-    }
-    return full;
-  });
-}
+const xmlParser = new XMLParser({
+  ignoreDeclaration: true,
+  ignoreAttributes: false,
+  attributeNamePrefix: "",
+  attributesGroupName: ":@",
+  preserveOrder: true,
+  cdataPropName: "__cdata",
+  trimValues: false,
+  parseTagValue: false,
+  processEntities: true,
+  htmlEntities: true,
+});
 
 export function parseXml(xml: string): XNode {
-  const { tokens, error } = tokenize(xml);
-  if (error !== null) throw new Error(error);
-  const stack: XNode[] = [];
-  let root: XNode | null = null;
-  const appendNode = (node: XNode): void => {
-    const parent = stack[stack.length - 1];
-    if (parent) parent.content.push({ kind: "element", node });
-    else if (!root) root = node;
-    else throw new Error("XML document has multiple root elements");
-  };
-  for (const token of tokens) {
-    switch (token.kind) {
-      case "start":
-        stack.push({ name: token.name, attributes: token.attributes, content: [] });
-        break;
-      case "empty":
-        appendNode({ name: token.name, attributes: token.attributes, content: [] });
-        break;
-      case "end": {
-        const node = stack.pop();
-        if (!node) throw new Error("unexpected XML closing tag");
-        if (localName(token.name) !== localName(node.name)) {
-          throw new Error(`expecting </${node.name}> found </${token.name}>`);
-        }
-        appendNode(node);
-        break;
-      }
-      case "text": {
-        if (unescapeXml(token.raw).trim().length === 0) break;
-        const parent = stack[stack.length - 1];
-        if (!parent) throw new Error("text outside XML root");
-        parent.content.push({ kind: "text", raw: token.raw });
-        break;
-      }
-      case "cdata": {
-        if (token.text.trim().length === 0) break;
-        const parent = stack[stack.length - 1];
-        if (!parent) throw new Error("CDATA outside XML root");
-        parent.content.push({ kind: "cdata", text: token.text });
-        break;
-      }
-      case "reference": {
-        const parent = stack[stack.length - 1];
-        if (!parent) throw new Error("entity reference outside XML root");
-        parent.content.push({ kind: "reference", raw: token.raw });
-        break;
-      }
-      case "skip":
-        break;
-    }
+  const validation = XMLValidator.validate(xml);
+  if (validation !== true) {
+    throw new Error(
+      `${validation.err.msg} (line ${validation.err.line}, col ${validation.err.col})`,
+    );
   }
-  if (stack.length > 0) throw new Error("unexpected end of XML document");
-  if (!root) throw new Error("XML document has no root element");
-  return root;
+  const roots = xmlNodes(xmlParser.parse(xml) as XmlEntry[]);
+  if (roots.length === 0) throw new Error("XML document has no root element");
+  if (roots.length > 1) throw new Error("XML document has multiple root elements");
+  return roots[0]!;
+}
+
+type XmlEntry = Record<string, unknown>;
+
+const structureKeys = [":@", "#text", "__cdata"];
+
+function xmlNodes(entries: XmlEntry[]): XNode[] {
+  const nodes: XNode[] = [];
+  for (const entry of entries) {
+    const node = xmlNode(entry);
+    if (node !== null) nodes.push(node);
+  }
+  return nodes;
+}
+
+function xmlNode(entry: XmlEntry): XNode | null {
+  const name = Object.keys(entry).find((key) => !structureKeys.includes(key));
+  if (name === undefined) return null;
+  const children = entry[name];
+  const attributesObject = entry[":@"];
+  const attributes: Array<[string, string]> = attributesObject
+    ? (Object.entries(attributesObject as XmlEntry) as Array<[string, string]>)
+    : [];
+  return {
+    name,
+    attributes,
+    content: xmlContents(Array.isArray(children) ? (children as XmlEntry[]) : []),
+  };
+}
+
+function xmlContents(entries: XmlEntry[]): XContent[] {
+  const content: XContent[] = [];
+  for (const entry of entries) {
+    const text = entry["#text"];
+    if (typeof text === "string") {
+      if (text.trim().length > 0) content.push({ kind: "text", text });
+      continue;
+    }
+    const cdata = entry["__cdata"];
+    if (cdata !== undefined) {
+      const value = cdataText(cdata);
+      if (value.trim().length > 0) content.push({ kind: "cdata", text: value });
+      continue;
+    }
+    const node = xmlNode(entry);
+    if (node !== null) content.push({ kind: "element", node });
+  }
+  return content;
+}
+
+function cdataText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return "";
+  let out = "";
+  for (const item of value as XmlEntry[]) {
+    const text = item["#text"];
+    if (typeof text === "string") out += text;
+  }
+  return out;
 }
 
 function lines(text: string): string[] {

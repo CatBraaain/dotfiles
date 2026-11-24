@@ -59,7 +59,7 @@ class FakeSchtasks implements Schtasks {
 }
 
 const queriedTask = (path: string, body: string): string =>
-  `<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><RegistrationInfo><URI>${path.replaceAll("\\", "/")}</URI></RegistrationInfo>${body}</Task>`;
+  `<?xml version="1.0" encoding="UTF-16"?>\n<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task"><RegistrationInfo><URI>${path.replaceAll("\\", "/")}</URI></RegistrationInfo>${body}</Task>`;
 
 function run(
   yaml: string,
@@ -221,7 +221,7 @@ describe("apply sync", () => {
     assert.ok(scheduler.creates.length === 0 && scheduler.deletes.length === 0);
   });
 
-  it("wrapped query tasks are no change", () => {
+  it("query tasks with cdata uri are no change", () => {
     const yaml = definitions(
       "  - name: startup\n    trigger: { type: now, value: x }\n    action: { command: startup.exe }\n  - name: SyncTime\n    trigger: { type: now, value: x }\n    action: { command: synctime.exe }\n",
     );
@@ -242,7 +242,7 @@ describe("apply sync", () => {
           );
       })
       .join("\n");
-    const scheduler = new FakeSchtasks({ queryXml: `<Tasks>${queryXml}</Tasks>` });
+    const scheduler = new FakeSchtasks({ queryXml });
     const { code, out, err } = run(yaml, true, scheduler);
     assert.equal(code, 0, err);
     assert.equal(out, "no-change \\WinTasks\\now\\startup\nno-change \\WinTasks\\now\\SyncTime\n");
@@ -270,7 +270,7 @@ describe("apply sync", () => {
     );
   });
 
-  it("malformed query stops at that document but keeps prior tasks", () => {
+  it("malformed query fails the sync without changes", () => {
     const yaml = definitions(
       "  - name: wanted\n    trigger: { type: now, value: x }\n    action: { command: cmd.exe }\n",
     );
@@ -279,8 +279,10 @@ describe("apply sync", () => {
         queriedTask("\\WinTasks\\gone", "") + "<!broken>" + queriedTask("\\WinTasks\\ignored", ""),
     });
     const { code, err } = run(yaml, false, scheduler);
-    assert.equal(code, 0, err);
-    assert.deepEqual(scheduler.deletes, ["\\WinTasks\\gone"]);
+    assert.equal(code, 1);
+    assert.match(err, /^wintasks: failed to parse schtasks query output: /);
+    assert.deepEqual(scheduler.creates, []);
+    assert.deepEqual(scheduler.deletes, []);
   });
 
   it("scheduler failures continue and are reported", () => {

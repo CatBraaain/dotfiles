@@ -74,8 +74,14 @@ export function runSync(
   } catch (queryError) {
     return fail((queryError as Error).message, err);
   }
+  let existingTasks: ExistingTask[];
+  try {
+    existingTasks = extractTasks(query);
+  } catch (parseError) {
+    return fail((parseError as Error).message, err);
+  }
   const current = new Map<string, ExistingTask>();
-  for (const task of extractTasks(query)) {
+  for (const task of existingTasks) {
     if (!isInMount(task.path, definitions.mount)) continue;
     current.set(taskPathKey(task.path), task);
   }
@@ -101,8 +107,7 @@ export function runSync(
   }
 
   if (elevation !== undefined) {
-    const changesNeeded =
-      deletions.length > 0 || plan.some((task) => task.action !== "no-change");
+    const changesNeeded = deletions.length > 0 || plan.some((task) => task.action !== "no-change");
     const exitCode = elevateIfNeeded(changesNeeded, elevation, err);
     if (exitCode !== undefined) return exitCode;
   }

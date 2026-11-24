@@ -173,6 +173,29 @@ describe("render xml", () => {
     assert.equal(normalizedTaskXml(current), normalizedTaskXml(equivalent));
   });
 
+  it("writes escaped character data and attributes in normalized XML", () => {
+    const xml =
+      '<Task label="a&amp;&quot;b"><Actions><Exec><Arguments>a&amp;&lt;b</Arguments></Exec></Actions></Task>';
+    const normalized = normalizedTaskXml(xml);
+    assert.ok(normalized.includes('label="a&amp;&quot;b"'), normalized);
+    assert.ok(normalized.includes("<Arguments>a&amp;&lt;b</Arguments>"), normalized);
+    assert.equal(normalizedTaskXml(normalized), normalized);
+  });
+
+  it("distinguishes numeric character references from literal reference text", () => {
+    const references = '<Task label="&#65;&#x41;"><Data>&#65;&#x41;</Data></Task>';
+    const resolved = '<Task label="AA"><Data>AA</Data></Task>';
+    const literal = '<Task label="&amp;#65;&amp;#x41;"><Data>&amp;#65;&amp;#x41;</Data></Task>';
+    assert.equal(normalizedTaskXml(references), normalizedTaskXml(resolved));
+    assert.notEqual(normalizedTaskXml(references), normalizedTaskXml(literal));
+  });
+
+  it("keeps numeric-looking action values as text", () => {
+    const xml = "<Task><Actions><Exec><Arguments>00123</Arguments></Exec></Actions></Task>";
+    const normalized = normalizedTaskXml(xml);
+    assert.ok(normalized.includes("<Arguments>00123</Arguments>"), normalized);
+  });
+
   it("root child order and settings are exact", () => {
     const yaml = definitions(
       "  - name: admin\n    trigger: { type: now, value: x }\n    action: { command: cmd.exe }\n    setting: { run_as: true, logon_type: s4u }\n",

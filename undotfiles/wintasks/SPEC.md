@@ -256,7 +256,7 @@ trigger 種別の選択:
 `wintasks` は次の順序で YAML と mount folder を同期する。
 
 1. `--path FILE` で指定されたファイル（省略時は `wintasks.yaml`）を読み込みパースし、`--mount FOLDER` の指定値（省略時は `wintasks`）の形式を検証する。パースエラー、mount の形式エラー、name 重複、XML 生成エラーのいずれかがあった場合は、システムを変更せずエラー終了する。
-2. `schtasks /Query /XML` でシステム上の全タスクの XML を取得する。`/Query` の出力は BOM 付き UTF-16 または UTF-8 で返るため、BOM で判別してデコードする。BOM がなく UTF-8 として妥当なバイト列は UTF-8 として読む。それ以外の BOM なし Windows 出力は、接続されたコンソールの出力コードページでデコードする。コンソールがない実行環境では Windows の OEM コードページを使う。query 出力の 1 文書をパースできなかったときは、その文書以降を無視し、それまでに読めたタスクだけで処理を続行する。
+2. `schtasks /Query /XML` でシステム上の全タスクの XML を取得する。`/Query` の出力は BOM 付き UTF-16 または UTF-8 で返るため、BOM で判別してデコードする。BOM がなく UTF-8 として妥当なバイト列は UTF-8 として読む。それ以外の BOM なし Windows 出力は、接続されたコンソールの出力コードページでデコードする。コンソールがない実行環境では Windows の OEM コードページを使う。query 出力は XML 宣言から始まる文書の連結とし、各文書を XML パーサーでパースする。パースできない文書があるときは、システムを変更せず即時にエラー終了する。
 3. タスクパスが mount folder 自身またはその子フォルダにあるタスクだけを同期対象とする。mount folder の外にあるタスクは分類・変更しない。
 4. desired state の各タスクと同期対象の既存タスクをタスクパスで比較し、次のように分類する。
 
@@ -303,7 +303,7 @@ update \WinTasks\cron\backup
 |---|---|
 | 成功（変更の有無を問わない） | 0 |
 | usage エラー（不明な引数・オプションの不正） | 2 |
-| ファイル読み取り失敗、YAML パースエラー、mount 形式エラー、XML 生成エラー、`/Query` 失敗、gsudo 不在、schtasks の失敗 | 1 |
+| ファイル読み取り失敗、YAML パースエラー、mount 形式エラー、XML 生成エラー、`/Query` 失敗、query 出力のパース失敗、gsudo 不在、schtasks の失敗 | 1 |
 
 ### エラー表示
 
@@ -317,6 +317,7 @@ update \WinTasks\cron\backup
 - name 制約エラー: `wintasks: <file>: invalid task name `<name>``
 - desired task path の衝突: `wintasks: <file>: duplicate task path `<path>``
 - `/Query` の失敗: `wintasks: schtasks /Query /XML failed: <schtasks の標準エラー出力>`
+- query 出力のパース失敗: `wintasks: failed to parse schtasks query output: <パーサーのエラー>`
 
 usage エラーは `wintasks: <メッセージ>` に続けて `usage: wintasks [OPTIONS]` を stderr へ出力する。
 
