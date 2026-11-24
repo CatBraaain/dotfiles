@@ -2281,6 +2281,50 @@ describe("lnk adoption", () => {
     },
   );
 
+  it.each([
+    { scenario: "root and file access timestamps", changeOffset: null, canAdopt: true },
+    { scenario: "target name", changeOffset: 0x96, canAdopt: false },
+    { scenario: "arguments", changeOffset: -6, canAdopt: false },
+    { scenario: "window style", changeOffset: 0x3c, canAdopt: false },
+    { scenario: "extension signature", changeOffset: 0xa2, canAdopt: false },
+  ])(
+    "compares generated link bytes with changes in $scenario",
+    async ({ changeOffset, canAdopt }) => {
+      const distBytes = lnkWithTargetItems();
+      const homeBytes = Buffer.from(distBytes);
+      homeBytes.writeBigUInt64LE(123n, 0x7e);
+      homeBytes.writeUInt32LE(456, 0xa8);
+      if (changeOffset !== null) {
+        const offset = changeOffset < 0 ? homeBytes.length + changeOffset : changeOffset;
+        homeBytes.writeUInt8(homeBytes.readUInt8(offset) ^ 1, offset);
+      }
+      await put(distRoot, "Edit.lnk", distBytes);
+      await put(homeRoot, "Edit.lnk", homeBytes);
+
+      await adoptHomeLnkBytes(distRoot, homeRoot, new Set(["Edit.lnk"]));
+
+      assert.deepEqual(
+        await readFile(join(distRoot, "Edit.lnk")),
+        canAdopt ? homeBytes : distBytes,
+      );
+    },
+  );
+
+  it("keeps file item differences when the primary name has no terminator", async () => {
+    const primaryNameTerminator = 0x9b;
+    const fileAccessTime = 0xa8;
+    const distBytes = lnkWithTargetItems();
+    distBytes.writeUInt8(0x61, primaryNameTerminator);
+    const homeBytes = Buffer.from(distBytes);
+    homeBytes.writeUInt32LE(456, fileAccessTime);
+    await put(distRoot, "Edit.lnk", distBytes);
+    await put(homeRoot, "Edit.lnk", homeBytes);
+
+    await adoptHomeLnkBytes(distRoot, homeRoot, new Set(["Edit.lnk"]));
+
+    assert.deepEqual(await readFile(join(distRoot, "Edit.lnk")), distBytes);
+  });
+
   it("adopts matching home link bytes into dist during build", async () => {
     await put(join(root, "dotfiles"), "Main.ahk.lnk", lnkBytes("pwsh.exe", "-Command main", 1000n));
     await put(homeRoot, "Main.ahk.lnk", lnkBytes("pwsh.exe", "-Command main", 2000n));
@@ -2328,6 +2372,38 @@ describe("lnk adoption", () => {
     assert.deepEqual(new Uint8Array(await readFile(join(distRoot, "tool.lnk"))), distBytes);
   });
 });
+
+function lnkWithTargetItems(): Buffer {
+  const headerLength = 0x4c;
+  const linkFlagsOffset = 0x14;
+  const hasTargetIdList = 1;
+  const shortcut = Buffer.from(lnkBytes("tool.exe", "-Command menu"));
+  const header = shortcut.subarray(0, headerLength);
+  header.writeUInt32LE(header.readUInt32LE(linkFlagsOffset) | hasTargetIdList, linkFlagsOffset);
+  const rootItem = Buffer.from(
+    "3a001f49471a0359723fa74489c55595fe6b30ee260001002600efbe11000000" +
+      "0000000000000000000000000000000000000000000000001400",
+    "hex",
+  );
+  const fileItem = Buffer.from(
+    "4800320000000000000000002004742e65786500340009000400efbe" +
+      "00000000000000002e00" +
+      "00".repeat(28) +
+      "740000001400",
+    "hex",
+  );
+  const listSize = Buffer.alloc(2);
+  const terminalId = Buffer.alloc(2);
+  listSize.writeUInt16LE(rootItem.length + fileItem.length + terminalId.length);
+  return Buffer.concat([
+    header,
+    listSize,
+    rootItem,
+    fileItem,
+    terminalId,
+    shortcut.subarray(headerLength),
+  ]);
+}
 
 function lnkBytes(relativePath: string, commandLineArguments: string, timeValue = 0n): Uint8Array {
   const header = new Uint8Array(0x4c);

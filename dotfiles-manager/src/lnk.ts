@@ -21,6 +21,33 @@ const LINK_HEADER_SIZE = 0x4c;
 const LINK_CLSID_OFFSET = 4;
 const LINK_TIMES_START = 0x1c;
 const LINK_TIMES_END = 0x34;
+const LINK_FLAGS_OFFSET = 0x14;
+const HAS_TARGET_ID_LIST = 0x01;
+const SIZE_FIELD_BYTES = 2;
+const ITEM_CLASS_OFFSET = 2;
+const ROOT_ITEM_CLASS = 0x1f;
+const ROOT_EXTENSION_OFFSET = 20;
+const ROOT_EXTENSION_SIZE = 38;
+const ROOT_EXTENSION_SIGNATURE = 0xbeef0026;
+const ROOT_EXTENSION_VERSION = 1;
+const ROOT_FILETIME_OFFSET = 28;
+const FILETIME_BYTES = 8;
+const FILE_ITEM_CLASS_MASK = 0x70;
+const FILE_ITEM_CLASS = 0x30;
+const FILE_ITEM_UNICODE_NAME = 0x04;
+const FILE_ITEM_NAME_OFFSET = 14;
+const FILE_EXTENSION_SIGNATURE = 0xbeef0004;
+const FILE_EXTENSION_MIN_SIZE = new Map([
+  [3, 24],
+  [7, 42],
+  [8, 46],
+  [9, 50],
+]);
+const FILE_ACCESS_TIME_OFFSET = 12;
+const FAT_TIME_BYTES = 4;
+const EXTENSION_VERSION_OFFSET = 2;
+const EXTENSION_SIGNATURE_OFFSET = 4;
+const EXTENSION_HEADER_BYTES = 8;
 const TEXT_RUN_PATTERN = /(?:[\x20-\x7e]\x00){4,}/g;
 const WINDOW_STYLE = { normal: 1, minimized: 7 } as const;
 const WINDOWS_POWERSHELL = "System32\\WindowsPowerShell\\v1.0\\powershell.exe";
@@ -47,6 +74,7 @@ $link.Save()
 
 type ManagedEntry = { distRelPath: string; homeRelPath: string; isLink: boolean };
 type LnkDeclaration = { target: string; arguments: string; windowStyle: keyof typeof WINDOW_STYLE };
+type TimestampRange = { start: number; end: number };
 
 export async function convertLnkDeclarations(
   distDir: string,
@@ -195,12 +223,103 @@ function isShellLink(bytes: Buffer): boolean {
 }
 
 function matchesExceptLinkTimes(distBytes: Buffer, homeBytes: Buffer): boolean {
-  return (
-    homeBytes.length === distBytes.length &&
-    isShellLink(homeBytes) &&
-    distBytes.subarray(0, LINK_TIMES_START).equals(homeBytes.subarray(0, LINK_TIMES_START)) &&
-    distBytes.subarray(LINK_TIMES_END).equals(homeBytes.subarray(LINK_TIMES_END))
-  );
+  if (
+    distBytes.length < LINK_HEADER_SIZE ||
+    homeBytes.length !== distBytes.length ||
+    !isShellLink(homeBytes)
+  ) {
+    return false;
+  }
+
+  const times = [
+    { start: LINK_TIMES_START, end: LINK_TIMES_END },
+    ...targetItemTimestamps(distBytes),
+  ];
+  let comparedThrough = 0;
+  for (const { start, end } of times) {
+    if (
+      !distBytes.subarray(comparedThrough, start).equals(homeBytes.subarray(comparedThrough, start))
+    ) {
+      return false;
+    }
+    comparedThrough = end;
+  }
+  return distBytes.subarray(comparedThrough).equals(homeBytes.subarray(comparedThrough));
+}
+
+function targetItemTimestamps(bytes: Buffer): TimestampRange[] {
+  const listStart = LINK_HEADER_SIZE + SIZE_FIELD_BYTES;
+  if (bytes.length < listStart || !(bytes.readUInt32LE(LINK_FLAGS_OFFSET) & HAS_TARGET_ID_LIST)) {
+    return [];
+  }
+  const terminalOffset = listStart + bytes.readUInt16LE(LINK_HEADER_SIZE) - SIZE_FIELD_BYTES;
+  if (
+    terminalOffset < listStart ||
+    terminalOffset + SIZE_FIELD_BYTES > bytes.length ||
+    bytes.readUInt16LE(terminalOffset) !== 0
+  ) {
+    return [];
+  }
+
+  const times: TimestampRange[] = [];
+  for (let offset = listStart; offset < terminalOffset;) {
+    if (terminalOffset - offset <= ITEM_CLASS_OFFSET) return [];
+    const itemSize = bytes.readUInt16LE(offset);
+    if (itemSize <= ITEM_CLASS_OFFSET || offset + itemSize > terminalOffset) return [];
+    const item = bytes.subarray(offset, offset + itemSize);
+    const time = itemTimestamp(item, offset === listStart);
+    if (time) times.push({ start: offset + time.start, end: offset + time.end });
+    offset += itemSize;
+  }
+  return times;
+}
+
+// Windows stores additional timestamps inside Shell Items: https://github.com/libyal/libfwsi/blob/main/documentation/Windows%20Shell%20Item%20format.asciidoc#extension_block_0xbeef0026
+function itemTimestamp(item: Buffer, isFirstItem: boolean): TimestampRange | null {
+  const itemClass = item.readUInt8(ITEM_CLASS_OFFSET);
+  const offsetField = item.length - SIZE_FIELD_BYTES;
+  if (offsetField <= ITEM_CLASS_OFFSET) return null;
+  const extensionOffset = item.readUInt16LE(offsetField);
+  if (extensionOffset + EXTENSION_HEADER_BYTES > offsetField) return null;
+  const extensionSize = item.readUInt16LE(extensionOffset);
+  const version = item.readUInt16LE(extensionOffset + EXTENSION_VERSION_OFFSET);
+  const signature = item.readUInt32LE(extensionOffset + EXTENSION_SIGNATURE_OFFSET);
+
+  const isKnownRootExtension =
+    isFirstItem &&
+    itemClass === ROOT_ITEM_CLASS &&
+    extensionOffset === ROOT_EXTENSION_OFFSET &&
+    extensionSize === ROOT_EXTENSION_SIZE &&
+    extensionOffset + extensionSize === item.length &&
+    signature === ROOT_EXTENSION_SIGNATURE &&
+    version === ROOT_EXTENSION_VERSION;
+  if (isKnownRootExtension) {
+    const start = extensionOffset + ROOT_FILETIME_OFFSET;
+    return { start, end: start + FILETIME_BYTES };
+  }
+
+  const minFileExtensionSize = FILE_EXTENSION_MIN_SIZE.get(version);
+  const isKnownFileExtension =
+    (itemClass & FILE_ITEM_CLASS_MASK) === FILE_ITEM_CLASS &&
+    signature === FILE_EXTENSION_SIGNATURE &&
+    minFileExtensionSize !== undefined &&
+    extensionSize >= minFileExtensionSize &&
+    extensionOffset + extensionSize <= item.length &&
+    followsFileItemName(item, itemClass, extensionOffset);
+  if (!isKnownFileExtension) return null;
+  const start = extensionOffset + FILE_ACCESS_TIME_OFFSET;
+  return { start, end: start + FAT_TIME_BYTES };
+}
+
+function followsFileItemName(item: Buffer, itemClass: number, extensionOffset: number): boolean {
+  const width = itemClass & FILE_ITEM_UNICODE_NAME ? SIZE_FIELD_BYTES : 1;
+  for (let offset = FILE_ITEM_NAME_OFFSET; offset + width <= extensionOffset; offset += width) {
+    if (item.readUIntLE(offset, width) !== 0) continue;
+    const nameEnd = offset + width;
+    const alignedEnd = nameEnd + (nameEnd % SIZE_FIELD_BYTES);
+    return alignedEnd === extensionOffset;
+  }
+  return false;
 }
 
 function matchesLinkText(distBytes: Buffer, homeBytes: Buffer): boolean {
