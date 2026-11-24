@@ -816,7 +816,7 @@ Windows で symlink の作成が `EPERM` で失敗した場合は、元のエラ
 
 ### `.executable` の解釈
 
-dist の `<name>.executable` ファイルは、home の `<name>` に owner実行権を付けて配置する。windows では実行権の処理を行わず、ファイル名はそのまま使う。
+dist の `<name>.executable` ファイルの展開名は、Windows を含むすべての OS で §差分検知 の対応規則に従う。Linux と macOS では、配置時に所有者の実行権を付ける。Windows では、この接尾辞による実行権の変更は行わない。
 
 ## フックシステム
 
