@@ -1707,7 +1707,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         const items = page.getByRole("menuitem");
         await expect
           .poll(() => items.allTextContents())
-          .toEqual(["Open Terminal", "Unregister workspace"]);
+          .toEqual(["Unregister workspace", "Open Terminal"]);
         expect(
           await items.evaluateAll((items) => items.some((item) => item === document.activeElement)),
         ).toBe(false);

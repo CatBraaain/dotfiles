@@ -1134,12 +1134,12 @@ function SessionsApp({
     const { cwd } = contextMenu;
     menuItems.push(
       {
-        label: "Open Terminal",
-        run: () => bridge.postMessage({ type: "openWorkspaceTerminal", cwd }),
-      },
-      {
         label: "Unregister workspace",
         run: () => bridge.postMessage({ type: "unregisterWorkspace", cwd }),
+      },
+      {
+        label: "Open Terminal",
+        run: () => bridge.postMessage({ type: "openWorkspaceTerminal", cwd }),
       },
     );
   } else if (menuSession !== undefined) {
