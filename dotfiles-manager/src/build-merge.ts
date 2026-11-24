@@ -2,8 +2,8 @@
 // §パッチ適用): composes JSON/YAML/TOML/INI targets from the home tree, plain
 // bases, and merge/merge-existing sidecars, then writes the finished value to dist.
 import { existsSync } from "node:fs";
-import { readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative, sep } from "node:path";
+import { lstat, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, join, relative, sep } from "node:path";
 import { homeRelPath } from "./home-path.ts";
 import { parse as parseIni, stringify as stringifyIni } from "js-ini";
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
@@ -161,6 +161,27 @@ async function writeMergedLayers(
   await writeFile(outputPath, content);
 }
 
+export async function mergeFile(path: string, patch: Record<string, unknown>): Promise<void> {
+  const extension = extname(path).slice(1);
+  if (!Object.hasOwn(fileFormats, extension)) {
+    throw new Error(`unsupported merge format: ${path}`);
+  }
+  const format = extension as FileFormat;
+  if (!(await lstat(path)).isFile()) throw new Error(`merge target is not a regular file: ${path}`);
+  if (!isPlainObject(patch)) throw new Error(`merge patch must be an object: ${path}`);
+
+  const base = applyLayer({}, await readLayer(path, format));
+  const layer = parseHookPatch(patch, format);
+  if (format === "ini") validateIniMerge(base, layer.normal);
+  await writeFile(path, fileFormats[format].stringify(applyLayer(base, layer)));
+}
+
+function parseHookPatch(patch: Record<string, unknown>, format: FileFormat): Layer {
+  if (format === "toml") return splitTomlLayer(patch);
+  const content = fileFormats[format].stringify(patch);
+  return format === "ini" ? parseIniLayer(content) : parseLayer(content, format);
+}
+
 async function collectMergeTargets(distDir: string, platform: string): Promise<MergeTarget[]> {
   const targets = new Map<string, MergeTarget>();
   for (const entry of await collectEntries(distDir)) {
@@ -211,7 +232,7 @@ async function readLayer(
 }
 
 function parseLayer(content: string, format: FileFormat, externalLayer?: ExternalLayer): Layer {
-  if (format === "toml") return parseTomlLayer(content);
+  if (format === "toml") return splitTomlLayer(parseToml(content));
   const document = parseDocument(format === "json" ? stripJsonComments(content) : content, {
     uniqueKeys: false,
   });
@@ -258,9 +279,9 @@ function validateExternalLayerKeys(document: Document, operationPairs: Set<unkno
   });
 }
 
-function parseTomlLayer(content: string): Layer {
+function splitTomlLayer(patch: unknown): Layer {
   const operations: Operations = new Map();
-  const parsed = parseTomlPairs(parseToml(content), "", operations);
+  const parsed = parseTomlPairs(patch, "", operations);
   return { normal: parsed.normal, operations };
 }
 
@@ -346,8 +367,7 @@ function prepareIniLines(content: string): string {
       }
       const delimiter = line.indexOf("=");
       const key = delimiter === -1 ? line : line.slice(0, delimiter);
-      validateIniName(key);
-      if (key.startsWith("[") || key.startsWith("#")) throw new Error(`invalid INI key: ${key}`);
+      validateIniKey(key);
       const operation = matchOperationKey(key);
       if (operation) {
         validateIniName(operation.path);
@@ -376,6 +396,13 @@ function validateIniName(name: string): void {
   if (iniReservedNames.has(name)) throw new Error(`reserved INI name: ${name}`);
 }
 
+function validateIniKey(key: string): void {
+  validateIniName(key);
+  if (key.startsWith("[") || key.startsWith("#") || key.includes("=")) {
+    throw new Error(`invalid INI key: ${key}`);
+  }
+}
+
 function validateIniMerge(base: unknown, normal: unknown): void {
   if (!isPlainObject(base) || !isPlainObject(normal)) throw new Error("INI root must be a map");
   for (const [key, value] of Object.entries(normal)) {
@@ -390,13 +417,17 @@ function stringifyIniMerge(value: unknown): string {
   const rootValues: Record<string, string> = {};
   const sections: Record<string, Record<string, string>> = {};
   for (const [key, child] of Object.entries(value)) {
+    validateIniName(key);
     if (typeof child === "string") {
+      validateIniKey(key);
       rootValues[key] = escapeIniValue(child);
       continue;
     }
     if (!isPlainObject(child)) throw new Error(`INI section must be a map: ${key}`);
+    if (key.includes("[") || key.includes("]")) throw new Error(`invalid INI section: ${key}`);
     const values: Record<string, string> = {};
     for (const [name, text] of Object.entries(child)) {
+      validateIniKey(name);
       if (typeof text !== "string") throw new Error(`INI value must be a string: ${key}.${name}`);
       values[name] = escapeIniValue(text);
     }
@@ -520,11 +551,11 @@ function parseTomlPairs(value: unknown, prefix: string, operations: Operations):
         hasOperations = true;
         continue;
       }
-      normal[key] = parsed.normal;
+      setOwnProperty(normal, key, parsed.normal);
       hasOperations ||= parsed.hasOperations;
       continue;
     }
-    normal[key] = child;
+    setOwnProperty(normal, key, child);
   }
   return { normal, hasOperations };
 }

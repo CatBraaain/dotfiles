@@ -1,8 +1,8 @@
 // Shared context for build and apply hooks run as standalone bun processes
 // (spec: SPEC.md §フックシステム). Resolves the manager-injected environment
 // into the path and mirror helpers hooks share with the engine.
-import { readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { readFile, realpath, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { resolvePaths } from "./home-path.ts";
 
 export type HookContext = {
@@ -10,6 +10,7 @@ export type HookContext = {
   resolvePaths(path: string): { distPath: string; homePath: string };
   syncGithubMirror(repo: string): Promise<string>;
   transform(path: string, edit: (content: string) => string | Promise<string>): Promise<void>;
+  merge(path: string, patch: Record<string, unknown>): Promise<void>;
 };
 
 // Reads the dist-side file resolved from path, passes its content to edit,
@@ -37,6 +38,26 @@ function withSingleTrailingNewline(content: string): string {
   return content === "" || content.endsWith("\n") ? content : `${content}\n`;
 }
 
+async function mergeHookFile(
+  path: string,
+  patch: Record<string, unknown>,
+  hookDir: string,
+  distPath: string,
+): Promise<void> {
+  function assertInsideHookDir(root: string, directory: string): void {
+    const fromHook = relative(root, directory);
+    if (fromHook === ".." || fromHook.startsWith(`..${sep}`) || isAbsolute(fromHook)) {
+      throw new Error(`merge target is outside the hook directory: ${path}`);
+    }
+  }
+
+  const parent = dirname(distPath);
+  assertInsideHookDir(hookDir, parent);
+  assertInsideHookDir(await realpath(hookDir), await realpath(parent));
+  const { mergeFile } = await import("./build-merge.ts");
+  await mergeFile(distPath, patch);
+}
+
 function hookEnv(name: string): string {
   const value = process.env[name];
   if (value === undefined || value === "")
@@ -56,5 +77,10 @@ export async function buildHookContext(): Promise<HookContext> {
       ),
     transform: (path, edit) =>
       transformFile(path, edit, (target) => resolvePaths(process.cwd(), distDir, homeRoot, target)),
+    merge: (path, patch) => {
+      const hookDir = process.cwd();
+      const { distPath } = resolvePaths(hookDir, distDir, homeRoot, path);
+      return mergeHookFile(path, patch, hookDir, distPath);
+    },
   };
 }

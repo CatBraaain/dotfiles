@@ -1917,6 +1917,125 @@ describe("applyReplacements", () => {
 });
 
 describe("local build hooks", () => {
+  function mergeCall(path: string, patch: Record<string, unknown>, expectedError?: RegExp): string {
+    const call = `merge(${JSON.stringify(path)}, ${JSON.stringify(patch)})`;
+    return `
+      import assert from "node:assert/strict";
+      const { buildHookContext } = await import(process.env.DOTFILES_MANAGER_SRC + "/hook-context.ts");
+      const { merge } = await buildHookContext();
+      await ${expectedError ? `assert.rejects(async () => ${call}, ${expectedError})` : call};
+    `;
+  }
+
+  const mergeCases = [
+    {
+      format: "json",
+      base: '{ // retained settings\n "nested": { "keep": 10.00 }, "items": [1] }',
+      patch: { nested: { added: true }, "items.$append": [2] },
+      expected:
+        '{\n  "nested": {\n    "keep": 10.00,\n    "added": true\n  },\n  "items": [\n    1,\n    2\n  ]\n}\n',
+    },
+    {
+      format: "yaml",
+      base: "nested:\n  keep: yes\nitems: [1]\n",
+      patch: { nested: { added: true }, "items.$append": [2] },
+      expected: "nested:\n  keep: yes\n  added: true\nitems:\n  - 1\n  - 2\n",
+    },
+    {
+      format: "toml",
+      base: 'items = [1]\n[nested]\nkeep = "yes"\n',
+      patch: { nested: { added: true }, "items.$append": [2] },
+      expected: 'items = [ 1, 2 ]\n\n[nested]\nkeep = "yes"\nadded = true\n',
+    },
+    {
+      format: "ini",
+      base: "[Nested]\nKeep=yes\nDelete=old\n",
+      patch: { Nested: { Added: "new", "Delete.$unset": "true" } },
+      expected: "[Nested]\nKeep=yes\nAdded=new\n",
+    },
+  ];
+
+  for (const { format, base, patch, expected } of mergeCases) {
+    it(`merges a ${format} patch into the dist target using sidecar rules`, async () => {
+      const target = `settings.${format}`;
+      await put(root, `dotfiles/app/${target}`, base);
+      await put(root, "dotfiles/app/patch.build.ts", mergeCall(target, patch));
+
+      await main(root, "linux", homeRoot);
+
+      assert.equal(await readFile(join(distRoot, "app", target), "utf8"), expected);
+    });
+  }
+
+  it("keeps the order of TOML operations across root and table keys", async () => {
+    await put(root, "dotfiles/settings.toml", 'keep = "yes"\n[nested]\nitems = [1]\n');
+    await put(
+      root,
+      "dotfiles/patch.build.ts",
+      mergeCall("settings.toml", { nested: { "items.$append": [2] }, "nested.$unset": true }),
+    );
+
+    await main(root, "linux", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, "settings.toml"), "utf8"), 'keep = "yes"\n');
+  });
+
+  for (const platform of ["windows", "linux"] as const) {
+    it(`builds the shared Playwright config for ${platform}`, async () => {
+      const source = join(import.meta.dir, "..", "..", "dotfiles");
+      for (const path of [
+        "remap.data.md",
+        ".playwright/cli.config.json",
+        ".playwright/cli.config.windows-build.ts",
+      ]) {
+        await put(root, `dotfiles/${path}`, await readFile(join(source, path)));
+      }
+      const target = join(".playwright", "cli.config.json");
+      await put(homeRoot, target, '{"outputDir":"stale"}');
+
+      await main(root, platform, homeRoot);
+
+      const expectedDir = platform === "windows" ? join(tmpdir(), "playwright") : "/tmp/playwright";
+      assert.deepEqual(await Bun.file(join(distRoot, target)).json(), { outputDir: expectedDir });
+      assert.equal(await Bun.file(join(homeRoot, target)).text(), '{"outputDir":"stale"}');
+    });
+  }
+
+  it("rejects a merge target with an unsupported extension", async () => {
+    await put(root, "dotfiles/settings.conf", "unchanged\n");
+    await put(
+      root,
+      "dotfiles/patch.build.ts",
+      mergeCall("settings.conf", {}, /unsupported merge format.*settings\.conf/),
+    );
+
+    await main(root, "linux", homeRoot);
+    assert.equal(await readFile(join(distRoot, "settings.conf"), "utf8"), "unchanged\n");
+  });
+
+  it("does not create a missing merge target", async () => {
+    await put(
+      root,
+      "dotfiles/patch.build.ts",
+      mergeCall("missing.json", { added: true }, /ENOENT.*missing\.json/),
+    );
+
+    await main(root, "linux", homeRoot);
+    assert.equal(existsSync(join(distRoot, "missing.json")), false);
+  });
+
+  it("rejects a target outside the hook directory", async () => {
+    await put(root, "dotfiles/settings.json", "{}\n");
+    await put(
+      root,
+      "dotfiles/app/patch.build.ts",
+      mergeCall("../settings.json", { added: true }, /outside the hook directory/),
+    );
+
+    await main(root, "linux", homeRoot);
+    assert.equal(await readFile(join(distRoot, "settings.json"), "utf8"), "{}\n");
+  });
+
   it("runs a transform hook that rewrites a dist file's content with normalized trailing newline", async () => {
     await put(root, "dotfiles/app.conf", "mode=dev");
     await put(

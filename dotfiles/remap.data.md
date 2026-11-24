@@ -13,7 +13,7 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | .gitconfig.local.sample | - | - | - |
 | .local/cli |  |  | - |
 | .pi |  |  | - |
-| .playwright |  | - | - |
+| .playwright |  |  | - |
 | .wslconfig | - |  | - |
 | **/\*.sample | - | - | - |
 | **/\*.spec.md | - | - | - |
