@@ -459,13 +459,34 @@ describe("AgentSession preparation boundaries", () => {
     });
   }
 
-  for (const mode of ["rpc", "print", "json"] as const) {
-    it(`prepares in ${mode} without requiring a prompt or a TUI render`, async () => {
-      const h = await preparationFixture({ mode });
+  it("prepares in RPC without requiring a prompt or a TUI render", async () => {
+    const h = await preparationFixture({ mode: "rpc" });
+    try {
+      await until(() => h.wrappedProviderIds().length === h.providerIds.length);
+      assert.deepEqual(h.fake.state.requests, []);
+      assert.equal(h.widgets.size, 0);
+      assert.deepEqual(h.errors, []);
+    } finally {
+      await h.dispose();
+    }
+  });
+
+  for (const mode of ["print", "json"] as const) {
+    it(`leaves the provider unchanged through async input handling in ${mode}`, async () => {
+      let wrappedDuringInput: string[] | undefined;
+      const h = await preparationFixture({
+        mode,
+        extension(pi) {
+          recontextExtension(pi);
+          pi.on("input", async () => {
+            await tick();
+            wrappedDuringInput = h.wrappedProviderIds();
+          });
+        },
+      });
       try {
-        await until(() => h.wrappedProviderIds().length === h.providerIds.length);
-        assert.deepEqual(h.fake.state.requests, []);
-        assert.equal(h.widgets.size, 0);
+        await h.session.prompt("first input");
+        assert.deepEqual(wrappedDuringInput, []);
         assert.deepEqual(h.errors, []);
       } finally {
         await h.dispose();

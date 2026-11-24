@@ -50,6 +50,7 @@ export default function recontextExtension(pi: ExtensionAPI): void {
     closingGates?.close();
   });
   pi.on("resources_discover", (_event, ctx) => {
+    if (ctx.mode === "print" || ctx.mode === "json") return;
     const preparingGates = gates;
     if (!preparingGates) return;
     let started = false;
