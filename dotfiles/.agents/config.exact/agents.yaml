@@ -27,7 +27,7 @@ modes:
       - model: commandcode/z-ai/glm-<LATEST>-flash
       - model: zai/glm-<LATEST>-flash
     middle:
-      - model: zai/glm-<LATEST>-flash
+      - model: zai/glm-<LATEST>
       - model: openai-codex/gpt-<LATEST>-sol
       - model: commandcode/z-ai/glm-<LATEST>-flash
     low:
