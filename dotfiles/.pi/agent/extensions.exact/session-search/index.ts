@@ -102,22 +102,24 @@ function cliResult(
   const details = { bash };
   const isTruncated = truncation?.truncated === true || envelope?.truncated === true;
   const isInterrupted = signal?.aborted === true;
-  if (
-    isInterrupted ||
-    outcome.isError ||
-    bash.isError ||
-    (envelope?.exit_code !== undefined && envelope.exit_code !== 0)
-  ) {
-    const error = isInterrupted
+  const exitCode = envelope?.exit_code;
+  const hasNonzeroExit = typeof exitCode === "number" && exitCode !== 0;
+  if (isInterrupted || outcome.isError || bash.isError || hasNonzeroExit) {
+    const summary = isInterrupted
       ? "session_search interrupted"
-      : envelope?.exit_code === 127
+      : exitCode === 127
         ? "session_search CLI unavailable"
-        : "session_search bash execution failed or was denied";
+        : hasNonzeroExit
+          ? `session_search command exited with code ${exitCode}`
+          : "session_search bash call failed";
+    const diagnostic =
+      hasNonzeroExit && typeof envelope?.output === "string" ? envelope.output.trim() : text.trim();
+    const error = !isInterrupted && diagnostic ? `${summary}: ${diagnostic}` : summary;
     return {
       content: [
         {
           type: "text" as const,
-          text: `${error}${isTruncated ? " (output incomplete: bash output was truncated)" : ""}\n${text}`,
+          text: `${summary}${isTruncated ? " (output incomplete: bash output was truncated)" : ""}\n${text}`,
         },
       ],
       details,

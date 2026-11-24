@@ -280,6 +280,7 @@ describe("session_search CLI boundary", () => {
         isError: true,
         structuredContent: undefined,
       }),
+      diagnostic: /Command denied by user/,
     },
     {
       name: "permission reason required",
@@ -287,6 +288,7 @@ describe("session_search CLI boundary", () => {
         isError: true,
         structuredContent: undefined,
       }),
+      diagnostic: /Command requires a reason/,
     },
     {
       name: "CLI unavailable",
@@ -311,6 +313,8 @@ describe("session_search CLI boundary", () => {
       assert.equal(result.isError, true);
       assert.equal(result.structuredContent?.status, "error");
       assert.deepEqual(result.details, { bash: sample.outcome });
+      if (sample.diagnostic)
+        assert.match(String(result.structuredContent?.error), sample.diagnostic);
       if (sample.name === "CLI unavailable")
         assert.match(String(result.structuredContent?.error), /CLI unavailable/);
     });
@@ -515,7 +519,21 @@ describe("session_search sandbox fixture integration", () => {
         (shown.result.structuredContent!.result as { nextOffset: number }).nextOffset,
         2,
       );
-      assert.equal(nestedCalls, 3);
+      const missingId = "00000000-0000-0000-0000-000000000000";
+      const { result: missing } = await execute({ action: "show", id: missingId }, bashOutput(""), {
+        cwd,
+        executeTool,
+      });
+      assert.equal(missing.isError, true);
+      assert.deepEqual(missing.structuredContent, {
+        status: "error",
+        action: "show",
+        error: `session_search command exited with code 1: session-search: no session matches id: ${missingId}`,
+      });
+      const missingText = missing.content[0]?.type === "text" ? missing.content[0].text : "";
+      assert.match(missingText, /no session matches id/);
+      assert.doesNotMatch(missingText, /denied/);
+      assert.equal(nestedCalls, 4);
     } finally {
       events.clear();
       rmSync(temp, { recursive: true, force: true });
