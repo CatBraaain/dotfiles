@@ -1,29 +1,21 @@
-import { readFileSync } from "node:fs";
 import { ensurePatched, installRoots, workbenchSearchDirs } from "./patch.ts";
 
 declare const BUNDLED_SCM_SELECTION: string;
-
-const pluginPath = process.argv[2];
-if (!pluginPath) throw new Error("usage: bun run inject <plugin.js>");
 
 const failures: Record<string, string> = {
   "no-workbench": "workbench.html not found; skipping",
   unwritable: "workbench.html not writable; skipping (vscode-custom-patch reapplies at startup)",
   "backup-missing": "patch backup is missing; leaving the patch in place",
-  "bridge-unwritable": "SCM bridge: workbench.desktop.main.js cannot be updated; skipping",
-  "bridge-invalid":
-    "SCM bridge: workbench.desktop.main.js has an invalid patch boundary; leaving it in place",
+  "bundle-unwritable": "Custom patch: workbench.desktop.main.js cannot be updated; skipping",
+  "bundle-invalid":
+    "Custom patch: workbench.desktop.main.js has an invalid patch boundary; leaving it in place",
 };
 
 const result = ensurePatched({
   searchDirs: workbenchSearchDirs({ extraRoots: installRoots() }),
   scmSelectionSource: BUNDLED_SCM_SELECTION,
-  plugins: [
-    {
-      name: "scm-collapse.js",
-      content: readFileSync(pluginPath, "utf8"),
-    },
-  ],
+  plugins: [],
+  sortExplorer: true,
 });
 
 if (result in failures) {
@@ -32,7 +24,7 @@ if (result in failures) {
   const messages: Record<string, string> = {
     patched: "custom scripts patched into workbench",
     unpatched: "custom scripts patch removed from workbench",
-    fresh: "workbench patch already matches plugins",
+    fresh: "workbench patch already matches",
   };
   console.log(messages[result]);
 }

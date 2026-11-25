@@ -2,7 +2,7 @@
   "name": "vscode-custom-patch",
   "displayName": "VSCode Custom Patch",
   "version": "1.0.0",
-  "description": "Injects the bundled SCM collapse script into the VS Code workbench.",
+  "description": "Applies Explorer sorting and Agent Kit SCM patches to the VS Code workbench.",
   "publisher": "catbraaain",
   "main": "./extension.js",
   "scripts": {

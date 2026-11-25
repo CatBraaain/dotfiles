@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, it, spyOn } from "bun:test";
 import { applyCustomPatch, selectPatchTarget } from "../../vscode-custom-patch.apply.ts";
-import { buildProject } from "./scripts/build.ts";
+import { buildProject, buildScmSelection } from "./scripts/build.ts";
+import { ensurePatched } from "./src/patch.ts";
 
 const first = "a".repeat(64);
 const second = "b".repeat(64);
@@ -56,7 +57,7 @@ it("installs a same-version VSIX on first apply and injects only after installat
   assert.deepEqual(calls, [
     ["code", "--list-extensions", "--show-versions"],
     ["code", "--install-extension", vsix, "--force"],
-    [process.execPath, linuxInjectPath(), join(vscodeDir, "scm-collapse.data.js")],
+    [process.execPath, linuxInjectPath()],
   ]);
 });
 
@@ -151,7 +152,7 @@ it.skipIf(process.platform !== "linux")(
     assert.deepEqual(calls, [
       [...command, "--list-extensions", "--show-versions"],
       [...command, "--install-extension", vsix, "--force"],
-      [process.execPath, linuxInjectPath(), join(vscodeDir, "scm-collapse.data.js")],
+      [process.execPath, linuxInjectPath()],
     ]);
   },
 );
@@ -233,7 +234,7 @@ it("skips Windows injection when code does not identify an app output directory"
   }
 });
 
-it("patches only the app output directory selected by the CLI", async () => {
+it("replaces the old HTML injection only in the selected app and keeps the SCM bridge", async () => {
   const oldOut = join(root, "old", "out");
   const selectedOut = join(root, "selected", "out");
   const original = "<html><head></head></html>";
@@ -245,7 +246,15 @@ registry.registerCommand("scm.setActiveProvider", accessor => { accessor.get(vie
 class View {
   constructor() { this.selectionModeConfig = config("scm.repositories.selectionMode"); }
   set visibleRepositories(repositories) {}
-}`;
+}
+var Sorter = class {
+  constructor(explorer, context) { this.explorerService = explorer; this.contextService = context; }
+  compare(left, right) {
+    if (left.isRoot) return -1;
+    if (right.isRoot) return 1;
+    return left.name.localeCompare(right.name);
+  }
+};`;
   for (const out of [oldOut, selectedOut]) {
     const html = join(out, workbenchFile);
     const bundle = join(out, bundleFile);
@@ -254,16 +263,31 @@ class View {
     await writeFile(html, original);
     await writeFile(bundle, originalBundle);
   }
+  const scmSelectionSource = await buildScmSelection(import.meta.dir);
+  assert.equal(
+    ensurePatched({
+      searchDirs: [selectedOut],
+      plugins: [{ name: "scm-collapse.js", content: "window.legacyCollapse = true;" }],
+      scmSelectionSource,
+    }),
+    "patched",
+  );
+  assert.match(await readFile(join(selectedOut, workbenchFile), "utf8"), /legacyCollapse/);
+  const legacyBundle = await readFile(join(selectedOut, bundleFile), "utf8");
+  const legacyBridge = legacyBundle.slice(
+    legacyBundle.indexOf("\n// vscode-custom-patch: SCM bridge start"),
+  );
+
   await buildProject(import.meta.dir, vscodeDir, async () => {});
   const cli = join(vscodeDir, "cli.js");
   const patch = Bun.spawnSync([process.execPath, cli, "ensure", "--app-out", selectedOut]);
   assert.equal(patch.exitCode, 0, patch.stderr.toString());
-  assert.match(await readFile(join(selectedOut, workbenchFile), "utf8"), /VSCODE-CUSTOM-CSS-START/);
+  assert.equal(await readFile(join(selectedOut, workbenchFile), "utf8"), original);
   assert.equal(await readFile(join(oldOut, workbenchFile), "utf8"), original);
-  assert.match(
-    await readFile(join(selectedOut, bundleFile), "utf8"),
-    /agentKit\.scm\.selectRepositories/,
-  );
+  const patchedBundle = await readFile(join(selectedOut, bundleFile), "utf8");
+  assert.match(patchedBundle, /vscode-custom-patch: sort-explorer start/);
+  assert.ok(patchedBundle.endsWith(legacyBridge));
+  assert.match(legacyBridge, /agentKit\.scm\.selectRepositories/);
   assert.equal(await readFile(join(oldOut, bundleFile), "utf8"), originalBundle);
 
   const repeat = Bun.spawnSync([process.execPath, cli, "ensure", "--app-out", selectedOut]);

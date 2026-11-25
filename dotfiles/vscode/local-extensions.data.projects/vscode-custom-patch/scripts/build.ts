@@ -6,15 +6,8 @@ export async function buildProject(
   outputDir: string,
   packageVsix = packageExtension,
 ): Promise<void> {
-  const plugin = await bundle("scm-collapse", {
-    entrypoints: [join(sourceDir, "plugins/scm-collapse/src/entry.ts")],
-    target: "browser",
-    format: "iife",
-  });
-  const pluginText = await plugin.text();
   const scmSelectionSource = await buildScmSelection(sourceDir);
   const define = {
-    BUNDLED_SCM_COLLAPSE: JSON.stringify(pluginText),
     BUNDLED_SCM_SELECTION: JSON.stringify(scmSelectionSource),
   };
   const extension = await bundle("extension", {
@@ -53,7 +46,6 @@ export async function buildProject(
     await packageVsix(packageDir, join(outputDir, "extension.vsix"));
     await Promise.all([
       Bun.write(join(outputDir, "content.sha256"), `${contentHash}\n`),
-      Bun.write(join(outputDir, "scm-collapse.js"), pluginText),
       Bun.write(join(outputDir, "cli.js"), cli),
       Bun.write(join(outputDir, "inject.js"), inject),
     ]);

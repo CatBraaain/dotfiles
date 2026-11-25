@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeAll, beforeEach, it } from "bun:test";
 import { buildProject, buildScmSelection } from "../scripts/build.ts";
-import { ensureScmBridge } from "./scm-bridge.ts";
+import { ensureWorkbenchBundle } from "./workbench-bundle.ts";
 
 const command = "agentKit.scm.selectRepositories";
 const source = `
@@ -57,12 +57,12 @@ afterEach(() => {
 
 it("installs once and restores the original bytes without a backup", () => {
   const original = readFileSync(bundle);
-  assert.equal(ensureScmBridge(appOut, scmSelectionSource), "patched");
+  assert.equal(ensureWorkbenchBundle(appOut, { scmSelectionSource }), "patched");
   const patched = readFileSync(bundle);
   assert.ok(patched.subarray(0, original.length).equals(original));
-  assert.equal(ensureScmBridge(appOut, scmSelectionSource), "fresh");
+  assert.equal(ensureWorkbenchBundle(appOut, { scmSelectionSource }), "fresh");
   assert.deepEqual(readFileSync(bundle), patched);
-  assert.equal(ensureScmBridge(appOut), "unpatched");
+  assert.equal(ensureWorkbenchBundle(appOut), "unpatched");
   assert.deepEqual(readFileSync(bundle), original);
 });
 
@@ -130,15 +130,15 @@ it.each([
   ],
 ])("leaves the source intact for %s", (_, unsupported) => {
   writeFileSync(bundle, unsupported);
-  assert.equal(ensureScmBridge(appOut, scmSelectionSource), "fresh");
+  assert.equal(ensureWorkbenchBundle(appOut, { scmSelectionSource }), "fresh");
   assert.equal(readFileSync(bundle, "utf8"), unsupported);
 });
 
 it("does not truncate unrelated bytes after a damaged patch boundary", () => {
-  ensureScmBridge(appOut, scmSelectionSource);
+  ensureWorkbenchBundle(appOut, { scmSelectionSource });
   const damaged = `${readFileSync(bundle, "utf8")}stockCode();\n`;
   writeFileSync(bundle, damaged);
-  assert.equal(ensureScmBridge(appOut), "bridge-invalid");
+  assert.equal(ensureWorkbenchBundle(appOut), "bundle-invalid");
   assert.equal(readFileSync(bundle, "utf8"), damaged);
 });
 
@@ -215,7 +215,7 @@ it.each([
 });
 
 function loadSelection(mode = "multiple", repositories = [alpha, beta, gamma]) {
-  assert.equal(ensureScmBridge(appOut, scmSelectionSource), "patched");
+  assert.equal(ensureWorkbenchBundle(appOut, { scmSelectionSource }), "patched");
   const globals = {
     mode,
     fixture: undefined as unknown as {

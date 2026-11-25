@@ -11,13 +11,7 @@ import {
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-const artifactNames = [
-  "extension.vsix",
-  "content.sha256",
-  "cli.js",
-  "inject.js",
-  "scm-collapse.js",
-];
+const artifactNames = ["extension.vsix", "content.sha256", "cli.js", "inject.js"];
 
 export async function buildCustomPatch(
   vscodeDir: string,
@@ -34,17 +28,10 @@ export async function buildCustomPatch(
   const inputHash = new Bun.CryptoHasher("sha256");
   inputHash.update(await readFile(import.meta.path));
   inputHash.update(`\0bun:${process.versions.bun}\0`);
-  for (const path of [
-    "package.json",
-    "cli.ts",
-    "scripts/build.ts",
-    "plugins/scm-collapse/package.json",
-    "plugins/scm-collapse/tsconfig.json",
-  ]) {
+  for (const path of ["package.json", "cli.ts", "scripts/build.ts"]) {
     await hashFile(inputHash, sourceDir, path);
   }
   await hashSources(inputHash, sourceDir, "src");
-  await hashSources(inputHash, sourceDir, "plugins/scm-collapse/src");
   const cachePath = join(
     dirname(distDir),
     ".cache/vscode-custom-patch",
@@ -121,7 +108,6 @@ async function restoreArtifacts(cache: string, vscodeDir: string, vsixPath: stri
   await Promise.all([
     copyFile(join(cache, "cli.js"), join(cliDir, "cli.js")),
     copyFile(join(cache, "inject.js"), join(cliDir, "inject.data.js")),
-    copyFile(join(cache, "scm-collapse.js"), join(vscodeDir, "scm-collapse.data.js")),
     copyFile(join(cache, "extension.vsix"), vsixPath),
     copyFile(join(cache, "content.sha256"), `${vsixPath}.sha256`),
   ]);

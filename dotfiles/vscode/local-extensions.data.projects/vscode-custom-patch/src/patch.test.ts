@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,7 +22,7 @@ import {
   insertPatchSegment,
   pluginEntries,
   removeContentSecurityPolicy,
-  restoreOriginalFromBackup,
+  readOriginalFromBackup,
   segmentFromPlugins,
   workbenchSearchDirs,
 } from "./patch.ts";
@@ -350,6 +351,51 @@ describe("ensurePatched", () => {
     chmodSync(htmlPath, 0o644);
   });
 
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "keeps the current HTML and its backup if migration cannot replace the HTML",
+    () => {
+      const { htmlPath, searchDirs } = stagePatchFixture("locked-html-target");
+      const targetDir = makeTempRoot("locked-target");
+      const target = join(targetDir, "workbench.html");
+      const patched = patchedHtml("<script>old</script>");
+      const backup = backupPath(join(htmlPath, ".."), SESSION_ID);
+      writeFileSync(target, patched);
+      writeFileSync(backup, PRISTINE_HTML);
+      rmSync(htmlPath);
+      symlinkSync(target, htmlPath);
+      chmodSync(targetDir, 0o555);
+      try {
+        assert.equal(ensurePatched({ searchDirs, plugins: [] }), "unwritable");
+        assert.equal(readHtml(htmlPath), patched);
+        assert.equal(readHtml(backup), PRISTINE_HTML);
+      } finally {
+        chmodSync(targetDir, 0o755);
+      }
+    },
+  );
+
+  it("applies and removes the bundle patch without writing pristine read-only HTML", () => {
+    const { htmlPath, searchDirs } = stagePatchFixture("readonly-pristine-html");
+    const bundlePath = join(searchDirs[0]!, "vs", "workbench", "workbench.desktop.main.js");
+    const bundleSource = `
+var Sorter = class {
+  constructor(explorer, context) { this.explorerService = explorer; this.contextService = context; }
+  compare(left, right) { if (left.isRoot) return -1; return 0; }
+};`;
+    mkdirSync(join(bundlePath, ".."), { recursive: true });
+    writeFileSync(bundlePath, bundleSource);
+    chmodSync(htmlPath, 0o444);
+    try {
+      assert.equal(ensurePatched({ searchDirs, plugins: [], sortExplorer: true }), "patched");
+      assert.match(readHtml(bundlePath), /sort-explorer start/);
+      assert.equal(ensurePatched({ searchDirs, mode: "remove", plugins: [] }), "unpatched");
+      assert.equal(readHtml(bundlePath), bundleSource);
+      assert.equal(readHtml(htmlPath), PRISTINE_HTML);
+    } finally {
+      chmodSync(htmlPath, 0o644);
+    }
+  });
+
   it("reports no-workbench when the installation is not found", () => {
     const root = makeTempRoot("no-workbench");
     const pluginsDir = join(root, "plugins");
@@ -368,8 +414,8 @@ function readHtml(htmlPath: string) {
   return readFileSync(htmlPath, "utf-8");
 }
 
-describe("restoreOriginalFromBackup", () => {
-  it("restores the original html from the backup of the current session", () => {
+describe("readOriginalFromBackup", () => {
+  it("reads the original html without consuming the current backup", () => {
     const dir = makeTempRoot("restore");
     const patched = insertPatchSegment(
       removeContentSecurityPolicy(clearExistingPatchMarkers(PRISTINE_HTML)),
@@ -378,22 +424,22 @@ describe("restoreOriginalFromBackup", () => {
     );
     writeFileSync(backupPath(dir, SESSION_ID), PRISTINE_HTML);
 
-    const restored = restoreOriginalFromBackup(patched, dir);
+    const restored = readOriginalFromBackup(patched, dir);
 
     assert.equal(restored, PRISTINE_HTML);
-    assert.deepEqual(readdirSync(dir), []);
+    assert.equal(readHtml(backupPath(dir, SESSION_ID)), PRISTINE_HTML);
   });
 
   it("returns the html unchanged when no backup exists", () => {
     const dir = makeTempRoot("no-backup");
     const patched = patchedHtml("<script>old</script>");
-    const restored = restoreOriginalFromBackup(patched, dir);
+    const restored = readOriginalFromBackup(patched, dir);
     assert.equal(restored, patched);
   });
 
   it("keeps the html unchanged when no session id is present", () => {
     const dir = makeTempRoot("no-session");
-    const restored = restoreOriginalFromBackup(PRISTINE_HTML, dir);
+    const restored = readOriginalFromBackup(PRISTINE_HTML, dir);
     assert.equal(restored, PRISTINE_HTML);
   });
 });

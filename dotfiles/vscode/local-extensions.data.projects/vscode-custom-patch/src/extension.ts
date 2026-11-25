@@ -1,7 +1,6 @@
 import * as vscode from "vscode";
 import { ensurePatched, installRoots, workbenchSearchDirs } from "./patch.ts";
 
-declare const BUNDLED_SCM_COLLAPSE: string;
 declare const BUNDLED_SCM_SELECTION: string;
 
 export function activate() {
@@ -19,19 +18,20 @@ function runPatch() {
       mainFilename: require.main?.filename,
       extraRoots: installRoots(),
     }),
-    plugins: [{ name: "scm-collapse.js", content: BUNDLED_SCM_COLLAPSE }],
+    plugins: [],
     scmSelectionSource: BUNDLED_SCM_SELECTION,
+    sortExplorer: true,
   });
 
   if (result === "patched") promptReload("Custom scripts patch updated. Restart to apply.");
   else if (result === "unpatched") promptReload("Custom scripts patch removed. Restart to finish.");
   else if (result === "unwritable")
     vscode.window.showWarningMessage("Custom scripts: workbench.html is not writable.");
-  else if (result === "bridge-unwritable")
-    vscode.window.showWarningMessage("SCM bridge: workbench.desktop.main.js cannot be updated.");
-  else if (result === "bridge-invalid")
+  else if (result === "bundle-unwritable")
+    vscode.window.showWarningMessage("Custom patch: workbench.desktop.main.js cannot be updated.");
+  else if (result === "bundle-invalid")
     vscode.window.showWarningMessage(
-      "SCM bridge: workbench.desktop.main.js has an invalid patch boundary; leaving it in place.",
+      "Custom patch: workbench.desktop.main.js has an invalid patch boundary; leaving it in place.",
     );
   else if (result === "backup-missing")
     vscode.window.showWarningMessage(

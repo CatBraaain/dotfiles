@@ -161,7 +161,6 @@ async function inject(target: Target, vscodeDir: string, run: Run): Promise<void
     const output = await run([
       process.execPath,
       join(vscodeDir, "vscode-custom-patch", "inject.data.js"),
-      join(vscodeDir, "scm-collapse.data.js"),
     ]);
     if (output.length > 0) process.stdout.write(output);
     return;
@@ -174,7 +173,7 @@ async function inject(target: Target, vscodeDir: string, run: Run): Promise<void
     if (output.length > 0) process.stdout.write(output);
   } catch (error) {
     console.warn(
-      `[windows] Could not patch workbench.html; VS Code will retry at startup: ${error}`,
+      `[windows] Could not patch the workbench; VS Code will retry at startup: ${error}`,
     );
   }
 }

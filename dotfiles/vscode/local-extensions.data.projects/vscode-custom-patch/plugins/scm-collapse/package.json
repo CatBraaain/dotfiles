@@ -1,8 +1,0 @@
-{
-  "name": "scm-collapse",
-  "private": true,
-  "type": "module",
-  "devDependencies": {
-    "@types/bun": "latest"
-  }
-}

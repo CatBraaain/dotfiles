@@ -1,7 +1,6 @@
 import { isAbsolute, parse } from "node:path";
 import { ensurePatched, installRoots, workbenchSearchDirs } from "./src/patch.ts";
 
-declare const BUNDLED_SCM_COLLAPSE: string;
 declare const BUNDLED_SCM_SELECTION: string;
 
 const command = process.argv[2] ?? "ensure";
@@ -18,12 +17,11 @@ if (appOut !== undefined && !isAbsoluteAppOut(appOut)) {
 }
 const searchDirs =
   appOut === undefined ? workbenchSearchDirs({ extraRoots: installRoots() }) : [appOut];
-const plugins = [{ name: "scm-collapse.js", content: BUNDLED_SCM_COLLAPSE }];
 
 const result = ensurePatched({
   searchDirs,
   ...(useAppOut || pathOption === undefined
-    ? { plugins, scmSelectionSource: BUNDLED_SCM_SELECTION }
+    ? { plugins: [], scmSelectionSource: BUNDLED_SCM_SELECTION, sortExplorer: true }
     : { pluginsDir: pathOption }),
   mode: command,
 });
@@ -32,9 +30,9 @@ const failures: Record<string, string> = {
   "no-workbench": "workbench.html not found",
   unwritable: "workbench.html is not writable",
   "backup-missing": "patch backup is missing; leaving the patch in place",
-  "bridge-unwritable": "SCM bridge: workbench.desktop.main.js cannot be updated",
-  "bridge-invalid":
-    "SCM bridge: workbench.desktop.main.js has an invalid patch boundary; leaving it in place",
+  "bundle-unwritable": "Custom patch: workbench.desktop.main.js cannot be updated",
+  "bundle-invalid":
+    "Custom patch: workbench.desktop.main.js has an invalid patch boundary; leaving it in place",
 };
 if (result in failures) {
   console.error(failures[result]);
@@ -43,7 +41,7 @@ if (result in failures) {
 const messages: Record<string, string> = {
   patched: "custom scripts patched into workbench",
   unpatched: "custom scripts patch removed from workbench",
-  fresh: "workbench patch already matches plugins",
+  fresh: "workbench patch already matches",
 };
 console.log(messages[result]);
 

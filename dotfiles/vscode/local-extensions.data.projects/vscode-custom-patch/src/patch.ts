@@ -9,11 +9,17 @@ import {
   existsSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, extname, join } from "node:path";
-import { ensureScmBridge } from "./scm-bridge.ts";
+import {
+  ensureWorkbenchBundle,
+  isWorkbenchWriteUnavailable,
+  replaceWorkbenchFile,
+} from "./workbench-bundle.ts";
 
 export type PluginEntry = { name: string; content: string };
 export type ReadFile = (filePath: string) => string;
@@ -25,8 +31,8 @@ export type EnsureResult =
   | "no-workbench"
   | "unwritable"
   | "backup-missing"
-  | "bridge-unwritable"
-  | "bridge-invalid";
+  | "bundle-unwritable"
+  | "bundle-invalid";
 
 const SESSION_ID_PATTERN = /<!-- !! VSCODE-CUSTOM-CSS-SESSION-ID ([0-9a-fA-F-]+) !! -->/;
 const PATCH_SEGMENT_PATTERN =
@@ -149,6 +155,7 @@ export function ensurePatched(
     searchDirs: string[];
     mode?: EnsureMode;
     scmSelectionSource?: string;
+    sortExplorer?: boolean;
   } & ({ pluginsDir: string } | { plugins: PluginEntry[] }),
 ): EnsureResult {
   const { searchDirs, mode = "ensure" } = options;
@@ -163,39 +170,46 @@ export function ensurePatched(
   const htmlResult = ensureHtmlPatched(workbench.htmlPath, entries);
   if (htmlResult === "unwritable" || htmlResult === "backup-missing") return htmlResult;
 
-  const bridgeResult = ensureScmBridge(
+  const bundleResult = ensureWorkbenchBundle(
     workbench.appOut,
-    mode === "ensure" ? options.scmSelectionSource : undefined,
+    mode === "ensure" ? options : undefined,
   );
-  return bridgeResult === "fresh" ? htmlResult : bridgeResult;
+  return bundleResult === "fresh" ? htmlResult : bundleResult;
 }
 
 function ensureHtmlPatched(htmlPath: string, entries: PluginEntry[]): EnsureResult {
   const workbenchDir = dirname(htmlPath);
   const currentHtml = readFileSync(htmlPath, "utf-8");
-  if (extractPatchSegment(currentHtml) === segmentFromPlugins(entries)) return "fresh";
+  const segment = segmentFromPlugins(entries);
+  if (extractPatchSegment(currentHtml) === segment) return "fresh";
+  if (entries.length === 0 && !hasPatchMarker(currentHtml)) return "fresh";
   if (!isWritable(htmlPath) || !isWritable(workbenchDir)) return "unwritable";
-  const originalHtml = restoreOriginalFromBackup(currentHtml, workbenchDir);
 
-  if (entries.length === 0) {
-    if (!hasPatchMarker(currentHtml)) return "fresh";
-    if (originalHtml === currentHtml) return "backup-missing";
-    writeFileSync(htmlPath, originalHtml);
-    return "unpatched";
+  try {
+    const target = realpathSync(htmlPath);
+    const originalHtml = readOriginalFromBackup(currentHtml, workbenchDir);
+    if (entries.length === 0) {
+      if (originalHtml === currentHtml) return "backup-missing";
+      replaceWorkbenchFile(target, originalHtml, statSync(target).mode);
+      removeHtmlBackups(workbenchDir);
+      return "unpatched";
+    }
+
+    const clearedHtml = clearExistingPatchMarkers(originalHtml);
+    const sessionUuid = randomUUID();
+    const nextBackup = backupPath(workbenchDir, sessionUuid);
+    writeFileSync(nextBackup, clearedHtml);
+    replaceWorkbenchFile(
+      target,
+      insertPatchSegment(removeContentSecurityPolicy(clearedHtml), segment, sessionUuid),
+      statSync(target).mode,
+    );
+    removeHtmlBackups(workbenchDir, nextBackup);
+    return "patched";
+  } catch (error) {
+    if (isWorkbenchWriteUnavailable(error)) return "unwritable";
+    throw error;
   }
-
-  const clearedHtml = clearExistingPatchMarkers(originalHtml);
-  const sessionUuid = randomUUID();
-  writeFileSync(backupPath(workbenchDir, sessionUuid), clearedHtml);
-  writeFileSync(
-    htmlPath,
-    insertPatchSegment(
-      removeContentSecurityPolicy(clearedHtml),
-      segmentFromPlugins(entries),
-      sessionUuid,
-    ),
-  );
-  return "patched";
 }
 
 export function clearExistingPatchMarkers(html: string): string {
@@ -229,21 +243,17 @@ export function backupPath(workbenchDir: string, sessionUuid: string): string {
   return join(workbenchDir, `workbench.${sessionUuid}${BACKUP_SUFFIX}`);
 }
 
-// Restores the original html from the current session's backup and removes
-// leftover backups (also stale ones left behind by VS Code updates that wiped
-// the patch). Returns the input unchanged when no backup exists, so the
-// caller can detect "cannot unpatch" by comparing against the input.
-export function restoreOriginalFromBackup(html: string, workbenchDir: string): string {
+export function readOriginalFromBackup(html: string, workbenchDir: string): string {
   const sessionId = SESSION_ID_PATTERN.exec(html)?.[1];
-  const previousBackupPath = sessionId !== undefined ? backupPath(workbenchDir, sessionId) : null;
-  const originalHtml =
-    previousBackupPath !== null && existsSync(previousBackupPath)
-      ? readFileSync(previousBackupPath, "utf-8")
-      : html;
+  const backup = sessionId !== undefined ? backupPath(workbenchDir, sessionId) : undefined;
+  return backup !== undefined && existsSync(backup) ? readFileSync(backup, "utf-8") : html;
+}
+
+function removeHtmlBackups(workbenchDir: string, keep?: string): void {
   for (const item of readdirSync(workbenchDir)) {
-    if (item.endsWith(BACKUP_SUFFIX)) rmSync(join(workbenchDir, item));
+    const path = join(workbenchDir, item);
+    if (item.endsWith(BACKUP_SUFFIX) && path !== keep) rmSync(path);
   }
-  return originalHtml;
 }
 
 function pushAppOutBases(dirs: string[], seen: Set<string>, root: string): void {
