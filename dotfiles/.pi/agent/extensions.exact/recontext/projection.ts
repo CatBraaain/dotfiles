@@ -15,8 +15,50 @@ import { Value } from "typebox/value";
 export type ProjectionManager = ExtensionContext["sessionManager"];
 
 export const REPLACEMENT_STATE = "recontext-projection";
+export const HANDOFF_COUNTER_STATE = "handoff-session-counter";
 const REPLACEMENT_COMMITTED = "recontext-committed";
 const STATE_VERSION = 1;
+
+interface ContextBranch {
+  sessionId: string;
+  leafId: string | null;
+  entryCount: number;
+}
+
+export function captureContextBranch(manager: ProjectionManager): ContextBranch {
+  return {
+    sessionId: manager.getSessionId(),
+    leafId: manager.getLeafId(),
+    entryCount: manager.getEntries().length,
+  };
+}
+
+export function isCurrentContextBranch(
+  manager: ProjectionManager,
+  baseline: ContextBranch,
+): boolean {
+  if (manager.getSessionId() !== baseline.sessionId) return false;
+  if (manager.getLeafId() === baseline.leafId) return true;
+  const branch = manager.getBranch();
+  const baselineIndex = branch.findIndex((entry) => entry.id === baseline.leafId);
+  if (baseline.leafId !== null && baselineIndex < 0) return false;
+  const suffix = branch.slice(baselineIndex + 1);
+  const appended = manager.getEntries().slice(baseline.entryCount);
+  return (
+    suffix.length === appended.length &&
+    suffix.every(
+      (entry, index) => entry.id === appended[index]?.id && isContextNeutralMetadata(entry),
+    )
+  );
+}
+
+function isContextNeutralMetadata(entry: SessionEntry): boolean {
+  if (entry.type === "session_info") return true;
+  if (entry.type !== "custom") return false;
+  return ![REPLACEMENT_STATE, REPLACEMENT_COMMITTED, HANDOFF_COUNTER_STATE].includes(
+    entry.customType,
+  );
+}
 
 const replacementSchema = Type.Object({
   version: Type.Literal(STATE_VERSION),

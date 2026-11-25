@@ -23,7 +23,9 @@ import {
   type CompactionOptions,
 } from "./auto-compaction.ts";
 import {
+  captureContextBranch,
   createReplacement,
+  isCurrentContextBranch,
   isReplacementCurrent,
   matchMessageSources,
   pendingProjection,
@@ -319,8 +321,8 @@ export function installProviderGates(
       requestFits(model, context, options, simple)
     )
       return context;
-    const sessionId = manager.getSessionId();
-    const leafId = manager.getLeafId();
+    const baseline = captureContextBranch(manager);
+    const { sessionId, leafId } = baseline;
     const projection = pendingProjection(manager).entries;
     const candidates = compactionCandidates(manager, projection, model, context, options, simple);
     const candidate = candidates[0];
@@ -425,7 +427,7 @@ export function installProviderGates(
         );
       }
       reason = "branch_changed";
-      if (manager.getSessionId() !== sessionId || manager.getLeafId() !== leafId)
+      if (!isCurrentContextBranch(manager, baseline))
         throw new Error("The session or branch changed during summarization");
       reason = "prefix_changed";
       const state = createReplacement(manager, projection, candidate.targetIds, text);

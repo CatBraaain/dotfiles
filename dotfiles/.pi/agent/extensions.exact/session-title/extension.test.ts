@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { describe, it, spyOn } from "bun:test";
+import { mock } from "node:test";
+import { setImmediate, setTimeout as delay } from "node:timers/promises";
+import { afterEach, beforeEach, describe, it, spyOn } from "bun:test";
 import {
   SessionManager,
   DefaultResourceLoader,
@@ -10,9 +12,17 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import type { AssistantMessage, Context, Model, Api } from "@earendil-works/pi-ai";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type Context,
+  type Model,
+  type Api,
+  type Provider,
+} from "@earendil-works/pi-ai";
 import { registerSessionTitle } from "./extension.ts";
 import agentsExtension, { __resetRoutingState } from "../agents/index.ts";
+import recontextExtension from "../recontext/index.ts";
 import { fakeModel, fakeProvider, memoryRuntime } from "../recontext/test-fixture.ts";
 
 type ResolveClassModels = Parameters<typeof registerSessionTitle>[1];
@@ -52,6 +62,9 @@ function deferred<T>() {
 function harness(
   options: {
     complete?: () => Promise<AssistantMessage>;
+    timeoutProviderAvailable?: boolean;
+    timeoutModelBaseUrl?: string;
+    timeoutAuth?: () => Promise<void>;
     resolve?: ResolveClassModels;
     hasUI?: boolean;
     select?: ExtensionCommandContext["ui"]["select"];
@@ -69,6 +82,8 @@ function harness(
   const calls: Array<{ model: Model<Api>; context: Context; options: unknown }> = [];
   const resolutions: Resolution[] = [];
   const started = deferred<void>();
+  const parentAbort = new AbortController();
+  let hasActiveRunSignal = true;
   let idle = true;
   const parentModel = { provider: "parent", id: "expensive" } as Model<Api>;
   const lowModel = { provider: "test", id: "low" } as Model<Api>;
@@ -80,6 +95,9 @@ function harness(
     cwd: "/tmp",
     model: parentModel,
     thinkingLevel: "high",
+    get signal() {
+      return hasActiveRunSignal ? parentAbort.signal : undefined;
+    },
     isIdle: () => idle,
     ui: {
       async select(
@@ -98,14 +116,39 @@ function harness(
     },
     modelRegistry: {
       hasConfiguredAuth: () => true,
-      getApiKeyAndHeaders: async () => ({ ok: true }),
-      async complete(model: Model<Api>, request: Context, completeOptions: unknown) {
-        calls.push({ model, context: request, options: completeOptions });
-        started.resolve();
-        return options.complete ? options.complete() : assistant("stop", "Generated title");
-      },
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "synthetic" }),
+      complete,
     },
   } as unknown as ExtensionCommandContext;
+  async function complete(model: Model<Api>, request: Context, completeOptions: unknown) {
+    calls.push({ model, context: request, options: completeOptions });
+    started.resolve();
+    return options.complete ? options.complete() : assistant("stop", "Generated title");
+  }
+  const timeoutProvider: Provider = {
+    ...fakeProvider("test").provider,
+    stream(model, request, options) {
+      const stream = createAssistantMessageEventStream();
+      void complete(model, request, options).then(
+        (result) => stream.end(result),
+        (error: unknown) => stream.end({ ...assistant("error"), errorMessage: String(error) }),
+      );
+      return stream;
+    },
+  };
+  async function createTimeoutRuntime() {
+    return {
+      getProvider: () => (options.timeoutProviderAvailable === false ? undefined : timeoutProvider),
+      getModel: () =>
+        options.timeoutModelBaseUrl
+          ? { ...lowModel, baseUrl: options.timeoutModelBaseUrl }
+          : lowModel,
+      async getAuth() {
+        await options.timeoutAuth?.();
+        return { auth: { apiKey: "synthetic" } };
+      },
+    };
+  }
   const pi = {
     on(name: string, handler: (event: never, ctx: ExtensionCommandContext) => unknown) {
       handlers.set(name, handler);
@@ -133,7 +176,7 @@ function harness(
     resolutions.push({ class: className, context: ctx, signal });
     return options.resolve ? options.resolve(className, ctx, signal) : [lowModel];
   }
-  registerSessionTitle(pi, resolveClassModels);
+  registerSessionTitle(pi, resolveClassModels, createTimeoutRuntime);
 
   async function emit(name: string, event: Record<string, unknown> = {}) {
     await handlers.get(name)?.({ type: name, ...event } as never, context);
@@ -173,6 +216,15 @@ function harness(
       idle = value;
     },
     emit,
+    abort: () => parentAbort.abort(),
+    pauseRun() {
+      hasActiveRunSignal = false;
+    },
+    async start() {
+      idle = false;
+      hasActiveRunSignal = true;
+      await emit("agent_start");
+    },
     respond,
     settle,
     flush,
@@ -186,7 +238,7 @@ function harness(
     async reinstall(reason: string) {
       await emit("session_shutdown");
       handlers.clear();
-      registerSessionTitle(pi, resolveClassModels);
+      registerSessionTitle(pi, resolveClassModels, createTimeoutRuntime);
       await emit("session_start", { reason });
     },
     async switchSession() {
@@ -287,6 +339,290 @@ describe("automatic session titles", () => {
     await h.settle();
     assert.equal(h.queued.length, 0);
   });
+});
+
+describe("first response title timeout", () => {
+  const fiveMinutesMs = 5 * 60 * 1_000;
+
+  beforeEach(() => mock.timers.enable({ apis: ["setTimeout"] }));
+  afterEach(() => mock.timers.reset());
+
+  async function advanceClock(ms: number): Promise<void> {
+    mock.timers.tick(ms);
+    await setImmediate();
+  }
+
+  it("uses the normal completion path when the first response finishes before five minutes", async () => {
+    const h = harness();
+    h.user();
+    await h.start();
+    await advanceClock(fiveMinutesMs - 1);
+    assert.equal(h.calls.length, 0);
+    await h.finish();
+    await h.start();
+    await advanceClock(fiveMinutesMs);
+    assert.deepEqual(h.names, ["Generated title"]);
+    assert.equal(h.calls.length, 1);
+  });
+
+  it("uses the saved text at five minutes without resetting for tool steps or retry runs", async () => {
+    const h = harness();
+    h.user("Original request");
+    await h.start();
+    await advanceClock(fiveMinutesMs - 1);
+    const progress = assistant("toolUse", "Saved progress");
+    progress.content.push({ type: "toolCall", id: "call", name: "read", arguments: {} });
+    await h.respond(progress);
+    h.manager.appendMessage({
+      role: "toolResult",
+      toolCallId: "call",
+      toolName: "read",
+      content: [{ type: "text", text: "Tool output" }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+    await h.emit("agent_end");
+    await h.start();
+    await h.emit("message_update", { message: assistant("stop", "Uncommitted stream text") });
+    assert.equal(h.calls.length, 0);
+
+    await advanceClock(1);
+    assert.deepEqual(h.names, ["Generated title"]);
+    assert.equal(h.context.isIdle(), false);
+    assert.deepEqual(h.queued, []);
+    const input = h.calls[0]?.context.messages.find((message) => message.role === "user")?.content;
+    assert.equal(
+      input,
+      [
+        JSON.stringify({ role: "user", content: "Original request" }),
+        JSON.stringify({ role: "assistant", content: "Saved progress" }),
+      ].join("\n"),
+    );
+
+    await h.finish();
+    await h.reinstall("reload");
+    await h.start();
+    await advanceClock(fiveMinutesMs);
+    await h.finish();
+    assert.equal(h.calls.length, 1);
+  });
+
+  it("uses only user and assistant text from the active conversation context", async () => {
+    const h = harness();
+    h.user("Stored but not in the active context");
+    h.user("Active question");
+    h.manager.appendMessage(assistant("stop", "Active answer"));
+    await h.start();
+    await h.emit("context_with_system", {
+      messages: [
+        { role: "system", content: "Parent instruction", timestamp: 1 },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "Active question" },
+            { type: "image", data: "opaque-image-data", mimeType: "image/png" },
+          ],
+          timestamp: 2,
+        },
+        assistant("stop", "Active answer"),
+        { role: "user", content: "Injected handoff", timestamp: 3 },
+        { role: "toolResult", content: [{ type: "text", text: "Tool output" }], timestamp: 3 },
+      ],
+    });
+    await advanceClock(fiveMinutesMs);
+    const input = h.calls[0]?.context.messages.find((message) => message.role === "user");
+    assert.equal(
+      input?.content,
+      [
+        JSON.stringify({ role: "user", content: "Active question" }),
+        JSON.stringify({ role: "assistant", content: "Active answer" }),
+      ].join("\n"),
+    );
+  });
+
+  it("keeps the normal completion path if the low provider is unavailable outside the session", async () => {
+    const h = harness({ timeoutProviderAvailable: false });
+    h.user();
+    await h.start();
+    await advanceClock(fiveMinutesMs);
+    assert.equal(h.calls.length, 0);
+    await h.finish();
+    assert.deepEqual(h.names, ["Generated title"]);
+  });
+
+  it("does not send a timeout request to a different configured endpoint", async () => {
+    const h = harness({ timeoutModelBaseUrl: "https://different.invalid/v1" });
+    h.user();
+    await h.start();
+    await advanceClock(fiveMinutesMs);
+    assert.equal(h.calls.length, 0);
+    await h.finish();
+    assert.deepEqual(h.names, ["Generated title"]);
+  });
+
+  it("uses the completed conversation when the timeout inference fails", async () => {
+    let attempts = 0;
+    const h = harness({
+      complete: async () =>
+        attempts++ === 0 ? assistant("error") : assistant("stop", "Final title"),
+    });
+    h.user();
+    await h.start();
+    await advanceClock(fiveMinutesMs);
+    assert.deepEqual(h.names, []);
+    await h.finish();
+    const normalInput = h.calls[1]?.context.messages.find(
+      (message) => message.role === "user",
+    )?.content;
+    assert.equal(typeof normalInput, "string");
+    assert.match(normalInput as string, /A useful response/);
+    assert.deepEqual(h.names, ["Final title"]);
+  });
+
+  it("does not show the candidate chooser during the response if both candidates are overlong", async () => {
+    let attempts = 0;
+    const h = harness({
+      complete: async () => assistant("stop", attempts++ < 2 ? "あ".repeat(36) : "Final title"),
+    });
+    h.user();
+    await h.start();
+    await advanceClock(fiveMinutesMs);
+    assert.equal(h.calls.length, 2);
+    assert.deepEqual(h.names, []);
+    assert.deepEqual(h.selections, []);
+    await h.finish();
+    assert.deepEqual(h.names, ["Final title"]);
+  });
+
+  it("gives completion priority over a timeout request that has not saved a title", async () => {
+    const early = deferred<AssistantMessage>();
+    let attempts = 0;
+    const h = harness({
+      complete: async () => (attempts++ === 0 ? early.promise : assistant("stop", "Final title")),
+    });
+    h.user();
+    await h.start();
+    await advanceClock(fiveMinutesMs);
+    assert.equal(h.calls.length, 1);
+    await h.finish();
+    assert.equal(h.resolutions[0]?.signal?.aborted, true);
+    early.resolve(assistant("stop", "Late provisional title"));
+    await setImmediate();
+    assert.deepEqual(h.names, ["Final title"]);
+  });
+
+  it("does not start timeout inference after the parent is aborted but not settled", async () => {
+    const h = harness();
+    h.user();
+    await h.start();
+    h.abort();
+    await advanceClock(fiveMinutesMs);
+    assert.equal(h.context.isIdle(), false);
+    assert.equal(h.calls.length, 0);
+    await h.settle(true);
+  });
+
+  it("cancels in-flight timeout inference as soon as the parent is aborted", async () => {
+    const early = deferred<AssistantMessage>();
+    const h = harness({ complete: () => early.promise });
+    h.user();
+    await h.start();
+    await advanceClock(fiveMinutesMs);
+    await h.started;
+    h.abort();
+    assert.equal(h.resolutions[0]?.signal?.aborted, true);
+    early.resolve(assistant("stop", "Cancelled title"));
+    await setImmediate();
+    assert.deepEqual(h.names, []);
+    await h.settle(true);
+  });
+
+  it("waits for started authentication at shutdown without dispatching the title request", async () => {
+    const authStarted = deferred<void>();
+    const authFinished = deferred<void>();
+    const h = harness({
+      timeoutAuth: () => {
+        authStarted.resolve();
+        return authFinished.promise;
+      },
+    });
+    h.user();
+    await h.start();
+    await advanceClock(fiveMinutesMs);
+    await authStarted.promise;
+    let shutdownFinished = false;
+    const shutdown = h.emit("session_shutdown").then(() => {
+      shutdownFinished = true;
+    });
+    await setImmediate();
+    assert.equal(shutdownFinished, false);
+    authFinished.resolve();
+    await shutdown;
+    assert.equal(h.calls.length, 0);
+  });
+
+  it("starts at the next active run if the timer expires between runs", async () => {
+    const h = harness();
+    h.user();
+    await h.start();
+    h.pauseRun();
+    await advanceClock(fiveMinutesMs);
+    assert.equal(h.calls.length, 0);
+    await h.start();
+    await setImmediate();
+    assert.deepEqual(h.names, ["Generated title"]);
+  });
+
+  it("does not save a timeout result between the end of a run and aborted settlement", async () => {
+    const early = deferred<AssistantMessage>();
+    const h = harness({ complete: () => early.promise });
+    h.user();
+    await h.start();
+    await advanceClock(fiveMinutesMs);
+    await h.started;
+    h.pauseRun();
+    early.resolve(assistant("stop", "Late title"));
+    await setImmediate();
+    assert.equal(h.context.isIdle(), false);
+    assert.deepEqual(h.names, []);
+    await h.settle(true);
+  });
+
+  it("disarms the timer after a manual title is set", async () => {
+    const h = harness();
+    h.user();
+    await h.start();
+    await h.title("Manual title");
+    await advanceClock(fiveMinutesMs);
+    await h.finish();
+    assert.equal(h.calls.length, 0);
+    assert.deepEqual(h.names, ["Manual title"]);
+  });
+
+  for (const change of ["manual title", "branch", "session"] as const) {
+    it(`discards an in-flight timeout result after a change of ${change}`, async () => {
+      const early = deferred<AssistantMessage>();
+      const h = harness({ complete: () => early.promise });
+      const root = h.user();
+      await h.start();
+      await h.respond(assistant("toolUse"));
+      await advanceClock(fiveMinutesMs);
+      assert.equal(h.calls.length, 1);
+      if (change === "manual title") await h.title("Keep title");
+      if (change === "branch") {
+        h.manager.branch(root);
+        await h.emit("session_tree");
+      }
+      if (change === "session") await h.switchSession();
+      assert.equal(h.resolutions[0]?.signal?.aborted, true);
+      early.resolve(assistant("stop", "Stale title"));
+      await setImmediate();
+      assert.equal(
+        h.manager.getSessionName(),
+        change === "manual title" ? "Keep title" : undefined,
+      );
+    });
+  }
 });
 
 describe("retitle command", () => {
@@ -1255,6 +1591,109 @@ describe("real SDK title command dispatch", () => {
       __resetRoutingState();
       if (previousAgent === undefined) delete process.env.PI_AGENT_NAME;
       else process.env.PI_AGENT_NAME = previousAgent;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("saves a timeout title with recontext active while the first response is still streaming", async () => {
+    const root = "/tmp/work/dotfiles/session-title";
+    mkdirSync(root, { recursive: true });
+    const directory = mkdtempSync(`${root}/timeout-`);
+    const runtime = await memoryRuntime();
+    const timeoutRuntime = await memoryRuntime();
+    const fake = fakeProvider("title-timeout-test");
+    fake.state.models = [fakeModel({ provider: "title-timeout-test", id: "same-model" })];
+    const parentStarted = deferred<void>();
+    const releaseParent = deferred<void>();
+    fake.state.beforeReply = async (capture) => {
+      const isParent = capture.options.sessionId === manager.getSessionId();
+      if (isParent) {
+        parentStarted.resolve();
+        await releaseParent.promise;
+      }
+      const text = isParent ? "First reply" : "Early session title";
+      fake.state.normalContent = [{ type: "text", text }];
+    };
+    runtime.registerNativeProvider(fake.provider);
+    timeoutRuntime.registerNativeProvider(fake.provider);
+    await runtime.refresh({ allowNetwork: false });
+    const manager = SessionManager.inMemory(directory);
+    const settings = SettingsManager.inMemory({
+      compaction: { enabled: false },
+      cacheWarming: "off",
+    });
+    const renamed = deferred<void>();
+    const loader = new DefaultResourceLoader({
+      cwd: directory,
+      agentDir: directory,
+      settingsManager: settings,
+      noExtensions: true,
+      extensionFactories: [
+        recontextExtension,
+        (pi) => {
+          pi.on("before_agent_start", () => mock.timers.enable({ apis: ["setTimeout"] }));
+          registerSessionTitle(
+            pi,
+            async () => [runtime.getModel("title-timeout-test", "same-model")!],
+            async () => timeoutRuntime,
+          );
+          pi.on("session_info_changed", () => renamed.resolve());
+        },
+      ],
+    });
+    await loader.reload();
+    const { session } = await createAgentSession({
+      cwd: directory,
+      agentDir: directory,
+      modelRuntime: runtime,
+      model: runtime.getModel("title-timeout-test", "same-model")!,
+      settingsManager: settings,
+      sessionManager: manager,
+      resourceLoader: loader,
+      tools: [],
+    });
+    const errors: unknown[] = [];
+    let firstResponse: Promise<void> | undefined;
+    const watchdog = new AbortController();
+    try {
+      await session.bindExtensions({ mode: "rpc", onError: (error) => errors.push(error) });
+      firstResponse = session.prompt("First request");
+      await parentStarted.promise;
+      mock.timers.tick(5 * 60 * 1_000);
+      mock.timers.reset();
+      const wasRenamed = await Promise.race([
+        renamed.promise.then(() => true),
+        delay(2_000, false, { signal: watchdog.signal }),
+      ]);
+      assert.equal(wasRenamed, true);
+      assert.equal(session.isIdle, false);
+      assert.equal(fake.state.maxActive, 2);
+      assert.equal(fake.state.requests[1]?.options.cacheRetention, "none");
+      assert.notEqual(
+        fake.state.requests[0]?.options.sessionId,
+        fake.state.requests[1]?.options.sessionId,
+      );
+      const [parent, title] = fake.state.requests;
+      assert.ok(parent && title);
+      assert.equal(title.model.id, parent.model.id);
+      assert.equal(title.options.apiKey, fake.state.authRevision);
+      assert.equal(title.options.headers?.["X-Auth-Revision"], fake.state.authRevision);
+      const titleInput = title.context.messages.find((message) => message.role === "user");
+      assert.equal(titleInput?.content, JSON.stringify({ role: "user", content: "First request" }));
+      assert.match(String(title.context.messages[0]?.content), /短いタイトルを作る/);
+      assert.equal(manager.getSessionName(), "Early session title");
+      releaseParent.resolve();
+      await firstResponse;
+      await setImmediate();
+      assert.equal(fake.state.requests.length, 2);
+      assert.deepEqual(errors, []);
+    } finally {
+      watchdog.abort();
+      mock.timers.reset();
+      releaseParent.resolve();
+      await firstResponse;
+      await session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
+      session.dispose();
       rmSync(directory, { recursive: true, force: true });
     }
   });

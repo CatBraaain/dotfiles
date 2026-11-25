@@ -1070,6 +1070,21 @@ describe("handoff boundaries", () => {
     };
     assert.equal(await h.boundary(), undefined);
   });
+  it("honors approval after only the session name and extension metadata were appended", async () => {
+    const h = harness();
+    h.commit(await h.boundary());
+    h.commit(await h.boundary());
+    h.ctx.ui.select = async () => {
+      h.manager.appendSessionInfo("New name");
+      h.manager.appendCustomEntry("example-extension-state", { ready: true });
+      return "Yes, recontext";
+    };
+    const result = await h.boundary();
+    assert.equal(result?.continue, true);
+    h.commit(result);
+    assert.equal(h.manager.getEntries().filter(isHandoffEntry).length, 3);
+    assert.deepEqual(h.notices, []);
+  });
   it("keeps new user input received during approval", async () => {
     const h = harness();
     h.commit(await h.boundary());

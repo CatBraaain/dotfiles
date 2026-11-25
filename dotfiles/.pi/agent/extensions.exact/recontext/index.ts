@@ -9,7 +9,10 @@ import { Type } from "typebox";
 import { requestClassChange } from "../agents/class-change.ts";
 import { requestMaxHandoff } from "../agents/max-handoff.ts";
 import {
+  captureContextBranch,
   createReplacement,
+  HANDOFF_COUNTER_STATE as STATE_TYPE,
+  isCurrentContextBranch,
   REPLACEMENT_STATE,
   replacementCommitDraft,
   pendingProjection,
@@ -19,7 +22,6 @@ import {
 } from "./projection.ts";
 import { installProviderGates, type ProviderGates } from "./provider-gate.ts";
 
-const STATE_TYPE = "handoff-session-counter";
 const STATE_VERSION = 1;
 const AUTO_HANDOFF_LIMIT = 2;
 const HANDOFF_OPTION = "Yes, recontext";
@@ -275,13 +277,10 @@ export default function recontextExtension(pi: ExtensionAPI): void {
       return isRecord(state) && state.type === STATE_TYPE && state.requestId === requestId;
     });
     if (alreadyApplied) return;
-    let baselineLeafId = ctx.sessionManager.getLeafId();
-    const sessionId = ctx.sessionManager.getSessionId();
+    let baseline = captureContextBranch(ctx.sessionManager);
     function isCurrentRequest(): boolean {
       if (ctx.signal?.aborted) return false;
-      const contextChanged =
-        ctx.sessionManager.getSessionId() !== sessionId ||
-        ctx.sessionManager.getLeafId() !== baselineLeafId;
+      const contextChanged = !isCurrentContextBranch(ctx.sessionManager, baseline);
       if (contextChanged) {
         ctx.ui.notify(SESSION_CHANGED_NOTICE, "warning");
       }
@@ -324,8 +323,8 @@ export default function recontextExtension(pi: ExtensionAPI): void {
     }
     function isOnRequestBranch(): boolean {
       return (
-        ctx.sessionManager.getSessionId() === sessionId &&
-        ctx.sessionManager.getBranch().some((entry) => entry.id === baselineLeafId)
+        ctx.sessionManager.getSessionId() === baseline.sessionId &&
+        ctx.sessionManager.getBranch().some((entry) => entry.id === baseline.leafId)
       );
     }
 
@@ -372,7 +371,7 @@ export default function recontextExtension(pi: ExtensionAPI): void {
         ctx.ui.notify(SESSION_CHANGED_NOTICE, "warning");
         return;
       }
-      baselineLeafId = ctx.sessionManager.getLeafId();
+      baseline = captureContextBranch(ctx.sessionManager);
       if (!isCurrentRequest()) return;
     }
     try {

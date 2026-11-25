@@ -241,7 +241,28 @@ describe("final provider preflight", () => {
     }
   });
 
-  for (const change of ["abort", "branch", "session", "new-input"] as const) {
+  it("adopts a summary after only the session name and extension metadata were appended", async () => {
+    const h = await gateFixture();
+    try {
+      seedConversation(h.manager, 12_500);
+      h.state.beforeReply = (capture) => {
+        if (capture.kind !== "summary") return;
+        h.manager.appendSessionInfo("New name");
+        h.manager.appendCustomEntry("example-extension-state", { ready: true });
+      };
+      assert.equal((await send(h)).stopReason, "stop");
+      assert.deepEqual(
+        h.state.requests.map((request) => request.kind),
+        ["summary", "normal"],
+      );
+      assert.equal(states(h).length, 1);
+      assert.equal(h.manager.getSessionName(), "New name");
+    } finally {
+      h.gates.close();
+    }
+  });
+
+  for (const change of ["abort", "branch", "session", "new-input", "projection"] as const) {
     it(`discards an unapplied summary after ${change} during generation`, async () => {
       const h = await gateFixture();
       try {
@@ -253,6 +274,7 @@ describe("final provider preflight", () => {
           if (change === "session") h.manager.newSession();
           if (change === "new-input")
             h.manager.appendMessage({ role: "user", content: "NEW INPUT", timestamp: 100 });
+          if (change === "projection") h.manager.appendCustomEntry(REPLACEMENT_STATE, {});
         };
         const result = await send(h, { signal: h.controller.signal });
         assert.equal(result.stopReason, "aborted");
@@ -260,7 +282,7 @@ describe("final provider preflight", () => {
           h.state.requests.map((request) => request.kind),
           ["summary"],
         );
-        assert.deepEqual(states(h), []);
+        assert.equal(states(h).length, change === "projection" ? 1 : 0);
       } finally {
         h.gates.close();
       }
@@ -446,7 +468,7 @@ describe("effective cap preflight", () => {
 });
 
 describe("session serialization and provider wrapper restoration", () => {
-  it("serializes an already-running warm request before summary and ordinary dispatch", async () => {
+  it("serializes warming, summary, normal dispatch and unmarked requests with a different ID", async () => {
     const h = await gateFixture();
     try {
       seedConversation(h.manager, 12_500);
@@ -467,10 +489,12 @@ describe("session serialization and provider wrapper restoration", () => {
         .result();
       await started.promise;
       const normal = send(h);
+      const unmarked = send(h, { sessionId: "unmarked-request" });
       await Promise.resolve();
-      assert.equal(h.state.requests.length, 1);
+      const requestsWhileWarm = h.state.requests.length;
       release.resolve();
-      await Promise.all([warm, normal]);
+      await Promise.all([warm, normal, unmarked]);
+      assert.equal(requestsWhileWarm, 1);
       assert.deepEqual(h.state.timeline, [
         "normal:start",
         "normal:end",
@@ -478,7 +502,10 @@ describe("session serialization and provider wrapper restoration", () => {
         "summary:end",
         "normal:start",
         "normal:end",
+        "normal:start",
+        "normal:end",
       ]);
+      assert.equal(h.state.requests.at(-1)?.options.sessionId, "unmarked-request");
       assert.equal(h.state.maxActive, 1);
       assert.equal(h.gates.isBusy(), false);
     } finally {
