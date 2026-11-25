@@ -238,6 +238,7 @@ const PARENT_ENV_KEYS = new Set([
   "TICKET_DISPATCH_PROJECT",
   "TICKET_DISPATCH_ID",
 ]);
+const PI_HARDWARE_CURSOR_ENV = "PI_HARDWARE_CURSOR";
 const WINDOWS_RIGHT_ENV = "PI_MUX_WINDOWS_START_RIGHT";
 const WINDOWS_RIGHT_OPTION = "@pi-mux-windows-start-right";
 const PSMUX_ROUTING = new Set([
@@ -1510,13 +1511,14 @@ function tmuxConfiguration() {
   const directory = join(platform.runtimeStateRoot(), "pi-tmux");
   const agentDir = resolveAgentDirectory();
   const extension = join(agentDir, "extensions", "pi-mux-bridge", "index.ts");
-  const tmuxConfig = join(homedir(), ".config", "tmux", "pi.conf");
+  const tmuxConfig = join(homedir(), ".config", platform.windows ? "psmux" : "tmux", "pi.conf");
   const env = Object.fromEntries(
     Object.entries(process.env).filter(
       (entry): entry is [string, string] =>
         entry[1] !== undefined &&
         !PARENT_ENV_KEYS.has(entry[0]) &&
-        (!platform.windows || !PSMUX_ROUTING.has(entry[0])),
+        (!platform.windows ||
+          (!PSMUX_ROUTING.has(entry[0]) && entry[0].toUpperCase() !== PI_HARDWARE_CURSOR_ENV)),
     ),
   );
   return {
@@ -1695,8 +1697,7 @@ async function claimWindowsLaunch(token: string, command: string[]): Promise<num
     randomUUID(),
     () => {
       const env = { ...process.env };
-      delete env[WINDOWS_RIGHT_ENV];
-      env.TMUX = `${config.socket},${port},${index}`;
+      configureWindowsPiEnvironment(env, `${config.socket},${port},${index}`);
       try {
         return Bun.spawn(command, { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
       } catch (error) {
@@ -1708,6 +1709,14 @@ async function claimWindowsLaunch(token: string, command: string[]): Promise<num
     prepare,
   );
   return started ? await started.started.exited : 1;
+}
+
+function configureWindowsPiEnvironment(env: NodeJS.ProcessEnv, tmux: string): void {
+  for (const key of Object.keys(env))
+    if (key.toUpperCase() === PI_HARDWARE_CURSOR_ENV) delete env[key];
+  env[PI_HARDWARE_CURSOR_ENV] = "1";
+  delete env[WINDOWS_RIGHT_ENV];
+  env.TMUX = tmux;
 }
 
 type WindowsLaunch = {
@@ -2596,8 +2605,7 @@ async function claimWindowsReload(
               if (inherited.toUpperCase() === key.toUpperCase()) delete env[inherited];
             if (value !== null) env[key] = value;
           }
-          delete env[WINDOWS_RIGHT_ENV];
-          env.TMUX = `${config.socket},${port},${index}`;
+          configureWindowsPiEnvironment(env, `${config.socket},${port},${index}`);
           if (observeWindowsIdentity(route.launcher, inspectWindowsProcess) !== "present")
             throw new SpawnDidNotStartError("Windows reload launcher exited before the claim");
           try {

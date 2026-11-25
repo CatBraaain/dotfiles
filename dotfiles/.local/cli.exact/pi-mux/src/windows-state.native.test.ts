@@ -18,7 +18,7 @@ test.skipIf(!tmux)(
     assert.ok(tmux);
     const root = mkdtempSync(join(tmpdir(), "pi-mux native state-"));
     const profile = join(root, "home");
-    const config = join(profile, ".config", "tmux", "pi.conf");
+    const config = join(profile, ".config", "psmux", "pi.conf");
     const agent = join(profile, ".pi", "agent");
     const registry = join(root, "registry");
     const socket = join(profile, ".local", "state", "pi-tmux", "server.sock");

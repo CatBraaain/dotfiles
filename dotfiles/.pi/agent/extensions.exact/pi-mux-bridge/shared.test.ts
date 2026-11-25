@@ -22,12 +22,27 @@ describe("dedicated tmux paths", () => {
     assert.deepEqual(args, ["-S", paths.socketPath, "-f", paths.configPath, "start-server"]);
   });
 
-  it("uses the global config independently of PI_CODING_AGENT_DIR", () => {
-    const defaultPaths = getTmuxPaths({});
-    const customPaths = getTmuxPaths({ PI_CODING_AGENT_DIR: "/custom pi agent" });
+  it("uses the tmux config on Linux independently of PI_CODING_AGENT_DIR", () => {
+    const defaultPaths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated" }, "linux");
+    const customPaths = getTmuxPaths(
+      { XDG_RUNTIME_DIR: "/isolated", PI_CODING_AGENT_DIR: "/custom pi agent" },
+      "linux",
+    );
     const configPath = join(homedir(), ".config", "tmux", "pi.conf");
     assert.equal(defaultPaths.configPath, configPath);
     assert.equal(customPaths.configPath, configPath);
+  });
+
+  it("explicitly passes the psmux config on Windows", () => {
+    const paths = getTmuxPaths({}, "win32");
+    const configPath = join(homedir(), ".config", "psmux", "pi.conf");
+    assert.deepEqual(tmuxArgs(paths, ["display-message"]), [
+      "-S",
+      paths.socketPath,
+      "-f",
+      configPath,
+      "display-message",
+    ]);
   });
 
   it("rejects a relative runtime directory", () => {

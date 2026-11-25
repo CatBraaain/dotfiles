@@ -36,7 +36,7 @@ export function getTmuxPaths(
     return {
       directory,
       socketPath: join(directory, "server.sock"),
-      configPath: join(homedir(), ".config", "tmux", "pi.conf"),
+      configPath: join(homedir(), ".config", "psmux", "pi.conf"),
     };
   }
   const runtime = env.XDG_RUNTIME_DIR || `/run/user/${process.getuid!()}`;

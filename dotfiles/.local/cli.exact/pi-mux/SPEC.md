@@ -749,7 +749,7 @@ CLIは対象の状態を繰り返し確認し、置き換えの条件を満た�
 | 管理先 | POSIX では `${XDG_RUNTIME_DIR:-/run/user/<uid>}/pi-tmux/server.sock` を、Windows では `~/.local/state/pi-tmux/server.sock` を使う。管理ディレクトリは所有者専用とする。Windows では `-S` のパスをサーバー識別に使い、socketファイルは作成・検査しない |
 | 起動 | `new`・`open`・`restore` は専用serverがなければ起動して復元する |
 | 存続 | クライアントや会話がなくなってもサーバーを存続させる |
-| 設定 | 起動操作で専用設定を適用する。通常tmuxの設定を読み込まず、他のサーバーへ作用しない |
+| 設定 | 起動時に、POSIX の tmux には `~/.config/tmux/pi.conf`、Windows の psmux には `~/.config/psmux/pi.conf` を明示指定する。通常の mux 設定を読み込まず、他のサーバーへ作用しない |
 | マウス | mouseを有効にする。rootテーブルの `C-MouseDrag1Pane` だけを解除し、Ctrl+左ドラッグによるfloating pane作成を無効にする。その他のマウス操作は維持する |
 | status・prefix | `status off`・`prefix None` とし、status barを非表示、prefixキーを無効にする |
 | タイトル | `set-titles on`・`set-titles-string "#{pane_title}"` とし、paneタイトルを接続先端末へ転送する |
@@ -767,6 +767,8 @@ Windows では、tmuxの代わりに PATH上の `tmux` コマンドとして psm
 | 項目 | 振る舞い |
 | --- | --- |
 | shell実行 | tmux設定のhookとpaneコマンドなど、shell として解釈するコマンド文字列は Windows PowerShell の構文で実行する。pwsh または powershell が PATH上に必要である |
+| マウス | psmux 専用設定で `mouse-selection off` とし、psmux 側のドラッグ選択ではなく pi のスクロールバーを操作できるようにする。ホイールの設定は変更しない |
+| IME | Windows で `pi-mux` が起動する pi プロセスにのみ `PI_HARDWARE_CURSOR=1` を渡し、IME が参照する端末カーソルを表示する |
 | 排他 | 操作の排他に使う接続先を名前付きパイプに切り替える。排他の待機・競合時の扱いは共通とする |
 | サーバーとpaneの同一性 | サーバーの識別は `#{pid}` のPIDとserver世代で、piの識別は起動トークンで行い、POSIXと同じ手順で通知元を検証する |
 | `reload`・通常の `restart` | psmux 3.4.0 で、1会話を1セッション・1 pane・1 pi で管理する起動経路を対象にする。pi-mux 経由の起動・停止・置き換えを同じ排他で扱い、専用管理先と対象を照合して操作の直前に有効な `waiting-user` を再確認する。確認と操作は不可分ではないため、同じ pi の実行フェーズがその間に変わる競合を許容する。psmux の直接操作による同時の分割、pi 起動、同じ pane でのプロセス置き換えは、この排他と競合防御の対象外とする。 |

@@ -37,6 +37,7 @@ if (id) {
   writeFileSync(process.env.RECEIVED_PATH, JSON.stringify({
     argv, role: process.env.TICKET_DISPATCH_ROLE, project: process.env.TICKET_DISPATCH_PROJECT,
     stale: process.env.PI_TMUX_SESSION_ID, cwd: realpathSync(process.cwd()),
+    hardwareCursor: process.env.PI_HARDWARE_CURSOR,
   }));
 }
 await Bun.sleep(90_000);
@@ -61,7 +62,7 @@ test.skipIf(!tmux)(
     assert.ok(tmux);
     const root = mkdtempSync(join(tmpdir(), "pi-mux-native-launch-"));
     const profile = join(root, "home");
-    const conf = join(profile, ".config", "tmux", "pi.conf");
+    const conf = join(profile, ".config", "psmux", "pi.conf");
     const agent = join(profile, ".pi", "agent");
     const extension = join(agent, "extensions", "pi-mux-bridge");
     const data = join(root, "registry");
@@ -78,6 +79,7 @@ test.skipIf(!tmux)(
       PSMUX_NO_WARM: "1",
       PATH: `${root};${dirname(tmux)};${process.env.PATH}`,
       RECEIVED_PATH: received,
+      PI_HARDWARE_CURSOR: "0",
     };
     for (const key of Object.keys(env)) {
       if (
@@ -124,7 +126,10 @@ test.skipIf(!tmux)(
       ]) {
         mkdirSync(dir, { recursive: true });
       }
-      writeFileSync(conf, "set -g exit-empty off\nset -g remain-on-exit on\n");
+      writeFileSync(
+        conf,
+        "set -g exit-empty off\nset -g remain-on-exit on\nset -g @pi-mux-test-config windows\n",
+      );
       writeFileSync(join(extension, "index.ts"), "export default () => {};\n");
       const file = join(sessions, `${id}.jsonl`);
       writeFileSync(
@@ -149,6 +154,25 @@ test.skipIf(!tmux)(
       const start = ["start", "--status", "locked", "--project", "empty"];
       assert.equal((await run([ticketExe, "dispatch", ...start])).code, 1);
       await mux("restore");
+      const loadedConfig = await ok([
+        tmux,
+        "-S",
+        socket,
+        "display-message",
+        "-p",
+        "#{@pi-mux-test-config}",
+      ]);
+      assert.equal(loadedConfig, "windows");
+      const serverCursor = await run([
+        tmux,
+        "-S",
+        socket,
+        "show-environment",
+        "-g",
+        "PI_HARDWARE_CURSOR",
+      ]);
+      assert.equal(serverCursor.stdout, "");
+      assert.match(serverCursor.stderr, /unknown variable: PI_HARDWARE_CURSOR/i);
       assert.deepEqual(json(await mux("inspect", id)), { state: "absent", file });
       const args = ["open", "--detached", "--expect-file", file, id];
       const saved = await mux(...args);
@@ -175,6 +199,7 @@ test.skipIf(!tmux)(
         role: "pi",
         project: "dotfiles",
         cwd: root,
+        hardwareCursor: "1",
       });
       const sleep = Buffer.from("Start-Sleep -Seconds 90", "utf16le").toString("base64");
       const powerShell = join(

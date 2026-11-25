@@ -50,6 +50,7 @@ const record = {
   child, paneChild, cwd: process.cwd(), file: process.argv[3],
   replacement: process.env.RELOAD_NEW_ENV,
   stale: process.env.RELOAD_OLD_ENV,
+  hardwareCursor: process.env.PI_HARDWARE_CURSOR,
   oldProcesses: oldProcesses.map((process) => observeWindowsIdentity(process, inspectWindowsProcess)),
 };
 appendFileSync(log, JSON.stringify(record) + "\\n");
@@ -73,6 +74,7 @@ type RecordFromPi = {
   oldProcesses: string[];
   replacement?: string;
   stale?: string;
+  hardwareCursor?: string;
   cwd: string;
   file: string;
 };
@@ -91,7 +93,7 @@ it.skipIf(!tmux)(
     assert.ok(tmux);
     const root = mkdtempSync(join(tmpdir(), "pi-mux-reload-"));
     const profile = join(root, "home");
-    const conf = join(profile, ".config", "tmux", "pi.conf");
+    const conf = join(profile, ".config", "psmux", "pi.conf");
     const agent = join(profile, ".pi", "agent");
     const extension = join(agent, "extensions", "pi-mux-bridge");
     const registry = join(root, "registry");
@@ -110,6 +112,7 @@ it.skipIf(!tmux)(
       PSMUX_NO_WARM: "1",
       PATH: [root, dirname(tmux), process.env.PATH].join(";"),
       RELOAD_LOG_DIR: root,
+      PI_HARDWARE_CURSOR: "0",
     };
     for (const key of Object.keys(env))
       if (
@@ -191,6 +194,7 @@ it.skipIf(!tmux)(
 
       const original = log(target)[0]!;
       const other = log(sibling)[0]!;
+      assert.equal(original.hardwareCursor, "1");
       assert.equal(original.source.pane, other.source.pane);
       assert.notEqual(original.source.serverPid, other.source.serverPid);
       await publish(target, "running");
@@ -245,6 +249,7 @@ it.skipIf(!tmux)(
       assert.equal(replacement.file, original.file);
       assert.equal(replacement.cwd, original.cwd);
       assert.equal(replacement.stale, undefined);
+      assert.equal(replacement.hardwareCursor, "1");
       assert.equal(replacement.replacement, "'quoted' \\path; $literal");
       assert.deepEqual(log(sibling), [other]);
       assert.equal(observeWindowsIdentity(other.child, inspectWindowsProcess), "present");
