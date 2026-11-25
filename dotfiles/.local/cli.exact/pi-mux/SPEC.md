@@ -767,7 +767,7 @@ Windows では、tmuxの代わりに PATH上の `tmux` コマンドとして psm
 | 項目 | 振る舞い |
 | --- | --- |
 | shell実行 | tmux設定のhookとpaneコマンドなど、shell として解釈するコマンド文字列は Windows PowerShell の構文で実行する。pwsh または powershell が PATH上に必要である |
-| マウス | psmux 専用設定で `mouse-selection off` とし、psmux 側のドラッグ選択ではなく pi のスクロールバーを操作できるようにする。ホイールの設定は変更しない |
+| マウス | psmux 専用設定で `mouse-selection off` とし、psmux 側のドラッグ選択ではなく pi のスクロールバーを操作できるようにする。専用設定を読むセッションの作成時に、初期ペインへ `@mouse-force on` を適用する。psmux がマウス登録を検出しなくても、そのペインへホイール入力を転送する |
 | IME | Windows で `pi-mux` が起動する pi プロセスにのみ `PI_HARDWARE_CURSOR=1` を渡し、IME が参照する端末カーソルを表示する |
 | 排他 | 操作の排他に使う接続先を名前付きパイプに切り替える。排他の待機・競合時の扱いは共通とする |
 | サーバーとpaneの同一性 | サーバーの識別は `#{pid}` のPIDとserver世代で、piの識別は起動トークンで行い、POSIXと同じ手順で通知元を検証する |
