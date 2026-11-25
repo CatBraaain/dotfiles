@@ -3,11 +3,15 @@ import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import {
   type GuardrailConfig,
+  type GlobCache,
   type PathActionMatch,
   type ExpandedPathSection,
+  AuthorizationPath,
   actionPatterns,
   expandBraces,
   expandPathPatterns,
+  expandPathSection,
+  expandPathSnapshot,
   expandRuntimeVariables,
   globToRegExp,
   hasGlob,
@@ -17,6 +21,7 @@ import {
   resolvePathActionMatch,
   resolvePattern,
 } from "./config.ts";
+import { WindowsPathLookup } from "./windows-path-identity.ts";
 
 export type DynamicPaths = Map<string, Set<"read" | "write">>;
 
@@ -27,32 +32,13 @@ export type SandboxMode = "fs" | "bash";
  * re-expansions reuse the first result and never pick up paths created during
  * the session.
  */
-export function warmGlobCache(config: GuardrailConfig, cwd: string): Map<string, string[]> {
-  const globCache = new Map<string, string[]>();
-  const gitMainWorktreePath = resolveGitMainWorktreePath(cwd);
-  expandPathSectionInto(config.read, cwd, true, gitMainWorktreePath, globCache);
-  expandPathSectionInto(config.write, cwd, false, gitMainWorktreePath, globCache);
-  expandPathPatterns(config.credentials, cwd, gitMainWorktreePath, false, globCache);
+export function warmGlobCache(config: GuardrailConfig, cwd: string): GlobCache {
+  const globCache: GlobCache = new Map();
+  const gitMainWorktreePath = resolveGitMainWorktreePath(cwd) ?? resolve(cwd);
+  expandPathSection(config.read, cwd, true, gitMainWorktreePath, globCache);
+  expandPathSection(config.write, cwd, false, gitMainWorktreePath, globCache);
+  expandPathSnapshot(config.credentials, cwd, gitMainWorktreePath, false, globCache);
   return globCache;
-}
-
-function expandPathSectionInto(
-  entries: GuardrailConfig["read"],
-  cwd: string,
-  allowAllPaths: boolean,
-  gitMainWorktreePath: string | undefined,
-  globCache: Map<string, string[]>,
-): ExpandedPathSection {
-  return (entries ?? []).map((entry) => ({
-    action: entry.action,
-    paths: expandPathPatterns(
-      entry.patterns,
-      cwd,
-      gitMainWorktreePath,
-      allowAllPaths && entry.action === "allow",
-      globCache,
-    ),
-  }));
 }
 
 // Path sections are recomputed on every access instead of cached, so
@@ -61,23 +47,19 @@ function expandPathSectionInto(
 export function readPaths(
   config: GuardrailConfig,
   cwd: string,
-  globCache: Map<string, string[]>,
+  globCache: GlobCache,
 ): ExpandedPathSection {
-  return expandPathSectionInto(config.read, cwd, true, resolveGitMainWorktreePath(cwd), globCache);
+  const worktree = resolveGitMainWorktreePath(cwd) ?? resolve(cwd);
+  return expandPathSection(config.read, cwd, true, worktree, globCache);
 }
 
 export function writePaths(
   config: GuardrailConfig,
   cwd: string,
-  globCache: Map<string, string[]>,
+  globCache: GlobCache,
 ): ExpandedPathSection {
-  return expandPathSectionInto(
-    config.write,
-    cwd,
-    false,
-    resolveGitMainWorktreePath(cwd),
-    globCache,
-  ).map((entry) =>
+  const worktree = resolveGitMainWorktreePath(cwd) ?? resolve(cwd);
+  return expandPathSection(config.write, cwd, false, worktree, globCache).map((entry) =>
     entry.action === "allow" ? { ...entry, paths: [...new Set(entry.paths)] } : entry,
   );
 }
@@ -85,9 +67,13 @@ export function writePaths(
 export function credentialPaths(
   config: GuardrailConfig,
   cwd: string,
-  globCache: Map<string, string[]>,
+  globCache: GlobCache,
 ): string[] {
-  return expandPathPatterns(
+  return credentialSnapshot(config, cwd, globCache).paths;
+}
+
+export function credentialSnapshot(config: GuardrailConfig, cwd: string, globCache: GlobCache) {
+  return expandPathSnapshot(
     config.credentials,
     cwd,
     resolveGitMainWorktreePath(cwd),
@@ -107,29 +93,45 @@ export function credentialPaths(
 export function readActionMatch(
   config: GuardrailConfig,
   cwd: string,
-  globCache: Map<string, string[]>,
+  globCache: GlobCache,
   candidatePath: string,
+  comparison = new AuthorizationPath(resolve(candidatePath)),
 ): PathActionMatch {
-  const section = readPaths(config, cwd, globCache);
-  const denyGlobRegexes = readDenyGlobRegexes(config, cwd);
+  const mainWorktree = resolveGitMainWorktreePath(cwd) ?? resolve(cwd);
+  const section = expandPathSection(config.read, cwd, true, mainWorktree, globCache);
+  const name = repositoryName(cwd, mainWorktree);
+  const legacyDenyGlobs = comparison.windows
+    ? []
+    : resolvedGlobs(actionPatterns(config.read, "deny"), cwd, mainWorktree).map((pattern) =>
+        globToRegExp(pattern, name),
+      );
   let resolved: PathActionMatch = { action: "deny" };
-  for (const entry of section) {
-    const matchedPath = entry.paths.find((path) => pathCovers(path, candidatePath));
-    const deniedDynamically =
-      entry.action === "deny" && denyGlobRegexes.some((regex) => regex.test(candidatePath));
-    if (matchedPath !== undefined || deniedDynamically)
-      resolved = { action: entry.action, matched: matchedPath ?? candidatePath };
+  for (const [index, entry] of section.entries()) {
+    const match = comparison.matchRule(entry);
+    if (match) {
+      resolved = match;
+    } else if (entry.action === "deny") {
+      const denyMatch = comparison.windows
+        ? resolvedGlobs(config.read![index]!.patterns, cwd, mainWorktree).some(
+            (pattern) => comparison.denyGlobCoverage(pattern, name) !== "none",
+          )
+        : legacyDenyGlobs.some((regex) => regex.test(candidatePath));
+      if (denyMatch) resolved = { action: "deny", matched: candidatePath };
+    }
   }
   return resolved;
 }
 
-function readDenyGlobRegexes(config: GuardrailConfig, cwd: string): RegExp[] {
-  return actionPatterns(config.read, "deny")
-    .flatMap((pattern) => expandRuntimeVariables(pattern, resolveGitMainWorktreePath(cwd), cwd))
+function resolvedGlobs(
+  patterns: string[],
+  cwd: string,
+  mainWorktree: string | undefined,
+): string[] {
+  return patterns
+    .flatMap((pattern) => expandRuntimeVariables(pattern, mainWorktree, cwd))
     .flatMap(expandBraces)
     .map((expanded) => resolvePattern(expanded, cwd))
-    .filter(hasGlob)
-    .map((pattern) => globToRegExp(pattern, repositoryName(cwd, resolveGitMainWorktreePath(cwd))));
+    .filter(hasGlob);
 }
 
 /**
@@ -141,7 +143,7 @@ function readDenyGlobRegexes(config: GuardrailConfig, cwd: string): RegExp[] {
 export function writePathsByFinalAction(
   config: GuardrailConfig,
   cwd: string,
-  globCache: Map<string, string[]>,
+  globCache: GlobCache,
 ): {
   allow: string[];
   ask: string[];
@@ -156,11 +158,13 @@ export function writePathsByFinalAction(
   };
   const restricted = new Set<string>();
   const seen = new Set<string>();
+  const lookup = process.platform === "win32" ? new WindowsPathLookup() : undefined;
   for (const entry of section)
     for (const path of entry.paths) {
       if (seen.has(path)) continue;
       seen.add(path);
-      const action = resolvePathActionMatch(section, path).action;
+      const comparison = new AuthorizationPath(path, lookup);
+      const action = resolvePathActionMatch(section, path, comparison).action;
       pathsByAction[action].add(path);
       if (action !== "allow") restricted.add(path);
     }
@@ -179,7 +183,7 @@ export function readAllPaths(config: GuardrailConfig): boolean {
 export function hiddenFsPaths(
   config: GuardrailConfig,
   cwd: string,
-  globCache: Map<string, string[]>,
+  globCache: GlobCache,
 ): string[] {
   const gitMainWorktreePath = resolveGitMainWorktreePath(cwd);
   return [
@@ -197,9 +201,21 @@ export function hiddenFsPaths(
 export function prepareWriteDirectories(
   config: GuardrailConfig,
   cwd: string,
-  globCache: Map<string, string[]>,
+  globCache: GlobCache,
 ): void {
+  const uncertainCredentials =
+    process.platform === "win32"
+      ? credentialSnapshot(config, cwd, globCache).uncertainSubtrees
+      : undefined;
   for (const path of writePathsByFinalAction(config, cwd, globCache).allow) {
+    if (
+      uncertainCredentials &&
+      new AuthorizationPath(path).matchesRestriction({
+        paths: [],
+        uncertainSubtrees: uncertainCredentials,
+      })
+    )
+      continue;
     if (existsSync(path)) continue;
     try {
       mkdirSync(path, { recursive: true });
@@ -232,7 +248,7 @@ function addConfiguredMounts(
   input: {
     cwd: string;
     config: GuardrailConfig;
-    globCache: Map<string, string[]>;
+    globCache: GlobCache;
     dynamicPaths: DynamicPaths;
     mode: SandboxMode;
     readOnly?: boolean;
@@ -307,7 +323,7 @@ function addHiddenPaths(
   input: {
     cwd: string;
     config: GuardrailConfig;
-    globCache: Map<string, string[]>;
+    globCache: GlobCache;
     mode: SandboxMode;
   },
 ): void {
@@ -324,7 +340,7 @@ function addHiddenPaths(
 export function buildSandboxArgs(input: {
   cwd: string;
   config: GuardrailConfig;
-  globCache: Map<string, string[]>;
+  globCache: GlobCache;
   dynamicPaths: DynamicPaths;
   mode: SandboxMode;
   commandCwd?: string;

@@ -11,6 +11,7 @@ import {
 import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { quote } from "shell-quote";
 import {
+  AuthorizationPath,
   commandOnceApprovalKey,
   commandPatternApprovalKey,
   compileCommandRuleEntries,
@@ -26,6 +27,7 @@ import {
   restoreRepositoryName,
   type CommandActionMatch,
   type CompiledCommandRuleEntry,
+  type GlobCache,
   type GuardrailConfig,
   type MatchSpan,
   parseGuardrailConfig,
@@ -38,7 +40,7 @@ import {
   type DynamicPaths,
   type SandboxMode,
   buildSandboxArgs,
-  credentialPaths,
+  credentialSnapshot,
   prepareWriteDirectories,
   readActionMatch,
   readAllPaths,
@@ -340,7 +342,7 @@ export class Guardrail {
   /** Configured command patterns that failed regex compilation, deduped in config order (SPEC §6). */
   readonly invalidCommandPatterns: string[];
   /** Glob expansions are computed once per resolved pattern (§3 startup semantics). */
-  private readonly globCache: Map<string, string[]>;
+  private readonly globCache: GlobCache;
 
   constructor(
     private readonly cwd: string,
@@ -362,9 +364,9 @@ export class Guardrail {
   /** Effective write paths, excluding paths covered by the credentials deny list. */
   getWritePathsByFinalAction(): { allow: string[]; ask: string[]; deny: string[] } {
     const { allow, ask, deny } = writePathsByFinalAction(this.config, this.cwd, this.globCache);
-    const credentials = credentialPaths(this.config, this.cwd, this.globCache);
+    const credentials = credentialSnapshot(this.config, this.cwd, this.globCache);
     const excludeCredentials = (paths: string[]) =>
-      paths.filter((path) => !pathsMatchCandidate(credentials, path));
+      paths.filter((path) => !new AuthorizationPath(path).matchesRestriction(credentials));
     return {
       allow: excludeCredentials(allow),
       ask: excludeCredentials(ask),
@@ -546,13 +548,26 @@ export class Guardrail {
   }
 
   private assertWriteNotDenied(path: string): void {
-    if (pathsMatchCandidate(credentialPaths(this.config, this.cwd, this.globCache), path))
+    this.pathAction("write", new AuthorizationPath(path));
+  }
+
+  private pathAction(operation: "read" | "write", comparison: AuthorizationPath) {
+    comparison.assertVerified();
+    const path = comparison.absolutePath;
+    if (comparison.matchesRestriction(credentialSnapshot(this.config, this.cwd, this.globCache)))
       throw new Error(`Access denied for credential path: ${path}`);
-    const { action, matched } = resolvePathActionMatch(
-      writePaths(this.config, this.cwd, this.globCache),
-      path,
-    );
-    if (action === "deny" && matched !== undefined) throw new Error(`Access denied: ${path}`);
+
+    const match =
+      operation === "read"
+        ? readActionMatch(this.config, this.cwd, this.globCache, path, comparison)
+        : resolvePathActionMatch(
+            writePaths(this.config, this.cwd, this.globCache),
+            path,
+            comparison,
+          );
+    if (match.action === "deny" && match.matched !== undefined)
+      throw new Error(`Access denied: ${path}`);
+    return match;
   }
 
   async authorizePath(
@@ -561,24 +576,18 @@ export class Guardrail {
     context: ToolContext,
   ): Promise<PathApproval | undefined> {
     const absolutePath = resolve(candidatePath);
-    if (pathsMatchCandidate(credentialPaths(this.config, this.cwd, this.globCache), absolutePath)) {
-      throw new Error(`Access denied for credential path: ${absolutePath}`);
-    }
-    const { action, matched } =
-      operation === "read"
-        ? readActionMatch(this.config, this.cwd, this.globCache, absolutePath)
-        : resolvePathActionMatch(writePaths(this.config, this.cwd, this.globCache), absolutePath);
-    if (action === "allow") return undefined;
-    if (action === "deny" && matched !== undefined)
-      throw new Error(`Access denied: ${absolutePath}`);
-    if (this.hasDynamicGrant(operation, absolutePath)) return undefined;
+    const comparison = new AuthorizationPath(absolutePath);
+    const initialMatch = this.pathAction(operation, comparison);
+    if (initialMatch.action === "allow" || this.hasDynamicGrant(operation, comparison))
+      return undefined;
     if (!context.hasUI || !context.ui)
       throw new Error(`Access requires confirmation: ${absolutePath}`);
     const ui = context.ui;
     return this.withUiLock(async () => {
-      // A sibling tool call may have obtained the grant while this call queued.
-      if (this.hasDynamicGrant(operation, absolutePath)) return undefined;
-      return this.requestAccess(operation, absolutePath, ui, matched);
+      const current = comparison.windows ? new AuthorizationPath(absolutePath) : comparison;
+      const match = comparison.windows ? this.pathAction(operation, current) : initialMatch;
+      if (match.action === "allow" || this.hasDynamicGrant(operation, current)) return undefined;
+      return this.requestAccess(operation, absolutePath, ui, match.matched);
     });
   }
 
@@ -596,14 +605,14 @@ export class Guardrail {
     }
   }
 
-  private hasDynamicGrant(operation: "read" | "write", candidatePath: string): boolean {
+  private hasDynamicGrant(operation: "read" | "write", comparison: AuthorizationPath): boolean {
     for (const [grantedPath, accessModes] of this.dynamicPaths)
-      if (accessModes.has(operation) && pathCovers(grantedPath, candidatePath)) return true;
+      if (accessModes.has(operation) && comparison.coverageOf(grantedPath) === "match") return true;
     if (operation !== "write") return false;
     for (const path of this.currentGrantPaths()) {
-      if (!pathCovers(path, candidatePath)) continue;
-      const canonical = canonicalWritePath(candidatePath);
-      if (canonical !== candidatePath) this.assertWriteNotDenied(canonical);
+      if (comparison.coverageOf(path) !== "match") continue;
+      const canonical = canonicalWritePath(comparison.absolutePath);
+      if (canonical !== comparison.absolutePath) this.assertWriteNotDenied(canonical);
       if (pathCovers(path, canonical)) return true;
     }
     return false;
@@ -620,32 +629,24 @@ export class Guardrail {
     context: ToolContext,
   ): Promise<WritePermissionRequest> {
     const absolutePath = resolve(directoryPath);
-    if (pathsMatchCandidate(credentialPaths(this.config, this.cwd, this.globCache), absolutePath)) {
-      throw new Error(`Access denied for credential path: ${absolutePath}`);
-    }
-    const { action, matched } = resolvePathActionMatch(
-      writePaths(this.config, this.cwd, this.globCache),
-      absolutePath,
-    );
-    if (action === "deny" && matched !== undefined)
-      throw new Error(`Access denied: ${absolutePath}`);
+    const comparison = new AuthorizationPath(absolutePath);
+    const initialMatch = this.pathAction("write", comparison);
     const grantedPath = this.directoryScopePath(absolutePath);
-    if (action === "allow" || this.hasDynamicGrant("write", grantedPath))
-      return {
-        status: "already granted",
-        grantedPath,
-      };
+    const scope = grantedPath === absolutePath ? comparison : new AuthorizationPath(grantedPath);
+    scope.assertVerified();
+    if (initialMatch.action === "allow" || this.hasDynamicGrant("write", scope))
+      return { status: "already granted", grantedPath };
     if (!context.hasUI || !context.ui)
       throw new Error(`Access requires confirmation: ${absolutePath}`);
     const ui = context.ui;
     return this.withUiLock(async () => {
-      // A sibling tool call may have obtained the grant while this call queued.
-      if (this.hasDynamicGrant("write", grantedPath))
-        return {
-          status: "already granted",
-          grantedPath,
-        };
-      return this.confirmWritePermission(grantedPath, reason, ui, matched);
+      const current = comparison.windows ? new AuthorizationPath(absolutePath) : comparison;
+      const match = comparison.windows ? this.pathAction("write", current) : initialMatch;
+      const currentScope = comparison.windows ? new AuthorizationPath(grantedPath) : scope;
+      currentScope.assertVerified();
+      if (match.action === "allow" || this.hasDynamicGrant("write", currentScope))
+        return { status: "already granted", grantedPath };
+      return this.confirmWritePermission(grantedPath, reason, ui, match.matched, absolutePath);
     });
   }
 
@@ -663,7 +664,8 @@ export class Guardrail {
     grantedPath: string,
     reason: string,
     ui: ToolUI,
-    matched?: string,
+    matched: string | undefined,
+    candidatePath: string,
   ): Promise<WritePermissionRequest> {
     const question = "Allow write access to directory subtree?";
     const details = `${grantedPath}\nreason: ${reason}\n${matchedPatternNote(matched)}`;
@@ -672,17 +674,18 @@ export class Guardrail {
         ALLOW_OPTION,
         DENY_OPTION,
       ]);
-      if (selectedOption === ALLOW_OPTION) return this.grantWriteDirectory(grantedPath);
+      if (selectedOption === ALLOW_OPTION)
+        return this.grantWriteDirectory(grantedPath, candidatePath);
     } else if (await ui.confirm(question, details)) {
-      return this.grantWriteDirectory(grantedPath);
+      return this.grantWriteDirectory(grantedPath, candidatePath);
     }
     const denialReason = (await ui.input?.("Denied. Optional reason for the agent:"))?.trim();
     return { status: "denied", grantedPath, ...(denialReason ? { reason: denialReason } : {}) };
   }
 
   /** Grant the directory-scope dynamic write and build the request result (§3). */
-  private grantWriteDirectory(grantedPath: string): WritePermissionRequest {
-    this.addDynamicGrant("write", grantedPath, "directory");
+  private grantWriteDirectory(grantedPath: string, candidatePath: string): WritePermissionRequest {
+    this.addDynamicGrant("write", grantedPath, "directory", candidatePath);
     return {
       status: "granted",
       grantedPath,
@@ -711,7 +714,7 @@ export class Guardrail {
           throw await this.deniedError(`Access denied by user: ${absolutePath}`, ui);
         const scope = selectedOption === directoryScopeOption ? "directory" : "file";
         const grantPath = scope === "directory" ? dirname(absolutePath) : absolutePath;
-        this.addDynamicGrant("write", grantPath, scope);
+        this.addDynamicGrant("write", grantPath, scope, absolutePath);
         return {
           operation: "write",
           scope,
@@ -742,7 +745,13 @@ export class Guardrail {
     operation: "read" | "write",
     grantPath: string,
     scope: "file" | "directory",
+    candidatePath = grantPath,
   ): void {
+    const comparison = new AuthorizationPath(candidatePath);
+    if (comparison.windows) {
+      this.pathAction(operation, comparison);
+      if (grantPath !== candidatePath) new AuthorizationPath(grantPath).assertVerified();
+    }
     if (operation === "write") this.ensureGrantPathExists(grantPath, scope);
     const accessModes = this.dynamicPaths.get(grantPath) ?? new Set<"read" | "write">();
     accessModes.add(operation);

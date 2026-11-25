@@ -1,13 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { parseCommandSegments, type CommandSegment, type TokenRange } from "./command-parser.ts";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import { readWslWindowsEnvironment } from "./windows-environment.ts";
+import { isDrivePath, WindowsPathLookup, type PathCoverage } from "./windows-path-identity.ts";
 
 export type PathAction = "allow" | "deny" | "ask";
 
@@ -493,29 +494,120 @@ export function actionPatterns(entries: PathRuleEntry[] | undefined, action: Pat
 // bun's globSync silently drops dotfiles, so expand by walking the static prefix
 // and testing each path with globToRegExp (same semantics as command matching).
 // Walks the whole prefix subtree; add per-segment matching if large trees get slow.
-function expandGlobPattern(absolutePattern: string, name: string): string[] {
+function expandGlobPattern(absolutePattern: string, name: string): PathSnapshot {
+  if (process.platform === "win32" && isDrivePath(absolutePattern))
+    return expandWindowsDriveGlob(absolutePattern, name);
+  const directory = legacyGlobPrefix(absolutePattern, name);
   const regexes = expandBraces(absolutePattern).map((pattern) => globToRegExp(pattern, name));
+  return scanGlob(directory, (path) => regexes.some((regex) => regex.test(path)));
+}
+
+type GlobEntry = { name: string; isDirectory(): boolean; isSymbolicLink(): boolean };
+
+export function expandWindowsDriveGlob(
+  pattern: string,
+  name: string,
+  lookup = new WindowsPathLookup(),
+  listDirectory?: (path: string) => GlobEntry[],
+): PathSnapshot {
+  const glob = windowsDriveGlob(pattern, name);
+  const prefix = lookup.inspect(glob.prefix);
+  const suffix = globToRegExp(glob.suffixPattern, name);
+  const maxDepth = maxGlobDepth(glob.suffixPattern, name);
+  const uncertainty = {
+    prefixDepth: drivePathDepth(prefix.spelling),
+    maxDepth,
+    asciiCaseMatcher:
+      !glob.suffixPattern.includes("[^") && isAscii(restoreRepositoryName(glob.suffixPattern, name))
+        ? new RegExp(suffix.source, "i")
+        : undefined,
+  };
+  if (prefix.state === "unverified")
+    return { paths: [], uncertainSubtrees: [{ ...uncertainty, directory: prefix.spelling }] };
+  if (prefix.state === "missing" || !prefix.directory) return { paths: [] };
+  return scanGlob(
+    prefix.spelling,
+    (path) => suffix.test(relativeToGlobPrefix(path.replaceAll("\\", "/"), prefix.spelling)),
+    { uncertainty, listDirectory },
+  );
+}
+
+function scanGlob(
+  root: string,
+  matchesPath: (path: string) => boolean,
+  windows?: {
+    uncertainty: Omit<UncertainGlobBranch, "directory">;
+    listDirectory?: (path: string) => GlobEntry[];
+  },
+): PathSnapshot {
+  const paths: string[] = [];
+  const uncertainSubtrees: UncertainGlobBranch[] = [];
+  walk(root, 0);
+  return uncertainSubtrees.length === 0 ? { paths } : { paths, uncertainSubtrees };
+
+  function walk(directory: string, depth: number): void {
+    if (windows && depth >= windows.uncertainty.maxDepth) return;
+    let entries: GlobEntry[];
+    try {
+      entries = windows?.listDirectory
+        ? windows.listDirectory(directory)
+        : readdirSync(directory, { withFileTypes: true });
+    } catch {
+      if (windows) uncertainSubtrees.push({ ...windows.uncertainty, directory });
+      return;
+    }
+    for (const entry of entries) {
+      if (windows && entry.isSymbolicLink()) continue;
+      const path = windows ? win32.join(directory, entry.name) : join(directory, entry.name);
+      if (matchesPath(path)) paths.push(path);
+      if (entry.isDirectory()) walk(path, depth + 1);
+    }
+  }
+}
+
+function legacyGlobPrefix(absolutePattern: string, name: string): string {
   let staticPrefix = "";
   for (const segment of absolutePattern.split("/")) {
     if (hasGlob(segment) || segment.includes("{")) break;
     staticPrefix = staticPrefix ? join(staticPrefix, segment) : segment || "/";
   }
-  const matches: string[] = [];
-  const walk = (directory: string) => {
-    let entries;
-    try {
-      entries = readdirSync(directory, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const path = join(directory, entry.name);
-      if (regexes.some((regex) => regex.test(path))) matches.push(path);
-      if (entry.isDirectory()) walk(path);
-    }
-  };
-  walk(restoreRepositoryName(staticPrefix, name));
-  return matches;
+  return restoreRepositoryName(staticPrefix, name);
+}
+
+function windowsDriveGlob(absolutePattern: string, name: string) {
+  const pattern = absolutePattern.replaceAll("\\", "/");
+  const segments = pattern.split("/");
+  const firstGlob = segments.findIndex(hasGlob);
+  const prefix = restoreRepositoryName(`${segments.slice(0, firstGlob).join("/")}/`, name);
+  const suffixPattern = segments.slice(firstGlob).join("/");
+  return { prefix, suffixPattern };
+}
+
+function maxGlobDepth(pattern: string, name: string): number {
+  let depth = 1;
+  for (let index = 0; index < pattern.length; index++) {
+    const character = pattern[index];
+    if (character === "*" && pattern[index + 1] === "*") return Infinity;
+    if (character === "/") depth++;
+    if (character !== "[") continue;
+    const end = pattern.indexOf("]", index + 1);
+    if (end === -1) continue;
+    if (globToRegExp(pattern.slice(index, end + 1), name).test("/")) depth++;
+    index = end;
+  }
+  return depth;
+}
+
+function drivePathDepth(path: string): number {
+  return path.split(/[/\\]/).filter(Boolean).length;
+}
+
+function isAscii(value: string): boolean {
+  return /^[ -~]*$/.test(value);
+}
+
+function relativeToGlobPrefix(path: string, prefix: string): string {
+  return path.slice(prefix.length + (prefix.endsWith("/") ? 0 : 1));
 }
 
 /**
@@ -526,15 +618,36 @@ function expandGlobPattern(absolutePattern: string, name: string): string[] {
  * first expansion per resolved pattern instead of picking up paths created
  * later in the session.
  */
+type UncertainGlobBranch = {
+  directory: string;
+  prefixDepth: number;
+  maxDepth: number;
+  asciiCaseMatcher?: RegExp;
+};
+
+export type PathSnapshot = { paths: string[]; uncertainSubtrees?: UncertainGlobBranch[] };
+export type GlobCache = Map<string, PathSnapshot>;
+
 export function expandPathPatterns(
   patterns: string[] | undefined,
   cwd: string,
   gitMainWorktreePath: string | undefined,
   allowAllPaths = false,
-  globCache?: Map<string, string[]>,
+  globCache?: GlobCache,
 ): string[] {
+  return expandPathSnapshot(patterns, cwd, gitMainWorktreePath, allowAllPaths, globCache).paths;
+}
+
+export function expandPathSnapshot(
+  patterns: string[] | undefined,
+  cwd: string,
+  gitMainWorktreePath: string | undefined,
+  allowAllPaths = false,
+  globCache?: GlobCache,
+): PathSnapshot {
   const name = repositoryName(cwd, gitMainWorktreePath);
-  return (patterns ?? []).flatMap((pattern) =>
+  const uncertainSubtrees: UncertainGlobBranch[] = [];
+  const paths = (patterns ?? []).flatMap((pattern) =>
     expandRuntimeVariables(pattern, gitMainWorktreePath, cwd).flatMap((variableExpanded) =>
       expandBraces(variableExpanded).flatMap((expandedPattern) => {
         if (allowAllPaths && expandedPattern === "*") return ["/"];
@@ -546,24 +659,26 @@ export function expandPathPatterns(
           expanded = expandGlobPattern(resolvedPattern, name);
           globCache?.set(cacheKey, expanded);
         }
-        return expanded;
+        if (expanded.uncertainSubtrees) uncertainSubtrees.push(...expanded.uncertainSubtrees);
+        return expanded.paths;
       }),
     ),
   );
+  return uncertainSubtrees.length === 0 ? { paths } : { paths, uncertainSubtrees };
 }
 
-export type ExpandedPathSection = { action: PathAction; paths: string[] }[];
+export type ExpandedPathSection = ({ action: PathAction } & PathSnapshot)[];
 
 export function expandPathSection(
   entries: PathRuleEntry[] | undefined,
   cwd: string,
   allowAllPaths = false,
   gitMainWorktreePath = resolveGitMainWorktreePath(cwd),
-  globCache?: Map<string, string[]>,
+  globCache?: GlobCache,
 ): ExpandedPathSection {
   return (entries ?? []).map((entry) => ({
     action: entry.action,
-    paths: expandPathPatterns(
+    ...expandPathSnapshot(
       entry.patterns,
       cwd,
       gitMainWorktreePath,
@@ -586,18 +701,104 @@ export function pathsMatchCandidate(paths: string[], candidatePath: string): boo
   return paths.some((path) => pathCovers(path, candidatePath));
 }
 
+export class AuthorizationPath {
+  readonly windows;
+
+  constructor(
+    readonly absolutePath: string,
+    lookup?: WindowsPathLookup,
+  ) {
+    if ((lookup || process.platform === "win32") && isDrivePath(absolutePath)) {
+      lookup ??= new WindowsPathLookup();
+      this.windows = { lookup, candidate: lookup.inspect(absolutePath) };
+    }
+  }
+
+  coverageOf(path: string): PathCoverage {
+    if (!this.windows) return pathCovers(path, this.absolutePath) ? "match" : "none";
+    const { lookup, candidate } = this.windows;
+    if (!isDrivePath(path)) {
+      if (!pathCovers(path, this.absolutePath)) return "none";
+      return candidate.state === "unverified" ? "possible" : "match";
+    }
+    if (!lookup.couldCover(path, candidate)) return "none";
+    const rule = lookup.inspect(path);
+    return lookup.coverage(rule, candidate);
+  }
+
+  matchesRestriction({ paths, uncertainSubtrees }: PathSnapshot): boolean {
+    return (
+      paths.some((path) => this.coverageOf(path) !== "none") ||
+      (uncertainSubtrees?.some((branch) => this.mayContainGlobMatch(branch)) ?? false)
+    );
+  }
+
+  matchRule({
+    action,
+    paths,
+    uncertainSubtrees,
+  }: ExpandedPathSection[number]): PathActionMatch | undefined {
+    let uncertainPath: string | undefined;
+    for (const path of paths) {
+      const coverage = this.coverageOf(path);
+      if (coverage === "match") return { action, matched: path };
+      if (coverage === "possible" && action !== "allow") uncertainPath ??= path;
+    }
+    if (action !== "allow")
+      uncertainPath ??= uncertainSubtrees?.find((branch) =>
+        this.mayContainGlobMatch(branch),
+      )?.directory;
+    return uncertainPath === undefined ? undefined : { action: "deny", matched: uncertainPath };
+  }
+
+  private mayContainGlobMatch(branch: UncertainGlobBranch): boolean {
+    if (!this.windows) return false;
+    const { candidate } = this.windows;
+    const parts = candidate.spelling.split("/").filter(Boolean);
+    const firstUnseenDepth = drivePathDepth(branch.directory) + 1;
+    const maxDepth = Math.min(parts.length, branch.prefixDepth + branch.maxDepth);
+    if (firstUnseenDepth > maxDepth || this.coverageOf(branch.directory) === "none") return false;
+
+    for (let depth = firstUnseenDepth; depth <= maxDepth; depth++) {
+      const relative = parts.slice(branch.prefixDepth, depth).join("/");
+      if (!branch.asciiCaseMatcher || !isAscii(relative) || branch.asciiCaseMatcher.test(relative))
+        return true;
+    }
+    return false;
+  }
+
+  denyGlobCoverage(pattern: string, name: string): PathCoverage {
+    if (!this.windows || !isDrivePath(pattern))
+      return globToRegExp(pattern, name).test(this.absolutePath) ? "match" : "none";
+
+    const glob = windowsDriveGlob(pattern, name);
+    const { lookup, candidate } = this.windows;
+    if (!lookup.couldCover(glob.prefix, candidate)) return "none";
+    const prefix = lookup.inspect(glob.prefix);
+    const coverage = lookup.coverage(prefix, candidate);
+    if (coverage === "none") return "none";
+    if (prefix.state === "existing" && !prefix.directory) return "none";
+    if (coverage === "possible" || candidate.state !== "existing") return "possible";
+    if (!prefix.spelling.endsWith("/") && prefix.spelling === candidate.spelling) return "none";
+    const suffix = globToRegExp(glob.suffixPattern, name);
+    return suffix.test(relativeToGlobPrefix(candidate.spelling, prefix.spelling))
+      ? "match"
+      : "none";
+  }
+
+  assertVerified(): void {
+    if (this.windows?.candidate.state === "unverified")
+      throw new Error(`Cannot verify Windows path: ${this.absolutePath}`);
+  }
+}
+
 export function resolvePathActionMatch(
   section: ExpandedPathSection | undefined,
   candidatePath: string,
+  comparison = new AuthorizationPath(resolve(candidatePath)),
 ): PathActionMatch {
-  if (!section) return { action: "deny" };
-  // Last match wins (SPEC §6). When nothing matched, `matched` stays undefined,
-  // which callers treat as unset (deny, but a permission request is possible).
   let resolved: PathActionMatch = { action: "deny" };
-  for (const entry of section) {
-    const path = entry.paths.find((candidate) => pathCovers(candidate, candidatePath));
-    if (path !== undefined) resolved = { action: entry.action, matched: path };
-  }
+  for (const entry of section ?? []) resolved = comparison.matchRule(entry) ?? resolved;
   return resolved;
 }
 
