@@ -233,7 +233,7 @@ function buildSessionLines(width: number, data: FooterRenderData, theme: FooterT
   const cwd = formatCwdForFooter(data.cwd, data.home);
   const branch = data.branch ? ` (${data.branch})` : "";
   const fields = formatAssignmentFields(data.assignments);
-  if (data.sessionName) fields.push(data.sessionName);
+  if (data.sessionName) fields.push(`title: ${data.sessionName}`);
 
   const lines: string[] = [];
   const fieldGap = " ".repeat(MIN_LINE_PADDING);

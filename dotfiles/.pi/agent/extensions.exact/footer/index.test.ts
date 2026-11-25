@@ -362,6 +362,7 @@ describe("footer", () => {
     assert.equal(lines.length, 2);
     assert.match(lines[0]!, /^\/workspace\/project \(main\)/);
     assert.match(lines[0]!, /session: 12345678-1234-1234-1234-abcdefabcdef$/);
+    assert.doesNotMatch(lines[0]!, /title:/);
     assert.match(lines[1]!, /↑57k ↓1.8k R94k W0 CH88\.7% \$0\.015 20\.6%\/272k/);
     assert.match(lines[1]!, /\(openai-codex\) gpt-5\.6-luna • high$/);
     assert.equal(visibleWidth(lines[0]!), 140);
@@ -385,7 +386,7 @@ describe("footer", () => {
 
   it("keeps all session fields in order on one line when they fit", () => {
     const left =
-      "/workspace/project (main)  worktree: zeta, alpha  ticket: project/ticket  Example title";
+      "/workspace/project (main)  worktree: zeta, alpha  ticket: project/ticket  title: Example title";
     const session = `session: ${SESSION_ID}`;
     const width = visibleWidth(left) + 2 + visibleWidth(session);
     const lines = buildFooterLines(
@@ -421,7 +422,7 @@ describe("footer", () => {
     );
 
     assert.equal(lines[0], "/workspace/project (main)  worktree: feature  ticket: project/ticket");
-    assert.match(lines[1]!, /^新規作業 {2,}session: 12345678-1234-1234-1234-abcdefabcdef$/);
+    assert.match(lines[1]!, /^title: 新規作業 {2,}session: 12345678-1234-1234-1234-abcdefabcdef$/);
     assert.equal(visibleWidth(lines[1]!), width);
     assert.match(lines[2]!, /^↑57k/);
     assert.equal(lines[3], "alpha status");
@@ -430,9 +431,9 @@ describe("footer", () => {
 
   it("keeps the full session ID on its own line when it does not fit with the preceding field", () => {
     const width = 45;
-    const lines = buildFooterLines(width, renderData({ sessionName: "Example title" }), plainTheme);
+    const lines = buildFooterLines(width, renderData({ sessionName: "Demo title" }), plainTheme);
 
-    assert.equal(lines[0], "/workspace/project (main)  Example title");
+    assert.equal(lines[0], "/workspace/project (main)  title: Demo title");
     assert.equal(lines[1], `session: ${SESSION_ID}`);
     assert.match(lines[2]!, /^↑57k/);
   });
