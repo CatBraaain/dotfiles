@@ -8,6 +8,14 @@ const project = join(import.meta.dir, "..");
 const preload = join(import.meta.dir, "fixtures/cli-environment.ts");
 const searchUsage = 'usage: browse search "<query>" [--lang <code>] [--json]\n';
 const fetchUsage = "usage: browse fetch <url> [--json]\n";
+const topLevelUsage = `${searchUsage}       browse fetch <url> [--json]
+       browse login twitter
+       browse server start
+       browse server stop
+       browse server restart
+       browse display show
+       browse display hide
+`;
 
 interface CliFixtureOutput {
   backend?: string;
@@ -46,13 +54,20 @@ function runCli(args: string[], extraEnv: Record<string, string> = {}) {
 }
 
 describe("CLI argument contract", () => {
-  for (const args of [[], ["unknown"]]) {
-    it(`rejects a missing or unknown command: ${JSON.stringify(args)}`, () => {
+  it("prints the top-level usage to stdout and exits 0 for --help alone", () => {
+    const result = runCli(["--help"]);
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, topLevelUsage);
+    assert.equal(result.stderr, "");
+    assert.deepEqual(result.events, []);
+  });
+
+  for (const args of [[], ["unknown"], ["--help", "extra"]]) {
+    it(`rejects invalid top-level arguments: ${JSON.stringify(args)}`, () => {
       const result = runCli(args);
       assert.equal(result.code, 1);
       assert.equal(result.stdout, "");
-      assert.match(result.stderr, /^usage: browse search/);
-      assert.ok(!result.stderr.includes("__locked") && !result.stderr.includes("__server"));
+      assert.equal(result.stderr, topLevelUsage);
       assert.deepEqual(result.events, []);
     });
   }

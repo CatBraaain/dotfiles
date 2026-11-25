@@ -51,7 +51,8 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | Camoufoxのrenderがabort・timeout・切断した | 実行 | serverの機能ヘルスチェックを行う。応答不能ならserverを再起動してから新しいsessionで同じbackendを再試行する。再起動はrestartロックで仲裁し、自分以外のrenderスロットの完了を待って再起動する。仲裁に負けた側は再起動を申請せず、再起動の完了を15秒まで待つ。1コマンド全体のserver復旧再試行は1回までとし、失敗後は次のbackendへ進む |
 | 直接接続による描画で対象 URL が `file:`、またはページが JavaScript ダイアログを開く | 実行 | 描画失敗とし、DOM を返さない |
 | `search` または camoufox経路の `fetch` が同時に起動された | 実行 | 空いているrenderスロットで並列実行する（上限4）。すべてのスロットが埋まっていたら先に開始した実行の完了を待つ。待機中に server停止・再起動が始まったら、未開始の render はその完了まで待つ（開始済みの render は継続する）。Reddit / StackOverflow / YouTube / Twitter / Hacker News / Wikipedia / arXiv の専用経路はスロットを取得せず待ち合わせない。`login` は camoufox を使うためスロットを取得する |
-| サブコマンドがない・未知のサブコマンドを渡した | 実行 | usage を stderr へ出力し、終了コード1 で終わる |
+| 引数が `--help` だけ | 実行 | 冒頭の usage を stdout へ出力し、stderr には出力せず、終了コード0 で終わる |
+| 上記のヘルプ指定以外で、引数がないか、未知のサブコマンドを渡した | 実行 | usage を stderr へ出力し、終了コード1 で終わる |
 | 未知のフラグを渡した | 実行 | 対象サブコマンドの usage行を stderr へ出力し、終了コード1 で終わる |
 | 必須引数が不足している（位置引数0個） | 実行 | 対象サブコマンドの usage行を stderr へ出力し、終了コード1 で終わる |
 | 位置引数が 2つ以上ある | 実行 | 対象サブコマンドの usage行を stderr へ出力し、終了コード1 で終わる |

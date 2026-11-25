@@ -164,6 +164,11 @@ function isAbsoluteUrl(raw: string): boolean {
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args.length === 1 && args[0] === "--help") {
+    console.log(USAGE);
+    return;
+  }
+
   const [subcommand, ...rest] = args[0] === LOCKED_SUBCOMMAND ? args.slice(1) : args;
   switch (subcommand) {
     case "search":
