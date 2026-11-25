@@ -217,13 +217,8 @@ export function buildFooterLines(
   data: FooterRenderData,
   theme: FooterTheme,
 ): string[] {
-  const cwd = formatCwdForFooter(data.cwd, data.home);
-  const branch = data.branch ? ` (${data.branch})` : "";
-  const sessionName = data.sessionName ? ` • ${data.sessionName}` : "";
-  const location = theme.fg("dim", `${cwd}${branch}${sessionName}`);
-  const session = theme.fg("dim", `session: ${data.sessionId}`);
-
-  const lines = [rightAlignedLine(location, session, width), buildStatsLine(width, data, theme)];
+  const lines = buildSessionLines(width, data, theme);
+  lines.push(buildStatsLine(width, data, theme));
   const statuses = [...data.extensionStatuses.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([, text]) => sanitizeStatusText(text))
@@ -231,11 +226,41 @@ export function buildFooterLines(
   if (data.extensionStatuses.size > 0) {
     lines.push(theme.fg("dim", truncateToWidth(statuses, width, "...")));
   }
-  if (data.assignments) {
-    const assignments = formatAssignments(data.assignments);
-    if (assignments) lines.push(theme.fg("dim", truncateToWidth(assignments, width, "...")));
-  }
   return lines;
+}
+
+function buildSessionLines(width: number, data: FooterRenderData, theme: FooterTheme): string[] {
+  const cwd = formatCwdForFooter(data.cwd, data.home);
+  const branch = data.branch ? ` (${data.branch})` : "";
+  const fields = formatAssignmentFields(data.assignments);
+  if (data.sessionName) fields.push(data.sessionName);
+
+  const lines: string[] = [];
+  const fieldGap = " ".repeat(MIN_LINE_PADDING);
+  let line = cwd + branch;
+  for (const field of fields) {
+    const combined = line + fieldGap + field;
+    if (visibleWidth(combined) <= width) {
+      line = combined;
+    } else {
+      lines.push(line);
+      line = field;
+    }
+  }
+
+  const session = `session: ${data.sessionId}`;
+  const sessionFits = visibleWidth(line) + MIN_LINE_PADDING + visibleWidth(session) <= width;
+  if (!sessionFits) lines.push(line);
+
+  const ellipsis = theme.fg("dim", "...");
+  const renderedLines = lines.map((line) =>
+    truncateToWidth(theme.fg("dim", line), width, ellipsis),
+  );
+  const lastLine = sessionFits ? rightAlignedLine(line, session, width) : session;
+  const fittedLastLine = truncateToWidth(theme.fg("dim", lastLine), width, ellipsis);
+  const padding = " ".repeat(width - visibleWidth(fittedLastLine));
+  renderedLines.push(padding + fittedLastLine);
+  return renderedLines;
 }
 
 function escapeAssignmentText(text: string): string {
@@ -244,14 +269,17 @@ function escapeAssignmentText(text: string): string {
   });
 }
 
-function formatAssignments({ worktrees, ticket }: Assignments): string {
+function formatAssignmentFields(assignments: Assignments | undefined): string[] {
+  if (!assignments) return [];
+
+  const { worktrees, ticket } = assignments;
   const groups: string[] = [];
   if (worktrees.length > 0) {
     const names = worktrees.map((path) => escapeAssignmentText(basename(path) || path));
     groups.push(`worktree: ${names.join(", ")}`);
   }
   if (ticket) groups.push(`ticket: ${escapeAssignmentText(`${ticket.project}/${ticket.id}`)}`);
-  return groups.join("  ");
+  return groups;
 }
 
 async function loadAssignments(
@@ -365,9 +393,9 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): () => void {
       const next = await loadAssignments(pi, sessionId, ctx.cwd, controller.signal);
       if (!next || controller.signal.aborted || ctx.sessionManager.getSessionId() !== sessionId)
         return;
-      const previousLine = assignments ? formatAssignments(assignments) : "";
+      const previousFields = formatAssignmentFields(assignments).join("\n");
       assignments = next;
-      if (formatAssignments(next) !== previousLine) requestRender?.();
+      if (formatAssignmentFields(next).join("\n") !== previousFields) requestRender?.();
     } finally {
       queryInFlight = false;
     }

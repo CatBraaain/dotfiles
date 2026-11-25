@@ -235,7 +235,7 @@ describe("extension lifecycle", () => {
     assert.equal(harness.schedulePoll.mock.calls[0]?.[1], 5000);
     query.complete({ ...assignmentResponse("saved"), unread: false, lastViewedAt: null });
     await setImmediate();
-    assert.equal(harness.render()?.[2], "worktree: saved");
+    assert.match(harness.render()?.[0] ?? "", /  worktree: saved  /);
     assert.equal(harness.renderRequests(), 1);
     assert.equal(harness.queries.length, 1);
   });
@@ -261,14 +261,14 @@ describe("extension lifecycle", () => {
     harness.emit("session_start");
     harness.queries[0]!.complete(assignmentResponse("saved"));
     await setImmediate();
-    assert.equal(harness.render()?.[2], "worktree: saved");
+    assert.match(harness.render()?.[0] ?? "", /  worktree: saved  /);
     assert.equal(harness.queries.length, 1);
 
     const latest = { worktrees: [], ticket: { project: "project", id: "ticket" } };
     harness.poll();
     harness.queries[1]!.complete(latest);
     await setImmediate();
-    assert.equal(harness.render()?.[2], "ticket: project/ticket");
+    assert.match(harness.render()?.[0] ?? "", /  ticket: project\/ticket  /);
 
     harness.poll();
     harness.queries[2]!.complete(latest);
@@ -278,7 +278,7 @@ describe("extension lifecycle", () => {
     harness.poll();
     harness.queries[3]!.complete(EMPTY_ASSIGNMENTS);
     await setImmediate();
-    assert.equal(harness.render()?.length, 2);
+    assert.doesNotMatch(harness.render()?.[0] ?? "", /(?:worktree|ticket):/);
     assert.equal(harness.renderRequests(), 3);
   });
 
@@ -291,13 +291,13 @@ describe("extension lifecycle", () => {
 
     harness.queries[0]!.complete(assignmentResponse("first"));
     await setImmediate();
-    assert.equal(harness.render()?.[2], "worktree: first");
+    assert.match(harness.render()?.[0] ?? "", /  worktree: first  /);
     assert.equal(harness.queries.length, 1);
 
     harness.poll();
     harness.queries[1]!.complete(assignmentResponse("latest"));
     await setImmediate();
-    assert.equal(harness.render()?.[2], "worktree: latest");
+    assert.match(harness.render()?.[0] ?? "", /  worktree: latest  /);
   });
 
   it("cancels a pending query on switch and never shows the old session's assignments in the next footer", async () => {
@@ -305,7 +305,7 @@ describe("extension lifecycle", () => {
     harness.emit("session_start");
     harness.queries[0]!.complete(assignmentResponse("old"));
     await setImmediate();
-    assert.equal(harness.render()?.[2], "worktree: old");
+    assert.match(harness.render()?.[0] ?? "", /  worktree: old  /);
     harness.poll();
     const pending = harness.queries[1]!;
     harness.setSessionId("new-session");
@@ -313,12 +313,12 @@ describe("extension lifecycle", () => {
     assert.equal(pending.signal?.aborted, true);
     assert.equal(harness.timerCount(), 1);
     assert.deepEqual(harness.queries[2]!.args, ["metadata", "new-session"]);
-    assert.equal(harness.render()?.length, 2);
+    assert.doesNotMatch(harness.render()?.[0] ?? "", /worktree:/);
 
     pending.complete(assignmentResponse("too-late"));
     await setImmediate();
     assert.equal(harness.renderRequests(), 1);
-    assert.equal(harness.render()?.length, 2);
+    assert.doesNotMatch(harness.render()?.[0] ?? "", /worktree:/);
 
     harness.emit("session_shutdown");
     assert.equal(harness.timerCount(), 0);
@@ -349,7 +349,7 @@ describe("extension lifecycle", () => {
       harness.poll();
       fail(harness.queries.at(-1)!);
       await setImmediate();
-      assert.equal(harness.render()?.[2], "worktree: retained");
+      assert.match(harness.render()?.[0] ?? "", /  worktree: retained  /);
     }
     assert.equal(harness.renderRequests(), 1);
   });
@@ -383,26 +383,63 @@ describe("footer", () => {
     assert.equal(lines[2], "alpha zeta");
   });
 
-  it("appends one dim assignment line after statuses and preserves worktree order", () => {
+  it("keeps all session fields in order on one line when they fit", () => {
+    const left =
+      "/workspace/project (main)  worktree: zeta, alpha  ticket: project/ticket  Example title";
+    const session = `session: ${SESSION_ID}`;
+    const width = visibleWidth(left) + 2 + visibleWidth(session);
     const lines = buildFooterLines(
-      120,
+      width,
       renderData({
-        extensionStatuses: new Map([["alpha", "alpha status"]]),
+        sessionName: "Example title",
         assignments: {
           worktrees: ["/worktrees/zeta", "/worktrees/alpha"],
           ticket: { project: "project", id: "ticket" },
         },
       }),
-      taggingTheme,
+      plainTheme,
     );
-    assert.equal(lines[2], "\x1b[2malpha status\x1b[0m");
-    assert.equal(lines[3], "\x1b[2mworktree: zeta, alpha  ticket: project/ticket\x1b[0m");
+
+    assert.equal(lines.length, 2);
+    assert.equal(lines[0], `${left}  ${session}`);
+    assert.match(lines[1]!, /^↑57k/);
+  });
+
+  it("wraps the first field that does not fit in visible columns and keeps later fields in order", () => {
+    const width = 75;
+    const lines = buildFooterLines(
+      width,
+      renderData({
+        sessionName: "新規作業",
+        extensionStatuses: new Map([["alpha", "alpha status"]]),
+        assignments: {
+          worktrees: ["/worktrees/feature"],
+          ticket: { project: "project", id: "ticket" },
+        },
+      }),
+      plainTheme,
+    );
+
+    assert.equal(lines[0], "/workspace/project (main)  worktree: feature  ticket: project/ticket");
+    assert.match(lines[1]!, /^新規作業 {2,}session: 12345678-1234-1234-1234-abcdefabcdef$/);
+    assert.equal(visibleWidth(lines[1]!), width);
+    assert.match(lines[2]!, /^↑57k/);
+    assert.equal(lines[3], "alpha status");
     assert.equal(lines.length, 4);
+  });
+
+  it("keeps the full session ID on its own line when it does not fit with the preceding field", () => {
+    const width = 45;
+    const lines = buildFooterLines(width, renderData({ sessionName: "Example title" }), plainTheme);
+
+    assert.equal(lines[0], "/workspace/project (main)  Example title");
+    assert.equal(lines[1], `session: ${SESSION_ID}`);
+    assert.match(lines[2]!, /^↑57k/);
   });
 
   it("escapes assignment characters that could affect the terminal or break a line", () => {
     const lines = buildFooterLines(
-      120,
+      140,
       renderData({
         assignments: {
           worktrees: ["/worktrees/a\u001b[2J\nb"],
@@ -411,18 +448,18 @@ describe("footer", () => {
       }),
       plainTheme,
     );
-    assert.equal(lines[2], "worktree: a\\u001b[2J\\u000ab  ticket: p\\u202e/t\\u2028");
+    assert.match(lines[0]!, /worktree: a\\u001b\[2J\\u000ab  ticket: p\\u202e\/t\\u2028/);
   });
 
-  it("truncates the assignment line to the terminal's visible width", () => {
+  it("truncates a field that is too wide for a line of its own", () => {
     const width = 18;
     const lines = buildFooterLines(
       width,
       renderData({ assignments: assignmentResponse("日本語の担当") }),
       plainTheme,
     );
-    assert.ok(visibleWidth(lines[2]!) <= width);
-    assert.match(stripVTControlCharacters(lines[2]!), /\.\.\.$/);
+    assert.equal(stripVTControlCharacters(lines[1]!), "worktree: 日本...");
+    assert.ok(lines.every((line) => visibleWidth(line) <= width));
   });
 
   it("context usage が不明な場合は ? と上限を表示する", () => {
@@ -457,16 +494,18 @@ describe("footer", () => {
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
   });
 
-  it("すべての行を dim だけで表示する", () => {
+  it("uses only dim on every line, including wrapped session fields", () => {
     const lines = buildFooterLines(
-      140,
+      65,
       renderData({ extensionStatuses: new Map([["alpha", "alpha status"]]) }),
       taggingTheme,
     );
 
-    assert.equal(lines.length, 3);
+    assert.equal(lines.length, 4);
+    const dimCode = "\x1B[2m";
     for (const line of lines) {
-      const withoutDim = line.replaceAll("\x1B[2m", "").replaceAll("\x1B[0m", "");
+      assert.ok(line.includes(dimCode), `dim color missing in: ${JSON.stringify(line)}`);
+      const withoutDim = line.replaceAll(dimCode, "").replaceAll("\x1B[0m", "");
       assert.ok(!withoutDim.includes("\x1B"), `non-dim color used in: ${JSON.stringify(line)}`);
     }
   });
