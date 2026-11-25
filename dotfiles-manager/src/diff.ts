@@ -8,6 +8,7 @@ import { expandHomeRoot, positionalArguments } from "./args.ts";
 import { compareCodeUnits, entryDiffers, lstatOrNull } from "./compare.ts";
 import { fileOperationConcurrency, IoLimiter } from "./concurrency.ts";
 import { renderDiffs } from "./diff-render.ts";
+import { createGeneratedLinkComparison } from "./lnk.ts";
 import { mapSegment, type EntryKind } from "./path-mapping.ts";
 import type { Stats } from "node:fs";
 
@@ -39,6 +40,7 @@ export async function collectDifferences(
   distRoot: string,
   homeRoot: string,
   platform: string = process.platform,
+  generatedLinks?: ReadonlySet<string>,
 ): Promise<DiffResult> {
   for (const [label, path] of [
     ["dist root", distRoot],
@@ -56,11 +58,23 @@ export async function collectDifferences(
     removedExact: [],
     removedIgnored: [],
   };
+  const generatedLinkDiffers =
+    platform === "win32" && process.platform === "win32" && generatedLinks?.size
+      ? createGeneratedLinkComparison()
+      : undefined;
   await walk(
     "",
     "",
     { isExactScope: false, scanForSurplus: false },
-    { distRoot, homeRoot, platform, result, limiter: new IoLimiter(fileOperationConcurrency) },
+    {
+      distRoot,
+      homeRoot,
+      platform,
+      result,
+      limiter: new IoLimiter(fileOperationConcurrency),
+      generatedLinks,
+      generatedLinkDiffers,
+    },
   );
   for (const entries of Object.values(result))
     entries.sort((a, b) => compareCodeUnits(a.homePath, b.homePath));
@@ -77,9 +91,17 @@ export function toDiffJson(result: DiffResult): DiffJson {
   };
 }
 
-export async function main(argv: readonly string[]): Promise<number> {
+export async function main(
+  argv: readonly string[],
+  generatedLinks?: ReadonlySet<string>,
+): Promise<number> {
   const options = parseArgs(argv);
-  const result = await collectDifferences(options.distRoot, options.homeRoot);
+  const result = await collectDifferences(
+    options.distRoot,
+    options.homeRoot,
+    undefined,
+    generatedLinks,
+  );
   if (options.managed) {
     // Managed entries: every dist-mapped home entry regardless of difference,
     // in tree order. Surplus removals (removedExact) are not listed.
@@ -136,6 +158,8 @@ type WalkContext = {
   platform: string;
   result: DiffResult;
   limiter: IoLimiter;
+  generatedLinks?: ReadonlySet<string>;
+  generatedLinkDiffers?: ReturnType<typeof createGeneratedLinkComparison>;
 };
 
 type WalkScope = { isExactScope: boolean; scanForSurplus: boolean };
@@ -194,7 +218,9 @@ async function walk(
         }
 
         const differs = await ctx.limiter.run(() =>
-          entryDiffers(distAbs, homeAbs, mapping, homeStat, ctx.platform),
+          ctx.generatedLinkDiffers && ctx.generatedLinks?.has(childDistRel)
+            ? ctx.generatedLinkDiffers(distAbs, homeAbs)
+            : entryDiffers(distAbs, homeAbs, mapping, homeStat, ctx.platform),
         );
         ctx.result[differs ? "changed" : "unchanged"].push({
           homePath: childHomeRel,

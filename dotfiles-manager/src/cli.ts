@@ -36,16 +36,19 @@ export async function main(
   // (spec: §Windows の WSL 接続); Linux/macOS resolve no connection.
   const connection = await resolveWsl(root);
   try {
-    await logBuild(root, homeRoot, connection, hookLog);
+    const generatedLinks = await logBuild(root, homeRoot, connection, hookLog);
 
     const code = await logStage(
       stage,
       () => {
         if (stage === "apply") {
           const applyArgs = shouldAsk ? [distRoot, homeRoot] : [distRoot, homeRoot, "--yes"];
-          return apply(applyArgs, confirmApply, hookLog);
+          return apply(applyArgs, confirmApply, hookLog, generatedLinks);
         }
-        return diff(stage === "managed" ? ["--managed", distRoot, homeRoot] : [distRoot, homeRoot]);
+        return diff(
+          stage === "managed" ? ["--managed", distRoot, homeRoot] : [distRoot, homeRoot],
+          generatedLinks,
+        );
       },
       elapsedWithoutConfirmation,
     );
@@ -86,11 +89,11 @@ async function logBuild(
   homeRoot: string,
   wsl: WslConnection | undefined,
   hookLog?: ApplyHookLog,
-): Promise<void> {
+): Promise<ReadonlySet<string>> {
   const started = performance.now();
   console.log(hookLog ? "Build\n  Steps" : "[build] Started");
   try {
-    await build(root, undefined, homeRoot, {
+    const generatedLinks = await build(root, undefined, homeRoot, {
       hookLog,
       onHookEvent: hookLog
         ? undefined
@@ -109,6 +112,7 @@ async function logBuild(
       connection: wsl,
     });
     report(true);
+    return generatedLinks;
   } catch (error) {
     report(false);
     throw error;

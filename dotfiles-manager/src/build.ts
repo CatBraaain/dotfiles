@@ -31,7 +31,7 @@ export async function main(
   platform: Platform = currentPlatform(),
   homeRoot = homedir(),
   options: BuildOptions = {},
-): Promise<void> {
+): Promise<ReadonlySet<string>> {
   assertPlatform(platform);
   const { onHookEvent, onPhase, connection } = options;
   const wsl = connection ?? (await resolveWsl(root));
@@ -59,6 +59,7 @@ export async function main(
   await runHooks(hooks, distDir, homeRoot, onHookEvent, options.hookLog);
   const generatedLinks = await convertLnkDeclarations(distDir, platform);
   if (platform === "windows") await adoptHomeLnkBytes(distDir, homeRoot, generatedLinks);
+  return generatedLinks;
 }
 
 async function removeDist(distDir: string, wsl: WslConnection | undefined): Promise<void> {

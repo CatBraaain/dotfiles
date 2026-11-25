@@ -366,14 +366,15 @@ export async function main(
   argv: readonly string[],
   confirmApply: () => Promise<boolean> = confirmApplyStdin,
   hookLog?: ApplyHookLog,
+  generatedLinks?: ReadonlySet<string>,
 ): Promise<number> {
   const options = parseArgs(argv);
-  if (options.dryRun) return diffMain(options.rest);
+  if (options.dryRun) return diffMain(options.rest, generatedLinks);
   const distRoot = resolve(options.distRoot);
   const { homeRoot } = options;
 
   const diffStarted = performance.now();
-  const result = await collectDifferences(distRoot, homeRoot);
+  const result = await collectDifferences(distRoot, homeRoot, undefined, generatedLinks);
   if (hookLog) {
     const expectedChanges = options.yes
       ? ""

@@ -7,10 +7,12 @@ import { join, relative } from "node:path";
 import { parse as parseIni } from "js-ini";
 import { parse as parseToml } from "smol-toml";
 import { parse as parseYaml } from "yaml";
+import { applyDifferences } from "./apply.ts";
 import { applyPathMap } from "./build-path-map.ts";
 import { applyReplacements, applyReplaceSidecars, parseReplaceSidecar } from "./build-replace.ts";
 import { collectHooks, runHooks } from "./build-hooks.ts";
 import { main } from "./build.ts";
+import { collectDifferences } from "./diff.ts";
 import { adoptHomeLnkBytes, convertLnkDeclarations } from "./lnk.ts";
 
 let root: string;
@@ -2885,67 +2887,104 @@ describe("lnk adoption", () => {
     assert.deepEqual(new Uint8Array(await readFile(join(distRoot, distPath))), distBytes);
   });
 
-  it.each([false, true])(
-    "adopts generated link bytes only when differences are limited to times (other change: %s)",
-    async (hasOtherChange) => {
-      const distBytes = lnkBytes("pwsh.exe", "-Command menu", 1000n);
-      const homeBytes = lnkBytes("pwsh.exe", "-Command menu", 2000n);
-      if (hasOtherChange) homeBytes[0x34] = 1;
-      await put(distRoot, "Edit.lnk", distBytes);
-      await put(homeRoot, "Edit.lnk", homeBytes);
+  it("leaves declaration-generated links as generated during build adoption", async () => {
+    const name = "Edit.lnk";
+    const generated = lnkBytes("pwsh.exe", "-Command menu", 1000n);
+    await put(distRoot, name, generated);
+    await put(homeRoot, name, lnkBytes("pwsh.exe", "-Command menu", 2000n));
 
-      await adoptHomeLnkBytes(distRoot, homeRoot, new Set(["Edit.lnk"]));
+    await adoptHomeLnkBytes(distRoot, homeRoot, new Set([name]));
 
-      assert.deepEqual(
-        new Uint8Array(await readFile(join(distRoot, "Edit.lnk"))),
-        hasOtherChange ? distBytes : homeBytes,
-      );
-    },
-  );
-
-  it.each([
-    { scenario: "root and file access timestamps", changeOffset: null, canAdopt: true },
-    { scenario: "target name", changeOffset: 0x96, canAdopt: false },
-    { scenario: "arguments", changeOffset: -6, canAdopt: false },
-    { scenario: "window style", changeOffset: 0x3c, canAdopt: false },
-    { scenario: "extension signature", changeOffset: 0xa2, canAdopt: false },
-  ])(
-    "compares generated link bytes with changes in $scenario",
-    async ({ changeOffset, canAdopt }) => {
-      const distBytes = lnkWithTargetItems();
-      const homeBytes = Buffer.from(distBytes);
-      homeBytes.writeBigUInt64LE(123n, 0x7e);
-      homeBytes.writeUInt32LE(456, 0xa8);
-      if (changeOffset !== null) {
-        const offset = changeOffset < 0 ? homeBytes.length + changeOffset : changeOffset;
-        homeBytes.writeUInt8(homeBytes.readUInt8(offset) ^ 1, offset);
-      }
-      await put(distRoot, "Edit.lnk", distBytes);
-      await put(homeRoot, "Edit.lnk", homeBytes);
-
-      await adoptHomeLnkBytes(distRoot, homeRoot, new Set(["Edit.lnk"]));
-
-      assert.deepEqual(
-        await readFile(join(distRoot, "Edit.lnk")),
-        canAdopt ? homeBytes : distBytes,
-      );
-    },
-  );
-
-  it("keeps file item differences when the primary name has no terminator", async () => {
-    const primaryNameTerminator = 0x9b;
-    const fileAccessTime = 0xa8;
-    const distBytes = lnkWithTargetItems();
-    distBytes.writeUInt8(0x61, primaryNameTerminator);
-    const homeBytes = Buffer.from(distBytes);
-    homeBytes.writeUInt32LE(456, fileAccessTime);
-    await put(distRoot, "Edit.lnk", distBytes);
-    await put(homeRoot, "Edit.lnk", homeBytes);
-
-    await adoptHomeLnkBytes(distRoot, homeRoot, new Set(["Edit.lnk"]));
-
-    assert.deepEqual(await readFile(join(distRoot, "Edit.lnk")), distBytes);
+    assert.deepEqual(new Uint8Array(await readFile(join(distRoot, name))), generated);
   });
+
+  it.skipIf(process.platform !== "win32" || process.env.DOTFILES_TEST_PWSH_ALIAS !== "1")(
+    "compares generated PowerShell alias settings without replacing matching files",
+    async () => {
+      const windowsApps = join(process.env.LOCALAPPDATA!, "Microsoft", "WindowsApps");
+      const packageAlias = join(windowsApps, "Microsoft.PowerShell_8wekyb3d8bbwe", "pwsh.exe");
+      const records = [
+        { name: "Match.lnk", declaration: {} },
+        { name: "Arguments.lnk", declaration: { arguments: "-NoLogo" } },
+        { name: "WindowStyle.lnk", declaration: { windowStyle: "normal" } },
+        {
+          name: "Target.lnk",
+          declaration: {
+            target: join(
+              process.env.SystemRoot!,
+              "System32",
+              "WindowsPowerShell",
+              "v1.0",
+              "powershell.exe",
+            ),
+          },
+        },
+        { name: "RunAs.lnk", declaration: {} },
+        { name: "UnknownBlock.lnk", declaration: {} },
+      ];
+      const defaults = { arguments: "-NoProfile", windowStyle: "minimized" };
+      const source = join(root, "dotfiles");
+      for (const { name, declaration } of records) {
+        await put(homeRoot, name, JSON.stringify({ target: packageAlias, ...defaults }));
+        await put(
+          source,
+          name,
+          JSON.stringify({ target: "powershell", ...defaults, ...declaration }),
+        );
+      }
+      await convertLnkDeclarations(homeRoot, "windows");
+      const runAsName = "RunAs.lnk";
+      const runAsBytes = await readFile(join(homeRoot, runAsName));
+      const linkFlags = 0x14;
+      const runAsUser = 0x2000;
+      runAsBytes.writeUInt32LE(runAsBytes.readUInt32LE(linkFlags) | runAsUser, linkFlags);
+      await put(homeRoot, runAsName, runAsBytes);
+
+      const unknownBlockName = "UnknownBlock.lnk";
+      const unknownBlockBytes = await readFile(join(homeRoot, unknownBlockName));
+      const terminal = unknownBlockBytes.subarray(-4);
+      assert.equal(terminal.readUInt32LE(), 0);
+      const unknownBlock = Buffer.from("08000000ffff00a0", "hex");
+      await put(
+        homeRoot,
+        unknownBlockName,
+        Buffer.concat([unknownBlockBytes.subarray(0, -4), unknownBlock, terminal]),
+      );
+
+      const oldPath = process.env.Path;
+      process.env.Path = `${windowsApps};${oldPath ?? ""}`;
+      try {
+        const generated = await main(root, "windows", homeRoot);
+        const distPath = join(distRoot, "Match.lnk");
+        const homePath = join(homeRoot, "Match.lnk");
+        const distBefore = await readFile(distPath);
+        const homeBefore = await readFile(homePath);
+        assert.notDeepEqual(distBefore, homeBefore);
+        const differences = await collectDifferences(distRoot, homeRoot, "win32", generated);
+        assert.deepEqual(
+          differences.unchanged.map(({ homePath }) => homePath),
+          ["Match.lnk"],
+        );
+        assert.deepEqual(
+          differences.changed.map(({ homePath }) => homePath),
+          ["Arguments.lnk", "RunAs.lnk", "Target.lnk", "UnknownBlock.lnk", "WindowStyle.lnk"],
+        );
+
+        const applied = await applyDifferences(distRoot, homeRoot, differences, "win32");
+
+        assert.deepEqual(
+          applied.changed,
+          differences.changed.map(({ homePath }) => homePath),
+        );
+        assert.deepEqual(await readFile(distPath), distBefore);
+        assert.deepEqual(await readFile(homePath), homeBefore);
+      } finally {
+        if (oldPath === undefined) delete process.env.Path;
+        else process.env.Path = oldPath;
+      }
+    },
+    30000,
+  );
 
   it("adopts matching home link bytes into dist during build", async () => {
     await put(join(root, "dotfiles"), "Main.ahk.lnk", lnkBytes("pwsh.exe", "-Command main", 1000n));
@@ -2994,38 +3033,6 @@ describe("lnk adoption", () => {
     assert.deepEqual(new Uint8Array(await readFile(join(distRoot, "tool.lnk"))), distBytes);
   });
 });
-
-function lnkWithTargetItems(): Buffer {
-  const headerLength = 0x4c;
-  const linkFlagsOffset = 0x14;
-  const hasTargetIdList = 1;
-  const shortcut = Buffer.from(lnkBytes("tool.exe", "-Command menu"));
-  const header = shortcut.subarray(0, headerLength);
-  header.writeUInt32LE(header.readUInt32LE(linkFlagsOffset) | hasTargetIdList, linkFlagsOffset);
-  const rootItem = Buffer.from(
-    "3a001f49471a0359723fa74489c55595fe6b30ee260001002600efbe11000000" +
-      "0000000000000000000000000000000000000000000000001400",
-    "hex",
-  );
-  const fileItem = Buffer.from(
-    "4800320000000000000000002004742e65786500340009000400efbe" +
-      "00000000000000002e00" +
-      "00".repeat(28) +
-      "740000001400",
-    "hex",
-  );
-  const listSize = Buffer.alloc(2);
-  const terminalId = Buffer.alloc(2);
-  listSize.writeUInt16LE(rootItem.length + fileItem.length + terminalId.length);
-  return Buffer.concat([
-    header,
-    listSize,
-    rootItem,
-    fileItem,
-    terminalId,
-    shortcut.subarray(headerLength),
-  ]);
-}
 
 function lnkBytes(relativePath: string, commandLineArguments: string, timeValue = 0n): Uint8Array {
   const header = new Uint8Array(0x4c);
