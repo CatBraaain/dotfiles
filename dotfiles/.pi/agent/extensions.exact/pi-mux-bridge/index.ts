@@ -17,6 +17,13 @@ import {
 
 const TMUX_TIMEOUT_MS = 1_000;
 const MESSAGE_POLL_INTERVAL_MS = 2_000;
+const TMUX_SUBCOMMAND_INDEX = 4;
+const PANE_UNAVAILABLE_REASON =
+  /can't find pane|no such pane|no server running|error connecting to|no sessions/;
+const PANE_UNAVAILABLE_STDOUT = new RegExp(
+  `^\\s*(?:(?:tmux|psmux):\\s*)?(?:${PANE_UNAVAILABLE_REASON.source})`,
+  "m",
+);
 
 export function rejectSessionChange(ctx: ExtensionContext): { cancel: true } | undefined {
   if (ctx.mode !== "tui") return;
@@ -28,7 +35,6 @@ let messageTimer: ReturnType<typeof setInterval> | undefined;
 let messageIdentity: ManagedPaneIdentity | undefined;
 const injectedMessageNames = new Set<string>();
 const consumedViewOptions = new Set<string>();
-let lastMessageFailure: string | undefined;
 
 export function stopMessageWatcher(): void {
   if (messageTimer !== undefined) {
@@ -38,7 +44,6 @@ export function stopMessageWatcher(): void {
   messageIdentity = undefined;
   injectedMessageNames.clear();
   consumedViewOptions.clear();
-  lastMessageFailure = undefined;
 }
 
 function startMessageWatcher(
@@ -48,6 +53,7 @@ function startMessageWatcher(
   stopMessageWatcher();
   if (ctx.mode !== "tui") return;
   if ((process.env.TMUX ?? "").split(",")[0] !== getTmuxPaths().socketPath) return;
+  const reportedFailures = new Set<string>();
   let polling = false;
   messageTimer = setInterval(async () => {
     if (polling) return;
@@ -55,24 +61,26 @@ function startMessageWatcher(
     try {
       await drainAgentMessages(pi, ctx);
     } catch (error) {
-      reportMessagePollFailure(error);
+      reportMessagePollFailure(error, reportedFailures);
     } finally {
       polling = false;
     }
   }, MESSAGE_POLL_INTERVAL_MS);
 }
 
-function reportMessagePollFailure(error: unknown): void {
-  const reason = error instanceof Error ? error.message : String(error);
-  if (
-    /can't find pane|no such pane|no server running|error connecting to|no sessions/.test(reason)
-  ) {
+function reportMessagePollFailure(error: unknown, reportedFailures: Set<string>): void {
+  const commandError = error instanceof MessagePollCommandError ? error : undefined;
+  const isPaneUnavailable = commandError
+    ? commandError.isPaneUnavailable
+    : PANE_UNAVAILABLE_REASON.test(error instanceof Error ? error.message : String(error));
+  if (isPaneUnavailable) {
     stopMessageWatcher();
     return;
   }
-  if (reason === lastMessageFailure) return;
-  lastMessageFailure = reason;
-  process.stderr.write(`pi-mux: message polling failed: ${reason}\n`);
+  const key = commandError?.key ?? "message handling";
+  if (reportedFailures.has(key)) return;
+  reportedFailures.add(key);
+  process.stderr.write(`pi-mux: message polling failed: ${commandError?.message ?? key}\n`);
 }
 
 export async function drainAgentMessages(
@@ -297,14 +305,61 @@ function backgroundExecutor(pi: Pick<ExtensionAPI, "exec">, ctx: ExtensionContex
   };
 }
 
+type MessageExecResult = Awaited<ReturnType<Execute>> & { truncated?: boolean };
+
+class MessagePollCommandError extends Error {
+  readonly key: string;
+  readonly isPaneUnavailable: boolean;
+
+  constructor(
+    operation: string,
+    elapsedMs: number,
+    result?: MessageExecResult,
+    rejection?: unknown,
+  ) {
+    const truncated = result?.truncated === true;
+    const timeout =
+      !result || (result.killed && truncated) ? "unknown" : result.killed ? "yes" : "no";
+    const execCode =
+      result?.killed && result.code === 0 && result.truncated === undefined
+        ? "unknown"
+        : (result?.code ?? "unknown");
+    const truncation = result ? (truncated ? "yes" : "no") : "unknown";
+    const status = `exec_code=${execCode} timeout=${timeout} truncated=${truncation}`;
+    super(`tmux ${operation} elapsed=${elapsedMs}ms ${status}`);
+    this.key = `${operation} ${status}`;
+    const reason =
+      result?.stderr || (rejection instanceof Error ? rejection.message : String(rejection));
+    this.isPaneUnavailable =
+      PANE_UNAVAILABLE_REASON.test(reason) ||
+      (result !== undefined && !result.stderr && PANE_UNAVAILABLE_STDOUT.test(result.stdout));
+  }
+}
+
 function messageExecutor(pi: Pick<ExtensionAPI, "exec">, ctx: ExtensionContext): Execute {
   return async function execute(command, args, options) {
-    const result = await pi.exec(command, args, {
-      cwd: ctx.cwd,
-      timeout: options?.timeout ?? TMUX_TIMEOUT_MS,
-    });
-    if (result.killed || ("truncated" in result && result.truncated === true) || result.code !== 0)
-      throw new Error(`tmux failed: ${result.stderr || result.stdout || result.code}`);
+    const operation = args[TMUX_SUBCOMMAND_INDEX] ?? "unknown";
+    const startedMs = performance.now();
+    let result: MessageExecResult;
+    try {
+      result = await pi.exec(command, args, {
+        cwd: ctx.cwd,
+        timeout: options?.timeout ?? TMUX_TIMEOUT_MS,
+      });
+    } catch (error) {
+      throw new MessagePollCommandError(
+        operation,
+        Math.round(performance.now() - startedMs),
+        undefined,
+        error,
+      );
+    }
+    if (result.killed || result.truncated === true || result.code !== 0)
+      throw new MessagePollCommandError(
+        operation,
+        Math.round(performance.now() - startedMs),
+        result,
+      );
     return result;
   };
 }

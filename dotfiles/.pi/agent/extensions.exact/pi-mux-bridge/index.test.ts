@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { describe, it } from "bun:test";
+import { describe, it, spyOn } from "bun:test";
 import {
   createEventBus,
   type ExtensionAPI,
@@ -88,6 +88,7 @@ async function withManagedEnvironment(test: () => Promise<void>): Promise<void> 
     PI_TMUX_STARTUP_COMMAND: "pi-mux-startup-fixture",
     PI_TMUX_STARTUP_MODE: "",
     PI_TMUX_LAUNCH_TOKEN: UNIT_TOKEN,
+    TICKET_DISPATCH_ROLE: "",
   };
   const previous = Object.fromEntries(Object.keys(updates).map((key) => [key, process.env[key]]));
   Object.assign(process.env, updates);
@@ -507,6 +508,118 @@ describe("agent message reception", () => {
     ].join("\n");
   }
 
+  for (const { name, result, diagnostic, hasInitialStderr } of [
+    {
+      name: "nonzero exit after listing options",
+      result: { code: 7, killed: false },
+      diagnostic: "exec_code=7 timeout=no truncated=no",
+    },
+    {
+      name: "nonzero exit with multiline stderr",
+      result: { code: 1, killed: false },
+      diagnostic: "exec_code=1 timeout=no truncated=no",
+      hasInitialStderr: true,
+    },
+    {
+      name: "timeout after listing options",
+      result: { code: 143, killed: true },
+      diagnostic: "exec_code=143 timeout=yes truncated=no",
+    },
+    {
+      name: "truncated pane options",
+      result: { code: 143, killed: true, truncated: true },
+      diagnostic: "exec_code=143 timeout=unknown truncated=yes",
+    },
+    {
+      name: "timeout without an exit code from the older SDK",
+      result: { code: 0, killed: true },
+      diagnostic: "exec_code=unknown timeout=yes truncated=no",
+    },
+    {
+      name: "rejected command without execution data",
+      result: undefined,
+      diagnostic: "exec_code=unknown timeout=unknown truncated=unknown",
+    },
+  ]) {
+    it(`reports one line for ${name} even when it happens twice`, async () => {
+      await withManagedEnvironment(async () => {
+        let nowMs = 0;
+        let listAttempts = 0;
+        const handlers = captureHandlers(async (_command, args) => {
+          if (args.includes("display-message"))
+            return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
+          assert.ok(args.includes("show-options"));
+          listAttempts++;
+          nowMs += listAttempts * 1_000;
+          const payload = `${paneListing([])}\n@mouse-force ${listAttempts}\n@pi-mux-msg-fixture secret`;
+          if (!result) throw new Error(payload);
+          return {
+            ...result,
+            stdout: `${payload}\n@label no such pane`,
+            stderr: hasInitialStderr || listAttempts > 1 ? payload : "",
+          };
+        });
+        const interval = spyOn(globalThis, "setInterval").mockReturnValue(
+          {} as ReturnType<typeof setInterval>,
+        );
+        const stderr = spyOn(process.stderr, "write").mockReturnValue(true);
+        const clock = spyOn(performance, "now").mockImplementation(() => nowMs);
+        try {
+          await handlers.get("session_start")!({}, context().ctx);
+          assert.equal(interval.mock.calls.length, 1);
+          const [poll] = interval.mock.calls[0]!;
+          await poll();
+          await poll();
+          assert.equal(listAttempts, 2);
+          assert.deepEqual(stderr.mock.calls, [
+            [`pi-mux: message polling failed: tmux show-options elapsed=1000ms ${diagnostic}\n`],
+          ]);
+        } finally {
+          stopMessageWatcher();
+          clock.mockRestore();
+          stderr.mockRestore();
+          interval.mockRestore();
+        }
+      });
+    });
+  }
+
+  for (const source of ["stderr", "stdout", "rejection"] as const) {
+    it(`stops polling without logging a missing pane reported in ${source}`, async () => {
+      await withManagedEnvironment(async () => {
+        const reason = "no such pane: %3";
+        const handlers = captureHandlers(async (_command, args) => {
+          if (args.includes("display-message"))
+            return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
+          assert.ok(args.includes("show-options"));
+          if (source === "rejection") throw new Error(reason);
+          return {
+            stdout: source === "stdout" ? reason : "",
+            stderr: source === "stderr" ? reason : "",
+            code: 1,
+            killed: false,
+          };
+        });
+        const timer = {} as ReturnType<typeof setInterval>;
+        const interval = spyOn(globalThis, "setInterval").mockReturnValue(timer);
+        const clear = spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+        const stderr = spyOn(process.stderr, "write").mockReturnValue(true);
+        try {
+          await handlers.get("session_start")!({}, context().ctx);
+          const [poll] = interval.mock.calls[0]!;
+          await poll();
+          assert.deepEqual(clear.mock.calls, [[timer]]);
+          assert.deepEqual(stderr.mock.calls, []);
+        } finally {
+          stopMessageWatcher();
+          stderr.mockRestore();
+          clear.mockRestore();
+          interval.mockRestore();
+        }
+      });
+    });
+  }
+
   it("injects valid messages in send order, unsets every option, and ignores foreign options", async () => {
     await withManagedEnvironment(async () => {
       stopMessageWatcher();
@@ -614,14 +727,12 @@ describe("agent message reception", () => {
           delivered.push(message);
         },
       };
-      await assert.rejects(
-        () => drainAgentMessages(pi as unknown as ExtensionAPI, context().ctx),
-        /pane option unset denied/,
-      );
-      await assert.rejects(
-        () => drainAgentMessages(pi as unknown as ExtensionAPI, context().ctx),
-        /pane option unset denied/,
-      );
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await assert.rejects(
+          () => drainAgentMessages(pi as unknown as ExtensionAPI, context().ctx),
+          /^Error: tmux if-shell elapsed=\d+ms exec_code=1 timeout=no truncated=no$/,
+        );
+      }
       assert.equal(delivered.length, 1);
       assert.equal(unsetAttempts, 2);
       stopMessageWatcher();
