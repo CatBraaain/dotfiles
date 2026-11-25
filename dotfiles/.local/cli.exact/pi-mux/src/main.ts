@@ -33,7 +33,7 @@ import { displayedSessions, SwitchResolutionError, switchSession } from "./tmux-
 import {
   claimWindowsLaunch,
   createWindowsDispatchWorker,
-  readWindowsDispatchInventory,
+  auditWindowsDispatchInventory,
 } from "./windows-launch";
 import { claimWindowsReload } from "./windows-reload";
 import { getWorktreeSnapshot } from "./worktree-snapshot";
@@ -113,7 +113,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         config,
         async () => {
           if (operation.kind === "inspect-dispatch-inventory") {
-            console.log(JSON.stringify({ sessions: await readWindowsDispatchInventory(config) }));
+            const { sessions } = await auditWindowsDispatchInventory(config);
+            console.log(JSON.stringify({ sessions }));
           } else await createWindowsDispatchWorker(config, operation);
         },
         "try",

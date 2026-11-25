@@ -314,7 +314,7 @@ async function selectWindowsLaunchPanes<
   return selected;
 }
 
-export async function readWindowsDispatchInventory(config: TmuxConfig) {
+export async function auditWindowsDispatchInventory(config: TmuxConfig) {
   const management = windowsManagement(config);
   const rights = management.createLaunchRights(windowsClaimLock(management));
   const unaccounted = new Set(await rights.fenceForDispatchInventory());
@@ -369,7 +369,7 @@ export async function readWindowsDispatchInventory(config: TmuxConfig) {
       throw new Error("Cannot locate a live Windows ticket launch in the pane inventory");
   }
   await management.assertLive(audit.basis);
-  return sessions;
+  return { sessions, basis: audit.basis, names: audit.panes.map(({ peer }) => peer.name) };
 }
 
 export async function inspectWindowsBeforeOpen(

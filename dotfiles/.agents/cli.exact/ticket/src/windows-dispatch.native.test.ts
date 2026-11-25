@@ -190,19 +190,17 @@ describe.skipIf(!psmux)("native Windows dispatcher with an isolated psmux namesp
       assert.equal(absent.code, 1, JSON.stringify(absent));
       assert.equal((await tmux("list-sessions")).code, 1);
       await keep("anchor");
-      for (const args of [[], ["--status", "open", "--status", "locked"]]) {
-        const unsupported = await ticket("start", "--project", project, ...args);
-        assert.equal(unsupported.code, 1, JSON.stringify(unsupported));
-        assert.match(unsupported.stderr, /requires --status locked/);
-      }
-      const one = await ticket("one", "--project", project, ticketId);
-      assert.equal(one.code, 1, JSON.stringify(one));
-      assert.match(one.stderr, /one is not supported/);
-      assert.equal(successful(await tmux("list-sessions", "-F", "#{session_name}")), "anchor");
       env.TICKET_TEST_MANAGEMENT_READY = "0";
-      const unready = await ticket(...start);
-      assert.equal(unready.code, 1, JSON.stringify(unready));
-      assert.match(unready.stderr, /initial restoration pending/);
+      for (const args of [
+        start,
+        ["start", "--project", project],
+        ["start", "--project", project, "--status", "open", "--status", "locked"],
+      ]) {
+        const unready = await ticket(...args);
+        assert.equal(unready.code, 1, JSON.stringify(unready));
+        assert.match(unready.stderr, /initial restoration pending/);
+      }
+      assert.equal(successful(await tmux("list-sessions", "-F", "#{session_name}")), "anchor");
       env.TICKET_TEST_MANAGEMENT_READY = "1";
       env.TICKET_TEST_INVALID_INVENTORY = "1";
       const incomplete = await ticket("start", "--status", "locked", "--all");

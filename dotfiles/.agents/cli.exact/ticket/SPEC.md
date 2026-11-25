@@ -97,7 +97,7 @@ dispatcher は ticket store から起動可能な ticket を探してプロン�
 
 start と stop では、`-a/--all` 指定時は全project を対象とするグローバルdispatcher、未指定時は1 project を対象とするproject単位dispatcher を操作する。操作範囲が同じなら、別のディレクトリ・worktree からも同じ dispatcher を操作する。
 
-Windows ネイティブでは、[pi-mux の専用管理先](../../../.local/cli.exact/pi-mux/SPEC.md#管理先と起動権) を使い、`--status locked` のみを選ぶ start と、その dispatcher の list・stop に対応する。WSL を必要としない。専用管理先が初期復元済みで稼働中でなければ、start は管理先を初期化せず、理由を stderr に表示して終了コード1を返す。`open` を含む start または `one` も、既存セッションを変更せず、理由を stderr に表示して終了コード1を返す。
+Windows ネイティブでは、[pi-mux の専用管理先](../../../.local/cli.exact/pi-mux/SPEC.md#管理先と起動権) を使い、WSL を必要としない。`start` と `one` にも以下の共通ルールを適用する。専用管理先が初期復元済みで稼働中でなければ、`start` と `one` は管理先を初期化せず、理由を stderr に表示して終了コード1を返す。
 
 #### 入力と配置
 
@@ -179,6 +179,8 @@ piセッション名の接頭辞は `handle_` で固定であり、オプショ�
 存在確認は `has-session -t =<セッション名>` の完全一致で行う。他project または dispatcher管理外の既存セッションと名前が衝突する場合は、そのセッションを変更せず、その ticket の起動失敗を記録する。衝突したセッションを稼働中として扱わず、今回の実行中はその ticket を再起動しない。
 
 `open` の自動起動で tmux のセッション作成に失敗した場合、または `locked` の起動で名前が衝突した場合は、`tmux new-session failed for <セッション名>: <エラー内容>` を dispatcher の stderr と stdout へ出す。`open` で名前の衝突以外の失敗が起きた場合は稼働として登録し、以降の tick の解放条件で判定する。
+
+Windows の `open` は、`one` と自動起動のどちらでも、専用管理先で対象チケットの新規 pi 起動を確認した場合だけ成功とする。初期プロンプトの処理完了は待たない。起動を確認できなければ、`one` は理由を stderr に出して終了コード1を返し、自動起動は `launched` ではなく失敗を記録する。
 
 #### tick と終了
 

@@ -817,14 +817,6 @@ async function main(): Promise<void> {
       console.log(entries.length === 0 ? "no dispatcher running" : formatDispatchers(entries));
       return;
     }
-    if (process.platform === "win32") {
-      if (parsed.action === "one") fail("Ticket dispatch one is not supported on Windows");
-      if (
-        parsed.action === "start" &&
-        (parsed.options?.statuses?.length !== 1 || parsed.options.statuses[0] !== "locked")
-      )
-        fail("Ticket dispatch start on Windows requires --status locked");
-    }
     const project = parsed.all
       ? null
       : isWorker

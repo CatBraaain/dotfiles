@@ -3617,6 +3617,22 @@ describe("inspect --dispatch-ticket", () => {
     }
   });
 
+  it("accepts the Windows open ticket launch shape without weakening owner or ticket validation", () => {
+    const [, , , ...sharedArgs] = dispatchArgs("/socket", "/workspace");
+    const args = ["inspect", "--dispatch-open-ticket", ...sharedArgs];
+    assert.deepEqual(parseOperation(args), {
+      kind: "inspect-dispatch-ticket",
+      socket: "/socket",
+      project,
+      ticketId,
+      sessionName: name,
+      cwd: "/workspace",
+      prompt: "Investigate this ticket",
+    });
+    assert.throws(() => parseOperation([...args, ownerId]), /Invalid argument count/);
+    assert.throws(() => parseOperation(args.with(4, "invalid")), /Invalid ticket ID/);
+  });
+
   it("holds the lifecycle lock through tmux start and registers the normalized history cwd", async () => {
     const fixture = new SessionFixture();
     const gate = join(fixture.directory, "continue-start");

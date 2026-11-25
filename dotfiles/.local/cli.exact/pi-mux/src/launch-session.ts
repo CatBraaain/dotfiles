@@ -41,6 +41,7 @@ import {
   windowsManagement,
 } from "./tmux";
 import {
+  auditWindowsDispatchInventory,
   inspectWindowsBeforeOpen,
   inspectWindowsRunningSession,
   startWindowsLaunch,
@@ -207,6 +208,9 @@ export async function launchDispatchedTicket(
 ): Promise<DispatchTicketLaunch> {
   if (!platform.windows && process.platform !== "linux")
     throw new Error("Ticket dispatch launch requires Linux or Windows");
+  const { ownerId } = operation;
+  if (ownerId === undefined && !platform.windows)
+    throw new Error("Open ticket dispatch launch requires Windows");
   if (operation.socket !== config.socket)
     throw new Error("Ticket dispatch socket does not match pi-mux");
   const cwd = realpathSync(operation.cwd);
@@ -215,30 +219,43 @@ export async function launchDispatchedTicket(
     return await withLock(
       config,
       async () => {
-        const keys = [
-          conversationLaunchKey(operation.ownerId),
-          ticketLaunchKey(operation.project, operation.ticketId),
-        ];
+        const ticketKey = ticketLaunchKey(operation.project, operation.ticketId);
+        const keys =
+          ownerId === undefined ? [ticketKey] : [conversationLaunchKey(ownerId), ticketKey];
         const management = windowsManagement(config);
         const rights = management.createLaunchRights(windowsClaimLock(management));
         await rights.discardUnclaimed(keys);
-        const { running, managed, starting, restoring, basis } = await inspectWindowsRunningSession(
-          config,
-          operation.ownerId,
-        );
-        if (running || managed || starting || restoring) return { state: "present" };
-        const audit = await management.audit(PANE_FORMAT);
-        if (audit.panes.some(({ peer }) => peer.name === operation.sessionName))
+
+        let basis: WindowsManagementBasis;
+        let names: string[];
+        if (ownerId === undefined) {
+          const inventory = await auditWindowsDispatchInventory(config);
+          if (
+            inventory.sessions.some(
+              ({ project, ticketId }) => ticketLaunchKey(project, ticketId) === ticketKey,
+            )
+          )
+            return { state: "present" };
+          ({ basis, names } = inventory);
+        } else {
+          const owner = await inspectWindowsRunningSession(config, ownerId);
+          if (owner.running || owner.managed || owner.starting || owner.restoring)
+            return { state: "present" };
+          basis = owner.basis!;
+          const audit = await management.audit(PANE_FORMAT);
+          names = audit.panes.map(({ peer }) => peer.name);
+        }
+        if (names.includes(operation.sessionName))
           throw new Error(`Ticket tmux session already exists: ${operation.sessionName}`);
         const piCommand = windowsNpmPiCommand();
         prepareDirectory(config.stateDirectory);
         registerWorkspaces(config, [cwd]);
         const session = await startWindowsLaunch(config, {
           keys,
-          basis: basis!,
+          basis,
           name: operation.sessionName,
           cwd,
-          ownerId: operation.ownerId,
+          ownerId,
           environment: { ...config.env, ...dispatchTicketEnvironment(config, operation) },
           command: [...piCommand, "--", operation.prompt],
         });
@@ -247,7 +264,7 @@ export async function launchDispatchedTicket(
       "try",
     );
   return await withSessionAudit<DispatchTicketLaunch>(config, async (lifetime) => {
-    const isPresent = await auditSessionPresence(config, operation.ownerId);
+    const isPresent = await auditSessionPresence(config, ownerId!);
     await verifyServerLifetime(config, lifetime, "ticket dispatch launch");
     if (isPresent) return { state: "present" };
 

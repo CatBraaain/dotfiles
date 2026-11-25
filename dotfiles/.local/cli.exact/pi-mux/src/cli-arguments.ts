@@ -51,7 +51,7 @@ export type Operation =
 
 export type DispatchTicketOperation = {
   kind: "inspect-dispatch-ticket";
-  ownerId: string;
+  ownerId?: string;
   socket: string;
   project: string;
   ticketId: string;
@@ -176,7 +176,8 @@ export function parseOperation(argv: string[]): Operation {
   if (argv[0] === "inspect") {
     const id = argv[1];
     if (argv.length === 2 && id && SESSION_ID_PATTERN.test(id)) return { kind: "inspect", id };
-    if (id === "--dispatch-ticket") return parseDispatchTicketOperation(argv.slice(2));
+    if (id === "--dispatch-ticket" || id === "--dispatch-open-ticket")
+      return parseDispatchTicketOperation(id, argv.slice(2));
     if (
       id === "--management" &&
       argv.length === 3 &&
@@ -445,11 +446,17 @@ function parseWindowsReloadRoute(route: unknown): WindowsReloadRoute {
   return route as WindowsReloadRoute;
 }
 
-function parseDispatchTicketOperation(args: string[]): DispatchTicketOperation {
-  const [ownerId, socket, project, ticketId, sessionName, cwd, prompt] = args;
-  if (args.length !== 7) throw new Error("Invalid argument count for inspect --dispatch-ticket");
-  if (!ownerId || ownerId !== ownerId.trim() || !SESSION_ID_PATTERN.test(ownerId))
+function parseDispatchTicketOperation(
+  flag: "--dispatch-ticket" | "--dispatch-open-ticket",
+  args: string[],
+): DispatchTicketOperation {
+  const locked = flag === "--dispatch-ticket";
+  if (args.length !== (locked ? 7 : 6))
+    throw new Error(`Invalid argument count for inspect ${flag}`);
+  const ownerId = locked ? args[0]! : undefined;
+  if (ownerId !== undefined && (ownerId !== ownerId.trim() || !SESSION_ID_PATTERN.test(ownerId)))
     throw new Error("Invalid ticket owner ID");
+  const [socket, project, ticketId, sessionName, cwd, prompt] = locked ? args.slice(1) : args;
   if (!socket || socket.includes("\0")) throw new Error("Invalid ticket dispatch socket");
   if (!project || project === "." || project === ".." || /[/\\\0]/.test(project))
     throw new Error("Invalid ticket project");
@@ -469,7 +476,7 @@ function parseDispatchTicketOperation(args: string[]): DispatchTicketOperation {
   if (!prompt || prompt.includes("\0")) throw new Error("Invalid ticket dispatch prompt");
   return {
     kind: "inspect-dispatch-ticket",
-    ownerId,
+    ...(ownerId !== undefined ? { ownerId } : {}),
     socket,
     project,
     ticketId,
