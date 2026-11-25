@@ -35,15 +35,49 @@ export function quoteShell(argument: string): string {
   return "'" + argument.replaceAll("'", "'\\''") + "'";
 }
 
-export function createCliCommand(params: CliParams): string {
-  const invocation = [params.executable, ...params.args].map(quoteShell).join(" ");
+export function cliExecutableName(name: string, platform = process.platform): string {
+  return platform === "win32" ? `${name}.exe` : name;
+}
+
+function bashPath(path: string, platform: NodeJS.Platform): string {
+  return platform === "win32" ? path.replaceAll("\\", "/") : path;
+}
+
+function quoteRecoveryPath(path: unknown, platform: NodeJS.Platform): string {
+  if (typeof path === "string" && !path.includes("\0")) {
+    const shellPath = bashPath(path, platform);
+    if (platform !== "win32" && path.startsWith("/")) return quoteShell(path);
+    if (platform === "win32") {
+      const posixAbsolute = path.startsWith("/") && !shellPath.startsWith("//");
+      const windowsAbsolute = /^(?:[a-z]:\/|\/\/(?![?.]\/)[^/]+\/[^/]+\/)/i.test(shellPath);
+      if (posixAbsolute || windowsAbsolute) return quoteShell(shellPath);
+    }
+  }
+  throw new Error("Truncated registered bash output has no valid full_output_path");
+}
+
+function quoteWindowsArgument(argument: string): string {
+  return argument
+    .split(/(?<=\\)(?=\\)/)
+    .map(quoteShell)
+    .join("");
+}
+
+export function createCliCommand(params: CliParams, platform = process.platform): string {
+  const quoteArgument = platform === "win32" ? quoteWindowsArgument : quoteShell;
+  const executable = bashPath(params.executable, platform);
+  const invocation = [quoteShell(executable), ...params.args.map(quoteArgument)].join(" ");
+  const argConversion = platform === "win32" ? "MSYS2_ARG_CONV_EXCL='*' " : "";
+  const tempTemplate = platform === "win32" ? "-t pi-cli.XXXXXXXXXX" : "/tmp/pi-cli.XXXXXXXXXX";
   return [
     "set -o pipefail",
-    ...(params.cwd === undefined ? [] : [`cd -- ${quoteShell(params.cwd)} || exit`]),
-    "cli_tmp=$(mktemp -d /tmp/pi-cli.XXXXXXXXXX) || exit",
+    ...(params.cwd === undefined
+      ? []
+      : [`cd -- ${quoteShell(bashPath(params.cwd, platform))} || exit`]),
+    `cli_tmp=$(mktemp -d ${tempTemplate}) || exit`,
     "trap 'rm -rf -- \"$cli_tmp\"' EXIT",
     "cli_code=0",
-    `${invocation} >"$cli_tmp/stdout" 2>"$cli_tmp/stderr" || cli_code=$?`,
+    `${argConversion}${invocation} >"$cli_tmp/stdout" 2>"$cli_tmp/stderr" || cli_code=$?`,
     "printf 'PI_CLI_V1:%s\\n' \"$cli_code\"",
     "base64 <\"$cli_tmp/stdout\" | tr -d '\\n' || exit",
     "printf '\\n'",
@@ -73,7 +107,9 @@ export async function runCliViaBash(request: {
   context: Pick<ExtensionToolContext, "executeTool">;
   params: CliParams;
   signal?: AbortSignal;
+  platform?: NodeJS.Platform;
 }): Promise<CliOutcome> {
+  const platform = request.platform ?? process.platform;
   let received: Partial<CliResponse> = {};
   let firstResponse: Partial<CliResponse> = {};
   async function execute(command: string) {
@@ -112,15 +148,12 @@ export async function runCliViaBash(request: {
     };
   }
   try {
-    const first = await execute(createCliCommand(request.params));
+    const first = await execute(createCliCommand(request.params, platform));
     request.signal?.throwIfAborted();
     firstResponse = first.response;
     let output = first.output;
     if (first.truncated) {
-      const path = first.full_output_path;
-      if (typeof path !== "string" || !path.startsWith("/") || path.includes("\0"))
-        throw new Error("Truncated registered bash output has no valid full_output_path");
-      const quotedPath = quoteShell(path);
+      const quotedPath = quoteRecoveryPath(first.full_output_path, platform);
       const sizeResult = await execute(`wc -c < ${quotedPath}`);
       const sizeText = sizeResult.output.trim();
       const sizeBytes = Number(sizeText);

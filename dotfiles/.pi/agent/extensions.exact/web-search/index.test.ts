@@ -41,8 +41,9 @@ function captureTools(deps?: TestDeps): Map<string, Tool> {
                   const command = (input as { command: string }).command;
                   const line = command
                     .split("\n")
-                    .find((line) => line.startsWith("'/nonexistent-test-cli/browse'"))!;
-                  const tokens = line
+                    .find((line) => line.includes(`'${FAKE_BROWSE_PATH}'`))!;
+                  const invocation = line.slice(line.indexOf(`'${FAKE_BROWSE_PATH}'`));
+                  const tokens = invocation
                     .split(" >")[0]!
                     .split("'")
                     .filter((_, index) => index % 2 === 1);
@@ -61,6 +62,9 @@ function captureTools(deps?: TestDeps): Map<string, Tool> {
   );
   return tools;
 }
+
+const BROWSE_EXECUTABLE = process.platform === "win32" ? "browse.exe" : "browse";
+const FAKE_BROWSE_PATH = `/nonexistent-test-cli/${BROWSE_EXECUTABLE}`;
 
 type RecordedCall = { command: string; args: string[] };
 
@@ -506,8 +510,8 @@ describe("registered bash adapter", () => {
     const dir = mkdtempSync(join(tmpdir(), "web-denied-"));
     const marker = join(dir, "launched");
     try {
-      const executable = join(dir, "browse");
-      writeFileSync(executable, "#!/bin/sh\ntouch '" + marker + "'\n", { mode: 0o755 });
+      const executable = join(dir, BROWSE_EXECUTABLE);
+      writeFileSync(executable, '#!/bin/sh\ntouch -- "${0%/*}/launched"\n', { mode: 0o755 });
       const ctx = {
         async executeTool() {
           return {
@@ -544,7 +548,7 @@ describe("registered bash routing", () => {
     await callSearch(search, { query: "pi coding agent" });
 
     assert.equal(cli.calls.length, 1);
-    assert.equal(cli.calls[0]!.command, join("/nonexistent-test-cli", "browse"));
+    assert.equal(cli.calls[0]!.command, FAKE_BROWSE_PATH);
     assert.deepEqual(cli.calls[0]!.args, ["search", "pi coding agent", "--json"]);
   });
 
@@ -573,12 +577,12 @@ describe("registered bash routing", () => {
     await callFetch(fetchTool, "https://example.com/");
 
     assert.equal(cli.calls.length, 1);
-    assert.equal(cli.calls[0]!.command, join("/nonexistent-test-cli", "browse"));
+    assert.equal(cli.calls[0]!.command, FAKE_BROWSE_PATH);
     assert.deepEqual(cli.calls[0]!.args, ["fetch", "https://example.com/", "--json"]);
   });
 });
 
-describe("tool execution with a real browse executable", () => {
+describe("tool execution with a browse shell fixture", () => {
   const cases = [
     {
       name: "web_search",
@@ -595,13 +599,13 @@ describe("tool execution with a real browse executable", () => {
   ];
 
   for (const testCase of cases) {
-    it(`runs ${testCase.name} through an executable path containing spaces`, async () => {
-      const dir = mkdtempSync(join(tmpdir(), "web cli-"));
+    it(`runs ${testCase.name} through an executable path containing spaces and Japanese`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), "web 日本語 cli-"));
       const argsFile = join(dir, "args");
       try {
         writeFileSync(
-          join(dir, "browse"),
-          `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile}'\nprintf '%s' '${testCase.output}'\n`,
+          join(dir, BROWSE_EXECUTABLE),
+          `#!/bin/sh\nprintf '%s\\n' "$@" > "\${0%/*}/args"\nprintf '%s' '${testCase.output}'\n`,
           { mode: 0o755 },
         );
         const tool = captureTools({ env: { BROWSE_CLI_DIR: dir } }).get(testCase.name)!;
@@ -789,14 +793,14 @@ describe("CLI path resolution", () => {
     const deployedExtensionDir = "/home/example/.pi/agent/extensions/web-search";
     assert.equal(browseCliDir({ BROWSE_CLI_DIR: "/opt/cli" }), "/opt/cli");
     assert.equal(browseCliDir({ BROWSE_CLI_DIR: "/opt/cli" }, deployedExtensionDir), "/opt/cli");
-    assert.equal(browseScript({ BROWSE_CLI_DIR: "/opt/cli" }), "/opt/cli/browse");
+    assert.equal(browseScript({ BROWSE_CLI_DIR: "/opt/cli" }), join("/opt/cli", BROWSE_EXECUTABLE));
   });
 
   it("always returns the CLI project directory name", () => {
     const dir = mkdtempSync(join(tmpdir(), "web-cli-"));
     try {
-      writeFileSync(join(dir, "browse.executable"), "");
-      assert.equal(browseScript({ BROWSE_CLI_DIR: dir }), join(dir, "browse"));
+      writeFileSync(join(dir, `${BROWSE_EXECUTABLE}.executable`), "");
+      assert.equal(browseScript({ BROWSE_CLI_DIR: dir }), join(dir, BROWSE_EXECUTABLE));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -805,8 +809,8 @@ describe("CLI path resolution", () => {
   it("resolves the deployed project directory name", () => {
     const dir = mkdtempSync(join(tmpdir(), "web-cli-"));
     try {
-      writeFileSync(join(dir, "browse"), "");
-      assert.equal(browseScript({ BROWSE_CLI_DIR: dir }), join(dir, "browse"));
+      writeFileSync(join(dir, BROWSE_EXECUTABLE), "");
+      assert.equal(browseScript({ BROWSE_CLI_DIR: dir }), join(dir, BROWSE_EXECUTABLE));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -818,7 +822,7 @@ describe("CLI path resolution", () => {
       browseCliDir({}),
       join(extensionDir, "..", "..", "..", "..", ".agents", "cli.exact"),
     );
-    assert.equal(browseScript({}), join(browseCliDir({}), "browse"));
+    assert.equal(browseScript({}), join(browseCliDir({}), BROWSE_EXECUTABLE));
   });
 
   it("defaults to deployed .agents/cli four levels above the deployed extension", () => {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "bun:test";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   createBashTool,
@@ -670,7 +671,8 @@ describe("registered Bash ticket routing", () => {
           assert.equal(Object.hasOwn(args as object, "timeout"), false);
           const command = (args as { command: string }).command;
           assert.match(command, /cd -- /);
-          assert.match(command, /\.agents\/cli\/ticket/);
+          const executable = process.platform === "win32" ? "ticket.exe" : "ticket";
+          assert.ok(command.includes(`/.agents/cli/${executable}'`));
           calls.push(command);
           return bashOutcome(cliFrame(" \noutput\n\n"));
         },
@@ -839,9 +841,10 @@ describe("registered Bash ticket routing", () => {
 
 describe("ticket CLI through an actual Bash implementation", () => {
   const stubDirs: string[] = [];
-  const bashTool = createBashTool("/tmp");
+  const cwd = tmpdir();
+  const bashTool = createBashTool(cwd);
   const ctx = {
-    cwd: "/tmp",
+    cwd,
     async executeTool(name: string, args: unknown, options?: { signal?: AbortSignal }) {
       assert.equal(name, "bash");
       const result = await bashTool.execute("nested", args as never, options?.signal);
@@ -850,8 +853,9 @@ describe("ticket CLI through an actual Bash implementation", () => {
   };
 
   async function installStub(script: string): Promise<string> {
-    await mkdir("/tmp/work/dotfiles", { recursive: true });
-    const dir = await mkdtemp("/tmp/work/dotfiles/ticket cli'-");
+    const fixtureRoot = process.platform === "win32" ? cwd : "/tmp/work/dotfiles";
+    await mkdir(fixtureRoot, { recursive: true });
+    const dir = await mkdtemp(join(fixtureRoot, "ticket 日本語 cli'-"));
     stubDirs.push(dir);
     const path = join(dir, "ticket stub'");
     await writeFile(path, `#!/usr/bin/env bun\n${script}`);
@@ -889,7 +893,7 @@ describe("ticket CLI through an actual Bash implementation", () => {
 
   it("preserves stdout whitespace and trailing newlines", async () => {
     const cliPath = await installStub('process.stdout.write(" \\nbody  \\n\\n");');
-    const stdout = await spawnTicketCli(["show"], "/tmp", undefined, ctx, { cliPath });
+    const stdout = await spawnTicketCli(["show"], cwd, undefined, ctx, { cliPath });
     assert.equal(stdout, " \nbody  \n\n");
   });
 
@@ -898,7 +902,7 @@ describe("ticket CLI through an actual Bash implementation", () => {
       'process.stderr.write("error: body  \\n\\n"); process.exit(1);',
     );
     await assert.rejects(
-      spawnTicketCli(["edit"], "/tmp", undefined, ctx, { cliPath }),
+      spawnTicketCli(["edit"], cwd, undefined, ctx, { cliPath }),
       new Error("error: body  \n"),
     );
   });
@@ -906,14 +910,14 @@ describe("ticket CLI through an actual Bash implementation", () => {
   it("reports an exit code when stderr is empty", async () => {
     const cliPath = await installStub("process.exit(2);");
     await assert.rejects(
-      spawnTicketCli(["list"], "/tmp", undefined, ctx, { cliPath }),
+      spawnTicketCli(["list"], cwd, undefined, ctx, { cliPath }),
       /ticket exited with code 2/,
     );
   });
 
   it("fails when the executable is absent", async () => {
     await assert.rejects(
-      spawnTicketCli(["list"], "/tmp", undefined, ctx, { cliPath: "/nonexistent/ticket" }),
+      spawnTicketCli(["list"], cwd, undefined, ctx, { cliPath: join(cwd, "absent-ticket-cli") }),
       /No such file/,
     );
   });
@@ -929,7 +933,7 @@ describe("ticket CLI through an actual Bash implementation", () => {
   it("cancels an active CLI through Bash", async () => {
     const cliPath = await installStub("setTimeout(() => {}, 60000);");
     await assert.rejects(
-      spawnTicketCli(["list"], "/tmp", AbortSignal.timeout(100), ctx, { cliPath }),
+      spawnTicketCli(["list"], cwd, AbortSignal.timeout(100), ctx, { cliPath }),
       /aborted/,
     );
   });

@@ -2,7 +2,7 @@
 
 ## 対象と目的
 
-tickets は、pi の LLM に ticket CLI（`dotfiles/.agents/cli.exact/ticket/` の展開先 `~/.agents/cli/ticket`。単一実行ファイル）の操作手段を tool として提供するpi extension である。5つのチケット操作ツールを `pi.registerTool` で登録する。
+tickets は、pi の LLM に ticket CLI（`dotfiles/.agents/cli.exact/ticket/` の展開先は `~/.agents/cli/ticket`、Windows では `~/.agents/cli/ticket.exe`）の操作手段を tool として提供するpi extension である。5つのチケット操作ツールを `pi.registerTool` で登録する。
 
 ストアとCLIの契約は [ticket CLI仕様](../../../../.agents/cli.exact/ticket/SPEC.md) に従う。本書は、このCLIを呼び出すpi拡張の構成、tool引数の変換、実行、結果とエラー、依存を定める。ストア操作はCLIに委ねる。
 

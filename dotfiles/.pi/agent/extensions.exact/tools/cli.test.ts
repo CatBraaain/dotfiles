@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
-import { runCliViaBash } from "./cli.ts";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createBashTool } from "@earendil-works/pi-coding-agent";
+import { cliExecutableName, createCliCommand, runCliViaBash } from "./cli.ts";
 
 function frame(stdout = "", stderr = "", code = 0): string {
   return [
@@ -25,6 +29,143 @@ function response(output: string, overrides: Record<string, unknown> = {}) {
 }
 
 const params = { executable: "/cli", args: [] };
+
+describe("Windows CLI execution", () => {
+  it("uses the deployed executable name on Windows only", () => {
+    assert.equal(cliExecutableName("ticket", "win32"), "ticket.exe");
+    assert.equal(cliExecutableName("browse", "linux"), "browse");
+  });
+
+  it("passes Git Bash paths and preserves literal arguments for native programs", () => {
+    const command = createCliCommand(
+      {
+        executable: "C:\\Agent Home\\日本語\\ticket.exe",
+        cwd: "\\\\server\\share\\作業 場所",
+        args: [String.raw`\exact\argument`, "/literal/item", "日本語's"],
+      },
+      "win32",
+    );
+    assert.ok(command.includes("cd -- '//server/share/作業 場所' || exit"));
+    assert.ok(command.includes("mktemp -d -t pi-cli."));
+    assert.ok(
+      command.includes(
+        "MSYS2_ARG_CONV_EXCL='*' 'C:/Agent Home/日本語/ticket.exe' '\\exact\\argument' '/literal/item' '日本語'\\''s'",
+      ),
+    );
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "recovers native executable output from Git Bash without changing literal argv",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "pi CLI 日本語 "));
+      const bash = createBashTool(cwd);
+      const tempPaths = new Set<string>();
+      const context = {
+        async executeTool(name: string, input: unknown, options?: { signal?: AbortSignal }) {
+          assert.equal(name, "bash");
+          const result = await bash.execute("windows", input as never, options?.signal);
+          const savedPath = result.details?.fullOutputPath;
+          if (savedPath) tempPaths.add(savedPath);
+          return { toolCall: response("").toolCall, result, isError: result.isError ?? false };
+        },
+      };
+      try {
+        const stdout = "本文\r\n".repeat(140_000);
+        const args = [
+          "/literal/argument",
+          "日本語 空白",
+          "\\\\server\\share\\日本語 空白",
+          "literal\\\\path\\\\",
+          'double quote" after a backslash\\',
+        ];
+        const outcome = await runCliViaBash({
+          context,
+          params: {
+            executable: process.execPath,
+            args: [
+              "-e",
+              'process.stdout.write(JSON.stringify([process.cwd(), ...process.argv.slice(1)]) + "本文\\r\\n".repeat(140000)); process.stderr.write("診断\\r\\n"); process.exitCode = 23;',
+              "--",
+              ...args,
+            ],
+            cwd,
+          },
+        });
+        assert.equal(
+          outcome.status,
+          "completed",
+          String(outcome.status === "failed" && outcome.error),
+        );
+        assert.deepEqual(outcome.cli, {
+          stdout: JSON.stringify([cwd, ...args]) + stdout,
+          stderr: "診断\r\n",
+          code: 23,
+        });
+        assert.ok(tempPaths.size > 0);
+      } finally {
+        await Promise.all([...tempPaths].map((path) => rm(path, { force: true })));
+        await rm(cwd, { recursive: true, force: true });
+      }
+    },
+    30_000,
+  );
+
+  for (const [path, shellPath] of [
+    [
+      "C:\\Users\\User Name\\一時'temp\\pi-output.log",
+      "C:/Users/User Name/一時'\\''temp/pi-output.log",
+    ],
+    ["\\\\server\\share\\名前 空白\\pi-output.log", "//server/share/名前 空白/pi-output.log"],
+  ] as const) {
+    it("recovers the complete UTF-8 result through registered Bash from " + path, async () => {
+      const cli = { stdout: " 本文\r\n", stderr: "診断\r\n", code: 23 };
+      const output = frame(cli.stdout, cli.stderr, cli.code);
+      const signal = new AbortController().signal;
+      const original = response("partial", { truncated: true, full_output_path: path });
+      const calls: string[] = [];
+      const context = {
+        async executeTool(name: string, input: unknown, options?: { signal?: AbortSignal }) {
+          assert.equal(name, "bash");
+          assert.equal(options?.signal, signal);
+          calls.push((input as { command: string }).command);
+          if (calls.length === 1) return original;
+          if (calls.length === 2) return response(String(output.length));
+          return response(output);
+        },
+      };
+      const outcome = await runCliViaBash({ context, params, platform: "win32", signal });
+      assert.equal(outcome.status, "completed");
+      assert.deepEqual(outcome.cli, cli);
+      assert.strictEqual(outcome.result, original.result);
+      assert.deepEqual(calls.slice(1), [
+        `wc -c < '${shellPath}'`,
+        `dd if='${shellPath}' bs=524288 skip=0 count=1 status=none`,
+      ]);
+    });
+  }
+
+  for (const path of [
+    String.raw`C:relative\output.log`,
+    String.raw`\current-drive\output.log`,
+    String.raw`\\server`,
+    String.raw`\\?\C:\temp\output.log`,
+    "C:/bad\0path",
+  ]) {
+    it("does not attempt to recover an invalid path: " + JSON.stringify(path), async () => {
+      let calls = 0;
+      const context = {
+        async executeTool() {
+          calls++;
+          return response("partial", { truncated: true, full_output_path: path });
+        },
+      };
+      const outcome = await runCliViaBash({ context, params, platform: "win32" });
+      assert.equal(outcome.status, "failed");
+      assert.match(String(outcome.error), /no valid full_output_path/);
+      assert.equal(calls, 1);
+    });
+  }
+});
 
 describe("runCliViaBash CLI input", () => {
   it("uses only the requested timeout and keeps cwd inside the authorized command", async () => {

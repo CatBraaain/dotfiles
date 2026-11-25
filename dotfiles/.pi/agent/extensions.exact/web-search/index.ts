@@ -4,7 +4,7 @@ import type { ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-codi
 import { Type } from "typebox";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CliFailure, runCliViaBash } from "../tools/cli.ts";
+import { cliExecutableName, CliFailure, runCliViaBash } from "../tools/cli.ts";
 import type { CliResult, CliResponse } from "../tools/cli.ts";
 export type WebToolDetails = {
   engine?: string;
@@ -30,7 +30,7 @@ export function browseCliDir(
 }
 
 export function browseScript(env: Record<string, string | undefined> = process.env): string {
-  return join(browseCliDir(env), "browse");
+  return join(browseCliDir(env), cliExecutableName("browse"));
 }
 
 // --- registered bash execution ---

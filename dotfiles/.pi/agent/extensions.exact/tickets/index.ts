@@ -9,7 +9,7 @@ import {
   type ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
-import { CliFailure, runCliViaBash } from "../tools/cli.ts";
+import { cliExecutableName, CliFailure, runCliViaBash } from "../tools/cli.ts";
 
 // --- tool parameter schemas (argument names match ticket/SPEC.md) ---
 
@@ -274,11 +274,8 @@ export type TicketCliRunner = (
   ctx: Pick<ExtensionToolContext, "executeTool">,
 ) => Promise<string>;
 
-// The deployed single-file executable (compiled by cli.build.ts); apply
-// grants the owner exec bit, so spawning needs nothing else on PATH (same
-// pattern as the web-search extension).
 function ticketCliPath(): string {
-  return join(homedir(), ".agents", "cli", "ticket");
+  return join(homedir(), ".agents", "cli", cliExecutableName("ticket"));
 }
 
 export interface SpawnTicketCliDeps {
@@ -335,7 +332,7 @@ export async function spawnTicketCli(
 // --- extension ---
 
 export interface TicketsExtensionDeps {
-  /** Replaces the CLI runner; defaults to `~/.agents/cli/ticket`. */
+  /** Replaces the CLI runner for the deployed executable. */
   runCli?: TicketCliRunner;
 }
 

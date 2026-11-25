@@ -20,7 +20,7 @@ pi に **Web検索** と **URL取得** の2つのツールを追加する。実�
 
 tool呼び出しの中断（abort signal）はnested bashへ伝える。各bash呼び出しの実行時間の上限は300秒とし、プロセス停止は登録bashの契約に従う。stdoutとstderrは分離して回収し、stderrの診断が成功時のJSONに混入しないようにする。
 
-bashの構造化出力が切り詰められた場合は、返された `full_output_path` から同じ登録bash経由で全出力を分割回収して解釈する。回収にも中断・承認・sandbox・tool hooks を適用する。最初の部分出力は回収結果に混ぜず、全体の回収と検証が完了した場合だけ本文とdetailsへ変換する。回収用の出力やBase64表現はツールの本文へ含めない。
+Bashの出力が切り詰められた場合のパス検証と全量回収は [Tools仕様](../tools/SPEC.md#cliの引数と結果回収) に従う。全量の回収と検証が完了した場合だけ、回収したCLI出力を本文とdetailsへ変換する。
 
 | CLI の終了 | tool の結果 |
 | --- | --- |
@@ -55,7 +55,7 @@ backend の順序とフォールバック、challenge / captcha再試行、タ�
 
 ## camoufox server の配置
 
-camoufox server は `browse` CLI（`~/.agents/cli/browse`）に内蔵され、`browse server start` サブコマンドが起動する。search / fetch の実行時に server が未接続なら CLI自身が `browse server start` をバックグラウンド起動し、共通の startup script（`~/.agents/scripts/startup`）も先行起動する。この拡張は server本体を同梱しない。
+camoufox server は `browse` CLI に内蔵され、`browse server start` サブコマンドが起動する。search / fetch の実行時に server が未接続なら CLI自身が `browse server start` をバックグラウンド起動し、共通の startup script（`~/.agents/scripts/startup`）も先行起動する。この拡張は server本体を同梱しない。
 
 ### camoufox の表示モード（Xvfb headed と x11vnc）
 
@@ -65,7 +65,7 @@ camoufox server の表示モード（Linux既定の Xvfb `:99` 上の headed と
 
 `browse` の配置ディレクトリは、この拡張のディレクトリから4階層上の `.agents/` 配下で解決する。source tree の `dotfiles/.pi/agent/extensions.exact/web-search/` からは `dotfiles/.agents/cli.exact/`、展開後の `~/.pi/agent/extensions/web-search/` からは `~/.agents/cli/` を使う。
 
-環境変数 `BROWSE_CLI_DIR` を設定したときは、そのディレクトリを配置ごとの既定ディレクトリの代わりに使う（テスト・開発用）。起動対象は常に `<配置ディレクトリ>/browse` の実行可能なコンパイル済みファイルとする。source tree から利用するときも、`BROWSE_CLI_DIR` でその実行ファイルの配置先を指定できる。
+環境変数 `BROWSE_CLI_DIR` を設定したときは、そのディレクトリを配置ごとの既定ディレクトリの代わりに使う（テスト・開発用）。起動対象は `<配置ディレクトリ>/browse`、Windows では `<配置ディレクトリ>/browse.exe` のコンパイル済みファイルとする。source tree から利用するときも、`BROWSE_CLI_DIR` でその実行ファイルの配置先を指定できる。
 
 ## 表示（TUI）
 
