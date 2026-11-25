@@ -8,15 +8,22 @@ import { writeNpmPlaywrightFixture } from "./npm-playwright";
 
 const scenario = process.argv[2] ?? "success";
 const isWindowsNpmScenario = scenario === "windows-npm";
+const isLinuxWrapperScenario = scenario === "linux-wrapper";
+const isLinuxScenario = scenario === "linux-direct" || isLinuxWrapperScenario;
+const isDirectScenario = isLinuxScenario || scenario === "windows-direct";
 const isNativeWindows = process.platform === "win32";
-const fixtureUrl = isWindowsNpmScenario
-  ? "https://fixture.invalid/?query=a&literal=%PATH%"
-  : "https://fixture.invalid/";
+const fixtureUrl =
+  isWindowsNpmScenario || isDirectScenario
+    ? "https://fixture.invalid/?query=a&literal=%PATH%"
+    : "https://fixture.invalid/";
 const nativeExecFile = childProcess.execFile;
-const windowsCli = isNativeWindows || isWindowsNpmScenario ? setupWindowsCli() : undefined;
+if (!isDirectScenario) process.env.PLAYWRIGHT_MCP_TIMEOUT_NAVIGATION = "60000";
+const cliEntry =
+  isNativeWindows || isWindowsNpmScenario || isDirectScenario ? setupPlaywrightCli() : undefined;
 
-function setupWindowsCli(): string {
+function setupPlaywrightCli(): string | undefined {
   const prefix = join(stateDir(), "npm prefix");
+  process.env.PWTEST_CLI_GLOBAL_CONFIG = prefix;
   const { entry, shim } = writeNpmPlaywrightFixture(
     prefix,
     `const assert = require("node:assert/strict");
@@ -28,9 +35,38 @@ function setupWindowsCli(): string {
      if (command === "open") assert.equal(argument, ${JSON.stringify(fixtureUrl)});
      if (command === "run-code") console.log("### Result\\n" + JSON.stringify(require("playwright-core")));
     `,
-    'module.exports = { mode: "settled", html: "<html>Windows npm fixture</html>" };',
+    `const assert = require("node:assert/strict");
+     module.exports = {
+       mode: "settled",
+       html: "<html>Windows npm fixture</html>",
+       firefox: {
+         async connect() {
+           return {
+             async newPage() {
+               return {
+                 once() {},
+                 async goto(url) { assert.equal(url, ${JSON.stringify(fixtureUrl)}); },
+                 async evaluate() { return "<html>Direct fixture</html>"; },
+                 async waitForLoadState() {},
+                 async waitForTimeout() {},
+               };
+             },
+             async close() {},
+           };
+         },
+       },
+     };`,
   );
 
+  if (isLinuxScenario) {
+    const nativeWhich = Bun.which;
+    const executable = isLinuxWrapperScenario ? shim : entry;
+    spyOn(Bun, "which").mockImplementation((command, options) =>
+      command === "playwright-cli" ? executable : nativeWhich(command, options),
+    );
+    Object.defineProperty(process, "platform", { value: "linux" });
+    return undefined;
+  }
   if (isNativeWindows) {
     process.env.PATH = prefix + delimiter + process.env.PATH;
   } else {
@@ -141,11 +177,11 @@ mock.module("node:child_process", () => ({
     options: { signal: AbortSignal; env?: NodeJS.ProcessEnv },
     callback: (error: Error | null, stdout: string) => void,
   ) => {
-    if (windowsCli && argv[0] !== windowsCli) {
+    if (cliEntry && argv[0] !== cliEntry) {
       queueMicrotask(() => callback(new Error("Expected the npm package bin entry"), ""));
       return;
     }
-    const args = windowsCli ? argv.slice(1) : argv;
+    const args = cliEntry ? argv.slice(1) : argv;
     const command = args[1]!;
     commands.push(command);
     if (isWindowsNpmScenario) {

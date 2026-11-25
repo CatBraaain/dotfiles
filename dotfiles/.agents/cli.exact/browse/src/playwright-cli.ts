@@ -1,5 +1,17 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+
+export function loadCliPlaywrightCore(): unknown {
+  if (process.platform === "win32") {
+    const { entry } = resolveWindowsPlaywrightCli();
+    return createRequire(entry)("playwright-core");
+  }
+
+  const cliPath = Bun.which("playwright-cli");
+  if (!cliPath) throw new Error("playwright-cli not found on PATH");
+  return createRequire(realpathSync(cliPath))("playwright-core");
+}
 
 export function resolveWindowsPlaywrightCli(): { entry: string; prefix: string } {
   const shim = Bun.which("playwright-cli.cmd", { PATH: process.env.PATH });

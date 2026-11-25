@@ -1,7 +1,3 @@
-// Camoufox rendering over the shared server: drive playwright-cli to open the
-// URL, poll for challenge pages and read back the DOM. Also holds the camoufox
-// retry policy hooks (shouldRetryCamoufox / recoverCamoufoxBeforeRetry) shared
-// by the search and fetch backends.
 import { execFile } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -17,20 +13,63 @@ import {
   SERVER_WAIT_TIMEOUT_MS,
   stateDir,
 } from "./config";
-import { resolveWindowsNode, resolveWindowsPlaywrightCli } from "./playwright-cli";
+import {
+  loadCliPlaywrightCore,
+  resolveWindowsNode,
+  resolveWindowsPlaywrightCli,
+} from "./playwright-cli";
+import {
+  useDirectPlaywright,
+  withRemoteRenderPage,
+  type RemoteFirefox,
+  type RenderPage,
+} from "./playwright-render";
 import { ensureCamoufoxServer, camoufoxServerHealthy, recoverCamoufoxServer } from "./server";
+
+declare const document: { documentElement: { outerHTML: string } };
 
 export async function camoufoxRender(url: string, sessionKey: string): Promise<string> {
   await ensureCamoufoxServer(AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));
   syncPlaywrightCliConfig();
 
+  const firefox = useDirectPlaywright() ? loadDirectFirefox() : undefined;
+  if (!firefox) return renderWithPlaywrightCli(url, sessionKey);
+
+  const clock = new RenderClock(RENDER_TIMEOUT_MS);
+  try {
+    return await withRemoteRenderPage(firefox, camoufoxBaseUrl(), url, clock, async (page) =>
+      renderedHtml(await readRenderedPage(page, CHALLENGE_SIGNALS)),
+    );
+  } catch (error) {
+    throw renderError(error);
+  } finally {
+    clock.dispose();
+  }
+}
+
+function loadDirectFirefox(): RemoteFirefox | undefined {
+  try {
+    const { firefox } = loadCliPlaywrightCore() as { firefox?: RemoteFirefox };
+    return typeof firefox?.connect === "function" ? firefox : undefined;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "MODULE_NOT_FOUND") {
+      return undefined;
+    }
+    throw renderError(error);
+  }
+}
+
+function renderError(error: unknown): Error {
+  return new Error(`render: ${error instanceof Error ? error.message : String(error)}`, {
+    cause: error,
+  });
+}
+
+async function renderWithPlaywrightCli(url: string, sessionKey: string): Promise<string> {
   // Spec: 実行中の render は server 再起動を待たない（再起動側が全 render
   // スロットの解放を待つため、実行中 render が再起動の完了を待つ循環待ちは
   // 起きない）。再起動が始まっても予算を使い切るまで継続する。
   const clock = new RenderClock(RENDER_TIMEOUT_MS);
-  const renderError = (error: unknown): Error =>
-    new Error(`render: ${error instanceof Error ? error.message : String(error)}`);
-
   const closePage = async (): Promise<void> => {
     await runPlaywrightCli(
       sessionKey,
@@ -56,7 +95,7 @@ export async function camoufoxRender(url: string, sessionKey: string): Promise<s
       throw renderError(error);
     });
     try {
-      return parseRenderedPage(codeOutput);
+      return renderedHtml(parseRunCodeResult<RenderedPage>(codeOutput));
     } catch (error) {
       throw renderError(error);
     }
@@ -169,33 +208,44 @@ const CHALLENGE_SIGNALS: readonly RegExp[] = [
   /^(?![\s\S]*(?:class="tF2Cxc"|data-hveid=))[\s\S]*httpservice\/retry\/enablejs/,
 ];
 
-const CHALLENGE_POLL_INTERVAL_MS = 250;
-const NETWORK_IDLE_WAIT_MS = 5_000;
-
-function challengeWaitSnippet(): string {
-  const signals = CHALLENGE_SIGNALS.map((signal) => [signal.source, signal.flags]);
-  return `async page => {
-  const challengeSignals = ${JSON.stringify(signals)}.map(([source, flags]) => new RegExp(source, flags));
-  const grab = () => page.evaluate(() => document.documentElement.outerHTML);
-  let settled = false;
-  const idle = page.waitForLoadState('networkidle', { timeout: ${NETWORK_IDLE_WAIT_MS} }).catch(() => {}).then(() => { settled = true; });
-  const deadline = Date.now() + ${NETWORK_IDLE_WAIT_MS};
-  while (!settled && Date.now() < deadline) {
-    const html = await grab();
-    if (challengeSignals.some((signal) => signal.test(html))) return { mode: 'challenge', html };
-    await page.waitForTimeout(${CHALLENGE_POLL_INTERVAL_MS});
-  }
-  await idle;
-  return { mode: 'settled', html: await grab() };
-}`;
+interface RenderedPage {
+  mode: "challenge" | "settled";
+  html: string;
 }
 
-function parseRenderedPage(output: string): string {
-  const { mode, html } = parseRunCodeResult<{ mode?: string; html?: string }>(output);
-  if (mode === "challenge") throw new Error("challenge detected");
-  if (typeof html !== "string" || !html) {
-    throw new Error("playwright-cli run-code returned no HTML");
+function challengeWaitSnippet(): string {
+  return `async page => (${readRenderedPage.toString()})(page, [${CHALLENGE_SIGNALS.join(",")}])`;
+}
+
+async function readRenderedPage(
+  page: Pick<RenderPage, "evaluate" | "waitForLoadState" | "waitForTimeout">,
+  challengeSignals: readonly RegExp[],
+): Promise<RenderedPage> {
+  const pollIntervalMs = 250;
+  const networkIdleWaitMs = 5_000;
+  function grab() {
+    return page.evaluate(() => document.documentElement.outerHTML);
   }
+  let settled = false;
+  const idle = page
+    .waitForLoadState("networkidle", { timeout: networkIdleWaitMs })
+    .catch(() => {})
+    .then(() => {
+      settled = true;
+    });
+  const deadline = Date.now() + networkIdleWaitMs;
+  while (!settled && Date.now() < deadline) {
+    const html = await grab();
+    if (challengeSignals.some((signal) => signal.test(html))) return { mode: "challenge", html };
+    await page.waitForTimeout(pollIntervalMs);
+  }
+  await idle;
+  return { mode: "settled", html: await grab() };
+}
+
+function renderedHtml({ mode, html }: RenderedPage): string {
+  if (mode === "challenge") throw new Error("challenge detected");
+  if (typeof html !== "string" || !html) throw new Error("Camoufox returned no HTML");
   return html;
 }
 
@@ -233,11 +283,17 @@ export class RenderClock {
   readonly signal: AbortSignal;
 
   private readonly controller = new AbortController();
+  private readonly deadlineMs: number;
   private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(budgetMs: number) {
     this.signal = this.controller.signal;
+    this.deadlineMs = performance.now() + budgetMs;
     this.timer = setTimeout(() => this.controller.abort(), budgetMs);
+  }
+
+  get remainingMs(): number {
+    return Math.max(1, Math.ceil(this.deadlineMs - performance.now()));
   }
 
   dispose(): void {

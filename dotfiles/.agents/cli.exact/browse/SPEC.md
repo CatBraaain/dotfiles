@@ -27,8 +27,10 @@ usage: browse search "<query>" [--lang <code>] [--json]
 - camoufox server と `browse server start` のログは `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/` 配下の `camoufox-server.log` へ、Xvfb と x11vnc の出力は同じディレクトリの `xvfb.log`・`x11vnc.log` へ追記する
 - camoufox server は起動引数に待受ポート番号を持つ。`CAMOUFOX_BASE_URL` のポートを使い、省略時は `ws:` が80、`wss:` が443とする。ポート0は拒否する。PID ファイルの読み書きは行わない。新規起動の判定・停止・再起動・自動復旧では、同じ OS 上で同じユーザー・同じ実行ファイル・同じポート番号のローカルサーバーを探す。ホストやパスが異なっても、同じポート番号で複数台を管理することはできない。Windows は PowerShell のプロセス情報、Linux は `pgrep` と `/proc` を使う
 - Windows の camoufox server は、選択したインストール先の `version.json` から対応バージョンを確認し、実行ファイルが存在することを確認してから起動する。メタデータや実行ファイルが欠落している場合、またはバージョンが未対応の場合は、理由をサーバーログに出して異常終了する。Camoufox 本体の自動ダウンロードやインストール先の削除は行わない。
-- Windows では、PATH 上の `playwright-cli.cmd` と同じ npm インストール先にある `@playwright/cli` を Node.js で直接起動する。Windows 以外では PATH 上の `playwright-cli` を起動する。
-- playwright-cli のブラウザは firefox で、remote endpoint に camoufox を使う。セッションキーは検索が `web-search-<n>`、フェッチが `web-fetch-<n>`、server の機能ヘルスチェックが `web-health-<n>`（`<n>` は renderスロット番号。`flock(1)` が無い環境ではプロセスの PID）で、同時に走るrender と機能ヘルスチェックが同じセッションを共有しない。各実行の冒頭と終了時にセッションを閉じる
+- `search` と `fetch` が Camoufox で描画するときは、Playwright CLI の動作に上書きがなく、PATH 上の Playwright CLI と同じインストール先から `playwright-core` の接続 API を読み込める場合は、その JS API で稼働中のサーバーに直接接続する。試行ごとに新しいブラウザコンテキストを使い、cookie とページ状態を分離する。試行の成否にかかわらず、そのコンテキストを解放して接続を閉じる。接続の終了ではサーバーを停止しない。
+- `login twitter` とサーバーの機能ヘルスチェックは、Camoufox を firefox の remote endpoint に指定した `playwright-cli` を使う。描画でも、環境変数やユーザー全体の設定で Playwright CLI の動作を上書きする場合、作業ディレクトリに `.playwright/cli.config.json` がある場合、または `playwright-core` の接続 API を利用できない場合は、同じ経路を使う。ユーザー全体または環境変数の出力先設定だけでは Playwright CLI の動作を上書きしたとはみなさない。Windows では PATH 上の `playwright-cli.cmd` に対応する `@playwright/cli` を Node.js で直接起動し、それ以外では PATH 上の `playwright-cli` を起動する。
+- Camoufox を使う描画の前に、対話用 Playwright CLI の接続先を `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/playwright-cli.config.json` に書き出す。
+- playwright-cli を使う描画と機能ヘルスチェックは、検索が `web-search-<n>`、フェッチが `web-fetch-<n>`、機能ヘルスチェックが `web-health-<n>`（`<n>` は renderスロット番号。`flock(1)` が無い環境ではプロセスの PID）をセッションキーに使い、各実行の冒頭と終了時に対象セッションを閉じる。
 - server の機能ヘルスチェックは、websocket接続と、ローカルHTTP（127.0.0.1）へのページopen の完了で判定する。ページopen がタイムアウトまでに完了しなければ応答不能とする（websocket応答だけでは、ページopen は成功するが HTTPナビゲーションが一切完了しないbrowser のハングを検知できない）
 - camoufox を使う `search` と `fetch` は、renderスロットセマフォ（既定4スロット）で並列実行する。スロットは `flock(1)` に依存し、利用できない環境では待ち合わせせずに実行する。スロットの獲得は、コマンド自身を内部サブコマンド `__locked`（usage には出ない）付きで空いているスロットの `flock(1)` の下へ再実行することで行う。4スロットすべてが埋まっていれば待つ。待機中と獲得の直後には restartロックの保持を探知し、server停止・再起動が進行していれば、まだrender を開始していない分はその完了まで待機し、完了後にスロットを取り直す。`__locked` が直接渡された実行はスロットを取得せずにコマンド本体を実行する。この再入は、スロット保持中の search / fetch が detached で server起動を依頼するときにも使う
 - `browse server stop` と `browse server restart` は restartロックと 4つすべての renderスロットを `flock(1)` で獲得してから実行する。実行中の render は完了まで、新規の render は停止・再起動操作の完了まで待つ。`flock(1)` が無い環境では待ち合わせずに実行する
@@ -46,6 +48,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | render が abortされる | 実行 | ローカルHTTP へのページopen を含む機能ヘルスチェックを行い、応答不能ならserverを自動再起動して同じbackendを再試行する。自動復旧後も全backendが失敗した場合は、`All ... failed` 行の次行へ `Hint: ...` 形式で、失敗が過渡的な可能性を示した再試行と、手動再起動 `~/.agents/cli/browse server restart` を案内する |
 | challenge / captcha を検出した | 実行 | 同一backend を1回だけ新しいsessionで再試行し、それでも失敗したら次のbackendへ進む |
 | Camoufoxのrenderがabort・timeout・切断した | 実行 | serverの機能ヘルスチェックを行う。応答不能ならserverを再起動してから新しいsessionで同じbackendを再試行する。再起動はrestartロックで仲裁し、自分以外のrenderスロットの完了を待って再起動する。仲裁に負けた側は再起動を申請せず、再起動の完了を15秒まで待つ。1コマンド全体のserver復旧再試行は1回までとし、失敗後は次のbackendへ進む |
+| 直接接続による描画で対象 URL が `file:`、またはページが JavaScript ダイアログを開く | 実行 | 描画失敗とし、DOM を返さない |
 | `search` または camoufox経路の `fetch` が同時に起動された | 実行 | 空いているrenderスロットで並列実行する（上限4）。すべてのスロットが埋まっていたら先に開始した実行の完了を待つ。待機中に server停止・再起動が始まったら、未開始の render はその完了まで待つ（開始済みの render は継続する）。Reddit / StackOverflow / YouTube / Twitter / Hacker News / Wikipedia / arXiv の専用経路はスロットを取得せず待ち合わせない。`login` は camoufox を使うためスロットを取得する |
 | サブコマンドがない・未知のサブコマンドを渡した | 実行 | usage を stderr へ出力し、終了コード1 で終わる |
 | 未知のフラグを渡した | 実行 | 対象サブコマンドの usage行を stderr へ出力し、終了コード1 で終わる |
@@ -63,6 +66,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | server起動からの render復旧再起動の申請抑制期間 | 30秒 |
 | `browse server stop` / `browse server restart` の停止待ち（SIGTERM を送ってから SIGKILL に上げるまで） | 10秒 |
 | ページopen・ナビゲーション・DOM取得 | 30秒 |
+| 直接接続による描画で、ナビゲーションが `DOMContentLoaded` に到達した後 | `load` を最大5秒待ち、完了または待ち時間の満了後に challenge 検出待ちへ進む。描画全体の上限の内側で待つ |
 | render中に他の実行の server再起動が始まったとき | 実行中の render は再起動を待たず実行を継続する（再起動側が renderスロットの解放を待つため、実行中render が再起動の完了を待つ循環待ちは起きない） |
 | openserpパース・trafilatura変換・Reddit の各要求・StackOverflow の各要求・GitHub API の各要求・Hacker News / Wikipedia / arXiv / RSS / fxtwitter の各要求 | 15秒 |
 | yt-dlp によるYouTubeメタデータ・字幕の取得 | 60秒 |
@@ -185,7 +189,7 @@ server の実行環境は環境変数で上書きできる:
 | --- | --- | --- |
 | `CAMOUFOX_INSTALL_DIR` | Windows で使う camoufox のインストール先 | 未設定・空の場合は `%LOCALAPPDATA%\Programs\Camoufox`。`LOCALAPPDATA` が未設定なら `~/AppData/Local/Programs/Camoufox` |
 | `CAMOUFOX_EXECUTABLE_PATH` | camoufoxブラウザの実行ファイル | Windows: 選択したインストール先の `camoufox.exe`。Windows 以外: `~/.cache/camoufox/camoufox-bin` |
-| `CAMOUFOX_PLAYWRIGHT_CORE` | server が使うplaywright-core | browse が起動する playwright-cli と同じパッケージから解決した playwright-core |
+| `CAMOUFOX_PLAYWRIGHT_CORE` | サーバーが使う `playwright-core`。接続クライアントとメジャー・マイナーバージョンを揃える | PATH 上の Playwright CLI と同じインストール先の `playwright-core` |
 
 fingerprint生成に使うcamoufox-js は、`~/.pi/agent` 配下から解決する。
 

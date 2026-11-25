@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   CAMOUFOX_DEFAULT_BASE_URL,
@@ -32,7 +32,7 @@ import {
 } from "./config";
 import { ensureDisplay, ensureX11vnc, DISPLAY_NUMBER, resolveHeadless } from "./display";
 import { openLinuxProcess } from "./linux-process";
-import { resolveWindowsPlaywrightCli } from "./playwright-cli";
+import { loadCliPlaywrightCore } from "./playwright-cli";
 import { delay, selfRunArgv, selfRunPath } from "./util";
 import { findWindowsServerProcesses, stopWindowsProcess } from "./windows-process";
 
@@ -360,9 +360,6 @@ async function validateWindowsCamoufoxInstall(camoufoxJsUrl: string): Promise<st
   return executablePath;
 }
 
-// Fingerprint generation borrows camoufox-js; the browser itself is launched
-// by the same playwright-core that playwright-cli embeds, so the server
-// always speaks the client's protocol version (no HTTP 428 on connect).
 interface CamoufoxServerHandle {
   close(): Promise<void>;
 }
@@ -381,23 +378,10 @@ interface PlaywrightCoreModule {
   firefox: { launchServer(options: Record<string, unknown>): Promise<CamoufoxServerHandle> };
 }
 
-// The playwright-cli-embedded playwright-core is the single source of truth
-// for the server's protocol version: clients must send a matching major.minor
-// in their User-Agent or the upgrade is rejected with HTTP 428.
 function resolvePlaywrightCore(): PlaywrightCoreModule {
   const override = process.env.CAMOUFOX_PLAYWRIGHT_CORE;
   if (override) return nodeRequire(override) as PlaywrightCoreModule;
-  if (process.platform === "win32") {
-    const { entry } = resolveWindowsPlaywrightCli();
-    return createRequire(entry)("playwright-core") as PlaywrightCoreModule;
-  }
-  const output = spawnSync("which", ["playwright-cli"], { encoding: "utf8" });
-  const binary = output.stdout?.trim().split(/\r?\n/)[0];
-  if (!binary) throw new Error("playwright-cli not found on PATH");
-  const packageDir = dirname(realpathSync(binary));
-  return nodeRequire(
-    nodeRequire.resolve("playwright-core", { paths: [packageDir] }),
-  ) as PlaywrightCoreModule;
+  return loadCliPlaywrightCore() as PlaywrightCoreModule;
 }
 
 // Spec: 接続先（CAMOUFOX_BASE_URL）の host・port・path で待ち受ける。

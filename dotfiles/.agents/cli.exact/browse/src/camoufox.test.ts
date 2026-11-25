@@ -1,11 +1,11 @@
 import { describe, it } from "bun:test";
 import { strict as assert } from "node:assert";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RenderClock, startLocalHttpProbe } from "./camoufox";
-import { SLOT_COUNT, slotLockFile } from "./config";
+import { CAMOUFOX_DEFAULT_BASE_URL, SLOT_COUNT, slotLockFile } from "./config";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -102,8 +102,41 @@ function launchRender(root: string, scenario: string, slot?: number, gated = fal
   return { ready, exited, child };
 }
 
-describe("Windows npm Playwright CLI", () => {
-  it("renders through the package bin entry with the URL passed literally", async () => {
+describe("Playwright render paths", () => {
+  for (const platform of ["windows", "linux"]) {
+    it(`uses the installed Playwright core without launching the CLI on ${platform}`, async () => {
+      const root = mkdtempSync(join(tmpdir(), `browse-${platform}-direct-`));
+      try {
+        const { code, messages } = await launchRender(root, `${platform}-direct`).exited;
+        assert.equal(code, 0, messages[0]?.error ?? "Fixture did not render");
+        assert.equal(messages[0]?.html, "<html>Direct fixture</html>");
+        assert.deepEqual(messages[0]?.commands, []);
+        const config = JSON.parse(
+          readFileSync(join(root, "pi", "web-search", "playwright-cli.config.json"), "utf8"),
+        );
+        assert.equal(
+          config.browser.remoteEndpoint,
+          process.env.CAMOUFOX_BASE_URL ?? CAMOUFOX_DEFAULT_BASE_URL,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("uses the CLI when its wrapper has no resolvable Playwright core", async () => {
+    const root = mkdtempSync(join(tmpdir(), "browse-linux-wrapper-"));
+    try {
+      const { code, messages } = await launchRender(root, "linux-wrapper").exited;
+      assert.equal(code, 0, messages[0]?.error ?? "Fixture did not render");
+      assert.equal(messages[0]?.html, "<html>ready</html>");
+      assert.deepEqual(messages[0]?.commands, ["close", "open", "run-code", "close"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("passes the URL literally to the package bin when Playwright settings are overridden", async () => {
     const root = mkdtempSync(join(tmpdir(), "browse-windows-cli-"));
     try {
       const { code, messages } = await launchRender(root, "windows-npm").exited;

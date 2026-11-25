@@ -62,6 +62,11 @@ if (isInternal && process.platform === "win32") {
   } else {
     spyOn(Bun, "which").mockReturnValue(shim);
   }
+} else if (isInternal) {
+  spyOn(Bun, "which").mockImplementation((command) => {
+    events.push(["which", command]);
+    return command === "playwright-cli" ? process.execPath : null;
+  });
 }
 
 spyOn(Date, "now").mockImplementation(() => now);
@@ -179,7 +184,6 @@ mock.module("node:child_process", () => ({
       return { status: 0, stdout: [...alive, 41003, process.pid].join("\n") };
     }
     if (command === "ps" && scenario === "recover-cooldown") return { status: 0, stdout: "1\n" };
-    if (command === "which" || command === "where") return { status: 0, stdout: process.execPath };
     return { status: 0, stdout: "" };
   },
 }));
@@ -229,14 +233,14 @@ Object.assign(globalThis, { fixtureLaunchServer, fixtureEvents: events });
 
 function fixtureRequire(path: string) {
   events.push(["require", path]);
-  if (path === process.env.CAMOUFOX_PLAYWRIGHT_CORE || path === "fixture-playwright") {
+  if (path === process.env.CAMOUFOX_PLAYWRIGHT_CORE || path === "playwright-core") {
     return { firefox: { launchServer: fixtureLaunchServer } };
   }
   return nativeRequire(path);
 }
 fixtureRequire.resolve = (name: string) => {
   events.push(["resolve", name]);
-  return name.startsWith("camoufox-js") ? fixtureCamoufoxPath : "fixture-playwright";
+  return name.startsWith("camoufox-js") ? fixtureCamoufoxPath : nativeRequire.resolve(name);
 };
 const nativeCreateRequire = nodeModule.createRequire;
 mock.module("node:module", () => ({

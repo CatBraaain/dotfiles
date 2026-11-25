@@ -286,13 +286,10 @@ describe("internal server contract", () => {
       assert.equal(launch.executablePath, join(homedir(), ".cache/camoufox/camoufox-bin"));
       assert.equal(launch.env.XDG_RUNTIME_DIR, `/run/user/${process.getuid?.() ?? 1000}`);
       assert.ok(
-        report.events.some(
-          ([name, command, args]) =>
-            name === "spawnSync" && command === "which" && args[0] === "playwright-cli",
-        ),
+        report.events.some(([name, command]) => name === "which" && command === "playwright-cli"),
       );
       assert.ok(
-        report.events.some(([name, module]) => name === "resolve" && module === "playwright-core"),
+        report.events.some(([name, module]) => name === "require" && module === "playwright-core"),
       );
       assert.ok(
         report.events.some(
@@ -323,7 +320,7 @@ describe("internal server contract", () => {
     assert.equal(launch.executablePath, join(installDir, "camoufox.exe"));
     assert.equal(launch.port, 9378);
     assert.ok(
-      !report.events.some(([name, path]) => name === "require" && path === "fixture-playwright"),
+      !report.events.some(([name, path]) => name === "require" && path === "playwright-core"),
     );
   });
 
