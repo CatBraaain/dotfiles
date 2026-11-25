@@ -4,7 +4,7 @@
 
 読者はこの spec だけを読んで要件の go/no-go をするユーザーと、実装・テストの担当者。
 
-- 用語: セッションは 1 つの JSONL ファイル(1 行 1 entry)。プロジェクトディレクトリはセッション起動時の cwd の `/` を `-` に置換し前後を `--` で括った名前(`/home/username/projects/X` → `--home-username-projects-X--`)。
+- 用語: セッションは 1 つの JSONL ファイル(1 行 1 entry)。プロジェクトディレクトリは、セッション起動時の cwd から先頭の `/` または `\` を1文字取り除き、残りの `/`・`\`・`:` を `-` に置換して前後を `--` で括った名前である(`/home/username/projects/X` → `--home-username-projects-X--`、`C:\Users\NAME\X` → `--C--Users-NAME-X--`、`\\host\share\X` → `---host-share-X--`)。名前は pi が決め、CLI はディレクトリ名をそのまま扱う。
 - 方針: 生の JSONL 行は人間向け出力にそのまま出さず、entry からテキストを抽出して見せる。全文検索は ripgrep に任せ、CLI 側のパースはヒット行と対象ファイルのみに限定する。インデックス(SQLite 等)の構築は対象外である。
 
 usage:
@@ -45,7 +45,7 @@ usage: session-search search <query> [--json] [--project <pattern>] [--since <da
 
 ## search
 
-`session-search search <query>` は、絞り込み後のファイル集合に対して ripgrep(`rg`)を spawn して全文検索する。`agents.subagent-log` の子ログを含む custom 行も自然にヒットする。
+`session-search search <query>` は、絞り込み後のファイル集合が属するプロジェクトディレクトリを対象に ripgrep(`rg`)を spawn して全文検索する。各ディレクトリは1回だけ引数に渡し、rg には直下のファイルだけを走査させる(`--max-depth 1 --no-ignore`)。ファイルを1つずつ引数に列挙しない(Windows のコマンドラインは 32,767 文字まで)。日付・プロジェクトの絞り込みから外れたファイルが同じディレクトリにあれば走査されるが、そのヒットは破棄する。`subagents/` 等のサブディレクトリは走査しない。`agents.subagent-log` の子ログを含む custom 行も自然にヒットする。
 
 - 人間可読: ヒットごとに `id(8桁)・プロジェクトディレクトリ・entryType・時刻・行番号` の見出し行と、その行から抽出したテキストの抜粋(改行は空白に崩し 200 字で切り詰め)を 2 行で出す。
 - テキスト抽出は entry 単位で行う。assistant は text ブロックを優先し、無ければ thinking ブロックを使う。system メッセージは `content` が空のため `sections` の値を結合したテキストを使う。
@@ -117,7 +117,7 @@ sessionヘッダー・systemメッセージ・モデル変更・上表にないc
 ## 前提と依存
 
 - npm 依存を持たない。TypeScript + Bun の標準API とファイルシステムのみで動く。
-- `search` だけが `rg` に依存する。`list` / `show` は `rg` なしで動く。
+- `search` だけが `rg` に依存する。`list` / `show` は `rg` なしで動く。PATH 上の `rg` を使い、Windows では `rg.exe` を同じ名前で解決する。`rg` は各 OS の dotfiles インストール定義が導入する(Windows は winget の `BurntSushi.ripgrep.MSVC`)。
 - セッション全体が巨大(17GB 級)でも、CLI 側で読み込むのは検索のヒット行、`list` / `show` の対象ファイルのみに限定する。検索の走査自体は `rg` が行う。
 
 ## テスト

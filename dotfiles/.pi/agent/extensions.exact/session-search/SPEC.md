@@ -15,8 +15,8 @@ extensions.exact/session-search/
 └── SPEC.md         # 本ファイル
 ```
 
-- `index.ts` は、tool登録、tool引数からCLI引数へのマッピング、CLI実行コマンドの構成、実行結果からtool結果への変換（`buildCliCommand` / `runCli` / `executePiSessions`）、description の組み立てをexportする
-- `index.test.ts` は上記export と登録tool の検証に限定する。CLIの実経路は fixture HOME とcompile済みfixture CLIで検証し、ホームの実CLI・実セッションは変更しない
+- `index.ts` は、tool登録、tool引数からCLI引数へのマッピング、CLI実行コマンドの構成、実行結果からtool結果への変換を行う。テストは、コマンド構成の `cliCommand`、配布先パスの `deployedCliPath`、CLIパスを差し替える拡張オプション `cliPath` を使う
+- `index.test.ts` は上記と登録tool の検証に限定する。CLIの実経路は、homeDir を fixture に固定した入口から compile した fixture CLI で検証し、ホームの実CLI・実セッションは変更しない
 
 ## 登録tool
 
@@ -28,7 +28,7 @@ extensions.exact/session-search/
 
 ## CLI実行
 
-実行先はホームの `.agents/cli/session-search` に固定し、常に `--json` を付ける。cwdは呼出し時のpiセッションcwd（`ctx.cwd`）とし、明示された `project` は変換せずCLIへ渡す。cwd・固定CLIパス・各引数値は既存のshell quotingで安全に構成し、`ctx.executeTool("bash", …)` で実行する。shell構文としての入力解釈・自由なコマンド・直接spawn・共有sandboxの変更は行わない。CLI不在時の自動build・install・代替実行も行わない。既存bashツールの許可判定・sandbox・中断・出力上限はそのまま適用される。
+実行先はホームの `.agents/cli/session-search`（Windows は `session-search.exe`）に固定し、常に `--json` を付ける。cwdは呼出し時のpiセッションcwd（`ctx.cwd`）とし、明示された `project` は変換せずCLIへ渡す。cwd・固定CLIパス・各引数値は、`tools/cli.ts` が共通CLI呼出しに使う quote で安全に構成し、`ctx.executeTool("bash", …)` で実行する。Windows では、Git Bash に渡すCLIパスとcwdの `\` を `/` に置き換え、連続する `\` を含む引数は Git Bash が畳まないよう分けて quote する。shell構文としての入力解釈・自由なコマンド・直接spawn・共有sandboxの変更は行わない。CLI不在時の自動build・install・代替実行も行わない。既存bashツールの許可判定・sandbox・中断・出力上限はそのまま適用される。共通の全量回収（`runCliViaBash`）は使わず、切り詰められた出力は解析せず `incomplete` として返す。
 
 tool結果の`status` は3値である。
 
@@ -49,6 +49,6 @@ tool結果の`status` は3値である。
 | 依存 | 用途 | 場所 |
 | --- | --- | --- |
 | `typebox` | tool引数の schema | pi本体が拡張向けに提供（`agent/package.json` 未記載） |
-| `shell-quote` | CLI引数とcwdのshell quoting | `agent/package.json` の dependencies |
+| `tools/cli.ts` | 配布実行ファイル名、Windows のパス変換と引数quote | `extensions.exact/tools/`（依存追加なし） |
 | `@earendil-works/pi-coding-agent` | `ExtensionAPI` 等の型 | `agent/package.json` の devDependencies |
 | `bun:test` / `node:assert/strict` | テスト | `@types/bun`（devDependencies）、Bun組み込み |

@@ -5,7 +5,7 @@ import type {
   ExtensionAPI,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { quote } from "shell-quote";
+import { bashPath, cliExecutableName, quoteShell, quoteWindowsArgument } from "../tools/cli.ts";
 type BashResponse = Awaited<
   ReturnType<import("@earendil-works/pi-coding-agent").ExtensionToolContext["executeTool"]>
 >;
@@ -37,7 +37,12 @@ const outputSchema = Type.Object({
   error: Type.Optional(Type.String()),
 });
 
-export default function piSessionsExtension(pi: ExtensionAPI): void {
+export type SessionSearchDeps = {
+  cliPath?: string;
+};
+
+export default function piSessionsExtension(pi: ExtensionAPI, deps: SessionSearchDeps = {}): void {
+  const cliPath = deps.cliPath ?? deployedCliPath();
   const tool: ToolDefinition<typeof parameters> & { reachesTools(): string[] } = {
     name: "session_search",
     label: "Pi Sessions",
@@ -51,12 +56,26 @@ export default function piSessionsExtension(pi: ExtensionAPI): void {
     async execute(_toolCallId, input, signal, _onUpdate, ctx) {
       const argv = cliArguments(input);
       signal?.throwIfAborted();
-      const command = `cd -- ${quote([ctx.cwd])} && ${quote([join(homedir(), ".agents", "cli", "session-search"), ...argv])}`;
+      const command = cliCommand(argv, ctx.cwd, cliPath);
       const bash = await ctx.executeTool("bash", { command }, { signal });
       return cliResult(input.action, bash, signal);
     },
   };
   pi.registerTool(tool);
+}
+
+export function deployedCliPath(): string {
+  return join(homedir(), ".agents", "cli", cliExecutableName("session-search"));
+}
+
+export function cliCommand(
+  argv: readonly string[],
+  cwd: string,
+  cliPath: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const quoteArgument = platform === "win32" ? quoteWindowsArgument : quoteShell;
+  return `cd -- ${quoteShell(bashPath(cwd, platform))} && ${quoteShell(bashPath(cliPath, platform))} ${argv.map(quoteArgument).join(" ")}`;
 }
 
 function cliArguments(input: Input): string[] {

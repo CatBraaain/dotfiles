@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createReadStream, type ReadStream } from "node:fs";
 import { createInterface, type Interface } from "node:readline";
+import { dirname } from "node:path";
 import {
   entryTypeLabel,
   extractEntryText,
@@ -52,6 +53,8 @@ export async function runSearch(
   const rgCommand = options.rgCommand ?? "rg";
   const limit = options.limit ?? Number.POSITIVE_INFINITY;
   const filesByPath = new Map(files.map((file) => [file.path, file]));
+  // rg receives directories, not each file: Windows caps a command line at 32,767 characters (https://learn.microsoft.com/cpp/windows/command-line-parameters).
+  const projectDirs = [...new Set(files.map((file) => dirname(file.path)))];
   const child = spawn(
     rgCommand,
     [
@@ -62,9 +65,12 @@ export async function runSearch(
       "--max-columns",
       String(MATCHED_LINE_MAX_COLUMNS),
       "--max-columns-preview",
+      "--max-depth",
+      "1",
+      "--no-ignore",
       "--",
       query,
-      ...filesByPath.keys(),
+      ...projectDirs,
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );

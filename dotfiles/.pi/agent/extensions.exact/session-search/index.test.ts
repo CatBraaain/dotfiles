@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, it } from "bun:test";
 import type {
@@ -12,9 +12,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { createBashTool, createEventBus } from "@earendil-works/pi-coding-agent";
 import { quote, parse } from "shell-quote";
-import piSessionsExtension from "./index";
+import piSessionsExtension, { cliCommand, deployedCliPath, type SessionSearchDeps } from "./index";
 
 import toolsExtension from "../tools/index";
+import { bashPath, cliExecutableName } from "../tools/cli.ts";
 
 type Outcome = AgentToolResult;
 type ExecuteTool = (
@@ -23,13 +24,16 @@ type ExecuteTool = (
   options?: { signal?: AbortSignal },
 ) => Promise<Outcome>;
 
-function captureTool(): ToolDefinition {
+function captureTool(deps: SessionSearchDeps = {}): ToolDefinition {
   const tools: ToolDefinition[] = [];
-  piSessionsExtension({
-    registerTool(tool: ToolDefinition) {
-      tools.push(tool);
-    },
-  } as ExtensionAPI);
+  piSessionsExtension(
+    {
+      registerTool(tool: ToolDefinition) {
+        tools.push(tool);
+      },
+    } as ExtensionAPI,
+    deps,
+  );
   assert.equal(tools.length, 1);
   return tools[0]!;
 }
@@ -52,6 +56,7 @@ async function execute(
     signal?: AbortSignal;
     executeTool?: ExecuteTool;
     nestedIsError?: boolean;
+    deps?: SessionSearchDeps;
   } = {},
 ) {
   const calls: { name: string; args: unknown; signal?: AbortSignal }[] = [];
@@ -69,7 +74,13 @@ async function execute(
       };
     },
   } as ExtensionToolContext;
-  const result = await captureTool().execute("test", input, options.signal, undefined, ctx);
+  const result = await captureTool(options.deps).execute(
+    "test",
+    input,
+    options.signal,
+    undefined,
+    ctx,
+  );
   return {
     result: {
       ...result,
@@ -83,7 +94,7 @@ function commandArguments(command: string): string[] {
   const tokens = parse(command);
   assert.deepEqual(tokens.slice(0, 2), ["cd", "--"]);
   assert.deepEqual(tokens[3], { op: "&&" });
-  assert.equal(tokens[4], join(homedir(), ".agents", "cli", "session-search"));
+  assert.equal(tokens[4], bashPath(deployedCliPath(), process.platform));
   return tokens.slice(5) as string[];
 }
 
@@ -213,42 +224,41 @@ describe("session_search CLI boundary", () => {
     assert.deepEqual(commandArguments(command), ["list", "--json"]);
   });
 
-  it("quotes query, id, project and cwd as literal shell arguments", async () => {
-    const temp = mkdtempSync(join(tmpdir(), "session-search-quote-"));
-    try {
-      const marker = join(temp, "injected");
-      const unsafe = `x ' " ; $(touch ${marker}) \`touch ${marker}\`\n$HOME & | > * ?`;
-      const cwd = join(temp, "cwd 'quoted'\n$()");
-      mkdirSync(cwd);
-      const { calls } = await execute(
-        { action: "show", id: unsafe, query: unsafe, project: unsafe },
-        bashOutput("{}"),
-        { cwd },
-      );
-      const command = (calls[0]!.args as { command: string }).command;
-      const fixedCli = quote([join(homedir(), ".agents", "cli", "session-search")]);
-      const echoArgv = quote([
-        process.execPath,
-        "-e",
-        "console.log(JSON.stringify({cwd:process.cwd(),argv:process.argv.slice(1)}))",
-      ]);
-      const shellCommand = command.replace(fixedCli, echoArgv);
-      const received = JSON.parse(execFileSync("bash", ["-c", shellCommand], { encoding: "utf8" }));
-      assert.equal(received.cwd, cwd);
-      assert.deepEqual(received.argv, [
-        "show",
-        "--json",
-        unsafe,
-        "--project",
-        unsafe,
-        "--query",
-        unsafe,
-      ]);
-      assert.equal(existsSync(marker), false);
-    } finally {
-      rmSync(temp, { recursive: true, force: true });
-    }
-  });
+  it.skipIf(process.platform === "win32")(
+    "quotes query, id, project and cwd as literal shell arguments",
+    async () => {
+      const temp = mkdtempSync(join(tmpdir(), "session-search-quote-"));
+      try {
+        const marker = join(temp, "injected");
+        const unsafe = `x ' " ; $(touch ${marker}) \`touch ${marker}\`\n$HOME & | > * ?`;
+        const cwd = join(temp, "cwd 'quoted'\n$()");
+        mkdirSync(cwd);
+        const echoCli = join(temp, "echo-cli");
+        writeFileSync(echoCli, `#!/bin/sh\nprintf '%s\\0' "$PWD" "$@"\n`);
+        chmodSync(echoCli, 0o755);
+        const { calls } = await execute(
+          { action: "show", id: unsafe, query: unsafe, project: unsafe },
+          bashOutput("{}"),
+          { cwd, deps: { cliPath: echoCli } },
+        );
+        const command = (calls[0]!.args as { command: string }).command;
+        const received = execFileSync("bash", ["-c", command], { encoding: "utf8" }).split("\0");
+        assert.equal(received[0], cwd);
+        assert.deepEqual(received.slice(1, -1), [
+          "show",
+          "--json",
+          unsafe,
+          "--project",
+          unsafe,
+          "--query",
+          unsafe,
+        ]);
+        assert.equal(existsSync(marker), false);
+      } finally {
+        rmSync(temp, { recursive: true, force: true });
+      }
+    },
+  );
 
   for (const input of [
     { action: "search" },
@@ -432,6 +442,43 @@ describe("session_search CLI boundary", () => {
   });
 });
 
+describe("cliCommand", () => {
+  it("quotes the cwd, the CLI path and each argument for the registered bash", () => {
+    assert.equal(
+      cliCommand(
+        ["search", "--json", "two words"],
+        "/home/u/a 'quote'",
+        "/home/u/.agents/cli/session-search",
+        "linux",
+      ),
+      "cd -- '/home/u/a '\\''quote'\\''' && '/home/u/.agents/cli/session-search' 'search' '--json' 'two words'",
+    );
+    assert.equal(
+      cliCommand(["list", "--json"], "/tmp", deployedCliPath()),
+      `cd -- '/tmp' && '${bashPath(deployedCliPath(), process.platform)}' 'list' '--json'`,
+    );
+  });
+
+  it("uses the .exe name and forward slashes for Git Bash on Windows", () => {
+    assert.equal(
+      cliCommand(
+        ["list", "--json"],
+        "\\\\wsl.localhost\\Ubuntu\\home\\作業 場所's",
+        "C:\\Users\\USERNAME\\.agents\\cli\\session-search.exe",
+        "win32",
+      ),
+      "cd -- '//wsl.localhost/Ubuntu/home/作業 場所'\\''s' && 'C:/Users/USERNAME/.agents/cli/session-search.exe' 'list' '--json'",
+    );
+  });
+
+  it("keeps consecutive backslashes in Windows arguments", () => {
+    assert.equal(
+      cliCommand(["search", "--json", "C:\\\\Users\\\\NAME"], "C:\\tmp", "C:\\cli.exe", "win32"),
+      "cd -- 'C:/tmp' && 'C:/cli.exe' 'search' '--json' 'C:\\''\\Users\\''\\NAME'",
+    );
+  });
+});
+
 describe("session_search sandbox fixture integration", () => {
   it("runs all registered actions through the existing sandboxed bash into a compiled fixture CLI", async () => {
     const temp = mkdtempSync(join(tmpdir(), "session-search-integration-"));
@@ -440,15 +487,21 @@ describe("session_search sandbox fixture integration", () => {
       const cwd = join(temp, "project 'space'");
       mkdirSync(cwd);
       const home = join(temp, "home");
-      const project = `--${cwd.replaceAll("/", "-").replace(/^-/, "")}--`;
-      const sessions = join(home, ".pi", "agent", "sessions", project);
+      const sessions = join(
+        home,
+        ".pi",
+        "agent",
+        "sessions",
+        `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`,
+      );
       mkdirSync(sessions, { recursive: true });
       const id = "12345678-1234-1234-1234-123456789abc";
+      const needle = "fixture needle C:\\\\Users\\\\NAME";
       writeFileSync(
         join(sessions, `2026-10-22T00-00-00-000Z_${id}.jsonl`),
         [
           { type: "session", id, cwd, timestamp: "2026-10-22T00:00:00Z", version: 3 },
-          { type: "message", message: { role: "user", content: "fixture needle" } },
+          { type: "message", message: { role: "user", content: needle } },
           {
             type: "message",
             message: { role: "assistant", content: [{ type: "text", text: "fixture done" }] },
@@ -461,13 +514,17 @@ describe("session_search sandbox fixture integration", () => {
         import.meta.dir,
         "../../../../.agents/cli.exact/session-search/src/main.ts",
       );
-      const fixtureCli = join(temp, "dist", "session-search");
-      execFileSync(process.execPath, ["build", "--compile", cliSource, "--outfile", fixtureCli], {
-        stdio: "pipe",
-      });
-      const wrapper = join(temp, "wrapper");
-      writeFileSync(wrapper, `#!/bin/sh\nHOME=${quote([home])} exec ${quote([fixtureCli])} "$@"\n`);
-      chmodSync(wrapper, 0o755);
+      const fixtureEntry = join(temp, "fixture-main.ts");
+      writeFileSync(
+        fixtureEntry,
+        `import { run } from ${JSON.stringify(cliSource)};\nprocess.exit(await run(process.argv.slice(2), { cwd: process.cwd(), homeDir: ${JSON.stringify(home)} }));\n`,
+      );
+      const fixtureCli = join(temp, "dist", cliExecutableName("session-search"));
+      execFileSync(
+        process.execPath,
+        ["build", "--compile", fixtureEntry, "--outfile", fixtureCli],
+        { stdio: "pipe" },
+      );
       const config = join(temp, "guardrails.yaml");
       writeFileSync(
         config,
@@ -487,43 +544,43 @@ describe("session_search sandbox fixture integration", () => {
       const executeTool: ExecuteTool = async (name, args, options) => {
         nestedCalls++;
         assert.equal(name, "bash");
-        const command = (args as { command: string }).command.replace(
-          quote([join(homedir(), ".agents", "cli", "session-search")]),
-          quote([wrapper]),
-        );
-        return (await bash.execute("integration/bash", { command }, options?.signal, undefined, {
+        return (await bash.execute("integration/bash", args, options?.signal, undefined, {
           cwd: process.cwd(),
           hasUI: false,
         } as ExtensionToolContext)) as Outcome;
       };
-      const listed = await execute({ action: "list" }, bashOutput(""), { cwd, executeTool });
+      const run = (input: Record<string, unknown>) =>
+        execute(input, bashOutput(""), { cwd, executeTool, deps: { cliPath: fixtureCli } });
+      const listed = await run({ action: "list" });
       assert.equal(
         listed.result.structuredContent?.status,
         "complete",
         JSON.stringify(listed.result),
       );
       assert.equal((listed.result.structuredContent!.result as { id: string }[])[0]?.id, id);
-      const searched = await execute({ action: "search", query: "needle" }, bashOutput(""), {
-        cwd,
-        executeTool,
-      });
+      const searched = await run({ action: "search", query: "needle" });
       assert.equal(
         (searched.result.structuredContent!.result as { text: string }[])[0]?.text,
-        "fixture needle",
+        needle,
       );
-      const shown = await execute({ action: "show", id, limit: 1 }, bashOutput(""), {
-        cwd,
-        executeTool,
-      });
+      const shown = await run({ action: "show", id, limit: 1 });
       assert.equal(
         (shown.result.structuredContent!.result as { nextOffset: number }).nextOffset,
         2,
       );
+      const backslashes = await run({ action: "show", id, query: "C:\\\\Users" });
+      assert.deepEqual(
+        (
+          backslashes.result.structuredContent!.result as {
+            records: { text: string }[];
+          }
+        ).records.map((record) => record.text),
+        [needle, "fixture done"],
+      );
+      const collapsed = await run({ action: "show", id, query: "C:\\Users" });
+      assert.equal((collapsed.result.structuredContent!.result as { total: number }).total, 0);
       const missingId = "00000000-0000-0000-0000-000000000000";
-      const { result: missing } = await execute({ action: "show", id: missingId }, bashOutput(""), {
-        cwd,
-        executeTool,
-      });
+      const { result: missing } = await run({ action: "show", id: missingId });
       assert.equal(missing.isError, true);
       assert.deepEqual(missing.structuredContent, {
         status: "error",
@@ -533,10 +590,10 @@ describe("session_search sandbox fixture integration", () => {
       const missingText = missing.content[0]?.type === "text" ? missing.content[0].text : "";
       assert.match(missingText, /no session matches id/);
       assert.doesNotMatch(missingText, /denied/);
-      assert.equal(nestedCalls, 4);
+      assert.equal(nestedCalls, 6);
     } finally {
       events.clear();
       rmSync(temp, { recursive: true, force: true });
     }
-  }, 30000);
+  }, 60000);
 });

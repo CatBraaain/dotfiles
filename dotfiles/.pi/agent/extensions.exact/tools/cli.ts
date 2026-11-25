@@ -39,7 +39,7 @@ export function cliExecutableName(name: string, platform = process.platform): st
   return platform === "win32" ? `${name}.exe` : name;
 }
 
-function bashPath(path: string, platform: NodeJS.Platform): string {
+export function bashPath(path: string, platform: NodeJS.Platform): string {
   return platform === "win32" ? path.replaceAll("\\", "/") : path;
 }
 
@@ -56,7 +56,7 @@ function quoteRecoveryPath(path: unknown, platform: NodeJS.Platform): string {
   throw new Error("Truncated registered bash output has no valid full_output_path");
 }
 
-function quoteWindowsArgument(argument: string): string {
+export function quoteWindowsArgument(argument: string): string {
   return argument
     .split(/(?<=\\)(?=\\)/)
     .map(quoteShell)

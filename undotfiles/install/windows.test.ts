@@ -51,7 +51,8 @@ function wingetInstall(packageIds: string, ...options: string[]): string[] {
 
 const devBeforeDocker = "Oven-sh.Bun Microsoft.coreutils";
 const devAfterDocker = `Git.Git GitHub.cli gerardog.gsudo Casey.Just OpenJS.NodeJS.LTS
-  Microsoft.PowerShell marlocarlo.psmux Canonical.Ubuntu astral-sh.uv Microsoft.VisualStudioCode`;
+  Microsoft.PowerShell marlocarlo.psmux Canonical.Ubuntu astral-sh.uv BurntSushi.ripgrep.MSVC
+  Microsoft.VisualStudioCode`;
 const workAfterFirefox = `DuongDieuPhap.ImageGlass RussellBanks.Komac LocalSend.LocalSend MPC-BE.MPC-BE
   M2Team.NanaZip OpenWhispr.OpenWhispr CatBraaain.runx ShareX.ShareX Rime.Weasel WinDirStat.WinDirStat
   Microsoft.WindowsTerminal CatBraaain.wintasks ZedIndustries.Zed`;

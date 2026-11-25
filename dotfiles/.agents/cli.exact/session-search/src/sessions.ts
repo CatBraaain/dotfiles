@@ -36,7 +36,7 @@ export function sessionsRootDir(homeDir: string = homedir()): string {
 }
 
 export function cwdToProjectDir(cwd: string): string {
-  const dashedPath = cwd.replace(/^\//, "").replaceAll("/", "-");
+  const dashedPath = cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-");
   return `--${dashedPath}--`;
 }
 

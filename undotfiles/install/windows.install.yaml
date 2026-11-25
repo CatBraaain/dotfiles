@@ -13,6 +13,7 @@ dev:
   - winget: marlocarlo.psmux
   - winget: Canonical.Ubuntu
   - winget: astral-sh.uv
+  - winget: BurntSushi.ripgrep.MSVC
   - winget: Microsoft.VisualStudioCode
 
   - npm: "@earendil-works/pi-coding-agent"

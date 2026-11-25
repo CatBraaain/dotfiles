@@ -1,6 +1,6 @@
 import { afterAll, describe, it } from "bun:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listSessionFiles, type SessionFile } from "./sessions";
@@ -60,6 +60,78 @@ describe("runSearch", () => {
   it("returns an empty list without spawning rg when there are no files", async () => {
     assert.deepEqual(await runSearch([], "query", { rgCommand: "session-search-missing-rg" }), []);
   });
+
+  it("discards hits from files outside the filtered set", async () => {
+    const root = createSessionTree();
+    writeSession(root, "00000000-0000-0000-0000-000000000001", [
+      userLineWithText("needle in range"),
+    ]);
+    const projectDir = join(root, "--proj--");
+    writeFileSync(
+      join(projectDir, "2026-10-20T00-00-00-000Z_00000000-0000-0000-0000-000000000002.jsonl"),
+      `${userLineWithText("needle before since")}\n`,
+    );
+    writeFileSync(join(projectDir, "notes.txt"), "needle non-session\n");
+    mkdirSync(join(projectDir, "subagents"));
+    writeFileSync(
+      join(
+        projectDir,
+        "subagents",
+        "2026-10-21T00-00-00-000Z_00000000-0000-0000-0000-000000000003.jsonl",
+      ),
+      `${userLineWithText("needle subagent")}\n`,
+    );
+    const files = listSessionFiles(root, { since: "2026-10-21" });
+
+    const hits = await runSearch(files, "needle");
+
+    assert.deepEqual(
+      hits.map((hit) => hit.text),
+      ["needle in range"],
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "gives rg the project directories instead of every session file",
+    async () => {
+      const root = createSessionTree();
+      const projectDir = join(root, "--proj--");
+      mkdirSync(projectDir, { recursive: true });
+      for (let i = 0; i < 300; i++) {
+        const hex = i.toString(16).padStart(32, "0");
+        const sessionId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+        writeFileSync(
+          join(projectDir, `2026-10-21T00-00-00-000Z_${sessionId}.jsonl`),
+          `${userLineWithText("needle")}\n`,
+        );
+      }
+      const files = listSessionFiles(root);
+      const argvPath = join(root, "rg-argv.json");
+      const fakeRg = join(root, "fake-rg");
+      writeFileSync(
+        fakeRg,
+        `#!/usr/bin/env bun\nawait Bun.write(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));\n`,
+        { mode: 0o755 },
+      );
+
+      assert.deepEqual(await runSearch(files, "needle", { rgCommand: fakeRg }), []);
+
+      const argv: string[] = JSON.parse(readFileSync(argvPath, "utf8"));
+      assert.deepEqual(argv.slice(0, -3), [
+        "--line-number",
+        "--no-heading",
+        "--with-filename",
+        "--null",
+        "--max-columns",
+        "100000",
+        "--max-columns-preview",
+        "--max-depth",
+        "1",
+        "--no-ignore",
+      ]);
+      assert.deepEqual(argv.slice(-3), ["--", "needle", projectDir]);
+    },
+  );
 
   it("stops rg early once the limit is reached", async () => {
     const root = createSessionTree();

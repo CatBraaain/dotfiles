@@ -55,6 +55,17 @@ describe("cwdToProjectDir", () => {
       "--home-username-projects-browser-youtube-play-all--",
     );
   });
+
+  it("maps Windows drive and UNC cwds to the names pi writes", () => {
+    assert.equal(
+      cwdToProjectDir("C:\\Users\\USERNAME\\projects\\dotfiles"),
+      "--C--Users-USERNAME-projects-dotfiles--",
+    );
+    assert.equal(
+      cwdToProjectDir("\\\\wsl.localhost\\Ubuntu\\home\\username\\projects\\dotfiles"),
+      "---wsl.localhost-Ubuntu-home-username-projects-dotfiles--",
+    );
+  });
 });
 
 describe("isWithinDateRange", () => {
