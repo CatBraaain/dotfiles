@@ -59,7 +59,12 @@ mock.module("../camoufox", () => ({
       }
     }
     trace({ event: "end", url, session });
-    if (scenario === "abort") throw new Error("render: aborted");
+    if (scenario === "multiline-failure") {
+      throw new Error(
+        "render: unavailable\r\ncall log\nfirst frame\rsecond frame\u2028third frame\u2029last frame",
+      );
+    }
+    if (scenario === "abort") throw new Error("render: aborted\ncall log");
     return "<html>Fixture</html>";
   },
   recoverCamoufoxBeforeRetry: async () => ({ shouldRetry: true, consumesRecoveryBudget: true }),

@@ -156,7 +156,23 @@ describe("CLI output and failure contract", () => {
     assert.equal(result.stderr.trim().split("\n").length, 1);
   });
 
-  it("adds the recovery Hint on a second stderr line after render aborts", () => {
+  it("escapes multiline backend errors within the single stderr summary line", () => {
+    const result = runCli(["__locked", "search", "query", "--json"], {
+      BROWSE_FIXTURE_SCENARIO: "multiline-failure",
+    });
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr.split(/[\r\n\u2028\u2029]/).length, 2, result.stderr);
+    assert.match(result.stderr, /^All web search backends failed:/);
+    assert.ok(
+      result.stderr.includes(
+        String.raw`render: unavailable\r\ncall log\nfirst frame\rsecond frame\u2028third frame\u2029last frame`,
+      ),
+      result.stderr,
+    );
+  });
+
+  it("adds the recovery Hint on a second stderr line after multiline render aborts", () => {
     const result = runCli(["__locked", "search", "query"], { BROWSE_FIXTURE_SCENARIO: "abort" });
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");

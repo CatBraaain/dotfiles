@@ -111,10 +111,18 @@ class AllBackendsFailedError extends Error {
     super(
       `All ${operation} backends failed: ${attempts
         .filter((attempt) => !attempt.ok)
-        .map((attempt) => `${attempt.backend}: ${attempt.error}`)
+        .map((attempt) => `${attempt.backend}: ${escapeLineBreaks(attempt.error)}`)
         .join("; ")}${renderAbortHint(attempts)}`,
     );
   }
+}
+
+function escapeLineBreaks(message: string): string {
+  return message
+    .replaceAll("\r", "\\r")
+    .replaceAll("\n", "\\n")
+    .replaceAll("\u2028", "\\u2028")
+    .replaceAll("\u2029", "\\u2029");
 }
 
 export async function tryRecoveryBackends<T>(
