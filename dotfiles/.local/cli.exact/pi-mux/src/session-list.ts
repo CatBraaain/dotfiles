@@ -16,6 +16,10 @@ import { resolveSessionTitle } from "./saved-sessions";
 import type { Pane } from "./session-model";
 import { tmux, tmuxQueries } from "./tmux";
 
+const STATE_OPTION = "@pi_session_state";
+const PUBLISH_PENDING_OPTION = "@pi_session_state_pending";
+const PANE_OPTIONS_COMPLETE = "pi-mux-pane-options-complete";
+
 export type ListedSession = {
   id: string;
   file: string;
@@ -49,32 +53,35 @@ async function collectWorkspaceList(
 ): Promise<ListedWorkspace[]> {
   const saved = panes.filter((pane) => existsSync(pane.file));
   const unsaved = panes.filter((pane) => !existsSync(pane.file));
-  const savedQueries = saved.flatMap(({ name, pane, session }) => {
-    const target = platform.windows ? `=${name}:.${pane}` : pane;
-    return [
-      ["show-options", "-pqv", "-t", target, "@pi_session_state"],
-      ["show-options", "-pqv", "-t", target, "@pi_session_state_pending"],
-      temporarySessionQuery(session),
-    ];
-  });
+  const savedQueryCount = platform.windows ? 2 : 3;
+  const savedQueries = saved.flatMap(({ name, pane, session }) => [
+    ...paneOptionQueries(name, pane),
+    temporarySessionQuery(session),
+  ]);
   const commands = [
     ...savedQueries,
     ...unsaved.map(({ session }) => temporarySessionQuery(session)),
   ];
   const results = await listTmuxQueries(config, commands);
   const sessions = saved.map(({ id, cwd, file, session }, index) => {
-    const queryIndex = index * 3;
-    const metadata = results[queryIndex]!;
-    const pending = results[queryIndex + 1]!;
-    for (const result of [metadata, pending]) {
+    const queryIndex = index * savedQueryCount;
+    const temporaryIndex = queryIndex + savedQueryCount - 1;
+    const [metadata, pending] = results.slice(queryIndex, temporaryIndex).map((result) => {
       if (result.exitCode !== 0)
         throw new Error(`tmux show-options failed: ${result.stderr.trim()}`);
-    }
+      if (platform.windows && !hasPaneOptionsCompletion(result.stdout))
+        throw new Error(`tmux show-options failed: incomplete pane option response for ${id}`);
+      return result.stdout;
+    });
+    const stateValue = platform.windows ? namedPaneOption(metadata!, STATE_OPTION) : metadata;
+    const pendingValue = platform.windows
+      ? namedPaneOption(metadata!, PUBLISH_PENDING_OPTION)
+      : pending;
     const temporary = readTemporarySession(
       config,
       session,
       id,
-      results[queryIndex + 2]!,
+      results[temporaryIndex]!,
       "allow-missing",
     );
     return {
@@ -82,8 +89,8 @@ async function collectWorkspaceList(
       session: {
         id,
         file,
-        ...parseSessionMetadata(metadata.stdout, id, file),
-        publishPending: parsePublishPending(pending.stdout, id),
+        ...parseSessionMetadata(stateValue, id, file),
+        publishPending: parsePublishPending(pendingValue, id),
         ...(temporary ? { temporary: true as const } : {}),
       } satisfies ListedSession,
     };
@@ -111,6 +118,42 @@ async function collectWorkspaceList(
   for (const { cwd, session } of sessions) workspaces.get(cwd)?.sessions.push(session);
   for (const { cwd, session } of empty) workspaces.get(cwd)?.empty.push(session);
   return [...workspaces.values()];
+}
+
+function paneOptionQueries(name: string, pane: string): string[][] {
+  const target = platform.windows ? `=${name}:.${pane}` : pane;
+  const flags = platform.windows ? "-pq" : "-pqv";
+  const showOption = ["show-options", flags, "-t", target];
+  const state = [...showOption, STATE_OPTION];
+  const pending = [...showOption, PUBLISH_PENDING_OPTION];
+  return platform.windows
+    ? [
+        [
+          ...state,
+          ";",
+          ...pending,
+          ";",
+          "display-message",
+          "-p",
+          "-t",
+          target,
+          PANE_OPTIONS_COMPLETE,
+        ],
+      ]
+    : [state, pending];
+}
+
+function hasPaneOptionsCompletion(stdout: string): boolean {
+  const completionLine = `${PANE_OPTIONS_COMPLETE}\n`;
+  return stdout === completionLine || stdout.endsWith(`\n${completionLine}`);
+}
+
+function namedPaneOption(stdout: string, option: string): string | undefined {
+  const prefix = `${option} `;
+  return stdout
+    .split("\n")
+    .find((line) => line.startsWith(prefix))
+    ?.slice(prefix.length);
 }
 
 async function listTmuxQueries(config: TmuxConfig, commands: string[][]) {

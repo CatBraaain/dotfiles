@@ -5,6 +5,7 @@ import * as fsPromises from "node:fs/promises";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createServer } from "node:net";
+import * as timers from "node:timers/promises";
 import { setImmediate } from "node:timers/promises";
 import { describe, it, spyOn } from "bun:test";
 import {
@@ -16,7 +17,7 @@ import {
 import { childInvocationArgs, subagentSessionDir } from "../agents/index.ts";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import { registerSessionState } from "./session-state.ts";
-import { stateOptionValue } from "./session-state-tmux.ts";
+import { dedicatedSocketPath, stateOptionValue } from "./session-state-tmux.ts";
 
 type EventHandler = (event: ExtensionEvent, ctx: ExtensionContext) => unknown;
 type KeywordResponse = (file: string, args: string[]) => ExecResult | Promise<ExecResult>;
@@ -138,6 +139,7 @@ async function createExtensionHarness(
     dedicated?: boolean;
     deferDiscovery?: boolean;
     failFirstAppend?: boolean;
+    platform?: NodeJS.Platform;
   } = {},
 ): Promise<ExtensionHarness> {
   await mkdir("/tmp/work/dotfiles", { recursive: true });
@@ -148,6 +150,9 @@ async function createExtensionHarness(
 
   const runtimeDir = await mkdtemp("/tmp/work/dotfiles/session-state-runtime-");
   const socketPath = join(runtimeDir, "pi-tmux", "server.sock");
+  const managedSocketPath = options.platform
+    ? dedicatedSocketPath({ XDG_RUNTIME_DIR: runtimeDir }, options.platform)
+    : socketPath;
   await mkdir(dirname(socketPath), { recursive: true });
   const socket = createServer();
   await new Promise<void>((resolve, reject) => {
@@ -167,7 +172,7 @@ async function createExtensionHarness(
     process.env.TMUX = `/other/socket,${process.pid}`;
     process.env.TMUX_PANE = "%0";
   } else {
-    process.env.TMUX = `${socketPath},${process.pid}`;
+    process.env.TMUX = `${managedSocketPath},${process.pid}`;
     process.env.TMUX_PANE = "%0";
   }
   const previousAgentName = process.env.PI_AGENT_NAME;
@@ -191,7 +196,7 @@ async function createExtensionHarness(
   const handlers = new Map<string, EventHandler[]>();
   const bus = createEventBus();
   const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
-  const server = new FakeTmuxServer(socketPath);
+  const server = new FakeTmuxServer(managedSocketPath);
   const modelRegistry = {};
   const entries: CustomEntry[] = [];
   const entryCountsAtStateCalls: number[] = [];
@@ -1040,48 +1045,215 @@ describe("session-state latest publication recovery", () => {
   });
 });
 
+interface RecoveryWait {
+  delayMs: number | undefined;
+  elapse(): void;
+}
+
+async function withRecoveryHarness(
+  platform: NodeJS.Platform,
+  run: (h: ExtensionHarness, waits: RecoveryWait[]) => Promise<void>,
+): Promise<void> {
+  const h = await createExtensionHarness({ platform });
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { value: platform });
+  const waits: RecoveryWait[] = [];
+  const mockedDelay = spyOn(timers, "setTimeout").mockImplementation(async function mockDelay<T>(
+    delayMs?: number,
+    value?: T,
+    { signal }: Parameters<typeof timers.setTimeout>[2] = {},
+  ): Promise<T> {
+    const elapsed = Promise.withResolvers<void>();
+    function onAbort(): void {
+      elapsed.reject(signal?.reason);
+    }
+    signal?.throwIfAborted();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    waits.push({ delayMs, elapse: elapsed.resolve });
+    try {
+      await elapsed.promise;
+      return value as T;
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+    }
+  });
+  try {
+    await run(h, waits);
+  } finally {
+    try {
+      await h.close();
+    } finally {
+      mockedDelay.mockRestore();
+      Object.defineProperty(process, "platform", originalPlatform);
+    }
+  }
+}
+
+async function elapseRecovery(wait: RecoveryWait | undefined, expectedMs: number): Promise<void> {
+  assert.ok(wait, "expected a pending recovery delay");
+  assert.equal(wait.delayMs, expectedMs);
+  wait.elapse();
+  await finishEventLoopTurn();
+}
+
+describe("session-state recovery timing", () => {
+  const windowsIntervalsMs = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+  for (const platform of ["win32", "linux"] as const) {
+    it(`applies the ${platform} publication schedule until success, then restarts at one second`, async () => {
+      await withRecoveryHarness(platform, async (h, waits) => {
+        const terminal = Promise.withResolvers<ExecResult>();
+        try {
+          await h.emit("session_start");
+          await finishEventLoopTurn();
+          assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("s1", "waiting-user"));
+          let attempts = 0;
+          h.server.responses.state = () => {
+            attempts++;
+            if (attempts === 1) return terminal.promise;
+            return attempts % 2 === 0 ? busyResult() : completedResult("", 1, "write failed");
+          };
+          await h.emit("agent_start");
+          await finishEventLoopTurn();
+          assert.equal(attempts, 1);
+          assert.equal(h.server.hasPending(), true);
+          assert.equal(waits.length, 0, "the backoff must not start before CLI termination");
+          terminal.resolve(interruptedResult());
+          await finishEventLoopTurn();
+
+          const intervalsMs =
+            platform === "win32" ? windowsIntervalsMs : windowsIntervalsMs.map(() => 1_000);
+          for (const [index, intervalMs] of intervalsMs.entries()) {
+            assert.equal(attempts, index + 1, "only one attempt before each delay expires");
+            if (index === 1) {
+              await h.emit("agent_settled");
+              await h.emit("session_info_changed", { name: "Latest title" });
+              await finishEventLoopTurn();
+              assert.equal(attempts, index + 1, "new events must not interrupt backoff");
+            }
+            if (index === intervalsMs.length - 1) delete h.server.responses.state;
+            await elapseRecovery(waits[index], intervalMs);
+          }
+          assert.equal(
+            h.server.paneOptionOf("%0"),
+            stateOptionValue("s1", "waiting-user", "Latest title"),
+          );
+          const requests = stateArguments(h.server.commands);
+          assert.deepEqual(
+            requests.map((args) => [args[2], JSON.parse(args[args.indexOf("--title") + 1]!)]),
+            [
+              ["waiting-user", null],
+              ["running", null],
+              ["running", null],
+              ...Array.from({ length: intervalsMs.length - 1 }, () => [
+                "waiting-user",
+                "Latest title",
+              ]),
+            ],
+          );
+          assert.equal(new Set(requests.map((args) => args[args.indexOf("--source") + 1])).size, 1);
+
+          h.server.responses.state = () => busyResult();
+          await h.emit("session_info_changed", { name: "After success" });
+          await finishEventLoopTurn();
+          delete h.server.responses.state;
+          await elapseRecovery(waits[intervalsMs.length], 1_000);
+          assert.equal(
+            h.server.paneOptionOf("%0"),
+            stateOptionValue("s1", "waiting-user", "After success"),
+          );
+        } finally {
+          terminal.resolve(interruptedResult());
+          delete h.server.responses.state;
+        }
+      });
+    });
+  }
+
+  it("backs off Windows pane detection and starts publication recovery at one second once verified", async () => {
+    await withRecoveryHarness("win32", async (h, waits) => {
+      const token = process.env.PI_TMUX_LAUNCH_TOKEN;
+      h.server.responses["display-message"] = () => interruptedResult();
+      await h.emit("session_start");
+      await finishEventLoopTurn();
+      await elapseRecovery(waits[0], 1_000);
+      await h.emit("agent_start");
+      await h.emit("session_info_changed", { name: "During inspection" });
+      await finishEventLoopTurn();
+      assert.equal(h.server.commands.length, 2);
+      assert.deepEqual(stateArguments(h.server.commands), []);
+      const serverPid = process.pid + 1;
+      h.server.responses["display-message"] = () =>
+        completedResult(
+          [h.server.socketPath, serverPid, "%0", JSON.stringify({ token }), process.pid].join("\t"),
+        );
+      h.server.responses.state = () => busyResult();
+      await elapseRecovery(waits[1], 2_000);
+      delete h.server.responses.state;
+      await elapseRecovery(waits[2], 1_000);
+      const requests = stateArguments(h.server.commands);
+      assert.deepEqual(
+        requests.map((args) => args[2]),
+        ["running", "running"],
+      );
+      for (const args of requests) {
+        assert.deepEqual(JSON.parse(args[args.indexOf("--source") + 1]!), {
+          socket: h.server.socketPath,
+          serverPid,
+          pane: "%0",
+          pid: process.pid,
+          token,
+        });
+      }
+      assert.equal(
+        h.server.paneOptionOf("%0"),
+        stateOptionValue("s1", "running", "During inspection"),
+      );
+    });
+  });
+});
+
 describe("session-state persistent publication recovery", () => {
   for (const stop of ["shutdown", "replacement"] as const) {
-    it(`stops persistent publication retries on ${stop}`, async () => {
-      const h = await createExtensionHarness();
-      let failures = 0;
-      try {
+    it(`cancels Windows publication backoff on ${stop}`, async () => {
+      await withRecoveryHarness("win32", async (h, waits) => {
         await h.emit("session_start");
-        await waitFor("initial", () => h.server.paneOptionOf("%0") !== undefined);
-        h.server.responses.state = () => {
-          failures++;
-          return completedResult("", 126, "publication failed");
-        };
+        await finishEventLoopTurn();
+        assert.equal(h.server.paneOptionOf("%0"), stateOptionValue("s1", "waiting-user"));
+        h.server.responses.state = () => completedResult("", 126, "publication failed");
         await h.emit("agent_start");
-        await waitFor("repeated failures", () => failures >= 2);
+        await finishEventLoopTurn();
+        await elapseRecovery(waits[0], 1_000);
+        const pendingWait = waits[1];
+        assert.ok(pendingWait);
+        assert.equal(pendingWait.delayMs, 2_000);
         await h.emit("agent_settled");
         await h.emit("session_info_changed", { name: "Discarded title" });
         delete h.server.responses.state;
         if (stop === "shutdown") {
           await h.emit("session_shutdown");
           assert.equal(h.server.paneOptionOf("%0"), undefined);
+          assert.equal(
+            stateArguments(h.server.commands).filter((args) => args.includes("--clear")).length,
+            1,
+          );
         } else {
           h.sessionId = "replacement";
           h.sessionName = "Replacement title";
           await h.emit("session_start");
-          await waitFor(
-            "replacement",
-            () =>
-              h.server.paneOptionOf("%0") ===
-              stateOptionValue("replacement", "waiting-user", "Replacement title"),
+          await finishEventLoopTurn();
+          assert.equal(
+            h.server.paneOptionOf("%0"),
+            stateOptionValue("replacement", "waiting-user", "Replacement title"),
           );
         }
         const count = h.server.commands.length;
-        await finishEventLoopTurn();
+        await elapseRecovery(pendingWait, 2_000);
         assert.equal(h.server.commands.length, count);
         assert.equal(
           h.server.commands.some((call) => call.args.includes("Discarded title")),
           false,
         );
-      } finally {
-        delete h.server.responses.state;
-        await h.close();
-      }
+      });
     });
   }
 });

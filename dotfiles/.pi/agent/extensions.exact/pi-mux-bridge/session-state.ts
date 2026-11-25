@@ -16,7 +16,8 @@ import {
 } from "./session-state-tmux.ts";
 
 const TMUX_COMMAND_TIMEOUT_MS = 1_000;
-const RECOVERY_RETRY_INTERVAL_MS = 1_000;
+const INITIAL_RECOVERY_RETRY_INTERVAL_MS = 1_000;
+const WINDOWS_MAX_RECOVERY_RETRY_INTERVAL_MS = 30_000;
 const PUBLICATION_PROCESS_KEY = Symbol.for("pi.session-state.publication-process");
 const LAST_RUN_ENTRY_TYPE = "pi-mux-last-run";
 
@@ -98,6 +99,7 @@ interface PublicationGeneration {
   settlementsBeforeBinding?: SettledRun[];
   lastPublished?: StateSnapshot;
   pending: number;
+  recoveryRetryIntervalMs: number;
   title: string | null;
   sessionId: string;
   run: CommandRunner;
@@ -197,6 +199,7 @@ export function registerSessionState(pi: ExtensionAPI): void {
       controller,
       initializationStarted: false,
       pending: 0,
+      recoveryRetryIntervalMs: INITIAL_RECOVERY_RETRY_INTERVAL_MS,
       sessionId,
       title: ctx.sessionManager.getSessionName() ?? null,
       runRevision: 0,
@@ -357,9 +360,19 @@ async function recoveryRetry(
   gen: PublicationGeneration,
   autoRecovery: boolean,
 ): Promise<"proceed" | "retry" | "aborted"> {
-  if (!autoRecovery) return "proceed";
+  if (!autoRecovery) {
+    gen.recoveryRetryIntervalMs = INITIAL_RECOVERY_RETRY_INTERVAL_MS;
+    return "proceed";
+  }
   if (!(await waitForPriorExecution(gen))) return "aborted";
-  return (await waitToRetry(gen, RECOVERY_RETRY_INTERVAL_MS)) ? "retry" : "aborted";
+  const retryIntervalMs = gen.recoveryRetryIntervalMs;
+  if (process.platform === "win32") {
+    gen.recoveryRetryIntervalMs = Math.min(
+      retryIntervalMs * 2,
+      WINDOWS_MAX_RECOVERY_RETRY_INTERVAL_MS,
+    );
+  }
+  return (await waitToRetry(gen, retryIntervalMs)) ? "retry" : "aborted";
 }
 
 async function waitToRetry(gen: PublicationGeneration, milliseconds: number): Promise<boolean> {
