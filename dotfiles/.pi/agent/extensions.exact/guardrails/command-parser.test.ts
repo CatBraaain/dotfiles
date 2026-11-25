@@ -3,6 +3,47 @@ import { describe, it } from "bun:test";
 import { parseCommandSegments } from "./command-parser.ts";
 
 describe("Bash syntax adapter", () => {
+  it("decodes supported ANSI-C escapes into the same argument Bash passes", () => {
+    const words = [
+      ["$'\\r'", "\r"],
+      ["'a'$'\\r\\n''b'", "a\r\nb"],
+      ["'c'$'\\r''d'", "c\rd"],
+      ["$'\\n\\t'", "\n\t"],
+      ["$'a b'", "a b"],
+      ["$'\\e\\a'", "\x1b\x07"],
+      ["$'x$y\\\\z'", "x$y\\z"],
+      ["$''", ""],
+    ];
+    for (const [word, token] of words) {
+      assert.deepEqual(
+        parseCommandSegments(`tool ${word}`).map((s) => s.tokens),
+        [["tool", token]],
+      );
+    }
+  });
+
+  it("rejects ANSI-C escapes whose value the parser does not define", () => {
+    for (const word of [
+      "$'\\x0d'",
+      "$'\\u3042'",
+      "$'\\U0001F600'",
+      "$'\\cM'",
+      "$'\\101'",
+      "$'\\'",
+      "$'a\\'b'",
+      "$'\\d'",
+      "$'a\\\nb'",
+      "$'\\$'",
+      "$'\\`'",
+    ]) {
+      assert.throws(
+        () => parseCommandSegments(`tool ${word}`),
+        /Unable to parse Bash command/,
+        word,
+      );
+    }
+  });
+
   it("retains builtin command tokens without treating declaration values as executable commands", () => {
     const segments = parseCommandSegments("export A=b; unset x; [ -n foo ]; [[ foo == foo ]]");
     assert.deepEqual(

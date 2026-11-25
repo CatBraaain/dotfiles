@@ -24,6 +24,19 @@ const EXPANSIONS = new Set([
   "arithmetic_expansion",
 ]);
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const ANSI_C_ESCAPES: Record<string, string> = {
+  a: "\x07",
+  b: "\x08",
+  e: "\x1b",
+  E: "\x1b",
+  f: "\x0c",
+  n: "\n",
+  r: "\r",
+  t: "\t",
+  v: "\x0b",
+  "\\": "\\",
+  '"': '"',
+};
 
 async function loadParser(): Promise<Parser> {
   await Parser.init();
@@ -178,6 +191,7 @@ function normalizeWord(node: Node): string | undefined {
 function withoutExpansions(node: Node): string {
   if (EXPANSIONS.has(node.type)) return "";
   if (node.type === "raw_string") return node.text;
+  if (node.type === "ansi_c_string") return quoteAnsiCString(node.text);
   let text = "";
   let index = node.startIndex;
   for (const child of node.namedChildren) {
@@ -188,6 +202,26 @@ function withoutExpansions(node: Node): string {
     index = child.endIndex;
   }
   return text + removeLineContinuations(node.text.slice(index - node.startIndex));
+}
+
+function quoteAnsiCString(text: string): string {
+  const body = /^\$'([\s\S]*)'$(?![\s\S])/.exec(text)?.[1];
+  if (body === undefined) throw new Error("Unable to parse Bash command: invalid ANSI-C string");
+  let decoded = "";
+  for (let index = 0; index < body.length; index++) {
+    const character = body[index]!;
+    if (character !== "\\") {
+      decoded += character;
+      continue;
+    }
+    const escaped = body[index + 1];
+    const replacement = escaped === undefined ? undefined : ANSI_C_ESCAPES[escaped];
+    if (replacement === undefined)
+      throw new Error("Unable to parse Bash command: unsupported ANSI-C escape");
+    decoded += replacement;
+    index++;
+  }
+  return "'" + decoded.replaceAll("'", "'\\''") + "'";
 }
 
 function removeLineContinuations(text: string): string {

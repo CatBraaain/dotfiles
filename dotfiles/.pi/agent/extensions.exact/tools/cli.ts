@@ -59,15 +59,20 @@ function quoteRecoveryPath(path: unknown, platform: NodeJS.Platform): string {
 export function quoteWindowsArgument(argument: string): string {
   return argument
     .split(/(?<=\\)(?=\\)/)
-    .map(quoteShell)
+    .map((part) => part.split("\r").map(quoteShell).join("$'\\r'"))
     .join("");
 }
 
+export function buildWindowsCliInvocation(executable: string, args: readonly string[]): string {
+  const command = quoteShell(bashPath(executable, "win32"));
+  return ["MSYS2_ARG_CONV_EXCL='*'", command, ...args.map(quoteWindowsArgument)].join(" ");
+}
+
 export function createCliCommand(params: CliParams, platform = process.platform): string {
-  const quoteArgument = platform === "win32" ? quoteWindowsArgument : quoteShell;
-  const executable = bashPath(params.executable, platform);
-  const invocation = [quoteShell(executable), ...params.args.map(quoteArgument)].join(" ");
-  const argConversion = platform === "win32" ? "MSYS2_ARG_CONV_EXCL='*' " : "";
+  const invocation =
+    platform === "win32"
+      ? buildWindowsCliInvocation(params.executable, params.args)
+      : [params.executable, ...params.args].map(quoteShell).join(" ");
   const tempTemplate = platform === "win32" ? "-t pi-cli.XXXXXXXXXX" : "/tmp/pi-cli.XXXXXXXXXX";
   return [
     "set -o pipefail",
@@ -77,7 +82,7 @@ export function createCliCommand(params: CliParams, platform = process.platform)
     `cli_tmp=$(mktemp -d ${tempTemplate}) || exit`,
     "trap 'rm -rf -- \"$cli_tmp\"' EXIT",
     "cli_code=0",
-    `${argConversion}${invocation} >"$cli_tmp/stdout" 2>"$cli_tmp/stderr" || cli_code=$?`,
+    `${invocation} >"$cli_tmp/stdout" 2>"$cli_tmp/stderr" || cli_code=$?`,
     "printf 'PI_CLI_V1:%s\\n' \"$cli_code\"",
     "base64 <\"$cli_tmp/stdout\" | tr -d '\\n' || exit",
     "printf '\\n'",

@@ -32,7 +32,7 @@
 
 | 条件 | 実行するコマンド | 成功時の status |
 | --- | --- | --- |
-| `session-id` 省略 | `pi-mux new --detached <message>` | `created` |
+| `session-id` 省略 | `pi-mux new --detached <message>`（Windows では `new --detached --cwd <absolute-cwd> <message>`） | `created` |
 | `session-id` 指定 | `pi-mux send [--wait <seconds>] <session-id> <message>` | `delivered` |
 
 - 作成では、sessionとwindowの命名はCLIに任せる。成功時はCLIの出力を本文に含め、会話IDとその会話への接続コマンドを示す。CLIがヘルプだけを表示する場合など、会話IDを返さなければ `error` とする。作成はdetachedで行い、呼び出し元や他の端末への自動attach・画面表示は行わない。
@@ -111,9 +111,9 @@ session承認も同じ置換・reloadで失効する。履歴からはどちら�
 
 通常の対話起動と同じ専用サーバーを利用する。専用管理先・設定の契約は [pi-mux の仕様](../../../../.local/cli.exact/pi-mux/SPEC.md) に従う。作成時は必要に応じて専用サーバーを起動する。送信時は稼働中の専用サーバーを使う。どちらも通常の tmux のソケット・設定・稼働状態には作用しない。`TMUX`・`TMUX_TMPDIR` によって解決先を変更しない。
 
-両動作とも、登録済みbashからlogin shell（`bash -lc`）でPATHを読み込み、専用管理先のruntimeディレクトリを `XDG_RUNTIME_DIR` に明示して共通CLIを実行する。各引数はquoteして渡し、`message`・`session-id` の空白・引用符・改行を保持する。
+Windows では、登録済みの Git for Windows の Bash から PATH 上のネイティブ `pi-mux.exe` を呼ぶ。追加のログインシェルや WSL を介さず、CLI が Windows の専用管理先を解決する。Windows 以外では、登録済み Bash からログインシェル（`bash -lc`）で PATH を読み込み、専用管理先のランタイムディレクトリを `XDG_RUNTIME_DIR` に明示して `pi-mux` を呼ぶ。どちらも作成時の初期依頼と送信時の `session-id`・`message` を、それぞれ空白・引用符・改行を含む単一の引数として保持する。
 
-作成では、親pi の会話情報（`PI_SESSION_ID` 等）を unset してから、入力で定まる作業ディレクトリで共通CLIの独立新規起動を実行する。初期依頼は1つの位置引数として渡す。新しいpi はPATH上で解決され、標準の設定探索（`~/.pi/agent/`・プロジェクト設定）で起動する。親pi の会話情報と固定ID指定を除き、新しいPTYの `TERM`・`TMUX`・`TMUX_PANE` を保持する。専用管理先のruntimeディレクトリを使い、paneの起動PIDとpi のPIDを一致させる。
+作成では、親 pi の会話情報（`PI_SESSION_ID` 等）を unset してから、入力で定まる作業ディレクトリで新しい pi を起動する。pi の解決と起動はプラットフォームごとの CLI の規則に従う。新しい pi は標準の設定探索（`~/.pi/agent/`・プロジェクト設定）で起動し、新しい PTY の `TERM`・`TMUX`・`TMUX_PANE` を保持する。
 
 送信では、親の会話情報を unset せずそのまま保持する。送信側の識別はCLIが `PI_SESSION_ID` 環境変数から埋めるためであり、未設定のときはCLIが `external` と識別する。cwdの変更は行わない。
 

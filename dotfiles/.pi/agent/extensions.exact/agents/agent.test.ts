@@ -107,10 +107,18 @@ function approvalUi(answer: {
   };
 }
 
+const windows = process.platform === "win32";
+const projectCwd = windows ? "C:\\project" : "/project";
+
+function commandTokens(command: string) {
+  const tokens = parse(command);
+  return tokens[0] === "bash" ? parse(tokens[2] as string) : tokens;
+}
+
 function mockContext(
   ui: ApprovalUI,
   executeTool: ExecuteTool,
-  cwd = "/project",
+  cwd = projectCwd,
   mode: "tui" | "rpc" = "tui",
 ): any {
   return { cwd, hasUI: true, mode, ui, executeTool };
@@ -202,7 +210,7 @@ describe("入力の検証", () => {
   });
 });
 
-describe("common independent startup command", () => {
+describe.skipIf(windows)("common independent startup command", () => {
   it("uses the dedicated runtime and common CLI without calling tmux directly", () => {
     const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated runtime" });
     const command = buildCreateCommand({ message: "fix it", cwd: "/repo" }, paths);
@@ -259,7 +267,7 @@ describe("common independent startup command", () => {
   }
 });
 
-describe("send command", () => {
+describe.skipIf(windows)("send command", () => {
   it("uses the dedicated runtime and keeps the sender environment", () => {
     const paths = getTmuxPaths({ XDG_RUNTIME_DIR: "/isolated runtime" });
     const command = buildSendCommand({ sessionId: "abc123", message: "the current status" }, paths);
@@ -313,6 +321,42 @@ describe("send command", () => {
       assert.deepEqual(argumentsPassed, ["pi-mux", "send", "--wait", "9", "abc123", message]);
     });
   }
+});
+
+describe("Windows commands", () => {
+  const message = "--literal ' \" \\ \\\\ /path $(not-a-command)\n日本語";
+
+  for (const cwd of ["C:\\作業 場所\\O'Brien", "\\\\server\\share\\作業 場所"]) {
+    it(`clears parent state and passes the native cwd and initial request for ${cwd}`, () => {
+      const command = buildCreateCommand({ cwd, message }, undefined, "win32");
+      assert.deepEqual(parse(command), [
+        "unset",
+        ...PARENT_PI_ENV_KEYS,
+        { op: "&&" },
+        "MSYS2_ARG_CONV_EXCL=*",
+        "pi-mux.exe",
+        "new",
+        "--detached",
+        "--cwd",
+        cwd,
+        message,
+      ]);
+    });
+  }
+
+  it("passes the send inputs without changing the sender environment", () => {
+    const sessionId = "exact \\ ' \"\nID";
+    const command = buildSendCommand({ sessionId, message, wait: 4 }, undefined, "win32");
+    assert.deepEqual(parse(command), [
+      "MSYS2_ARG_CONV_EXCL=*",
+      "pi-mux.exe",
+      "send",
+      "--wait",
+      "4",
+      sessionId,
+      message,
+    ]);
+  });
 });
 
 describe("ツールの登録", () => {
@@ -520,8 +564,7 @@ describe("承認", () => {
       calls.selections[0]?.title,
       `Allow creating a new main-agent session?\nTurn and session approvals apply to session creation only.\nmessage: ${message}`,
     );
-    const script = parse(executor.commands[0]!)[2] as string;
-    assert.equal(parse(script).at(-1), message);
+    assert.equal(commandTokens(executor.commands[0]!).at(-1), message);
   });
 
   it("shows the destination session id and wait in the send approval", async () => {
@@ -540,8 +583,7 @@ describe("承認", () => {
       calls.selections[0]?.title,
       `Allow sending a message to another session?\nTurn and session approvals apply to message sending only.\nmessage: ${message}\nsession-id: abc123\nwait: 7 seconds`,
     );
-    const script = parse(executor.commands[0]!)[2] as string;
-    assert.equal(parse(script).at(-1), message);
+    assert.equal(commandTokens(executor.commands[0]!).at(-1), message);
   });
 
   it("passes the full multiline message to confirm without a session id", async () => {
@@ -565,8 +607,7 @@ describe("承認", () => {
       },
     ]);
     assert.equal(calls.selections.length, 0);
-    const script = parse(executor.commands[0]!)[2] as string;
-    assert.equal(parse(script).at(-1), message);
+    assert.equal(commandTokens(executor.commands[0]!).at(-1), message);
   });
 
   it("treats selection cancellation as denial and requests an optional reason", async () => {
@@ -927,9 +968,17 @@ describe("実行", () => {
       mockContext(ui, executor.executeTool, "/repo"),
     );
     assert.equal(executor.commands.length, 1);
-    const script = parse(executor.commands[0]!)[2] as string;
-    assert.ok(script.includes("pi-mux new --detached"));
-    assert.ok(script.includes("XDG_RUNTIME_DIR="));
+    const tokens = commandTokens(executor.commands[0]!);
+    const cli = windows ? "pi-mux.exe" : "pi-mux";
+    assert.deepEqual(tokens.slice(tokens.indexOf(cli), tokens.indexOf(cli) + 3), [
+      cli,
+      "new",
+      "--detached",
+    ]);
+    assert.equal(
+      tokens.some((token) => String(token).startsWith("XDG_RUNTIME_DIR=")),
+      !windows,
+    );
     assert.equal(result.structuredContent.status, "created");
     assert.deepEqual(result.structuredContent, { status: "created" });
     assert.equal(result.content[0].text.includes("window"), false);
@@ -971,15 +1020,13 @@ describe("実行", () => {
       mockContext(ui, executor.executeTool),
     );
     assert.equal(executor.commands.length, 1);
-    const script = parse(executor.commands[0]!)[2] as string;
-    const tokens = parse(script);
-    assert.deepEqual(tokens.slice(tokens.indexOf("exec")), [
-      "exec",
-      "pi-mux",
-      "new",
-      "--detached",
-      "--detached",
-    ]);
+    const tokens = commandTokens(executor.commands[0]!);
+    assert.deepEqual(
+      tokens.slice(tokens.indexOf("new")),
+      windows
+        ? ["new", "--detached", "--cwd", projectCwd, "--detached"]
+        : ["new", "--detached", "--detached"],
+    );
     assert.deepEqual(result.structuredContent, { status: "created" });
   });
 
@@ -987,21 +1034,29 @@ describe("実行", () => {
     const tool = captureTool();
     const { ui } = approvalUi({ dialog: "once" });
     const executor = recordingExecutor();
+    const cwd = windows ? "C:\\from\\ctx" : "/from/ctx";
     const result = await tool.execute(
       "t",
       { message: "fix it" },
       undefined,
       undefined,
-      mockContext(ui, executor.executeTool, "/from/ctx"),
+      mockContext(ui, executor.executeTool, cwd),
     );
-    assert.ok((parse(executor.commands[0]!)[2] as string).includes("cd -- /from/ctx"));
+    const command = commandTokens(executor.commands[0]!);
+    assert.equal(command[command.indexOf(windows ? "--cwd" : "--") + 1], cwd);
     assert.deepEqual(result.structuredContent, { status: "created" });
   });
 
-  for (const [cwd, resolvedCwd] of [
-    ["../other repo", "/other repo"],
-    ["/absolute repo", "/absolute repo"],
-  ] as const) {
+  const directoryCases = windows
+    ? [
+        ["../other repo", "C:\\other repo"],
+        ["D:\\absolute repo", "D:\\absolute repo"],
+      ]
+    : [
+        ["../other repo", "/other repo"],
+        ["/absolute repo", "/absolute repo"],
+      ];
+  for (const [cwd, resolvedCwd] of directoryCases) {
     it(`shows and uses the resolved working directory for ${cwd}`, async () => {
       const tool = captureTool();
       const { ui, calls } = approvalUi({ dialog: "once" });
@@ -1012,9 +1067,8 @@ describe("実行", () => {
         calls.selections[0]?.title,
         `Allow creating a new main-agent session?\nTurn and session approvals apply to session creation only.\nmessage: ${request.message}\ncwd: ${resolvedCwd}`,
       );
-      const command = parse(parse(executor.commands[0]!)[2] as string);
-      const cdIndex = command.indexOf("cd");
-      assert.deepEqual(command.slice(cdIndex, cdIndex + 3), ["cd", "--", resolvedCwd]);
+      const command = commandTokens(executor.commands[0]!);
+      assert.equal(command[command.indexOf(windows ? "--cwd" : "--") + 1], resolvedCwd);
       assert.deepEqual(result.structuredContent, { status: "created" });
     });
   }
@@ -1061,10 +1115,10 @@ describe("実行", () => {
       mockContext(ui, executor.executeTool),
     );
     assert.equal(executor.commands.length, 1);
-    const inner = parse(parse(executor.commands[0]!)[2] as string);
-    assert.deepEqual(inner.slice(inner.indexOf("exec")), [
-      "exec",
-      "pi-mux",
+    const tokens = commandTokens(executor.commands[0]!);
+    const cli = windows ? "pi-mux.exe" : "pi-mux";
+    assert.deepEqual(tokens.slice(tokens.indexOf(cli)), [
+      cli,
       "send",
       "abc123",
       "report the current status",
@@ -1088,8 +1142,8 @@ describe("実行", () => {
       undefined,
       mockContext(ui, executor.executeTool),
     );
-    const inner = parse(parse(executor.commands[0]!)[2] as string);
-    assert.deepEqual(inner.slice(inner.indexOf("send")), [
+    const tokens = commandTokens(executor.commands[0]!);
+    assert.deepEqual(tokens.slice(tokens.indexOf("send")), [
       "send",
       "--wait",
       "30",

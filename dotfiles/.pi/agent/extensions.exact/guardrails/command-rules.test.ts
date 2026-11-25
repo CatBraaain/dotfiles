@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Guardrail } from "./guardrail.ts";
 import {
   compileCommandRuleEntries,
+  commandOnceApprovalKey,
   parseGuardrailConfig,
   resolveCommandAction,
   resolveCommandActionMatch,
@@ -67,6 +68,29 @@ describe("structured whole-token command rules", () => {
     const entries = commandEntries("tool", ["", " a b ", "a\\nb"]);
     assert.equal(resolveCommandAction(entries, 'tool "" " a b " "a\nb"'), "ask");
     assert.equal(resolveCommandAction(entries, 'tool " a b " "a\nb"'), "deny");
+  });
+
+  it("matches and approves ANSI-C quoted arguments by their Bash value", () => {
+    const entries = compileCommandRuleEntries([
+      { action: "allow", pattern: "pi-mux", args: [] },
+      { action: "deny", pattern: "pi-mux", args: ["a\r\nb"] },
+      { action: "ask", pattern: "pi-mux", args: ["a\rb"] },
+    ]).entries;
+    const crlf = "pi-mux 'a'$'\\r\\n''b'";
+    const cr = "pi-mux 'a'$'\\r''b'";
+    assert.equal(resolveCommandAction(entries, crlf), "deny", crlf);
+    assert.equal(resolveCommandAction(entries, cr), "ask", cr);
+    assert.equal(
+      resolveCommandAction(entries, "pi-mux 'a\r\nb'"),
+      "deny",
+      "a literal CR inside single quotes is the same Bash value",
+    );
+    assert.equal(
+      resolveCommandAction(entries, "pi-mux 'a\\r\\nb'"),
+      "allow",
+      "a backslash followed by r is not a carriage return",
+    );
+    assert.equal(commandOnceApprovalKey(cr), commandOnceApprovalKey("pi-mux 'a\rb'"));
   });
 
   it("discards unquoted empty expansions without hiding the executable behind env", () => {

@@ -54,6 +54,11 @@ describe("Windows CLI execution", () => {
     );
   });
 
+  it("keeps a carriage return as an ANSI-C escape and a line feed as a quoted newline", () => {
+    const command = createCliCommand({ executable: "cli.exe", args: ["a\rb\rc", "d\ne"] }, "win32");
+    assert.ok(command.includes(String.raw`'cli.exe' 'a'$'\r''b'$'\r''c' 'd` + "\ne'"));
+  });
+
   it.skipIf(process.platform !== "win32")(
     "recovers native executable output from Git Bash without changing literal argv",
     async () => {
@@ -77,6 +82,7 @@ describe("Windows CLI execution", () => {
           "\\\\server\\share\\日本語 空白",
           "literal\\\\path\\\\",
           'double quote" after a backslash\\',
+          "first\r\nsecond\rthird\n",
         ];
         const outcome = await runCliViaBash({
           context,

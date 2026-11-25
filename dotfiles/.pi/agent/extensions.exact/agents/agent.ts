@@ -9,6 +9,7 @@ import { quote } from "shell-quote";
 import { Type, type Static } from "typebox";
 import { getTmuxPaths, PARENT_PI_ENV_KEYS, type TmuxPaths } from "../pi-mux-bridge/shared.ts";
 import { resultText } from "../shared/tool-text.ts";
+import { buildWindowsCliInvocation } from "../tools/cli.ts";
 import { showAgentApproval, type ApprovalField } from "./agent-approval.ts";
 
 type BashResponse = Awaited<ReturnType<ExtensionToolContext["executeTool"]>>;
@@ -96,11 +97,23 @@ function toAction(input: AgentInput, sessionCwd: string): AgentAction {
 
 export function buildCreateCommand(
   input: { message: string; cwd: string },
-  paths: TmuxPaths = getTmuxPaths(),
+  paths?: TmuxPaths,
+  platform = process.platform,
 ): string {
+  const clearParent = `unset ${PARENT_PI_ENV_KEYS.join(" ")}`;
+  if (platform === "win32") {
+    const invocation = buildWindowsCliInvocation("pi-mux.exe", [
+      "new",
+      "--detached",
+      "--cwd",
+      input.cwd,
+      input.message,
+    ]);
+    return `${clearParent} && ${invocation}`;
+  }
   const piScript = [
-    `unset ${PARENT_PI_ENV_KEYS.join(" ")}`,
-    `export XDG_RUNTIME_DIR=${quote([dirname(paths.directory)])}`,
+    clearParent,
+    `export XDG_RUNTIME_DIR=${quote([dirname((paths ?? getTmuxPaths()).directory)])}`,
     `cd -- ${quote([input.cwd])} && exec ${quote(["pi-mux", "new", "--detached", input.message])}`,
   ].join("\n");
   return quote(["bash", "-lc", piScript]);
@@ -108,18 +121,19 @@ export function buildCreateCommand(
 
 export function buildSendCommand(
   input: { sessionId: string; message: string; wait?: number },
-  paths: TmuxPaths = getTmuxPaths(),
+  paths?: TmuxPaths,
+  platform = process.platform,
 ): string {
   const cliArguments = [
-    "pi-mux",
     "send",
     ...(input.wait === undefined ? [] : ["--wait", String(input.wait)]),
     input.sessionId,
     input.message,
   ];
+  if (platform === "win32") return buildWindowsCliInvocation("pi-mux.exe", cliArguments);
   const piScript = [
-    `export XDG_RUNTIME_DIR=${quote([dirname(paths.directory)])}`,
-    `exec ${quote(cliArguments)}`,
+    `export XDG_RUNTIME_DIR=${quote([dirname((paths ?? getTmuxPaths()).directory)])}`,
+    `exec ${quote(["pi-mux", ...cliArguments])}`,
   ].join("\n");
   return quote(["bash", "-lc", piScript]);
 }
@@ -267,11 +281,8 @@ export function registerAgentTool(pi: ExtensionAPI): void {
       }
 
       signal?.throwIfAborted();
-      const paths = getTmuxPaths();
       const command =
-        action.kind === "create"
-          ? buildCreateCommand(action, paths)
-          : buildSendCommand(action, paths);
+        action.kind === "create" ? buildCreateCommand(action) : buildSendCommand(action);
       const bash = await ctx.executeTool("bash", { command }, { signal });
       return actionResult(action, signal?.aborted ? { ...bash, isError: true } : bash);
     },
