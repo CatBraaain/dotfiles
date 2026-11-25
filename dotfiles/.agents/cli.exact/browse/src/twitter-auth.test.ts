@@ -67,6 +67,11 @@ console.log(JSON.stringify({
     }
     const build = Bun.spawnSync([process.execPath, join(project, "../cli.build.ts")], {
       cwd: buildRoot,
+      env: {
+        ...process.env,
+        DOTFILES_MANAGER_SRC: join(project, "../../../../dotfiles-manager/src"),
+        DOTFILES_DIST_DIR: buildRoot,
+      },
       timeout: 30_000,
     });
     assert.equal(build.exitCode, 0, build.stderr.toString());
