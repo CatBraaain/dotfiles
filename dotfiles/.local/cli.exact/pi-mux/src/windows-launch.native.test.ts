@@ -350,8 +350,57 @@ test.skipIf(!tmux)(
         client.kill();
         await Promise.all([client.exited, streams]);
       }
-      assert.notEqual(await generation(), previous);
+      const beforeNormal = await generation();
+      assert.notEqual(beforeNormal, previous);
       assert.deepEqual(json(await mux("inspect", id)), { state: "present" });
+
+      const paneFields = () =>
+        ok([
+          tmux,
+          "-S",
+          socket,
+          "-f",
+          conf,
+          "list-panes",
+          "-a",
+          "-F",
+          "#{pid}\t#{pane_id}\t#{pane_pid}\t#{@pi-tmux-session}",
+        ]);
+      const [serverPid, pane, panePid, metadata] = (await paneFields()).split("\t");
+      assert.ok(metadata);
+      const { processPid, token } = json<{ processPid: number; token: string }>(
+        Buffer.from(metadata, "base64").toString("utf8"),
+      );
+      const source = JSON.stringify({
+        socket,
+        serverPid: Number(serverPid),
+        pane,
+        pid: processPid,
+        token,
+      });
+      const notify = (state: string) =>
+        mux("state", id, state, "--source", source, "--title", "null");
+
+      await notify("running");
+      const restarting = run([muxExe, "restart"]);
+      let completed = false;
+      void restarting
+        .finally(() => {
+          completed = true;
+        })
+        .catch(() => {});
+      for (const state of ["running", "waiting-approval"] as const) {
+        if (state === "waiting-approval") await notify(state);
+        await Bun.sleep(500);
+        assert.equal(completed, false, state);
+        assert.equal(await generation(), beforeNormal, state);
+      }
+      await notify("waiting-user");
+      const result = await restarting;
+      assert.equal(result.code, 0, JSON.stringify(result));
+      assert.notEqual(await generation(), beforeNormal);
+      assert.deepEqual(json(await mux("inspect", id)), { state: "present" });
+      assert.notEqual((await paneFields()).split("\t")[2], panePid);
     } finally {
       await run([tmux, "-S", socket, "-f", conf, "kill-server"]);
       rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });

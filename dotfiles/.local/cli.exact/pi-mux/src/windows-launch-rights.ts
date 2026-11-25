@@ -76,16 +76,21 @@ export class WindowsLaunchRights {
   async reserveAfterLifecycleAudit(
     keys: string[],
     basis: WindowsManagementBasis,
-    { requireRestored = true }: { requireRestored?: boolean } = {},
+    {
+      requireRestored = true,
+      token = randomUUID(),
+    }: { requireRestored?: boolean; token?: string } = {},
   ): Promise<{ state: "conflict"; right: SpawnedRight } | { state: "reserved"; token: string }> {
     return await this.access.withClaimLock(async () => {
       if (
+        !TOKEN.test(token) ||
         !isWindowsManagementBasis(basis) ||
         !launchBasisStillLive(basis, await this.access.observeManagement(requireRestored))
       )
         throw new Error("The audited Windows pi-mux management generation is no longer live");
       const retained: LaunchRight[] = [];
       for (const right of readRights(this.access.path)) {
+        if (right.token === token) throw new Error("Windows pi-mux launch token already exists");
         if (!right.keys.some((key) => keys.includes(key))) {
           retained.push(right);
           continue;
@@ -98,7 +103,6 @@ export class WindowsLaunchRights {
         }
         throw new Error("Cannot determine the outcome of a prior Windows pi-mux launch");
       }
-      const token = randomUUID();
       writeRights(this.access.path, [
         ...retained,
         { state: "reserved", keys, basis, token, requireRestored },

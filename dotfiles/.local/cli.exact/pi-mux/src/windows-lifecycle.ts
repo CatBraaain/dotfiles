@@ -1,6 +1,8 @@
-import { lstat, readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { basename, join } from "node:path";
 import {
   inspectWindowsProcess,
   isWindowsProcessIdentity,
@@ -12,6 +14,9 @@ import type { PsmuxObservation, PsmuxPeer } from "./windows-psmux";
 
 const CONTROL_TIMEOUT_MS = 5000;
 const RESPONSE_LIMIT = 1024;
+const PANE_RESPONSE_LIMIT = 1024 * 1024;
+const PANE_ID = /^%\d+$/;
+const PANE_FIELD = /^(?:[a-z_][a-z_0-9]*|@[a-z_0-9-]+)$/i;
 const AUTH_KEY = /^[0-9a-f]{16}$/;
 const PEER_NAME = /^[A-Za-z0-9_-]+$/;
 const NAMESPACE = /^[A-Za-z0-9_.-]+$/;
@@ -64,6 +69,7 @@ export async function stopWindowsPeers(
   scope: Scope,
   { basis, panes }: PsmuxObservation,
   inspect: InspectWindowsProcess = inspectWindowsProcess,
+  beforeShutdown?: () => Promise<void>,
 ): Promise<WindowsProcessIdentity[]> {
   if (!AUTH_KEY.test(basis.instance) || !NAMESPACE.test(scope.namespace) || panes.length === 0)
     throw new Error("Invalid psmux shutdown scope");
@@ -93,6 +99,7 @@ export async function stopWindowsPeers(
       if (socket.destroyed || observeWindowsIdentity(identity, inspect) !== "present")
         throw new Error(`psmux peer changed before shutdown: ${peer.name}`);
     }
+    await beforeShutdown?.();
     const results = await Promise.allSettled(bound.map((peer) => shutdown(peer, basis.instance)));
     const stopFailure = results.find((result) => result.status === "rejected");
     if (stopFailure) throw stopFailure.reason;
@@ -138,14 +145,204 @@ function wireArgument(value: string): string {
   return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
+function auditedPaneIdentity(
+  scope: Scope,
+  { basis, panes }: PsmuxObservation,
+  peer: PsmuxPeer,
+  pane: string,
+): WindowsProcessIdentity {
+  const matches = panes.filter(({ peer: observed }) => observed.identity === peer.identity);
+  if (
+    !AUTH_KEY.test(basis.instance) ||
+    !NAMESPACE.test(scope.namespace) ||
+    !basis.witnesses.includes(peer.identity) ||
+    matches.length !== 1 ||
+    matches[0]!.peer.name !== peer.name ||
+    matches[0]!.peer.port !== peer.port ||
+    matches[0]!.peer.held ||
+    peer.held ||
+    !PANE_ID.test(pane)
+  )
+    throw new Error("Invalid psmux pane scope");
+  return peerIdentity(peer);
+}
+
+export async function readWindowsPeerPaneFields(
+  scope: Scope,
+  observation: PsmuxObservation,
+  peer: PsmuxPeer,
+  pane: string,
+  fields: readonly string[],
+  inspect: InspectWindowsProcess = inspectWindowsProcess,
+): Promise<string[]> {
+  const identity = auditedPaneIdentity(scope, observation, peer, pane);
+  if (fields.length === 0 || fields.some((field) => !PANE_FIELD.test(field)))
+    throw new Error("Invalid psmux pane read fields");
+  const { basis } = observation;
+  const fixedFields = ["pid", "server_instance", "session_name", "pane_id"];
+  const prefix = [String(identity.pid), basis.instance, peer.name, pane].join("\t") + "\t";
+  const format = [...fixedFields, ...fields].map((field) => `#{${field}}`).join("\t");
+  const socket = await authenticate(scope, peer);
+  try {
+    if (observeWindowsIdentity(identity, inspect) !== "present")
+      throw new Error(`psmux peer changed before pane read: ${peer.name}`);
+    const response = await exchange(
+      socket,
+      `display-message -p -t ${pane} ${wireArgument(format)}\n`,
+      "pane-read",
+    );
+    if (observeWindowsIdentity(identity, inspect) !== "present")
+      throw new Error(`psmux peer changed during pane read: ${peer.name}`);
+    const values = response.slice(prefix.length, -1).split("\t");
+    if (
+      !response.startsWith(prefix) ||
+      !response.endsWith("\n") ||
+      values.length !== fields.length ||
+      values.some((value) => /[\r\n]/.test(value))
+    )
+      throw new Error(`Cannot verify psmux pane read: ${peer.name} ${pane}`);
+    return values;
+  } finally {
+    socket.destroy();
+  }
+}
+
+export async function runWindowsPeerPaneCommands(
+  scope: Scope,
+  observation: PsmuxObservation,
+  peer: PsmuxPeer,
+  pane: string,
+  commands: readonly (readonly string[])[],
+): Promise<string> {
+  const identity = auditedPaneIdentity(scope, observation, peer, pane);
+  if (commands.length === 0) throw new Error("Expected a psmux pane command");
+  const request = commands.map((args) => args.map(wireArgument).join(" ")).join(" ; ");
+  const socket = await authenticate(scope, peer);
+  try {
+    if (observeWindowsIdentity(identity, inspectWindowsProcess) !== "present")
+      throw new Error(`psmux peer changed before pane command: ${peer.name}`);
+    const response = await exchange(socket, `${request}\n`, "pane-read");
+    if (observeWindowsIdentity(identity, inspectWindowsProcess) !== "present")
+      throw new Error(`psmux peer changed during pane command: ${peer.name}`);
+    if (response.split("\n").some((line) => line.startsWith("ERROR: ")))
+      throw new Error(`psmux ${commands[0]![0]} failed in ${peer.name} ${pane}`);
+    return response;
+  } finally {
+    socket.destroy();
+  }
+}
+
+type PaneExpectation = readonly [field: string, value: string];
+type PaneMutation = { option: string; value?: string; global?: boolean } | { unsetTemporary: true };
+
+export async function mutateWindowsPeerPane(
+  scope: Scope,
+  observation: PsmuxObservation,
+  peer: PsmuxPeer,
+  pane: string,
+  {
+    expected,
+    owner,
+    mutations,
+    processes,
+  }: {
+    expected: readonly PaneExpectation[];
+    owner?: PaneExpectation;
+    mutations: readonly PaneMutation[];
+    processes: readonly WindowsProcessIdentity[];
+  },
+): Promise<"applied" | "owner-changed"> {
+  const identity = auditedPaneIdentity(scope, observation, peer, pane);
+  const marker = `PI_MUX_STATE_${randomUUID().replaceAll("-", "")}`;
+  const variables: string[] = [];
+  const matches = ([field, value]: PaneExpectation) => {
+    if (!PANE_FIELD.test(field) || /[\0\r\n]/.test(value) || value !== value.trim())
+      throw new Error("Invalid psmux pane expectation");
+    const name = `${marker}_${variables.length}`;
+    variables.push(`%hidden ${name}=${value}`);
+    return `#{==:#{${field}},#{${name}}}`;
+  };
+  const guard = [
+    peerGuard(peer, identity.pid, observation.basis.instance),
+    ...([["pane_id", pane], ["pane_dead", "0"], ...expected] as const).map(matches),
+  ];
+  const ownerGuard = owner && matches(owner);
+  const postconditions: string[] = [];
+  const commands = mutations.map((mutation) => {
+    if ("unsetTemporary" in mutation) {
+      postconditions.push(matches(["PI_TMUX_TEMPORARY", ""]));
+      return "set-environment -u PI_TMUX_TEMPORARY";
+    }
+    const { option, value, global } = mutation;
+    if (!option.startsWith("@") || !PANE_FIELD.test(option) || value?.includes("$"))
+      throw new Error("Invalid psmux pane mutation");
+    postconditions.push(matches([option, value ?? ""]));
+    const flags = global ? "-g" : `-p -t ${pane}`;
+    return value === undefined
+      ? `set-option -u ${flags} ${option}`
+      : `set-option ${flags} ${option} ${wireArgument(value)}`;
+  });
+  const script = [
+    ...variables,
+    ...guard.map((condition) => `%if ${condition}`),
+    ...(ownerGuard ? [`%if ${ownerGuard}`] : []),
+    ...commands,
+    ...postconditions.map((condition) => `%if ${condition}`),
+    `%hidden ${marker}=applied`,
+    ...postconditions.map(() => "%endif"),
+    ...(ownerGuard ? ["%else", `%hidden ${marker}=owner-changed`, "%endif"] : []),
+    ...guard.map(() => "%endif"),
+    ...variables.map((_, index) => `set-environment -ghu ${marker}_${index}`),
+  ].join("\n");
+
+  // Targeted RunCommand sources the file in one server request. Its forwarded TCP copy is parse-only, so it cannot reset bindings or run the file on the active pane: https://github.com/psmux/psmux/blob/v3.4.0/src/commands.rs#L2042
+  const directory = await mkdtemp(join(homedir(), ".pi-mux-state-"));
+  try {
+    const file = "publish.conf";
+    await writeFile(join(directory, file), script, { flag: "wx", mode: 0o600 });
+    const path = `~/${basename(directory)}/${file}`;
+    const socket = await authenticate(scope, peer);
+    try {
+      for (const process of [identity, ...processes]) {
+        if (observeWindowsIdentity(process, inspectWindowsProcess) !== "present")
+          throw new Error(`psmux peer or Pi process changed before pane mutation: ${peer.name}`);
+      }
+      const command = [
+        `run-command -t ${pane} ${wireArgument(`source-file ${path} -n`)}`,
+        `display-message -p ${wireArgument(`#{${marker}}`)}`,
+        `set-environment -ghu ${marker}`,
+      ].join(" ; ");
+      const response = await exchange(socket, `${command}\n`, "pane-read");
+      if (observeWindowsIdentity(identity, inspectWindowsProcess) !== "present")
+        throw new Error(`psmux peer changed during pane mutation: ${peer.name}`);
+      if (response === "OK\napplied\n") return "applied";
+      if (response === "OK\nowner-changed\n") return "owner-changed";
+      throw new Error(`Cannot confirm guarded psmux pane mutation: ${peer.name} ${pane}`);
+    } finally {
+      socket.destroy();
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 export async function configureWindowsPeer(
   scope: Scope,
   observation: PsmuxObservation,
-  { configFile, hookCommand, proof }: { configFile: string; hookCommand: string; proof?: string },
+  {
+    configFile,
+    hookCommand,
+    proof,
+    peerName,
+  }: { configFile: string; hookCommand: string; proof?: string; peerName?: string },
   inspect: InspectWindowsProcess = inspectWindowsProcess,
 ): Promise<void> {
   const { basis, panes } = observation;
-  const peer = (panes.find(({ peer }) => peer.held) ?? panes[0])?.peer;
+  const peer = (
+    peerName === undefined
+      ? (panes.find(({ peer }) => peer.held) ?? panes[0])
+      : panes.find(({ peer }) => peer.name === peerName)
+  )?.peer;
   if (
     !peer ||
     !AUTH_KEY.test(basis.instance) ||
@@ -206,22 +403,27 @@ async function shutdown({ socket, peer, identity }: BoundPeer, instance: string)
 function exchange(
   socket: Socket,
   request: string,
-  phase: "auth" | "bootstrap" | "shutdown",
+  phase: "auth" | "bootstrap" | "shutdown" | "pane-read",
   expected?: string,
-): Promise<void> {
+): Promise<string> {
   return new Promise((resolve, reject) => {
+    const responseLimit = phase === "pane-read" ? PANE_RESPONSE_LIMIT : RESPONSE_LIMIT;
     let response = "";
     const failure = () => finish(new Error(`Unexpected psmux ${phase} response`));
     const onData = (chunk: string) => {
       response += chunk;
-      if (response.length > RESPONSE_LIMIT) failure();
+      if (response.length > responseLimit) failure();
       else if (phase === "auth" && response.includes("\n")) {
         if (response === "OK\n") finish();
         else failure();
       }
     };
     const onEnd = () => {
-      if ((phase === "shutdown" && !response) || (phase === "bootstrap" && response === expected))
+      if (
+        phase === "pane-read" ||
+        (phase === "shutdown" && !response) ||
+        (phase === "bootstrap" && response === expected)
+      )
         finish();
       else failure();
     };
@@ -237,7 +439,7 @@ function exchange(
       socket.off("close", failure);
       socket.off("error", onError);
       if (error) reject(error);
-      else resolve();
+      else resolve(response);
     }
     socket.on("data", onData);
     socket.once("end", onEnd);

@@ -5,7 +5,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { captureWindowsProcesses, stopWindowsPeers, waitForWindowsExit } from "./windows-lifecycle";
+import {
+  captureWindowsProcesses,
+  readWindowsPeerPaneFields,
+  stopWindowsPeers,
+  waitForWindowsExit,
+} from "./windows-lifecycle";
 import { conversationLaunchKey, WindowsLaunchRights } from "./windows-launch-rights";
 import type { PsmuxObservation, PsmuxPeer } from "./windows-psmux";
 import type { InspectWindowsProcess, WindowsProcessObservation } from "./windows-process";
@@ -29,7 +34,12 @@ async function fixture() {
   async function addPeer(
     name: string,
     pid: number,
-    { rejectAuth = false, refuseStop = false, held = false } = {},
+    {
+      rejectAuth = false,
+      refuseStop = false,
+      held = false,
+      paneReply,
+    }: { rejectAuth?: boolean; refuseStop?: boolean; held?: boolean; paneReply?: string } = {},
   ) {
     const identity = { pid, creationTime: String(pid * 100) };
     const sockets = new Set<Socket>();
@@ -48,6 +58,8 @@ async function fixture() {
           if (line === `AUTH ${key}`) {
             if (rejectAuth) socket.end("ERROR: Invalid session key\n");
             else socket.write("OK\n");
+          } else if (line.startsWith("display-message ")) {
+            socket.end(paneReply ?? "");
           } else if (refuseStop) {
             socket.end("PI_MUX_STOP_REFUSED\n");
           } else {
@@ -85,6 +97,15 @@ async function fixture() {
     observation,
     attempts: { timeoutMs: 20, pollMs: 2 },
     stop: () => stopWindowsPeers({ registryDirectory: directory, namespace }, observation, inspect),
+    readPane: (peer: PsmuxPeer, pane: string, fields: string[]) =>
+      readWindowsPeerPaneFields(
+        { registryDirectory: directory, namespace },
+        observation,
+        peer,
+        pane,
+        fields,
+        inspect,
+      ),
   };
 }
 
@@ -141,6 +162,46 @@ describe("Windows restart launch fence", () => {
     await assert.rejects(rights.fenceForRestart(true), /Cannot determine the outcome/);
     assert.equal((await rights.status(reserved)).state, "reserved");
     assert.equal((await rights.status(pending)).state, "pending");
+  });
+});
+
+describe("exact Windows psmux pane read", () => {
+  it("reads one audited peer even when another peer has the same pane ID", async () => {
+    const test = await fixture();
+    await test.addPeer("first", 12, { paneReply: `12\t${instance}\tfirst\t%0\twaiting\t\n` });
+    await test.addPeer("second", 25, { paneReply: `25\t${instance}\tsecond\t%0\trunning\t1\n` });
+    assert.deepEqual(
+      await test.readPane(test.observation.panes[1]!.peer, "%0", [
+        "@pi_session_state",
+        "@pi-mux-pending-restart-blocker",
+      ]),
+      ["running", "1"],
+    );
+    assert.equal(test.requests.length, 2);
+    assert.ok(test.requests.every((line) => line.startsWith("second:")));
+    assert.match(test.requests[1]!, /^second:display-message -p -t %0 /);
+  });
+
+  it("rejects a response from another generation or pane without a fallback query", async () => {
+    const test = await fixture();
+    await test.addPeer("first", 12, { paneReply: "12\tffffffffffffffff\tfirst\t%1\trunning\n" });
+    await test.addPeer("second", 25);
+    await assert.rejects(
+      test.readPane(test.observation.panes[0]!.peer, "%0", ["@pi_session_state"]),
+      /Cannot verify psmux pane read/,
+    );
+    assert.ok(test.requests.every((line) => line.startsWith("first:")));
+  });
+
+  it("refuses a reused process identity after authentication", async () => {
+    const test = await fixture();
+    await test.addPeer("first", 12);
+    test.processes.set(12, { state: "live", identity: { pid: 12, creationTime: "99999" } });
+    await assert.rejects(
+      test.readPane(test.observation.panes[0]!.peer, "%0", ["@pi_session_state"]),
+      /peer changed before pane read/,
+    );
+    assert.deepEqual(test.requests, [`first:AUTH ${key}`]);
   });
 });
 

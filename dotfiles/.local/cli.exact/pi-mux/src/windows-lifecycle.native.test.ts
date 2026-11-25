@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import {
   captureWindowsProcesses,
   configureWindowsPeer,
+  readWindowsPeerPaneFields,
   stopWindowsPeers,
   waitForWindowsExit,
   WINDOWS_BOOTSTRAP_PROOF,
@@ -125,6 +126,17 @@ it.skipIf(!psmux)(
       const audited = await observe();
       assert.equal(audited.panes.filter(({ peer }) => !peer.held).length, 2);
       assert.notEqual(audited.basis.instance, held.basis.instance);
+      const firstPane = ok(socket, "display-message", "-p", "-t", "=same", "#{pane_id}");
+      const otherPane = ok(socket, "display-message", "-p", "-t", "=other", "#{pane_id}");
+      assert.equal(firstPane, otherPane);
+      for (const name of ["same", "other"]) {
+        const { peer } = audited.panes.find(({ peer }) => peer.name === name)!;
+        const panePid = ok(socket, "display-message", "-p", "-t", `=${name}`, "#{pane_pid}");
+        assert.deepEqual(
+          await readWindowsPeerPaneFields(management.scope, audited, peer, firstPane, ["pane_pid"]),
+          [panePid],
+        );
+      }
       const externalPid = ok(external, "display-message", "-p", "-t", "=same", "#{pid}");
       await assert.rejects(configureWindowsPeer(management.scope, held, options));
       writeFileSync(config, "set -g exit-empty off\nset -g @sourced from-file\n");

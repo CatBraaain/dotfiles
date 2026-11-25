@@ -168,6 +168,18 @@ export class WindowsManagement {
     });
   }
 
+  async keepRestoring(
+    basis: WindowsManagementBasis,
+    id: string,
+    withClaimLock: WindowsClaimLock,
+  ): Promise<void> {
+    const key = validateId(id);
+    await this.updateStartup(basis, withClaimLock, (state) => ({
+      ...state,
+      restoring: [...new Set([...state.restoring, key])],
+    }));
+  }
+
   async clearRestoring(
     basis: WindowsManagementBasis,
     id: string,

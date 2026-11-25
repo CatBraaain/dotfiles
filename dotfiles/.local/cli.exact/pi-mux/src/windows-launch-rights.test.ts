@@ -69,6 +69,30 @@ async function reserve(ledger: WindowsLaunchRights, keys = [conversation], expec
 }
 
 describe("Windows launch rights", () => {
+  it("does not grant a waiting reload wrapper's token while the old identity lives", async () => {
+    const { create, observations } = fixture();
+    const ledger = create();
+    const old = await reserve(ledger);
+    await ledger.claimAndStart(old, randomUUID(), spawn);
+    const replacement = randomUUID();
+    assert.equal(
+      (await ledger.reserveAfterLifecycleAudit([conversation], basis, { token: replacement }))
+        .state,
+      "conflict",
+    );
+    assert.equal(
+      await ledger.claimAndStart(replacement, randomUUID(), () => assert.fail()),
+      undefined,
+    );
+
+    observations.child = { state: "ended" };
+    assert.deepEqual(
+      await ledger.reserveAfterLifecycleAudit([conversation], basis, { token: replacement }),
+      { state: "reserved", token: replacement },
+    );
+    assert.deepEqual(await ledger.status(replacement), { state: "reserved" });
+  });
+
   it("rejects a late claim after its unclaimed reservation is replaced", async () => {
     const { create } = fixture();
     const old = await reserve(create(), [conversation, ticket]);

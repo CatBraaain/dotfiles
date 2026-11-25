@@ -37,12 +37,20 @@ import {
   type WindowsLaunchStatus,
   type WindowsManagementBasis,
 } from "./windows-launch-rights";
-import { inspectWindowsProcess, observeWindowsIdentity } from "./windows-process";
-import { waitForPsmuxClient } from "./windows-psmux";
+import {
+  inspectWindowsProcess,
+  isWindowsProcessIdentity,
+  observeWindowsIdentity,
+  type WindowsProcessIdentity,
+} from "./windows-process";
+import { waitForPsmuxClient, type PsmuxPeer } from "./windows-psmux";
 import { WindowsManagement } from "./windows-management";
 import {
   captureWindowsProcesses,
   configureWindowsPeer,
+  mutateWindowsPeerPane,
+  readWindowsPeerPaneFields,
+  runWindowsPeerPaneCommands,
   stopWindowsPeers,
   waitForWindowsExit,
   WINDOWS_BOOTSTRAP_PROOF,
@@ -77,7 +85,7 @@ type Operation =
   | { kind: "inspect-management"; socket: string }
   | { kind: "inspect-dispatch-inventory"; socket: string }
   | WindowsCreateDispatchWorker
-  | { kind: "windows-claim-launch"; token: string; command: string[] }
+  | { kind: "windows-claim-launch"; token: string; command: string[]; reload?: WindowsReloadRoute }
   | { kind: "metadata"; id: string; viewFile?: string }
   | { kind: "worktree-snapshot"; request: WorktreeSnapshotRequest }
   | { kind: "record-view"; id: string; receipt: ViewReceipt }
@@ -321,7 +329,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     }
     if (operation.kind === "windows-claim-launch") {
       if (!platform.windows) throw new Error("This launch operation requires Windows");
-      return await claimWindowsLaunch(operation.token, operation.command);
+      return operation.reload
+        ? await claimWindowsReload(operation.token, operation.command, operation.reload)
+        : await claimWindowsLaunch(operation.token, operation.command);
     }
     if (operation.kind === "worktree-snapshot") {
       console.log(JSON.stringify(getWorktreeSnapshot(operation.request)));
@@ -790,7 +800,11 @@ export function parseOperation(argv: string[]): Operation {
       return { kind: "inspect-dispatch-inventory", socket: argv[2]! };
     if (id === "--create-dispatch-worker") return parseWindowsCreateDispatchWorker(argv.slice(2));
   }
-  if (argv[0] === "windows-claim-launch" && argv.length === 3 && UUID.test(argv[1]!)) {
+  if (
+    argv[0] === "windows-claim-launch" &&
+    (argv.length === 3 || argv.length === 4) &&
+    UUID.test(argv[1]!)
+  ) {
     const command: unknown = JSON.parse(Buffer.from(argv[2]!, "base64").toString("utf8"));
     if (
       !Array.isArray(command) ||
@@ -798,7 +812,8 @@ export function parseOperation(argv: string[]): Operation {
       !command.every((arg) => typeof arg === "string" && !arg.includes("\0"))
     )
       throw new Error("Invalid Windows pi launch command");
-    return { kind: "windows-claim-launch", token: argv[1]!, command };
+    const reload = argv[3] === undefined ? undefined : parseWindowsReloadRoute(argv[3]);
+    return { kind: "windows-claim-launch", token: argv[1]!, command, reload };
   }
   if (argv[0] === "worktree") {
     const [, action, encoded] = argv;
@@ -1078,12 +1093,185 @@ async function clearPendingPublication(
   await tmux(config, ["source-file", "-"], false, `${clear}\n`);
 }
 
+async function notifyWindowsState(
+  config: TmuxConfig,
+  id: string,
+  source: StateSource,
+  notification: StateNotification,
+): Promise<number> {
+  if (source.socket !== config.socket)
+    throw new Error("Source socket does not match the dedicated socket");
+  const management = windowsManagement(config);
+  const observe = () => verifyWindowsStateSource(management, id, source);
+  const initial = await observe();
+  const lastRun =
+    !notification.clear && notification.state === "waiting-user" && initial.file
+      ? readSessionLastRun(initial.file, id)
+      : undefined;
+  const target = lastRun ? await observe() : initial;
+  if (
+    target.audit.basis.instance !== initial.audit.basis.instance ||
+    target.peer.identity !== initial.peer.identity ||
+    target.panePid !== initial.panePid ||
+    target.processes.some(
+      (process, index) => process.creationTime !== initial.processes[index]?.creationTime,
+    )
+  )
+    throw new Error("Source Pi process changed during state verification");
+
+  const ownState = ["@pi-mux-state-source", windowsStateJson({ id, ...source })] as const;
+  const mutate = (
+    mutations: Parameters<typeof mutateWindowsPeerPane>[4]["mutations"],
+    owner?: typeof ownState,
+    expected: Parameters<typeof mutateWindowsPeerPane>[4]["expected"] = [],
+  ) =>
+    mutateWindowsPeerPane(management.scope, target.audit, target.peer, source.pane, {
+      expected: [
+        ["pane_pid", String(target.panePid)],
+        ["@pi-tmux-session", target.encoded],
+        ["@pi-mux-launch", target.launch],
+        ...expected,
+      ],
+      owner,
+      mutations,
+      processes: target.processes,
+    });
+
+  if (notification.clear) {
+    await mutate(
+      clearStateOptions(source.pane).map((args) => ({ option: args.at(-1)! })),
+      ownState,
+    );
+    return 0;
+  }
+
+  await mutate([
+    { option: ownState[0], value: ownState[1] },
+    {
+      option: "@pi_session_state",
+      value: windowsStateJson({
+        version: 1,
+        sessionId: id,
+        state: notification.state,
+        title: notification.title,
+        lastRun: target.file === initial.file ? lastRun : undefined,
+      }),
+    },
+    { option: "@pi-mux-pending-restart-blocker" },
+  ]);
+  if (notification.state !== "running" || (!target.temporary && !target.audit.startup)) return 0;
+
+  const mutateOwned = async (
+    mutations: Parameters<typeof mutate>[0],
+    expected?: Parameters<typeof mutate>[2],
+  ) => {
+    if ((await mutate(mutations, ownState, expected)) !== "applied")
+      throw new Error("Source no longer owns the published session state");
+  };
+  try {
+    return await withLock(
+      config,
+      async () => {
+        if (target.temporary) {
+          const current = await observe();
+          if (
+            current.audit.basis.instance !== target.audit.basis.instance ||
+            current.peer.identity !== target.peer.identity ||
+            current.panePid !== target.panePid
+          )
+            throw new Error("Source pane changed before promotion");
+          if (current.temporary)
+            await mutateOwned([{ unsetTemporary: true }], [["PI_TMUX_TEMPORARY", id]]);
+        }
+        await management.assertLive(target.audit.basis);
+        await snapshotSessions(config, target.audit.basis.instance, "repair");
+        await mutateOwned([{ option: "@pi_session_state_pending" }]);
+        return 0;
+      },
+      "try",
+    );
+  } catch (error) {
+    if (!(error instanceof LockBusyError)) throw error;
+    await mutateOwned([
+      { option: "@pi-mux-pending-restart-blocker", value: "1" },
+      { option: "@pi-mux-restart-veto", value: randomUUID(), global: true },
+      {
+        option: "@pi_session_state_pending",
+        value: windowsStateJson({ version: 1, sessionId: id, attemptAt: Date.now() }),
+      },
+    ]);
+    console.error(`pi-mux: state ${id}: ${errorMessage(error)}`);
+    return 75;
+  }
+}
+
+function windowsStateJson(value: unknown): string {
+  return JSON.stringify(value).replaceAll("$", "\\u0024").replaceAll("\x7f", "\\u007f");
+}
+
+async function verifyWindowsStateSource(
+  management: WindowsManagement,
+  id: string,
+  source: StateSource,
+) {
+  const audit = await management.audit(
+    "#{pane_id}\t#{pane_pid}\t#{pane_dead}\t#{@pi-tmux-session}\t#{@pi-mux-launch}\t#{PI_TMUX_TEMPORARY}",
+    { requireRestored: false },
+  );
+  const matches = audit.panes.flatMap(({ peer, rows }) =>
+    rows.flatMap((row) => {
+      const fields = row.split("\t");
+      const [pane, rawPid, dead, encoded, launch, temporary] = fields;
+      if (fields.length !== 6 || !/^%\d+$/.test(pane ?? "") || (dead !== "0" && dead !== "1"))
+        throw new Error(`Invalid psmux pane inventory for state: ${peer.name}`);
+      if (dead === "1" || !encoded) return [];
+      if (!/^[1-9]\d*$/.test(rawPid ?? ""))
+        throw new Error(`Invalid live psmux pane PID for state: ${peer.name}`);
+      const metadata: unknown = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+      if (!isRecord(metadata)) throw new Error(`Invalid Pi metadata in pane ${pane}`);
+      if (metadata.id !== id) return [];
+      return [
+        { peer, pane, panePid: Number(rawPid), encoded, launch: launch!, temporary, metadata },
+      ];
+    }),
+  );
+  const match = matches[0];
+  if (
+    matches.length !== 1 ||
+    !match ||
+    match.peer.identity.split(":")[0] !== String(source.serverPid) ||
+    match.pane !== source.pane ||
+    match.metadata.pid !== match.panePid ||
+    (match.metadata.processPid ?? match.panePid) !== source.pid ||
+    match.metadata.token !== source.token ||
+    (match.launch && !matchesLaunch(match.launch, id, match.panePid, source.token)) ||
+    (match.metadata.startup !== undefined &&
+      match.metadata.startup !== "accepted" &&
+      match.metadata.startup !== "ready")
+  )
+    throw new Error("Source Pi process does not match the conversation and pane");
+  const processes = [...new Set([match.panePid, source.pid])].map((pid) => {
+    const process = inspectWindowsProcess(pid);
+    if (process.state !== "live") throw new Error(`Cannot verify source Windows process ${pid}`);
+    return process.identity;
+  });
+  const { file } = match.metadata;
+  return {
+    ...match,
+    audit,
+    processes,
+    temporary: match.temporary === id,
+    file: typeof file === "string" && isAbsolute(file) ? file : undefined,
+  };
+}
+
 async function notifyState(
   config: TmuxConfig,
   id: string,
   source: StateSource,
   notification: StateNotification,
 ): Promise<number> {
+  if (platform.windows) return await notifyWindowsState(config, id, source, notification);
   const { session, panePid, file } = await verifyStateSource(config, id, source);
   const owner = JSON.stringify({ id, ...source });
   if (notification.clear) {
@@ -1967,21 +2155,41 @@ async function restartIsWaiting(config: TmuxConfig): Promise<boolean> {
   });
 }
 
-const WINDOWS_LIFECYCLE_FORMAT = `${PANE_FORMAT}\t#{PI_TMUX_SESSION_ID}\t#{PI_TMUX_TEMPORARY}\t#{session_path}`;
+const WINDOWS_LIFECYCLE_FORMAT = `${PANE_FORMAT}\t#{PI_TMUX_SESSION_ID}\t#{PI_TMUX_TEMPORARY}\t#{session_path}\t#{@pi-mux-launch}\t#{TICKET_DISPATCH_ROLE}\t#{@pi-mux-windows-start-right}\t#{@pi_session_state}\t#{@pi-mux-state-source}\t#{@pi-mux-pending-restart-blocker}`;
 
-async function auditWindowsLifecycle(management: WindowsManagement) {
+async function auditWindowsLifecycle(management: WindowsManagement, mode = "restart") {
   const audit = await management.audit(WINDOWS_LIFECYCLE_FORMAT, { requireRestored: false });
   if (!audit.startup) throw new Error("Dedicated psmux management has not been initialized");
   const managed: ManagedSession[] = [];
+  const ownership: { peer: WindowsLifecyclePeer; session: ManagedSession }[] = [];
   const pids: number[] = [];
   const activeIds = new Set<string>();
-  for (const { peer, rows } of audit.panes) {
+  const entries = audit.panes.flatMap(({ peer, rows }) => {
     let session: ManagedSession | undefined;
-    for (const row of rows) {
+    const panes = rows.flatMap((row) => {
       const fields = row.split("\t");
-      const [, sessionId, name, metadata, pid, dead, , , id, temporary, cwd] = fields;
+      const [
+        paneId,
+        sessionId,
+        name,
+        metadata,
+        pid,
+        dead,
+        ,
+        ,
+        id,
+        temporary,
+        cwd,
+        launch,
+        role,
+        right,
+        state,
+        owner,
+        blocker,
+      ] = fields;
       if (
-        fields.length !== 11 ||
+        fields.length !== 17 ||
+        !/^%\d+$/.test(paneId ?? "") ||
         !sessionId ||
         name !== peer.name ||
         !["0", "1"].includes(dead ?? "") ||
@@ -1995,84 +2203,189 @@ async function auditWindowsLifecycle(management: WindowsManagement) {
           throw new Error(`Conflicting Windows conversation ownership in ${peer.name}`);
         session = candidate;
       }
-      if (dead !== "0") continue;
+      if (dead !== "0") return [];
       if (!/^[1-9]\d*$/.test(pid ?? ""))
         throw new Error(`Cannot identify a live pane process in ${peer.name}`);
       pids.push(Number(pid));
+      const [pane] = metadata ? parseLivePaneRows(fields.slice(0, 8).join("\t"), "list") : [];
       if (metadata) {
-        const [pane] = parseLivePaneRows(fields.slice(0, 8).join("\t"), "list");
-        if (!pane || activeIds.has(pane.id.toLowerCase()))
+        if (!pane || (mode !== "reload" && activeIds.has(pane.id.toLowerCase())))
           throw new Error(`Cannot uniquely identify Windows pi in ${peer.name}`);
         activeIds.add(pane.id.toLowerCase());
         pids.push(pane.pid);
       }
+      return [
+        {
+          peer,
+          paneId: paneId!,
+          panePid: Number(pid),
+          pi: pane,
+          launch,
+          role,
+          right,
+          state,
+          owner,
+          blocker,
+        },
+      ];
+    });
+    if (session) {
+      managed.push(session);
+      ownership.push({ peer, session });
     }
-    if (session) managed.push(session);
-  }
-  if (new Set(managed.map(({ id }) => id.toLowerCase())).size !== managed.length)
+    const managedId = session?.id;
+    const unresolved = managedId !== undefined && !panes.some(({ pi }) => pi?.id === managedId);
+    const dispatchUnpublished =
+      panes.some(({ role }) => role === "pi") && !panes.some(({ pi }) => pi);
+    return panes.map((pane) => ({ ...pane, unresolved: unresolved || dispatchUnpublished }));
+  });
+  if (
+    mode !== "reload" &&
+    new Set(managed.map(({ id }) => id.toLowerCase())).size !== managed.length
+  )
     throw new Error("Multiple Windows psmux sessions own the same conversation");
-  return { ...audit, startup: audit.startup, managed, pids };
+  return { ...audit, startup: audit.startup, managed, ownership, pids, entries };
 }
 
+type WindowsLifecycleAudit = Awaited<ReturnType<typeof auditWindowsLifecycle>>;
+type WindowsLifecycleEntry = WindowsLifecycleAudit["entries"][number];
+type WindowsLifecyclePeer = PsmuxPeer;
+
+function windowsPaneIsWaiting(config: TmuxConfig, entry: WindowsLifecycleEntry): boolean {
+  const { pi, peer, paneId, launch, state, owner, blocker } = entry;
+  if (!pi || pi.startup === "accepted" || blocker || !owner) return false;
+  if (parseSessionState(state, pi.id) !== "waiting-user") return false;
+  try {
+    const raw: unknown = JSON.parse(owner);
+    if (!isRecord(raw) || raw.id !== pi.id) return false;
+    const source = parseSource(raw);
+    const metadata = JSON.parse(Buffer.from(pi.metadata, "base64").toString("utf8"));
+    return (
+      source.socket === config.socket &&
+      String(source.serverPid) === peer.identity.split(":")[0] &&
+      source.pane === paneId &&
+      source.pid === pi.pid &&
+      source.token === metadata.token &&
+      (!launch || matchesLaunch(launch, pi.id, pi.panePid, source.token))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function windowsRestartIsWaiting(config: TmuxConfig, audit: WindowsLifecycleAudit): boolean {
+  return audit.entries.every((entry) =>
+    entry.pi
+      ? windowsPaneIsWaiting(config, entry)
+      : !entry.unresolved && !entry.launch && !entry.right,
+  );
+}
+
+function windowsStopInventory(audit: WindowsLifecycleAudit): string {
+  const identities = audit.entries.map(({ peer, paneId, panePid, pi, launch, right }) =>
+    JSON.stringify([peer.identity, paneId, panePid, pi?.id, pi?.pid, pi?.metadata, launch, right]),
+  );
+  return JSON.stringify([audit.basis.witnesses, identities.sort(), audit.managed]);
+}
+
+const WINDOWS_RESTART_RECHECK = Symbol("Windows restart needs a new readiness check");
+
 async function restartWindowsServer(config: Config, force: boolean): Promise<number> {
-  return await withLock(config, async () => {
-    const previous = readSnapshot(config);
-    const management = windowsManagement(config);
-    const rights = management.createLaunchRights(windowsClaimLock(management));
-    const original = await management.currentBasis();
-    if (original) {
-      const audit = await auditWindowsLifecycle(management);
-      if (!launchBasisStillLive(original, audit.basis))
-        throw new Error("Dedicated psmux generation changed during restart");
-      if (!force && audit.panes.some(({ peer }) => !peer.held))
-        throw new Error(
-          "Cannot safely restart live sessions on this psmux build: no atomic waiting-user shutdown guard; use restart --force to skip the wait",
-        );
-      if (previous?.generation && previous.generation !== original.instance)
-        throw new Error("Snapshot belongs to another psmux generation");
-      const excluded = new Set(
-        audit.managed.filter(({ temporary }) => temporary).map(({ id }) => id.toLowerCase()),
-      );
-      const restoring = new Set(audit.startup.restoring);
-      const candidates = uniqueCandidates([
-        ...(previous?.sessions ?? []).filter(
-          ({ id }) => restoring.has(id.toLowerCase()) && !excluded.has(id.toLowerCase()),
-        ),
-        ...audit.managed.filter(({ temporary }) => !temporary).map(({ id, cwd }) => ({ id, cwd })),
-      ]);
-      const panes = captureWindowsProcesses(audit.pids);
-      const activeLaunches = await rights.fenceForRestart(force);
-      await management.assertLive(audit.basis);
-      writeSnapshot(config, {
-        version: 1,
-        generation: original.instance,
-        cwds: previous?.cwds ?? [],
-        sessions: candidates,
+  const management = windowsManagement(config);
+  const original = await withLock(config, () => management.currentBasis());
+  while (true) {
+    const result = await withLock(config, () =>
+      tryRestartWindowsServer(config, management, original, force),
+    );
+    if (result !== undefined) return result;
+    await Bun.sleep(POLL_INTERVAL_MS);
+  }
+}
+
+async function tryRestartWindowsServer(
+  config: Config,
+  management: WindowsManagement,
+  original: WindowsManagementBasis | undefined,
+  force: boolean,
+): Promise<number | undefined> {
+  const previous = readSnapshot(config);
+  const rights = management.createLaunchRights(windowsClaimLock(management));
+  if (original) {
+    const audit = await auditWindowsLifecycle(management);
+    if (!launchBasisStillLive(original, audit.basis))
+      throw new Error("Dedicated psmux generation changed during restart");
+    if (previous?.generation && previous.generation !== original.instance)
+      throw new Error("Snapshot belongs to another psmux generation");
+    if (!force && !windowsRestartIsWaiting(config, audit)) return;
+
+    const panes = captureWindowsProcesses(audit.pids);
+    const activeLaunches = await rights.fenceForRestart(true);
+    const unmatched = activeLaunches.some(
+      (launch) =>
+        !panes.some((pane) => pane.pid === launch.pid && pane.creationTime === launch.creationTime),
+    );
+    if (!force && (panes.length !== new Set(audit.pids).size || unmatched)) return;
+
+    await management.assertLive(audit.basis);
+    const excluded = new Set(
+      audit.managed.filter(({ temporary }) => temporary).map(({ id }) => id.toLowerCase()),
+    );
+    const restoring = new Set(audit.startup.restoring);
+    const candidates = uniqueCandidates([
+      ...(previous?.sessions ?? []).filter(
+        ({ id }) => restoring.has(id.toLowerCase()) && !excluded.has(id.toLowerCase()),
+      ),
+      ...audit.managed.filter(({ temporary }) => !temporary).map(({ id, cwd }) => ({ id, cwd })),
+    ]);
+    try {
+      const peers = await stopWindowsPeers(management.scope, audit, undefined, async () => {
+        if (force) {
+          const current = await management.currentBasis();
+          if (
+            current?.instance !== audit.basis.instance ||
+            JSON.stringify(current.witnesses) !== JSON.stringify(audit.basis.witnesses)
+          )
+            throw new Error("Dedicated psmux peers changed before restart stop");
+          await management.prepareStartup(
+            audit.basis,
+            candidates.map(({ id }) => id),
+            windowsClaimLock(management),
+          );
+        } else {
+          const final = await auditWindowsLifecycle(management);
+          if (!launchBasisStillLive(audit.basis, final.basis))
+            throw new Error("Dedicated psmux generation changed before restart stop");
+          if (
+            windowsStopInventory(final) !== windowsStopInventory(audit) ||
+            JSON.stringify(captureWindowsProcesses(final.pids)) !== JSON.stringify(panes) ||
+            !windowsRestartIsWaiting(config, final)
+          )
+            throw WINDOWS_RESTART_RECHECK;
+        }
+        writeSnapshot(config, {
+          version: 1,
+          generation: original.instance,
+          cwds: previous?.cwds ?? [],
+          sessions: candidates,
+        });
       });
-      await management.prepareStartup(
-        audit.basis,
-        candidates.map(({ id }) => id),
-        windowsClaimLock(management),
-      );
-      const current = await management.currentBasis();
-      if (
-        current?.instance !== audit.basis.instance ||
-        JSON.stringify(current.witnesses) !== JSON.stringify(audit.basis.witnesses)
-      )
-        throw new Error("Dedicated psmux peers changed before restart stop");
-      const peers = await stopWindowsPeers(management.scope, audit);
       await waitForWindowsExit([...panes, ...activeLaunches, ...peers], {
         timeoutMs: STARTUP_TIMEOUT_MS,
         pollMs: POLL_INTERVAL_MS,
       });
-    } else {
-      await rights.fenceForRestart(false);
+    } catch (error) {
+      if (error === WINDOWS_RESTART_RECHECK) return;
+      throw error;
     }
+  } else {
     if (await management.currentBasis())
-      throw new Error("Dedicated psmux did not remain stopped during restart");
-    prepareDirectory(config.directory);
-    return (await startAndRestore(config, true, undefined, "fresh")).failures > 0 ? 2 : 0;
-  });
+      throw new Error("Dedicated psmux generation changed during restart");
+    await rights.fenceForRestart(false);
+  }
+  if (await management.currentBasis())
+    throw new Error("Dedicated psmux did not remain stopped during restart");
+  prepareDirectory(config.directory);
+  return (await startAndRestore(config, true, undefined, "fresh")).failures > 0 ? 2 : 0;
 }
 
 async function restartServer(config: Config, force: boolean): Promise<number> {
@@ -2170,31 +2483,693 @@ type ReloadProgress = {
   inFlight: Map<string, InFlightReload>;
 };
 
+type WindowsReloadRoute = {
+  name: string;
+  identity: string;
+  instance: string;
+  pane: string;
+  session: string;
+  id: string;
+  cwd: string;
+  launchToken: string;
+  launcher: WindowsProcessIdentity;
+  inheritedOverrides: [string, string | null][];
+};
+type WindowsReloadTarget = {
+  session: ManagedSession;
+  entry: WindowsLifecycleEntry;
+  pane: Pane;
+};
+type WindowsReloadPublication = Omit<ReloadPublication, "deadlineMs"> & {
+  route: WindowsReloadRoute;
+  right: string;
+  deadlineMs: number;
+  release: ReleaseLock;
+};
+type WindowsReloadProgress = Pick<ReloadProgress, "reloaded" | "failed"> & {
+  inFlight: Map<string, WindowsReloadPublication>;
+};
+type WindowsReloadContext = {
+  config: Config;
+  management: WindowsManagement;
+  rights: WindowsLaunchRights;
+  original: WindowsManagementBasis;
+  progress: WindowsReloadProgress;
+};
+
+function parseWindowsReloadRoute(encoded: string): WindowsReloadRoute {
+  const route: unknown = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+  if (
+    !isRecord(route) ||
+    typeof route.name !== "string" ||
+    !/^[A-Za-z0-9_-]+$/.test(route.name) ||
+    typeof route.identity !== "string" ||
+    !/^[1-9]\d*:[1-9]\d*$/.test(route.identity) ||
+    typeof route.instance !== "string" ||
+    !/^[0-9a-f]{16}$/.test(route.instance) ||
+    typeof route.pane !== "string" ||
+    !/^%\d+$/.test(route.pane) ||
+    typeof route.session !== "string" ||
+    !/^\$\d+$/.test(route.session) ||
+    typeof route.id !== "string" ||
+    !SESSION_ID_PATTERN.test(route.id) ||
+    typeof route.cwd !== "string" ||
+    !isAbsolute(route.cwd) ||
+    route.cwd.includes("\0") ||
+    typeof route.launchToken !== "string" ||
+    !UUID.test(route.launchToken) ||
+    !isWindowsProcessIdentity(route.launcher) ||
+    !Array.isArray(route.inheritedOverrides) ||
+    !route.inheritedOverrides.every(
+      (entry) =>
+        Array.isArray(entry) &&
+        entry.length === 2 &&
+        typeof entry[0] === "string" &&
+        /^[^=\0\r\n]+$/.test(entry[0]) &&
+        !PSMUX_ROUTING.has(entry[0].toUpperCase()) &&
+        (entry[1] === null || (typeof entry[1] === "string" && !entry[1].includes("\0"))),
+    )
+  )
+    throw new Error("Invalid Windows reload launch route");
+  return route as WindowsReloadRoute;
+}
+
+function findWindowsReloadPeer(
+  observation: WindowsLifecycleAudit | Awaited<ReturnType<WindowsManagement["audit"]>>,
+  route: WindowsReloadRoute,
+): WindowsLifecyclePeer | undefined {
+  if (observation.basis.instance !== route.instance)
+    throw new Error("Dedicated psmux generation changed during reload");
+  return observation.panes.find(
+    ({ peer }) => peer.name === route.name && peer.identity === route.identity,
+  )?.peer;
+}
+
+async function claimWindowsReload(
+  token: string,
+  command: string[],
+  route: WindowsReloadRoute,
+): Promise<number> {
+  const config = tmuxConfiguration();
+  const management = windowsManagement(config);
+  const rights = management.createLaunchRights(windowsClaimLock(management));
+  const destination = `${management.scope.namespace}__${route.name}`;
+  const [, port, index] = (process.env.TMUX ?? "").split(",");
+  if (
+    process.env.PSMUX_TARGET_SESSION !== destination ||
+    process.env.TMUX_PANE !== route.pane ||
+    process.env[WINDOWS_RIGHT_ENV] !== token ||
+    !/^\d+$/.test(index ?? "")
+  )
+    throw new Error("Windows reload wrapper did not start in its assigned pane");
+  const deadline = Date.now() + STARTUP_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const status = await rights.status(token);
+    if (status.state === "reserved") {
+      const started = await rights.claimAndStart(
+        token,
+        randomUUID(),
+        () => {
+          const env = { ...process.env };
+          for (const [key, value] of route.inheritedOverrides) {
+            for (const inherited of Object.keys(env))
+              if (inherited.toUpperCase() === key.toUpperCase()) delete env[inherited];
+            if (value !== null) env[key] = value;
+          }
+          delete env[WINDOWS_RIGHT_ENV];
+          env.TMUX = `${config.socket},${port},${index}`;
+          if (observeWindowsIdentity(route.launcher, inspectWindowsProcess) !== "present")
+            throw new SpawnDidNotStartError("Windows reload launcher exited before the claim");
+          try {
+            return Bun.spawn(command, {
+              cwd: route.cwd,
+              env,
+              stdin: "inherit",
+              stdout: "inherit",
+              stderr: "inherit",
+            });
+          } catch (error) {
+            if (["ENOENT", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? ""))
+              throw new SpawnDidNotStartError(errorMessage(error), { cause: error });
+            throw error;
+          }
+        },
+        async () => {
+          const audit = await management.audit("#{pane_id}");
+          const peer = findWindowsReloadPeer(audit, route);
+          if (!peer || String(peer.port) !== port) throw new Error("Windows reload peer changed");
+          const expected = await readWindowsPeerPaneFields(
+            management.scope,
+            audit,
+            peer,
+            route.pane,
+            [
+              "session_id",
+              "pane_pid",
+              "pane_dead",
+              "PI_TMUX_SESSION_ID",
+              "session_path",
+              "PI_TMUX_LAUNCH_TOKEN",
+              WINDOWS_RIGHT_ENV,
+              "@pi-tmux-session",
+            ],
+          );
+          if (
+            JSON.stringify(expected) !==
+            JSON.stringify([
+              route.session,
+              String(process.pid),
+              "0",
+              route.id,
+              route.cwd,
+              route.launchToken,
+              token,
+              "",
+            ])
+          )
+            throw new Error("Cannot verify the new Windows reload pane");
+          await runWindowsPeerPaneCommands(management.scope, audit, peer, route.pane, [
+            [
+              "set-option",
+              "-p",
+              "-t",
+              route.pane,
+              "@pi-mux-launch",
+              JSON.stringify({ id: route.id, pid: process.pid, token: route.launchToken }),
+            ],
+            ["set-option", "-p", "-t", route.pane, WINDOWS_RIGHT_OPTION, token],
+          ]);
+        },
+      );
+      return started ? await started.started.exited : 1;
+    }
+    if (
+      status.state !== "missing" ||
+      observeWindowsIdentity(route.launcher, inspectWindowsProcess) !== "present"
+    )
+      return 1;
+    await Bun.sleep(POLL_INTERVAL_MS);
+  }
+  throw new Error("Windows reload launch was not permitted");
+}
+
 async function reloadWindowsPanes(config: Config, onlyId?: string): Promise<number> {
-  return await withLock(config, async () => {
-    const management = windowsManagement(config);
-    if (!(await management.currentBasis())) {
+  const management = windowsManagement(config);
+  const rights = management.createLaunchRights(windowsClaimLock(management));
+  const initial = await withLock(config, async () => {
+    const original = await management.currentBasis();
+    if (!original) {
       if (onlyId !== undefined)
         throw new Error(`Cannot reload session ${onlyId}: the dedicated server is not running`);
-      await management.createLaunchRights(windowsClaimLock(management)).fenceForRestart(false);
+      await rights.fenceForRestart(false);
       if (await management.currentBasis())
         throw new Error("Dedicated psmux generation changed during reload");
       prepareDirectory(config.directory);
       return (await startAndRestore(config, true, undefined, "fresh")).failures > 0 ? 2 : 0;
     }
     const snapshot = readSnapshot(config);
-    if (onlyId) {
-      const audit = await auditWindowsLifecycle(management);
-      if (!audit.managed.some(({ id }) => id === onlyId)) {
-        if (snapshot?.sessions.some(({ id }) => id === onlyId) || (await findSaved(config, onlyId)))
-          throw new Error(`The conversation is not running: ${onlyId}`);
-        throw new Error(`Session not found (use the complete ID): ${onlyId}`);
+    const audit = await auditWindowsLifecycle(management, "reload");
+    if (!launchBasisStillLive(original, audit.basis) || !audit.startup.restored)
+      throw new Error("Cannot confirm a restored psmux generation for reload");
+    if (onlyId && !audit.managed.some(({ id }) => id === onlyId)) {
+      if (snapshot?.sessions.some(({ id }) => id === onlyId) || (await findSaved(config, onlyId)))
+        throw new Error(`The conversation is not running: ${onlyId}`);
+      throw new Error(`Session not found (use the complete ID): ${onlyId}`);
+    }
+    const invocation = compiledEntry()
+      ? [process.execPath]
+      : [process.execPath, fileURLToPath(import.meta.url)];
+    const hookCommand = platform.hookCommand([...invocation, "snapshot", original.instance], {
+      PI_CODING_AGENT_DIR: config.agentDir,
+    });
+    for (const { peer } of audit.panes)
+      await configureWindowsPeer(management.scope, audit, {
+        configFile: config.tmuxConfig,
+        hookCommand,
+        peerName: peer.name,
+      });
+    return original;
+  });
+  if (typeof initial === "number") return initial;
+
+  const progress: WindowsReloadProgress = {
+    reloaded: new Set(),
+    failed: new Set(),
+    inFlight: new Map(),
+  };
+  const context = { config, management, original: initial, rights, progress };
+  let schedulingFailure: { cause: unknown } | undefined;
+  try {
+    while (true) {
+      const step = schedulingFailure
+        ? "done"
+        : await withLock(config, () => startNextWindowsReload(context, onlyId)).catch(
+            (cause: unknown) => {
+              schedulingFailure = { cause };
+              return "done" as const;
+            },
+          );
+      await confirmWindowsReloadPublications(context);
+      if (step === "done" && progress.inFlight.size === 0) {
+        if (schedulingFailure) throw schedulingFailure.cause;
+        return progress.failed.size ? 2 : 0;
+      }
+      if (step !== "started") await Bun.sleep(POLL_INTERVAL_MS);
+    }
+  } finally {
+    await Promise.all([...progress.inFlight.values()].map(({ release }) => release()));
+  }
+}
+
+async function startNextWindowsReload(
+  context: WindowsReloadContext,
+  onlyId?: string,
+): Promise<"started" | "wait" | "done"> {
+  const { management, original, progress } = context;
+  const audit = await auditWindowsLifecycle(management, "reload");
+  if (!launchBasisStillLive(original, audit.basis) || !audit.startup.restored)
+    throw new Error("Dedicated psmux generation changed during reload");
+
+  const targets = audit.ownership.filter(
+    ({ session: { id } }) =>
+      (!onlyId || id === onlyId) &&
+      !progress.reloaded.has(id) &&
+      !progress.failed.has(id) &&
+      !progress.inFlight.has(id),
+  );
+  if (
+    onlyId &&
+    !audit.managed.some(({ id }) => id === onlyId) &&
+    !progress.reloaded.has(onlyId) &&
+    !progress.inFlight.has(onlyId)
+  )
+    reportReloadFailure(progress, onlyId, "The managed pi is not running");
+  for (const { peer, session } of targets) {
+    const { id } = session;
+    const lockKey = JSON.stringify([
+      management.lockResource,
+      "reload",
+      original.instance,
+      id.toLowerCase(),
+    ]);
+    const release = await tryAcquireLock(
+      platform.lockAddress(createHash("sha256").update(lockKey).digest("hex")),
+    );
+    if (!release) continue;
+    try {
+      const target = await selectWindowsReloadTarget(context, audit, peer, session);
+      if (!target) continue;
+      const publication = await respawnWindowsReloadTarget(context, audit, target);
+      if (!publication) continue;
+      progress.inFlight.set(id, { ...publication, release });
+      return "started";
+    } finally {
+      if (!progress.inFlight.has(id)) await release();
+    }
+  }
+  return targets.some(({ session }) => !progress.failed.has(session.id)) ? "wait" : "done";
+}
+
+async function selectWindowsReloadTarget(
+  context: WindowsReloadContext,
+  audit: WindowsLifecycleAudit,
+  peer: WindowsLifecyclePeer,
+  session: ManagedSession,
+): Promise<WindowsReloadTarget | undefined> {
+  const { config, progress, rights } = context;
+  const { id } = session;
+  if (progress.failed.has(id)) return;
+  const owned = audit.entries.filter((entry) => entry.peer.identity === peer.identity);
+  const observed = audit.panes.find(({ peer: observed }) => observed.identity === peer.identity);
+  const sameId = audit.entries.filter(({ pi }) => pi?.id.toLowerCase() === id.toLowerCase());
+  const owners = audit.managed.filter(
+    (candidate) => candidate.id.toLowerCase() === id.toLowerCase(),
+  );
+  if (owners.length !== 1 || sameId.length > 1 || (observed?.rows.length ?? 0) > 1) {
+    reportReloadFailure(progress, id, "Cannot uniquely identify the managed pi and pane");
+    return;
+  }
+  const entry = owned[0];
+  const pane = entry?.pi;
+  if (!entry || !pane || pane.id !== id) {
+    if (
+      entry &&
+      !pane &&
+      launchMatchesManagedSession(entry.launch ?? "", session, String(entry.panePid))
+    ) {
+      if (!entry.right) return;
+      const status = await rights.status(entry.right);
+      if (status.state === "reserved" || status.state === "pending" || status.state === "live")
+        return;
+      if (status.state === "unknown") throw new Error(`Cannot verify Windows launch for ${id}`);
+    }
+    reportReloadFailure(progress, id, "The managed pi is not running");
+    return;
+  }
+  if (pane.cwd !== session.cwd || pane.session !== session.session) {
+    reportReloadFailure(progress, id, "Conflicting working directories or session ownership");
+    return;
+  }
+  if (!windowsPaneIsWaiting(config, entry) || !entry.launch) return;
+  if (entry.right) {
+    const status = await rights.status(entry.right);
+    const child = inspectWindowsProcess(pane.pid);
+    if (
+      status.state !== "live" ||
+      !("receipt" in status) ||
+      child.state !== "live" ||
+      status.receipt.child.pid !== pane.pid ||
+      status.receipt.child.creationTime !== child.identity.creationTime
+    )
+      throw new Error(`Cannot verify the current Windows pi launch for ${id}`);
+  }
+  return { session, entry, pane };
+}
+
+async function respawnWindowsReloadTarget(
+  context: WindowsReloadContext,
+  audit: WindowsLifecycleAudit,
+  { session, entry, pane }: WindowsReloadTarget,
+): Promise<Omit<WindowsReloadPublication, "release"> | undefined> {
+  const { config, management, rights, progress } = context;
+  const { peer, paneId } = entry;
+  const basis = { instance: audit.basis.instance, witnesses: [peer.identity] };
+  const readPane = (fields: string[]) =>
+    readWindowsPeerPaneFields(management.scope, audit, peer, paneId, fields);
+  const run = (commands: string[][]) =>
+    runWindowsPeerPaneCommands(management.scope, audit, peer, paneId, commands);
+  const oldPids = new Set([pane.pid, pane.panePid]);
+  const processes = captureWindowsProcesses(oldPids);
+  if (processes.length !== oldPids.size) return;
+  const savedFile = lstatSync(pane.file, { throwIfNoEntry: false });
+  if (savedFile && !savedFile.isFile())
+    throw new Error(`Invalid saved conversation file: ${pane.file}`);
+  const preserveWarm = pane.warm && !savedFile;
+  const launchToken = randomUUID();
+  const right = randomUUID();
+  const startup = `pi-mux-startup-${randomUUID()}`;
+  const desired: Record<string, string> = {
+    ...config.env,
+    PI_CODING_AGENT_DIR: config.agentDir,
+    PI_TMUX_SESSION_ID: pane.id,
+    PI_TMUX_LAUNCH_TOKEN: launchToken,
+    PI_TMUX_STARTUP_COMMAND: startup,
+    [WINDOWS_RIGHT_ENV]: right,
+    ...(session.temporary ? { PI_TMUX_TEMPORARY: pane.id } : {}),
+    ...(preserveWarm ? { PI_TMUX_STARTUP_MODE: "warm" } : {}),
+  };
+  const { commands, inheritedOverrides } = await windowsReloadEnvironment(run, desired);
+  const launcher = inspectWindowsProcess(process.pid);
+  if (launcher.state !== "live") throw new Error("Cannot identify the Windows reload launcher");
+  await snapshotWindowsReload(context, audit);
+  const route: WindowsReloadRoute = {
+    name: peer.name,
+    identity: peer.identity,
+    instance: basis.instance,
+    pane: paneId,
+    session: pane.session,
+    id: pane.id,
+    cwd: pane.cwd,
+    launchToken,
+    launcher: launcher.identity,
+    inheritedOverrides,
+  };
+  const invocation = compiledEntry()
+    ? [process.execPath]
+    : [process.execPath, fileURLToPath(import.meta.url)];
+  const command = [
+    config.pi,
+    ...(savedFile ? ["--session", pane.file] : ["--session-id", pane.id]),
+    "-e",
+    config.extension,
+    "--",
+    `/${startup}`,
+  ];
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value), "utf8").toString("base64");
+  const respawn = [
+    "respawn-pane",
+    "-k",
+    "-t",
+    paneId,
+    "-c",
+    pane.cwd,
+    "--",
+    ...invocation,
+    "windows-claim-launch",
+    right,
+    encode(command),
+    encode(route),
+  ];
+  const last = await readPane([
+    "session_id",
+    "pane_pid",
+    "pane_dead",
+    "PI_TMUX_SESSION_ID",
+    "PI_TMUX_TEMPORARY",
+    "session_path",
+    "@pi-tmux-session",
+    "@pi-mux-launch",
+    WINDOWS_RIGHT_OPTION,
+    "@pi_session_state",
+    "@pi-mux-state-source",
+    "@pi-mux-pending-restart-blocker",
+  ]);
+  const [
+    sessionId,
+    pid,
+    dead,
+    id,
+    temporary,
+    cwd,
+    metadata,
+    launch,
+    paneRight,
+    state,
+    owner,
+    blocker,
+  ] = last;
+  if (
+    sessionId !== pane.session ||
+    Number(pid) !== pane.panePid ||
+    dead !== "0" ||
+    id !== pane.id ||
+    cwd !== pane.cwd ||
+    temporary !== (session.temporary ? id : "") ||
+    metadata !== pane.metadata ||
+    launch !== entry.launch ||
+    paneRight !== entry.right ||
+    processes.some(
+      (process) => observeWindowsIdentity(process, inspectWindowsProcess) !== "present",
+    ) ||
+    !windowsPaneIsWaiting(config, { ...entry, state, owner, blocker })
+  )
+    return;
+
+  if (!session.temporary)
+    await management.keepRestoring(basis, session.id, windowsClaimLock(management));
+  try {
+    await run([
+      ...commands,
+      ["set-option", "-pu", "-t", paneId, "@pi-tmux-session"],
+      ["set-option", "-pu", "-t", paneId, "@pi-mux-launch"],
+      ["set-option", "-pu", "-t", paneId, WINDOWS_RIGHT_OPTION],
+      ...clearStateOptions(paneId).filter((args) => args.at(-1) !== "@pi_session_state_pending"),
+      respawn,
+    ]);
+    await waitForWindowsExit(processes, {
+      timeoutMs: STARTUP_TIMEOUT_MS,
+      pollMs: POLL_INTERVAL_MS,
+    });
+    const [nextSession, nextPid, nextDead, nextRight] = await readPane([
+      "session_id",
+      "pane_pid",
+      "pane_dead",
+      WINDOWS_RIGHT_ENV,
+    ]);
+    if (
+      nextSession !== pane.session ||
+      !/^[1-9]\d*$/.test(nextPid ?? "") ||
+      Number(nextPid) === pane.panePid ||
+      nextDead !== "0" ||
+      nextRight !== right
+    )
+      throw new Error("Cannot verify the Windows reload replacement pane");
+    const reserved = await rights.reserveAfterLifecycleAudit(
+      [conversationLaunchKey(pane.id)],
+      basis,
+      { token: right },
+    );
+    if (reserved.state !== "reserved") throw new Error("A Windows pi launch is still active");
+    const claimDeadlineMs = Date.now() + STARTUP_TIMEOUT_MS;
+    while (true) {
+      const status = await rights.status(right);
+      if (status.state === "live") break;
+      if (status.state !== "reserved")
+        throw new Error("Cannot confirm the Windows reload launch was claimed");
+      if (Date.now() >= claimDeadlineMs) {
+        if (await rights.cancelUnclaimed(right))
+          throw new Error("Timed out waiting for the Windows reload launch claim");
+        if ((await rights.status(right)).state === "live") break;
+        throw new Error("Cannot confirm the Windows reload launch after the claim timeout");
+      }
+      await Bun.sleep(POLL_INTERVAL_MS);
+    }
+    return {
+      pane,
+      launchToken,
+      preserveWarm,
+      route,
+      right,
+      deadlineMs: Date.now() + STARTUP_TIMEOUT_MS,
+    };
+  } catch (error) {
+    await rights.cancelUnclaimed(right);
+    await management.assertLive(context.original);
+    reportReloadFailure(progress, pane.id, errorMessage(error));
+  }
+}
+
+async function snapshotWindowsReload(
+  { config, management }: WindowsReloadContext,
+  audit: WindowsLifecycleAudit,
+): Promise<void> {
+  const previous = readSnapshot(config);
+  const { basis } = audit;
+  if (previous?.generation && previous.generation !== basis.instance)
+    throw new Error("Snapshot belongs to another psmux generation");
+  const retained = new Set(audit.startup.restoring);
+  const suppressed = new Set(
+    audit.managed.filter(({ temporary }) => temporary).map(({ id }) => id.toLowerCase()),
+  );
+  const counts = new Map<string, number>();
+  for (const { id } of audit.managed) {
+    const key = id.toLowerCase();
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const sessions = uniqueCandidates([
+    ...(previous?.sessions ?? []).filter(({ id }) => {
+      const key = id.toLowerCase();
+      return !suppressed.has(key) && (retained.has(key) || (counts.get(key) ?? 0) > 1);
+    }),
+    ...audit.ownership
+      .filter(
+        ({ peer, session }) =>
+          !session.temporary &&
+          counts.get(session.id.toLowerCase()) === 1 &&
+          audit.entries.some((entry) => entry.peer.identity === peer.identity),
+      )
+      .map(({ session: { id, cwd } }) => ({ id, cwd })),
+  ]);
+  await management.assertLive(basis);
+  writeSnapshot(config, {
+    version: 1,
+    generation: basis.instance,
+    cwds: previous?.cwds ?? [],
+    sessions,
+  });
+}
+
+async function windowsReloadEnvironment(
+  run: (commands: string[][]) => Promise<string>,
+  desired: Record<string, string>,
+): Promise<{ commands: string[][]; inheritedOverrides: WindowsReloadRoute["inheritedOverrides"] }> {
+  const current = await run([["show-environment", "-s"]]);
+  const global = await run([["show-environment", "-gs"]]);
+  const exported = (text: string) =>
+    [...text.replace(/"(?:\\.|[^"\\])*"/gs, "").matchAll(/; export ([^;\n]+);/g)].map(
+      (match) => match[1]!,
+    );
+  const desiredKeys = new Set(Object.keys(desired).map((key) => key.toUpperCase()));
+  const stale = [
+    ...new Set([...exported(current), ...exported(global), ...PARENT_ENV_KEYS]),
+  ].filter(
+    (key) =>
+      !desiredKeys.has(key.toUpperCase()) &&
+      !GENERATED_ENV_KEYS.has(key.toUpperCase()) &&
+      !PSMUX_ROUTING.has(key.toUpperCase()),
+  );
+  const commands: string[][] = [];
+  const inheritedOverrides: WindowsReloadRoute["inheritedOverrides"] = [];
+  for (const key of stale) {
+    if (platform.acceptsTmuxEnvironmentKey(key)) commands.push(["set-environment", "-r", key]);
+    else if (/^[^=\0\r\n]+$/.test(key)) inheritedOverrides.push([key, null]);
+  }
+  for (const [key, value] of Object.entries(desired)) {
+    if (GENERATED_ENV_KEYS.has(key.toUpperCase()) || PSMUX_ROUTING.has(key.toUpperCase())) continue;
+    const supported = platform.acceptsTmuxEnvironmentKey(key);
+    if (!supported || /[\r\n]/.test(value) || value === "-t") {
+      if (supported) commands.push(["set-environment", "-r", key]);
+      inheritedOverrides.push([key, value]);
+    } else {
+      commands.push(["set-environment", key, value]);
+    }
+  }
+  return { commands, inheritedOverrides };
+}
+
+async function confirmWindowsReloadPublications(context: WindowsReloadContext): Promise<void> {
+  const { config, management, original, progress, rights } = context;
+  if (!progress.inFlight.size) return;
+  const audit = await management.audit("#{pane_id}");
+  if (!launchBasisStillLive(original, audit.basis))
+    throw new Error("Dedicated psmux generation changed during reload publication");
+  for (const [id, pending] of progress.inFlight) {
+    const { route, pane, launchToken, preserveWarm, right, release, deadlineMs } = pending;
+    const peer = findWindowsReloadPeer(audit, route);
+    const status = await rights.status(right);
+    if (
+      !peer ||
+      status.state === "ended" ||
+      status.state === "missing" ||
+      status.state === "unknown"
+    ) {
+      reportReloadFailure(progress, id, "Cannot confirm the Windows reload launch");
+    } else {
+      const [session, pid, dead, sessionId, cwd, metadata, launch, paneRight] =
+        await readWindowsPeerPaneFields(management.scope, audit, peer, route.pane, [
+          "session_id",
+          "pane_pid",
+          "pane_dead",
+          "PI_TMUX_SESSION_ID",
+          "session_path",
+          "@pi-tmux-session",
+          "@pi-mux-launch",
+          WINDOWS_RIGHT_OPTION,
+        ]);
+      if (session !== pane.session || dead !== "0" || sessionId !== id || cwd !== pane.cwd) {
+        reportReloadFailure(progress, id, "The managed pane changed before publication");
+      } else if (
+        status.state === "live" &&
+        "receipt" in status &&
+        paneRight === right &&
+        matchesReloadPublication(pane, Number(pid), launchToken, preserveWarm, metadata, launch)
+      ) {
+        const published = JSON.parse(Buffer.from(metadata!, "base64").toString("utf8"));
+        if (
+          published.processPid === status.receipt.child.pid &&
+          published.cwd === pane.cwd &&
+          published.startup === "ready" &&
+          isAbsolute(published.file ?? "")
+        ) {
+          await withLock(config, async () => {
+            await management.assertLive({ instance: route.instance, witnesses: [peer.identity] });
+            await rights.complete(right, status.receipt);
+            if (management.startupState(audit.basis)?.restoring.includes(id.toLowerCase()))
+              await management.clearRestoring(audit.basis, id, windowsClaimLock(management));
+          });
+          progress.reloaded.add(id);
+          console.log(`reloaded ${id}`);
+        }
+      }
+      if (!progress.reloaded.has(id) && !progress.failed.has(id)) {
+        if (Date.now() < deadlineMs) continue;
+        reportReloadFailure(progress, id, "pi startup timed out during reload");
       }
     }
-    throw new Error(
-      "Cannot safely reload live panes on this psmux build: no atomic waiting-user respawn guard",
-    );
-  });
+    if (progress.failed.has(id)) await rights.cancelUnclaimed(right);
+    progress.inFlight.delete(id);
+    await release();
+  }
 }
 
 async function reloadPanes(config: Config, onlyId?: string): Promise<number> {
@@ -2266,7 +3241,11 @@ async function startNextReload(
   return "wait";
 }
 
-function reportReloadFailure(progress: ReloadProgress, id: string, reason: string): void {
+function reportReloadFailure(
+  progress: Pick<ReloadProgress, "failed">,
+  id: string,
+  reason: string,
+): void {
   if (progress.failed.has(id)) return;
   progress.failed.add(id);
   console.error(`pi-mux: reload ${id}: ${reason}`);
