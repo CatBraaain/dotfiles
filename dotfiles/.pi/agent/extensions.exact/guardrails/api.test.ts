@@ -4306,6 +4306,7 @@ describe("§3 ツール引数パスの正規化", () => {
     const originalRunTool = SandboxRunner.prototype.runTool;
     Guardrail.prototype.authorizePath = async function (operation, path) {
       authorized.push({ operation, path });
+      return undefined;
     };
     SandboxRunner.prototype.runTool = async function (toolName, params, _options) {
       runToolCalls.push({ toolName, params });
@@ -4612,6 +4613,7 @@ describe("tool path environment expansion", () => {
         const calls: string[] = [];
         Guardrail.prototype.authorizePath = async () => {
           calls.push("authorize");
+          return undefined;
         };
         Guardrail.prototype.requestWritePermission = async (path) => {
           calls.push("request");
