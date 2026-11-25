@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { buildEnvelope, insertMetadata, type RenderSettings } from "./format";
 import { scanViolations, type Violation } from "./scan";
@@ -25,12 +25,62 @@ const AUTO_SCALE_TARGET_HEIGHT_PX = 1080;
 const AUTO_SCALE_MIN = 1;
 const AUTO_SCALE_MAX = 3;
 
-const PATH_BROWSERS = ["chromium", "chromium-browser", "google-chrome-stable", "google-chrome"];
+const PATH_BROWSER_NAMES = {
+  other: ["chromium", "chromium-browser", "google-chrome-stable", "google-chrome"],
+  win32: ["chromium.exe", "chrome.exe"],
+} as const;
+const PLAYWRIGHT_CHROMIUM_FILES = {
+  other: [
+    { directory: "chrome-linux64", executable: "chrome" },
+    { directory: "chrome-linux", executable: "chrome" },
+  ],
+  win32: [
+    { directory: "chrome-win64", executable: "chrome.exe" },
+    { directory: "chrome-win", executable: "chrome.exe" },
+  ],
+} as const;
 const VIRTUAL_TIME_BUDGET_MILLISECONDS = 5000;
 const RENDER_TIMEOUT_MILLISECONDS = 30000;
 const TRANSPARENT_BACKGROUND_COLOR = "00000000";
 
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+export interface BrowserSearch {
+  platform: "win32" | "other";
+  playwrightCache: { dir: string; entries: readonly string[] } | undefined;
+  searchPath: string;
+}
+
+function currentBrowserSearch(): BrowserSearch {
+  const isWindows = process.platform === "win32";
+  const cacheDir = isWindows
+    ? process.env.LOCALAPPDATA && win32.join(process.env.LOCALAPPDATA, "ms-playwright")
+    : posix.join(homedir(), ".cache", "ms-playwright");
+  return {
+    platform: isWindows ? "win32" : "other",
+    playwrightCache:
+      cacheDir && existsSync(cacheDir)
+        ? { dir: cacheDir, entries: readdirSync(cacheDir) }
+        : undefined,
+    searchPath: process.env.PATH ?? "",
+  };
+}
+
+export function browserCandidates(search: BrowserSearch): string[] {
+  const pathApi = search.platform === "win32" ? win32 : posix;
+  const versions = (search.playwrightCache?.entries ?? [])
+    .filter((name) => /^chromium-\d+$/.test(name))
+    .sort((a, b) => Number(b.slice("chromium-".length)) - Number(a.slice("chromium-".length)));
+  const playwrightCandidates = versions.flatMap((version) =>
+    PLAYWRIGHT_CHROMIUM_FILES[search.platform].map(({ directory, executable }) =>
+      pathApi.join(search.playwrightCache?.dir ?? "", version, directory, executable),
+    ),
+  );
+  const pathCandidates = search.searchPath
+    .split(pathApi.delimiter)
+    .flatMap((dir) => PATH_BROWSER_NAMES[search.platform].map((name) => pathApi.join(dir, name)));
+  return [...playwrightCandidates, ...pathCandidates];
+}
 
 export function resolveBrowser(): string | null {
   const envBrowser = process.env.HTMLSHOT_BROWSER;
@@ -39,25 +89,9 @@ export function resolveBrowser(): string | null {
       throw new Error(`HTMLSHOT_BROWSER points to a missing file: ${envBrowser}`);
     return envBrowser;
   }
-  const playwrightDir = join(homedir(), ".cache", "ms-playwright");
-  if (existsSync(playwrightDir)) {
-    const versions = readdirSync(playwrightDir)
-      .filter((name) => /^chromium-\d+$/.test(name))
-      .sort((a, b) => Number(b.slice("chromium-".length)) - Number(a.slice("chromium-".length)));
-    for (const version of versions) {
-      const browserPath = ["chrome-linux64", "chrome-linux"]
-        .map((layout) => join(playwrightDir, version, layout, "chrome"))
-        .find((path) => existsSync(path));
-      if (browserPath !== undefined) return browserPath;
-    }
-  }
-  for (const dir of (process.env.PATH ?? "").split(":")) {
-    for (const name of PATH_BROWSERS) {
-      const candidate = join(dir, name);
-      if (existsSync(candidate)) return candidate;
-    }
-  }
-  return null;
+  return (
+    browserCandidates(currentBrowserSearch()).find((candidate) => existsSync(candidate)) ?? null
+  );
 }
 
 export function resolveScale(width: number, height: number, requested?: number): number {

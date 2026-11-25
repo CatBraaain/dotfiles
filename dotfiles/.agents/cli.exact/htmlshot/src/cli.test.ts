@@ -3,7 +3,7 @@ import { describe, it } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveBrowser, resolveScale } from "./shot";
+import { browserCandidates, resolveBrowser, resolveScale } from "./shot";
 import {
   FORMAT,
   PNG_SIGNATURE,
@@ -83,6 +83,66 @@ const syntheticPng = (): Buffer => {
 
 const bound = (html: string): Buffer =>
   insertMetadata(syntheticPng(), buildEnvelope(html, { width: 1200, height: 800, scale: 1 }));
+
+describe("browserCandidates", () => {
+  it("prefers the newest Playwright chromium and its win64 layout on Windows", () => {
+    const candidates = browserCandidates({
+      platform: "win32",
+      playwrightCache: {
+        dir: "C:\\Users\\u\\AppData\\Local\\ms-playwright",
+        entries: [
+          "chromium-999",
+          "chromium_headless_shell-1228",
+          "ffmpeg-1011",
+          "chromium-1000",
+          "chromium-1228",
+        ],
+      },
+      searchPath: "C:\\Tools;D:\\Browsers",
+    });
+    assert.deepEqual(candidates, [
+      "C:\\Users\\u\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe",
+      "C:\\Users\\u\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win\\chrome.exe",
+      "C:\\Users\\u\\AppData\\Local\\ms-playwright\\chromium-1000\\chrome-win64\\chrome.exe",
+      "C:\\Users\\u\\AppData\\Local\\ms-playwright\\chromium-1000\\chrome-win\\chrome.exe",
+      "C:\\Users\\u\\AppData\\Local\\ms-playwright\\chromium-999\\chrome-win64\\chrome.exe",
+      "C:\\Users\\u\\AppData\\Local\\ms-playwright\\chromium-999\\chrome-win\\chrome.exe",
+      "C:\\Tools\\chromium.exe",
+      "C:\\Tools\\chrome.exe",
+      "D:\\Browsers\\chromium.exe",
+      "D:\\Browsers\\chrome.exe",
+    ]);
+  });
+
+  it("keeps the Linux Playwright layout and PATH names", () => {
+    const candidates = browserCandidates({
+      platform: "other",
+      playwrightCache: { dir: "/home/u/.cache/ms-playwright", entries: ["chromium-1200"] },
+      searchPath: "/usr/bin:/opt/google/chrome",
+    });
+    assert.deepEqual(candidates, [
+      "/home/u/.cache/ms-playwright/chromium-1200/chrome-linux64/chrome",
+      "/home/u/.cache/ms-playwright/chromium-1200/chrome-linux/chrome",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/google-chrome",
+      "/opt/google/chrome/chromium",
+      "/opt/google/chrome/chromium-browser",
+      "/opt/google/chrome/google-chrome-stable",
+      "/opt/google/chrome/google-chrome",
+    ]);
+  });
+
+  it("falls back to PATH when the Playwright cache is missing", () => {
+    const candidates = browserCandidates({
+      platform: "win32",
+      playwrightCache: undefined,
+      searchPath: "C:\\Browsers",
+    });
+    assert.deepEqual(candidates, ["C:\\Browsers\\chromium.exe", "C:\\Browsers\\chrome.exe"]);
+  });
+});
 
 describe("resolveScale", () => {
   it("uses the requested scale when given", () => {

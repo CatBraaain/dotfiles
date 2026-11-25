@@ -59,7 +59,7 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 
 | 項目 | 値 |
 | --- | --- |
-| ブラウザの決定順 | 環境変数 `HTMLSHOT_BROWSER` → `~/.cache/ms-playwright/chromium-*` のうちバージョン番号が最大の配下の `chrome-linux64/chrome`、無いとき `chrome-linux/chrome` → PATH上の `chromium`・`chromium-browser`・`google-chrome-stable`・`google-chrome` の最初に見つけたもの |
+| ブラウザの決定順 | 環境変数 `HTMLSHOT_BROWSER` → Playwright のブラウザキャッシュ（`~/.cache/ms-playwright`。Windows は `%LOCALAPPDATA%\ms-playwright`）の `chromium-*` のうちバージョン番号が大きい順に、その配下の `chrome-linux64/chrome`、無いとき `chrome-linux/chrome`（Windows は `chrome-win64/chrome.exe`、無いとき `chrome-win/chrome.exe`）→ PATH上（Windows は `;` 区切り）の `chromium`・`chromium-browser`・`google-chrome-stable`・`google-chrome`（Windows は `chromium.exe`・`chrome.exe`）の最初に見つけたもの |
 | 読み込み | 正本の絶対パスの `file://` URL |
 | 起動フラグ | `--headless`、`--screenshot=<一時ファイル>`、`--window-size=<width>,<height>`、`--force-device-scale-factor=<scale>`、`--default-background-color=00000000`、`--hide-scrollbars`、`--virtual-time-budget=5000` |
 | 既定のレンダ設定 | width 1200、height 800。`--scale` を省略したときの scale は、width が height 以上のとき 1920 ÷ width、それ以外のとき 1080 ÷ height を四捨五入し、1〜3 の範囲に制限した値。`--width`・`--height`・`--scale` で変更する |
@@ -110,5 +110,5 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 ## テスト
 
 - テストは `src/*.test.ts` とし、`import { describe, it } from "bun:test"` で書き、assertion は `node:assert/strict` を使う。実行は `cd dotfiles/.agents/cli.exact/htmlshot && bun test` である。
-- 対象: 合成PNG への `iTXt` 挿入と抽出のバイト一致、checksum不一致、未対応 `format`、メタデータ不在、制約検出の判定、`--unsafe` 付きの続行、usage と終了コード。
+- 対象: ブラウザ探索順の各プラットフォームの候補、合成PNG への `iTXt` 挿入と抽出のバイト一致、checksum不一致、未対応 `format`、メタデータ不在、制約検出の判定、`--unsafe` 付きの続行、usage と終了コード。
 - Chromium を要するshot の E2Eテストは、ブラウザが決定できない環境では skipする。
