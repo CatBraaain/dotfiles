@@ -10,14 +10,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { registerScmSelection } from "./scm-selection.ts";
 
 type BridgeResult = "patched" | "unpatched" | "fresh" | "bridge-unwritable" | "bridge-invalid";
 const BRIDGE_START = "\n// vscode-custom-patch: SCM bridge start\n";
 const BRIDGE_END = "\n// vscode-custom-patch: SCM bridge end\n";
 const IDENTIFIER = "[$A-Za-z_][$\\w]*";
 
-export function ensureScmBridge(appOut: string, enabled: boolean): BridgeResult {
+export function ensureScmBridge(appOut: string, scmSelectionSource?: string): BridgeResult {
   const bundlePath = join(appOut, "vs", "workbench", "workbench.desktop.main.js");
   try {
     const stats = lstatSync(bundlePath, { throwIfNoEntry: false });
@@ -31,7 +30,7 @@ export function ensureScmBridge(appOut: string, enabled: boolean): BridgeResult 
       return "bridge-invalid";
 
     const original = hasBridge ? current.slice(0, bridgeStart) : current;
-    const bridge = enabled ? prepareScmBridge(original) : undefined;
+    const bridge = scmSelectionSource ? prepareScmBridge(original, scmSelectionSource) : undefined;
     const updated = bridge ? `${original}${BRIDGE_START}${bridge}${BRIDGE_END}` : original;
     if (updated === current) return "fresh";
     if (!bytes.equals(Buffer.from(current))) return "bridge-invalid";
@@ -47,7 +46,7 @@ export function ensureScmBridge(appOut: string, enabled: boolean): BridgeResult 
   }
 }
 
-function prepareScmBridge(bundle: string): string | undefined {
+function prepareScmBridge(bundle: string, scmSelectionSource: string): string | undefined {
   if (!/\bset\s+visibleRepositories\s*\(/.test(bundle)) return;
   if (
     !/\bselectionModeConfig\s*=\s*[$\w]+\(\s*["']scm\.repositories\.selectionMode["']/.test(bundle)
@@ -71,7 +70,10 @@ function prepareScmBridge(bundle: string): string | undefined {
   return `;(() => {
   try {
     if (typeof ${registry} !== "undefined" && typeof ${viewService} === "function" && ${viewService}.toString() === "scmView") {
-      (${registerScmSelection.toString()})(${registry}, ${viewService});
+      ((module) => {
+${scmSelectionSource}
+        return module.exports.registerScmSelection;
+      })({})(${registry}, ${viewService});
     }
   } catch (error) {
     console.warn("Agent Kit SCM bridge could not register", error);

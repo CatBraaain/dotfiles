@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { ensurePatched, installRoots, workbenchSearchDirs } from "./patch.ts";
 
+declare const BUNDLED_SCM_SELECTION: string;
+
 const pluginPath = process.argv[2];
 if (!pluginPath) throw new Error("usage: bun run inject <plugin.js>");
 
@@ -15,7 +17,7 @@ const failures: Record<string, string> = {
 
 const result = ensurePatched({
   searchDirs: workbenchSearchDirs({ extraRoots: installRoots() }),
-  enableScmBridge: true,
+  scmSelectionSource: BUNDLED_SCM_SELECTION,
   plugins: [
     {
       name: "scm-collapse.js",

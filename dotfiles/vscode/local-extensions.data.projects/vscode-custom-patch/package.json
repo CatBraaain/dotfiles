@@ -7,7 +7,7 @@
   "main": "./extension.js",
   "scripts": {
     "build": "bun scripts/build.ts",
-    "inject": "bun src/inject.ts"
+    "inject": "bun dist/inject.js"
   },
   "activationEvents": [
     "onStartupFinished"

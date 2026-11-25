@@ -2,6 +2,7 @@ import { isAbsolute, parse } from "node:path";
 import { ensurePatched, installRoots, workbenchSearchDirs } from "./src/patch.ts";
 
 declare const BUNDLED_SCM_COLLAPSE: string;
+declare const BUNDLED_SCM_SELECTION: string;
 
 const command = process.argv[2] ?? "ensure";
 if (command !== "ensure" && command !== "remove") {
@@ -22,7 +23,7 @@ const plugins = [{ name: "scm-collapse.js", content: BUNDLED_SCM_COLLAPSE }];
 const result = ensurePatched({
   searchDirs,
   ...(useAppOut || pathOption === undefined
-    ? { plugins, enableScmBridge: true }
+    ? { plugins, scmSelectionSource: BUNDLED_SCM_SELECTION }
     : { pluginsDir: pathOption }),
   mode: command,
 });

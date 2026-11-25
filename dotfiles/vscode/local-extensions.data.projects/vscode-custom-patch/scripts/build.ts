@@ -12,7 +12,11 @@ export async function buildProject(
     format: "iife",
   });
   const pluginText = await plugin.text();
-  const define = { BUNDLED_SCM_COLLAPSE: JSON.stringify(pluginText) };
+  const scmSelectionSource = await buildScmSelection(sourceDir);
+  const define = {
+    BUNDLED_SCM_COLLAPSE: JSON.stringify(pluginText),
+    BUNDLED_SCM_SELECTION: JSON.stringify(scmSelectionSource),
+  };
   const extension = await bundle("extension", {
     entrypoints: [join(sourceDir, "src/extension.ts")],
     target: "node",
@@ -22,6 +26,12 @@ export async function buildProject(
   });
   const cli = await bundle("CLI", {
     entrypoints: [join(sourceDir, "cli.ts")],
+    target: "node",
+    format: "cjs",
+    define,
+  });
+  const inject = await bundle("inject", {
+    entrypoints: [join(sourceDir, "src/inject.ts")],
     target: "node",
     format: "cjs",
     define,
@@ -45,10 +55,20 @@ export async function buildProject(
       Bun.write(join(outputDir, "content.sha256"), `${contentHash}\n`),
       Bun.write(join(outputDir, "scm-collapse.js"), pluginText),
       Bun.write(join(outputDir, "cli.js"), cli),
+      Bun.write(join(outputDir, "inject.js"), inject),
     ]);
   } finally {
     await rm(packageDir, { recursive: true, force: true });
   }
+}
+
+export async function buildScmSelection(sourceDir: string): Promise<string> {
+  const selection = await bundle("SCM selection", {
+    entrypoints: [join(sourceDir, "src/scm-selection.ts")],
+    target: "browser",
+    format: "cjs",
+  });
+  return (await selection.text()).trim();
 }
 
 async function packageExtension(packageDir: string, vsixPath: string): Promise<void> {

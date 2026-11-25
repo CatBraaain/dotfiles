@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
-import { afterEach, beforeEach, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, it } from "bun:test";
+import { buildProject, buildScmSelection } from "../scripts/build.ts";
 import { ensureScmBridge } from "./scm-bridge.ts";
 
 const command = "agentKit.scm.selectRepositories";
@@ -31,30 +33,88 @@ $registry.registerCommand("scm.setActiveProvider", async accessor => {
 });
 globalThis.fixture = { registry: $registry, View, viewService: $viewService };
 //# sourceMappingURL=workbench.js.map`;
+const project = join(import.meta.dir, "..");
+let scmSelectionSource: string;
+let root: string;
 let appOut: string;
 let bundle: string;
 
+beforeAll(async () => {
+  scmSelectionSource = await buildScmSelection(project);
+});
+
 beforeEach(() => {
-  appOut = mkdtempSync(join(tmpdir(), "scm-bridge-"));
+  root = mkdtempSync(join(tmpdir(), "scm-bridge-"));
+  appOut = join(root, "out");
   bundle = join(appOut, "vs", "workbench", "workbench.desktop.main.js");
   mkdirSync(dirname(bundle), { recursive: true });
   writeFileSync(bundle, source);
 });
 
 afterEach(() => {
-  rmSync(appOut, { recursive: true, force: true });
+  rmSync(root, { recursive: true, force: true });
 });
 
 it("installs once and restores the original bytes without a backup", () => {
   const original = readFileSync(bundle);
-  assert.equal(ensureScmBridge(appOut, true), "patched");
+  assert.equal(ensureScmBridge(appOut, scmSelectionSource), "patched");
   const patched = readFileSync(bundle);
   assert.ok(patched.subarray(0, original.length).equals(original));
-  assert.equal(ensureScmBridge(appOut, true), "fresh");
+  assert.equal(ensureScmBridge(appOut, scmSelectionSource), "fresh");
   assert.deepEqual(readFileSync(bundle), patched);
-  assert.equal(ensureScmBridge(appOut, false), "unpatched");
+  assert.equal(ensureScmBridge(appOut), "unpatched");
   assert.deepEqual(readFileSync(bundle), original);
 });
+
+it("prompts on startup only when the bundled patch needs to be restored", async () => {
+  const artifacts = join(root, "dist");
+  const extension = join(artifacts, "extension.js");
+  const html = join(appOut, "vs", "code", "electron-browser", "workbench.html");
+  mkdirSync(dirname(html), { recursive: true });
+  writeFileSync(html, "<html><head></head><body></body></html>");
+  await buildProject(project, artifacts, async (packageDir) => {
+    copyFileSync(join(packageDir, "extension.js"), extension);
+  });
+  const applied = execFileSync(
+    process.execPath,
+    [join(artifacts, "cli.js"), "ensure", "--app-out", appOut],
+    { encoding: "utf8" },
+  );
+  assert.equal(applied.trim(), "custom scripts patched into workbench");
+  const patched = readFileSync(bundle);
+  assert.deepEqual(activationMessages(), []);
+  assert.deepEqual(readFileSync(bundle), patched);
+
+  writeFileSync(bundle, source);
+  assert.deepEqual(activationMessages(), ["Custom scripts patch updated. Restart to apply."]);
+  assert.deepEqual(readFileSync(bundle), patched);
+
+  function activationMessages(): string[] {
+    return JSON.parse(
+      execFileSync("node", ["-e", activateExtension, extension, root], { encoding: "utf8" }),
+    );
+  }
+});
+
+const activateExtension = `
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
+const { runInNewContext } = require("node:vm");
+const [path, root] = process.argv.slice(1);
+const module = { exports: {} };
+const messages = [];
+const vscode = { window: {
+  showInformationMessage(message) { messages.push(message); return Promise.resolve(); },
+  showWarningMessage(message) { messages.push(message); },
+} };
+runInNewContext(readFileSync(path, "utf8"), {
+  module, exports: module.exports, Buffer, console,
+  process: { ...process, execPath: join(root, "Code.exe") },
+  require: (id) => id === "vscode" ? vscode : require(id),
+});
+module.exports.activate();
+console.log(JSON.stringify(messages));
+`;
 
 it.each([
   [
@@ -70,15 +130,15 @@ it.each([
   ],
 ])("leaves the source intact for %s", (_, unsupported) => {
   writeFileSync(bundle, unsupported);
-  assert.equal(ensureScmBridge(appOut, true), "fresh");
+  assert.equal(ensureScmBridge(appOut, scmSelectionSource), "fresh");
   assert.equal(readFileSync(bundle, "utf8"), unsupported);
 });
 
 it("does not truncate unrelated bytes after a damaged patch boundary", () => {
-  ensureScmBridge(appOut, true);
+  ensureScmBridge(appOut, scmSelectionSource);
   const damaged = `${readFileSync(bundle, "utf8")}stockCode();\n`;
   writeFileSync(bundle, damaged);
-  assert.equal(ensureScmBridge(appOut, false), "bridge-invalid");
+  assert.equal(ensureScmBridge(appOut), "bridge-invalid");
   assert.equal(readFileSync(bundle, "utf8"), damaged);
 });
 
@@ -155,7 +215,7 @@ it.each([
 });
 
 function loadSelection(mode = "multiple", repositories = [alpha, beta, gamma]) {
-  assert.equal(ensureScmBridge(appOut, true), "patched");
+  assert.equal(ensureScmBridge(appOut, scmSelectionSource), "patched");
   const globals = {
     mode,
     fixture: undefined as unknown as {

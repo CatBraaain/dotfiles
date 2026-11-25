@@ -28,6 +28,7 @@ it("restores all outputs for unchanged build inputs and keeps two cache generati
       vsix + ".sha256",
       "scm-collapse.data.js",
       "vscode-custom-patch/cli.js",
+      "vscode-custom-patch/inject.data.js",
     ];
 
     async function copyBuildInputs() {
@@ -36,6 +37,7 @@ it("restores all outputs for unchanged build inputs and keeps two cache generati
         "cli.ts",
         "scripts/build.ts",
         "src/extension.ts",
+        "src/inject.ts",
         "src/patch.ts",
         "src/scm-bridge.ts",
         "src/scm-selection.ts",

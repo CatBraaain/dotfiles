@@ -20,7 +20,7 @@ const shellIntegrationPathSuffix =
   "\\vs\\workbench\\contrib\\terminal\\common\\scripts\\shellIntegration.ps1";
 type WindowsTarget = { platform: "windows"; powershell: string };
 type Target = { platform: "linux"; codeCommand: string[] } | WindowsTarget;
-type Run = (argv: string[], cwd?: string) => Promise<string>;
+type Run = (argv: string[]) => Promise<string>;
 
 async function main(): Promise<void> {
   if (process.platform !== "linux" && process.platform !== "win32") return;
@@ -158,10 +158,11 @@ function isWindowsUncPath(path: string): boolean {
 
 async function inject(target: Target, vscodeDir: string, run: Run): Promise<void> {
   if (target.platform === "linux") {
-    const output = await run(
-      [process.execPath, "run", "inject", join(vscodeDir, "scm-collapse.data.js")],
-      join(vscodeDir, "local-extensions.data.projects/vscode-custom-patch"),
-    );
+    const output = await run([
+      process.execPath,
+      join(vscodeDir, "vscode-custom-patch", "inject.data.js"),
+      join(vscodeDir, "scm-collapse.data.js"),
+    ]);
     if (output.length > 0) process.stdout.write(output);
     return;
   }
@@ -237,10 +238,8 @@ async function writeReceipt(path: string, contentHash: string): Promise<void> {
   }
 }
 
-async function runCommand(argv: string[], cwd?: string): Promise<string> {
-  const command = $`${argv}`.quiet();
-  if (cwd) command.cwd(cwd);
-  const { stdout, stderr, exitCode } = await command.nothrow();
+async function runCommand(argv: string[]): Promise<string> {
+  const { stdout, stderr, exitCode } = await $`${argv}`.quiet().nothrow();
   if (stderr.length > 0) process.stderr.write(stderr);
   if (exitCode !== 0) {
     if (stdout.length > 0) process.stdout.write(stdout);

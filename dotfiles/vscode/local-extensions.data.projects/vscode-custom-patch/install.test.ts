@@ -40,12 +40,15 @@ function receipt(target: "linux" | "windows") {
   );
 }
 
+function linuxInjectPath() {
+  return join(vscodeDir, "vscode-custom-patch", "inject.data.js");
+}
+
 it("installs a same-version VSIX on first apply and injects only after installation succeeds", async () => {
   const calls: string[][] = [];
-  await applyCustomPatch(vscodeDir, root, linux, async (argv, cwd) => {
+  await applyCustomPatch(vscodeDir, root, linux, async (argv) => {
     calls.push(argv);
-    if (argv.includes("inject")) {
-      assert.equal(cwd, join(vscodeDir, "local-extensions.data.projects/vscode-custom-patch"));
+    if (argv[1] === linuxInjectPath()) {
       assert.equal((await readFile(receipt("linux"), "utf8")).trim(), first);
     }
     return argv.includes("--list-extensions") ? installed : "";
@@ -53,7 +56,7 @@ it("installs a same-version VSIX on first apply and injects only after installat
   assert.deepEqual(calls, [
     ["code", "--list-extensions", "--show-versions"],
     ["code", "--install-extension", vsix, "--force"],
-    [process.execPath, "run", "inject", join(vscodeDir, "scm-collapse.data.js")],
+    [process.execPath, linuxInjectPath(), join(vscodeDir, "scm-collapse.data.js")],
   ]);
 });
 
@@ -79,13 +82,13 @@ it("skips only the VSIX installation on a content hit, and reinstalls if absent"
     calls.push(argv[1]!);
     return argv.includes("--list-extensions") ? installed : "";
   });
-  assert.deepEqual(calls, ["--list-extensions", "run"]);
+  assert.deepEqual(calls, ["--list-extensions", linuxInjectPath()]);
   calls.length = 0;
   await applyCustomPatch(vscodeDir, root, linux, async (argv) => {
     calls.push(argv[1]!);
     return "";
   });
-  assert.deepEqual(calls, ["--list-extensions", "--install-extension", "run"]);
+  assert.deepEqual(calls, ["--list-extensions", "--install-extension", linuxInjectPath()]);
 });
 
 it("skips injection on a failed same-version update, then retries it before injecting", async () => {
@@ -94,7 +97,7 @@ it("skips injection on a failed same-version update, then retries it before inje
   await assert.rejects(
     applyCustomPatch(vscodeDir, root, linux, async (argv) => {
       if (argv.includes("--install-extension")) throw new Error("install failed");
-      if (argv.includes("inject")) assert.fail("injection must not run");
+      if (argv[1] === linuxInjectPath()) assert.fail("injection must not run");
       return installed;
     }),
     /install failed/,
@@ -105,7 +108,7 @@ it("skips injection on a failed same-version update, then retries it before inje
     calls.push(argv[1]!);
     return argv.includes("--list-extensions") ? installed : "";
   });
-  assert.deepEqual(calls, ["--list-extensions", "--install-extension", "run"]);
+  assert.deepEqual(calls, ["--list-extensions", "--install-extension", linuxInjectPath()]);
   assert.equal((await readFile(receipt("linux"), "utf8")).trim(), second);
 });
 
@@ -148,7 +151,7 @@ it.skipIf(process.platform !== "linux")(
     assert.deepEqual(calls, [
       [...command, "--list-extensions", "--show-versions"],
       [...command, "--install-extension", vsix, "--force"],
-      [process.execPath, "run", "inject", join(vscodeDir, "scm-collapse.data.js")],
+      [process.execPath, linuxInjectPath(), join(vscodeDir, "scm-collapse.data.js")],
     ]);
   },
 );

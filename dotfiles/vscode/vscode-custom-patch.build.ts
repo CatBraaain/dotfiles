@@ -11,7 +11,13 @@ import {
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-const artifactNames = ["extension.vsix", "content.sha256", "cli.js", "scm-collapse.js"];
+const artifactNames = [
+  "extension.vsix",
+  "content.sha256",
+  "cli.js",
+  "inject.js",
+  "scm-collapse.js",
+];
 
 export async function buildCustomPatch(
   vscodeDir: string,
@@ -72,11 +78,7 @@ async function hashSources(
     const relativePath = `${relativeDir}/${name}`;
     if ((await stat(join(root, relativePath))).isDirectory()) {
       await hashSources(hash, root, relativePath);
-    } else if (
-      name.endsWith(".ts") &&
-      !name.endsWith(".test.ts") &&
-      relativePath !== "src/inject.ts"
-    ) {
+    } else if (name.endsWith(".ts") && !name.endsWith(".test.ts")) {
       await hashFile(hash, root, relativePath);
     }
   }
@@ -118,6 +120,7 @@ async function restoreArtifacts(cache: string, vscodeDir: string, vsixPath: stri
   await mkdir(cliDir, { recursive: true });
   await Promise.all([
     copyFile(join(cache, "cli.js"), join(cliDir, "cli.js")),
+    copyFile(join(cache, "inject.js"), join(cliDir, "inject.data.js")),
     copyFile(join(cache, "scm-collapse.js"), join(vscodeDir, "scm-collapse.data.js")),
     copyFile(join(cache, "extension.vsix"), vsixPath),
     copyFile(join(cache, "content.sha256"), `${vsixPath}.sha256`),

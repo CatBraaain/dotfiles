@@ -148,7 +148,7 @@ export function ensurePatched(
   options: {
     searchDirs: string[];
     mode?: EnsureMode;
-    enableScmBridge?: boolean;
+    scmSelectionSource?: string;
   } & ({ pluginsDir: string } | { plugins: PluginEntry[] }),
 ): EnsureResult {
   const { searchDirs, mode = "ensure" } = options;
@@ -165,7 +165,7 @@ export function ensurePatched(
 
   const bridgeResult = ensureScmBridge(
     workbench.appOut,
-    mode === "ensure" && options.enableScmBridge === true,
+    mode === "ensure" ? options.scmSelectionSource : undefined,
   );
   return bridgeResult === "fresh" ? htmlResult : bridgeResult;
 }

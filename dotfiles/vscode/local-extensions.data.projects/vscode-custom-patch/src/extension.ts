@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { ensurePatched, installRoots, workbenchSearchDirs } from "./patch.ts";
 
 declare const BUNDLED_SCM_COLLAPSE: string;
+declare const BUNDLED_SCM_SELECTION: string;
 
 export function activate() {
   try {
@@ -19,7 +20,7 @@ function runPatch() {
       extraRoots: installRoots(),
     }),
     plugins: [{ name: "scm-collapse.js", content: BUNDLED_SCM_COLLAPSE }],
-    enableScmBridge: true,
+    scmSelectionSource: BUNDLED_SCM_SELECTION,
   });
 
   if (result === "patched") promptReload("Custom scripts patch updated. Restart to apply.");
