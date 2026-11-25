@@ -6,7 +6,7 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | key | linux | windows | macos |
 | --- | --- | --- | --- |
 | .agents |  |  | - |
-| .agents/SYSTEM_PROMPT.yaml |  | - | - |
+| .agents/SYSTEM_PROMPT.yaml |  |  | - |
 | .agents/config |  |  | - |
 | .agents/scripts |  |  | - |
 | .config |  |  | - |
