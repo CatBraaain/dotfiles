@@ -42,6 +42,8 @@ write:
       - ~/.agents/config
       - ~/.pi/agent/config
       - /mnt
+  - allow:
+      - /mnt/c/Users/USERNAME/AppData/Local/Temp/pi-work
 
 # Auth files that bash tools need for authentication but pi fs tools
 # (read/write/edit/glob/grep/find/ls) must never touch. Bound read-only into the
