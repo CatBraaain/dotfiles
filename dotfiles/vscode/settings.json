@@ -557,6 +557,7 @@
   },
   "search.showLineNumbers": true,
   "security.allowedUNCHosts": ["wsl.localhost"],
+  "security.workspace.trust.enabled": false,
   "security.workspace.trust.untrustedFiles": "open",
   "settingsSync.ignoredSettings": [
     // "editor.fontSize",
