@@ -244,12 +244,35 @@ async function waitForServerHealthy(
 export async function ensureOpenserpServer(signal: AbortSignal): Promise<void> {
   const baseUrl = openserpBaseUrl();
   if (await serverHealthy(baseUrl, "/ready", signal)) return;
-  spawnOpenserpServer();
+
+  const { hostname, port } = new URL(baseUrl);
+  let startupFailure: string | undefined;
+  const recordSpawnError = (error: unknown): void => {
+    startupFailure = error instanceof Error ? error.message : String(error);
+  };
+  try {
+    const child = spawnDetachedServer(
+      "openserp",
+      openserpServeArgs(hostname, port),
+      { detached: true, stdio: "ignore", shell: process.platform === "win32" },
+      recordSpawnError,
+    );
+    child.on("exit", (code, exitSignal) => {
+      if (exitSignal !== null) startupFailure ??= `process exited with signal ${exitSignal}`;
+      else if (code !== null && code !== 0) startupFailure ??= `process exited with code ${code}`;
+    });
+  } catch (error) {
+    recordSpawnError(error);
+  }
+
   while (!signal.aborted) {
     await delay(SERVER_HEALTH_POLL_INTERVAL_MS, signal);
     if (await serverHealthy(baseUrl, "/ready", signal)) return;
   }
-  throw new Error(`openserp server not ready at ${baseUrl}`);
+  if (startupFailure !== undefined) {
+    throw new Error(`openserp startup failed at ${baseUrl}: ${startupFailure}`);
+  }
+  throw new Error(`openserp server not ready at ${baseUrl} (timed out waiting for /ready)`);
 }
 
 async function serverHealthy(baseUrl: string, path: string, signal: AbortSignal): Promise<boolean> {
@@ -288,25 +311,16 @@ export function openserpServeArgs(hostname: string, port: string): string[] {
   return ["serve", "-a", hostname, "-p", port, "--quiet", "--log_level", "error"];
 }
 
-function spawnOpenserpServer(): void {
-  const { hostname, port } = new URL(openserpBaseUrl());
-  spawnDetachedServer("openserp", openserpServeArgs(hostname, port), {
-    detached: true,
-    stdio: "ignore",
-    shell: process.platform === "win32",
-  });
-}
-
 // The servers are machine-scoped and outlive this CLI process, so spawn them
-// detached. Swallow spawn errors (e.g. binary missing from PATH): the
-// health-check loop reports them as a backend failure instead.
+// detached.
 function spawnDetachedServer(
   command: string,
   args: readonly string[],
   options: SpawnOptions,
+  onError: (error: Error) => void = () => {},
 ): ChildProcess {
   const child = spawn(command, args, options);
-  child.on("error", () => {});
+  child.on("error", onError);
   child.unref();
   return child;
 }

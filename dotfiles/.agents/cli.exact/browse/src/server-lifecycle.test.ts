@@ -465,9 +465,41 @@ describe("bootstrap and recovery timing", () => {
         ],
       );
       if (scenario === "openserp-timeout") {
-        assert.match(report.error!, /openserp server not ready/);
+        assert.match(report.error!, /openserp server not ready .*timed out/);
         assert.equal(report.now, 15000);
       } else assert.equal(report.error, undefined);
+    });
+  }
+
+  it("reuses a ready OpenSERP server without spawning", () => {
+    const report = runServer("openserp-existing", { OPENSERP_BASE_URL: "http://127.0.0.1:7070" });
+    assert.equal(report.error, undefined);
+    assert.equal(report.probes, 1);
+    assert.ok(!report.events.some(([name]) => name === "spawn"));
+  });
+
+  it("accepts a server that becomes ready despite a local OpenSERP startup error", () => {
+    const report = runServer("openserp-missing-but-ready", {
+      OPENSERP_BASE_URL: "http://127.0.0.1:7070",
+    });
+    assert.equal(report.error, undefined);
+    assert.equal(report.now, 500);
+  });
+
+  for (const [scenario, reason] of [
+    ["openserp-missing", "spawn openserp ENOENT"],
+    ["openserp-windows-missing", "process exited with code 1"],
+    ["openserp-signalled", "process exited with signal SIGTERM"],
+  ] as const) {
+    it(`reports the OpenSERP startup failure if readiness never succeeds: ${scenario}`, () => {
+      const baseUrl = "http://127.0.0.1:7070";
+      const report = runServer(scenario, { OPENSERP_BASE_URL: baseUrl });
+      assert.equal(report.error, `Error: openserp startup failed at ${baseUrl}: ${reason}`);
+      assert.equal(report.now, 15000);
+      if (scenario === "openserp-windows-missing") {
+        const launch = report.events.find(([name]) => name === "spawn")!;
+        assert.equal(launch[3].shell, true);
+      }
     });
   }
 

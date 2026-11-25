@@ -10,7 +10,7 @@ import { writeNpmPlaywrightFixture } from "./npm-playwright";
 const scenario = process.argv[2]!;
 const isNativeWindows = process.platform === "win32";
 const isInternal = scenario.startsWith("internal") || scenario.startsWith("windows-internal");
-if (scenario.startsWith("windows-")) {
+if (scenario.startsWith("windows-") || scenario === "openserp-windows-missing") {
   Object.defineProperty(process, "platform", { value: "win32" });
 }
 const events: unknown[][] = [];
@@ -163,8 +163,20 @@ mock.module("node:child_process", () => ({
     return {
       pid: 42000,
       exitCode: null,
-      on: (event: string, listener: (message: unknown) => void) => {
+      on: (event: string, listener: (...args: unknown[]) => void) => {
         if (event === "message" && scenario !== "restart-no-ready") listener("camoufox-ready");
+        if (
+          event === "error" &&
+          (scenario === "openserp-missing" || scenario === "openserp-missing-but-ready")
+        ) {
+          queueMicrotask(() => listener(new Error("spawn openserp ENOENT")));
+        }
+        if (event === "exit" && scenario === "openserp-windows-missing") {
+          queueMicrotask(() => listener(1, null));
+        }
+        if (event === "exit" && scenario === "openserp-signalled") {
+          queueMicrotask(() => listener(null, "SIGTERM"));
+        }
       },
       unref: () => {
         events.push(["unref"]);
@@ -265,7 +277,10 @@ if (scenario.startsWith("openserp")) {
   globalThis.fetch = (async (input: unknown) => {
     events.push(["http-probe", String(input), now]);
     probes++;
-    return new Response("", { status: scenario !== "openserp-timeout" && probes >= 3 ? 200 : 503 });
+    const ready =
+      scenario === "openserp-existing" ||
+      ((scenario === "openserp" || scenario === "openserp-missing-but-ready") && probes >= 3);
+    return new Response("", { status: ready ? 200 : 503 });
   }) as typeof fetch;
 }
 try {

@@ -22,7 +22,8 @@ usage: browse search "<query>" [--lang <code>] [--json]
 - Twitter のタイムライン・検索・リプライ取得は同梱の Pythonスクリプト `scripts/twikit_client.py`（twiforkパッケージ）に依存し、`uv run --no-project` で起動する。cookie は `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/twitter-cookies.json` に保存する
 - GitHub API は `GITHUB_TOKEN` または `GH_TOKEN` 環境変数があれば認証付きで呼ぶ。discussions の GraphQL は token が必須で、無いときは GitHub backend が失敗する
 - `OPENSERP_BASE_URL` / `CAMOUFOX_BASE_URL` 環境変数で接続先を変更できる
-- openserp が未起動のときは `openserp serve --quiet --log_level error` をバックグラウンド起動し、`/ready` 応答を 250ms間隔で待ち、15秒で断念する。serve の stderr（openserp のログ出力）は破棄する
+- openserp の `/ready` が起動前の確認で成功した場合は、そのサーバーを使う。それ以外は `openserp serve --quiet --log_level error` をバックグラウンド起動し、250ms間隔で `/ready` を確認する。serve の stderr は破棄する。
+- `/ready` が15秒の期限までに成功しなければ、起動時のエラーや子プロセスの異常終了を観測した場合はその原因（エラー内容、終了コード、またはシグナル）を表示する。それ以外は応答待ちタイムアウトとして報告する。
 - camoufox server は `browse` 自身の内部サーバーモード（`browse __server <ポート番号>`。usage には出ない）として起動し、machine の shutdown かプロセスの kill まで動き続ける。server が未接続のときは `browse server start` をバックグラウンド起動し、websocket接続（1接続1秒上限）で healthy を判定し、250ms間隔で再プローブして15秒で断念する
 - camoufox server と `browse server start` のログは `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/` 配下の `camoufox-server.log` へ、Xvfb と x11vnc の出力は同じディレクトリの `xvfb.log`・`x11vnc.log` へ追記する
 - camoufox server は起動引数に待受ポート番号を持つ。`CAMOUFOX_BASE_URL` のポートを使い、省略時は `ws:` が80、`wss:` が443とする。ポート0は拒否する。PID ファイルの読み書きは行わない。新規起動の判定・停止・再起動・自動復旧では、同じ OS 上で同じユーザー・同じ実行ファイル・同じポート番号のローカルサーバーを探す。ホストやパスが異なっても、同じポート番号で複数台を管理することはできない。Windows は PowerShell のプロセス情報、Linux は `pgrep` と `/proc` を使う
