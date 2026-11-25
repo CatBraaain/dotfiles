@@ -77,6 +77,8 @@ export function writePaths(
     false,
     resolveGitMainWorktreePath(cwd),
     globCache,
+  ).map((entry) =>
+    entry.action === "allow" ? { ...entry, paths: [...new Set(entry.paths)] } : entry,
   );
 }
 

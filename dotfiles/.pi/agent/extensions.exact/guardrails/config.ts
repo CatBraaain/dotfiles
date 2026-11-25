@@ -7,6 +7,7 @@ import { parse as parseYaml } from "yaml";
 import { parseCommandSegments, type CommandSegment, type TokenRange } from "./command-parser.ts";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
+import { readWslWindowsEnvironment } from "./windows-environment.ts";
 
 export type PathAction = "allow" | "deny" | "ask";
 
@@ -124,7 +125,10 @@ function toCommandEntries(family: Static<typeof CommandFamilySchema>): CommandRu
   });
 }
 
-export function parseGuardrailConfig(source: string): GuardrailConfig {
+export function parseGuardrailConfig(
+  source: string,
+  readWindowsEnvironment = readWslWindowsEnvironment,
+): GuardrailConfig {
   const parsed = parseYaml(source) as unknown;
   if (!validateConfig.Check(parsed)) {
     const details = [...validateConfig.Errors(parsed)]
@@ -135,12 +139,7 @@ export function parseGuardrailConfig(source: string): GuardrailConfig {
   const config = parsed as Static<typeof GuardrailConfigSchema>;
   return {
     read: config.read?.map(toPathEntry),
-    write: config.write?.map((entry) => {
-      const rule = toPathEntry(entry);
-      if (rule.action === "allow")
-        rule.patterns = rule.patterns.flatMap(expandWriteAllowEnvironment);
-      return rule;
-    }),
+    write: config.write && expandWriteRules(config.write.map(toPathEntry), readWindowsEnvironment),
     credentials: config.credentials,
     commands: config.commands?.flatMap(toCommandEntries),
   };
@@ -230,18 +229,67 @@ const XDG_RUNTIME_DIR = "${XDG_RUNTIME_DIR}";
 const LITERAL_REPOSITORY_NAME = "\0repo;";
 const PATH_VARIABLE_REFERENCE = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
-function expandWriteAllowEnvironment(pattern: string): string[] {
+function isComputedPathVariable(reference: string): boolean {
+  return reference === REPOSITORY_NAME || reference === GIT_MAIN_WORKTREE_PATH;
+}
+
+function readWindowsWriteVariables(
+  rules: PathRuleEntry[],
+  readWindowsEnvironment: typeof readWslWindowsEnvironment,
+): ReadonlyMap<string, string> | undefined {
+  if (process.platform !== "linux" || !isWslEnvironment()) return undefined;
+
+  const names = new Set<string>();
+  for (const { action, patterns } of rules) {
+    if (action !== "allow") continue;
+    for (const pattern of patterns) {
+      for (const [reference, name] of pattern.matchAll(PATH_VARIABLE_REFERENCE)) {
+        if (name && !isComputedPathVariable(reference)) names.add(name);
+      }
+    }
+  }
+  if (names.size === 0) return undefined;
+
+  try {
+    return readWindowsEnvironment([...names]);
+  } catch {
+    return undefined;
+  }
+}
+
+function expandWriteRules(
+  rules: PathRuleEntry[],
+  readWindowsEnvironment: typeof readWslWindowsEnvironment,
+): PathRuleEntry[] {
+  const windows = readWindowsWriteVariables(rules, readWindowsEnvironment);
+  return rules.map((rule) => {
+    if (rule.action !== "allow") return rule;
+    const patterns = rule.patterns.flatMap((pattern) => {
+      const local = expandWriteAllowEnvironment(pattern, (name) =>
+        Object.hasOwn(process.env, name) ? process.env[name] : undefined,
+      );
+      const remote = windows && expandWriteAllowEnvironment(pattern, (name) => windows.get(name));
+      return [...new Set([local, remote])].filter((path) => path !== undefined);
+    });
+    return { ...rule, patterns };
+  });
+}
+
+function expandWriteAllowEnvironment(
+  pattern: string,
+  getValue: (name: string) => string | undefined,
+): string | undefined {
   let hasMissingEnvironmentVariable = false;
   const expanded = pattern.replace(PATH_VARIABLE_REFERENCE, (reference, name: string) => {
-    if (reference === REPOSITORY_NAME || reference === GIT_MAIN_WORKTREE_PATH) return reference;
-    const pathValue = Object.hasOwn(process.env, name) ? process.env[name] : undefined;
+    if (isComputedPathVariable(reference)) return reference;
+    const pathValue = getValue(name);
     if (!pathValue) {
       hasMissingEnvironmentVariable = true;
       return "";
     }
     return pathValue.replace(/[^/~.:]/g, maskPatternCharacter);
   });
-  return hasMissingEnvironmentVariable ? [] : [expanded];
+  return hasMissingEnvironmentVariable ? undefined : expanded;
 }
 
 export function expandRuntimeVariables(
