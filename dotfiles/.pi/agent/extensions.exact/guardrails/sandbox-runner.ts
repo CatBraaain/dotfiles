@@ -15,6 +15,8 @@ import { getPackageDir, type AgentToolResult } from "@earendil-works/pi-coding-a
 import { type ToolName, type ToolSession, sanitizeSandboxEnvironment } from "./config.ts";
 import type { SandboxMode } from "./sandbox.ts";
 
+export type ExecutorDescriptor = { entrypoint: string; data?: Record<string, unknown> };
+
 type RunOptions = {
   input?: string | Buffer;
   cwd?: string;
@@ -25,6 +27,7 @@ type RunOptions = {
   mode?: SandboxMode;
   cooperativeCancellation?: boolean;
   maxOutputBytes?: number;
+  authorizeReadPath?: (path: string, signal: AbortSignal) => Promise<void>;
   sandbox?: { args: string[]; mountFds: number[] };
 };
 
@@ -73,6 +76,16 @@ function validateMountDirectory(path: string): void {
     throw new Error(`Invalid scoped execution directory: ${path}`);
 }
 
+function validateExecutor(executor: ExecutorDescriptor | undefined): void {
+  if (
+    executor !== undefined &&
+    (typeof executor.entrypoint !== "string" ||
+      !isAbsolute(executor.entrypoint) ||
+      executor.entrypoint.includes("\0"))
+  )
+    throw new Error("Executor entrypoint must be an absolute file path");
+}
+
 type RunResult = { exitCode: number | null; stdout: Buffer; stderr: Buffer };
 
 type RunToolsResponse = { ok: true; result: AgentToolResult<any> } | { ok: false; error: string };
@@ -93,33 +106,53 @@ export class SandboxRunner {
     readonly sandboxed: () => boolean = platformSandboxes,
   ) {}
 
+  async runWindowsRead(
+    params: Record<string, unknown>,
+    options: {
+      authorize: NonNullable<RunOptions["authorizeReadPath"]>;
+      executor?: ExecutorDescriptor;
+      signal?: AbortSignal;
+    },
+  ): Promise<AgentToolResult<unknown>> {
+    if (process.platform !== "win32" || this.sandboxed())
+      throw new Error("Windows read requires a native worker");
+    const { authorize, executor, signal } = options;
+    validateExecutor(executor);
+    const execution = await this.run("bun", [this.runToolsPath, "windows-read"], {
+      input: JSON.stringify({
+        params,
+        openedReadExecutor: executor?.entrypoint,
+        executorData: executor?.data,
+      }),
+      authorizeReadPath: authorize,
+      signal,
+      env: { GUARDRAIL_PI_PACKAGE_DIR: this.piPackageDir },
+    });
+    const response = parseRunToolsResponse(execution);
+    if (!response.ok) throw new Error(response.error);
+    return response.result;
+  }
+
   async runTool(
     toolName: ToolName,
     params: unknown,
     options: {
       mode: SandboxMode;
       cwd?: string;
-      executor?: { entrypoint: string };
-      imageMimeType?: string;
+      executor?: ExecutorDescriptor;
       signal?: AbortSignal;
       session?: ToolSession;
       onData?: (data: Buffer, stream: "stdout" | "stderr") => void;
     },
   ): Promise<AgentToolResult<any>> {
+    options.signal?.throwIfAborted();
     const entrypoint = options.executor?.entrypoint ?? this.runToolsPath;
-    if (
-      options.executor !== undefined &&
-      (typeof options.executor.entrypoint !== "string" ||
-        !isAbsolute(options.executor.entrypoint) ||
-        options.executor.entrypoint.includes("\0"))
-    ) {
-      throw new Error("Executor entrypoint must be an absolute file path");
-    }
+    validateExecutor(options.executor);
     const request = JSON.stringify({
       toolCallId: "cli",
       params,
       session: options.session,
-      imageMimeType: options.imageMimeType,
+      executorData: options.executor?.data,
     });
     const cooperativeCancellation = toolName === "bash" && options.executor === undefined;
     const execution = await this.run(
@@ -130,6 +163,9 @@ export class SandboxRunner {
         cwd: options.cwd,
         cooperativeCancellation,
         mode: options.mode,
+        ...(toolName === "read" && this.sandboxed()
+          ? { sandbox: { args: this.buildArgs("fs", options.cwd, true), mountFds: [] } }
+          : {}),
         signal: options.signal,
         env: { ...process.env, GUARDRAIL_PI_PACKAGE_DIR: this.piPackageDir },
         onData: options.onData,
@@ -302,7 +338,7 @@ export class SandboxRunner {
             options.input === undefined ? "ignore" : "pipe",
             "pipe",
             "pipe",
-            ...(options.sandbox?.mountFds ?? []),
+            ...(options.authorizeReadPath ? ["ipc" as const] : (options.sandbox?.mountFds ?? [])),
           ],
         },
       );
@@ -313,6 +349,43 @@ export class SandboxRunner {
       let outputExceeded = false;
       let processError: Error | undefined;
       let inputError: Error | undefined;
+      let authorizationError: { cause: unknown } | undefined;
+      let receivedAuthorizationRequest = false;
+      let authorized = false;
+      const authorizeReadPath = options.authorizeReadPath;
+      const authorization = authorizeReadPath ? new AbortController() : undefined;
+      function failAuthorization(cause: unknown): void {
+        authorizationError ??= { cause };
+        child.kill("SIGKILL");
+      }
+      if (authorizeReadPath && authorization) {
+        child.once("disconnect", () => {
+          if (!authorized)
+            authorization.abort(new Error("Windows read authorization channel closed"));
+        });
+        child.on("message", (message: unknown) => {
+          if (!child.connected || authorizationError || options.signal?.aborted) return;
+          if (
+            receivedAuthorizationRequest ||
+            typeof message !== "string" ||
+            !isAbsolute(message) ||
+            message.includes("\0")
+          ) {
+            failAuthorization(new Error("Invalid opened file path from Windows read worker"));
+            return;
+          }
+          receivedAuthorizationRequest = true;
+          void authorizeReadPath(message, authorization.signal)
+            .then(() => {
+              if (!child.connected || authorizationError || options.signal?.aborted) return;
+              child.send(true, (error) => {
+                if (error) failAuthorization(error);
+              });
+              authorized = true;
+            })
+            .catch(failAuthorization);
+        });
+      }
       function stopExecution(): void {
         if (options.cooperativeCancellation) child.stdin?.end();
         else child.kill("SIGKILL");
@@ -327,7 +400,10 @@ export class SandboxRunner {
               stopExecution();
             }, options.timeout * 1000)
           : undefined;
-      const onAbort = stopExecution;
+      const onAbort = () => {
+        authorization?.abort(options.signal?.reason);
+        stopExecution();
+      };
       options.signal?.addEventListener("abort", onAbort, { once: true });
       function collect(buffers: Buffer[], chunk: Buffer): void {
         outputBytes += chunk.length;
@@ -348,8 +424,13 @@ export class SandboxRunner {
         processError = error;
       });
       child.on("close", (exitCode) => {
+        authorization?.abort(new Error("Windows read worker closed"));
         if (timeoutHandle) clearTimeout(timeoutHandle);
         options.signal?.removeEventListener("abort", onAbort);
+        if (authorizeReadPath && options.signal?.aborted) return rejectRun(options.signal.reason);
+        if (authorizationError) return rejectRun(authorizationError.cause);
+        if (authorizeReadPath && exitCode === 0 && !authorized)
+          return rejectRun(new Error("Windows read worker returned before authorization"));
         if (processError) return rejectRun(processError);
         if (outputExceeded) return rejectRun(new Error("Scoped command output exceeds the limit"));
         if (inputError)

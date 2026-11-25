@@ -1,4 +1,3 @@
-import { basename, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   AgentToolResult,
@@ -16,12 +15,14 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   createGuardrailsAPI,
-  normalizeToolPath,
   publishDirectoryWriteAccess,
   type GuardedToolRequest,
   type GuardrailsAPI,
 } from "../guardrails/api.ts";
 import { rewriteBashCommand } from "./rtk.ts";
+import { modelSupportsImages } from "../shared/image-input.ts";
+
+const READ_ENTRYPOINT = fileURLToPath(new URL("./read.ts", import.meta.url));
 
 export default function toolsExtension(pi: ExtensionAPI, configPath?: string): void {
   const { guardrails, initializationError } = initializeGuardrails(pi, configPath);
@@ -37,7 +38,7 @@ export default function toolsExtension(pi: ExtensionAPI, configPath?: string): v
     bash,
   ];
   for (const definition of definitions) {
-    const execute = createGuardedExecutor(definition, guardrails, cwd, initializationError);
+    const execute = createGuardedExecutor(definition, guardrails, initializationError);
     registerGuardedTool(pi, definition, execute);
   }
 }
@@ -49,17 +50,20 @@ type GuardedExecutor = (
 function createGuardedExecutor(
   definition: ToolDefinition,
   guardrails: Pick<GuardrailsAPI, "execute">,
-  cwd: string,
   initializationError: unknown,
 ): GuardedExecutor {
   return async function execute(request) {
-    const path = initializationError === undefined ? request.params.path : undefined;
+    const model = request.context?.model;
     const executor =
-      initializationError === undefined &&
-      definition.name === "read" &&
-      typeof path === "string" &&
-      needsReadWorker(resolve(cwd, normalizeToolPath(path)))
-        ? { entrypoint: fileURLToPath(new URL("./full-read.ts", import.meta.url)) }
+      initializationError === undefined && definition.name === "read"
+        ? {
+            entrypoint: READ_ENTRYPOINT,
+            data: {
+              supportsImages: modelSupportsImages(model ?? {}),
+              provider: model?.provider,
+              modelId: model?.id,
+            },
+          }
         : undefined;
     return guardrails.execute({
       ...request,
@@ -67,10 +71,6 @@ function createGuardedExecutor(
       toolName: definition.name,
     });
   };
-}
-
-function needsReadWorker(path: string): boolean {
-  return basename(path) === "SKILL.md" || dirname(path).split(sep).includes("references");
 }
 
 function registerGuardedTool(

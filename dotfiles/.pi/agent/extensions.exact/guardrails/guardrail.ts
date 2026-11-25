@@ -574,7 +574,9 @@ export class Guardrail {
     operation: "read" | "write",
     candidatePath: string,
     context: ToolContext,
+    signal?: AbortSignal,
   ): Promise<PathApproval | undefined> {
+    signal?.throwIfAborted();
     const absolutePath = resolve(candidatePath);
     const comparison = new AuthorizationPath(absolutePath);
     const initialMatch = this.pathAction(operation, comparison);
@@ -584,10 +586,11 @@ export class Guardrail {
       throw new Error(`Access requires confirmation: ${absolutePath}`);
     const ui = context.ui;
     return this.withUiLock(async () => {
+      signal?.throwIfAborted();
       const current = comparison.windows ? new AuthorizationPath(absolutePath) : comparison;
       const match = comparison.windows ? this.pathAction(operation, current) : initialMatch;
       if (match.action === "allow" || this.hasDynamicGrant(operation, current)) return undefined;
-      return this.requestAccess(operation, absolutePath, ui, match.matched);
+      return this.requestAccess(operation, absolutePath, ui, match.matched, signal);
     });
   }
 
@@ -697,6 +700,7 @@ export class Guardrail {
     absolutePath: string,
     ui: ToolUI,
     matched?: string,
+    signal?: AbortSignal,
   ): Promise<PathApproval> {
     const directoryScopeOption = "Directory (subtree)";
     const title = `Allow ${operation} access?\n${absolutePath}\n${matchedPatternNote(matched)}`;
@@ -707,6 +711,7 @@ export class Guardrail {
           ? ["File only", directoryScopeOption, DENY_OPTION]
           : [ALLOW_OPTION, DENY_OPTION],
       );
+      signal?.throwIfAborted();
       if (selectedOption === undefined || selectedOption === DENY_OPTION)
         throw await this.deniedError(`Access denied by user: ${absolutePath}`, ui);
       if (operation === "write") {
@@ -730,6 +735,7 @@ export class Guardrail {
       `Allow ${operation} access?`,
       `${absolutePath}\n${matchedPatternNote(matched)}`,
     );
+    signal?.throwIfAborted();
     if (!approved) throw await this.deniedError(`Access denied by user: ${absolutePath}`, ui);
     this.addDynamicGrant(operation, absolutePath, "file");
     return { operation, scope: "file", grantedPath: absolutePath };

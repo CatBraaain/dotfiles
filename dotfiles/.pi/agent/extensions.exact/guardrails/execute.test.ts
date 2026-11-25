@@ -7,7 +7,7 @@ import { executeGuardedTool, type GuardedToolRequest } from "./execute.ts";
 import { Guardrail } from "./guardrail.ts";
 import { SandboxRunner } from "./sandbox-runner.ts";
 
-describe("guarded execution boundary", () => {
+describe.skipIf(process.platform !== "linux")("guarded execution boundary", () => {
   it("awaits approval before executing the requested tool", async () => {
     const directory = mkdtempSync(join(tmpdir(), "guarded-execute-"));
     try {
@@ -34,10 +34,6 @@ describe("guarded execution boundary", () => {
         params: { path: join(directory, "input.txt") },
         context: {
           hasUI: true,
-          executeTool: async () => ({
-            isError: false,
-            result: { content: [{ type: "text", text: "text/plain" }], details: {} },
-          }),
           ui: {
             confirm: async () => {
               shown.resolve();
@@ -143,7 +139,7 @@ describe("guarded execution boundary", () => {
     }
   });
 
-  it("detects image MIME types without a bwrap prefix when the sandbox is unavailable", async () => {
+  it("does not fall back to a host read when Linux sandboxing is unavailable", async () => {
     const directory = mkdtempSync(join(tmpdir(), "guarded-image-fallback-"));
     try {
       const config = join(directory, "config.yaml");
@@ -154,27 +150,16 @@ describe("guarded execution boundary", () => {
         (mode) => guardrail.buildArgs(mode),
         () => false,
       );
-      const commands: string[] = [];
-      runner.runTool = async () => ({ content: [], details: {} });
       const request = {
+        id: "fixture",
         toolName: "read",
         params: { path: join(directory, "input.txt") },
-        executor: { entrypoint: join(directory, "fixture.ts") },
-        context: {
-          hasUI: true,
-          executeTool: async (_toolName: string, params: { command: string }) => {
-            commands.push(params.command);
-            return {
-              isError: false,
-              result: { content: [{ type: "text", text: "text/plain" }], details: {} },
-            };
-          },
-        },
-      } as unknown as GuardedToolRequest;
-      await executeGuardedTool(guardrail, runner, directory, request);
-      assert.equal(commands.length, 1);
-      assert.match(commands[0] ?? "", /^file /);
-      assert.equal(commands[0]?.includes("bwrap"), false);
+        context: { hasUI: false, model: undefined, thinkingLevel: "off" },
+      } satisfies GuardedToolRequest;
+      await assert.rejects(
+        executeGuardedTool(guardrail, runner, directory, request),
+        /requires fs sandbox isolation/,
+      );
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

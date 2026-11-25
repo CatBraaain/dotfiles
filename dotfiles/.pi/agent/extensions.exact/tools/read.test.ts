@@ -6,9 +6,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "bun:test";
 
-const entrypoint = fileURLToPath(new URL("./full-read.ts", import.meta.url));
+const entrypoint = fileURLToPath(new URL("./read.ts", import.meta.url));
 
-describe("Tools full-read worker", () => {
+describe("Tools read worker", () => {
   for (const body of [
     "日本語\r\n".repeat(12000),
     "\uFEFFfirst\r\nlast\r\n",
@@ -35,6 +35,26 @@ describe("Tools full-read worker", () => {
       }
     });
   }
+
+  it("reads an extensionless image without shell commands in a direct worker", () => {
+    const directory = mkdtempSync(join(tmpdir(), "tools-worker-image-"));
+    try {
+      const path = join(directory, "photo");
+      const data =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jP1cAAAAASUVORK5CYII=";
+      writeFileSync(path, Buffer.from(data, "base64"));
+      const cli = spawnSync(process.execPath, [entrypoint, "read"], {
+        input: JSON.stringify({ params: { path }, executorData: { supportsImages: true } }),
+        encoding: "utf8",
+      });
+      assert.equal(cli.status, 0);
+      assert.deepEqual(JSON.parse(cli.stdout).result.content, [
+        { type: "image", mimeType: "image/png", data },
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 
   it("returns an error envelope for a missing input without a partial result", () => {
     const directory = mkdtempSync(join(tmpdir(), "tools-worker-error-"));

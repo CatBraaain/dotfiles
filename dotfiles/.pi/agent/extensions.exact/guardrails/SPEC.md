@@ -18,13 +18,13 @@ pi の全built-in fsツール（read / write / edit / grep / find / ls / bash）
 | `ask_permission` | 追加 | あり | — |
 | `codemode` | pi の組み込み拡張。結果表示は chat-renderer 拡張（§8） | 呼び出したツールに従う | 呼び出したツールに従う |
 
-置き換え対象は pi の **全built-in fsツール**（`read` `write` `edit` `grep` `find` `ls` `bash`）。`read` は画像ファイルを Vision入力として返す（§2.1）。
+置き換え対象は pi の **全built-in fsツール**（`read` `write` `edit` `grep` `find` `ls` `bash`）。
 
 ---
 
 ## 2. パスのアクセス結果（通常の fsツール共通）
 
-read / write の各操作ごとに、対応する設定セクションからパスのアクション（`allow` / `deny` / `ask`）を解決し（§3）、結果が決まる。edit は対象パスに対してread と write の両方を確認する。許可された画像ファイルの `read` は §2.1 に従う。`credentials` に指定されたパスは §2.2 の例外に従う。
+read / write の各操作ごとに、対応する設定セクションからパスのアクション（`allow` / `deny` / `ask`）を解決し（§3）、結果が決まる。edit は対象パスに対してread と write の両方を確認する。Windows ネイティブの `read` には §2.1 も適用する。`credentials` に指定されたパスは §2.2 の例外に従う。
 
 | パスのアクション | 結果 |
 | --- | --- |
@@ -36,25 +36,9 @@ read / write の各操作ごとに、対応する設定セクションからパ�
 - 秘密ファイル（`~/.ssh`, `~/.aws`, `~/.gnupg` 等）は `allow` に入れないことで読み出しを制限する。
 - 複数のツール呼び出しが並行して確認を要求するときも、確認は一度に1つずつ表示して順に解決する。待機中に他の呼び出しの承認で動的許可（§3）が追加されたパスは、あらためて確認しない。このとき確認なしで通った呼び出しの結果には、承認ノート（§2.3）を付けない。
 
-### 2.1画像ファイル
+### 2.1 Windows ネイティブの読み取り
 
-Vision入力として扱う画像ファイルは、MIMEタイプが `image/*` のファイルである。MIMEタイプを判定できないときだけ、拡張子を補助的に使う。`.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`、`.bmp`、`.tiff`、`.tif` は画像ファイルとして扱う。`image/svg+xml` は例外であり、SVG は通常のテキストファイルとして扱う。
-
-画像判定と画像本体の読み取りには、§2・§3 のアクセス制御と §6.1 の fs sandbox の保護を適用する。許可されたファイルは、拡張子の有無にかかわらず、画像判定に必要な範囲で内容を読み取れる。symlink経由でもリンク先の読取禁止と credentials の保護を適用し、保護された実体の内容を読み取らない。
-
-画像判定に必要な外部コマンドにも §4 の `commands` 規則を適用する。コマンドが拒否された場合や必要な承認が得られない場合は、`read` を失敗させる。
-
-`read` は画像を OCR・画像解析テキストへ変換しない。画像ファイルに対する `read` は、パスのアクセス制御（§2・§3）を通った後に、現在のモデルが画像入力対応（`Model.input` が `"image"` を含む）である場合だけ、画像を Vision入力として現在のモデルへ返す。このとき `offset` / `limit` は適用しない。現在のモデルが画像非対応の場合、および現在のモデルの情報を取得できない場合は、画像判定後に画像本体を追加で読み取らず、Vision入力も作らず、画像の読み取りを `vision` 子agent へ委譲することを促すエラーを返す。エラー文言には、委譲先の agent名、子agent が `read` で画像を読み観察結果をテキストで報告すること、子agent を起動できない場合に依頼元へ画像読み取りの必要性を報告することを含める。文言の正本は実装が持つ。画像以外のファイルは §7 の実行契約に従う。画像は `read` を実行したagent のツール結果と子セッションの記録にだけ含め、親agent には含めない。画像を処理できないagent から子agent への振り分けは agents の spec が定める。
-
-| 操作・状態 | 結果 |
-| --- | --- |
-| `read` に SVGパスを渡す | SVG のテキストを返し、Vision入力を作らない |
-| `read` に画像でないパスを渡す | §7 の実行契約の結果を返す |
-| `read` に許可されない画像パスを渡す | §2 のとおり拒否する |
-| `read` に許可された画像パスを渡し、現在のモデルが画像入力対応 | 画像を Vision入力として返す |
-| `read` に許可された画像パスを渡し、現在のモデルが画像入力非対応（モデル情報を取得できない場合を含む） | Vision入力を作らず、`vision` 子agent への委譲を促すエラーを返す |
-
-`read` の説明文には、画像ファイルは `read` で Vision入力として読めること、画像入力非対応モデルで動くときは `vision` への委譲が必要であることを明記する。
+`read` は、認可できるドライブ文字付きのパスを扱う。UNC パスは読み取り前に拒否する。指定されたパスを認可してからファイルを開く。開いたファイルの実体パスも確認して認可し、その後の読み取りには同じハンドルを使う。実体を確認できない場合や認可されない場合は、内容を読まずに失敗させる。実体パスの確認をキャンセルした後の応答は、読み取りも動的許可の登録も行わない。
 
 ### 2.2 credentials の例外
 
@@ -372,22 +356,22 @@ bashコマンドの sandbox ではこのマスクを行わない。`credentials`
 
 呼び出し元は追加した許可だけを解除できる。別経路の許可は解除しない。セッション切り替え・終了時には追加した許可を破棄する。追加・解除は後続のツール呼び出しに適用し、起動済みの sandbox は変更しない。
 
-`execute(request)` は、ツール名・引数・呼び出しごとのcontext・AbortSignal・onUpdateを受け付ける。要求ごとに認可（§2〜§4）し、認可済みの呼び出しをsandbox内で実行する。画像readは§2.1を先に適用する。最終ツール結果はPromiseで返し、認可・実行時の例外はrejectionで返す。
+`execute(request)` は、ツール名・引数・呼び出しごとのcontext・AbortSignal・onUpdateを受け付ける。要求ごとに認可（§2〜§4）し、認可済みの呼び出しをsandbox内で実行する。最終ツール結果はPromiseで返し、認可・実行時の例外はrejectionで返す。
 
-呼び出し元の信頼されたコードは、モデル向け引数 `params` とは別に、内部専用の `executor?: { entrypoint: string }` を渡せる。entrypointは絶対ファイルパスとし、相対パス・不正な値を拒否する。descriptorで指定できるのはentrypointだけであり、shell・環境変数・bind・sandbox modeを指定できない。認可対象とfs/bashのmodeはツール名と正規化後の引数で決まる。
+呼び出し元の信頼されたコードは、モデル向け引数 `params` とは別に、内部専用の executor descriptor を渡せる。descriptor は絶対ファイルパスの `entrypoint` と任意の JSON データ `data` を持つ。データは worker に渡すだけで、認可・実行ファイル・環境変数・bind・sandbox mode の決定には使わない。認可対象とfs/bashのmodeはツール名と正規化後の引数で決まる。
 
 | 要求・状態 | 実行結果 |
 | --- | --- |
-| descriptorなし | sandbox内で `bun run-tools.ts <tool-name>` → pi標準tool definitionのexecute |
-| descriptorあり、認可済みの非画像処理 | 同じsandbox内で `bun <entrypoint> <tool-name>` を実行 |
-| 画像read | descriptorより先に§2.1の画像入力を返す |
-| 認可拒否・承認前 | executorを起動しない |
+| descriptorなし（Windows の `read` を除く） | sandbox内で `bun run-tools.ts <tool-name>` → pi標準tool definitionのexecute |
+| descriptorあり、認可済みの処理（Windows の `read` を除く） | 同じsandbox内で `bun <entrypoint> <tool-name>` を実行 |
+| Windows ネイティブの `read` | §2.1 で認可したハンドルを読み取る。descriptor を指定した場合は、その executor の `executeOpenedRead` に認可済みハンドルを渡す。対応しない executor は拒否する |
+| 指定パスやコマンドの認可拒否・承認前 | worker を起動しない。Windows の `read` は指定パスの認可後に worker が実体パスを確認する |
 | entrypoint不在・sandbox内で不可視・worker失敗・不正な応答 | 呼び出しを失敗させる。host実行・標準executorへのfallbackやbind拡大は行わない |
 | `ask_permission` | 許可要求（§3・§4） |
 
 bash のツール結果（stdout/stderr）に `Read-only file system` が含まれるとき、結果の末尾にヒント文を追記する。ヒント文はコマンドを書き換えて再試行しないことを伝え、対象の最終アクションが `ask` または未設定で credentials に遮断されない場合にだけ `ask_permission` で許可要求できることを示す。明示 `deny` は許可できない。承認は Guardrails の共通書込許可を更新し、その許可を利用するすべてのツールに適用されることと、明示 `deny` と credentials の保護が維持されることを伝える。
 
-- **入力**: argvにtoolName、stdinに `toolCallId`・正規化後の `params`・必要な `session` 情報のJSONを渡す。entrypointは内部descriptorから選び、paramsから採用しない。
+- **入力**: argv に toolName、stdin に `toolCallId`・正規化後の `params`・必要な `session` 情報・descriptor の `executorData` を JSON で渡す。entrypointは内部descriptorから選び、paramsから採用しない。
 - **出力**: stdout にJSON envelope（`{ ok: true, result }` または `{ ok: false, error }`）を返す。成功時は終了コード0とし、失敗時は非0で終了する。Guardrailsはenvelopeを検査して結果またはエラーを伝達し、workerの成功結果を組み立てない。
 - 既定executorでは、標準tool definition が担当する処理（offset/limit、`oldText` / `newText` 置換、diff、結果の truncation、glob結果整形、rg実行、shell実行と timeout）は本拡張で再実装しない。
 - `edit` は pi標準の `oldText` / `newText` 形式を使い、行ハッシュアンカー形式は使わない。
@@ -397,7 +381,7 @@ bash のツール結果（stdout/stderr）に `Read-only file system` が含ま�
 
 `session_shutdown` 後は、取得済みAPIの `execute` と登録済み `ask_permission` の新規呼び出しを `guardrails API is no longer active` で拒否する。再読み込み時は公開APIを新しく取得し、前の動的許可・コマンド承認を持ち越さない。`ask_permission` と各ツールの実行は同じ有効期間を持つ。
 
-既定executorと差替えexecutorのいずれも、認可と実行準備が完了した要求は、実行中のほかのsandboxの終了を待たずに開始する。
+Linux の `read` は、既定 executor と差替え executor のいずれも読み取り専用の fs sandbox で実行する。隔離を利用できない場合は実行しない。認可と実行準備が完了した要求は、実行中のほかの sandbox の終了を待たずに開始する。
 
 ### 信頼済み拡張の単発実行
 

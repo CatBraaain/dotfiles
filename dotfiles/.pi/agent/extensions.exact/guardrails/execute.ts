@@ -1,15 +1,13 @@
-import { quote } from "shell-quote";
-import { extname, resolve } from "node:path";
+import { resolve } from "node:path";
 import type {
   AgentToolResult,
   ExtensionContext,
   ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
 import { Guardrail, writeApprovalNote, type PathApproval, type ToolContext } from "./guardrail.ts";
-import { SandboxRunner } from "./sandbox-runner.ts";
+import { SandboxRunner, type ExecutorDescriptor } from "./sandbox-runner.ts";
 import { withNormalizedPath } from "./normalize-path.ts";
 import type { ToolName, ToolSession } from "./config.ts";
-import { modelSupportsImages } from "../shared/image-input.ts";
 
 export async function executeGuardedTool(
   guardrail: Guardrail,
@@ -32,27 +30,36 @@ export async function executeGuardedTool(
     commandApproved = await guardrail.authorizeCommand(params.command as string, context);
   } else {
     const path = params.path as string;
-    if (toolName !== "write") await guardrail.authorizePath("read", path, context);
+    if (toolName !== "write")
+      await guardrail.authorizePath(
+        "read",
+        path,
+        context,
+        toolName === "read" && process.platform === "win32" ? signal : undefined,
+      );
     if (toolName === "write" || toolName === "edit") {
       approval = await guardrail.authorizePath("write", path, context);
     }
   }
   signal?.throwIfAborted();
-  const detectedMimeType =
-    toolName === "read"
-      ? await imageMimeType(params.path as string, guardrail, runner, request)
-      : null;
-  if (typeof detectedMimeType === "object" && detectedMimeType !== null) return detectedMimeType;
-  const result =
-    toolName === "read" && isVisionImageFile(params.path as string, detectedMimeType)
-      ? await readImage(params.path as string, detectedMimeType, runner, request)
-      : await runner.runTool(toolName as ToolName, params, {
-          mode: toolName === "bash" ? "bash" : "fs",
-          executor: request.executor,
-          signal,
-          session: toolName === "bash" ? sessionFromContext(context) : undefined,
-          onData: toolName === "bash" && onUpdate ? stderrLineUpdater(onUpdate) : undefined,
-        });
+  if (toolName === "read" && process.platform === "win32") {
+    return runner.runWindowsRead(params, {
+      authorize: async (path, authorizationSignal) => {
+        await guardrail.authorizePath("read", path, context, authorizationSignal);
+      },
+      executor: request.executor,
+      signal,
+    });
+  }
+  if (toolName === "read" && process.platform === "linux" && !runner.sandboxed())
+    throw new Error("Read requires fs sandbox isolation");
+  const result = await runner.runTool(toolName as ToolName, params, {
+    mode: toolName === "bash" ? "bash" : "fs",
+    executor: request.executor,
+    signal,
+    session: toolName === "bash" ? sessionFromContext(context) : undefined,
+    onData: toolName === "bash" && onUpdate ? stderrLineUpdater(onUpdate) : undefined,
+  });
   const notes: string[] = [];
   if (toolName === "bash") {
     const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
@@ -67,32 +74,6 @@ export async function executeGuardedTool(
   };
 }
 
-async function readImage(
-  imagePath: string,
-  mimeType: string | null,
-  runner: SandboxRunner,
-  request: GuardedToolRequest,
-): Promise<AgentToolResult<unknown>> {
-  request.signal?.throwIfAborted();
-  const model = request.context?.model;
-  if (!modelSupportsImages(model ?? {})) {
-    return {
-      content: [{ type: "text", text: imageReadErrorMessage(imagePath, model) }],
-      details: {},
-      isError: true,
-    };
-  }
-  return runner.runTool(
-    "read",
-    { path: imagePath },
-    {
-      mode: "fs",
-      signal: request.signal,
-      imageMimeType: mimeType ?? "application/octet-stream",
-    },
-  );
-}
-
 export type GuardedToolContext = Pick<ExtensionContext, "hasUI" | "model" | "thinkingLevel"> & {
   ui?: ToolContext["ui"];
   executeTool?: ExtensionToolContext["executeTool"];
@@ -103,7 +84,7 @@ export type GuardedToolRequest = {
   id: string;
   toolName: string;
   params: Record<string, unknown>;
-  executor?: { entrypoint: string };
+  executor?: ExecutorDescriptor;
   signal?: AbortSignal;
   onUpdate?: (result: AgentToolResult<unknown>) => void;
   context: GuardedToolContext;
@@ -122,88 +103,6 @@ function sessionFromContext(context: GuardedToolContext): ToolSession {
     modelId: context?.model?.id,
     reasoningLevel: context?.thinkingLevel,
   };
-}
-
-const IMAGE_EXTENSIONS = new Set([
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".webp",
-  ".gif",
-  ".bmp",
-  ".tiff",
-  ".tif",
-]);
-
-async function imageMimeType(
-  path: string,
-  guardrail: Guardrail,
-  runner: SandboxRunner,
-  request: GuardedToolRequest,
-): Promise<string | null | AgentToolResult<unknown>> {
-  if (typeof request.context?.executeTool !== "function")
-    throw new Error("Image detection requires the registered bash tool via context.executeTool");
-  const fileArgs = ["file", "-E", "--dereference", "--brief", "--mime-type", "--", path];
-  await guardrail.authorizeCommand(quote(fileArgs), request.context);
-  request.signal?.throwIfAborted();
-  const outcome = await request.context.executeTool(
-    "bash",
-    {
-      command: quote(
-        runner.sandboxed() ? ["bwrap", ...runner.buildArgs("fs"), ...fileArgs] : fileArgs,
-      ),
-    },
-    { signal: request.signal },
-  );
-  const output = outcome.result.content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("\n")
-    .trim();
-  if (request.signal?.aborted || outcome.isError || outcome.result.isError)
-    return {
-      content: [
-        {
-          type: "text",
-          text: `Image detection failed for ${path}: ${request.signal?.aborted ? String(request.signal.reason) : output}`,
-        },
-      ],
-      isError: true,
-      details: {
-        bash: outcome,
-        ...(request.signal?.aborted ? { reason: request.signal.reason } : {}),
-      },
-    };
-  const mimeType = output.split(/\r?\n/, 1)[0]?.trim() || null;
-  if (mimeType !== null && !/^[\w.+-]+\/[\w.+-]+$/.test(mimeType))
-    return {
-      content: [{ type: "text", text: `Invalid image detection response for ${path}: ${output}` }],
-      isError: true,
-      details: { bash: outcome },
-    };
-  return mimeType;
-}
-
-function isVisionImageFile(imagePath: string, detectedMimeType: string | null): boolean {
-  if (detectedMimeType === "image/svg+xml") return false;
-  return detectedMimeType === null
-    ? IMAGE_EXTENSIONS.has(extname(imagePath).toLowerCase())
-    : detectedMimeType.startsWith("image/");
-}
-
-export { isVisionImageFile };
-
-export function imageReadErrorMessage(
-  imagePath: string,
-  model?: { provider?: string; id?: string },
-): string {
-  const modelName = model?.provider && model?.id ? ` (${model.provider}/${model.id})` : "";
-  return (
-    `The current model${modelName} does not support image input; the image was not sent to the model. ` +
-    `Delegate image reading to the vision agent via subagent: have the child read the image ` +
-    `with read and report its observation as text. If you cannot spawn subagents, report ` +
-    `that image reading is needed to the requester. Path: ${imagePath}`
-  );
 }
 
 function stderrLineUpdater(

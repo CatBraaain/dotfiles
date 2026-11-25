@@ -7,14 +7,16 @@
 // package directory via GUARDRAIL_PI_PACKAGE_DIR and we import its entry
 // dynamically. Type-only imports are erased at runtime and stay safe.
 import { readFileSync } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import type {
   AgentToolResult,
   BashToolInput,
+  ReadToolInput,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 
@@ -33,7 +35,8 @@ export type ToolRequest = {
   toolCallId?: string;
   params: unknown;
   session?: ToolSession;
-  imageMimeType?: string;
+  executorData?: Record<string, unknown>;
+  openedReadExecutor?: string;
 };
 
 async function importPiTools(): Promise<typeof import("@earendil-works/pi-coding-agent")> {
@@ -150,19 +153,7 @@ export async function executeToolRequest(
   signal?: AbortSignal,
 ): Promise<AgentToolResult<any>> {
   signal?.throwIfAborted();
-  if (toolName === "read" && request.imageMimeType !== undefined) {
-    const { path } = request.params as { path: string };
-    return {
-      content: [
-        {
-          type: "image",
-          data: readFileSync(path).toString("base64"),
-          mimeType: request.imageMimeType,
-        },
-      ],
-      details: {},
-    };
-  }
+  if (toolName === "windows-read") return executeWindowsRead(request, signal);
   const pi = await importPiTools();
   const cwd = process.cwd();
   if (toolName === "bash") {
@@ -209,6 +200,55 @@ export async function executeToolRequest(
   );
 }
 
+export type OpenedReadExecutor = (
+  request: ToolRequest,
+  file: FileHandle,
+  size: bigint,
+) => Promise<AgentToolResult<unknown>>;
+
+export async function executeOpenedStandardRead(
+  request: ToolRequest,
+  file: FileHandle,
+  size: bigint,
+  signal?: AbortSignal,
+): Promise<AgentToolResult<unknown>> {
+  const pi = await importPiTools();
+  const operations = {
+    access: async () => {},
+    readFile: () => file.readFile(),
+    createReadStream: () =>
+      file.createReadStream({ autoClose: false, end: size > 0 ? Number(size) - 1 : undefined }),
+  };
+  return pi
+    .createReadToolDefinition(process.cwd(), { operations })
+    .execute(
+      request.toolCallId ?? "cli",
+      request.params as ReadToolInput,
+      signal,
+      undefined,
+      undefined as never,
+    );
+}
+
+async function executeWindowsRead(
+  request: ToolRequest,
+  signal?: AbortSignal,
+): Promise<AgentToolResult<unknown>> {
+  const params = request.params as ReadToolInput | null;
+  if (typeof params?.path !== "string") throw new Error("Invalid Windows read request");
+  const { withAuthorizedWindowsReadFile } = await import("./windows-read-file.ts");
+  return withAuthorizedWindowsReadFile(params.path, async (file, size) => {
+    if (request.openedReadExecutor === undefined)
+      return executeOpenedStandardRead(request, file, size, signal);
+    const executor = (await import(pathToFileURL(request.openedReadExecutor).href)) as {
+      executeOpenedRead?: OpenedReadExecutor;
+    };
+    if (typeof executor.executeOpenedRead !== "function")
+      throw new Error("Windows read executor does not support an opened file");
+    return executor.executeOpenedRead(request, file, size);
+  });
+}
+
 function parseToolRequest(text: string): ToolRequest {
   const request: unknown = JSON.parse(text);
   if (
@@ -220,8 +260,11 @@ function parseToolRequest(text: string): ToolRequest {
     throw new Error("Invalid tool request");
   if ("toolCallId" in request && typeof request.toolCallId !== "string")
     throw new Error("Invalid tool call ID");
-  if ("imageMimeType" in request && typeof request.imageMimeType !== "string")
-    throw new Error("Invalid image MIME type");
+  if ("openedReadExecutor" in request) {
+    const entrypoint = request.openedReadExecutor;
+    if (typeof entrypoint !== "string" || !isAbsolute(entrypoint) || entrypoint.includes("\0"))
+      throw new Error("Invalid opened read executor");
+  }
   if ("session" in request) {
     const session = request.session;
     if (typeof session !== "object" || session === null || Array.isArray(session))

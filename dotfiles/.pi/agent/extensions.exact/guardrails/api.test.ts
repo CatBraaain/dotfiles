@@ -20,7 +20,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
 import toolsExtension from "../tools/index";
-import { executeGuardedTool, isVisionImageFile } from "./execute.ts";
+import { executeGuardedTool } from "./execute.ts";
 import { SandboxRunner } from "./sandbox-runner.ts";
 import { createGuardrailsAPI } from "./api.ts";
 import { Guardrail, writeApprovalNote } from "./guardrail.ts";
@@ -161,39 +161,11 @@ function captureRegisteredTools(
   }
   const api = {
     events: createEventBus(),
-    registerTool: (tool: any) =>
-      registered.set(tool.name, {
-        ...tool,
-        execute(
-          id: string,
-          params: any,
-          signal: AbortSignal | undefined,
-          onUpdate: any,
-          context: any,
-        ) {
-          const mimeType = params.path?.endsWith(".png")
-            ? "image/png"
-            : params.path?.endsWith(".svg")
-              ? "image/svg+xml"
-              : "text/plain";
-          return tool.execute(id, params, signal, onUpdate, {
-            ...context,
-            executeTool: context?.executeTool ?? mockImageDetection(mimeType),
-          });
-        },
-      }),
+    registerTool: (tool: any) => registered.set(tool.name, tool),
     on,
   } as any;
   toolsExtension(api, configPath);
   return registered;
-}
-
-function mockImageDetection(mimeType = "text/plain"): ExtensionToolContext["executeTool"] {
-  return async () => ({
-    toolCall: { type: "toolCall", id: "mime", name: "bash", arguments: {} },
-    result: { content: [{ type: "text", text: mimeType }], details: {} },
-    isError: false,
-  });
 }
 
 async function runGuardedCall(
@@ -588,7 +560,7 @@ read:
   );
 });
 
-describe("§2.1 画像ファイル", () => {
+describe("registered Tools image read", () => {
   const pngBytes = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL0IAAAAABJRU5ErkJggg==",
     "base64",
@@ -605,18 +577,6 @@ describe("§2.1 画像ファイル", () => {
     const description = captureRegisteredTools().get("read").description;
     assert.match(description, /Image files are returned as Vision input/);
     assert.match(description, /delegation to the vision agent/);
-  });
-
-  it("isVisionImageFile excludes SVG and falls back to the extension when MIME detection fails", () => {
-    assert.equal(isVisionImageFile("/tmp/icon.svg", "image/svg+xml"), false);
-    assert.equal(isVisionImageFile("/tmp/photo.png", null), true);
-    assert.equal(isVisionImageFile("/tmp/photo.PNG", null), true);
-    assert.equal(isVisionImageFile("/tmp/photo.webp", null), true);
-    assert.equal(isVisionImageFile("/tmp/notes.txt", null), false);
-    assert.equal(isVisionImageFile("/tmp/noext", null), false);
-    assert.equal(isVisionImageFile("/tmp/photo.png", "image/png"), true);
-    assert.equal(isVisionImageFile("/tmp/photo.png", "text/plain"), false);
-    assert.equal(isVisionImageFile("/tmp/notes.txt", "image/jpeg"), true);
   });
 
   it(
@@ -750,6 +710,25 @@ describe("§2.1 画像ファイル", () => {
           result.content.some((part: { type: string }) => part.type === "image"),
         false,
       );
+    }),
+  );
+
+  it(
+    "does not take image support from the model's tool arguments",
+    withTempDirectory(async (directory) => {
+      const path = writeImage(directory);
+      const result = await captureRegisteredTools()
+        .get("read")
+        .execute(
+          "t",
+          { path, supportsImages: true, executorData: { supportsImages: true } },
+          undefined,
+          undefined,
+          { hasUI: false, model: { input: ["text"] } },
+        );
+      assert.equal(result.isError, true);
+      assert.equal(result.content[0]?.type, "text");
+      assert.match(result.content[0]?.text, /vision agent/);
     }),
   );
 
@@ -4532,10 +4511,7 @@ describe("tool path environment expansion", () => {
             executed.push((params as { path: string }).path);
             return originalRun.call(runner, toolName, params, options);
           };
-          const context = {
-            hasUI: false,
-            executeTool: mockImageDetection(),
-          } as ExtensionToolContext;
+          const context = { hasUI: false } as ExtensionToolContext;
           const result = await executeGuardedTool(guardrail, runner, cwd, {
             id: "literal-read",
             toolName: "read",

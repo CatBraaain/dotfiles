@@ -581,14 +581,18 @@ describe("tools with the guardrails public API", () => {
     }),
   );
 
-  it("keeps Guardrails independent of Tools workers and full-read policy", () => {
+  it("keeps Guardrails independent of Tools workers and read policy", () => {
     const directory = new URL("../guardrails/", import.meta.url);
     const implementations = readdirSync(directory).filter(
       (name) => name.endsWith(".ts") && !name.endsWith(".test.ts"),
     );
     for (const name of implementations) {
       const source = readFileSync(new URL(name, directory), "utf8");
-      assert.doesNotMatch(source, /readMode|SKILL\.md|full-read|from ["']\.\.\/tools\//, name);
+      assert.doesNotMatch(
+        source,
+        /readMode|SKILL\.md|full-read|wasmagic|imageMimeType|supportsImages|vision agent|from ["']\.\.\/tools\//,
+        name,
+      );
     }
   });
 

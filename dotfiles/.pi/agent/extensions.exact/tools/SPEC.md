@@ -1,6 +1,14 @@
 # Tools — 仕様書
 
-pi の標準7ツールを登録する Tools拡張の振る舞いを定める。読者はツールの利用者と保守担当である。read のテキスト返却契約と、外部コマンド実行の境界を本書で定め、認可・画像判定・隔離実行は [Guardrails仕様](../guardrails/SPEC.md) に依存する。
+pi の標準7ツールを登録する Tools拡張の振る舞いを定める。読者はツールの利用者と保守担当である。本書は `read` の画像・テキスト返却と、外部コマンド実行の境界を定める。認可と隔離実行は [Guardrails 仕様](../guardrails/SPEC.md) に従う。
+
+## 画像の読み取り
+
+Windows、Linux、macOS の `read` は WASMagic でファイルの内容を調べる。Bash と `file` は使わない。画像判定は Guardrails が許可した読み取り処理の中で行う。Linux では判定も fs sandbox 内で実行する。
+
+MIME タイプが `image/*` であれば画像として扱う。ただし `image/svg+xml` はテキストとして扱う。MIME タイプが不明な場合のみ、拡張子 `.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`、`.bmp`、`.tiff`、`.tif` で画像と判定する。
+
+現在のモデルが画像入力に対応する場合、`offset` / `limit` を適用せず、元のバイト列と MIME タイプを Vision 入力として返す。モデルが画像非対応または不明の場合、判定後は画像本体を追加で読み取らず、`vision` 子 agent への委譲を促すエラーを返す。エラーには子 agent が `read` で観察し、結果をテキストで報告することと、起動できない場合に依頼元へ読み取りの必要性を伝えることを含める。画像は `read` を実行した agent のツール結果とセッション記録にだけ含める。
 
 ## テキストread
 
@@ -18,9 +26,9 @@ pi の標準7ツールを登録する Tools拡張の振る舞いを定める。�
 
 ## 実行境界
 
-Tools は全文読みの対象判定、UTF-8全文IO、成功結果の組立てを所有する。指定パスのファイル名が `SKILL.md` の場合、または親ディレクトリのいずれかの名前が `references` の場合は、Tools配下のworkerを指定する内部executor descriptorを Guardrails公開APIへ渡す。モデルの引数にある executor・entrypoint・モード指定は内部descriptorとして採用しない。
+Tools はすべての `read` で、Tools の worker と現在のモデルの画像対応情報を Guardrails の内部 executor descriptor で渡す。モデルのツール引数から executor・entrypoint・画像対応情報を採用しない。
 
-認可・画像優先・sandbox・キャンセルの契約は [Guardrails仕様](../guardrails/SPEC.md) に従う。画像ファイルは、指定パスが全文読みの条件に一致しても画像readを優先する。`references/` の兄弟にある `SKILL.md` の確認は認可後に sandbox 内で行う。全文読みの条件に一致しない場合は sandbox 内で標準readを実行する。workerが失敗した場合は呼び出しを失敗として返し、再試行やhost読取は行わない。
+認可・sandbox・キャンセルは [Guardrails 仕様](../guardrails/SPEC.md) に従う。画像判定はテキスト処理より先に行う。`references/` の兄弟にある `SKILL.md` は認可後に確認する。全文読みの対象でないテキストは標準 `read` で処理する。worker が失敗した場合は、別の実行経路で読み直さない。
 
 ## ツール登録
 
