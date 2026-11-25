@@ -194,6 +194,23 @@ export class PiMux {
     return { id, cwd, file, target };
   }
 
+  async sessionWorktrees(sessionId: string, cwd: string): Promise<string[] | undefined> {
+    const args = ["metadata", sessionId];
+    let output: string;
+    try {
+      output = await this.execute("pi-mux", args, cwd);
+    } catch (error) {
+      const notFound = `pi-mux: Saved session not found (use the complete ID): ${sessionId}`;
+      if (isRecord(error) && error.exitCode === 1 && error.stderr === notFound) return undefined;
+      throw new Error(`pi-mux ${args.join(" ")} in ${cwd}: ${errorMessage(error)}`);
+    }
+
+    const response = parseJsonOutput(output, "metadata");
+    if (!isRecord(response) || response.id !== sessionId || !isWorktreePaths(response.worktrees))
+      throw new Error("Invalid pi-mux metadata response");
+    return response.worktrees;
+  }
+
   async viewTarget(sessionId: string, file: string): Promise<PiMuxViewTarget> {
     const output = await this.command(["metadata", "--view-target", sessionId, file]);
     const target = parseJsonOutput(output, "metadata --view-target");
@@ -321,6 +338,14 @@ function isPiMuxDisplayedSession(
   );
 }
 
+function isWorktreePaths(paths: unknown): paths is string[] {
+  return (
+    Array.isArray(paths) &&
+    paths.every((path) => typeof path === "string" && isAbsolute(path) && !path.includes("\0")) &&
+    new Set(paths).size === paths.length
+  );
+}
+
 function isPiMuxHistoryEntry(entry: unknown): entry is PiMuxHistoryEntry {
   return (
     isRecord(entry) &&
@@ -343,7 +368,7 @@ async function executePiMux(executable: string, args: string[], cwd?: string): P
     const child = spawn(executable, args, {
       cwd,
       timeout:
-        args[0] === "metadata"
+        args[0] === "metadata" && args[1] === "--view-target"
           ? VIEW_TARGET_TIMEOUT_MS
           : QUERY_COMMANDS.has(args[0])
             ? QUERY_TIMEOUT_MS
@@ -365,13 +390,9 @@ async function executePiMux(executable: string, args: string[], cwd?: string): P
         resolve(Buffer.concat(stdoutChunks).toString("utf8"));
         return;
       }
+      const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
       reject(
-        Object.assign(
-          new Error(
-            describeFailure(executable, child, Buffer.concat(stderrChunks).toString("utf8")),
-          ),
-          { exitCode },
-        ),
+        Object.assign(new Error(describeFailure(executable, child, stderr)), { exitCode, stderr }),
       );
     });
   });
@@ -384,7 +405,6 @@ function describeFailure(executable: string, child: ChildProcess, stderr: string
       : child.signalCode !== null
         ? `terminated by ${child.signalCode}`
         : `exited with ${child.exitCode}`;
-  const reason = stderr.trim();
   const summary = `${executable} ${outcome}`;
-  return reason === "" ? summary : `${reason} (${summary})`;
+  return stderr === "" ? summary : `${stderr} (${summary})`;
 }

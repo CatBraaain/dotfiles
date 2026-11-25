@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { SessionLauncher } from "./launcher";
 import { FolderSyncEngine, type VscodeLike } from "./folder-sync";
 import { resolveConfiguredSessionRoot } from "./paths";
+import { PiMux } from "./pi-mux";
 import { SELECT_SCM_REPOSITORIES, SessionScmSelection } from "./session-scm";
 import { TerminalRegistry } from "./terminal-registry";
 import { editorTerminals, isDisplayTerminal } from "./terminals";
@@ -91,15 +92,17 @@ function detectedGitRoots(): string[] | undefined {
 export function activate(context: vscode.ExtensionContext): void {
   const homeDir = homedir();
   const log = vscode.window.createOutputChannel("Agent Kit", { log: true });
+  const mux = new PiMux();
   const scm = new SessionScmSelection({
+    sessionWorktrees: (sessionId, cwd) => mux.sessionWorktrees(sessionId, cwd),
+    isSessionUnsaved: async (sessionId) =>
+      (await mux.list()).some(({ empty }) => empty.some(({ id }) => id === sessionId)),
     execFile,
     detectedRoots: detectedGitRoots,
     selectRepositories: (paths) => vscode.commands.executeCommand(SELECT_SCM_REPOSITORIES, paths),
     log: (message) => log.error(message),
   });
-  const registry = new TerminalRegistry(editorTerminals(), undefined, (session) =>
-    scm.track(session),
-  );
+  const registry = new TerminalRegistry(editorTerminals(), mux, (session) => scm.track(session));
 
   function updateActiveTerminalContext(terminal: vscode.Terminal | undefined): void {
     void Promise.resolve(
@@ -145,13 +148,7 @@ export function activate(context: vscode.ExtensionContext): void {
       folderSync.updateList(cwds);
     },
     onSessionFiles: (files) => {
-      const displayed = registry.displayedSessionId;
-      for (let index = files.length - 1; displayed !== undefined && index >= 0; index--) {
-        const { id, file } = files[index];
-        if (id !== displayed) continue;
-        scm.updateSessionFile(id, file);
-        break;
-      }
+      scm.updateSessionFiles(files);
       const directories = new Set(files.map(({ file }) => dirname(file)));
       for (const [directory, watcher] of historyWatchers) {
         if (directories.has(directory)) continue;

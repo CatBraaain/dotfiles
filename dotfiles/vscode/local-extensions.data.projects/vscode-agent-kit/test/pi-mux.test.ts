@@ -5,6 +5,47 @@ const liveSession = { id: "A", file: "/saved/A.jsonl", state: "running", title: 
 const emptySession = { id: "empty", file: "/saved/empty.jsonl" };
 
 describe("PiMux", () => {
+  it("reads worktrees by complete session ID without using a live session file", async () => {
+    const metadata = { id: "chosen-id", worktrees: ["/repo/owned", "/repo/other"] };
+    const execute = vi.fn().mockResolvedValue(JSON.stringify(metadata));
+    const mux = new PiMux(execute);
+    await expect(mux.sessionWorktrees(metadata.id, "/project")).resolves.toEqual(
+      metadata.worktrees,
+    );
+    expect(execute).toHaveBeenCalledExactlyOnceWith(
+      "pi-mux",
+      ["metadata", metadata.id],
+      "/project",
+    );
+  });
+
+  it("distinguishes an unsaved session from other metadata failures", async () => {
+    const stderr = "pi-mux: Saved session not found (use the complete ID): chosen-id";
+    const error = Object.assign(new Error(stderr), { exitCode: 1, stderr });
+    const mux = new PiMux(vi.fn().mockRejectedValue(error));
+    await expect(mux.sessionWorktrees("chosen-id", "/project")).resolves.toBeUndefined();
+  });
+
+  it("reports metadata failures that are not the missing-session diagnostic", async () => {
+    const stderr = "pi-mux: Invalid workspaces in custom entry";
+    const error = Object.assign(new Error(stderr), { exitCode: 1, stderr });
+    const mux = new PiMux(vi.fn().mockRejectedValue(error));
+    await expect(mux.sessionWorktrees("chosen-id", "/project")).rejects.toThrow(stderr);
+  });
+
+  it.each([
+    { id: "other-id", worktrees: ["/owned"] },
+    { id: "chosen-id", worktrees: "invalid" },
+    { id: "chosen-id", worktrees: ["relative"] },
+    { id: "chosen-id", worktrees: ["/nul\0path"] },
+    { id: "chosen-id", worktrees: ["/owned", "/owned"] },
+  ])("rejects invalid metadata: %j", async (metadata) => {
+    const mux = new PiMux(vi.fn().mockResolvedValue(JSON.stringify(metadata)));
+    await expect(mux.sessionWorktrees("chosen-id", "/project")).rejects.toThrow(
+      "Invalid pi-mux metadata response",
+    );
+  });
+
   it("reloads all sessions without extra arguments or requiring a completion line", async () => {
     const execute = vi.fn().mockResolvedValue("");
     await expect(new PiMux(execute).reloadAllSessions()).resolves.toBeUndefined();

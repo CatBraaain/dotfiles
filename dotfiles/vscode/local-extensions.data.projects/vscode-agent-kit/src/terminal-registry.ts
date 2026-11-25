@@ -3,7 +3,7 @@ import { realpath } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { DisplayTerminals } from "./terminals";
 import type { PiMuxCurrentSession } from "./pi-mux";
-import { PiMux, type PiSession } from "./pi-mux";
+import { hasLiveSession, PiMux, type PiSession } from "./pi-mux";
 import { errorMessage } from "./guards";
 import { sameWorkDirectory } from "./work-directory";
 import { cwdGroupKey } from "./grouping";
@@ -131,7 +131,7 @@ export class TerminalRegistry implements vscode.Disposable {
   }
 
   async open(
-    launch: PiSession & DisplayedScmSession,
+    session: PiSession,
     intent: "select" | "unarchive" = "select",
     signal?: AbortSignal,
   ): Promise<{ terminal: vscode.Terminal }> {
@@ -139,7 +139,7 @@ export class TerminalRegistry implements vscode.Disposable {
       this.displayedSession !== undefined && this.displayedSessionCwd !== undefined
         ? {
             previous: { sessionId: this.displayedSession, cwd: this.displayedSessionCwd },
-            requestedCwd: launch.cwd,
+            requestedCwd: session.cwd,
             cancelled: false,
           }
         : undefined;
@@ -148,18 +148,10 @@ export class TerminalRegistry implements vscode.Disposable {
       signal?.throwIfAborted();
       const workspaces = await this.mux.list();
       signal?.throwIfAborted();
-      const { filePath: savedFile, ...session } = launch;
-      const liveSession = workspaces
-        .flatMap(({ sessions, empty }) => [...sessions, ...empty])
-        .find(({ id }) => id === session.sessionId);
-      const reuseDisplay = liveSession !== undefined && intent === "select";
+      const reuseDisplay = intent === "select" && hasLiveSession(workspaces, session.sessionId);
       const display = await this.connect(session, reuseDisplay, signal, recovery);
       if (this.disposed || this.closed.has(display.terminal)) return display;
-      this.onDisplayedSession?.({
-        sessionId: session.sessionId,
-        cwd: session.cwd,
-        filePath: liveSession?.file ?? savedFile,
-      });
+      this.onDisplayedSession?.({ sessionId: session.sessionId, cwd: session.cwd });
       return display;
     } catch (error) {
       signal?.throwIfAborted();
@@ -168,7 +160,7 @@ export class TerminalRegistry implements vscode.Disposable {
         error instanceof SwitchTargetExitedError
       )
         throw error;
-      throw new Error(`Pi session ${launch.sessionId} in ${launch.cwd}: ${errorMessage(error)}`);
+      throw new Error(`Pi session ${session.sessionId} in ${session.cwd}: ${errorMessage(error)}`);
     } finally {
       if (recovery !== undefined) this.recoveries.delete(recovery);
     }
@@ -505,7 +497,7 @@ export class TerminalRegistry implements vscode.Disposable {
           current.cwd === cwd || (await sameWorkDirectory(current.cwd, cwd).catch(() => false));
         if (!inRequestedCwd)
           throw new Error(`Pi display attached to ${current.cwd} instead of ${cwd}`);
-        return { sessionId: current.id, cwd, filePath: current.file };
+        return { sessionId: current.id, cwd };
       }
       await sleep(50, undefined, { signal });
     }

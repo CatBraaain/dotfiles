@@ -1,18 +1,17 @@
-import { readFile, stat } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { basename, isAbsolute } from "node:path";
 import type { ExecFile } from "./git-worktrees";
-import { errorMessage, isRecord } from "./guards";
+import { errorMessage } from "./guards";
 
 export const SELECT_SCM_REPOSITORIES = "agentKit.scm.selectRepositories";
-const WORKTREE_METADATA_ENTRY = "session-worktree-metadata";
 
 export interface DisplayedScmSession {
   readonly sessionId: string;
   readonly cwd: string;
-  readonly filePath?: string;
 }
 
 interface SessionScmDeps {
+  readonly sessionWorktrees: (sessionId: string, cwd: string) => Promise<string[] | undefined>;
+  readonly isSessionUnsaved: (sessionId: string) => Promise<boolean>;
   readonly execFile: ExecFile;
   readonly detectedRoots: () => readonly string[] | undefined;
   readonly selectRepositories: (paths: string[]) => PromiseLike<unknown>;
@@ -21,19 +20,23 @@ interface SessionScmDeps {
 
 type SelectionResult = "applied" | "pending" | "unavailable";
 
+interface TrackedScmSession extends DisplayedScmSession {
+  files: Map<string, boolean>;
+  worktrees?: string[];
+  hasLoadedWorktrees: boolean;
+}
+
 interface RefreshRun {
   requested: boolean;
   readonly done: Promise<void>;
 }
 
 export class SessionScmSelection {
-  private session: DisplayedScmSession | undefined;
+  private session: TrackedScmSession | undefined;
   private isEnabled = true;
   private version = 0;
   private refreshRun: RefreshRun | undefined;
   private selectionInFlight: Promise<SelectionResult> | undefined;
-  private worktreeMetadata: { signature: string; paths: string[] } | undefined;
-  private hasSeenSessionFile = false;
   private lastAttempt: { key: string; result: SelectionResult } | undefined;
   private lastProblem: string | undefined;
 
@@ -41,29 +44,39 @@ export class SessionScmSelection {
 
   track(session: DisplayedScmSession | undefined): void {
     const previous = this.session;
-    const sameScope = previous?.sessionId === session?.sessionId && previous?.cwd === session?.cwd;
-    if (sameScope && previous?.filePath === session?.filePath) return;
-    this.session = session;
+    if (previous?.sessionId === session?.sessionId && previous?.cwd === session?.cwd) return;
+    this.session = session && { ...session, files: new Map(), hasLoadedWorktrees: false };
     this.version += 1;
-    this.worktreeMetadata = undefined;
-    this.hasSeenSessionFile = false;
-    if (!sameScope) {
-      this.lastAttempt = undefined;
-      this.lastProblem = undefined;
-    }
+    this.lastAttempt = undefined;
+    this.lastProblem = undefined;
     void this.refresh();
   }
 
-  updateSessionFile(sessionId: string, filePath: string): void {
+  updateSessionFiles(entries: readonly { id: string; file: string; isSaved: boolean }[]): void {
     const session = this.session;
-    if (session?.sessionId === sessionId) this.track({ ...session, filePath });
+    if (!session) return;
+    const files = new Map<string, boolean>();
+    for (const { id, file, isSaved } of entries) {
+      if (id === session.sessionId && (isSaved || !files.has(file))) files.set(file, isSaved);
+    }
+    if (
+      files.size === session.files.size &&
+      [...files].every(([file, isSaved]) => session.files.get(file) === isSaved)
+    )
+      return;
+    session.files = files;
+    this.invalidateWorktrees(session);
   }
 
   onSessionFileChanged(filePath: string): void {
-    if (filePath !== this.session?.filePath) return;
-    this.version += 1;
-    this.worktreeMetadata = undefined;
-    void this.refresh();
+    const session = this.session;
+    if (!session) return;
+    const file = basename(filePath);
+    const prefixEnd = file.indexOf("_");
+    const sessionFile = `${session.sessionId}.jsonl`;
+    const matchesId =
+      file === sessionFile || (prefixEnd >= 0 && file.slice(prefixEnd + 1) === sessionFile);
+    if (matchesId || session.files.has(filePath)) this.invalidateWorktrees(session);
   }
 
   async toggle(): Promise<void> {
@@ -75,6 +88,7 @@ export class SessionScmSelection {
       return;
     }
     this.lastAttempt = undefined;
+    if (this.session) this.session.worktrees = undefined;
     await this.refresh();
   }
 
@@ -90,6 +104,12 @@ export class SessionScmSelection {
     };
     this.refreshRun = run;
     return run.done;
+  }
+
+  private invalidateWorktrees(session: TrackedScmSession): void {
+    session.worktrees = undefined;
+    this.version += 1;
+    void this.refresh();
   }
 
   private async drain(run: RefreshRun): Promise<void> {
@@ -108,14 +128,14 @@ export class SessionScmSelection {
     if (this.refreshRun === run) this.refreshRun = undefined;
   }
 
-  private async apply(session: DisplayedScmSession, version: number): Promise<void> {
+  private async apply(session: TrackedScmSession, version: number): Promise<void> {
     if (this.selectionInFlight !== undefined) {
       await this.selectionInFlight;
       if (version !== this.version) return;
     }
-    const ownedPaths = await this.loadOwnedWorktreePaths(session, version);
-    if (version !== this.version) return;
-    const paths = await resolveWorktreeScope(session.cwd, ownedPaths, this.deps.execFile);
+    const worktrees = session.worktrees ?? (await this.loadWorktrees(session, version));
+    if (version !== this.version || worktrees === undefined) return;
+    const paths = await resolveWorktreeScope(session.cwd, worktrees, this.deps.execFile);
     if (version !== this.version) return;
 
     const detected = this.deps.detectedRoots();
@@ -143,25 +163,22 @@ export class SessionScmSelection {
     }
   }
 
-  private async loadOwnedWorktreePaths(
-    { filePath, sessionId }: DisplayedScmSession,
+  private async loadWorktrees(
+    session: TrackedScmSession,
     version: number,
-  ): Promise<string[]> {
-    if (filePath === undefined) return [];
-    try {
-      const file = await stat(filePath);
-      if (version === this.version) this.hasSeenSessionFile = true;
-      if (!file.isFile()) throw new Error("Session path is not a regular file");
-      const { dev, ino, ctimeMs, mtimeMs, size } = file;
-      const signature = JSON.stringify([dev, ino, ctimeMs, mtimeMs, size]);
-      if (this.worktreeMetadata?.signature === signature) return this.worktreeMetadata.paths;
-      const paths = parseOwnedWorktreePaths(await readFile(filePath, "utf8"), sessionId);
-      if (version === this.version) this.worktreeMetadata = { signature, paths };
-      return paths;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT" && !this.hasSeenSessionFile) return [];
-      throw new Error(`Could not read worktree metadata from ${filePath}: ${errorMessage(error)}`);
+  ): Promise<string[] | undefined> {
+    const worktrees = await this.deps.sessionWorktrees(session.sessionId, session.cwd);
+    if (worktrees !== undefined) session.hasLoadedWorktrees = true;
+    if (version !== this.version) return undefined;
+    if (worktrees === undefined) {
+      const isUnsaved =
+        !session.hasLoadedWorktrees && (await this.deps.isSessionUnsaved(session.sessionId));
+      if (!isUnsaved || session.hasLoadedWorktrees)
+        throw new Error("Saved session metadata is missing");
     }
+    if (version !== this.version) return undefined;
+    session.worktrees = worktrees ?? [];
+    return session.worktrees;
   }
 
   private async select(paths: string[]): Promise<SelectionResult> {
@@ -178,39 +195,6 @@ export class SessionScmSelection {
     this.lastProblem = message;
     this.deps.log(message);
   }
-}
-
-function parseOwnedWorktreePaths(jsonl: string, sessionId: string): string[] {
-  const lines = jsonl.split("\n");
-  const headerIndex = lines.findIndex((line) => line.trim() !== "");
-  if (headerIndex === -1) return [];
-  const header: unknown = JSON.parse(lines[headerIndex]);
-  if (!isRecord(header) || header.type !== "session" || typeof header.id !== "string" || !header.id)
-    throw new Error("Invalid session header");
-  if (header.id !== sessionId)
-    throw new Error("Session header does not match the selected session");
-
-  for (let index = lines.length - 1; index > headerIndex; index--) {
-    const line = lines[index];
-    if (line.trim() === "") continue;
-    const entry: unknown = JSON.parse(line);
-    if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== WORKTREE_METADATA_ENTRY)
-      continue;
-    if (!isRecord(entry.data) || entry.data.sessionId !== header.id) continue;
-    return validateWorktreePaths(entry.data.workspaces);
-  }
-  return [];
-}
-
-function validateWorktreePaths(workspaces: unknown): string[] {
-  if (!Array.isArray(workspaces)) throw new Error("Invalid worktree metadata paths");
-  const paths = new Set<string>();
-  for (const path of workspaces) {
-    if (!isAbsolutePath(path) || resolve(path) !== path || paths.has(path))
-      throw new Error("Invalid worktree metadata paths");
-    paths.add(path);
-  }
-  return [...paths];
 }
 
 function isAbsolutePath(path: unknown): path is string {

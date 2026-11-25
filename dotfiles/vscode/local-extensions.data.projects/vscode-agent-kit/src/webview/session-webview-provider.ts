@@ -40,7 +40,7 @@ export interface SessionWebviewDeps {
   sessionOpenState: Pick<vscode.Memento, "get" | "update">;
   startNewSession: (cwd: string, onPresented: () => void) => Promise<string | undefined>;
   onWorkspaces?: (cwds: readonly string[]) => void;
-  onSessionFiles?: (files: readonly { id: string; file: string; cwd: string }[]) => void;
+  onSessionFiles?: (files: readonly { id: string; file: string; isSaved: boolean }[]) => void;
   log?: Pick<vscode.LogOutputChannel, "error">;
 }
 
@@ -362,10 +362,11 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     this.deps.onSessionFiles?.([
       ...(this.historySnapshot ?? [])
         .filter(({ cwd }) => this.registeredCwds.has(cwd))
-        .map(({ id, file, cwd }) => ({ id, file, cwd })),
-      ...this.latestWorkspaces.flatMap(({ cwd, sessions, empty }) =>
-        [...sessions, ...empty].map(({ id, file }) => ({ id, file, cwd })),
-      ),
+        .map(({ id, file }) => ({ id, file, isSaved: true })),
+      ...this.latestWorkspaces.flatMap(({ sessions, empty }) => [
+        ...sessions.map(({ id, file }) => ({ id, file, isSaved: true })),
+        ...empty.map(({ id, file }) => ({ id, file, isSaved: false })),
+      ]),
     ]);
   }
 
@@ -780,7 +781,6 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         {
           sessionId,
           cwd: session.cwd,
-          filePath: session.filePath,
           ...(temporary ? { temporary: true as const } : {}),
         },
         intent,

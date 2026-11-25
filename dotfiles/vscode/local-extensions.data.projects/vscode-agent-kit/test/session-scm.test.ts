@@ -1,38 +1,21 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { appendFile, mkdir, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { expect, it, vi } from "vitest";
 import { setImmediate } from "node:timers/promises";
 import { SessionScmSelection } from "../src/session-scm";
 import type { ExecFile } from "../src/git-worktrees";
-import { cleanup, tempDir } from "./fixtures";
 
 const MAIN = "/repo";
 const LINKED = "/linked";
 const OWNED = "/owned";
 const REPLACED = "/replaced";
-const OLD_OWNED = "/old-owned";
 const COMMON = "/repo/.git\n";
-
-let folder: string;
-beforeEach(async () => {
-  folder = await tempDir("agent-kit-scm-");
-});
-afterEach(async () => cleanup(folder));
-
-function header(id = "s1"): string {
-  return JSON.stringify({ type: "session", id }) + "\n";
-}
-
-function snapshot(...workspaces: string[]): string {
-  return metadata({ sessionId: "s1", workspaces });
-}
-
-function metadata(data: unknown): string {
-  return JSON.stringify({ type: "custom", customType: "session-worktree-metadata", data }) + "\n";
-}
+const SESSION_FILE = "/sessions/2026-11-23T13-07-05-610Z_s1.jsonl";
 
 function setup() {
-  const worktrees = new Set([MAIN, LINKED, OWNED, REPLACED, OLD_OWNED]);
+  const sessionWorktrees = vi.fn<(id: string, cwd: string) => Promise<string[] | undefined>>(
+    async () => [],
+  );
+  const isSessionUnsaved = vi.fn(async (_id: string) => false);
+  const worktrees = new Set([MAIN, LINKED, OWNED, REPLACED]);
   const detected = new Set([MAIN, LINKED, OWNED]);
   const selectRepositories = vi.fn<(paths: string[]) => Promise<unknown>>(async () => "applied");
   const log = vi.fn();
@@ -50,146 +33,213 @@ function setup() {
     return { stdout: COMMON };
   });
   const selection = new SessionScmSelection({
+    sessionWorktrees,
+    isSessionUnsaved,
     execFile,
     detectedRoots: () => [...detected],
     selectRepositories,
     log,
   });
-  return { selection, worktrees, detected, execFile, selectRepositories, log };
+  return {
+    selection,
+    sessionWorktrees,
+    isSessionUnsaved,
+    worktrees,
+    detected,
+    execFile,
+    selectRepositories,
+    log,
+  };
 }
 
-it("uses the last matching snapshot in append order and filters out foreign worktrees", async () => {
-  const filePath = join(folder, "session.jsonl");
-  await writeFile(
-    filePath,
-    header() +
-      snapshot(OLD_OWNED) +
-      snapshot(MAIN, LINKED, OWNED, REPLACED, "/foreign") +
-      metadata({ sessionId: "other", workspaces: [OLD_OWNED] }) +
-      '{"type":"message"}\n',
-  );
-  const { selection, selectRepositories } = setup();
-  selection.track({ sessionId: "s1", cwd: `${LINKED}/subdirectory`, filePath });
+it("uses ID-based metadata and selects only existing worktrees from the session repository", async () => {
+  const { selection, sessionWorktrees, selectRepositories } = setup();
+  const cwd = `${LINKED}/subdirectory`;
+  sessionWorktrees.mockResolvedValue([MAIN, LINKED, OWNED, REPLACED, "/foreign"]);
+  selection.track({ sessionId: "s1", cwd });
   await selection.refresh();
+  expect(sessionWorktrees).toHaveBeenCalledWith("s1", cwd);
   expect(selectRepositories.mock.calls).toEqual([[[MAIN, LINKED, OWNED]]]);
 });
 
-it("does not inherit fork source metadata or use legacy records", async () => {
-  const filePath = join(folder, "fork.jsonl");
-  const legacyDeclaration =
-    JSON.stringify({
-      type: "custom",
-      customType: "session-worktree-declarations",
-      data: { worktrees: [{ name: "old", path: LINKED }] },
-    }) + "\n";
-  await writeFile(
-    filePath,
-    header("fork") + snapshot(OWNED) + metadata({ workspaces: [LINKED] }) + legacyDeclaration,
-  );
+it("does not infer ownership from the linked working directory", async () => {
   const { selection, selectRepositories } = setup();
-  selection.track({ sessionId: "fork", cwd: LINKED, filePath });
+  selection.track({ sessionId: "s1", cwd: LINKED });
   await selection.refresh();
   expect(selectRepositories.mock.calls).toEqual([[[MAIN]]]);
 });
 
-it("keeps the current SCM selection when the file belongs to another session", async () => {
-  const filePath = join(folder, "other-session.jsonl");
-  await writeFile(filePath, header() + snapshot(OWNED));
-  const { selection, selectRepositories, log } = setup();
-  selection.track({ sessionId: "other", cwd: MAIN, filePath });
-  await selection.refresh();
-  expect(selectRepositories).not.toHaveBeenCalled();
-  expect(log).toHaveBeenCalledWith(
-    expect.stringContaining("Session header does not match the selected session"),
-  );
-});
-
 it("restores ownership when the same session ID resumes", async () => {
-  const filePath = join(folder, "session.jsonl");
-  await writeFile(filePath, header() + snapshot(LINKED));
-  const { selection, selectRepositories } = setup();
-  selection.track({ sessionId: "s1", cwd: MAIN, filePath });
+  const { selection, sessionWorktrees, selectRepositories } = setup();
+  sessionWorktrees.mockResolvedValue([LINKED]);
+  selection.track({ sessionId: "s1", cwd: MAIN });
   await selection.refresh();
   selection.track(undefined);
   await selection.refresh();
-  selection.track({ sessionId: "s1", cwd: MAIN, filePath });
+  selection.track({ sessionId: "s1", cwd: MAIN });
   await selection.refresh();
   expect(selectRepositories.mock.calls).toEqual([[[MAIN, LINKED]], [[MAIN, LINKED]]]);
 });
 
-it("keeps an empty latest snapshot and does not reapply on an unchanged scope", async () => {
-  const filePath = join(folder, "session.jsonl");
-  await writeFile(filePath, header() + snapshot(OWNED));
-  const { selection, selectRepositories } = setup();
-  selection.track({ sessionId: "s1", cwd: MAIN, filePath });
+it("rereads metadata when the archived session file changes and respects an empty list", async () => {
+  const { selection, sessionWorktrees, selectRepositories } = setup();
+  const id = "s_1";
+  const archiveFile = `/sessions/archive/2026-11-23T13-07-05-610Z_${id}.jsonl`;
+  sessionWorktrees.mockResolvedValue([OWNED]);
+  selection.track({ sessionId: id, cwd: MAIN });
   await selection.refresh();
 
-  await appendFile(filePath, '{"type":"message"}\n');
-  selection.onSessionFileChanged(filePath);
   await selection.refresh();
   expect(selectRepositories.mock.calls).toEqual([[[MAIN, OWNED]]]);
 
-  await appendFile(filePath, snapshot());
-  selection.onSessionFileChanged(filePath);
-  await selection.refresh();
+  let finishUpdate!: () => void;
+  const updated = new Promise<void>((resolve) => {
+    finishUpdate = resolve;
+  });
+  selectRepositories.mockImplementationOnce(async () => {
+    finishUpdate();
+    return "applied";
+  });
+  sessionWorktrees.mockResolvedValue([]);
+  selection.onSessionFileChanged(archiveFile);
+  await updated;
   expect(selectRepositories.mock.calls).toEqual([[[MAIN, OWNED]], [[MAIN]]]);
+});
+
+it("only rereads a known custom-named session file when the matching file changes", async () => {
+  const { selection, sessionWorktrees, selectRepositories } = setup();
+  const activeFile = { id: "s1", file: "/sessions/live.jsonl", isSaved: true };
+  const savedFile = { id: "s1", file: "/sessions/archive/history.jsonl", isSaved: true };
+  selection.track({ sessionId: "s1", cwd: MAIN });
+  selection.updateSessionFiles([activeFile, savedFile]);
+  await selection.refresh();
+  sessionWorktrees.mockClear().mockResolvedValue([OWNED]);
+
+  selection.updateSessionFiles([savedFile, activeFile]);
+  selection.onSessionFileChanged("/sessions/another.jsonl");
+  await selection.refresh();
+  expect(sessionWorktrees).not.toHaveBeenCalled();
+
+  selection.onSessionFileChanged(savedFile.file);
+  await selection.refresh();
+  expect(sessionWorktrees).toHaveBeenCalledOnce();
+  expect(selectRepositories.mock.calls).toEqual([[[MAIN]], [[MAIN, OWNED]]]);
 });
 
 it("excludes an owned worktree removed since the last detection", async () => {
-  const filePath = join(folder, "session.jsonl");
-  await writeFile(filePath, header() + snapshot(OWNED));
-  const { selection, worktrees, selectRepositories } = setup();
-  selection.track({ sessionId: "s1", cwd: MAIN, filePath });
+  const { selection, sessionWorktrees, worktrees, selectRepositories } = setup();
+  sessionWorktrees.mockResolvedValue([OWNED]);
+  selection.track({ sessionId: "s1", cwd: MAIN });
   await selection.refresh();
   worktrees.delete(OWNED);
   await selection.refresh();
+  expect(sessionWorktrees).toHaveBeenCalledOnce();
   expect(selectRepositories.mock.calls).toEqual([[[MAIN, OWNED]], [[MAIN]]]);
 });
 
-it("keeps the current SCM selection on an invalid latest matching snapshot", async () => {
-  const filePath = join(folder, "session.jsonl");
-  await writeFile(filePath, header() + snapshot(OWNED) + snapshot("relative"));
-  const { selection, selectRepositories, log } = setup();
-  selection.track({ sessionId: "s1", cwd: MAIN, filePath });
+it("keeps the current SCM selection on a metadata error even for an unsaved running session", async () => {
+  const { selection, sessionWorktrees, isSessionUnsaved, selectRepositories, log } = setup();
+  sessionWorktrees.mockRejectedValue(new Error("Invalid pi-mux metadata response"));
+  isSessionUnsaved.mockResolvedValue(true);
+  selection.track({ sessionId: "s1", cwd: MAIN });
   await selection.refresh();
   expect(selectRepositories).not.toHaveBeenCalled();
-  expect(log).toHaveBeenCalledWith(expect.stringContaining("Invalid worktree metadata paths"));
+  expect(isSessionUnsaved).not.toHaveBeenCalled();
+  expect(log).toHaveBeenCalledWith(expect.stringContaining("Invalid pi-mux metadata response"));
 });
 
-it("uses only the main worktree before the selected session file is saved", async () => {
-  const filePath = join(folder, "unsaved", "session.jsonl");
-  const { selection, selectRepositories } = setup();
-  selection.track({ sessionId: "s1", cwd: LINKED, filePath });
+it("uses only the main worktree before a running session saves its first metadata", async () => {
+  const { selection, sessionWorktrees, isSessionUnsaved, selectRepositories } = setup();
+  sessionWorktrees.mockResolvedValue(undefined);
+  isSessionUnsaved.mockResolvedValue(true);
+  selection.track({ sessionId: "s1", cwd: LINKED });
+  await selection.refresh();
+  expect(isSessionUnsaved).toHaveBeenCalledWith("s1");
+  expect(selectRepositories.mock.calls).toEqual([[[MAIN]]]);
+
+  await selection.refresh();
+  expect(sessionWorktrees).toHaveBeenCalledOnce();
+  expect(isSessionUnsaved).toHaveBeenCalledOnce();
+
+  sessionWorktrees.mockResolvedValue([OWNED]);
+  selection.onSessionFileChanged(SESSION_FILE);
+  await selection.refresh();
+  expect(selectRepositories.mock.calls).toEqual([[[MAIN]], [[MAIN, OWNED]]]);
+});
+
+it("refreshes when the active list reports the first save without a file event", async () => {
+  const { selection, sessionWorktrees, isSessionUnsaved, selectRepositories } = setup();
+  const pending = { id: "s1", file: SESSION_FILE, isSaved: false };
+  sessionWorktrees.mockResolvedValue(undefined);
+  isSessionUnsaved.mockResolvedValue(true);
+  selection.track({ sessionId: "s1", cwd: MAIN });
+  selection.updateSessionFiles([pending]);
   await selection.refresh();
   expect(selectRepositories.mock.calls).toEqual([[[MAIN]]]);
 
-  await mkdir(join(folder, "unsaved"));
-  await writeFile(filePath, header() + snapshot(OWNED));
+  sessionWorktrees.mockResolvedValue([OWNED]);
+  selection.updateSessionFiles([{ ...pending, isSaved: true }]);
   await selection.refresh();
-  expect(selectRepositories.mock.calls.at(-1)).toEqual([[MAIN, OWNED]]);
+  expect(selectRepositories.mock.calls).toEqual([[[MAIN]], [[MAIN, OWNED]]]);
 });
 
-it("keeps the current SCM selection if the saved session file disappears", async () => {
-  const filePath = join(folder, "session.jsonl");
-  await writeFile(filePath, header() + snapshot(OWNED));
-  const { selection, selectRepositories, log } = setup();
-  selection.track({ sessionId: "s1", cwd: MAIN, filePath });
+it("keeps the current SCM selection if missing metadata is not for an unsaved running session", async () => {
+  const { selection, sessionWorktrees, selectRepositories, log } = setup();
+  sessionWorktrees.mockResolvedValue(undefined);
+  selection.track({ sessionId: "s1", cwd: MAIN });
   await selection.refresh();
-
-  await unlink(filePath);
-  selection.onSessionFileChanged(filePath);
-  await selection.refresh();
-  expect(selectRepositories.mock.calls).toEqual([[[MAIN, OWNED]]]);
-  expect(log).toHaveBeenCalledWith(expect.stringContaining("Could not read worktree metadata"));
+  expect(selectRepositories).not.toHaveBeenCalled();
+  expect(log).toHaveBeenCalledWith(expect.stringContaining("Saved session metadata is missing"));
 });
+
+it("remembers a successful lookup invalidated by a file event for the same selection", async () => {
+  const { selection, sessionWorktrees, isSessionUnsaved, selectRepositories, log } = setup();
+  let completeLookup!: (worktrees: string[]) => void;
+  const lookupStarted = new Promise<void>((started) => {
+    sessionWorktrees.mockImplementationOnce(
+      () =>
+        new Promise((complete) => {
+          completeLookup = complete;
+          started();
+        }),
+    );
+  });
+  sessionWorktrees.mockResolvedValue(undefined);
+  isSessionUnsaved.mockResolvedValue(true);
+  selection.track({ sessionId: "s1", cwd: MAIN });
+  await lookupStarted;
+  selection.onSessionFileChanged(SESSION_FILE);
+  completeLookup([OWNED]);
+  await selection.refresh();
+  expect(selectRepositories).not.toHaveBeenCalled();
+  expect(isSessionUnsaved).not.toHaveBeenCalled();
+  expect(log).toHaveBeenCalledWith(expect.stringContaining("Saved session metadata is missing"));
+});
+
+it.each([[OWNED], []].map((worktrees) => ({ worktrees })))(
+  "keeps the current SCM selection if previously read metadata disappears: $worktrees",
+  async ({ worktrees }) => {
+    const { selection, sessionWorktrees, isSessionUnsaved, selectRepositories, log } = setup();
+    sessionWorktrees.mockResolvedValue(worktrees);
+    selection.track({ sessionId: "s1", cwd: MAIN });
+    await selection.refresh();
+
+    sessionWorktrees.mockResolvedValue(undefined);
+    isSessionUnsaved.mockResolvedValue(true);
+    selection.onSessionFileChanged(SESSION_FILE);
+    await selection.refresh();
+    expect(isSessionUnsaved).not.toHaveBeenCalled();
+    expect(selectRepositories.mock.calls).toEqual([[[MAIN, ...worktrees]]]);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Saved session metadata is missing"));
+  },
+);
 
 it("retries pending SCM targets and preserves manual selection after they are applied", async () => {
-  const filePath = join(folder, "session.jsonl");
-  await writeFile(filePath, header() + snapshot(LINKED));
-  const { selection, detected, selectRepositories, log } = setup();
+  const { selection, sessionWorktrees, detected, selectRepositories, log } = setup();
+  sessionWorktrees.mockResolvedValue([LINKED]);
   detected.delete(LINKED);
   selectRepositories.mockResolvedValueOnce("pending");
-  selection.track({ sessionId: "s1", cwd: LINKED, filePath });
+  selection.track({ sessionId: "s1", cwd: LINKED });
   await selection.refresh();
   expect(log).toHaveBeenCalledWith(expect.stringContaining("pending"));
 
@@ -211,19 +261,19 @@ it("does not overwrite SCM if the command is unavailable", async () => {
 });
 
 it("leaves SCM selection alone while disabled even when the displayed session changes", async () => {
-  const filePath = join(folder, "new.jsonl");
-  await writeFile(filePath, header("new") + metadata({ sessionId: "new", workspaces: [OWNED] }));
-  const { selection, execFile, selectRepositories } = setup();
+  const { selection, sessionWorktrees, execFile, selectRepositories } = setup();
   selection.track({ sessionId: "s1", cwd: MAIN });
   await selection.refresh();
   await selection.toggle();
+  sessionWorktrees.mockClear().mockResolvedValue([OWNED]);
   execFile.mockClear();
 
-  selection.track({ sessionId: "new", cwd: MAIN, filePath });
-  selection.onSessionFileChanged(filePath);
+  selection.track({ sessionId: "new", cwd: MAIN });
+  selection.onSessionFileChanged("/sessions/2026-11-23T13-07-05-610Z_new.jsonl");
   await selection.refresh();
 
   expect(selectRepositories.mock.calls).toEqual([[[MAIN]]]);
+  expect(sessionWorktrees).not.toHaveBeenCalled();
   expect(execFile).not.toHaveBeenCalled();
 });
 
@@ -239,9 +289,8 @@ it("reapplies an unchanged scope immediately when re-enabled", async () => {
 });
 
 it("applies the current session on re-enable without waiting for an obsolete Git lookup", async () => {
-  const filePath = join(folder, "new.jsonl");
-  await writeFile(filePath, header("new") + metadata({ sessionId: "new", workspaces: [OWNED] }));
-  const { selection, execFile, selectRepositories } = setup();
+  const { selection, sessionWorktrees, execFile, selectRepositories } = setup();
+  sessionWorktrees.mockImplementation(async (id) => (id === "new" ? [OWNED] : []));
   let finishWorktreeList!: (result: { stdout: string }) => void;
   let onWorktreeListStarted!: () => void;
   const worktreeListStarted = new Promise<void>((resolve) => {
@@ -259,7 +308,7 @@ it("applies the current session on re-enable without waiting for an obsolete Git
   await worktreeListStarted;
 
   await selection.toggle();
-  selection.track({ sessionId: "new", cwd: MAIN, filePath });
+  selection.track({ sessionId: "new", cwd: MAIN });
   await selection.toggle();
   expect(selectRepositories.mock.calls).toEqual([[[MAIN, OWNED]]]);
 
@@ -301,10 +350,30 @@ it("settles a dispatched SCM update before completing disable or sending the nex
   expect(selectRepositories.mock.calls).toEqual([[[MAIN]], [[newMain]]]);
 });
 
+it("discards worktrees returned for a previously displayed session", async () => {
+  const { selection, sessionWorktrees, selectRepositories } = setup();
+  let completeStaleLookup!: (worktrees: string[]) => void;
+  const lookupStarted = new Promise<void>((started) => {
+    sessionWorktrees.mockImplementationOnce(
+      () =>
+        new Promise((complete) => {
+          completeStaleLookup = complete;
+          started();
+        }),
+    );
+  });
+  sessionWorktrees.mockResolvedValue([LINKED]);
+  selection.track({ sessionId: "old", cwd: MAIN });
+  await lookupStarted;
+  selection.track({ sessionId: "new", cwd: MAIN });
+  completeStaleLookup([OWNED]);
+  await selection.refresh();
+  expect(selectRepositories.mock.calls).toEqual([[[MAIN, LINKED]]]);
+});
+
 it("discards a previous scope while Git is still resolving it", async () => {
-  const filePath = join(folder, "new.jsonl");
-  await writeFile(filePath, header("new") + metadata({ sessionId: "new", workspaces: [LINKED] }));
-  const { selection, execFile, selectRepositories } = setup();
+  const { selection, sessionWorktrees, execFile, selectRepositories } = setup();
+  sessionWorktrees.mockImplementation(async (id) => (id === "new" ? [LINKED] : []));
   let finishOldScope!: (result: { stdout: string }) => void;
   let startedOldScope!: () => void;
   const started = new Promise<void>((resolve) => {
@@ -319,7 +388,7 @@ it("discards a previous scope while Git is still resolving it", async () => {
   );
   selection.track({ sessionId: "old", cwd: MAIN });
   await started;
-  selection.track({ sessionId: "new", cwd: LINKED, filePath });
+  selection.track({ sessionId: "new", cwd: LINKED });
   finishOldScope({ stdout: `worktree ${MAIN}\0HEAD 123\0\0` });
   await selection.refresh();
   expect(selectRepositories.mock.calls).toEqual([[[MAIN, LINKED]]]);
