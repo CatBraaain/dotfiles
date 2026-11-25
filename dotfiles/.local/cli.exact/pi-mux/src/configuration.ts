@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { platform } from "./platform";
+import { windowsNpmPiCommand } from "./windows-pi-command";
 
 export type Config = ReturnType<typeof configuration>;
 
@@ -59,7 +60,8 @@ export function configuration() {
     throw new Error(
       `Missing pi-mux extension or tmux configuration: ${config.extension}, ${config.tmuxConfig}`,
     );
-  return { ...config, pi: executable("pi") };
+  let piCommand = platform.windows ? undefined : [executable("pi")];
+  return { ...config, piCommand: () => (piCommand ??= windowsNpmPiCommand()) };
 }
 
 export function resolveAgentDirectory(): string {

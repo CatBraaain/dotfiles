@@ -25,7 +25,13 @@ export type Operation =
   | { kind: "inspect-management"; socket: string }
   | { kind: "inspect-dispatch-inventory"; socket: string }
   | WindowsCreateDispatchWorker
-  | { kind: "windows-claim-launch"; token: string; command: string[]; reload?: WindowsReloadRoute }
+  | {
+      kind: "windows-claim-launch";
+      token: string;
+      command: string[];
+      cwd: string;
+      reload?: WindowsReloadRoute;
+    }
   | { kind: "metadata"; id: string; viewFile?: string }
   | { kind: "worktree-snapshot"; request: WorktreeSnapshotRequest }
   | { kind: "record-view"; id: string; receipt: ViewReceipt }
@@ -187,11 +193,7 @@ export function parseOperation(argv: string[]): Operation {
       return { kind: "inspect-dispatch-inventory", socket: argv[2]! };
     if (id === "--create-dispatch-worker") return parseWindowsCreateDispatchWorker(argv.slice(2));
   }
-  if (
-    argv[0] === "windows-claim-launch" &&
-    (argv.length === 3 || argv.length === 4) &&
-    UUID.test(argv[1]!)
-  ) {
+  if (argv[0] === "windows-claim-launch" && argv.length === 4 && UUID.test(argv[1]!)) {
     const command: unknown = JSON.parse(Buffer.from(argv[2]!, "base64").toString("utf8"));
     if (
       !Array.isArray(command) ||
@@ -199,8 +201,14 @@ export function parseOperation(argv: string[]): Operation {
       !command.every((arg) => typeof arg === "string" && !arg.includes("\0"))
     )
       throw new Error("Invalid Windows pi launch command");
-    const reload = argv[3] === undefined ? undefined : parseWindowsReloadRoute(argv[3]);
-    return { kind: "windows-claim-launch", token: argv[1]!, command, reload };
+    const destination: unknown = JSON.parse(Buffer.from(argv[3]!, "base64").toString("utf8"));
+    if (typeof destination === "string") {
+      if (!isAbsolute(destination) || destination.includes("\0"))
+        throw new Error("Invalid Windows pi launch directory");
+      return { kind: "windows-claim-launch", token: argv[1]!, command, cwd: destination };
+    }
+    const reload = parseWindowsReloadRoute(destination);
+    return { kind: "windows-claim-launch", token: argv[1]!, command, cwd: reload.cwd, reload };
   }
   if (argv[0] === "worktree") {
     const [, action, encoded] = argv;
@@ -401,8 +409,7 @@ export type WindowsReloadRoute = {
   inheritedOverrides: [string, string | null][];
 };
 
-function parseWindowsReloadRoute(encoded: string): WindowsReloadRoute {
-  const route: unknown = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
+function parseWindowsReloadRoute(route: unknown): WindowsReloadRoute {
   if (
     !isRecord(route) ||
     typeof route.name !== "string" ||

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { writeWindowsNpmPiFixture } from "./windows-npm-fixture";
 import {
   observeWindowsIdentity,
   inspectWindowsProcess,
@@ -12,12 +13,13 @@ import {
 
 const tmux = process.platform === "win32" ? Bun.which("tmux.exe") : null;
 const main = join(import.meta.dir, "main.ts");
-const processModule = JSON.stringify(join(import.meta.dir, "windows-process.ts"));
+const node = process.platform === "win32" && Bun.which("node.exe");
 
 const fixturePi = `
-import { appendFileSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 import { join } from "node:path";
-import { inspectWindowsProcess, observeWindowsIdentity } from ${processModule};
 
 const id = process.env.PI_TMUX_SESSION_ID;
 const token = process.env.PI_TMUX_LAUNCH_TOKEN;
@@ -25,53 +27,50 @@ const [socket] = process.env.TMUX.split(",");
 const pane = process.env.TMUX_PANE;
 const log = join(process.env.RELOAD_LOG_DIR, id + ".log");
 function tmux(...args) {
-  const result = Bun.spawnSync(["tmux", "-S", socket, ...args], { windowsHide: true });
-  if (result.exitCode !== 0) throw new Error(result.stderr.toString());
-  return result.stdout.toString().trim();
-}
-function identify(pid) {
-  const process = inspectWindowsProcess(pid);
-  if (process.state !== "live") throw new Error("Cannot identify the test process");
-  return process.identity;
+  return execFileSync("tmux.exe", ["-S", socket, ...args], { windowsHide: true, encoding: "utf8" }).trim();
 }
 const [serverPid, pid] = tmux("display-message", "-p", "-t", pane, "#{pid} #{pane_pid}")
   .split(" ").map(Number);
-const child = identify(process.pid);
-const paneChild = identify(pid);
 let previous = [];
 try {
   previous = readFileSync(log, "utf8").trim().split("\\n").map(JSON.parse);
 } catch (error) {
   if (error.code !== "ENOENT") throw error;
 }
-const oldProcesses = previous.flatMap(({child, paneChild}) => [child, paneChild]);
+function processHasExited(pid) {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    if (error.code !== "ESRCH") throw error;
+    return true;
+  }
+}
 const record = {
   source: { socket, pane, serverPid, pid: process.pid, token },
-  child, paneChild, cwd: process.cwd(), file: process.argv[3],
+  panePid: pid, cwd: process.cwd(), file: process.argv[3],
+  oldProcessesExited: previous.flatMap(({ source, panePid }) => [source.pid, panePid]).map(processHasExited),
   replacement: process.env.RELOAD_NEW_ENV,
   stale: process.env.RELOAD_OLD_ENV,
   hardwareCursor: process.env.PI_HARDWARE_CURSOR,
-  oldProcesses: oldProcesses.map((process) => observeWindowsIdentity(process, inspectWindowsProcess)),
 };
 appendFileSync(log, JSON.stringify(record) + "\\n");
 if (previous.length > 0 && process.env.RELOAD_DEFER_PUBLICATION) {
-  const permit = Bun.file(join(process.env.RELOAD_LOG_DIR, id + ".publish"));
+  const permit = join(process.env.RELOAD_LOG_DIR, id + ".publish");
   const deadline = Date.now() + 30000;
-  while (!(await permit.exists()) && Date.now() < deadline) await Bun.sleep(40);
-  if (!(await permit.exists())) process.exit(3);
+  while (!existsSync(permit) && Date.now() < deadline) await sleep(40);
+  if (!existsSync(permit)) process.exit(3);
 }
 const metadata = Buffer.from(JSON.stringify({
   id, cwd: record.cwd, file: record.file, pid, processPid: process.pid, startup: "ready", token,
 })).toString("base64");
 tmux("set-option", "-p", "-t", pane, "@pi-tmux-session", metadata);
-await Bun.sleep(100000);
+setInterval(() => {}, 1_000);
 `;
 
 type RecordFromPi = {
   source: { socket: string; pane: string; serverPid: number; pid: number; token: string };
-  child: WindowsProcessIdentity;
-  paneChild: WindowsProcessIdentity;
-  oldProcesses: string[];
+  oldProcessesExited: boolean[];
   replacement?: string;
   stale?: string;
   hardwareCursor?: string;
@@ -87,7 +86,7 @@ async function waitFor(condition: () => boolean): Promise<void> {
   }
 }
 
-it.skipIf(!tmux)(
+it.skipIf(!tmux || !node)(
   "waits for a selected Windows Pi, replaces only its exact peer, and waits for its publication",
   async () => {
     assert.ok(tmux);
@@ -110,6 +109,7 @@ it.skipIf(!tmux)(
       PI_CODING_AGENT_SESSION_DIR: sessions,
       PSMUX_DATA_DIR: registry,
       PSMUX_NO_WARM: "1",
+      npm_config_prefix: root,
       PATH: [root, dirname(tmux), process.env.PATH].join(";"),
       RELOAD_LOG_DIR: root,
       PI_HARDWARE_CURSOR: "0",
@@ -169,9 +169,7 @@ it.skipIf(!tmux)(
         mkdirSync(path, { recursive: true });
       writeFileSync(conf, "set -g exit-empty off\nset -g remain-on-exit on\n");
       writeFileSync(join(extension, "index.ts"), "export default () => {};\n");
-      const source = join(root, "fixture.ts");
-      writeFileSync(source, fixturePi);
-      await ok([process.execPath, "build", "--compile", source, "--outfile", join(root, "pi.exe")]);
+      writeWindowsNpmPiFixture(root, fixturePi);
       await ok([process.execPath, "build", "--compile", main, "--outfile", mux]);
       await ok([mux, "restore"]);
       for (const id of [target, sibling]) {
@@ -194,6 +192,12 @@ it.skipIf(!tmux)(
 
       const original = log(target)[0]!;
       const other = log(sibling)[0]!;
+      function identity(pid: number): WindowsProcessIdentity {
+        const observation = inspectWindowsProcess(pid);
+        assert.equal(observation.state, "live");
+        return observation.identity;
+      }
+      const siblingProcess = identity(other.source.pid);
       assert.equal(original.hardwareCursor, "1");
       assert.equal(original.source.pane, other.source.pane);
       assert.notEqual(original.source.serverPid, other.source.serverPid);
@@ -242,7 +246,7 @@ it.skipIf(!tmux)(
       await waitFor(() => log(target).length === 2 || completed);
       if (completed) assert.fail(JSON.stringify(await reload));
       const replacement = log(target)[1]!;
-      assert.deepEqual(replacement.oldProcesses, ["ended", "ended"]);
+      assert.deepEqual(replacement.oldProcessesExited, [true, true]);
       assert.equal(replacement.source.serverPid, original.source.serverPid);
       assert.equal(replacement.source.pane, original.source.pane);
       assert.notEqual(replacement.source.token, original.source.token);
@@ -252,7 +256,7 @@ it.skipIf(!tmux)(
       assert.equal(replacement.hardwareCursor, "1");
       assert.equal(replacement.replacement, "'quoted' \\path; $literal");
       assert.deepEqual(log(sibling), [other]);
-      assert.equal(observeWindowsIdentity(other.child, inspectWindowsProcess), "present");
+      assert.equal(observeWindowsIdentity(siblingProcess, inspectWindowsProcess), "present");
       assert.equal(completed, false);
       writeFileSync(join(root, target + ".publish"), "");
       assert.deepEqual(await reload, { code: 0, stdout: "reloaded " + target, stderr: "" });

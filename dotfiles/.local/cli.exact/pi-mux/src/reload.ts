@@ -280,7 +280,7 @@ async function respawnReloadTarget(
   const removed = await excludedGlobalEnvironment(config, desired);
   const selection = hasSavedFile ? ["--session", pane.file] : ["--session-id", pane.id];
   const paneCommand = platform.paneCommand(
-    [config.pi, ...selection, "-e", config.extension, "--", `/${startupCommand}`],
+    [...config.piCommand(), ...selection, "-e", config.extension, "--", `/${startupCommand}`],
     removed,
     desired,
   );

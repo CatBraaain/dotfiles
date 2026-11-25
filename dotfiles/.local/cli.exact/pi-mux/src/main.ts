@@ -124,7 +124,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       if (!platform.windows) throw new Error("This launch operation requires Windows");
       return operation.reload
         ? await claimWindowsReload(operation.token, operation.command, operation.reload)
-        : await claimWindowsLaunch(operation.token, operation.command);
+        : await claimWindowsLaunch(operation.token, operation.command, operation.cwd);
     }
     if (operation.kind === "worktree-snapshot") {
       console.log(JSON.stringify(getWorktreeSnapshot(operation.request)));
@@ -266,6 +266,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       throw new Error("Run restart and reload from a terminal outside the dedicated tmux server");
     if (operation.kind === "stop" && insideDedicatedServer)
       throw new Error("Run stop from a terminal outside the dedicated tmux server");
+    if (operation.kind === "restart") config.piCommand();
     prepareDirectory(config.stateDirectory);
     if (operation.kind === "stop" || operation.kind === "restart")
       return await serverLifecycle(config, operation);

@@ -41,7 +41,11 @@ export const WINDOWS_RIGHT_ENV = "PI_MUX_WINDOWS_START_RIGHT";
 
 export const WINDOWS_RIGHT_OPTION = "@pi-mux-windows-start-right";
 
-export async function claimWindowsLaunch(token: string, command: string[]): Promise<number> {
+export async function claimWindowsLaunch(
+  token: string,
+  command: string[],
+  cwd: string,
+): Promise<number> {
   const config = tmuxConfiguration();
   const management = windowsManagement(config);
   const route = process.env.PSMUX_TARGET_SESSION;
@@ -108,7 +112,13 @@ export async function claimWindowsLaunch(token: string, command: string[]): Prom
       const env = { ...process.env };
       configureWindowsPiEnvironment(env, `${config.socket},${port},${index}`);
       try {
-        return Bun.spawn(command, { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+        return Bun.spawn(command, {
+          cwd,
+          env,
+          stdin: "inherit",
+          stdout: "inherit",
+          stderr: "inherit",
+        });
       } catch (error) {
         if (["ENOENT", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? ""))
           throw new SpawnDidNotStartError(errorMessage(error), { cause: error });
@@ -162,8 +172,9 @@ export async function startWindowsLaunch(
     ];
     const invocation = cliInvocation();
     const payload = Buffer.from(JSON.stringify(command), "utf8").toString("base64");
+    const destination = Buffer.from(JSON.stringify(cwd), "utf8").toString("base64");
     const launch = platform.newSessionLaunch(
-      [...invocation, "windows-claim-launch", token, payload],
+      [...invocation, "windows-claim-launch", token, payload, destination],
       env,
       unset,
     );

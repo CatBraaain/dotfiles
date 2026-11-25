@@ -5,6 +5,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { windowsManagementScope } from "./windows-management";
+import { writeWindowsNpmPiFixture } from "./windows-npm-fixture";
+import { isUncPath } from "./windows-pi-command";
 
 const tmux = process.platform === "win32" && Bun.which("tmux.exe");
 const id = "6ec4c4f8-3b28-4b3d-ab62-de7790d46e83";
@@ -13,23 +15,28 @@ const name = `handle_${ticketId}`;
 const prompt = "alpha \"double\" 'single' `backtick` $env:PATH #{pid};\nsecond line 雪";
 const main = join(import.meta.dir, "main.ts");
 const ticketMain = resolve(import.meta.dir, "../../../../.agents/cli.exact/ticket/src/main.ts");
+const uncCwd = import.meta.dir;
+const node = process.platform === "win32" && Bun.which("node.exe");
 
-const fixturePi = `
-import { realpathSync, writeFileSync } from "node:fs";
+const fixturePi = String.raw`
+import { execFileSync } from "node:child_process";
+import { existsSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const argv = process.argv.slice(2);
 const [socket] = process.env.TMUX.split(",");
 const pane = process.env.TMUX_PANE;
 function tmux(...args) {
-  const result = Bun.spawnSync(["tmux", "-S", socket, ...args]);
-  if (result.exitCode !== 0) throw new Error(result.stderr.toString());
-  return result.stdout.toString().trim();
+  return execFileSync("tmux.exe", ["-S", socket, ...args], { encoding: "utf8", windowsHide: true }).trim();
 }
 const id = process.env.PI_TMUX_SESSION_ID;
 if (id) {
   const pid = Number(tmux("display-message", "-p", "-t", pane, "#{pane_pid}"));
+  const cwd = process.cwd();
+  const file = argv[0] === "--session" ? realpathSync(argv[1]) : join(process.env.PI_CODING_AGENT_SESSION_DIR, id + ".jsonl");
+  if (process.env.PI_TMUX_STARTUP_MODE === "create" && !existsSync(file))
+    writeFileSync(file, JSON.stringify({ type: "session", version: 3, id, cwd, timestamp: new Date().toISOString() }) + "\n");
   const metadata = Buffer.from(JSON.stringify({
-    id, cwd: realpathSync(process.cwd()), file: argv[0] === "--session" ? realpathSync(argv[1]) : join(process.env.PI_CODING_AGENT_SESSION_DIR, id + ".jsonl"), pid,
+    id, cwd, file, pid,
     processPid: process.pid, startup: "ready", token: process.env.PI_TMUX_LAUNCH_TOKEN,
   })).toString("base64");
   tmux("set-option", "-p", "-t", pane, "@pi-tmux-session", metadata);
@@ -40,7 +47,7 @@ if (id) {
     hardwareCursor: process.env.PI_HARDWARE_CURSOR,
   }));
 }
-await Bun.sleep(90_000);
+setInterval(() => {}, 1_000);
 `;
 
 function json<T>(output: string): T {
@@ -56,7 +63,7 @@ async function poll(condition: () => boolean | Promise<boolean>): Promise<void> 
   }
 }
 
-test.skipIf(!tmux)(
+test.skipIf(!tmux || !node)(
   "reopens the exact Windows session and gates locked dispatch on the same management generation",
   async () => {
     assert.ok(tmux);
@@ -77,6 +84,7 @@ test.skipIf(!tmux)(
       PI_CODING_AGENT_SESSION_DIR: sessions,
       PSMUX_DATA_DIR: data,
       PSMUX_NO_WARM: "1",
+      npm_config_prefix: root,
       PATH: `${root};${dirname(tmux)};${process.env.PATH}`,
       RECEIVED_PATH: received,
       PI_HARDWARE_CURSOR: "0",
@@ -142,9 +150,7 @@ test.skipIf(!tmux)(
           timestamp: "2026-10-01T00:00:00Z",
         }) + "\n",
       );
-      const fixtureFile = join(root, "fixture-pi.ts");
-      writeFileSync(fixtureFile, fixturePi);
-      await compile(fixtureFile, join(root, "pi.exe"));
+      writeWindowsNpmPiFixture(root, fixturePi);
       await compile(main, muxExe);
       await compile(ticketMain, ticketExe);
 
@@ -434,11 +440,11 @@ test.skipIf(!tmux)(
   100_000,
 );
 
-test.skipIf(!tmux)(
-  "restarts a waiting Windows conversation launched through an npm-style cmd shim",
+test.skipIf(!tmux || !node)(
+  "restarts a waiting Windows conversation launched directly through Node",
   async () => {
     assert.ok(tmux);
-    const root = mkdtempSync(join(tmpdir(), "pi-mux-native-cmd-restart-"));
+    const root = mkdtempSync(join(tmpdir(), "pi-mux-native-node-restart-"));
     const conf = join(root, ".config", "psmux", "pi.conf");
     const agent = join(root, ".pi", "agent");
     const extension = join(agent, "extensions", "pi-mux-bridge");
@@ -451,6 +457,7 @@ test.skipIf(!tmux)(
       PI_CODING_AGENT_SESSION_DIR: root,
       PSMUX_DATA_DIR: join(root, "registry"),
       PSMUX_NO_WARM: "1",
+      npm_config_prefix: root,
       PATH: `${root};${dirname(tmux)};${process.env.PATH}`,
     };
     for (const key of Object.keys(env)) {
@@ -491,18 +498,8 @@ test.skipIf(!tmux)(
           timestamp: "2026-10-01T00:00:00Z",
         }) + "\n",
       );
-      const fixtureFile = join(root, "fixture-pi.ts");
-      writeFileSync(fixtureFile, fixturePi);
-      await run([
-        process.execPath,
-        "build",
-        "--compile",
-        fixtureFile,
-        "--outfile",
-        join(root, "fixture-pi.exe"),
-      ]);
+      writeWindowsNpmPiFixture(root, fixturePi);
       await run([process.execPath, "build", "--compile", main, "--outfile", muxExe]);
-      writeFileSync(join(root, "pi.cmd"), '@echo off\r\n"%~dp0fixture-pi.exe" %*\r\n');
 
       await mux("restore");
       await mux("open", "--detached", "--expect-file", file, id);
@@ -517,7 +514,7 @@ test.skipIf(!tmux)(
       const childPid = ledger.rights.find((right: { token: string }) => right.token === startRight)
         ?.child.pid;
       assert.ok(childPid);
-      assert.notEqual(childPid, processPid);
+      assert.equal(childPid, processPid);
       assert.notEqual(childPid, Number(panePid));
       const source = JSON.stringify({
         socket,
@@ -546,4 +543,120 @@ test.skipIf(!tmux)(
     }
   },
   60_000,
+);
+
+test.skipIf(!tmux || !node || !isUncPath(uncCwd))(
+  "starts npm pi in the requested UNC directory and keeps that directory on reopen, reload, and restore",
+  async () => {
+    assert.ok(tmux && node);
+    const root = mkdtempSync(join(tmpdir(), "pi-mux-native-unc-"));
+    const conf = join(root, ".config", "psmux", "pi.conf");
+    const agent = join(root, ".pi", "agent");
+    const extension = join(agent, "extensions", "pi-mux-bridge");
+    const socket = join(root, ".local", "state", "pi-tmux", "server.sock");
+    const registry = join(root, "registry");
+    const sessions = join(root, "sessions");
+    const muxExe = join(root, "pi-mux.exe");
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      PI_CODING_AGENT_DIR: agent,
+      PI_CODING_AGENT_SESSION_DIR: sessions,
+      PSMUX_DATA_DIR: registry,
+      PSMUX_NO_WARM: "1",
+      npm_config_prefix: root,
+      PATH: `${root};${dirname(tmux)};${dirname(node)};${process.env.PATH}`,
+    };
+    for (const key of Object.keys(env)) {
+      if (
+        (key.toUpperCase() === "PATH" && key !== "PATH") ||
+        /^(TMUX(?:_PANE)?|PSMUX_TARGET_SESSION|PSMUX_TARGET_FULL|PSMUX_ROUTE_WARM)$/i.test(key)
+      )
+        delete env[key];
+    }
+    function run(command: string[], cwd = root) {
+      return Bun.spawnSync(command, { cwd, env, timeout: 35_000, windowsHide: true });
+    }
+    function ok(command: string[], cwd?: string) {
+      const result = run(command, cwd);
+      assert.equal(result.exitCode, 0, `${command.join(" ")}: ${result.stderr.toString()}`);
+      return result.stdout.toString().trim();
+    }
+    const mux = (...args: string[]) => ok([muxExe, ...args]);
+    const tmuxArgs = [tmux, "-S", socket, "-f", conf];
+    function verifyPane(expectedId: string) {
+      const row = ok([
+        ...tmuxArgs,
+        "list-panes",
+        "-a",
+        "-F",
+        "#{pid}\t#{pane_id}\t#{pane_dead}\t#{@pi-tmux-session}",
+      ]);
+      const live = row
+        .split(/\r?\n/)
+        .map((line) => line.split("\t"))
+        .filter(([, , dead, encoded]) => dead === "0" && encoded);
+      assert.equal(live.length, 1, row);
+      const [serverPid, pane, , encoded] = live[0]!;
+      assert.ok(encoded, row);
+      const state = json<{ id: string; cwd: string; processPid: number; token: string }>(
+        Buffer.from(encoded, "base64").toString("utf8"),
+      );
+      assert.equal(state.id, expectedId);
+      assert.equal(state.cwd, uncCwd);
+      mux(
+        "state",
+        expectedId,
+        "waiting-user",
+        "--source",
+        JSON.stringify({
+          socket,
+          serverPid: Number(serverPid),
+          pane,
+          pid: state.processPid,
+          token: state.token,
+        }),
+        "--title",
+        "null",
+      );
+    }
+    try {
+      for (const directory of [dirname(conf), extension, sessions, registry])
+        mkdirSync(directory, { recursive: true });
+      writeFileSync(conf, "set -g exit-empty off\nset -g remain-on-exit on\n");
+      writeFileSync(join(extension, "index.ts"), "export default () => {};\n");
+      ok([process.execPath, "build", "--compile", main, "--outfile", muxExe]);
+      writeFileSync(join(root, "pi.cmd"), "@exit /b 42\r\n");
+      const missingPackage = run([muxExe, "new", "--detached"], uncCwd);
+      assert.notEqual(missingPackage.exitCode, 0);
+      assert.match(missingPackage.stderr.toString(), /Cannot resolve npm-installed Windows pi/);
+      writeWindowsNpmPiFixture(root, fixturePi);
+
+      const output = ok([muxExe, "new", "--detached", "Initial request"], uncCwd);
+      const conversation = /^Pi session (\S+)/.exec(output)?.[1];
+      assert.ok(conversation, output);
+      verifyPane(conversation);
+      const header = json<{ cwd: string }>(
+        readFileSync(join(sessions, `${conversation}.jsonl`), "utf8"),
+      );
+      assert.equal(header.cwd, uncCwd);
+      mux("reload", conversation);
+      verifyPane(conversation);
+      mux("stop");
+      mux("restore");
+      verifyPane(conversation);
+      mux("close", conversation);
+      mux("open", "--detached", conversation);
+      verifyPane(conversation);
+      env.npm_config_prefix = join(root, "missing-prefix");
+      mux("snapshot");
+      mux("stop");
+      mux("stop");
+    } finally {
+      run([...tmuxArgs, "kill-server"]);
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
+  },
+  180_000,
 );

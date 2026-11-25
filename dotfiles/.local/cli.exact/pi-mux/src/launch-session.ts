@@ -45,6 +45,7 @@ import {
   inspectWindowsRunningSession,
   startWindowsLaunch,
 } from "./windows-launch";
+import { windowsNpmPiCommand } from "./windows-pi-command";
 import {
   conversationLaunchKey,
   ticketLaunchKey,
@@ -93,8 +94,13 @@ export async function createNew(
     name,
     windowsBasis,
   );
-  if (request !== undefined) return await waitForSession(config, created ?? name, id, "accepted");
-  return await waitForSession(config, created ?? name, id);
+  return await waitForSession(
+    config,
+    created ?? name,
+    id,
+    request === undefined ? "ready" : "accepted",
+    cwd,
+  );
 }
 
 type SavedSessionResolution = {
@@ -224,6 +230,7 @@ export async function launchDispatchedTicket(
         const audit = await management.audit(PANE_FORMAT);
         if (audit.panes.some(({ peer }) => peer.name === operation.sessionName))
           throw new Error(`Ticket tmux session already exists: ${operation.sessionName}`);
+        const piCommand = windowsNpmPiCommand();
         prepareDirectory(config.stateDirectory);
         registerWorkspaces(config, [cwd]);
         const session = await startWindowsLaunch(config, {
@@ -233,7 +240,7 @@ export async function launchDispatchedTicket(
           cwd,
           ownerId: operation.ownerId,
           environment: { ...config.env, ...dispatchTicketEnvironment(config, operation) },
-          command: [executable("pi"), "--", operation.prompt],
+          command: [...piCommand, "--", operation.prompt],
         });
         return { state: "launched", session };
       },
@@ -384,7 +391,7 @@ async function startExactSession(
 ): Promise<Pane> {
   const target = await createSession(config, saved, sessionName(saved.id), basis);
   if (!target) throw new Error(`Cannot confirm the exact file of a competing session: ${saved.id}`);
-  const pane = await waitForSession(config, target, saved.id);
+  const pane = await waitForSession(config, target, saved.id, "ready", saved.cwd);
   if (pane.session !== target)
     throw new Error(`Cannot confirm the session created for the expected file: ${saved.id}`);
   return pane;
@@ -427,7 +434,7 @@ export async function openResolvedSession(
     basis,
     restoringBasis === undefined,
   );
-  return await waitForSession(config, created ?? name, id);
+  return await waitForSession(config, created ?? name, id, "ready", candidate.cwd);
 }
 
 async function createSession(
@@ -459,7 +466,7 @@ async function createSession(
   };
   const selection = session.file ? ["--session", session.file] : ["--session-id", session.id];
   const command = [
-    config.pi,
+    ...config.piCommand(),
     ...selection,
     "-e",
     config.extension,

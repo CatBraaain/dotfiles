@@ -425,7 +425,7 @@ async function respawnWindowsReloadTarget(
   };
   const invocation = cliInvocation();
   const command = [
-    config.pi,
+    ...config.piCommand(),
     ...(savedFile ? ["--session", pane.file] : ["--session-id", pane.id]),
     "-e",
     config.extension,

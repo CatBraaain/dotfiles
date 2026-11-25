@@ -16,6 +16,7 @@ import {
   UUID,
 } from "./session-model";
 import { serverIsAbsent, tmux, tmuxQueries, windowsManagement } from "./tmux";
+import { assertWindowsPiWorkingDirectory } from "./windows-pi-command";
 
 export const PANE_FORMAT =
   "#{pane_id}\t#{session_id}\t#{session_name}\t#{@pi-tmux-session}\t#{pane_pid}\t#{pane_dead}\t#{window_active}\t#{pane_active}";
@@ -227,10 +228,15 @@ export async function waitForSession(
   target: string,
   expectedId: string,
   startup: "accepted" | "ready" = "ready",
+  expectedCwd?: string,
 ): Promise<Pane> {
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   function matches(candidate: Pane): boolean {
-    return candidate.id === expectedId && (startup === "accepted" || candidate.startup === "ready");
+    if (candidate.id !== expectedId || (startup === "ready" && candidate.startup !== "ready"))
+      return false;
+    if (platform.windows && expectedCwd !== undefined)
+      assertWindowsPiWorkingDirectory(expectedCwd, candidate.cwd);
+    return true;
   }
   while (Date.now() < deadline) {
     const pane = (await livePanes(config)).find(matches);
