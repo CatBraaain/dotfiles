@@ -433,3 +433,117 @@ test.skipIf(!tmux)(
   },
   100_000,
 );
+
+test.skipIf(!tmux)(
+  "restarts a waiting Windows conversation launched through an npm-style cmd shim",
+  async () => {
+    assert.ok(tmux);
+    const root = mkdtempSync(join(tmpdir(), "pi-mux-native-cmd-restart-"));
+    const conf = join(root, ".config", "psmux", "pi.conf");
+    const agent = join(root, ".pi", "agent");
+    const extension = join(agent, "extensions", "pi-mux-bridge");
+    const socket = join(root, ".local", "state", "pi-tmux", "server.sock");
+    const env = {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      PI_CODING_AGENT_DIR: agent,
+      PI_CODING_AGENT_SESSION_DIR: root,
+      PSMUX_DATA_DIR: join(root, "registry"),
+      PSMUX_NO_WARM: "1",
+      PATH: `${root};${dirname(tmux)};${process.env.PATH}`,
+    };
+    for (const key of Object.keys(env)) {
+      if (
+        (key.toUpperCase() === "PATH" && key !== "PATH") ||
+        /^(TMUX(?:_PANE)?|PSMUX_TARGET_SESSION|PSMUX_TARGET_FULL|PSMUX_ROUTE_WARM)$/i.test(key)
+      )
+        delete (env as NodeJS.ProcessEnv)[key];
+    }
+    async function run(command: string[]) {
+      const result = Bun.spawnSync(command, { env, cwd: root, timeout: 15_000, windowsHide: true });
+      assert.equal(result.exitCode, 0, `${command.join(" ")}: ${result.stderr.toString()}`);
+      return result.stdout.toString().trim();
+    }
+    const muxExe = join(root, "pi-mux.exe");
+    const mux = (...args: string[]) => run([muxExe, ...args]);
+    const tmuxCommand = (...args: string[]) => run([tmux, "-S", socket, "-f", conf, ...args]);
+    const panes = () =>
+      tmuxCommand(
+        "list-panes",
+        "-a",
+        "-F",
+        "#{pid}\t#{pane_id}\t#{pane_pid}\t#{@pi-tmux-session}\t#{@pi-mux-windows-start-right}",
+      );
+    try {
+      for (const dir of [dirname(conf), extension, env.PSMUX_DATA_DIR])
+        mkdirSync(dir, { recursive: true });
+      writeFileSync(conf, "set -g exit-empty off\nset -g remain-on-exit on\n");
+      writeFileSync(join(extension, "index.ts"), "export default () => {};\n");
+      const file = join(root, `${id}.jsonl`);
+      writeFileSync(
+        file,
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id,
+          cwd: root,
+          timestamp: "2026-10-01T00:00:00Z",
+        }) + "\n",
+      );
+      const fixtureFile = join(root, "fixture-pi.ts");
+      writeFileSync(fixtureFile, fixturePi);
+      await run([
+        process.execPath,
+        "build",
+        "--compile",
+        fixtureFile,
+        "--outfile",
+        join(root, "fixture-pi.exe"),
+      ]);
+      await run([process.execPath, "build", "--compile", main, "--outfile", muxExe]);
+      writeFileSync(join(root, "pi.cmd"), '@echo off\r\n"%~dp0fixture-pi.exe" %*\r\n');
+
+      await mux("restore");
+      await mux("open", "--detached", "--expect-file", file, id);
+      await poll(async () => Boolean((await panes()).split("\t")[3]));
+      const [serverPid, pane, panePid, metadata, startRight] = (await panes()).split("\t");
+      assert.ok(metadata);
+      const { processPid, token } = json<{ processPid: number; token: string }>(
+        Buffer.from(metadata, "base64").toString("utf8"),
+      );
+      const scope = windowsManagementScope({ socket, directory: dirname(socket), env });
+      const ledger = await Bun.file(join(scope.storageDirectory, "launch-rights.json")).json();
+      const childPid = ledger.rights.find((right: { token: string }) => right.token === startRight)
+        ?.child.pid;
+      assert.ok(childPid);
+      assert.notEqual(childPid, processPid);
+      assert.notEqual(childPid, Number(panePid));
+      const source = JSON.stringify({
+        socket,
+        serverPid: Number(serverPid),
+        pane,
+        pid: processPid,
+        token,
+      });
+      await mux("state", id, "waiting-user", "--source", source, "--title", "null");
+      await mux("restart");
+      const [restoredServer, , , restoredMetadata] = (await panes()).split("\t");
+      assert.notEqual(restoredServer, serverPid);
+      assert.ok(restoredMetadata);
+      assert.equal(
+        json<{ id: string }>(Buffer.from(restoredMetadata, "base64").toString("utf8")).id,
+        id,
+      );
+    } finally {
+      Bun.spawnSync([tmux, "-S", socket, "-f", conf, "kill-server"], {
+        env,
+        cwd: root,
+        timeout: 5000,
+        windowsHide: true,
+      });
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
+  },
+  60_000,
+);

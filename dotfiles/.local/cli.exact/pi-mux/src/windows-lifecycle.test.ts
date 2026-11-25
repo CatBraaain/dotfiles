@@ -140,7 +140,11 @@ describe("Windows restart launch fence", () => {
 
     await assert.rejects(rights.fenceForRestart(false), /still active/);
     assert.equal((await rights.status(reserved)).state, "reserved");
-    assert.deepEqual(await rights.fenceForRestart(true), [child]);
+    const active = await rights.fenceForRestart(true);
+    assert.deepEqual(
+      active.map(({ token, child }) => ({ token, child })),
+      [{ token: started, child }],
+    );
     assert.equal(
       await rights.claimAndStart(reserved, randomUUID(), () => assert.fail()),
       undefined,

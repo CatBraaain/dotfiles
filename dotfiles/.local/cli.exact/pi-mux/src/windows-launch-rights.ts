@@ -272,22 +272,22 @@ export class WindowsLaunchRights {
     });
   }
 
-  async fenceForRestart(allowLive: boolean): Promise<WindowsProcessIdentity[]> {
+  async fenceForRestart(allowLive: boolean): Promise<SpawnedRight[]> {
     return await this.access.withClaimLock(async () => {
       const rights = readRights(this.access.path);
-      const activeChildren: WindowsProcessIdentity[] = [];
+      const liveLaunches: SpawnedRight[] = [];
       for (const right of rights) {
         if (right.state === "reserved") continue;
         const state = right.state === "spawned" ? this.observeChild(right) : "unknown";
         if (state === "unknown")
           throw new Error("Cannot determine the outcome of a prior Windows pi-mux launch");
-        if (right.state === "spawned" && state === "present") activeChildren.push(right.child);
+        if (right.state === "spawned" && state === "present") liveLaunches.push(right);
       }
-      if (!allowLive && activeChildren.length > 0)
+      if (!allowLive && liveLaunches.length > 0)
         throw new Error("A prior Windows pi-mux launch is still active; cannot restart safely");
       const claimed = rights.filter((right) => right.state !== "reserved");
       if (claimed.length !== rights.length) writeRights(this.access.path, claimed);
-      return activeChildren;
+      return liveLaunches;
     });
   }
 

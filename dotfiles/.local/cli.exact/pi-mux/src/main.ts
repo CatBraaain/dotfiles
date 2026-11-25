@@ -2329,11 +2329,19 @@ async function tryRestartWindowsServer(
 
     const panes = captureWindowsProcesses(audit.pids);
     const activeLaunches = await rights.fenceForRestart(true);
-    const unmatched = activeLaunches.some(
-      (launch) =>
-        !panes.some((pane) => pane.pid === launch.pid && pane.creationTime === launch.creationTime),
-    );
-    if (!force && (panes.length !== new Set(audit.pids).size || unmatched)) return;
+    const hasUnmatchedLaunch = activeLaunches.some(({ child, token, basis, completed, keys }) => {
+      if (
+        panes.some(
+          ({ pid, creationTime }) => pid === child.pid && creationTime === child.creationTime,
+        )
+      )
+        return false;
+      if (!completed || basis.instance !== audit.basis.instance) return true;
+      const matchingPanes = audit.entries.filter((entry) => entry.right === token);
+      const pi = matchingPanes[0]?.pi;
+      return matchingPanes.length !== 1 || !pi || !keys.includes(conversationLaunchKey(pi.id));
+    });
+    if (!force && (panes.length !== new Set(audit.pids).size || hasUnmatchedLaunch)) return;
 
     await management.assertLive(audit.basis);
     const excluded = new Set(
@@ -2378,7 +2386,7 @@ async function tryRestartWindowsServer(
           sessions: candidates,
         });
       });
-      await waitForWindowsExit([...panes, ...activeLaunches, ...peers], {
+      await waitForWindowsExit([...panes, ...activeLaunches.map(({ child }) => child), ...peers], {
         timeoutMs: STARTUP_TIMEOUT_MS,
         pollMs: POLL_INTERVAL_MS,
       });
