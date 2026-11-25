@@ -1,7 +1,6 @@
 // Build hook: compile each CLI folder under dist/cli that has src/main.ts
 // into a single executable named after the folder (bun build --compile), so
-// applying dist leaves only the executables plus pi-shot.executable under
-// ~/.agents/cli.
+// applying dist leaves only the executables under ~/.agents/cli.
 import { existsSync } from "node:fs";
 import { readdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
