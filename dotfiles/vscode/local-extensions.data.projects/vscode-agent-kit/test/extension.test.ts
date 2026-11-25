@@ -8,6 +8,7 @@ import type * as vscode from "vscode";
 import manifest from "../package.json";
 import { activate } from "../src/extension";
 import { PiMux } from "../src/pi-mux";
+import { SessionScmSelection } from "../src/session-scm";
 import { SessionWebviewProvider } from "../src/webview/session-webview-provider";
 import { cleanup, tempDir } from "./fixtures";
 
@@ -202,6 +203,25 @@ describe("extension commands", () => {
     expect(await readFile(join(directory, "session-list-workspaces", files[0]), "utf8")).toBe(
       "/project",
     );
+  });
+
+  it("contributes the automatic SCM selection toggle to the command palette", () => {
+    const commandId = "agentKit.toggleAutomaticScmSelection";
+    expect(manifest.contributes.commands).toContainEqual({
+      command: commandId,
+      category: "Agent Kit",
+      title: "Toggle Automatic SCM Selection",
+    });
+    expect(manifest.contributes.menus.commandPalette).not.toContainEqual(
+      expect.objectContaining({ command: commandId }),
+    );
+  });
+
+  it("connects the SCM palette command to the selection toggle", async () => {
+    const toggle = vi.spyOn(SessionScmSelection.prototype, "toggle").mockResolvedValue();
+    const runCommand = register("agentKit.toggleAutomaticScmSelection");
+    await runCommand();
+    expect(toggle).toHaveBeenCalledTimes(1);
   });
 
   it("does not register or contribute the removed tmux settings command", () => {

@@ -37,6 +37,11 @@
   "contributes": {
     "commands": [
       {
+        "command": "agentKit.toggleAutomaticScmSelection",
+        "category": "Agent Kit",
+        "title": "Toggle Automatic SCM Selection"
+      },
+      {
         "command": "agentKit.reloadAllPiSessions",
         "category": "Agent Kit",
         "title": "Reload All Pi Sessions",

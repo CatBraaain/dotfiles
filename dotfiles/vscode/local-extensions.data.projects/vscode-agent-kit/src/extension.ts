@@ -224,6 +224,7 @@ export function activate(context: vscode.ExtensionContext): void {
         for (const watcher of historyWatchers.values()) watcher.dispose();
       },
     },
+    vscode.commands.registerCommand("agentKit.toggleAutomaticScmSelection", () => scm.toggle()),
     vscode.commands.registerCommand("agentKit.reloadAllPiSessions", async () => {
       void vscode.window.showInformationMessage("Reloading Pi sessions as they become idle.");
       try {

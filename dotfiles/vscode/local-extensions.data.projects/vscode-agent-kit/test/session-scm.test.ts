@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { appendFile, mkdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { SessionScmSelection } from "../src/session-scm";
 import type { ExecFile } from "../src/git-worktrees";
 import { cleanup, tempDir } from "./fixtures";
@@ -207,6 +208,97 @@ it("does not overwrite SCM if the command is unavailable", async () => {
   await selection.refresh();
   expect(selectRepositories).toHaveBeenCalledTimes(1);
   expect(log).toHaveBeenCalledWith(expect.stringContaining("unavailable"));
+});
+
+it("leaves SCM selection alone while disabled even when the displayed session changes", async () => {
+  const filePath = join(folder, "new.jsonl");
+  await writeFile(filePath, header("new") + metadata({ sessionId: "new", workspaces: [OWNED] }));
+  const { selection, execFile, selectRepositories } = setup();
+  selection.track({ sessionId: "s1", cwd: MAIN });
+  await selection.refresh();
+  await selection.toggle();
+  execFile.mockClear();
+
+  selection.track({ sessionId: "new", cwd: MAIN, filePath });
+  selection.onSessionFileChanged(filePath);
+  await selection.refresh();
+
+  expect(selectRepositories.mock.calls).toEqual([[[MAIN]]]);
+  expect(execFile).not.toHaveBeenCalled();
+});
+
+it("reapplies an unchanged scope immediately when re-enabled", async () => {
+  const { selection, selectRepositories } = setup();
+  selection.track({ sessionId: "s1", cwd: MAIN });
+  await selection.refresh();
+  await selection.toggle();
+
+  await selection.toggle();
+
+  expect(selectRepositories.mock.calls).toEqual([[[MAIN]], [[MAIN]]]);
+});
+
+it("applies the current session on re-enable without waiting for an obsolete Git lookup", async () => {
+  const filePath = join(folder, "new.jsonl");
+  await writeFile(filePath, header("new") + metadata({ sessionId: "new", workspaces: [OWNED] }));
+  const { selection, execFile, selectRepositories } = setup();
+  let finishWorktreeList!: (result: { stdout: string }) => void;
+  let onWorktreeListStarted!: () => void;
+  const worktreeListStarted = new Promise<void>((resolve) => {
+    onWorktreeListStarted = resolve;
+  });
+  execFile.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishWorktreeList = resolve;
+        onWorktreeListStarted();
+      }),
+  );
+  selection.track({ sessionId: "s1", cwd: MAIN });
+  const pending = selection.refresh();
+  await worktreeListStarted;
+
+  await selection.toggle();
+  selection.track({ sessionId: "new", cwd: MAIN, filePath });
+  await selection.toggle();
+  expect(selectRepositories.mock.calls).toEqual([[[MAIN, OWNED]]]);
+
+  finishWorktreeList({ stdout: `worktree ${MAIN}\0HEAD 123\0\0` });
+  await pending;
+  expect(selectRepositories.mock.calls).toEqual([[[MAIN, OWNED]]]);
+});
+
+it("settles a dispatched SCM update before completing disable or sending the next update", async () => {
+  const newMain = "/another-repo";
+  const { selection, execFile, selectRepositories } = setup();
+  execFile.mockImplementation(async (_command, args, { cwd }) => ({
+    stdout: args[0] === "worktree" ? `worktree ${cwd}\0HEAD 123\0\0` : `${cwd}\n`,
+  }));
+  let finishScmUpdate!: () => void;
+  const scmUpdateStarted = new Promise<void>((started) => {
+    selectRepositories.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishScmUpdate = () => resolve("applied");
+          started();
+        }),
+    );
+  });
+  selection.track({ sessionId: "s1", cwd: MAIN });
+  await scmUpdateStarted;
+
+  const disabled = selection.toggle();
+  selection.track({ sessionId: "new", cwd: newMain });
+  const enabled = selection.toggle();
+  await setImmediate();
+  const disableBeforeAcknowledgement = await Promise.race([disabled, Promise.resolve("pending")]);
+  const requestsBeforeAcknowledgement = selectRepositories.mock.calls.length;
+  finishScmUpdate();
+  await Promise.all([disabled, enabled]);
+
+  expect(disableBeforeAcknowledgement).toBe("pending");
+  expect(requestsBeforeAcknowledgement).toBe(1);
+  expect(selectRepositories.mock.calls).toEqual([[[MAIN]], [[newMain]]]);
 });
 
 it("discards a previous scope while Git is still resolving it", async () => {

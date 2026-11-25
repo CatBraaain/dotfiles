@@ -19,14 +19,22 @@ interface SessionScmDeps {
   readonly log: (message: string) => void;
 }
 
+type SelectionResult = "applied" | "pending" | "unavailable";
+
+interface RefreshRun {
+  requested: boolean;
+  readonly done: Promise<void>;
+}
+
 export class SessionScmSelection {
   private session: DisplayedScmSession | undefined;
+  private isEnabled = true;
   private version = 0;
-  private requested = false;
-  private pending: Promise<void> | undefined;
+  private refreshRun: RefreshRun | undefined;
+  private selectionInFlight: Promise<SelectionResult> | undefined;
   private worktreeMetadata: { signature: string; paths: string[] } | undefined;
   private hasSeenSessionFile = false;
-  private lastAttempt: { key: string; result: "applied" | "pending" | "unavailable" } | undefined;
+  private lastAttempt: { key: string; result: SelectionResult } | undefined;
   private lastProblem: string | undefined;
 
   constructor(private readonly deps: SessionScmDeps) {}
@@ -58,16 +66,35 @@ export class SessionScmSelection {
     void this.refresh();
   }
 
-  refresh(): Promise<void> {
-    this.requested = true;
-    this.pending ??= this.drain();
-    return this.pending;
+  async toggle(): Promise<void> {
+    this.isEnabled = !this.isEnabled;
+    this.version += 1;
+    if (!this.isEnabled) {
+      this.refreshRun = undefined;
+      await this.selectionInFlight;
+      return;
+    }
+    this.lastAttempt = undefined;
+    await this.refresh();
   }
 
-  private async drain(): Promise<void> {
-    await Promise.resolve();
-    while (this.requested) {
-      this.requested = false;
+  refresh(): Promise<void> {
+    if (!this.isEnabled) return Promise.resolve();
+    if (this.refreshRun !== undefined) {
+      this.refreshRun.requested = true;
+      return this.refreshRun.done;
+    }
+    const run: RefreshRun = {
+      requested: true,
+      done: Promise.resolve().then(() => this.drain(run)),
+    };
+    this.refreshRun = run;
+    return run.done;
+  }
+
+  private async drain(run: RefreshRun): Promise<void> {
+    while (this.refreshRun === run && run.requested) {
+      run.requested = false;
       const session = this.session;
       const version = this.version;
       if (session === undefined) continue;
@@ -78,10 +105,14 @@ export class SessionScmSelection {
           this.report(`SCM selection for Pi session ${session.sessionId}: ${errorMessage(error)}`);
       }
     }
-    this.pending = undefined;
+    if (this.refreshRun === run) this.refreshRun = undefined;
   }
 
   private async apply(session: DisplayedScmSession, version: number): Promise<void> {
+    if (this.selectionInFlight !== undefined) {
+      await this.selectionInFlight;
+      if (version !== this.version) return;
+    }
     const ownedPaths = await this.loadOwnedWorktreePaths(session, version);
     if (version !== this.version) return;
     const paths = await resolveWorktreeScope(session.cwd, ownedPaths, this.deps.execFile);
@@ -97,7 +128,10 @@ export class SessionScmSelection {
       if (attempt.result === "applied") this.lastProblem = undefined;
       return;
     }
-    const result = await this.select(paths);
+    const selection = this.select(paths);
+    this.selectionInFlight = selection;
+    const result = await selection;
+    this.selectionInFlight = undefined;
     if (version !== this.version) return;
     this.lastAttempt = { key, result };
     if (result === "applied") {
@@ -130,7 +164,7 @@ export class SessionScmSelection {
     }
   }
 
-  private async select(paths: string[]): Promise<"applied" | "pending" | "unavailable"> {
+  private async select(paths: string[]): Promise<SelectionResult> {
     try {
       const result = await this.deps.selectRepositories(paths);
       return result === "applied" || result === "pending" ? result : "unavailable";
