@@ -4683,11 +4683,14 @@ async function collectWorkspaceList(
 ): Promise<ListedWorkspace[]> {
   const saved = panes.filter((pane) => existsSync(pane.file));
   const unsaved = panes.filter((pane) => !existsSync(pane.file));
-  const savedQueries = saved.flatMap(({ pane, session }) => [
-    ["show-options", "-pqv", "-t", pane, "@pi_session_state"],
-    ["show-options", "-pqv", "-t", pane, "@pi_session_state_pending"],
-    temporarySessionQuery(session),
-  ]);
+  const savedQueries = saved.flatMap(({ name, pane, session }) => {
+    const target = platform.windows ? `=${name}:.${pane}` : pane;
+    return [
+      ["show-options", "-pqv", "-t", target, "@pi_session_state"],
+      ["show-options", "-pqv", "-t", target, "@pi_session_state_pending"],
+      temporarySessionQuery(session),
+    ];
+  });
   const commands = [
     ...savedQueries,
     ...unsaved.map(({ session }) => temporarySessionQuery(session)),
