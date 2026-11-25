@@ -224,6 +224,61 @@ describe("CLI output and failure contract", () => {
   });
 });
 
+describe("CLI server stop contract", () => {
+  const port = "19378";
+  const serverUrl = `ws://127.0.0.1:${port}/camoufox`;
+  const windows = { BROWSE_FIXTURE_PLATFORM: "win32", CAMOUFOX_BASE_URL: serverUrl };
+
+  it("stops the matching Windows server without starting another one", () => {
+    const result = runCli(["server", "stop"], windows);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "");
+    assert.deepEqual(
+      result.events.map(({ event, command }) => command ?? event),
+      ["flock", "find-windows-server", "stop-windows-process"],
+    );
+    assert.equal(result.events[1].port, port);
+    const stoppedProcess = result.events[2];
+    assert.equal(stoppedProcess.targetPid, 41001);
+    assert.equal(stoppedProcess.identity, "fixture");
+  });
+
+  it("succeeds without starting a Windows server when none matches", () => {
+    const result = runCli(["server", "stop"], { ...windows, BROWSE_FIXTURE_SCENARIO: "stop-none" });
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(
+      result.events.map(({ event }) => event),
+      ["spawnSync", "find-windows-server"],
+    );
+  });
+
+  it("reports failure if Windows cannot confirm the server exited", () => {
+    const result = runCli(["server", "stop"], {
+      ...windows,
+      BROWSE_FIXTURE_SCENARIO: "stop-failed",
+    });
+    assert.equal(result.code, 1);
+    assert.equal(result.stderr, "Could not confirm the Windows Camoufox server exited\n");
+  });
+
+  it("reports the shared process discovery error outside Linux and Windows", () => {
+    const result = runCli(["server", "stop"], {
+      BROWSE_FIXTURE_PLATFORM: "darwin",
+      CAMOUFOX_BASE_URL: serverUrl,
+    });
+    assert.equal(result.code, 1);
+    assert.equal(
+      result.stderr,
+      "Camoufox process discovery is only supported on Linux and Windows\n",
+    );
+    assert.deepEqual(
+      result.events.map(({ command }) => command),
+      ["flock"],
+    );
+  });
+});
+
 async function waitUntil(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 4000;
   while (!predicate()) {

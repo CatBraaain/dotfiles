@@ -6,6 +6,9 @@ import * as server from "../server";
 import * as util from "../util";
 
 const scenario = process.env.BROWSE_FIXTURE_SCENARIO ?? "success";
+const fixturePlatform = process.env.BROWSE_FIXTURE_PLATFORM;
+if (fixturePlatform) Object.defineProperty(process, "platform", { value: fixturePlatform });
+
 const nativeSpawnSync = childProcess.spawnSync;
 function trace(event: Record<string, unknown>): void {
   if (process.env.BROWSE_FIXTURE_TRACE)
@@ -24,6 +27,12 @@ mock.module("node:child_process", () => ({
     trace({ event: "spawnSync", command, args });
     if (scenario === "no-flock") return { error: new Error("ENOENT"), status: null };
     if (command !== "flock") throw new Error(`unexpected process: ${command}`);
+    if (fixturePlatform) {
+      return {
+        error: Object.assign(new Error("flock not found"), { code: "ENOENT" }),
+        status: null,
+      };
+    }
     const executableIndex = args.indexOf(process.execPath);
     const childArgs =
       executableIndex < 0
@@ -37,10 +46,25 @@ mock.module("node:child_process", () => ({
     return nativeSpawnSync(command, childArgs, options);
   },
 }));
+if (fixturePlatform === "win32") {
+  mock.module("../windows-process", () => ({
+    findWindowsServerProcesses: (_argv: readonly string[], _mode: string, port: string) => {
+      trace({ event: "find-windows-server", port });
+      return scenario === "stop-none" ? [] : [{ pid: 41001, identity: "fixture", startedAtMs: 1 }];
+    },
+    stopWindowsProcess: (pid: number, identity: string) => {
+      trace({ event: "stop-windows-process", targetPid: pid, identity });
+      if (scenario === "stop-failed") {
+        throw new Error("Could not confirm the Windows Camoufox server exited");
+      }
+    },
+  }));
+}
 mock.module("../server", () => ({
   ...server,
   ensureOpenserpServer: async () => {},
   startCamoufoxServer: async () => {
+    trace({ event: "start" });
     if (scenario === "start-timeout") throw new Error("camoufox server not ready at fixture");
   },
   restartCamoufoxServer: async () => {

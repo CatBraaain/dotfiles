@@ -286,12 +286,6 @@ describe("browse server stop", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
-
-  it.skipIf(process.platform === "linux")("reports that stop is unsupported outside Linux", () => {
-    const result = runBrowse(["server", "stop"], "", "");
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, /only supported on Linux/);
-  });
 });
 
 describe("browse display", () => {

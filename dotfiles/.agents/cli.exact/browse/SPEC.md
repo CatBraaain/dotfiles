@@ -66,7 +66,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | --- | --- |
 | server起動待ち・セッションclose・restartロック競合時の再起動完了待ち | 15秒 |
 | server起動からの render復旧再起動の申請抑制期間 | 30秒 |
-| `browse server stop` / `browse server restart` の停止待ち（SIGTERM を送ってから SIGKILL に上げるまで） | 10秒 |
+| `browse server stop` / `browse server restart` の最初の終了要求後の待機 | 10秒 |
 | ページopen・ナビゲーション・DOM取得 | 30秒 |
 | 直接接続による描画で、ナビゲーションが `DOMContentLoaded` に到達した後 | `load` を最大5秒待ち、完了または待ち時間の満了後に challenge 検出待ちへ進む。描画全体の上限の内側で待つ |
 | render中に他の実行の server再起動が始まったとき | 実行中の render は再起動を待たず実行を継続する（再起動側が renderスロットの解放を待つため、実行中render が再起動の完了を待つ循環待ちは起きない） |
@@ -122,22 +122,20 @@ camoufox server の起動を保証する冪等なサブコマンド。CLI内部�
 
 ## `browse server stop`
 
-Linux（WSL を含む）で設定されたポートのローカル camoufox server を停止する。後続の起動は [`browse server start`](#browse-server-start) の既存の呼び出し経路に従う。
+設定されたポートのローカル camoufox server を停止する。探索で特定したプロセスと同一であることを確認してから終了を要求する。最初の待機で終了しなければ、同じプロセスに再度終了を要求し、最大2秒待つ。後続の起動は [`browse server start`](#browse-server-start) の既存の呼び出し経路に従う。
 
 | 条件・状態 | 結果 |
 | --- | --- |
 | 対象を停止した、または対象がいない | 起動し直さず、終了コード0 で終わる |
 | 候補が複数ある、探索に失敗した、または対象の終了を確認できない | エラー1行を stderr へ出力し、終了コード1 で終わる |
-| Linux 以外で実行した | 非対応のエラー1行を stderr へ出力し、終了コード1 で終わる |
+| プロセス探索に対応していない環境で実行した | 非対応のエラー1行を stderr へ出力し、終了コード1 で終わる |
 
 ## `browse server restart`
 
-hangしたcamoufox server の復旧用に、実行中の server を停止して起動し直す。
+hangしたcamoufox server の復旧用に、[`browse server stop`](#browse-server-stop) と同じ方法で対象を停止して起動し直す。
 
 | 条件・状態 | 操作 | 結果 |
 | --- | --- | --- |
-| Linux | 停止 | ポート番号と一致するローカルサーバーを終了する。対象へ SIGTERM を送り、10秒以内に終了しなければ、同じプロセスを指すハンドル経由で SIGKILL を送る。ハンドルを取得できない環境では停止しない |
-| Windows | 停止 | ポート番号と一致するローカルサーバーを、生成時刻を照合したプロセスハンドルで強制終了し、同じプロセスの終了を10秒まで待つ。終了しなければ同じハンドルで強制終了を再送し、2秒まで待つ |
 | 停止後、または停止対象なし | 起動 | 設定先が応答していなければ起動する。今回起動した子プロセスが待受開始を通知し、WebSocket が応答するまで待つ |
 | 候補が複数ある、探索・停止に失敗した、または設定先が既に応答する | エラー | 別のプロセスは停止せず、エラー1行を stderr に出力して終了コード1で終わる |
 

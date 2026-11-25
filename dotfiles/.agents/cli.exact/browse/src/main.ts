@@ -251,9 +251,6 @@ function serverCommand(argv: string[]): Promise<void> {
 }
 
 async function runAfterDrainingRenderSlots(action: "stop" | "restart"): Promise<void> {
-  if (action === "stop" && process.platform !== "linux") {
-    fail("browse server stop is only supported on Linux");
-  }
   const run = action === "stop" ? stopCamoufoxServer : restartCamoufoxServer;
   if (process.argv[2] === LOCKED_SUBCOMMAND) return run();
   const stateDirPath = stateDir();
