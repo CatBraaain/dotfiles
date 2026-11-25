@@ -10,9 +10,9 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import footerExtension, {
   buildFooterLines,
-  collectUsageSummary,
   formatCwdForFooter,
   formatTokens,
+  sumSessionCostUsd,
   type FooterRenderData,
 } from "./index";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -31,33 +31,6 @@ const taggingTheme: Pick<Theme, "fg"> = {
   fg: (color, text) => `${ansiCodes[color] ?? "\x1B[39m"}${text}\x1B[0m`,
 };
 
-function usage(
-  input: number,
-  output: number,
-  cacheRead: number,
-  cacheWrite: number,
-  cost: number,
-): Record<string, unknown> {
-  return {
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    totalTokens: input + output + cacheRead + cacheWrite,
-    cost: { input: cost, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
-  };
-}
-
-function messageEntry(role: string, messageUsage?: Record<string, unknown>): SessionEntry {
-  return {
-    type: "message",
-    id: role,
-    parentId: null,
-    timestamp: "2026-01-01T00:00:00.000Z",
-    message: { role, usage: messageUsage },
-  } as never;
-}
-
 function renderData(overrides: Partial<FooterRenderData> = {}): FooterRenderData {
   return {
     cwd: "/workspace/project",
@@ -65,11 +38,8 @@ function renderData(overrides: Partial<FooterRenderData> = {}): FooterRenderData
     branch: "main",
     sessionName: undefined,
     sessionId: "12345678-1234-1234-1234-abcdefabcdef",
-    usage: {
-      totals: { input: 57000, output: 1800, cacheRead: 94000, cacheWrite: 0, cost: 0.015 },
-      latestCacheHitRate: 88.7,
-    },
-    contextUsage: { tokens: 56000, contextWindow: 272000, percent: 20.6 },
+    contextUsage: { tokens: 113500, contextWindow: 500000, percent: 22.7 },
+    sessionCostUsd: 0.731,
     model: {
       provider: "openai-codex",
       id: "gpt-5.6-luna",
@@ -81,19 +51,6 @@ function renderData(overrides: Partial<FooterRenderData> = {}): FooterRenderData
     extensionStatuses: new Map(),
     ...overrides,
   };
-}
-
-function entryWithUsage(
-  type: "compaction" | "branch_summary",
-  entryUsage: Record<string, unknown>,
-): SessionEntry {
-  return {
-    type,
-    id: type,
-    parentId: null,
-    timestamp: "2026-01-01T00:00:00.000Z",
-    usage: entryUsage,
-  } as never;
 }
 
 describe("formatting", () => {
@@ -111,22 +68,60 @@ describe("formatting", () => {
   });
 });
 
-describe("usage", () => {
-  it("assistant、tool result、compaction の usage を累積する", () => {
-    const summary = collectUsageSummary([
-      messageEntry("assistant", usage(50000, 1000, 90000, 1000, 0.01)),
-      messageEntry("toolResult", usage(7000, 800, 4000, 0, 0.002)),
-      entryWithUsage("compaction", usage(0, 0, 0, 0, 0.003)),
-    ]);
+describe("session cost", () => {
+  it("adds costs from assistant messages, tool results, branch summaries and compactions", () => {
+    const timestamp = Date.now();
+    const entry = { id: "entry", parentId: null, timestamp: new Date(timestamp).toISOString() };
+    function usage(total: number) {
+      return {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: total, output: 0, cacheRead: 0, cacheWrite: 0, total },
+      };
+    }
+    const entries: SessionEntry[] = [
+      {
+        ...entry,
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [],
+          api: "openai-responses",
+          provider: "openai",
+          model: "test-model",
+          stopReason: "stop",
+          timestamp,
+          usage: usage(0.125),
+        },
+      },
+      {
+        ...entry,
+        type: "message",
+        message: {
+          role: "toolResult",
+          toolName: "test-tool",
+          toolCallId: "test-call",
+          content: [],
+          isError: false,
+          timestamp,
+          usage: usage(0.25),
+        },
+      },
+      { ...entry, type: "branch_summary", fromId: "old", summary: "", usage: usage(0.5) },
+      {
+        ...entry,
+        type: "compaction",
+        firstKeptEntryId: "kept",
+        summary: "",
+        tokensBefore: 0,
+        usage: usage(1),
+      },
+    ];
 
-    assert.deepEqual(summary.totals, {
-      input: 57000,
-      output: 1800,
-      cacheRead: 94000,
-      cacheWrite: 1000,
-      cost: 0.015,
-    });
-    assert.equal(summary.latestCacheHitRate, (90000 / 141000) * 100);
+    assert.equal(sumSessionCostUsd(entries), 1.875);
   });
 });
 
@@ -248,6 +243,13 @@ describe("extension lifecycle", () => {
     assert.equal(harness.timerCount(), 0);
   });
 
+  it("shows zero cost when the session has no usage", () => {
+    const harness = createFooterHarness("tui", null);
+    harness.emit("session_start");
+
+    assert.match(harness.render()?.at(-1) ?? "", /^Context \? \/ 0 · Session \$0\.000 /);
+  });
+
   it("skips the CLI for an in-memory session", () => {
     const harness = createFooterHarness("tui", null);
     harness.emit("session_start");
@@ -356,15 +358,17 @@ describe("extension lifecycle", () => {
 });
 
 describe("footer", () => {
-  it("作業ディレクトリ、セッションID、usage、context、model を表示する", () => {
+  it("shows context and session cost on the left and the model on the right", () => {
     const lines = buildFooterLines(140, renderData(), plainTheme);
 
     assert.equal(lines.length, 2);
     assert.match(lines[0]!, /^\/workspace\/project \(main\)/);
     assert.match(lines[0]!, /session: 12345678-1234-1234-1234-abcdefabcdef$/);
     assert.doesNotMatch(lines[0]!, /title:/);
-    assert.match(lines[1]!, /↑57k ↓1.8k R94k W0 CH88\.7% \$0\.015 20\.6%\/272k/);
-    assert.match(lines[1]!, /\(openai-codex\) gpt-5\.6-luna • high$/);
+    assert.match(
+      lines[1]!,
+      /^Context 22\.7% \/ 500k · Session \$0\.731 {2,}\(openai-codex\) gpt-5\.6-luna • high$/,
+    );
     assert.equal(visibleWidth(lines[0]!), 140);
     assert.equal(visibleWidth(lines[1]!), 140);
   });
@@ -403,7 +407,7 @@ describe("footer", () => {
 
     assert.equal(lines.length, 2);
     assert.equal(lines[0], `${left}  ${session}`);
-    assert.match(lines[1]!, /^↑57k/);
+    assert.match(lines[1]!, /^Context /);
   });
 
   it("wraps the first field that does not fit in visible columns and keeps later fields in order", () => {
@@ -424,7 +428,7 @@ describe("footer", () => {
     assert.equal(lines[0], "/workspace/project (main)  worktree: feature  ticket: project/ticket");
     assert.match(lines[1]!, /^title: 新規作業 {2,}session: 12345678-1234-1234-1234-abcdefabcdef$/);
     assert.equal(visibleWidth(lines[1]!), width);
-    assert.match(lines[2]!, /^↑57k/);
+    assert.match(lines[2]!, /^Context /);
     assert.equal(lines[3], "alpha status");
     assert.equal(lines.length, 4);
   });
@@ -435,7 +439,7 @@ describe("footer", () => {
 
     assert.equal(lines[0], "/workspace/project (main)  title: Demo title");
     assert.equal(lines[1], `session: ${SESSION_ID}`);
-    assert.match(lines[2]!, /^↑57k/);
+    assert.match(lines[2]!, /^Context /);
   });
 
   it("escapes assignment characters that could affect the terminal or break a line", () => {
@@ -470,28 +474,20 @@ describe("footer", () => {
       plainTheme,
     );
 
-    assert.match(lines[1]!, /\?\/272k/);
+    assert.match(lines[1]!, /^Context \? \/ 272k /);
   });
 
-  it("usage がすべて0でも各項目を0で表示する", () => {
-    const lines = buildFooterLines(
-      140,
-      renderData({
-        usage: {
-          totals: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 },
-          latestCacheHitRate: undefined,
-        },
-      }),
-      plainTheme,
-    );
+  it("shows the model's context window when usage data is unavailable", () => {
+    const lines = buildFooterLines(100, renderData({ contextUsage: undefined }), plainTheme);
 
-    assert.match(lines[1]!, /^↑0 ↓0 R0 W0 CH0\.0% \$0\.000 /);
+    assert.match(lines[1]!, /^Context \? \/ 272k /);
   });
 
-  it("表示幅が不足してもすべての行を端末幅以内に収める", () => {
+  it("keeps context visible, omits the cost and shortens the model in a narrow terminal", () => {
     const width = 36;
     const lines = buildFooterLines(width, renderData(), plainTheme);
 
+    assert.match(lines.at(-1)!, /^Context 22\.7% \/ 500k  gpt-5\.6-luna/);
     assert.ok(lines.every((line) => visibleWidth(line) <= width));
   });
 

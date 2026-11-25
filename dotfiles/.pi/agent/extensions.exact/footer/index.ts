@@ -8,7 +8,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { basename, relative, resolve, sep, isAbsolute } from "node:path";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import type { Usage } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 
@@ -26,19 +25,6 @@ const AssignmentSchema = Type.Object({
 
 type Assignments = Static<typeof AssignmentSchema>;
 
-export interface UsageTotals {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  cost: number;
-}
-
-export interface UsageSummary {
-  totals: UsageTotals;
-  latestCacheHitRate: number | undefined;
-}
-
 export interface FooterModel {
   provider: string;
   id: string;
@@ -52,8 +38,8 @@ export interface FooterRenderData {
   branch: string | null;
   sessionName: string | undefined;
   sessionId: string;
-  usage: UsageSummary;
   contextUsage: ContextUsage | undefined;
+  sessionCostUsd: number;
   model: FooterModel | undefined;
   thinkingLevel: string | undefined;
   availableProviderCount: number;
@@ -87,45 +73,19 @@ export function formatCwdForFooter(cwd: string, home: string | undefined): strin
   return relativeToHome === "" ? "~" : `~${sep}${relativeToHome}`;
 }
 
-function emptyUsageTotals(): UsageTotals {
-  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
-}
-
-function addUsage(totals: UsageTotals, usage: Usage): void {
-  totals.input += usage.input;
-  totals.output += usage.output;
-  totals.cacheRead += usage.cacheRead;
-  totals.cacheWrite += usage.cacheWrite;
-  totals.cost += usage.cost.total;
-}
-
-export function collectUsageSummary(entries: readonly SessionEntry[]): UsageSummary {
-  const totals = emptyUsageTotals();
-  let latestCacheHitRate: number | undefined;
-
+export function sumSessionCostUsd(entries: readonly SessionEntry[]): number {
+  let costUsd = 0;
   for (const entry of entries) {
-    if (entry.type === "message" && entry.message.role === "assistant") {
-      addUsage(totals, entry.message.usage);
-      const latestPromptTokens =
-        entry.message.usage.input + entry.message.usage.cacheRead + entry.message.usage.cacheWrite;
-      latestCacheHitRate =
-        latestPromptTokens > 0
-          ? (entry.message.usage.cacheRead / latestPromptTokens) * 100
-          : undefined;
-      continue;
-    }
-
-    if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
-      addUsage(totals, entry.message.usage);
-      continue;
-    }
-
-    if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
-      addUsage(totals, entry.usage);
+    if (entry.type === "message") {
+      const { message } = entry;
+      if (message.role === "assistant" || message.role === "toolResult") {
+        costUsd += message.usage?.cost.total ?? 0;
+      }
+    } else if (entry.type === "branch_summary" || entry.type === "compaction") {
+      costUsd += entry.usage?.cost.total ?? 0;
     }
   }
-
-  return { totals, latestCacheHitRate };
+  return costUsd;
 }
 
 function sanitizeStatusText(text: string): string {
@@ -155,16 +115,11 @@ function rightAlignedLine(left: string, right: string, width: number): string {
 function contextDisplay(
   contextUsage: FooterRenderData["contextUsage"],
   model: FooterModel | undefined,
-  theme: FooterTheme,
 ): string {
   const contextWindow = contextUsage?.contextWindow ?? model?.contextWindow ?? 0;
   const percent = contextUsage?.percent ?? null;
-  const contextPercent = percent === null ? "?" : percent.toFixed(1);
-  const display =
-    contextPercent === "?"
-      ? `?/${formatTokens(contextWindow)}`
-      : `${contextPercent}%/${formatTokens(contextWindow)}`;
-  return theme.fg("dim", display);
+  const contextPercent = percent === null ? "?" : `${percent.toFixed(1)}%`;
+  return `Context ${contextPercent} / ${formatTokens(contextWindow)}`;
 }
 
 function modelDisplay(
@@ -185,20 +140,10 @@ function modelDisplay(
   return availableProviderCount > 1 && providerFits ? providerName : modelName;
 }
 
-function buildStatsLine(width: number, data: FooterRenderData, theme: FooterTheme): string {
-  const { totals, latestCacheHitRate } = data.usage;
-  const dimParts: string[] = [
-    `↑${formatTokens(totals.input)}`,
-    `↓${formatTokens(totals.output)}`,
-    `R${formatTokens(totals.cacheRead)}`,
-    `W${formatTokens(totals.cacheWrite)}`,
-    `CH${(latestCacheHitRate ?? 0).toFixed(1)}%`,
-    `$${totals.cost.toFixed(3)}`,
-  ];
-
-  const leftParts = dimParts.map((part) => theme.fg("dim", part));
-  leftParts.push(contextDisplay(data.contextUsage, data.model, theme));
-  const left = leftParts.join(" ");
+function buildModelLine(width: number, data: FooterRenderData, theme: FooterTheme): string {
+  const context = contextDisplay(data.contextUsage, data.model);
+  const contextAndCost = `${context} · Session $${data.sessionCostUsd.toFixed(3)}`;
+  const left = theme.fg("dim", visibleWidth(contextAndCost) <= width ? contextAndCost : context);
   const right = theme.fg(
     "dim",
     modelDisplay(
@@ -218,7 +163,7 @@ export function buildFooterLines(
   theme: FooterTheme,
 ): string[] {
   const lines = buildSessionLines(width, data, theme);
-  lines.push(buildStatsLine(width, data, theme));
+  lines.push(buildModelLine(width, data, theme));
   const statuses = [...data.extensionStatuses.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([, text]) => sanitizeStatusText(text))
@@ -318,8 +263,8 @@ function getFooterRenderData(
     branch: footerData.getGitBranch(),
     sessionName: ctx.sessionManager.getSessionName(),
     sessionId: ctx.sessionManager.getSessionId(),
-    usage: collectUsageSummary(ctx.sessionManager.getEntries()),
     contextUsage: ctx.getContextUsage(),
+    sessionCostUsd: sumSessionCostUsd(ctx.sessionManager.getEntries()),
     model: model
       ? {
           provider: model.provider,

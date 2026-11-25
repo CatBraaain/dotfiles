@@ -70,7 +70,7 @@ recontext拡張の自動圧縮は、通常要求の送信前に、実際に選�
 
 ## 自動圧縮の要求履歴
 
-自動圧縮はUX補助処理の調査用に、実際に呼び出した要約Provider要求ごとに `recontext-auto-compaction-request` のcustom session entryを1件残す。容量判定だけで送信しなかった場合は記録しない。記録は通常要求のモデル入力・callback・原文表示・標準 `/session`・footerの使用量と費用集計を変えない。
+自動圧縮はUX補助処理の調査用に、実際に呼び出した要約Provider要求ごとに `recontext-auto-compaction-request` のcustom session entryを1件残す。容量判定だけで送信しなかった場合は記録しない。記録は通常要求のモデル入力、callback、原文表示、標準 `/session` の使用量と費用集計、フッターのセッション累計コストを変えない。
 
 | 記録項目 | 内容 |
 | --- | --- |

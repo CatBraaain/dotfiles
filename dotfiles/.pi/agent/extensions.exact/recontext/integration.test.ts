@@ -15,7 +15,7 @@ import recontextExtension from "./index.ts";
 import { fakeProvider, memoryRuntime, seedConversation } from "./test-fixture.ts";
 import { REPLACEMENT_STATE } from "./projection.ts";
 import { AUTO_COMPACTION_REQUEST } from "./provider-gate.ts";
-import { collectUsageSummary } from "../footer/index.ts";
+import { sumSessionCostUsd } from "../footer/index.ts";
 
 interface FixtureOptions {
   virtual?: boolean;
@@ -245,7 +245,7 @@ function currentModelText(h: Awaited<ReturnType<typeof fixture>>) {
 
 describe("real AgentSession automatic compaction", () => {
   for (const summaryReason of ["stop", "error", "aborted"] as const) {
-    it(`keeps summary ${summaryReason} usage out of standard and footer totals`, async () => {
+    it(`keeps summary ${summaryReason} usage out of standard totals and footer cost`, async () => {
       const h = await fixture({ virtual: true });
       try {
         h.state.summaryReason = summaryReason;
@@ -258,12 +258,12 @@ describe("real AgentSession automatic compaction", () => {
           cost: { input: 0.012, output: 0.009, cacheRead: 0.003, cacheWrite: 0.004, total: 0.028 },
         };
         const before = h.session.getSessionStats();
-        const footerBefore = collectUsageSummary(h.manager.getEntries());
+        const footerCostBefore = sumSessionCostUsd(h.manager.getEntries());
         await h.session.prompt("new user prompt", { source: "extension" });
         const after = h.session.getSessionStats();
         assert.deepEqual(after.tokens, before.tokens);
         assert.equal(after.cost, before.cost);
-        assert.deepEqual(collectUsageSummary(h.manager.getEntries()), footerBefore);
+        assert.equal(sumSessionCostUsd(h.manager.getEntries()), footerCostBefore);
         const logs = h.manager
           .getEntries()
           .filter(
