@@ -1,4 +1,4 @@
-import { basename, resolve } from "node:path";
+import { basename, dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   AgentToolResult,
@@ -58,7 +58,7 @@ function createGuardedExecutor(
       initializationError === undefined &&
       definition.name === "read" &&
       typeof path === "string" &&
-      basename(resolve(cwd, normalizeToolPath(path))) === "SKILL.md"
+      needsReadWorker(resolve(cwd, normalizeToolPath(path)))
         ? { entrypoint: fileURLToPath(new URL("./full-read.ts", import.meta.url)) }
         : undefined;
     return guardrails.execute({
@@ -67,6 +67,10 @@ function createGuardedExecutor(
       toolName: definition.name,
     });
   };
+}
+
+function needsReadWorker(path: string): boolean {
+  return basename(path) === "SKILL.md" || dirname(path).split(sep).includes("references");
 }
 
 function registerGuardedTool(

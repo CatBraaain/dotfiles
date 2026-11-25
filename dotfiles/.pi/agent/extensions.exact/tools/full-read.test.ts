@@ -18,7 +18,7 @@ describe("Tools full-read worker", () => {
     it(`returns only the exact UTF-8 body of ${body.length} characters`, () => {
       const directory = mkdtempSync(join(tmpdir(), "tools-worker-"));
       try {
-        const path = join(directory, "reference.md");
+        const path = join(directory, "SKILL.md");
         writeFileSync(path, body);
         const cli = spawnSync("bun", [entrypoint, "read"], {
           input: JSON.stringify({ params: { path, offset: 99999, limit: 0 } }),
@@ -40,7 +40,7 @@ describe("Tools full-read worker", () => {
     const directory = mkdtempSync(join(tmpdir(), "tools-worker-error-"));
     try {
       const cli = spawnSync("bun", [entrypoint, "read"], {
-        input: JSON.stringify({ params: { path: join(directory, "missing") } }),
+        input: JSON.stringify({ params: { path: join(directory, "SKILL.md") } }),
         encoding: "utf8",
       });
       assert.equal(cli.status, 1);

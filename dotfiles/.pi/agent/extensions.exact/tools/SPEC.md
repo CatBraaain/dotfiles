@@ -4,21 +4,23 @@ pi の標準7ツールを登録する Tools拡張の振る舞いを定める。�
 
 ## テキストread
 
-tools の `read` は、Guardrails公開APIのパス正規化関数による正規化と cwd基準の解決後、ファイル名が正確に `SKILL.md` であるテキストファイルを全文で返す。判定は指定パスの名前を使い、symlink の実体名には依存しない。
+`read` は、正規化して cwd 基準で解決した指定パスから、次のテキストファイルを全文読みの対象とする。対象ファイルへの symlink を読んだ場合も、リンク先ではなく指定パスで判定する。
 
-| テキストファイル・入力 | 結果 |
+- ファイル名が正確に `SKILL.md` のファイル。
+- `SKILL.md` が通常ファイルとして確認できるディレクトリの直下にある `references/` 配下のファイル。サブディレクトリも含む。この `SKILL.md` が symlink の場合はリンク先で通常ファイルかを判定する。
+
+| テキストファイル | 結果 |
 | --- | --- |
-| `SKILL.md`、`offset` / `limit` の指定あり・なし | 指定を無視し、2000行・50 KiB の打ち切りを適用せず全文を返す |
-| `SKILL.md`、空ファイル・CRLF・末尾改行あり・なし | UTF-8 として読み取った原文の文字列をそのまま返す |
-| その他のファイル（skill内の参考文書を含む） | 標準readの `offset` / `limit` と打ち切りを適用する |
+| 全文読みの対象 | `offset` / `limit` と 2000行・50 KiB の打ち切りを適用せず、UTF-8 の原文を返す。空ファイル・CRLF・末尾改行の有無もそのまま返す。 |
+| その他のファイル | 標準 `read` の `offset` / `limit` と打ち切りを適用する。 |
 
 全文の成功結果はテキストブロック1件だけを持ち、その本文に通知を加えない。`structuredContent` も同じ全文の文字列とし、追加メタデータを返さない。アクセス制御・sandbox・キャンセルは通常の読取と同じである。codemode のスクリプトによる加工と最終出力の制限は codemode の動作に従う。
 
 ## 実行境界
 
-Tools は SKILL判定、UTF-8全文IO、成功結果の組立てを所有する。対象のテキストreadは、Tools配下のworkerを指定する内部executor descriptorを Guardrails公開APIへ渡す。モデルの引数にある executor・entrypoint・モード指定は内部descriptorとして採用しない。
+Tools は全文読みの対象判定、UTF-8全文IO、成功結果の組立てを所有する。指定パスのファイル名が `SKILL.md` の場合、または親ディレクトリのいずれかの名前が `references` の場合は、Tools配下のworkerを指定する内部executor descriptorを Guardrails公開APIへ渡す。モデルの引数にある executor・entrypoint・モード指定は内部descriptorとして採用しない。
 
-認可・画像優先・sandbox・キャンセルの契約は [Guardrails仕様](../guardrails/SPEC.md) に従う。画像内容を持つファイルは、名前が `SKILL.md` でも画像readを優先する。workerの失敗は呼び出しの失敗として返り、標準readやhost読取へのfallbackを行わない。
+認可・画像優先・sandbox・キャンセルの契約は [Guardrails仕様](../guardrails/SPEC.md) に従う。画像ファイルは、指定パスが全文読みの条件に一致しても画像readを優先する。`references/` の兄弟にある `SKILL.md` の確認は認可後に sandbox 内で行う。全文読みの条件に一致しない場合は sandbox 内で標準readを実行する。workerが失敗した場合は呼び出しを失敗として返し、再試行やhost読取は行わない。
 
 ## ツール登録
 

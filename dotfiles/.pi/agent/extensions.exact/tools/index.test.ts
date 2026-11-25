@@ -284,10 +284,84 @@ describe("tools with the guardrails public API", () => {
     }),
   );
 
-  for (const name of ["reference.md", "skill.md", "SKILL.md.txt"]) {
+  for (const referenceDirectory of ["references", "references/catalog"]) {
+    it(
+      `returns the complete text from a skill's ${referenceDirectory}/`,
+      withFixture(async ({ tools, context, directory }) => {
+        writeFileSync(join(directory, "SKILL.md"), "# Skill\n");
+        const references = join(directory, referenceDirectory);
+        mkdirSync(references, { recursive: true });
+        const path = join(references, "readable-coding.md");
+        const body = "# Catalog\r\n" + "日本語 text\r\n".repeat(6000) + "Last rule";
+        writeFileSync(path, body);
+        const inputPath = `@${relative(process.cwd(), path)}`;
+        const result = await tools
+          .get("read")!
+          .execute(
+            "skill-reference",
+            { path: inputPath, offset: 3, limit: 1 },
+            undefined,
+            undefined,
+            context,
+          );
+        assert.deepEqual(result, {
+          content: [{ type: "text", text: body }],
+          structuredContent: body,
+        });
+      }),
+    );
+  }
+
+  it(
+    "recognizes a skill whose SKILL.md is a symlink to a regular file",
+    withFixture(async ({ tools, context, directory }) => {
+      const entrance = join(directory, "entry.md");
+      writeFileSync(entrance, "# Skill\n");
+      symlinkSync(entrance, join(directory, "SKILL.md"));
+      const references = join(directory, "references");
+      mkdirSync(references);
+      const path = join(references, "guide.md");
+      const body = "first\nlast";
+      writeFileSync(path, body);
+      const result = await tools
+        .get("read")!
+        .execute(
+          "linked-skill-reference",
+          { path, offset: 2, limit: 1 },
+          undefined,
+          undefined,
+          context,
+        );
+      assert.deepEqual(result.content, [{ type: "text", text: body }]);
+    }),
+  );
+
+  it(
+    "preserves partial reads when a symlink loop does not identify a skill",
+    withFixture(async ({ tools, context, directory }) => {
+      symlinkSync("SKILL.md", join(directory, "SKILL.md"));
+      const references = join(directory, "references");
+      mkdirSync(references);
+      const path = join(references, "guide.md");
+      writeFileSync(path, "first\nlast");
+      const result = await tools
+        .get("read")!
+        .execute(
+          "invalid-skill-link",
+          { path, offset: 2, limit: 1 },
+          undefined,
+          undefined,
+          context,
+        );
+      assert.deepEqual(result.content, [{ type: "text", text: "last" }]);
+    }),
+  );
+
+  for (const name of ["reference.md", "skill.md", "SKILL.md.txt", "references/reference.md"]) {
     it(
       `preserves standard partial reads for ${name}`,
       withFixture(async ({ tools, context, directory }) => {
+        mkdirSync(join(directory, "references"));
         const path = join(directory, name);
         writeFileSync(path, "first\nlast");
         const result = await tools.get("read")!.execute(
@@ -312,9 +386,10 @@ describe("tools with the guardrails public API", () => {
 
   for (const body of ["line\n".repeat(2001), "a".repeat(52000)]) {
     it(
-      `preserves standard truncation for a reference file of ${body.length} characters`,
+      `preserves standard truncation for a non-skill reference of ${body.length} characters`,
       withFixture(async ({ tools, context, directory }) => {
-        const path = join(directory, "reference.md");
+        mkdirSync(join(directory, "references"));
+        const path = join(directory, "references", "reference.md");
         writeFileSync(path, body);
         const result = await tools
           .get("read")!
