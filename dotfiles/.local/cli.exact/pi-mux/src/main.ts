@@ -3802,7 +3802,11 @@ async function snapshotSessions(
   expectedGeneration?: string,
   mode: "existing" | "repair" = "existing",
 ): Promise<void> {
-  const generation = await serverOption(config, "@pi-mux-generation");
+  const management = platform.windows ? windowsManagement(config) : undefined;
+  const basis = await management?.currentBasis();
+  const generation = management
+    ? basis?.instance
+    : await serverOption(config, "@pi-mux-generation");
   if (!generation) throw new Error("Dedicated server has not been initialized by pi-mux");
   if (expectedGeneration !== undefined && generation !== expectedGeneration) return;
   const previous = readSnapshot(config);
@@ -3816,25 +3820,13 @@ async function snapshotSessions(
   const candidates = (previous?.sessions ?? []).filter(
     (candidate) => !temporaryIds.has(candidate.id),
   );
-  const markers = platform.windows
-    ? await Promise.all(
-        candidates.map(async ({ id }) => ({
-          exitCode: 0,
-          stderr: "",
-          stdout: await serverOption(config, `@pi-mux-restoring-${id}`),
-        })),
-      )
-    : await tmuxQueries(
-        config,
-        candidates.map(({ id }) => ["show-options", "-gqv", `@pi-mux-restoring-${id}`]),
-      );
-  const restoring = candidates.filter((_, index) => {
-    const result = markers[index]!;
-    if (result.exitCode !== 0) throw new Error(`tmux show-options failed: ${result.stderr.trim()}`);
-    const marker = result.stdout.trim();
-    if (marker && marker !== "1") throw new Error("Invalid in-memory restore state");
-    return marker === "1";
-  });
+  const restoringIds =
+    management && basis && candidates.length > 0
+      ? new Set(management.startupState(basis)?.restoring)
+      : undefined;
+  const restoring = restoringIds
+    ? candidates.filter(({ id }) => restoringIds.has(id.toLowerCase()))
+    : await readTmuxRestoringCandidates(config, candidates);
   const sessions = uniqueCandidates([
     ...restoring,
     ...managed.filter((entry) => !entry.temporary).map(({ id, cwd }) => ({ id, cwd })),
@@ -3847,6 +3839,23 @@ async function snapshotSessions(
     generation,
     cwds: previous?.cwds ?? [],
     sessions,
+  });
+}
+
+async function readTmuxRestoringCandidates(
+  config: TmuxConfig,
+  candidates: Candidate[],
+): Promise<Candidate[]> {
+  const markers = await tmuxQueries(
+    config,
+    candidates.map(({ id }) => ["show-options", "-gqv", `@pi-mux-restoring-${id}`]),
+  );
+  return candidates.filter((_, index) => {
+    const result = markers[index]!;
+    if (result.exitCode !== 0) throw new Error(`tmux show-options failed: ${result.stderr.trim()}`);
+    const marker = result.stdout.trim();
+    if (marker && marker !== "1") throw new Error("Invalid in-memory restore state");
+    return marker === "1";
   });
 }
 

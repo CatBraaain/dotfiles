@@ -256,6 +256,23 @@ test.skipIf(!tmux)(
       rmSync(snapshot);
       assert.deepEqual(await notify("running"), success);
       assert.deepEqual(JSON.parse(readFileSync(snapshot, "utf8")), saved);
+
+      const restoringId = randomUUID();
+      const staleId = randomUUID();
+      await management.keepRestoring(basis, restoringId, (action) => action());
+      writeFileSync(
+        snapshot,
+        JSON.stringify({
+          ...saved,
+          workspaces: [{ cwd: root, sessions: [id, restoringId.toUpperCase(), staleId] }],
+        }),
+      );
+      assert.deepEqual(await notify("running"), success);
+      const repaired = JSON.parse(readFileSync(snapshot, "utf8"));
+      assert.deepEqual(repaired.workspaces, [
+        { cwd: root, sessions: [restoringId.toUpperCase(), id] },
+      ]);
+
       assert.deepEqual(await notify("--clear"), success);
       assert.equal(await original(), "");
       assert.equal(await get(peerPane, "#{@pi-mux-state-source}"), "");
