@@ -157,9 +157,8 @@ async function readHeldPanes(
 }
 
 async function readPsmuxInstance(peer: PsmuxPeer, query: PsmuxQuery): Promise<string> {
-  const target = peer.held ? [] : ["-t", `=${peer.name}`];
   const format = `#{pid}\t#{server_instance}\t#{session_name}\t${END_OF_ROW}`;
-  const result = await query(["display-message", "-p", ...target, format]);
+  const result = await query(["display-message", "-p", "-t", `=${peer.name}`, format]);
   const fields = result.stdout.replace(/\r?\n$/, "").split("\t");
   const [pid, instance, name, end] = fields;
   if (
@@ -176,6 +175,28 @@ async function readPsmuxInstance(peer: PsmuxPeer, query: PsmuxQuery): Promise<st
   return instance;
 }
 
+async function confirmsZeroWindows(
+  peer: PsmuxPeer,
+  query: PsmuxQuery,
+  instance: string,
+): Promise<boolean> {
+  const format = `#{pid}\t#{server_instance}\t#{session_name}\t#{session_id}\t#{session_windows}\t${END_OF_ROW}`;
+  const result = await query(["display-message", "-p", "-t", `=${peer.name}`, format]);
+  const fields = result.stdout.replace(/\r?\n$/, "").split("\t");
+  const [pid, observedInstance, name, sessionId, windowCount, end] = fields;
+  return (
+    result.exitCode === 0 &&
+    result.stderr === "" &&
+    fields.length === 6 &&
+    pid === peer.identity.split(":")[0] &&
+    observedInstance === instance &&
+    name === peer.name &&
+    /^\$\d+$/.test(sessionId ?? "") &&
+    windowCount === "0" &&
+    end === END_OF_ROW
+  );
+}
+
 async function readPsmuxPeerPanes(
   peer: PsmuxPeer,
   query: PsmuxQuery,
@@ -187,7 +208,11 @@ async function readPsmuxPeerPanes(
     "#{server_instance}\t#{pid}\t#{session_name}\t#{session_id}\t#{session_windows}\t#{window_id}\t#{window_panes}\t#{pane_id}";
   const format = `${fields}\t${paneFormat}\t${END_OF_ROW}`;
   const result = await query(["list-panes", "-s", "-t", target, "-F", format]);
-  if (result.exitCode !== 0 || result.stderr || !result.stdout.trim())
+  const isBlank = !result.stdout.trim();
+  if (result.exitCode === 0 && !result.stderr && isBlank) {
+    if (await confirmsZeroWindows(peer, query, instance)) return [];
+  }
+  if (result.exitCode !== 0 || result.stderr || isBlank)
     throw new Error(`Cannot read the complete psmux pane inventory for ${peer.name}`);
   const pid = peer.identity.split(":")[0];
   const windows = new Map<string, { expected: string; seen: number }>();

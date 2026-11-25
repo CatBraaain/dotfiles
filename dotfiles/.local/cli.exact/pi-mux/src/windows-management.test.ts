@@ -240,7 +240,9 @@ describe("Windows psmux management", () => {
       },
     ]);
     assert.ok(
-      current.commands.every((args) => args[0] === "display-message" && !args.includes("-t")),
+      current.commands.every(
+        (args) => args[0] === "display-message" && args[2] === "-t" && args[3] === "=__warm__",
+      ),
     );
   });
 

@@ -89,6 +89,57 @@ describe("psmux pane inventory", () => {
     );
   });
 
+  it("accepts an empty pane list after the exact peer confirms zero windows", async () => {
+    const [emptyPeer, activePeer] = peers;
+    assert.ok(emptyPeer && activePeer);
+    const query: PsmuxQuery = async (args) => {
+      if (args[3] !== "=alpha") return await exactQuery(args);
+      if (args[0] === "list-panes") return { stdout: "", stderr: "", exitCode: 0 };
+      assert.deepEqual(args.slice(0, 4), ["display-message", "-p", "-t", "=alpha"]);
+      assert.ok(args[4]?.includes("#{session_windows}"));
+      return {
+        stdout: `11\t${instance}\talpha\t$1\t0\tpi-mux-audit-end\r\n`,
+        stderr: "",
+        exitCode: 0,
+      };
+    };
+    assert.deepEqual(await readPsmuxPaneInventory(readPeers, query, instance, paneFormat), [
+      { peer: emptyPeer, rows: [] },
+      { peer: activePeer, rows: ["57\t"] },
+    ]);
+  });
+
+  it("rejects an empty pane list when the exact peer reports a window", async () => {
+    const query: PsmuxQuery = async (args) => ({
+      stdout:
+        args[0] === "display-message" ? `11\t${instance}\talpha\t$1\t1\tpi-mux-audit-end\n` : "",
+      stderr: "",
+      exitCode: 0,
+    });
+    await assert.rejects(
+      readPsmuxPaneInventory(async () => [peers[0]!], query, instance, paneFormat),
+      /complete psmux pane inventory for alpha/,
+    );
+  });
+
+  it.each([
+    ["process", "12", instance],
+    ["generation", "11", "bbbbbbbbbbbbbbbb"],
+  ])("rejects a zero window count from a different %s", async (_, pid, reportedInstance) => {
+    const query: PsmuxQuery = async (args) => ({
+      stdout:
+        args[0] === "display-message"
+          ? `${pid}\t${reportedInstance}\talpha\t$1\t0\tpi-mux-audit-end\n`
+          : "",
+      stderr: "",
+      exitCode: 0,
+    });
+    await assert.rejects(
+      readPsmuxPaneInventory(async () => [peers[0]!], query, instance, paneFormat),
+      /complete psmux pane inventory for alpha/,
+    );
+  });
+
   it("does not accept success from a quiet peer as proof of absence", async () => {
     const query: PsmuxQuery = async (args) =>
       args[3] === "=beta" ? { stdout: "", stderr: "", exitCode: 0 } : await exactQuery(args);
