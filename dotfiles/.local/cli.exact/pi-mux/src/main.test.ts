@@ -3292,7 +3292,11 @@ function restartState(fixture: SessionFixture, target: string, id: string, state
 }
 
 function startRestart(fixture: SessionFixture, args: string[] = []) {
-  return Bun.spawn([process.execPath, "run", source, "restart", ...args], {
+  return startLifecycleCommand(fixture, ["restart", ...args]);
+}
+
+function startLifecycleCommand(fixture: SessionFixture, args: string[]) {
+  return Bun.spawn([process.execPath, "run", source, ...args], {
     cwd: fixture.cwd,
     env: fixture.env,
     stdout: "pipe",
@@ -4654,6 +4658,73 @@ describe("state argument parsing", () => {
         `title: ${title}`,
       );
   });
+});
+
+describe("stop", () => {
+  it("accepts no arguments", () => {
+    assert.deepEqual(parseOperation(["stop"]), { kind: "stop" });
+    assert.throws(() => parseOperation(["stop", "--force"]), /usage/);
+  });
+
+  it.skipIf(process.platform !== "linux")(
+    "waits for input, saves the conversation, and leaves the server stopped",
+    async () => {
+      const fixture = new SessionFixture();
+      let child: ReturnType<typeof startLifecycleCommand> | undefined;
+      try {
+        prepareManagedPi(fixture);
+        const id = addManagedSession(fixture, "target", "running");
+        const pid = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]);
+        child = startLifecycleCommand(fixture, ["stop"]);
+        await Bun.sleep(250);
+        assert.equal(child.exitCode, null);
+        assert.equal(existsSync(`/proc/${pid}`), true);
+        restartState(fixture, "target", id, "waiting-user");
+        await finishRestart(child);
+        assert.equal(existsSync(`/proc/${pid}`), false);
+        const server = spawnSync(realTmux!, [
+          "-N",
+          "-S",
+          fixture.socket,
+          "display-message",
+          "-p",
+          "#{pid}",
+        ]);
+        assert.equal(server.status, 1, server.stderr.toString());
+        assert.deepEqual(restoreDocument(fixture).workspaces, [
+          { cwd: fixture.cwd, sessions: [id] },
+        ]);
+
+        const restored = fixture.run(["restore"]);
+        assert.equal(restored.status, 0, restored.stderr);
+        const launch = JSON.parse(readFileSync(join(fixture.directory, "launches.jsonl"), "utf8"));
+        assert.equal(launch.id, id);
+      } finally {
+        child?.kill();
+        if (child) await child.exited;
+        await fixture.cleanup();
+      }
+    },
+    20_000,
+  );
+
+  it.skipIf(process.platform !== "linux")(
+    "succeeds without starting an absent server",
+    async () => {
+      const fixture = new SessionFixture();
+      try {
+        prepareManagedPi(fixture);
+        const snapshot = readFileSync(restoreFile(fixture), "utf8");
+        const result = fixture.run(["stop"]);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(existsSync(fixture.socket), false);
+        assert.equal(readFileSync(restoreFile(fixture), "utf8"), snapshot);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    20_000,
+  );
 });
 
 describe("restart", () => {

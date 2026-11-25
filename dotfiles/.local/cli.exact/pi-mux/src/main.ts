@@ -99,6 +99,7 @@ type Operation =
   | { kind: "workspace"; action: "register" | "unregister"; cwd: string }
   | { kind: "snapshot"; generation?: string }
   | { kind: "restore" }
+  | { kind: "stop" }
   | { kind: "reload"; id?: string }
   | { kind: "restart"; force: boolean };
 type DispatchTicketOperation = {
@@ -277,6 +278,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux workspace unregister <cwd>
   pi-mux snapshot [server-generation]
   pi-mux restore
+  pi-mux stop
   pi-mux reload [<session-id>]
   pi-mux restart [--force]`);
       return 0;
@@ -469,13 +471,14 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       });
     }
     const config = configuration();
-    if (
-      (operation.kind === "restart" || operation.kind === "reload") &&
-      process.env.TMUX?.split(",")[0] === config.socket
-    )
+    const insideDedicatedServer = process.env.TMUX?.split(",")[0] === config.socket;
+    if ((operation.kind === "restart" || operation.kind === "reload") && insideDedicatedServer)
       throw new Error("Run restart and reload from a terminal outside the dedicated tmux server");
+    if (operation.kind === "stop" && insideDedicatedServer)
+      throw new Error("Run stop from a terminal outside the dedicated tmux server");
     prepareDirectory(config.stateDirectory);
-    if (operation.kind === "restart") return await restartServer(config, operation.force);
+    if (operation.kind === "stop" || operation.kind === "restart")
+      return await serverLifecycle(config, operation);
     if (operation.kind === "reload") return await reloadPanes(config, operation.id);
     if (operation.kind === "new" && operation.cwd !== undefined) {
       if (!statSync(operation.cwd).isDirectory())
@@ -881,10 +884,11 @@ export function parseOperation(argv: string[]): Operation {
   if (argv[0] === "restart" && (argv.length === 1 || (argv.length === 2 && argv[1] === "--force")))
     return { kind: "restart", force: argv[1] === "--force" };
   if (argv.length === 1 && argv[0] === "restore") return { kind: "restore" };
+  if (argv.length === 1 && argv[0] === "stop") return { kind: "stop" };
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] [--detached] <session-id> | open --detached --expect-file <absolute-jsonl-path> <session-id> | inspect <session-id> | metadata <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | list --active [--json] | list --saved [--cwd <absolute-cwd>] [--json] | list --displayed [--client-pid <pid>] [--json] | switch <session-id> [--client-pid <pid>] | history [--cwd <absolute-cwd>] [--json] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | reload [<session-id>] | restart [--force]]",
+    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] [--detached] <session-id> | open --detached --expect-file <absolute-jsonl-path> <session-id> | inspect <session-id> | metadata <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | list --active [--json] | list --saved [--cwd <absolute-cwd>] [--json] | list --displayed [--client-pid <pid>] [--json] | switch <session-id> [--client-pid <pid>] | history [--cwd <absolute-cwd>] [--json] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | stop | reload [<session-id>] | restart [--force]]",
   );
 }
 
@@ -2299,24 +2303,35 @@ function windowsStopInventory(audit: WindowsLifecycleAudit): string {
 
 const WINDOWS_RESTART_RECHECK = Symbol("Windows restart needs a new readiness check");
 
-async function restartWindowsServer(config: Config, force: boolean): Promise<number> {
+type ServerOperation = Extract<Operation, { kind: "stop" | "restart" }>;
+
+async function windowsServerLifecycle(config: Config, operation: ServerOperation): Promise<number> {
   const management = windowsManagement(config);
   const original = await withLock(config, () => management.currentBasis());
   while (true) {
-    const result = await withLock(config, () =>
-      tryRestartWindowsServer(config, management, original, force),
-    );
+    const result = await withLock(config, async () => {
+      if (!original && operation.kind === "stop") {
+        if (await management.currentBasis())
+          throw new Error("Dedicated psmux generation changed during stop");
+        return 0;
+      }
+      const force = operation.kind === "restart" && operation.force;
+      if (!(await tryStopWindowsServer(config, management, original, force))) return undefined;
+      if (operation.kind === "stop") return 0;
+      prepareDirectory(config.directory);
+      return (await startAndRestore(config, true, undefined, "fresh")).failures > 0 ? 2 : 0;
+    });
     if (result !== undefined) return result;
     await Bun.sleep(POLL_INTERVAL_MS);
   }
 }
 
-async function tryRestartWindowsServer(
+async function tryStopWindowsServer(
   config: Config,
   management: WindowsManagement,
   original: WindowsManagementBasis | undefined,
   force: boolean,
-): Promise<number | undefined> {
+): Promise<boolean> {
   const previous = readSnapshot(config);
   const rights = management.createLaunchRights(windowsClaimLock(management));
   if (original) {
@@ -2325,7 +2340,7 @@ async function tryRestartWindowsServer(
       throw new Error("Dedicated psmux generation changed during restart");
     if (previous?.generation && previous.generation !== original.instance)
       throw new Error("Snapshot belongs to another psmux generation");
-    if (!force && !windowsRestartIsWaiting(config, audit)) return;
+    if (!force && !windowsRestartIsWaiting(config, audit)) return false;
 
     const panes = captureWindowsProcesses(audit.pids);
     const activeLaunches = await rights.fenceForRestart(true);
@@ -2341,7 +2356,7 @@ async function tryRestartWindowsServer(
       const pi = matchingPanes[0]?.pi;
       return matchingPanes.length !== 1 || !pi || !keys.includes(conversationLaunchKey(pi.id));
     });
-    if (!force && (panes.length !== new Set(audit.pids).size || hasUnmatchedLaunch)) return;
+    if (!force && (panes.length !== new Set(audit.pids).size || hasUnmatchedLaunch)) return false;
 
     await management.assertLive(audit.basis);
     const excluded = new Set(
@@ -2391,7 +2406,7 @@ async function tryRestartWindowsServer(
         pollMs: POLL_INTERVAL_MS,
       });
     } catch (error) {
-      if (error === WINDOWS_RESTART_RECHECK) return;
+      if (error === WINDOWS_RESTART_RECHECK) return false;
       throw error;
     }
   } else {
@@ -2401,22 +2416,23 @@ async function tryRestartWindowsServer(
   }
   if (await management.currentBasis())
     throw new Error("Dedicated psmux did not remain stopped during restart");
-  prepareDirectory(config.directory);
-  return (await startAndRestore(config, true, undefined, "fresh")).failures > 0 ? 2 : 0;
+  return true;
 }
 
-async function restartServer(config: Config, force: boolean): Promise<number> {
-  if (platform.windows) return await restartWindowsServer(config, force);
+async function serverLifecycle(config: Config, operation: ServerOperation): Promise<number> {
+  if (platform.windows) return await windowsServerLifecycle(config, operation);
   const original = await withLock(config, () => serverLifetime(config));
+  const force = operation.kind === "restart" && operation.force;
   while (true) {
     const result = await withLock(config, async () => {
       if (!original) {
         if (await serverLifetime(config))
-          throw new Error("Dedicated server changed during restart");
+          throw new Error(`Dedicated server changed during ${operation.kind}`);
+        if (operation.kind === "stop") return 0;
         prepareDirectory(config.directory);
         return (await startAndRestore(config, true)).failures > 0 ? 2 : 0;
       }
-      await verifyServerLifetime(config, original);
+      await verifyServerLifetime(config, original, operation.kind);
       readSnapshot(config);
       if (!force && !(await restartIsWaiting(config))) return undefined;
       const panes = await livePanes(config, "list");
@@ -2432,7 +2448,7 @@ async function restartServer(config: Config, force: boolean): Promise<number> {
       if (!saved || saved.generation !== original.generation)
         throw new Error("Cannot confirm restart snapshot");
       await setRestoringSessions(config, saved.sessions);
-      await verifyServerLifetime(config, original);
+      await verifyServerLifetime(config, original, operation.kind);
       if (!force && !(await restartIsWaiting(config))) return undefined;
       const stopScript = [
         tmuxArguments([
@@ -2457,7 +2473,11 @@ async function restartServer(config: Config, force: boolean): Promise<number> {
       ].join("\n");
       const stopped = await tmux(config, ["source-file", "-"], false, `${stopScript}\n`);
       if (stopped.stdout.includes("PI_MUX_RESTART_SERVER_CHANGED"))
-        throw new Error("Dedicated server changed before restart stop");
+        throw new Error(
+          operation.kind === "stop"
+            ? "Dedicated server changed before stop"
+            : "Dedicated server changed before restart stop",
+        );
       if (stopped.stdout.includes("PI_MUX_STOP_CHECKED")) return undefined;
       const targets = [...panes, ...initializing].map((pane) => ({ pid: pane.pid }));
       for (const target of targets) {
@@ -2471,11 +2491,12 @@ async function restartServer(config: Config, force: boolean): Promise<number> {
       const deadline = Date.now() + STARTUP_TIMEOUT_MS;
       while (targets.some((target) => platform.processIsAlive(target.pid))) {
         if (Date.now() >= deadline)
-          throw new Error("Timed out waiting for pi to exit during restart");
+          throw new Error(`Timed out waiting for pi to exit during ${operation.kind}`);
         await Bun.sleep(POLL_INTERVAL_MS);
       }
       if (await serverLifetime(config))
-        throw new Error("Dedicated server did not remain stopped during restart");
+        throw new Error(`Dedicated server did not remain stopped during ${operation.kind}`);
+      if (operation.kind === "stop") return 0;
       prepareDirectory(config.directory);
       return (await startAndRestore(config, true)).failures > 0 ? 2 : 0;
     });
