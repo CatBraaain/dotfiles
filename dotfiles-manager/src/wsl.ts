@@ -9,6 +9,8 @@ export type WslConnection = {
 };
 export type ProcessResult = { ok: boolean; stdout: string; stderr: string };
 
+const wslLoginShell = "bash";
+
 export async function resolveWsl(sourceRoot: string): Promise<WslConnection | undefined> {
   if (process.platform !== "win32") return undefined;
   const sourceDistro = uncDistro(win32.resolve(sourceRoot));
@@ -19,7 +21,7 @@ export async function resolveWsl(sourceRoot: string): Promise<WslConnection | un
       "wsl.exe",
       ...selection,
       "--exec",
-      "bash",
+      wslLoginShell,
       "-lc",
       'printf "%s\\n%s\\n%s\\n%s\\n" "$WSL_DISTRO_NAME" "$(id -un)" "$HOME" "$(command -v bun)"',
     ]);
@@ -131,10 +133,10 @@ function wslCommand(connection: Pick<WslConnection, "distro" | "user">): string[
     "--user",
     connection.user,
     "--exec",
-    "sh",
+    wslLoginShell,
     "-lc",
     'exec "$@"',
-    "sh",
+    wslLoginShell,
   ];
 }
 
