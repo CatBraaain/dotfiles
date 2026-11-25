@@ -18,7 +18,7 @@ import agentsExtension, {
   createThrottledEmitter,
   agentConfigPath,
   type AgentConfig,
-  buildAgentSystemPromptAddendum,
+  buildAgentInstructions,
   canDelegate,
   childAgent,
   childInvocationArgs,
@@ -505,12 +505,12 @@ function captureAgentsExtension(
       }
       return undefined;
     },
-    async beforeAgentStart(systemPrompt: string) {
-      for (const handler of handlers.get("before_agent_start") ?? []) {
-        const result = await handler({ systemPrompt }, context);
-        if (result) return result;
-      }
-      return undefined;
+    async beforeAgentStart(forceSystemPrompt?: string) {
+      const systemPromptOptions = { sections: {} as Record<string, string>, forceSystemPrompt };
+      let result: { systemPrompt: string } | undefined;
+      for (const handler of handlers.get("before_agent_start") ?? [])
+        result = await handler({ systemPromptOptions }, context);
+      return { sections: systemPromptOptions.sections, forced: result?.systemPrompt };
     },
     async executeSubagent(
       params: Record<string, unknown>,
@@ -1633,8 +1633,8 @@ describe("委譲", () => {
 });
 
 describe("システムプロンプト", () => {
-  it("agent の systemPrompt を追記する", () => {
-    assert.match(buildAgentSystemPromptAddendum("manager", config), /ファイル操作は禁止/);
+  it("builds the configured agent instructions", () => {
+    assert.match(buildAgentInstructions("manager", config), /ファイル操作は禁止/);
   });
 
   it("appends multiple prompts in configured order", () => {
@@ -1646,10 +1646,7 @@ describe("システムプロンプト", () => {
       },
     };
 
-    assert.equal(
-      buildAgentSystemPromptAddendum("manager", configuredPrompts),
-      "\n\nfirst\n\nsecond",
-    );
+    assert.equal(buildAgentInstructions("manager", configuredPrompts), "first\n\nsecond");
   });
 });
 
@@ -1874,8 +1871,9 @@ describe("拡張の接続", () => {
     try {
       await extension.sessionStart();
       await extension.runCommand("chat", "hello");
-      const prompt = await extension.beforeAgentStart("base");
-      assert.equal(prompt.systemPrompt, "base\n\nチャット用");
+      const prompt = await extension.beforeAgentStart();
+      assert.deepEqual(prompt.sections, { agent_instructions: "チャット用" });
+      assert.equal(prompt.forced, undefined);
       assert.deepEqual(extension.sentMessages, [{ content: "hello" }]);
     } finally {
       extension.restore();
@@ -1909,8 +1907,9 @@ describe("拡張の接続", () => {
     const extension = captureAgentsExtension();
     try {
       await extension.runCommand("manager");
-      const result = await extension.beforeAgentStart("base");
-      assert.match(result.systemPrompt, /^base\n\nファイル操作は禁止$/);
+      const result = await extension.beforeAgentStart("Already forced.");
+      assert.deepEqual(result.sections, { agent_instructions: "ファイル操作は禁止" });
+      assert.equal(result.forced, "Already forced.\n\nファイル操作は禁止");
     } finally {
       extension.restore();
     }
@@ -4323,8 +4322,9 @@ describe("subagent", () => {
       await extension.sessionStart();
       await extension.runCommand("worker");
       assert.deepEqual(extension.activeTools.at(-1), ["bash", "subagent"]);
-      const prompt = await extension.beforeAgentStart("base");
-      assert.equal(prompt.systemPrompt, "base\n\nworker prompt");
+      const prompt = await extension.beforeAgentStart();
+      assert.deepEqual(prompt.sections, { agent_instructions: "worker prompt" });
+      assert.equal(prompt.forced, undefined);
       assert.equal(
         (await extension.executeSubagent({ agent: "chat", task: "work" })).isError,
         undefined,

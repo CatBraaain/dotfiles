@@ -362,9 +362,8 @@ export function shouldBlockToolCall(agent: Agent, toolName: string, config: Agen
   return !isToolAllowed(agent, toolName, config);
 }
 
-export function buildAgentSystemPromptAddendum(agent: Agent, config: AgentConfig): string {
-  const prompts = (config.agents[agent]?.systemPrompt ?? []).filter(Boolean);
-  return prompts.length > 0 ? `\n\n${prompts.join("\n\n")}` : "";
+export function buildAgentInstructions(agent: Agent, config: AgentConfig): string {
+  return (config.agents[agent]?.systemPrompt ?? []).filter(Boolean).join("\n\n");
 }
 
 export function canDelegate(fromAgent: Agent, toAgent: Agent, config: AgentConfig): boolean {
@@ -1574,9 +1573,15 @@ export default function agentsExtension(
     }
   }
 
-  pi.on("before_agent_start", async (event) => {
-    const addendum = buildAgentSystemPromptAddendum(currentAgent, config);
-    return addendum ? { systemPrompt: event.systemPrompt + addendum } : undefined;
+  pi.on("before_agent_start", ({ systemPromptOptions }) => {
+    const instructions = buildAgentInstructions(currentAgent, config);
+    if (!instructions) {
+      delete systemPromptOptions.sections.agent_instructions;
+      return;
+    }
+    systemPromptOptions.sections.agent_instructions = instructions;
+    if (systemPromptOptions.forceSystemPrompt !== undefined)
+      return { systemPrompt: `${systemPromptOptions.forceSystemPrompt}\n\n${instructions}` };
   });
 
   // ── manual selection tracking ───────────────────────────────────────
