@@ -1,17 +1,18 @@
 import { homedir } from "node:os";
-import { basename, isAbsolute } from "node:path";
+import { isAbsolute, posix, win32 } from "node:path";
 import { quote } from "shell-quote";
 import { splitCommandSegments } from "../guardrails/config.ts";
 
-export type WorktreeAction = "add" | "move" | "remove";
+export type WorktreeMutation<Path> =
+  | { action: "add" | "remove"; path: Path }
+  | { action: "move"; from: Path | undefined; to: Path | undefined };
 export interface WorktreeSnapshotRequest {
   shellDirectories: string[];
   gitDirectories: string[];
   paths: string[];
 }
 export interface WorktreeScope extends WorktreeSnapshotRequest {
-  actions: WorktreeAction[];
-  destinationIndexes: number[];
+  mutations: WorktreeMutation<number>[];
 }
 export type SnapshotQuery = (request: WorktreeSnapshotRequest) => Promise<WorktreeSnapshot>;
 
@@ -39,33 +40,46 @@ export interface WorkspaceChanges {
   removed: string[];
 }
 
-export function findWorktreeScopes(command: string): WorktreeScope[] {
+export function findWorktreeScopes(
+  command: string,
+  shell: "bash" | "powershell" = "bash",
+  platform = process.platform,
+): WorktreeScope[] {
   const home = process.env.HOME || homedir();
-  let shellDirectories: string[] = [];
+  const segments =
+    shell === "bash"
+      ? splitCommandSegments(expandBashHome(command, home))
+      : platform === "win32"
+        ? literalPowerShellGitCommands(command)
+        : [];
   const scopes: WorktreeScope[] = [];
+  let shellDirectories: string[] = [];
   let lastKey: string | undefined;
-  for (const segment of splitCommandSegments(expandBashHome(command, home))) {
-    if (segment[0] === "cd") {
+  for (const segment of segments) {
+    if (shell === "bash" && segment[0] === "cd") {
       const path = segment[1] === "--" ? segment[2] : segment[1];
       if (path === "-") continue;
       const directory = path ?? home;
       if (isPathWord(directory)) shellDirectories = [...shellDirectories, directory];
       continue;
     }
-    const words = unwrapCommand(segment);
-    if (basename(words[0] ?? "") !== "git") continue;
+    const words = shell === "bash" ? unwrapCommand(segment) : segment;
+    if (!isGitExecutable(words[0] ?? "", platform)) continue;
     const gitDirectories: string[] = [];
     let cursor = 1;
     let unusable = false;
     while (words[cursor]?.startsWith("-")) {
       const option = words[cursor++]!;
-      if (option === "-C" || option.startsWith("-C")) {
+      if (option === "-C" || (shell === "bash" && option.startsWith("-C"))) {
         const directory = option === "-C" ? words[cursor++] : option.slice(2);
-        if (!isPathWord(directory)) {
+        if (!isCommandPath(directory, shell)) {
           unusable = true;
           break;
         }
         gitDirectories.push(directory);
+      } else if (shell === "powershell") {
+        unusable = true;
+        break;
       } else if (option === "-c" || option === "--git-dir" || option === "--work-tree") {
         cursor++;
       }
@@ -75,25 +89,26 @@ export function findWorktreeScopes(command: string): WorktreeScope[] {
     if (action !== "add" && action !== "move" && action !== "remove") continue;
     const operands = mutationOperands(words.slice(cursor + 2));
     const pathCount = action === "move" ? 2 : 1;
-    const targets = operands.slice(0, pathCount);
-    if (!targets.some(isPathWord)) continue;
+    const targets = operands
+      .slice(0, pathCount)
+      .map((path) => (isCommandPath(path, shell) ? path : undefined));
+    if (targets.every((path) => path === undefined)) continue;
+    if (shell === "powershell" && (targets.length < pathCount || targets.includes(undefined)))
+      continue;
 
     const key = JSON.stringify([shellDirectories, gitDirectories]);
     const previous = lastKey === key ? scopes.at(-1) : undefined;
     const scope: WorktreeScope = previous ?? {
       shellDirectories,
       gitDirectories,
-      actions: [],
       paths: [],
-      destinationIndexes: [],
+      mutations: [],
     };
-    if (!scope.actions.includes(action)) scope.actions.push(action);
-    const destinationIndex = action === "move" ? 1 : action === "add" ? 0 : -1;
-    for (const [index, path] of targets.entries()) {
-      if (!isPathWord(path)) continue;
-      if (index === destinationIndex) scope.destinationIndexes.push(scope.paths.length);
-      scope.paths.push(path);
-    }
+    const [first, second] = targets.map((path) =>
+      path === undefined ? undefined : scope.paths.push(path) - 1,
+    );
+    if (action === "move") scope.mutations.push({ action, from: first, to: second });
+    else if (first !== undefined) scope.mutations.push({ action, path: first });
     if (!previous) scopes.push(scope);
     lastKey = key;
   }
@@ -151,11 +166,25 @@ function isPathWord(path: unknown): path is string {
   return typeof path === "string" && path.length > 0 && !path.includes("\0");
 }
 
+export function resolveMutationPaths(
+  mutations: WorktreeMutation<number>[],
+  paths: string[],
+): WorktreeMutation<string>[] {
+  return mutations.map((mutation) =>
+    mutation.action === "move"
+      ? {
+          action: "move",
+          from: mutation.from === undefined ? undefined : paths[mutation.from],
+          to: mutation.to === undefined ? undefined : paths[mutation.to],
+        }
+      : { action: mutation.action, path: paths[mutation.path]! },
+  );
+}
+
 export function detectWorkspaceChanges(
   before: WorktreeSnapshot,
   after: WorktreeSnapshot,
-  actions: WorktreeAction[],
-  paths: string[],
+  mutations: WorktreeMutation<string>[],
 ): WorkspaceChanges {
   const oldByIdentity = new Map(
     before.worktrees.map((worktree) => [worktree.identity, worktree.path]),
@@ -163,24 +192,28 @@ export function detectWorkspaceChanges(
   const newByIdentity = new Map(
     after.worktrees.map((worktree) => [worktree.identity, worktree.path]),
   );
+  const livePaths = new Set(newByIdentity.values());
+  const addPaths = new Set<string>();
+  const movePaths = new Set<string>();
+  for (const mutation of mutations) {
+    if (mutation.action === "add") addPaths.add(mutation.path);
+    if (mutation.action !== "move" || !mutation.from || !mutation.to) continue;
+    movePaths.add(mutation.from);
+    movePaths.add(mutation.to);
+    if (addPaths.has(mutation.from) && !livePaths.has(mutation.from)) addPaths.add(mutation.to);
+  }
   return {
-    added: actions.includes("add")
-      ? after.worktrees
-          .filter(
-            (worktree) => paths.includes(worktree.path) && !oldByIdentity.has(worktree.identity),
-          )
-          .map((worktree) => worktree.path)
-      : [],
-    moved: actions.includes("move")
-      ? before.worktrees.flatMap((worktree) => {
-          const target = newByIdentity.get(worktree.identity);
-          const isTargeted =
-            paths.includes(worktree.path) || (target !== undefined && paths.includes(target));
-          return target && target !== worktree.path && isTargeted
-            ? [{ from: worktree.path, to: target }]
-            : [];
-        })
-      : [],
+    added: after.worktrees
+      .filter(({ path, identity }) => addPaths.has(path) && !oldByIdentity.has(identity))
+      .map(({ path }) => path),
+    moved: before.worktrees.flatMap((worktree) => {
+      const target = newByIdentity.get(worktree.identity);
+      const isTargeted =
+        movePaths.has(worktree.path) || (target !== undefined && movePaths.has(target));
+      return target && target !== worktree.path && isTargeted
+        ? [{ from: worktree.path, to: target }]
+        : [];
+    }),
     removed: before.worktrees
       .filter((worktree) => !newByIdentity.has(worktree.identity))
       .map((worktree) => worktree.path),
@@ -223,6 +256,50 @@ export async function retainLiveWorkspaces(
     }
   }
   return [...new Set(retained)];
+}
+
+function isGitExecutable(executable: string, platform: NodeJS.Platform): boolean {
+  if (platform !== "win32") return posix.basename(executable) === "git";
+  const name = win32.basename(executable).toLowerCase();
+  return name === "git" || name === "git.exe";
+}
+
+function isCommandPath(path: unknown, shell: "bash" | "powershell"): path is string {
+  if (!isPathWord(path)) return false;
+  if (shell === "bash") return true;
+  return !/^(?:\/[a-z](?:\/|$)|[a-z]:(?![\\/]))/i.test(path);
+}
+
+function literalPowerShellGitCommands(command: string): string[][] {
+  if (command.includes("\0")) return [];
+  const statementStart = /(?:[ \t;\r\n]|#[^\r\n]*)*/y;
+  const gitInvocation = /(?:&[ \t]*(["']?)git(?:\.exe)?\1|git(?:\.exe)?)(?=[ \t;\r\n]|$)/iy;
+  const literalArgument =
+    /[ \t]+(?:'((?:[^'\r\n\u2018-\u201b]|'')*)'|"([^"$`\r\n\u201c-\u201f]*)"|([^\s'"`$;&|()[\]{},<>@#\u2018-\u201f]+))(?=[ \t;\r\n]|$)/y;
+  const statementEnd = /[ \t]*(?:#[^\r\n]*)?(?:[;\r\n]|$)/y;
+  const commands: string[][] = [];
+  let offset = 0;
+  while (offset < command.length) {
+    statementStart.lastIndex = offset;
+    statementStart.exec(command);
+    gitInvocation.lastIndex = statementStart.lastIndex;
+    if (!gitInvocation.exec(command)) break;
+
+    const words = ["git"];
+    literalArgument.lastIndex = gitInvocation.lastIndex;
+    statementEnd.lastIndex = gitInvocation.lastIndex;
+    for (let match = literalArgument.exec(command); match; match = literalArgument.exec(command)) {
+      const [, singleQuoted, doubleQuoted, bare] = match;
+      const word = singleQuoted?.replaceAll("''", "'") ?? doubleQuoted ?? bare!;
+      if (word === "" || word === "--%" || word.includes('"')) return commands;
+      words.push(word);
+      statementEnd.lastIndex = literalArgument.lastIndex;
+    }
+    if (!statementEnd.exec(command)) break;
+    commands.push(words);
+    offset = statementEnd.lastIndex;
+  }
+  return commands;
 }
 
 function expandBashHome(command: string, home: string): string {

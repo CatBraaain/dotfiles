@@ -11,11 +11,12 @@ import {
   findWorktreeScopes,
   parseUnavailableDirectory,
   parseWorktreeSnapshot,
+  resolveMutationPaths,
   retainLiveWorkspaces,
   WorktreeDirectoryUnavailable,
   type SnapshotQuery,
   type WorkspaceChanges,
-  type WorktreeAction,
+  type WorktreeMutation,
   type WorktreeScope,
   type WorktreeSnapshot,
 } from "./worktrees.ts";
@@ -24,9 +25,7 @@ const MESSAGE_TYPE = "session-worktrees";
 const NoticeSchema = Type.Object({ summary: Type.String() });
 interface Observation {
   snapshot: WorktreeSnapshot;
-  actions: WorktreeAction[];
-  paths: string[];
-  destinations: string[];
+  mutations: WorktreeMutation<string>[];
 }
 interface PendingCall {
   generation: number;
@@ -100,8 +99,7 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
           const delta = detectWorkspaceChanges(
             observation.snapshot,
             snapshot,
-            observation.actions,
-            observation.paths,
+            observation.mutations,
           );
           changes.added.push(...delta.added);
           changes.moved.push(...delta.moved);
@@ -124,12 +122,14 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", resetSession);
 
   pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName !== "bash" || typeof event.input.command !== "string") return;
+    const { toolName, input } = event;
+    if ((toolName !== "bash" && toolName !== "powershell") || typeof input.command !== "string")
+      return;
     const expected = generation;
     const sessionId = ctx.sessionManager.getSessionId();
     let scopes: WorktreeScope[];
     try {
-      scopes = findWorktreeScopes(event.input.command);
+      scopes = findWorktreeScopes(input.command, toolName);
     } catch {
       return;
     }
@@ -149,7 +149,7 @@ export default function sessionMetadataExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_result", async (event, ctx) => {
-    if (event.toolName === "bash") await finishCall(event.toolCallId, ctx);
+    await finishCall(event.toolCallId, ctx);
   });
 
   pi.on("tool_execution_end", async (event, ctx) => {
@@ -184,7 +184,7 @@ export function piMuxExecutable(
 
 async function observeScope(
   observations: Observation[],
-  { actions, destinationIndexes, ...request }: WorktreeScope,
+  { mutations, ...request }: WorktreeScope,
   query: SnapshotQuery,
 ): Promise<void> {
   let snapshot: WorktreeSnapshot;
@@ -192,32 +192,22 @@ async function observeScope(
     snapshot = await query(request);
   } catch (error) {
     if (!(error instanceof WorktreeDirectoryUnavailable)) throw error;
-    const creating = observations.find((observation) =>
-      observation.destinations.includes(error.directory),
+    const creating = observations.find(({ mutations: observed }) =>
+      observed.some((mutation) =>
+        mutation.action === "move"
+          ? mutation.to === error.directory
+          : mutation.action === "add" && mutation.path === error.directory,
+      ),
     );
     if (!creating) throw error;
-    mergeObservation(creating, actions, error.paths, destinationIndexes);
+    creating.mutations.push(...resolveMutationPaths(mutations, error.paths));
     return;
   }
 
+  const resolved = resolveMutationPaths(mutations, snapshot.paths);
   const existing = observations.find((observation) => observation.snapshot.cwd === snapshot.cwd);
-  if (existing) {
-    mergeObservation(existing, actions, snapshot.paths, destinationIndexes);
-  } else {
-    const destinations = destinationIndexes.map((index) => snapshot.paths[index]!);
-    observations.push({ snapshot, actions, paths: [...snapshot.paths], destinations });
-  }
-}
-
-function mergeObservation(
-  observation: Observation,
-  actions: WorktreeAction[],
-  paths: string[],
-  destinationIndexes: number[],
-): void {
-  observation.actions = [...new Set([...observation.actions, ...actions])];
-  observation.paths.push(...paths);
-  observation.destinations.push(...destinationIndexes.map((index) => paths[index]!));
+  if (existing) existing.mutations.push(...resolved);
+  else observations.push({ snapshot, mutations: resolved });
 }
 
 function serialQueue() {

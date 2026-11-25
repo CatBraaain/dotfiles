@@ -428,12 +428,14 @@ describe("session metadata extension", () => {
       {
         shellDirectories: [],
         gitDirectories: [],
-        actions: ["add"],
         paths: [expected[0], "~/feature"],
-        destinationIndexes: [0, 1],
+        mutations: [
+          { action: "add", path: 0 },
+          { action: "add", path: 1 },
+        ],
       },
     ]);
-    const [{ actions: _actions, destinationIndexes: _destinations, ...request }] = parsed.scopes;
+    const [{ mutations: _mutations, ...request }] = parsed.scopes;
     const snapshot = execFileSync(
       process.execPath,
       [fileURLToPath(piMuxCli), "worktree", "snapshot", JSON.stringify(request)],

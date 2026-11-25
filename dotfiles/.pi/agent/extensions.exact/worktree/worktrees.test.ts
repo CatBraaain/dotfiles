@@ -21,7 +21,7 @@ describe("worktree command scopes", () => {
       'echo "git worktree add /x"; ./script.sh; git worktree add /x',
     );
     assert.deepEqual(scopes, [
-      { ...rootScope, actions: ["add"], destinationIndexes: [0], paths: ["/x"] },
+      { ...rootScope, mutations: [{ action: "add", path: 0 }], paths: ["/x"] },
     ]);
   });
 
@@ -33,22 +33,19 @@ describe("worktree command scopes", () => {
       {
         shellDirectories: ["main repo"],
         gitDirectories: ["sub", ".."],
-        actions: ["add"],
-        destinationIndexes: [0],
+        mutations: [{ action: "add", path: 0 }],
         paths: ["/a"],
       },
       {
         shellDirectories: ["main repo"],
         gitDirectories: ["."],
-        actions: ["move"],
-        destinationIndexes: [1],
+        mutations: [{ action: "move", from: 0, to: 1 }],
         paths: ["/a", "/b"],
       },
       {
         shellDirectories: ["main repo"],
         gitDirectories: [],
-        actions: ["remove"],
-        destinationIndexes: [],
+        mutations: [{ action: "remove", path: 0 }],
         paths: ["/b"],
       },
     ]);
@@ -62,8 +59,7 @@ describe("worktree command scopes", () => {
       {
         shellDirectories: ["/c/work space"],
         gitDirectories: ["C:/main repo"],
-        actions: ["move"],
-        destinationIndexes: [1],
+        mutations: [{ action: "move", from: 0, to: 1 }],
         paths: ["sub dir", "C:/move here"],
       },
     ]);
@@ -77,8 +73,7 @@ describe("worktree command scopes", () => {
       {
         shellDirectories: ["@repo"],
         gitDirectories: ["~/nested"],
-        actions: ["add"],
-        destinationIndexes: [0],
+        mutations: [{ action: "add", path: 0 }],
         paths: ["@feature"],
       },
     ]);
@@ -91,8 +86,11 @@ describe("worktree command scopes", () => {
     assert.deepEqual(scopes, [
       {
         ...rootScope,
-        actions: ["add"],
-        destinationIndexes: [0, 1, 2],
+        mutations: [
+          { action: "add", path: 0 },
+          { action: "add", path: 1 },
+          { action: "add", path: 2 },
+        ],
         paths: [home + "/feature", "~/quoted", "~/escaped"],
       },
     ]);
@@ -111,9 +109,12 @@ describe("worktree command scopes", () => {
         {
           ...rootScope,
           shellDirectories: ["C:/Bash Home"],
-          actions: ["add"],
+          mutations: [
+            { action: "add", path: 0 },
+            { action: "add", path: 1 },
+            { action: "add", path: 2 },
+          ],
           paths: ["C:/Bash Home/feature", "~/quoted", "~/escaped"],
-          destinationIndexes: [0, 1, 2],
         },
       ]);
     } finally {
@@ -129,7 +130,7 @@ describe("worktree command scopes", () => {
       "# don't expand '~/comment'\ngit worktree add --detach ~/feature HEAD",
     );
     assert.deepEqual(scopes, [
-      { ...rootScope, actions: ["add"], destinationIndexes: [0], paths: [home + "/feature"] },
+      { ...rootScope, mutations: [{ action: "add", path: 0 }], paths: [home + "/feature"] },
     ]);
   });
 
@@ -138,7 +139,7 @@ describe("worktree command scopes", () => {
       "git worktree add --lock --reason reason -b branch ../target HEAD",
     );
     assert.deepEqual(scopes, [
-      { ...rootScope, actions: ["add"], destinationIndexes: [0], paths: ["../target"] },
+      { ...rootScope, mutations: [{ action: "add", path: 0 }], paths: ["../target"] },
     ]);
   });
 
@@ -149,18 +150,16 @@ describe("worktree command scopes", () => {
       {
         ...rootScope,
         gitDirectories: ["/one"],
-        actions: ["add"],
-        destinationIndexes: [0],
+        mutations: [{ action: "add", path: 0 }],
         paths: ["/a"],
       },
       {
         ...rootScope,
         gitDirectories: ["/two"],
-        actions: ["remove"],
-        destinationIndexes: [],
+        mutations: [{ action: "remove", path: 0 }],
         paths: ["/b"],
       },
-      { ...rootScope, actions: ["move"], destinationIndexes: [1], paths: ["/a", "/b"] },
+      { ...rootScope, mutations: [{ action: "move", from: 0, to: 1 }], paths: ["/a", "/b"] },
     ]);
   });
 
@@ -183,8 +182,89 @@ describe("worktree command scopes", () => {
   it("ignores empty worktree mutation paths instead of throwing", () => {
     assert.deepEqual(findWorktreeScopes('git worktree add ""'), []);
     assert.deepEqual(findWorktreeScopes('git worktree move "" /b'), [
-      { ...rootScope, actions: ["move"], destinationIndexes: [0], paths: ["/b"] },
+      { ...rootScope, mutations: [{ action: "move", from: undefined, to: 0 }], paths: ["/b"] },
     ]);
+  });
+});
+
+describe("Windows worktree command scopes", () => {
+  it("recognizes git.exe in Git Bash without changing POSIX command names", () => {
+    const command = 'command git.exe -C "/c/main repo" worktree add "C:/new tree"';
+    assert.deepEqual(findWorktreeScopes(command, "bash", "win32"), [
+      {
+        ...rootScope,
+        gitDirectories: ["/c/main repo"],
+        mutations: [{ action: "add", path: 0 }],
+        paths: ["C:/new tree"],
+      },
+    ]);
+    assert.deepEqual(findWorktreeScopes(command, "bash", "linux"), []);
+  });
+
+  it("preserves Windows paths, quoting, and operations in direct PowerShell calls", () => {
+    const command = String.raw`& 'git.exe' -C 'C:\main repo' worktree add -b feature 'C:\tree''s; new'
+git -C 'C:\main repo' worktree move 'C:\tree''s; new' "C:\新 worktree"
+git.exe -C 'C:\main repo' worktree remove "C:\新 worktree"; exit 1`;
+    assert.deepEqual(findWorktreeScopes(command, "powershell", "win32"), [
+      {
+        ...rootScope,
+        gitDirectories: [String.raw`C:\main repo`],
+        mutations: [
+          { action: "add", path: 0 },
+          { action: "move", from: 1, to: 2 },
+          { action: "remove", path: 3 },
+        ],
+        paths: [
+          String.raw`C:\tree's; new`,
+          String.raw`C:\tree's; new`,
+          String.raw`C:\新 worktree`,
+          String.raw`C:\新 worktree`,
+        ],
+      },
+    ]);
+  });
+
+  it("distinguishes PowerShell comments from quoted path contents", () => {
+    const command =
+      "# git worktree add ignored\r\ngit.exe worktree add 'topic # one' HEAD # without tracking git worktree add ignored\r\ngit worktree remove 'topic # two'";
+    assert.deepEqual(findWorktreeScopes(command, "powershell", "win32"), [
+      {
+        ...rootScope,
+        paths: ["topic # one", "topic # two"],
+        mutations: [
+          { action: "add", path: 0 },
+          { action: "remove", path: 1 },
+        ],
+      },
+    ]);
+  });
+
+  it("does not assume locations or operands that need PowerShell evaluation", () => {
+    for (const command of [
+      "Set-Location other; git worktree add target",
+      "git worktree add $target",
+      'git worktree add "$target/child"',
+      "git worktree add `$target",
+      "& $git worktree add target",
+      "git --% worktree add %TARGET%",
+      "git worktree add -b '' topic 'new tree' HEAD",
+      `git worktree add -b 'to"pic' 'new tree' HEAD`,
+      "git --no-pager worktree add target",
+      "git --git-dir elsewhere worktree add target",
+      "git --work-tree=elsewhere worktree add target",
+      "git worktree add 'C:relative'",
+      "git worktree add '/c/relative'",
+      "git worktree move 'C:relative' 'C:/absolute'",
+      "'git.exe' worktree add target",
+      "Write-Output 'git.exe worktree add target'",
+      "& { git worktree add target }",
+    ]) {
+      assert.deepEqual(findWorktreeScopes(command, "powershell", "win32"), [], command);
+    }
+  });
+
+  it("does not treat PowerShell tool calls on POSIX as Windows operations", () => {
+    assert.deepEqual(findWorktreeScopes("git worktree add target", "powershell", "linux"), []);
   });
 });
 
@@ -203,7 +283,7 @@ describe("Git snapshot changes", () => {
       ...before,
       worktrees: [...before.worktrees, { path: "/b", identity: "/repo/.git/worktrees/b" }],
     };
-    assert.deepEqual(detectWorkspaceChanges(before, after, ["add"], ["/b"]), {
+    assert.deepEqual(detectWorkspaceChanges(before, after, [{ action: "add", path: "/b" }]), {
       added: ["/b"],
       moved: [],
       removed: [],
@@ -215,11 +295,14 @@ describe("Git snapshot changes", () => {
       ...before,
       worktrees: [before.worktrees[0]!, { path: "/b", identity: "/repo/.git/worktrees/a" }],
     };
-    assert.deepEqual(detectWorkspaceChanges(before, after, ["move"], ["/a", "/b"]), {
-      added: [],
-      moved: [{ from: "/a", to: "/b" }],
-      removed: [],
-    });
+    assert.deepEqual(
+      detectWorkspaceChanges(before, after, [{ action: "move", from: "/a", to: "/b" }]),
+      {
+        added: [],
+        moved: [{ from: "/a", to: "/b" }],
+        removed: [],
+      },
+    );
   });
 
   it("ignores a concurrent addition that was not a command target", () => {
@@ -230,16 +313,42 @@ describe("Git snapshot changes", () => {
         { path: "/foreign", identity: "/repo/.git/worktrees/foreign" },
       ],
     };
-    assert.deepEqual(detectWorkspaceChanges(before, after, ["add"], ["/requested"]), {
-      added: [],
-      moved: [],
-      removed: [],
-    });
+    assert.deepEqual(
+      detectWorkspaceChanges(before, after, [{ action: "add", path: "/requested" }]),
+      {
+        added: [],
+        moved: [],
+        removed: [],
+      },
+    );
+  });
+
+  it("does not claim an unrelated worktree at the destination of a failed move", () => {
+    const after = {
+      ...before,
+      worktrees: [
+        ...before.worktrees,
+        { path: "/own", identity: "/repo/.git/worktrees/own" },
+        { path: "/foreign", identity: "/repo/.git/worktrees/foreign" },
+      ],
+    };
+    const add = { action: "add", path: "/own" } as const;
+    for (const from of ["/absent", "/own"]) {
+      const changes = detectWorkspaceChanges(before, after, [
+        add,
+        { action: "move", from, to: "/foreign" },
+      ]);
+      assert.deepEqual(changes, { added: ["/own"], moved: [], removed: [] }, from);
+    }
   });
 
   it("does not invent a change for a failed or cancelled mutation", () => {
     assert.deepEqual(
-      detectWorkspaceChanges(before, before, ["add", "move", "remove"], ["/a", "/b"]),
+      detectWorkspaceChanges(before, before, [
+        { action: "add", path: "/b" },
+        { action: "move", from: "/a", to: "/b" },
+        { action: "remove", path: "/a" },
+      ]),
       { added: [], moved: [], removed: [] },
     );
   });
@@ -252,7 +361,7 @@ describe("Git snapshot changes", () => {
 
   it("removes a disappeared worktree association", () => {
     const after = { ...before, worktrees: [before.worktrees[0]!] };
-    const changes = detectWorkspaceChanges(before, after, ["remove"], ["/a"]);
+    const changes = detectWorkspaceChanges(before, after, [{ action: "remove", path: "/a" }]);
     assert.deepEqual(applyWorkspaceChanges(["/a", "/other"], changes), ["/other"]);
   });
 });
