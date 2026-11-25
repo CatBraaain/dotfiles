@@ -204,12 +204,15 @@ server は SIGINT / SIGTERM を受け取ったとき、browser server を close�
 | 結果の `url` が絶対URL・空文字列・欠損、または engine が google以外 | 検索結果を出力 | URL の補完を行わず、前後の空白を除いたURL を出力する。空文字列・欠損の URL は出力を省略する |
 | `--lang <code>` がある | 検索実行 | `<code>` を小文字へ正規化する。google は `hl` へ常に設定し、`gl` は対応表にあるlang のみ設定する。bing の `mkt`・duckduckgo の `kl` も対応表にあるlang のみ設定する。対応表にないlang では `gl`・`mkt`・`kl` を付与せず、google の `hl` のみ設定される |
 | engine が空結果・captcha・challenge で失敗した | 検索実行 | 次の engine へ進む |
+| OpenSERP の応答を JSON として読めない、`results` が配列でない、結果要素がオブジェクトでない、または結果フィールドの型が不正 | 検索実行 | その engine を失敗として次の engine へ進む |
 | engine のrenderがabort・timeout・切断した | 検索実行 | 同一engineを新しいsessionで再試行する。server復旧再試行を既に消費している場合は再試行せず、次のengineへ進む |
 | すべての engine が失敗した | 検索実行 | 共通の全backend失敗の振る舞いに従う |
 
 markdown出力の構造: 1行目に `**Query:** "<query>" - **Engines:** <engine> - **Took:** <秒>s` を置き、続いて結果ごとに `### <番号>. <title>`、`**<display_url>** - <type>`、スニペット、`-> <url>` の順のブロックを置く。欠損フィールドの行は省略し、タイトル欠損は URL、それも無ければ `(no title)` とする。`type` 欠損の結果は `organic` と表示し、`display_url` 欠損の結果は `**<display_url>** - <type>` 行を出力しない。
 
-`--json` のフィールド: `query`、`engine`、`tookMs`、`results`（各要素は `rank`、`title`、`url`、`display_url`、`type`、`snippet`。欠損フィールドは省略し、markdown出力の `type` 既定値 `organic` は補わない）。
+OpenSERP の各結果フィールドは省略できる。フィールドが存在する場合、`rank` は数値、`title`・`url`・`display_url`・`type`・`snippet` は文字列とする。
+
+`--json` のフィールド: `query`、`engine`、`tookMs`、`results`（各要素は上記の結果フィールド。欠損フィールドは省略し、markdown出力の `type` 既定値 `organic` は補わない）。
 
 `**Took:** <秒>s`（小数第1位まで）と `tookMs`（ミリ秒）は、成功したbackend の最終試行1回の所要時間とする。失敗した先行backend と同一backend への再試行に要した時間は含まない。
 

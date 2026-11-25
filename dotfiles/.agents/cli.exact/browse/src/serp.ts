@@ -108,13 +108,34 @@ export interface OpenserpSearchResult {
 }
 
 export function parseOpenserpResponse(body: string): OpenserpSearchResult[] {
-  let payload: { results?: OpenserpSearchResult[] };
+  let payload: unknown;
   try {
-    payload = JSON.parse(body) as { results?: OpenserpSearchResult[] };
+    payload = JSON.parse(body);
   } catch {
     throw new Error("parse: response is not valid JSON");
   }
-  const results = payload.results ?? [];
+  if (!isJsonObject(payload) || !Array.isArray(payload.results)) {
+    throw new Error("parse: expected a results array");
+  }
+  const { results } = payload;
   if (results.length === 0) throw new Error("parse: empty response");
+  if (!results.every(isOpenserpSearchResult)) throw new Error("parse: invalid search result");
   return results;
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isOpenserpSearchResult(value: unknown): value is OpenserpSearchResult {
+  if (!isJsonObject(value)) return false;
+  const { rank, type, title, url, display_url, snippet } = value;
+  return (
+    (rank === undefined || typeof rank === "number") &&
+    (type === undefined || typeof type === "string") &&
+    (title === undefined || typeof title === "string") &&
+    (url === undefined || typeof url === "string") &&
+    (display_url === undefined || typeof display_url === "string") &&
+    (snippet === undefined || typeof snippet === "string")
+  );
 }

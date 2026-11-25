@@ -114,6 +114,39 @@ describe("search pipeline contract", () => {
     );
   });
 
+  const invalidOpenserpResponses = [
+    ["non-array results", { results: { title: "Google result" } }],
+    ["null result", { results: [null] }],
+    ["array result", { results: [[]] }],
+    ["primitive result", { results: ["Google result"] }],
+    ["string rank", { results: [{ rank: "1" }] }],
+    ["numeric title", { results: [{ title: "Valid result" }, { title: 42 }] }],
+    ["numeric URL", { results: [{ url: 42 }] }],
+    ["numeric display URL", { results: [{ display_url: 42 }] }],
+    ["numeric type", { results: [{ type: 42 }] }],
+    ["null snippet", { results: [{ snippet: null }] }],
+  ] as const;
+
+  for (const [description, invalidResponse] of invalidOpenserpResponses) {
+    it(`falls back after an OpenSERP response with ${description}`, async () => {
+      const results = [{ title: "Duck result" }];
+      const parseRequest = spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(Response.json(invalidResponse))
+        .mockResolvedValueOnce(Response.json({ results }));
+
+      const outcome = await searchOne("query");
+
+      assert.equal(outcome.engine, "duckduckgo");
+      assert.deepEqual(outcome.results, results);
+      assert.deepEqual(
+        parseRequest.mock.calls.map(([url]) => url),
+        ["google", "duckduckgo"].map(
+          (engine) => `${openserpBaseUrl()}/${engine}/parse?format=json`,
+        ),
+      );
+    });
+  }
+
   it("retries a challenged engine before falling back to the next engine", async () => {
     const rendered = spyOn(camoufox, "camoufoxRender")
       .mockRejectedValueOnce(new Error("render: challenge detected"))
