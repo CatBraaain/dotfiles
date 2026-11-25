@@ -905,6 +905,12 @@ describe("title generation instructions", () => {
       assert.match(prompt, /セッション一覧から会話を識別できる短いタイトル/);
       assert.match(prompt, /対象と主題だけを残し/);
       assert.match(prompt, /経緯・詳細なエラー・完了報告は含めない/);
+      assert.match(
+        prompt,
+        /チケットの内容が会話本文にある場合は、対象と具体的な課題や変更内容をタイトルに含め/,
+      );
+      assert.match(prompt, /チケットIDや「対応方針確認」だけで済ませない/);
+      assert.match(prompt, /会話本文にない内容は推測しない/);
       assert.match(prompt, /会話の主な言語に合わせる/);
       assert.match(prompt, /半角小文字 a-z、数字 0-9、半角スペースは0\.5文字分/);
       assert.match(prompt, /それ以外（大文字 A-Z を含む）は1文字分/);
