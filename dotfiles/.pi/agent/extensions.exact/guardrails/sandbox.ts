@@ -32,12 +32,15 @@ export type SandboxMode = "fs" | "bash";
  * re-expansions reuse the first result and never pick up paths created during
  * the session.
  */
-export function warmGlobCache(config: GuardrailConfig, cwd: string): GlobCache {
+export function warmGlobCache(
+  config: GuardrailConfig,
+  cwd: string,
+  mainWorktree: string,
+): GlobCache {
   const globCache: GlobCache = new Map();
-  const gitMainWorktreePath = resolveGitMainWorktreePath(cwd) ?? resolve(cwd);
-  expandPathSection(config.read, cwd, true, gitMainWorktreePath, globCache);
-  expandPathSection(config.write, cwd, false, gitMainWorktreePath, globCache);
-  expandPathSnapshot(config.credentials, cwd, gitMainWorktreePath, false, globCache);
+  expandPathSection(config.read, cwd, true, mainWorktree, globCache);
+  expandPathSection(config.write, cwd, false, mainWorktree, globCache);
+  expandPathSnapshot(config.credentials, cwd, mainWorktree, false, globCache);
   return globCache;
 }
 
@@ -182,12 +185,13 @@ export function prepareWriteDirectories(
   config: GuardrailConfig,
   cwd: string,
   globCache: GlobCache,
+  mainWorktree: string,
 ): void {
   const uncertainCredentials =
     process.platform === "win32"
-      ? credentialSnapshot(config, cwd, globCache).uncertainSubtrees
+      ? credentialSnapshot(config, cwd, globCache, mainWorktree).uncertainSubtrees
       : undefined;
-  const writeSection = writePaths(config, cwd, globCache);
+  const writeSection = writePaths(config, cwd, globCache, mainWorktree);
   for (const path of writePathsByFinalAction(writeSection).allow) {
     if (
       uncertainCredentials &&

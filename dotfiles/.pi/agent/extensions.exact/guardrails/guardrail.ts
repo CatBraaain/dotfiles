@@ -342,6 +342,7 @@ export class Guardrail {
   private readonly commandEntries: CompiledCommandRuleEntry[];
   /** Configured command patterns that failed regex compilation, deduped in config order (SPEC §6). */
   readonly invalidCommandPatterns: string[];
+  readonly startupWritePaths: { allow: string[]; ask: string[]; deny: string[] };
   /** Glob expansions are computed once per resolved pattern (§3 startup semantics). */
   private readonly globCache: GlobCache;
 
@@ -358,15 +359,16 @@ export class Guardrail {
     const compiledCommands = compileCommandRuleEntries(this.config.commands);
     this.commandEntries = compiledCommands.entries;
     this.invalidCommandPatterns = [...new Set(compiledCommands.invalidPatterns)];
-    this.globCache = warmGlobCache(this.config, this.cwd);
-    prepareWriteDirectories(this.config, this.cwd, this.globCache);
+    const mainWorktree = resolvePolicyWorktreePath(this.cwd);
+    this.globCache = warmGlobCache(this.config, this.cwd, mainWorktree);
+    prepareWriteDirectories(this.config, this.cwd, this.globCache, mainWorktree);
+    this.startupWritePaths = this.summarizeStartupWritePaths(mainWorktree);
   }
 
-  /** Effective write paths, excluding paths covered by the credentials deny list. */
-  getWritePathsByFinalAction(): { allow: string[]; ask: string[]; deny: string[] } {
-    const writeSection = writePaths(this.config, this.cwd, this.globCache);
+  private summarizeStartupWritePaths(mainWorktree: string) {
+    const writeSection = writePaths(this.config, this.cwd, this.globCache, mainWorktree);
     const { allow, ask, deny } = writePathsByFinalAction(writeSection);
-    const credentials = credentialSnapshot(this.config, this.cwd, this.globCache);
+    const credentials = credentialSnapshot(this.config, this.cwd, this.globCache, mainWorktree);
     const excludeCredentials = (paths: string[]) =>
       paths.filter((path) => !new AuthorizationPath(path).matchesRestriction(credentials));
     return {

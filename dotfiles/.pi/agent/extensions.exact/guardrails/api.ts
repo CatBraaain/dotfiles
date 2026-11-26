@@ -42,7 +42,7 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
       " 1回限りの承認後は、同じ `bash` 呼び出しを再送すると確認なしで実行される。ターン承認は次のユーザーメッセージで失効する。",
     promptSnippet: "Ask the user for write access to a directory subtree or command approval",
     promptGuidelines: [
-      writePermissionGuideline(guardrail.getWritePathsByFinalAction()),
+      writePermissionGuideline(guardrail.startupWritePaths),
       'When bash rejects a command with "Command requires a reason", call ask_permission with that exact command and a reason instead of rewriting the command.',
     ],
     // No Type.Union/anyOf here: some models (e.g. GLM-5.3-Flash) fail to generate

@@ -874,6 +874,31 @@ describe("§3.a パス文字列の解決", () => {
   );
 
   it(
+    "resolves the main worktree once while initializing Guardrails",
+    withLinkedWorktree((mainWorktreePath, linkedWorktreePath, workspacePath) => {
+      const configPath = join(workspacePath, "config.yaml");
+      writeFileSync(configPath, 'write:\n  - {allow: "${GIT_MAIN_WORKTREE_PATH}/cache"}\n');
+      const cwd = spyOn(process, "cwd").mockReturnValue(linkedWorktreePath);
+      const gitCalls = spyOn(childProcess, "execFileSync");
+      try {
+        const tools = captureRegisteredTools(configPath);
+        const cachePath = join(mainWorktreePath, "cache");
+        assert.equal(existsSync(cachePath), true);
+        assert.ok(
+          tools.get("ask_permission").promptGuidelines[0].includes(JSON.stringify(cachePath)),
+        );
+        assert.deepEqual(
+          gitCalls.mock.calls.map(([command, args]) => [command, args]),
+          [["git", ["worktree", "list", "--porcelain"]]],
+        );
+      } finally {
+        gitCalls.mockRestore();
+        cwd.mockRestore();
+      }
+    }),
+  );
+
+  it(
     "resolves the Git worktree once per path decision and once per sandbox build outside Git",
     withTempDirectory(async (directory) => {
       const configPath = join(directory, "config.yaml");
@@ -1364,7 +1389,7 @@ describe("write.allow environment variables", () => {
         );
 
         const guardrail = new Guardrail(directory, configPath);
-        assert.deepEqual(guardrail.getWritePathsByFinalAction().allow, [join(directory, "fixed")]);
+        assert.deepEqual(guardrail.startupWritePaths.allow, [join(directory, "fixed")]);
         assert.deepEqual(readdirSync(directory).sort(), ["config.yaml", "fixed"]);
       })(),
   );
@@ -1378,7 +1403,7 @@ describe("write.allow environment variables", () => {
       const allowedDirectory = join(directory, "cache", "app");
       const guardrail = new Guardrail(directory, configPath);
 
-      assert.deepEqual(guardrail.getWritePathsByFinalAction().allow, [allowedDirectory]);
+      assert.deepEqual(guardrail.startupWritePaths.allow, [allowedDirectory]);
       assert.equal(existsSync(allowedDirectory), true);
       await guardrail.authorizePath("write", join(allowedDirectory, "file"), { cwd: directory });
       assert.equal(guardrail.buildArgs("fs").includes(allowedDirectory), true);
@@ -1396,7 +1421,7 @@ describe("write.allow environment variables", () => {
       const guardrail = new Guardrail(directory, configPath);
       process.env[variableName] = laterDirectory;
 
-      assert.deepEqual(guardrail.getWritePathsByFinalAction().allow, [originalDirectory]);
+      assert.deepEqual(guardrail.startupWritePaths.allow, [originalDirectory]);
       await guardrail.authorizePath("write", join(originalDirectory, "file"), { cwd: directory });
       assert.equal(guardrail.buildArgs("fs").includes(originalDirectory), true);
     }),
@@ -1413,7 +1438,7 @@ describe("write.allow environment variables", () => {
       );
       const guardrail = new Guardrail(directory, configPath);
 
-      assert.deepEqual(guardrail.getWritePathsByFinalAction().allow, [
+      assert.deepEqual(guardrail.startupWritePaths.allow, [
         join(directory, "chosen,${GUARDRAILS_TEST_WRITE_DIRECTORY}"),
         join(directory, "fixed"),
       ]);
@@ -1698,7 +1723,7 @@ describe("REPOSITORY_NAME work folder", () => {
           ),
           [name],
         );
-        assert.deepEqual(guardrail.getWritePathsByFinalAction().allow, [workPath]);
+        assert.deepEqual(guardrail.startupWritePaths.allow, [workPath]);
         await guardrail.authorizePath("write", join(workPath, "note.md"), { cwd });
         for (const otherPath of otherPaths) {
           await assert.rejects(
