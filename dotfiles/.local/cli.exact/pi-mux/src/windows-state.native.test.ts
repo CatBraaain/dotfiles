@@ -252,8 +252,9 @@ test.skipIf(!tmux)(
         await set(peerPane, "@pi-tmux-session", pendingReadiness);
         assert.equal((await publishReadiness({ token: randomUUID() })).exitCode, 1);
         assert.equal(await get(peerPane, "#{@pi-tmux-session}"), pendingReadiness);
-        assert.deepEqual(await publishReadiness(), success);
-        assert.deepEqual(await publishReadiness(), success);
+        const readinessAck = { ...success, stdout: "PI_MUX_STARTUP_INPUT_DRAINED\n" };
+        assert.deepEqual(await publishReadiness(), readinessAck);
+        assert.deepEqual(await publishReadiness(), readinessAck);
         assert.equal(await get(peerPane, "#{@pi-tmux-session}"), drainedReadiness);
         assert.deepEqual(JSON.parse(await original()), waiting);
         assert.deepEqual(JSON.parse(await get(peerPane, "#{@pi_session_state_pending}")), pending);
