@@ -70,11 +70,35 @@ function Optimize-WslStorage {
     }
 
     $target = "$($distribution.DistributionName): $($vhd.FullName)"
-    $action = 'Stop all WSL distributions and compact this VHDX'
+    $action = 'Compact this VHDX'
     if ($WhatIfPreference) {
         [void]$PSCmdlet.ShouldProcess($target, $action)
         return
     }
+
+    $system = [Environment]::SystemDirectory
+    $wsl = Get-Command -Name (Join-Path $system 'wsl.exe') -CommandType Application -ErrorAction Stop
+    $requireStopped = {
+        $running = & $wsl --list --running --quiet
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not check whether WSL is running (exit code $LASTEXITCODE). The VHDX was not compacted."
+        }
+        if (-not [string]::IsNullOrWhiteSpace(($running -join '').Replace("`0", ''))) {
+            throw "WSL is running. Run 'wsl --shutdown' before running wslfit."
+        }
+        try {
+            [IO.File]::Open($vhd.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None).Dispose()
+        }
+        catch [IO.IOException] {
+            $sharingViolation = 0x80070020
+            $lockViolation = 0x80070021
+            if ($_.Exception.GetBaseException().HResult -in $sharingViolation, $lockViolation) {
+                throw "The WSL VHDX is still in use. Run 'wsl --shutdown' before running wslfit."
+            }
+            throw
+        }
+    }
+    & $requireStopped
 
     $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -85,8 +109,6 @@ function Optimize-WslStorage {
         return
     }
 
-    $system = [Environment]::SystemDirectory
-    $wsl = Get-Command -Name (Join-Path $system 'wsl.exe') -CommandType Application -ErrorAction Stop
     $hyperVPath = Join-Path $system 'WindowsPowerShell\v1.0\Modules\Hyper-V'
     $hyperV = Import-Module -Name $hyperVPath -PassThru -ErrorAction Stop
     $optimize = $hyperV.ExportedCommands['Optimize-VHD']
@@ -94,12 +116,8 @@ function Optimize-WslStorage {
         throw 'The Windows Hyper-V module does not export Optimize-VHD.'
     }
 
-    & $wsl --shutdown
-    if ($LASTEXITCODE -ne 0) {
-        throw "WSL shutdown failed (exit code $LASTEXITCODE). The VHDX was not compacted."
-    }
-
     $before = (Get-Item -LiteralPath $vhd.FullName -ErrorAction Stop).Length
+    & $requireStopped
     & $optimize -Path $vhd.FullName -Confirm:$false -ErrorAction Stop
     $after = (Get-Item -LiteralPath $vhd.FullName -ErrorAction Stop).Length
     [pscustomobject]@{
