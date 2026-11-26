@@ -15,8 +15,15 @@ import {
   type TmuxConfig,
   tmuxConfiguration,
 } from "./configuration";
+import { InitialRequestFiles } from "./initial-request-files";
 import { windowsClaimLock } from "./locks";
-import { launchRecordToken, matchesLaunch, PANE_FORMAT, parseLivePaneRows } from "./pane-inventory";
+import {
+  launchRecordToken,
+  matchesLaunch,
+  PANE_FORMAT,
+  parseLivePaneRows,
+  sessionName,
+} from "./pane-inventory";
 import { platform } from "./platform";
 import {
   errorMessage,
@@ -46,6 +53,16 @@ export async function claimWindowsLaunch(
   command: string[],
   cwd: string,
 ): Promise<number> {
+  return await claimWindowsPaneLaunch(token, { command, cwd });
+}
+
+export async function claimWindowsInitialRequest(token: string): Promise<number> {
+  return await claimWindowsPaneLaunch(token);
+}
+
+type WindowsPiCommand = { command: string[]; cwd: string };
+
+async function claimWindowsPaneLaunch(token: string, inline?: WindowsPiCommand): Promise<number> {
   const config = tmuxConfiguration();
   const management = windowsManagement(config);
   const route = process.env.PSMUX_TARGET_SESSION;
@@ -75,24 +92,47 @@ export async function claimWindowsLaunch(
     ...config,
     env: { ...config.env, TMUX: process.env.TMUX!, PSMUX_TARGET_SESSION: route },
   };
-  const identity = await tmux(routed, [
-    "display-message",
-    "-p",
-    "-t",
-    pane!,
-    `#{session_name}\t#{pane_id}\t#{pane_pid}\t#{${WINDOWS_RIGHT_ENV}}`,
-  ]);
-  const [sessionName, paneId, panePid, paneToken] = identity.stdout.trimEnd().split("\t");
+  const launchToken = process.env.PI_TMUX_LAUNCH_TOKEN;
+  const id = process.env.PI_TMUX_SESSION_ID;
+  const isInitialRequest = inline === undefined;
   if (
-    sessionName !== name ||
-    paneId !== pane ||
-    paneToken !== token ||
-    !/^[1-9]\d*$/.test(panePid ?? "")
+    isInitialRequest &&
+    (!id ||
+      !UUID.test(id) ||
+      !launchToken ||
+      !UUID.test(launchToken) ||
+      process.env.PI_TMUX_STARTUP_MODE !== "create" ||
+      name !== `${sessionName(id)}-${launchToken.slice(0, 12)}`)
   )
-    throw new Error("Windows pi launch pane identity changed");
+    throw new Error("Cannot identify the Windows initial-request session");
+
+  async function readPanePid() {
+    const identity = await tmux(routed, [
+      "display-message",
+      "-p",
+      "-t",
+      pane!,
+      `#{session_name}\t#{pane_id}\t#{pane_pid}\t#{${WINDOWS_RIGHT_ENV}}`,
+    ]);
+    const [actualName, paneId, panePid, paneToken] = identity.stdout.trimEnd().split("\t");
+    if (
+      actualName !== name ||
+      paneId !== pane ||
+      paneToken !== token ||
+      !/^[1-9]\d*$/.test(panePid ?? "")
+    )
+      throw new Error("Windows pi launch pane identity changed");
+    return Number(panePid);
+  }
+
+  const panePid = await readPanePid();
+  let files: InitialRequestFiles | undefined;
   const prepare = async () => {
-    const launchToken = process.env.PI_TMUX_LAUNCH_TOKEN;
-    const id = process.env.PI_TMUX_SESSION_ID;
+    if (isInitialRequest) {
+      files = InitialRequestFiles.open(config);
+      if ((await readPanePid()) !== panePid)
+        throw new Error("Windows pi launch pane identity changed");
+    }
     if (id && launchToken)
       await tmux(routed, [
         "set-option",
@@ -100,7 +140,7 @@ export async function claimWindowsLaunch(
         "-t",
         pane!,
         "@pi-mux-launch",
-        JSON.stringify({ id, pid: Number(panePid), token: launchToken }),
+        JSON.stringify({ id, pid: panePid, token: launchToken }),
       ]);
     await tmux(routed, ["set-option", "-p", "-t", pane!, WINDOWS_RIGHT_OPTION, token]);
   };
@@ -108,7 +148,24 @@ export async function claimWindowsLaunch(
   const started = await rights.claimAndStart(
     token,
     randomUUID(),
-    () => {
+    (basis) => {
+      let launch: WindowsPiCommand;
+      try {
+        launch =
+          inline ??
+          files!.take(token, {
+            socket: config.socket,
+            session: name,
+            generation: basis.instance,
+            id: id!,
+            launchToken: launchToken!,
+          });
+      } catch {
+        throw new SpawnDidNotStartError(
+          "Cannot start Pi: the initial-request arguments were not claimed",
+        );
+      }
+      const { command, cwd } = launch;
       const env = { ...process.env };
       configureWindowsPiEnvironment(env, `${config.socket},${port},${index}`);
       try {
@@ -120,12 +177,18 @@ export async function claimWindowsLaunch(
           stderr: "inherit",
         });
       } catch (error) {
-        if (["ENOENT", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? ""))
+        if (["ENOENT", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+          if (isInitialRequest)
+            throw new SpawnDidNotStartError("Cannot start Pi with the initial-request arguments");
           throw new SpawnDidNotStartError(errorMessage(error), { cause: error });
+        }
+        if (isInitialRequest)
+          throw new Error("Cannot confirm whether Pi started with the initial-request arguments");
         throw error;
       }
     },
     prepare,
+    isInitialRequest ? name : undefined,
   );
   return started ? await started.started.exited : 1;
 }
@@ -147,16 +210,31 @@ type WindowsLaunch = {
   environment: Record<string, string>;
   command: string[];
   requireRestored?: boolean;
+  initialRequest?: { id: string; launchToken: string };
 };
 
 export async function startWindowsLaunch(
   config: TmuxConfig,
   action: WindowsLaunch,
 ): Promise<string> {
-  const { basis, keys, cwd, name, environment, command, ownerId, requireRestored = true } = action;
+  const {
+    basis,
+    keys,
+    cwd,
+    name,
+    environment,
+    command,
+    ownerId,
+    requireRestored = true,
+    initialRequest,
+  } = action;
+  const files = initialRequest ? InitialRequestFiles.open(config, true) : undefined;
   const management = windowsManagement(config);
   const rights = management.createLaunchRights(windowsClaimLock(management));
-  const right = await rights.reserveAfterLifecycleAudit(keys, basis, { requireRestored });
+  const right = await rights.reserveAfterLifecycleAudit(keys, basis, {
+    requireRestored,
+    initialRequestSession: initialRequest ? name : undefined,
+  });
   if (right.state !== "reserved") throw new Error("A competing Windows pi launch is still running");
   const { token } = right;
   try {
@@ -170,14 +248,23 @@ export async function startWindowsLaunch(
         ...(env.PI_CODING_AGENT_SESSION_DIR === undefined ? ["PI_CODING_AGENT_SESSION_DIR"] : []),
       ]),
     ];
-    const invocation = cliInvocation();
-    const payload = Buffer.from(JSON.stringify(command), "utf8").toString("base64");
-    const destination = Buffer.from(JSON.stringify(cwd), "utf8").toString("base64");
-    const launch = platform.newSessionLaunch(
-      [...invocation, "windows-claim-launch", token, payload, destination],
-      env,
-      unset,
-    );
+    let launchArgs: string[];
+    if (initialRequest) {
+      files!.publish(token, {
+        ...initialRequest,
+        socket: config.socket,
+        session: name,
+        generation: basis.instance,
+        cwd,
+        command,
+      });
+      launchArgs = ["claim-initial-request", token];
+    } else {
+      const payload = Buffer.from(JSON.stringify(command), "utf8").toString("base64");
+      const destination = Buffer.from(JSON.stringify(cwd), "utf8").toString("base64");
+      launchArgs = ["windows-claim-launch", token, payload, destination];
+    }
+    const launch = platform.newSessionLaunch([...cliInvocation(), ...launchArgs], env, unset);
     await tmux(config, [
       "new-session",
       "-d",
@@ -221,7 +308,11 @@ export async function startWindowsLaunch(
     }
     throw new Error("Timed out confirming the Windows pi launch");
   } finally {
-    await rights.cancelUnclaimed(token);
+    try {
+      await rights.cancelUnclaimed(token);
+    } finally {
+      files?.cancel(token);
+    }
   }
 }
 

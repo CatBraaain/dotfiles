@@ -1,9 +1,18 @@
 import { test } from "bun:test";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { INITIAL_REQUEST_DIRECTORY } from "./initial-request-files";
 import { metadataFileIdentity } from "./session-metadata";
 import { WindowsManagement, windowsManagementScope } from "./windows-management";
 import { runWindowsPeerPaneCommands } from "./windows-lifecycle";
@@ -22,9 +31,13 @@ const node = process.platform === "win32" && Bun.which("node.exe");
 
 const fixturePi = String.raw`
 import { execFileSync } from "node:child_process";
-import { existsSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const argv = process.argv.slice(2);
+if (process.env.PI_MUX_TEST_DIRECT_CAPTURE) {
+  writeFileSync(process.env.PI_MUX_TEST_DIRECT_CAPTURE, JSON.stringify({ argv, cwd: process.cwd() }));
+  process.exit(0);
+}
 const [socket] = process.env.TMUX.split(",");
 const pane = process.env.TMUX_PANE;
 function tmux(...args) {
@@ -37,6 +50,12 @@ if (id) {
   const file = argv[0] === "--session" ? realpathSync(argv[1]) : join(process.env.PI_CODING_AGENT_SESSION_DIR, id + ".jsonl");
   if (process.env.PI_TMUX_STARTUP_MODE === "create" && !existsSync(file))
     writeFileSync(file, JSON.stringify({ type: "session", version: 3, id, cwd, timestamp: new Date().toISOString() }) + "\n");
+  if (argv.includes("--agent")) {
+    const capture = join(process.env.PI_CODING_AGENT_SESSION_DIR, id + ".argv.jsonl");
+    const request = argv.at(-1);
+    const inEnvironment = Object.values(process.env).some((value) => value.includes(request));
+    appendFileSync(capture, JSON.stringify({ argv, cwd, inEnvironment }) + "\n");
+  }
   const metadata = Buffer.from(JSON.stringify({
     id, cwd, file, pid,
     processPid: process.pid, startup: "ready", token: process.env.PI_TMUX_LAUNCH_TOKEN,
@@ -624,6 +643,7 @@ test.skipIf(!tmux || !node || !isUncPath(uncCwd))(
       PI_CODING_AGENT_SESSION_DIR: sessions,
       PSMUX_DATA_DIR: registry,
       PSMUX_NO_WARM: "1",
+      LOCALAPPDATA: root,
       npm_config_prefix: root,
       PATH: `${root};${dirname(tmux)};${dirname(node)};${process.env.PATH}`,
     };
@@ -692,10 +712,30 @@ test.skipIf(!tmux || !node || !isUncPath(uncCwd))(
       assert.match(missingPackage.stderr.toString(), /Cannot resolve npm-installed Windows pi/);
       writeWindowsNpmPiFixture(root, fixturePi);
 
-      const output = ok([muxExe, "new", "--detached", "Initial request"], uncCwd);
+      const request = "-short \"double\" 'single'\r\nsecond line";
+      const output = ok([muxExe, "new", "--detached", request], uncCwd);
       const conversation = /^Pi session (\S+)/.exec(output)?.[1];
       assert.ok(conversation, output);
       verifyPane(conversation);
+      const capture = readFileSync(join(sessions, `${conversation}.argv.jsonl`), "utf8")
+        .trimEnd()
+        .split("\n");
+      assert.equal(capture.length, 1);
+      const launched = json<{ argv: string[]; cwd: string; inEnvironment: boolean }>(capture[0]!);
+      assert.deepEqual(launched, {
+        argv: [
+          "--session-id",
+          conversation,
+          "-e",
+          join(extension, "index.ts"),
+          "--agent",
+          "main",
+          "--",
+          request,
+        ],
+        cwd: uncCwd,
+        inEnvironment: false,
+      });
       const header = json<{ cwd: string }>(
         readFileSync(join(sessions, `${conversation}.jsonl`), "utf8"),
       );
@@ -721,7 +761,7 @@ test.skipIf(!tmux || !node || !isUncPath(uncCwd))(
 );
 
 test.skipIf(!tmux || !node)(
-  "routes Windows messages and view receipts to the exact conversation when pane IDs overlap",
+  "preserves long Windows new requests in fresh and running psmux and routes overlapping pane IDs",
   async () => {
     assert.ok(tmux && node);
     const root = mkdtempSync(join(tmpdir(), "pi-mux-native-delivery-"));
@@ -747,10 +787,10 @@ test.skipIf(!tmux || !node)(
       npm_config_prefix: root,
       PATH: `${dirname(tmux)};${dirname(node)};${process.env.PATH}`,
     });
-    async function run(args: string[]) {
+    async function run(args: string[], overrides: NodeJS.ProcessEnv = {}) {
       const child = Bun.spawn(args, {
         cwd: root,
-        env,
+        env: { ...env, ...overrides },
         timeout: 30_000,
         stdout: "pipe",
         stderr: "pipe",
@@ -786,9 +826,51 @@ test.skipIf(!tmux || !node)(
       writeFileSync(conf, "set -g exit-empty off\nset -g remain-on-exit on\n");
       writeFileSync(join(extension, "index.ts"), "export default () => {};\n");
       writeWindowsNpmPiFixture(root, fixturePi);
-      for (const request of ["First request", "Second request"]) {
+      const piEntry = join(root, "node_modules", "@earendil-works/pi-coding-agent", "cli.js");
+      for (const state of ["fresh", "existing"]) {
+        const sentinel = `-long-body-${state}`;
+        const request = `${sentinel} "double" “curly” 雪\r\n${"'x'".repeat(12_000)}`.slice(
+          0,
+          24_000,
+        );
         const created = await mux("new", "--detached", "--cwd", root, request);
         assert.equal(created.exitCode, 0, created.stderr);
+        const createdId = /^Pi session ([a-f0-9-]+)\r?$/m.exec(created.stdout)?.[1];
+        assert.ok(createdId, created.stdout);
+        const capture = join(sessions, `${createdId}.argv.jsonl`);
+        await poll(() => existsSync(capture));
+
+        const directCapture = join(root, "direct-argv.json");
+        const direct = await run(
+          [
+            node,
+            piEntry,
+            "--session-id",
+            createdId,
+            "-e",
+            join(extension, "index.ts"),
+            "--agent",
+            "main",
+            "--",
+            request,
+          ],
+          { PI_MUX_TEST_DIRECT_CAPTURE: directCapture },
+        );
+        assert.equal(direct.exitCode, 0, direct.stderr);
+        const lines = readFileSync(capture, "utf8").trimEnd().split("\n");
+        assert.equal(lines.length, 1);
+        const launched = json<{ argv: string[]; cwd: string; inEnvironment: boolean }>(lines[0]!);
+        const expected = json<{ argv: string[]; cwd: string }>(readFileSync(directCapture, "utf8"));
+        assert.equal(expected.argv.at(-1) === request, true);
+        assert.equal(JSON.stringify(launched.argv) === JSON.stringify(expected.argv), true);
+        assert.equal(launched.cwd, expected.cwd);
+        assert.equal(launched.inEnvironment, false);
+        assert.deepEqual(readdirSync(join(root, INITIAL_REQUEST_DIRECTORY)), []);
+        const ledger = readFileSync(
+          join(management.scope.storageDirectory, "launch-rights.json"),
+          "utf8",
+        );
+        assert.equal(ledger.includes(sentinel) || ledger.includes("command"), false);
       }
       const observation = await management.audit("#{pane_id}\t#{@pi-tmux-session}");
       const peers = observation.panes.filter(({ peer }) => !peer.held);
@@ -908,6 +990,19 @@ test.skipIf(!tmux || !node)(
       const otherOptions = await options(other.peer);
       assert.match(otherOptions, /^@pi-tmux-session /m);
       assert.doesNotMatch(otherOptions, /^@pi-mux-(msg|view)-/m);
+
+      const unverifiedParent = join(root, `unverified-${randomUUID()}`);
+      const unverifiedStorage = join(unverifiedParent, INITIAL_REQUEST_DIRECTORY);
+      mkdirSync(unverifiedStorage, { recursive: true });
+      const filesBefore = readdirSync(sessions);
+      const rejected = await run(
+        [process.execPath, main, "new", "--detached", "must not be launched"],
+        { LOCALAPPDATA: unverifiedParent },
+      );
+      assert.equal(rejected.exitCode, 1, rejected.stderr);
+      assert.match(rejected.stderr, /Cannot verify a private Windows initial-request directory/);
+      assert.deepEqual(readdirSync(unverifiedStorage), []);
+      assert.deepEqual(readdirSync(sessions), filesBefore);
     } finally {
       const listed = await run([...control, "list-sessions", "-F", "#{session_name}"]);
       for (const session of listed.stdout.trim().split(/\r?\n/).filter(Boolean))

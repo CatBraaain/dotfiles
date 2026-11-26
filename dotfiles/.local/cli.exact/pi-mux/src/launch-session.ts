@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync, realpathSync, statSync } from "node:fs";
 import type { DispatchTicketOperation } from "./cli-arguments";
 import {
+  cliInvocation,
   type Config,
   executable,
   GENERATED_ENV_KEYS,
@@ -9,6 +10,7 @@ import {
   prepareDirectory,
   type TmuxConfig,
 } from "./configuration";
+import { InitialRequestFiles } from "./initial-request-files";
 import { LockBusyError, windowsClaimLock, withLock } from "./locks";
 import {
   findFirstInput,
@@ -85,23 +87,32 @@ export async function createNew(
   }
   const id = randomUUID();
   const name = sessionName(id);
-  const created = await createSession(
-    config,
-    {
+  const handoff =
+    request !== undefined && process.platform === "linux"
+      ? { files: InitialRequestFiles.open(config, true), token: randomUUID() }
+      : undefined;
+  try {
+    const created = await createSession(
+      config,
+      {
+        id,
+        cwd,
+        ...(request === undefined ? { warm: true } : { request }),
+        handoff,
+      },
+      name,
+      windowsBasis,
+    );
+    return await waitForSession(
+      config,
+      created ?? name,
       id,
+      request === undefined ? "ready" : "accepted",
       cwd,
-      ...(request === undefined ? { warm: true } : { request }),
-    },
-    name,
-    windowsBasis,
-  );
-  return await waitForSession(
-    config,
-    created ?? name,
-    id,
-    request === undefined ? "ready" : "accepted",
-    cwd,
-  );
+    );
+  } finally {
+    handoff?.files.cancel(handoff.token);
+  }
 }
 
 type SavedSessionResolution = {
@@ -463,6 +474,7 @@ async function createSession(
     request?: string;
     temporary?: boolean;
     warm?: boolean;
+    handoff?: { files: InitialRequestFiles; token: string };
   },
   name: string,
   windowsBasis?: WindowsManagementBasis,
@@ -470,7 +482,7 @@ async function createSession(
 ): Promise<string | undefined> {
   const startupCommand =
     session.request === undefined ? `pi-mux-startup-${randomUUID()}` : undefined;
-  const launchToken = randomUUID();
+  const launchToken = session.handoff?.token ?? randomUUID();
   const desired = {
     ...config.env,
     PI_TMUX_SESSION_ID: session.id,
@@ -502,10 +514,31 @@ async function createSession(
       environment: desired,
       command,
       requireRestored,
+      ...(session.request === undefined ? {} : { initialRequest: { id: session.id, launchToken } }),
     });
   }
   const removed = await excludedGlobalEnvironment(config, desired);
-  const launch = platform.newSessionLaunch(command, desired, removed);
+  const handoff = session.handoff;
+  if (handoff) {
+    const lifetime = await serverLifetime({ ...config, noStart: true });
+    if (!lifetime?.generation)
+      throw new Error("Dedicated server has not been initialized by pi-mux");
+    handoff.files.publish(launchToken, {
+      socket: config.socket,
+      session: name,
+      generation: lifetime.generation,
+      serverPid: lifetime.pid,
+      id: session.id,
+      launchToken,
+      cwd: session.cwd,
+      command,
+    });
+  }
+  const launch = platform.newSessionLaunch(
+    handoff ? [...cliInvocation(), "claim-initial-request", launchToken] : command,
+    desired,
+    removed,
+  );
   const result = await tmux(
     config,
     [
@@ -526,9 +559,11 @@ async function createSession(
       String(process.stdout.rows || 24),
       ...launch.environmentArgs,
       "--",
-      ...(session.request === undefined
-        ? platform.tmuxPaneCommand(launch.paneCommand)
-        : [launch.paneCommand]),
+      ...(handoff
+        ? [`exec ${launch.paneCommand}`]
+        : session.request === undefined
+          ? platform.tmuxPaneCommand(launch.paneCommand)
+          : [launch.paneCommand]),
     ],
     true,
   );

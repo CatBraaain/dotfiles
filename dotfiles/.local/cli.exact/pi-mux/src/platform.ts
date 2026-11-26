@@ -19,7 +19,7 @@ const ENVIRONMENT_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const PROCESS_QUERY_TIMEOUT_MS = 5_000;
 const MAX_WINDOWS_PID = 0xffff_ffff;
 const execFileAsync = promisify(execFile);
-const windowsPowerShell = win32.join(
+export const windowsPowerShell = win32.join(
   process.env.SystemRoot || "C:\\Windows",
   "System32",
   "WindowsPowerShell",
@@ -27,7 +27,7 @@ const windowsPowerShell = win32.join(
   "powershell.exe",
 );
 
-function encodePowerShell(script: string): string {
+export function encodePowerShell(script: string): string {
   return Buffer.from(script, "utf16le").toString("base64");
 }
 

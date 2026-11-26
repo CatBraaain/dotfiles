@@ -69,6 +69,107 @@ async function reserve(ledger: WindowsLaunchRights, keys = [conversation], expec
 }
 
 describe("Windows launch rights", () => {
+  it("matches the initial-request helper and its assigned session before starting", async () => {
+    const { create, path } = fixture();
+    const ledger = create();
+    const initialRequestSession = "assigned";
+    const right = await ledger.reserveAfterLifecycleAudit([conversation], basis, {
+      initialRequestSession,
+    });
+    assert.equal(right.state, "reserved");
+    const persisted = JSON.parse(readFileSync(path, "utf8")).rights[0];
+    assert.deepEqual(Object.keys(persisted).sort(), [
+      "basis",
+      "initialRequestSession",
+      "keys",
+      "requireRestored",
+      "state",
+      "token",
+    ]);
+    for (const session of [undefined, "other"]) {
+      await assert.rejects(
+        ledger.claimAndStart(
+          right.token,
+          randomUUID(),
+          () => assert.fail("starts in the wrong pane"),
+          undefined,
+          session,
+        ),
+        /assigned initial-request session/,
+      );
+      assert.deepEqual(await ledger.status(right.token), { state: "reserved" });
+    }
+    const result = await ledger.claimAndStart(
+      right.token,
+      randomUUID(),
+      (observed) => {
+        assert.deepEqual(observed, basis);
+        const pending = JSON.parse(readFileSync(path, "utf8")).rights[0];
+        assert.equal(pending.state, "pending");
+        assert.equal(Object.hasOwn(pending, "initialRequestSession"), false);
+        return spawn();
+      },
+      undefined,
+      initialRequestSession,
+    );
+    assert.ok(result);
+    assert.equal(
+      await ledger.claimAndStart(
+        right.token,
+        randomUUID(),
+        () => assert.fail(),
+        undefined,
+        initialRequestSession,
+      ),
+      undefined,
+    );
+  });
+
+  it("never reads initial-request arguments in a stale generation", async () => {
+    const { create, observations } = fixture();
+    const ledger = create();
+    const initialRequestSession = "assigned";
+    const right = await ledger.reserveAfterLifecycleAudit([conversation], basis, {
+      initialRequestSession,
+    });
+    assert.equal(right.state, "reserved");
+    observations.management = { ...basis, instance: "bbbbbbbbbbbbbbbb" };
+    assert.equal(
+      await ledger.claimAndStart(
+        right.token,
+        randomUUID(),
+        () => assert.fail(),
+        undefined,
+        initialRequestSession,
+      ),
+      undefined,
+    );
+    assert.deepEqual(await ledger.status(right.token), { state: "missing" });
+  });
+
+  it("clears an assigned right when the argument file could not be claimed before spawn", async () => {
+    const { create } = fixture();
+    const ledger = create();
+    const initialRequestSession = "assigned";
+    const right = await ledger.reserveAfterLifecycleAudit([conversation], basis, {
+      initialRequestSession,
+    });
+    assert.equal(right.state, "reserved");
+    await assert.rejects(
+      ledger.claimAndStart(
+        right.token,
+        randomUUID(),
+        () => {
+          throw new SpawnDidNotStartError("Arguments not claimed");
+        },
+        undefined,
+        initialRequestSession,
+      ),
+      SpawnDidNotStartError,
+    );
+    assert.deepEqual(await ledger.status(right.token), { state: "missing" });
+  });
+
   it("does not grant a waiting reload wrapper's token while the old identity lives", async () => {
     const { create, observations } = fixture();
     const ledger = create();

@@ -25,6 +25,7 @@ export type Operation =
   | { kind: "inspect-management"; socket: string }
   | { kind: "inspect-dispatch-inventory"; socket: string }
   | WindowsCreateDispatchWorker
+  | { kind: "claim-initial-request"; token: string }
   | {
       kind: "windows-claim-launch";
       token: string;
@@ -195,6 +196,13 @@ export function parseOperation(argv: string[]): Operation {
       return { kind: "inspect-dispatch-inventory", socket: argv[2]! };
     if (id === "--create-dispatch-worker") return parseWindowsCreateDispatchWorker(argv.slice(2));
   }
+  if (
+    argv[0] === "claim-initial-request" &&
+    argv.length === 2 &&
+    argv[1]?.length === 36 &&
+    UUID.test(argv[1])
+  )
+    return { kind: "claim-initial-request", token: argv[1] };
   if (argv[0] === "windows-claim-launch" && argv.length === 4 && UUID.test(argv[1]!)) {
     const command: unknown = JSON.parse(Buffer.from(argv[2]!, "base64").toString("utf8"));
     if (

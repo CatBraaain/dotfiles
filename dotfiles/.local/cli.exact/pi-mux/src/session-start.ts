@@ -2,6 +2,7 @@ import { statSync } from "node:fs";
 import { dirname } from "node:path";
 import type { Operation } from "./cli-arguments";
 import { type Config, prepareDirectory, type TmuxConfig } from "./configuration";
+import { InitialRequestFiles } from "./initial-request-files";
 import { createNew, openSaved, resolveSaved } from "./launch-session";
 import { windowsClaimLock, withLock } from "./locks";
 import { promoteSession } from "./pane-inventory";
@@ -27,6 +28,7 @@ export async function startSession(
   const result = await withLock(config, async () => {
     prepareDirectory(config.directory);
     if (operation.kind === "new") {
+      if (platform.windows || process.platform === "linux") InitialRequestFiles.sweep(config);
       const preferred = await configuredSessionRoot(config);
       if (preferred) rememberSessionRoot(config, preferred);
     }

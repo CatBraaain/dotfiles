@@ -1839,7 +1839,7 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
       const custom = join(fixture.directory, "custom-new-sessions");
       fixture.env.PI_CODING_AGENT_SESSION_DIR = custom;
       fixture.mockTmux(randomUUID(), join(custom, "new.jsonl"));
-      const result = fixture.run(["new", "--detached", "Start a new task"]);
+      const result = fixture.run(["new", "--detached"]);
       assert.equal(result.error, undefined);
       assert.equal(result.status, 0, result.stderr);
       const launch = readFileSync(join(fixture.directory, "launch.log"), "utf8");

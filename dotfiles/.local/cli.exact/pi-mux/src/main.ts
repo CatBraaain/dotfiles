@@ -6,6 +6,7 @@ import {
   resolveAgentDirectory,
   tmuxConfiguration,
 } from "./configuration";
+import { claimWslInitialRequest } from "./initial-request-wsl";
 import { inspectSession, launchDispatchedTicket, openExactSession } from "./launch-session";
 import {
   mergeSessionLists,
@@ -32,6 +33,7 @@ import { windowsManagement } from "./tmux";
 import { displayedSessions, SwitchResolutionError, switchSession } from "./tmux-clients";
 import {
   claimWindowsLaunch,
+  claimWindowsInitialRequest,
   createWindowsDispatchWorker,
   auditWindowsDispatchInventory,
 } from "./windows-launch";
@@ -121,6 +123,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       );
       return 0;
     }
+    if (operation.kind === "claim-initial-request")
+      return platform.windows
+        ? await claimWindowsInitialRequest(operation.token)
+        : await claimWslInitialRequest(operation.token);
     if (operation.kind === "windows-claim-launch") {
       if (!platform.windows) throw new Error("This launch operation requires Windows");
       return operation.reload

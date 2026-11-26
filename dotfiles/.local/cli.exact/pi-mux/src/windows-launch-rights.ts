@@ -31,7 +31,7 @@ type Reservation = {
 export type SpawnReceipt = { claim: string; child: WindowsProcessIdentity };
 type SpawnedRight = Reservation & SpawnReceipt & { state: "spawned"; completed: boolean };
 export type LaunchRight =
-  | (Reservation & { state: "reserved" })
+  | (Reservation & { state: "reserved"; initialRequestSession?: string })
   | (Reservation & { state: "pending"; claim: string })
   | SpawnedRight;
 
@@ -79,7 +79,8 @@ export class WindowsLaunchRights {
     {
       requireRestored = true,
       token = randomUUID(),
-    }: { requireRestored?: boolean; token?: string } = {},
+      initialRequestSession,
+    }: { requireRestored?: boolean; token?: string; initialRequestSession?: string } = {},
   ): Promise<{ state: "conflict"; right: SpawnedRight } | { state: "reserved"; token: string }> {
     return await this.access.withClaimLock(async () => {
       if (
@@ -105,7 +106,7 @@ export class WindowsLaunchRights {
       }
       writeRights(this.access.path, [
         ...retained,
-        { state: "reserved", keys, basis, token, requireRestored },
+        { state: "reserved", keys, basis, token, requireRestored, initialRequestSession },
       ]);
       return { state: "reserved", token };
     });
@@ -114,13 +115,17 @@ export class WindowsLaunchRights {
   async claimAndStart<T extends { pid: number; exited?: Promise<number> }>(
     token: string,
     claim: string,
-    spawn: () => T,
+    spawn: (basis: WindowsManagementBasis) => T,
     prepare?: () => Promise<void>,
+    initialRequestSession?: string,
   ): Promise<{ started: T; receipt: SpawnReceipt } | undefined> {
     return await this.access.withClaimLock(async () => {
       const rights = readRights(this.access.path);
       const right = rights.find((entry) => entry.token === token);
       if (right?.state !== "reserved") return;
+      const { initialRequestSession: reservedSession, ...reservation } = right;
+      if (reservedSession !== initialRequestSession)
+        throw new Error("Windows launch right does not match its assigned initial-request session");
       const otherRights = rights.filter((entry) => entry !== right);
       let current: WindowsManagementBasis;
       try {
@@ -134,11 +139,11 @@ export class WindowsLaunchRights {
         writeRights(this.access.path, otherRights);
         return;
       }
-      const pending: LaunchRight = { ...right, state: "pending", claim };
+      const pending: LaunchRight = { ...reservation, state: "pending", claim };
       writeRights(this.access.path, [...otherRights, pending]);
       let started: T;
       try {
-        started = spawn();
+        started = spawn(right.basis);
       } catch (error) {
         if (error instanceof SpawnDidNotStartError) writeRights(this.access.path, otherRights);
         throw error;
@@ -167,7 +172,7 @@ export class WindowsLaunchRights {
       const receipt: SpawnReceipt = { claim, child: observation.identity };
       writeRights(this.access.path, [
         ...otherRights,
-        { ...right, ...receipt, state: "spawned", completed: false },
+        { ...reservation, ...receipt, state: "spawned", completed: false },
       ]);
       return { started, receipt };
     });
@@ -452,7 +457,13 @@ function validateRights(rights: unknown[]): asserts rights is LaunchRight[] {
 }
 
 function validRightState(right: Record<string, unknown>): boolean {
-  if (right.state === "reserved") return true;
+  if (right.state === "reserved")
+    return (
+      right.initialRequestSession === undefined ||
+      (typeof right.initialRequestSession === "string" &&
+        /^[A-Za-z0-9_-]+$/.test(right.initialRequestSession))
+    );
+  if (right.initialRequestSession !== undefined) return false;
   if (typeof right.claim !== "string" || !TOKEN.test(right.claim)) return false;
   if (right.state === "pending") return true;
   return (
