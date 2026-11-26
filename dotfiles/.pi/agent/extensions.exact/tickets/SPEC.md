@@ -35,7 +35,7 @@ extensions.exact/tickets/
 | tool・入力 | CLIへの変換・起動前の検証 |
 | --- | --- |
 | 共通 | セッションcwdをCLIのcwdに渡す。`project` 指定時は `--project` に渡す |
-| `ticket_list` | `status` をCLIのstatus指定に、`all` を全project指定に変換する。空のstatus配列は未指定として渡す |
+| `ticket_list` | `status` をCLIのstatus指定に、`all` を全project指定に変換する。空のstatus配列は未指定として渡す。`--json` を付ける |
 | `ticket_show` | `selector` を位置引数に渡し、省略時はCLIの既定に従う |
 | `ticket_create` | `title`・`body`・`status`・`after` のうち渡されたkeyだけをCLIのJSON引数に含める |
 | `ticket_set` | `status`・`after` のうち渡されたkeyだけをCLIのJSON引数に含める。両方未指定ならCLIを起動せず失敗する |
@@ -47,15 +47,21 @@ extensions.exact/tickets/
 
 5つのtoolのCLI実行は、実行時contextの `ctx.executeTool("bash", ...)` を使い、その時点の登録Bashによるコマンド承認とサンドボックスの対象とする。引数・cwdのliteral変換、分離出力と長文の完全回収は [Tools仕様](../tools/SPEC.md#cliの引数と結果回収) に従う。
 
-Bashツールが未登録、実行時contextが失効、実行が拒否またはキャンセルされた場合はtool failureとして返す。登録Bashを経由しない直接起動には切り替えない。toolの中断を登録Bashへ伝え、CLI実行と完全JSONの再取得を中断する。
+Bashツールが未登録、実行時contextが失効、実行が拒否またはキャンセルされた場合はtool failureとして返す。登録Bashを経由しない直接起動には切り替えない。toolの中断を登録Bashへ伝え、CLI実行と出力回収を中断する。
 
 ## 結果とエラー
 
-CLIは `--json` なしで実行し、成功時はstdoutのテキストを空白・改行も含めてtoolの `content` にそのまま格納する。各コマンドのテキスト形式はCLI仕様に従う。
+`ticket_list` は CLI を1回実行する。成功時は一覧のJSONから、CLIのテキスト出力と同じ順序・表記・末尾改行で `content` を作る。CLIが成功してもstdoutが有効な一覧のJSONでなければtool failureとして返す。
+
+ほかのtoolは初回に `--json` なしで実行し、成功時はstdoutのテキストを空白・改行も含めて `content` にそのまま格納する。各コマンドのテキスト形式はCLI仕様に従う。
 
 CLIの非0終了と実行不能はtool failureとして返す。CLIのstderrから末尾の改行を1個だけ除いたテキストを `Error` としてthrowし、piがtool呼び出しを失敗として報告する。stderrが空ならエラーメッセージを使う。
 
-toolのcontentは最大50 KiBまたは2,000行とする。上限を超えるときは先頭を返し、上限・全体量・完全本文をCLIで得る旨をmarkerに含める。`ticket_list` と `ticket_show` の切詰め時だけ、同じ引数に `--json` を付けてCLIを再実行し、`details` に完全JSONを格納する。書込toolは表示の切詰めを理由に再実行しない。
+toolのcontentは最大50 KiBまたは2,000行とする。上限を超えるときは先頭を返し、上限・全体量・完全本文をCLIで得る旨をmarkerに含める。
+
+- `ticket_list`: 切詰め時は、表示の元になった `ticket list --json` の配列全体を `details` の値にする。切詰めがなければ `details` を設定しない。
+- `ticket_show`: 切詰め時は同じ引数に `--json` を付けてCLIを再実行し、`details` に完全JSONを格納する。
+- 書込toolは表示の切詰めを理由に再実行しない。
 
 ## 書込順序
 

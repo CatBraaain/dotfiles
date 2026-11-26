@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "bun:test";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -460,28 +460,60 @@ describe("tool parameter schemas (SPEC: ticket/SPEC.md per-tool args)", () => {
   });
 });
 
-describe("tool execute (SPEC: content is the CLI text output; truncation refetches --json)", () => {
-  const LIST_TEXT = "20260101-000000\topen\tA";
+const LIST_ENTRY = {
+  id: "20260101-000000",
+  status: "open",
+  title: "A",
+  after: null,
+  path: "/p/a.md",
+};
+const LIST_JSON = JSON.stringify([LIST_ENTRY]);
+const LIST_TEXT = "20260101-000000\topen\tA\n";
+const ALL_LIST_JSON = JSON.stringify([{ ...LIST_ENTRY, project: "proj" }]);
+const ALL_LIST_TEXT = `proj\t${LIST_TEXT}`;
+
+describe("ticket tool results", () => {
   const SHOW_TEXT = "id: 20260101-000000\nstatus: open\nafter: -\ntitle: A\n\nbody:\n# A\n";
   const CREATED_TEXT = "created 20260101-000000\nstatus: open\nafter: -\npath: /p/a.md";
   const UPDATED_TEXT = "updated 20260101-000000\nstatus: open\nafter: -\npath: /p/a.md";
 
-  it("ticket_list returns the CLI stdout as content without details", async () => {
-    const fake = fakeRunner(LIST_TEXT);
+  it("ticket_list keeps the CLI text format and order without details", async () => {
+    const latest = { ...LIST_ENTRY, id: "20260101-000001", title: "日本語\tTitle" };
+    const fake = fakeRunner(JSON.stringify([latest, LIST_ENTRY]));
     const result = await exec(findTool(captureTools(fake), "ticket_list"), {});
-    assert.deepEqual(
-      fake.calls.map((call) => call.args),
-      [["list"]],
-    );
-    assert.deepEqual(result.content, [{ type: "text", text: LIST_TEXT }]);
+    assert.deepEqual(fake.calls, [{ args: ["list", "--json"], cwd: SESSION_CWD }]);
+    assert.deepEqual(result.content, [
+      { type: "text", text: `20260101-000001\topen\t日本語\tTitle\n${LIST_TEXT}` },
+    ]);
     assert.equal(result.details, undefined);
   });
 
-  it("ticket_list forwards --all and the CLI text keeps the project column", async () => {
-    const fake = fakeRunner("proj\t20260101-000000\topen\tA");
+  it("ticket_list keeps the project column when using --all", async () => {
+    const fake = fakeRunner(ALL_LIST_JSON);
     const result = await exec(findTool(captureTools(fake), "ticket_list"), { all: true });
-    assert.deepEqual(fake.calls[0]?.args, ["list", "--all"]);
-    assert.deepEqual(result.content, [{ type: "text", text: "proj\t20260101-000000\topen\tA" }]);
+    assert.deepEqual(fake.calls[0]?.args, ["list", "--all", "--json"]);
+    assert.deepEqual(result.content, [{ type: "text", text: ALL_LIST_TEXT }]);
+  });
+
+  it("ticket_list keeps the empty message and trailing newline", async () => {
+    const result = await exec(findTool(captureTools(fakeRunner("[]")), "ticket_list"), {});
+    assert.deepEqual(result.content, [{ type: "text", text: "no tickets\n" }]);
+    assert.equal(result.details, undefined);
+  });
+
+  it("ticket_list rejects invalid result shapes without retrying", async () => {
+    const cases = [
+      { stdout: "{}", params: {} },
+      { stdout: '[{"id":"missing fields"}]', params: {} },
+      { stdout: LIST_JSON, params: { all: true } },
+      { stdout: ALL_LIST_JSON, params: {} },
+    ];
+    for (const { stdout, params } of cases) {
+      const fake = fakeRunner(stdout);
+      const tool = findTool(captureTools(fake), "ticket_list");
+      await assert.rejects(() => exec(tool, params), /Invalid ticket list JSON/);
+      assert.equal(fake.calls.length, 1);
+    }
   });
 
   it("ticket_show returns the CLI stdout as content without details", async () => {
@@ -495,26 +527,22 @@ describe("tool execute (SPEC: content is the CLI text output; truncation refetch
     assert.equal(result.details, undefined);
   });
 
-  it("truncates oversized ticket_list content and refetches the complete JSON as details", async () => {
+  it("truncates oversized ticket_list content and returns the complete JSON from one call", async () => {
     const listJson = Array.from({ length: 2_100 }, (_, index) => ({
       id: `20260101-${String(index).padStart(6, "0")}`,
       status: "open",
-      title: "ticket",
+      title: "A",
       after: null,
       path: `/p/${index}.md`,
     }));
-    const fake = fakeRunner((args) =>
-      args.includes("--json")
-        ? JSON.stringify(listJson)
-        : listJson.map((ticket) => `${ticket.id}\t${ticket.status}\t${ticket.title}`).join("\n"),
-    );
+    const fake = fakeRunner(JSON.stringify(listJson));
     const result = await exec(findTool(captureTools(fake), "ticket_list"), {});
     const text = result.content[0]!.text;
     assert.match(text, /Output truncated/);
     assert.ok(Buffer.byteLength(text, "utf8") <= DEFAULT_MAX_BYTES);
     assert.ok(text.split("\n").length <= DEFAULT_MAX_LINES);
     assert.deepEqual(result.details, listJson);
-    assert.deepEqual(fake.calls[1]?.args, ["list", "--json"]);
+    assert.deepEqual(fake.calls, [{ args: ["list", "--json"], cwd: SESSION_CWD }]);
   });
 
   it("truncates oversized ticket_show content and refetches the complete JSON as details", async () => {
@@ -604,7 +632,7 @@ describe("tool execute (SPEC: content is the CLI text output; truncation refetch
 
   it("passes ctx.cwd to the runner", async () => {
     const cases: Array<[string, Record<string, unknown>, string]> = [
-      ["ticket_list", {}, LIST_TEXT],
+      ["ticket_list", {}, LIST_JSON],
       ["ticket_show", { selector: "a" }, SHOW_TEXT],
       ["ticket_create", { title: "t" }, CREATED_TEXT],
       ["ticket_set", { status: "closed" }, UPDATED_TEXT],
@@ -648,7 +676,7 @@ const toolCases: Array<[string, Record<string, unknown>, string[]]> = [
   [
     "ticket_list",
     { project: "p ' \"\n$HOME", status: ["open", "closed"], all: true },
-    ["list", "--all", "--status", "open,closed", "--project", "p ' \"\n$HOME"],
+    ["list", "--all", "--status", "open,closed", "--project", "p ' \"\n$HOME", "--json"],
   ],
   ["ticket_show", { selector: "a'\n$(id)" }, ["show", "a'\n$(id)"]],
   [
@@ -664,6 +692,8 @@ describe("registered Bash ticket routing", () => {
   for (const [name, params] of toolCases) {
     it("routes " + name + " through the current registered Bash without a timeout", async () => {
       const signal = new AbortController().signal;
+      const stdout = name === "ticket_list" ? ALL_LIST_JSON : " \noutput\n\n";
+      const text = name === "ticket_list" ? ALL_LIST_TEXT : stdout;
       const calls: string[] = [];
       const ctx = {
         cwd: "/tmp/session '\n$(id)",
@@ -676,7 +706,7 @@ describe("registered Bash ticket routing", () => {
           const executable = process.platform === "win32" ? "ticket.exe" : "ticket";
           assert.ok(command.includes(`/.agents/cli/${executable}'`));
           calls.push(command);
-          return bashOutcome(cliFrame(" \noutput\n\n"));
+          return bashOutcome(cliFrame(stdout));
         },
       };
       const result = await findTool(captureTools(), name).execute!(
@@ -686,7 +716,7 @@ describe("registered Bash ticket routing", () => {
         undefined,
         ctx,
       );
-      assert.deepEqual(result.content, [{ type: "text", text: " \noutput\n\n" }]);
+      assert.deepEqual(result.content, [{ type: "text", text }]);
       assert.equal(calls.length, 1);
     });
 
@@ -737,7 +767,9 @@ describe("registered Bash ticket routing", () => {
   for (const name of ["ticket_list", "ticket_show"]) {
     it("preserves complete multi-MiB JSON details for " + name, async () => {
       const body = "日本語\n".repeat(150_000);
-      const json = name === "ticket_list" ? [{ title: body }] : { body };
+      const json =
+        name === "ticket_list" ? [{ ...LIST_ENTRY, title: "日本語".repeat(150_000) }] : { body };
+      const jsonCall = name === "ticket_list" ? 1 : 2;
       const output = cliFrame(JSON.stringify(json));
       const signal = new AbortController().signal;
       const calls: string[] = [];
@@ -749,13 +781,13 @@ describe("registered Bash ticket routing", () => {
           assert.equal(Object.hasOwn(args as object, "timeout"), false);
           const command = (args as { command: string }).command;
           calls.push(command);
-          if (calls.length === 1) return bashOutcome(cliFrame(body));
-          if (calls.length === 2) {
+          if (calls.length < jsonCall) return bashOutcome(cliFrame(body));
+          if (calls.length === jsonCall) {
             assert.match(command, /'--json'/);
             return bashOutcome("partial", { truncated: true, full_output_path: "/tmp/output" });
           }
-          if (calls.length === 3) return bashOutcome(String(output.length));
-          const chunk = calls.length - 4;
+          if (calls.length === jsonCall + 1) return bashOutcome(String(output.length));
+          const chunk = calls.length - jsonCall - 2;
           return bashOutcome(output.slice(chunk * 524_288, (chunk + 1) * 524_288));
         },
       };
@@ -770,10 +802,10 @@ describe("registered Bash ticket routing", () => {
       assert.match(result.content[0]!.text, /Output truncated/);
       assert.ok(Buffer.byteLength(result.content[0]!.text) <= DEFAULT_MAX_BYTES);
       assert.ok(result.content[0]!.text.split("\n").length <= DEFAULT_MAX_LINES);
-      assert.equal(calls.length, 3 + Math.ceil(output.length / 524_288));
+      assert.equal(calls.length, jsonCall + 1 + Math.ceil(output.length / 524_288));
     });
 
-    it("fails " + name + " if the JSON refetch is denied or malformed", async () => {
+    it("fails " + name + " if the JSON request is denied or malformed", async () => {
       for (const response of [
         { ...bashOutcome("denied"), isError: true },
         bashOutcome(cliFrame("{bad")),
@@ -782,7 +814,9 @@ describe("registered Bash ticket routing", () => {
         const ctx = {
           cwd: SESSION_CWD,
           async executeTool() {
-            if (++calls === 1) return bashOutcome(cliFrame("line\n".repeat(2_100)));
+            calls++;
+            if (name === "ticket_show" && calls === 1)
+              return bashOutcome(cliFrame("line\n".repeat(2_100)));
             return response;
           },
         };
@@ -801,18 +835,20 @@ describe("registered Bash ticket routing", () => {
             response.result,
           );
         } else await assert.rejects(pending);
-        assert.equal(calls, 2);
+        assert.equal(calls, name === "ticket_list" ? 1 : 2);
       }
     });
 
-    it("stops " + name + " when cancellation arrives before the JSON refetch", async () => {
+    it("stops " + name + " when cancellation arrives during output handling", async () => {
       const controller = new AbortController();
       let calls = 0;
-      const output = bashOutcome(cliFrame("line\n".repeat(2_100)));
+      const stdout = name === "ticket_list" ? LIST_JSON : "line\n".repeat(2_100);
+      const frame = cliFrame(stdout);
+      const output = bashOutcome(frame);
       Object.defineProperty(output.result, "structuredContent", {
         get() {
           controller.abort();
-          return { output: cliFrame("line\n".repeat(2_100)), truncated: false, exit_code: 0 };
+          return { output: frame, truncated: false, exit_code: 0 };
         },
       });
       const ctx = {
@@ -872,7 +908,8 @@ describe("ticket CLI through an actual Bash implementation", () => {
   for (const [name, params, expectedArgs] of toolCases) {
     it("preserves arguments and cwd for " + name, async () => {
       const cliPath = await installStub(
-        "console.log(JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));\n",
+        `await Bun.write("received.json", JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));
+console.log(${JSON.stringify(name === "ticket_list" ? ALL_LIST_JSON : "output")});`,
       );
       const cwd = dirname(cliPath);
       const deps: TicketsExtensionDeps = {
@@ -880,14 +917,11 @@ describe("ticket CLI through an actual Bash implementation", () => {
           return spawnTicketCli(args, sessionCwd, signal, toolCtx, { cliPath });
         },
       };
-      const result = await findTool(captureTools(deps), name).execute!(
-        "call",
-        params,
-        undefined,
-        undefined,
-        { ...ctx, cwd },
-      );
-      const received = JSON.parse(result.content[0]!.text);
+      await findTool(captureTools(deps), name).execute!("call", params, undefined, undefined, {
+        ...ctx,
+        cwd,
+      });
+      const received = JSON.parse(await readFile(join(cwd, "received.json"), "utf8"));
       assert.deepEqual(received.argv, expectedArgs);
       assert.equal(received.cwd, cwd);
     });

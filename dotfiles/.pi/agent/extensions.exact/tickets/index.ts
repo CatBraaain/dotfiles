@@ -9,6 +9,7 @@ import {
   type ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { Value } from "typebox/value";
 import { cliExecutableName, CliFailure, runCliViaBash } from "../tools/cli.ts";
 
 // --- tool parameter schemas (argument names match ticket/SPEC.md) ---
@@ -222,6 +223,17 @@ export const ticketToolDescriptions = {
     projectDescription,
 } as const;
 
+const ticketListOutput = Type.Array(
+  Type.Object({
+    id: Type.String(),
+    status: Type.String(),
+    after: Type.Union([Type.String(), Type.Null()]),
+    title: Type.String(),
+    path: Type.String(),
+    project: Type.Optional(Type.String()),
+  }),
+);
+
 function truncateTicketOutput(
   text: string,
   recoveryHint: string,
@@ -340,7 +352,6 @@ export interface TicketsExtensionDeps {
 export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensionDeps = {}): void {
   const runCli: TicketCliRunner = deps.runCli ?? spawnTicketCli;
 
-  // Runs the CLI for the tool args; the resolved stdout is the tool text.
   async function runTicket(
     args: string[],
     ctx: ExtensionToolContext,
@@ -349,8 +360,6 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     return runCli(args, ctx.cwd, signal, ctx);
   }
 
-  // Re-runs a read-only tool's CLI with --json for the result details
-  // (SPEC: pi keeps the complete JSON in details when truncating).
   async function runTicketJson(
     args: string[],
     ctx: ExtensionToolContext,
@@ -367,14 +376,32 @@ export default function ticketsExtension(pi: ExtensionAPI, deps: TicketsExtensio
     parameters: ticketListParameters,
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       try {
-        const args = buildListArgs(params);
+        const entries = await runTicketJson(buildListArgs(params), ctx, signal);
+        const allProjects = params.all ?? false;
+        if (
+          !Value.Check(ticketListOutput, entries) ||
+          entries.some(({ project }) =>
+            allProjects ? project === undefined : project !== undefined,
+          )
+        ) {
+          throw new Error("Invalid ticket list JSON");
+        }
+        const text =
+          entries.length === 0
+            ? "no tickets\n"
+            : entries
+                .map(
+                  ({ id, status, title, project }) =>
+                    `${allProjects ? `${project}\t` : ""}${id}\t${status}\t${title}\n`,
+                )
+                .join("");
         const result = truncateTicketOutput(
-          await runTicket(args, ctx, signal),
+          text,
           "Use ticket list with the same filters to read the complete list.",
         );
         return {
           content: [{ type: "text", text: result.text }],
-          details: result.truncated ? await runTicketJson(args, ctx, signal) : undefined,
+          details: result.truncated ? entries : undefined,
         };
       } catch (error) {
         if (error instanceof CliFailure) return error.toolResult;
