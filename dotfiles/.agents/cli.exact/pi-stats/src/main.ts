@@ -135,6 +135,10 @@ function runStats(
     stderr(
       `pi-stats: indexed ${report.indexed} new/changed, removed ${report.removed}, total ${report.total} files`,
     );
+    if (report.total === 0) {
+      stderr("pi-stats: no session files found");
+      return 1;
+    }
     const projectByPath = new Map<string, string>();
     db.eachSession((record) => {
       projectByPath.set(record.path, record.project);
