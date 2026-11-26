@@ -557,13 +557,11 @@ export async function inspectWindowsRunningSession(
         throw new Error(`Cannot identify the starting pi in ${name}`);
       if (!metadata && managedId && !launch)
         throw new Error(`Cannot identify the starting managed conversation in ${name}`);
-      if (managedId?.toLowerCase() === id.toLowerCase())
+      if (managedId === id)
         candidates.set(session, { session, id: managedId, cwd: cwd!, temporary: false });
     }
   }
-  const running = parseLivePaneRows(allPanes.join("\n"), "list").filter(
-    (pane) => pane.id.toLowerCase() === id.toLowerCase(),
-  );
+  const running = parseLivePaneRows(allPanes.join("\n"), "list").filter((pane) => pane.id === id);
   if (
     running.length > 1 ||
     candidates.size > 1 ||

@@ -1190,3 +1190,105 @@ function windowsPeerFixture() {
   }
   return { create, mux, panes, cleanup, requestProcessPid };
 }
+
+for (const hasSavedMatch of [false, true]) {
+  test.skipIf(!tmux || !node)(
+    `Windows open rejects a case-only live ID mismatch ${hasSavedMatch ? "with" : "without"} an exact saved match`,
+    async () => {
+      assert.ok(tmux && node);
+      const root = mkdtempSync(join(tmpdir(), "pi-mux-native-open-id-"));
+      const conf = join(root, ".config", "psmux", "pi.conf");
+      const extension = join(root, ".pi", "agent", "extensions", "pi-mux-bridge");
+      const socket = join(root, ".local", "state", "pi-tmux", "server.sock");
+      const registry = join(root, "registry");
+      const sessions = join(root, "sessions");
+      const env = Object.fromEntries(
+        Object.entries(process.env).filter(
+          ([key]) =>
+            !/^(TMUX(?:_PANE)?|PSMUX_.*|PI_.*|HOME|USERPROFILE|LOCALAPPDATA|PATH)$/i.test(key),
+        ),
+      );
+      Object.assign(env, {
+        HOME: root,
+        USERPROFILE: root,
+        LOCALAPPDATA: root,
+        PI_CODING_AGENT_SESSION_DIR: sessions,
+        PSMUX_DATA_DIR: registry,
+        PSMUX_NO_WARM: "1",
+        npm_config_prefix: root,
+        PATH: `${dirname(tmux)};${dirname(node)};${process.env.PATH}`,
+      });
+      async function run(args: string[]) {
+        const child = Bun.spawn(args, {
+          cwd: root,
+          env,
+          stdout: "pipe",
+          stderr: "pipe",
+          timeout: 30_000,
+          windowsHide: true,
+        });
+        const [exitCode, stdout, stderr] = await Promise.all([
+          child.exited,
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+        ]);
+        return { exitCode, stdout, stderr };
+      }
+      const control = [tmux, "-S", socket, "-f", conf];
+      async function mux(...args: string[]) {
+        return await run([process.execPath, main, ...args]);
+      }
+      try {
+        for (const directory of [dirname(conf), extension, sessions, registry])
+          mkdirSync(directory, { recursive: true });
+        writeFileSync(conf, "set -g exit-empty off\nset -g remain-on-exit on\n");
+        writeFileSync(join(extension, "index.ts"), "export default () => {};\n");
+        writeWindowsNpmPiFixture(root, fixturePi);
+        const created = await mux("new", "--detached", "--cwd", root, "existing conversation");
+        assert.equal(created.exitCode, 0, created.stderr);
+        const liveId = /^Pi session ([a-f0-9-]+)\r?$/m.exec(created.stdout)?.[1];
+        assert.ok(liveId, created.stdout);
+        const requestedId = liveId.toUpperCase();
+        assert.notEqual(requestedId, liveId);
+
+        if (hasSavedMatch) {
+          const savedHeader = {
+            type: "session",
+            version: 3,
+            id: requestedId,
+            cwd: root,
+            timestamp: new Date().toISOString(),
+          };
+          writeFileSync(
+            join(sessions, "separate-saved-conversation.jsonl"),
+            `${JSON.stringify(savedHeader)}\n`,
+          );
+          const saved = await mux("metadata", requestedId);
+          assert.equal(saved.exitCode, 0, saved.stderr);
+        }
+
+        const opened = await mux("open", "--detached", requestedId);
+        assert.equal(opened.exitCode, 1, opened.stdout);
+        assert.equal(opened.stdout, "");
+        assert.match(
+          opened.stderr,
+          hasSavedMatch ? /A competing Windows pi launch is still running/ : /Session not found/,
+        );
+
+        const reopened = await mux("open", "--detached", liveId);
+        assert.equal(reopened.exitCode, 0, reopened.stderr);
+        assert.equal(reopened.stdout, created.stdout);
+        const listed = await run([...control, "list-sessions", "-F", "#{session_name}"]);
+        assert.equal(listed.exitCode, 0, listed.stderr);
+        assert.equal(listed.stdout.trim().split(/\r?\n/).filter(Boolean).length, 1);
+      } finally {
+        const listed = await run([...control, "list-sessions", "-F", "#{session_name}"]);
+        for (const session of listed.stdout.trim().split(/\r?\n/).filter(Boolean))
+          await run([...control, "kill-session", "-t", `=${session}`]);
+        await run([...control, "kill-server"]);
+        rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      }
+    },
+    80_000,
+  );
+}
