@@ -176,6 +176,30 @@ describe("PiMux", () => {
     },
   );
 
+  it.each([{}, { reloadStatus: null }, { reloadStatus: "reloading" }, { reloadStatus: true }])(
+    "accepts the active list but ignores an unrecognized or absent reload status: %j",
+    async (attributes) => {
+      const pending = { ...liveSession, reloadStatus: "waiting-reload" };
+      const other = { ...liveSession, id: "B", file: "/saved/B.jsonl" };
+      const execute = vi
+        .fn()
+        .mockResolvedValue(
+          JSON.stringify([
+            { cwd: "/project", sessions: [pending, { ...other, ...attributes }], empty: [] },
+          ]),
+        );
+
+      const [workspace] = await new PiMux(execute).list();
+
+      expect(workspace.sessions).toEqual([pending, other]);
+      expect(execute).toHaveBeenCalledExactlyOnceWith(
+        "pi-mux",
+        ["list", "--active", "--json"],
+        undefined,
+      );
+    },
+  );
+
   it.each([{ publishPending: { attemptAt: 1_700_000_000_000 } }, { publishPending: null }, {}])(
     "accepts a valid publishPending attribute: %j",
     async (attributes) => {

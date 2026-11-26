@@ -221,7 +221,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         );
         return 0;
       }
-      const active = await listWorkspaces(config);
+      const active = await listWorkspaces(
+        config,
+        operation.scope === "active" && operation.json ? "include-reload" : "omit-reload",
+      );
       if (operation.scope === "active") {
         console.log(operation.json ? JSON.stringify(active) : renderActiveTable(active));
       } else {

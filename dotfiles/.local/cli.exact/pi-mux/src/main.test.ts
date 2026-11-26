@@ -21,6 +21,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { parseOperation, type StateSource } from "./main";
+import type { ListedWorkspace } from "./session-list";
 
 const source = join(import.meta.dir, "main.ts");
 const realTmux = Bun.which("tmux");
@@ -3318,8 +3319,9 @@ function addManagedSession(fixture: SessionFixture, name: string, state: string)
   return id;
 }
 
-function startReload(fixture: SessionFixture, args: string[] = []) {
-  return Bun.spawn([process.execPath, "run", source, "reload", ...args], {
+function startReload(fixture: SessionFixture, args: string[] = [], preload?: string) {
+  const options = preload ? ["--preload", preload] : [];
+  return Bun.spawn([process.execPath, "run", ...options, source, "reload", ...args], {
     cwd: fixture.cwd,
     env: fixture.env,
     stdout: "pipe",
@@ -5238,6 +5240,27 @@ describe("restart safety", () => {
   }, 20000);
 });
 
+function activeList(
+  fixture: SessionFixture,
+  environment?: Record<string, string>,
+): ListedWorkspace[] {
+  const result = fixture.run(["list", "--active", "--json"], environment);
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+function waitingReloadIds(fixture: SessionFixture, environment?: Record<string, string>): string[] {
+  return activeList(fixture, environment)
+    .flatMap(({ sessions, empty }) => [...sessions, ...empty])
+    .filter(({ reloadStatus }) => reloadStatus === "waiting-reload")
+    .map(({ id }) => id)
+    .sort();
+}
+
+function reloadWaitingDirectory(fixture: SessionFixture): string {
+  return `${fixture.socket}.reload-wait`;
+}
+
 describe("reload", () => {
   it("accepts an optional conversation ID", () => {
     assert.deepEqual(parseOperation(["reload"]), { kind: "reload", id: undefined });
@@ -5246,6 +5269,316 @@ describe("reload", () => {
     for (const args of [["--force"], [id, "extra"], ["invalid id"], [id, "--force"]])
       assert.throws(() => parseOperation(["reload", ...args]), /usage/);
   });
+
+  it("adds reloadStatus only to the selected active JSON row without changing its state", async () => {
+    const fixture = new SessionFixture();
+    let child: ReturnType<typeof startReload> | undefined;
+    try {
+      const id = addManagedSession(fixture, "target", "running");
+      addManagedSession(fixture, "sibling", "waiting-approval");
+      fixture.tmux([
+        "set-option",
+        "-p",
+        "-t",
+        "target",
+        "@pi_session_state_pending",
+        JSON.stringify({ version: 1, sessionId: id, attemptAt: 1234 }),
+      ]);
+      const baseline = activeList(fixture);
+      const beforeText = fixture.run(["list", "--active"]);
+      const beforeUnified = fixture.run(["list", "--json"]);
+      assert.equal(beforeText.status, 0, beforeText.stderr);
+      assert.equal(beforeUnified.status, 0, beforeUnified.stderr);
+      child = startReload(fixture, [id]);
+
+      await waitUntil(() => waitingReloadIds(fixture).includes(id));
+      assert.deepEqual(
+        activeList(fixture),
+        baseline.map(({ sessions, ...workspace }) => ({
+          ...workspace,
+          sessions: sessions.map((session) =>
+            session.id === id ? { ...session, reloadStatus: "waiting-reload" } : session,
+          ),
+        })),
+      );
+      for (const [args, expected] of [
+        [["list", "--active"], beforeText.stdout],
+        [["list", "--json"], beforeUnified.stdout],
+      ] as const) {
+        const result = fixture.run([...args]);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout, expected);
+      }
+    } finally {
+      child?.kill();
+      await child?.exited;
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("fails active JSON when a live reload basis cannot be read and recovers on the next list", async () => {
+    const fixture = new SessionFixture();
+    let child: ReturnType<typeof startReload> | undefined;
+    try {
+      const id = addManagedSession(fixture, "target", "running");
+      fixture.beforeCliTmux(`case "$5:$6:$*" in
+  -N:display-message:*"show-options -gqv @pi-mux-generation"*)
+    if [ "$PI_MUX_FIXTURE_FAIL_BASIS" = 1 ]; then
+      echo "injected reload generation failure" >&2
+      exit 31
+    fi ;;
+esac`);
+      const failBasis = { PI_MUX_FIXTURE_FAIL_BASIS: "1" };
+      assert.deepEqual(waitingReloadIds(fixture, failBasis), []);
+      child = startReload(fixture, [id]);
+      await waitUntil(() => waitingReloadIds(fixture).includes(id));
+      const failed = fixture.run(["list", "--active", "--json"], failBasis);
+      assert.equal(failed.status, 1);
+      assert.equal(failed.stdout, "");
+      assert.match(failed.stderr, /injected reload generation failure/);
+      assert.deepEqual(waitingReloadIds(fixture), [id]);
+
+      const directory = reloadWaitingDirectory(fixture);
+      const record = readdirSync(directory).find((name) => name.endsWith(".json"));
+      assert.ok(record);
+      const path = join(directory, record);
+      const liveRecord = readFileSync(path, "utf8");
+      writeFileSync(path, "not JSON");
+      assert.deepEqual(waitingReloadIds(fixture, failBasis), []);
+
+      child.kill("SIGKILL");
+      await child.exited;
+      writeFileSync(path, liveRecord);
+      assert.deepEqual(waitingReloadIds(fixture, failBasis), []);
+    } finally {
+      child?.kill();
+      await child?.exited;
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("shares reload waiting across agent directories on the same endpoint but not another runtime", async () => {
+    const fixture = new SessionFixture();
+    const otherEndpoint = new SessionFixture();
+    let child: ReturnType<typeof startReload> | undefined;
+    try {
+      const id = addManagedSession(fixture, "target", "running");
+      otherEndpoint.piSession("target", {
+        id,
+        file: conversationFile(otherEndpoint.agentDir, otherEndpoint.cwd, id),
+      });
+
+      const alternateAgent = { PI_CODING_AGENT_DIR: otherEndpoint.agentDir };
+      const aliasRuntime = join(fixture.directory, "alias-runtime");
+      const aliasSocket = join(aliasRuntime, "pi-tmux/server.sock");
+      mkdirSync(dirname(aliasSocket), { recursive: true, mode: 0o700 });
+      symlinkSync(fixture.socket, aliasSocket);
+      const wrapper = join(fixture.directory, "bin/tmux");
+      writeFileSync(
+        wrapper,
+        readFileSync(wrapper, "utf8").replace(
+          `[ "$2" != ${JSON.stringify(fixture.socket)} ]`,
+          `{ [ "$2" != ${JSON.stringify(fixture.socket)} ] && [ "$2" != ${JSON.stringify(aliasSocket)} ]; }`,
+        ),
+      );
+      child = startReload(fixture, [id]);
+      await waitUntil(() => waitingReloadIds(fixture).includes(id));
+
+      assert.deepEqual(waitingReloadIds(fixture, alternateAgent), [id]);
+      assert.deepEqual(
+        waitingReloadIds(fixture, { ...alternateAgent, XDG_RUNTIME_DIR: aliasRuntime }),
+        [id],
+      );
+      assert.ok(
+        activeList(otherEndpoint)
+          .flatMap(({ sessions }) => sessions)
+          .some((row) => row.id === id),
+      );
+      assert.deepEqual(waitingReloadIds(otherEndpoint), []);
+      assert.equal(existsSync(reloadWaitingDirectory(otherEndpoint)), false);
+      assert.equal(statSync(reloadWaitingDirectory(fixture)).mode & 0o777, 0o700);
+    } finally {
+      child?.kill();
+      await child?.exited;
+      await fixture.cleanup();
+      await otherEndpoint.cleanup();
+    }
+  }, 20000);
+
+  it("retries an atomic reload publication failure without requiring the target set to change", async () => {
+    const fixture = new SessionFixture();
+    let child: ReturnType<typeof startReload> | undefined;
+    try {
+      prepareManagedPi(fixture);
+      const id = addManagedSession(fixture, "target", "running");
+      const directory = reloadWaitingDirectory(fixture);
+      const failures = join(fixture.directory, "publication-failures");
+      const permit = join(fixture.directory, "permit-publication");
+      const removalFailed = join(fixture.directory, "removal-failed");
+      const preload = join(fixture.directory, "fail-publication.ts");
+      writeFileSync(
+        preload,
+        `
+import { spyOn } from "bun:test";
+import * as fs from "node:fs";
+import { dirname } from "node:path";
+const rename = fs.renameSync;
+spyOn(fs, "renameSync").mockImplementation((source, target) => {
+  if (dirname(String(target)) === ${JSON.stringify(directory)} && !fs.existsSync(${JSON.stringify(permit)})) {
+    fs.appendFileSync(${JSON.stringify(failures)}, ".");
+    throw new Error("injected publication failure");
+  }
+  return rename(source, target);
+});
+const unlink = fs.unlinkSync;
+spyOn(fs, "unlinkSync").mockImplementation((path) => {
+  const record = String(path);
+  if (dirname(record) === ${JSON.stringify(directory)} && record.endsWith(".json")
+    && fs.existsSync(${JSON.stringify(permit)}) && !fs.existsSync(${JSON.stringify(removalFailed)})) {
+    fs.writeFileSync(${JSON.stringify(removalFailed)}, "");
+    throw new Error("injected removal failure");
+  }
+  return unlink(path);
+});
+`,
+      );
+      child = startReload(fixture, [id], preload);
+      await waitUntil(() => existsSync(failures) && readFileSync(failures).length >= 2);
+      assert.deepEqual(waitingReloadIds(fixture), []);
+      writeFileSync(permit, "");
+      await waitUntil(() => waitingReloadIds(fixture).includes(id));
+      assert.equal(readdirSync(directory).filter((name) => name.endsWith(".json")).length, 1);
+      restartState(fixture, "target", id, "waiting-user");
+      const result = await finishReload(child);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), `reloaded ${id}`);
+      assert.ok(existsSync(removalFailed));
+      assert.deepEqual(readdirSync(directory), []);
+    } finally {
+      child?.kill();
+      await child?.exited;
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("includes dynamically added empty rows and keeps overlapping reloads independent on interruption", async () => {
+    const fixture = new SessionFixture();
+    let selected: ReturnType<typeof startReload> | undefined;
+    let all: ReturnType<typeof startReload> | undefined;
+    try {
+      const id = addManagedSession(fixture, "target", "running");
+      const originalPid = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]);
+      selected = startReload(fixture, [id]);
+      await waitUntil(() => waitingReloadIds(fixture).includes(id));
+
+      all = startReload(fixture);
+      const emptyId = randomUUID();
+      const emptyFile = join(fixture.directory, "unsaved.jsonl");
+      fixture.piSession("dynamic", { id: emptyId, file: emptyFile });
+      await waitUntil(() => waitingReloadIds(fixture).includes(emptyId));
+      assert.deepEqual(activeList(fixture)[0]?.empty, [
+        { id: emptyId, file: emptyFile, reloadStatus: "waiting-reload" },
+      ]);
+
+      selected.kill("SIGINT");
+      await selected.exited;
+      assert.deepEqual(waitingReloadIds(fixture), [id, emptyId].sort());
+      all.kill("SIGKILL");
+      await all.exited;
+      const directory = reloadWaitingDirectory(fixture);
+      const entries = readdirSync(directory).sort();
+      assert.deepEqual(waitingReloadIds(fixture), []);
+      assert.deepEqual(readdirSync(directory).sort(), entries);
+      assert.equal(
+        fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]),
+        originalPid,
+      );
+    } finally {
+      selected?.kill();
+      all?.kill();
+      await Promise.all([selected?.exited, all?.exited]);
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("does not report a marker owned by a previous process with the same PID", async () => {
+    const fixture = new SessionFixture();
+    let child: ReturnType<typeof startReload> | undefined;
+    try {
+      const id = addManagedSession(fixture, "target", "running");
+      child = startReload(fixture, [id]);
+      await waitUntil(() => waitingReloadIds(fixture).includes(id));
+      const directory = reloadWaitingDirectory(fixture);
+      const name = readdirSync(directory).find((entry) => entry.endsWith(".json"));
+      assert.ok(name);
+      const path = join(directory, name);
+      const record = JSON.parse(readFileSync(path, "utf8"));
+      assert.equal(record.pid, child.pid);
+      writeFileSync(path, JSON.stringify({ ...record, started: "0" }));
+      assert.equal(child.exitCode, null);
+      assert.deepEqual(waitingReloadIds(fixture), []);
+    } finally {
+      child?.kill();
+      await child?.exited;
+      await fixture.cleanup();
+    }
+  }, 20000);
+
+  it("ignores a permission-denied reload owner but propagates unexpected process read errors", async () => {
+    const fixture = new SessionFixture();
+    let child: ReturnType<typeof startReload> | undefined;
+    try {
+      const id = addManagedSession(fixture, "target", "running");
+      const baseline = activeList(fixture);
+      child = startReload(fixture, [id]);
+      await waitUntil(() => waitingReloadIds(fixture).includes(id));
+      const ownerPath = `/proc/${child.pid}/stat`;
+      child.kill("SIGKILL");
+      await child.exited;
+
+      const preload = join(fixture.directory, "fail-reload-owner-read.ts");
+      writeFileSync(
+        preload,
+        `
+import { spyOn } from "bun:test";
+import * as fs from "node:fs";
+const readFile = fs.readFileSync;
+spyOn(fs, "readFileSync").mockImplementation((...args) => {
+  if (args[0] === ${JSON.stringify(ownerPath)}) {
+    throw Object.assign(new Error("injected reload owner read failure"), {
+      code: process.env.PI_MUX_FIXTURE_OWNER_READ_ERROR,
+    });
+  }
+  return Reflect.apply(readFile, fs, args);
+});
+`,
+      );
+      for (const code of ["EACCES", "EPERM", "EIO"]) {
+        const result = spawnSync(
+          process.execPath,
+          ["run", "--preload", preload, source, "list", "--active", "--json"],
+          {
+            cwd: fixture.cwd,
+            env: { ...fixture.env, PI_MUX_FIXTURE_OWNER_READ_ERROR: code },
+            encoding: "utf8",
+            timeout: 10_000,
+          },
+        );
+        if (code === "EIO") {
+          assert.equal(result.status, 1);
+          assert.equal(result.stdout, "");
+          assert.match(result.stderr, /injected reload owner read failure/);
+        } else {
+          assert.equal(result.status, 0, result.stderr);
+          assert.deepEqual(JSON.parse(result.stdout), baseline);
+        }
+      }
+    } finally {
+      child?.kill();
+      await child?.exited;
+      await fixture.cleanup();
+    }
+  }, 20000);
 
   it("reloads another ready conversation before the first replacement publishes metadata", async () => {
     const fixture = new SessionFixture();
@@ -5289,7 +5622,7 @@ describe("reload", () => {
     let child: ReturnType<typeof startReload> | undefined;
     try {
       const firstId = addManagedSession(fixture, "first", "waiting-user");
-      addManagedSession(fixture, "second", "running");
+      const secondId = addManagedSession(fixture, "second", "running");
       const allowPublication = join(fixture.directory, "allow-first-publication");
       const failScan = join(fixture.directory, "fail-next-scan");
       const scanFailed = join(fixture.directory, "scan-failed");
@@ -5317,8 +5650,11 @@ exec `,
 
       child = startReload(fixture);
       await waitUntil(() => firstPid() !== originalPid);
+      assert.deepEqual(waitingReloadIds(fixture), [secondId]);
       writeFileSync(failScan, "");
       await waitUntil(() => existsSync(scanFailed));
+      await waitUntil(() => waitingReloadIds(fixture).length === 0);
+      assert.equal(child.exitCode, null);
       writeFileSync(allowPublication, "");
 
       const result = await finishReload(child);
@@ -5574,6 +5910,7 @@ exec `,
           readFileSync(launches, "utf8").includes(firstId),
       );
       const replacementPid = firstPid();
+      assert.deepEqual(waitingReloadIds(fixture), [firstId]);
 
       fixture.env.PI_MUX_FIXTURE_GATE_CONFIRMATION = "2";
       writeFileSync(secondScans, "");
@@ -5600,6 +5937,7 @@ exec `,
         secondResult.stdout.trim().split("\n").sort(),
         [`reloaded ${firstId}`, `reloaded ${secondId}`].sort(),
       );
+      assert.deepEqual(waitingReloadIds(fixture), []);
     } finally {
       writeFileSync(allowConfirmation, "");
       first?.kill();
@@ -5963,21 +6301,25 @@ exec `,
     }
   });
 
-  it("rejects a server generation change while waiting", async () => {
+  it("hides a live reload marker after a server generation change and rejects the reload", async () => {
     const fixture = new SessionFixture();
     let child: ReturnType<typeof startReload> | undefined;
     try {
       prepareManagedPi(fixture);
-      addManagedSession(fixture, "target", "running");
+      const id = addManagedSession(fixture, "target", "running");
       child = startReload(fixture);
-      await Bun.sleep(250);
-      assert.equal(child.exitCode, null);
+      await waitUntil(() => waitingReloadIds(fixture).includes(id));
+      child.kill("SIGSTOP");
       const pid = fixture.tmux(["display-message", "-p", "#{pid}"]);
       fixture.tmux(["set-option", "-g", "@pi-mux-generation", "replacement"]);
+      assert.equal(child.exitCode, null);
+      assert.deepEqual(waitingReloadIds(fixture), []);
+      child.kill("SIGCONT");
       assert.equal(await child.exited, 1);
       assert.match(await new Response(child.stderr).text(), /server changed/);
       assert.equal(fixture.tmux(["display-message", "-p", "#{pid}"]), pid);
     } finally {
+      child?.kill("SIGCONT");
       child?.kill();
       if (child) await child.exited;
       await fixture.cleanup();

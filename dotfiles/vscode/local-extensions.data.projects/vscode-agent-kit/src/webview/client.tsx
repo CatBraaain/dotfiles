@@ -44,6 +44,7 @@ export interface ClientSession {
   hasUnread?: boolean;
   /** True while a state publication is known to be incomplete for the session. */
   publishDelayed?: boolean;
+  reloadPending?: boolean;
 }
 
 export interface ClientSessionGroup {
@@ -265,6 +266,7 @@ function sessionDescriptor(
     session.sessionId,
     phaseLabel(session.state),
     session.publishDelayed ? PUBLISH_DELAYED_HINT : undefined,
+    session.reloadPending ? "Reload pending" : undefined,
     session.state === "waiting-user" && session.hasUnread && !session.isArchived
       ? "Unread"
       : undefined,
@@ -298,6 +300,7 @@ function sessionDescriptor(
             children: [
               ...sessionStatusIcons(session),
               ...(session.publishDelayed ? [publishDelayDot()] : []),
+              ...(session.reloadPending ? [reloadMark()] : []),
             ],
           },
           { tag: "span", attrs: { class: "session-name" }, children: [session.displayName] },
@@ -355,6 +358,19 @@ const PUBLISH_DELAYED_HINT = "State update delayed";
 /** Warning dot in the status slot marking a session whose state publication is incomplete. */
 function publishDelayDot(): ElementDescriptor {
   return { tag: "span", attrs: { class: "session-delay-dot" } };
+}
+
+function reloadMark(): ElementDescriptor {
+  return {
+    tag: "span",
+    attrs: { class: "session-reload-mark" },
+    children: [
+      strokeIcon([
+        { tag: "path", attrs: { d: "M20 10a8 8 0 1 0-1.5 7" } },
+        { tag: "path", attrs: { d: "M20 4v6h-6" } },
+      ]),
+    ],
+  };
 }
 
 export function formatSessionTimestamp(updatedAtMs: number | null, now = new Date()): string {
@@ -610,7 +626,8 @@ function SessionStatus({
     return () => motion.removeEventListener("change", onMotionChange);
   }, []);
 
-  const children = visibility.fading ? [unreadBellIcon()] : (descriptor.children ?? []);
+  const statusChildren = descriptor.children ?? [];
+  const children = visibility.fading ? [unreadBellIcon(), ...statusChildren] : statusChildren;
   return createElement(
     "span",
     {

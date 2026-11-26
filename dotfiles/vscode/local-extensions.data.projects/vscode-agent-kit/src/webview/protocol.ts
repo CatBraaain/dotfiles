@@ -22,6 +22,7 @@ export interface WebviewSession {
   hasUnread?: boolean;
   /** True while a state publication is known to be incomplete for the session. */
   publishDelayed?: boolean;
+  reloadPending?: boolean;
 }
 
 export interface WebviewSessionGroup {

@@ -1,5 +1,6 @@
 import type { ReleaseLock } from "./locks";
 import { matchesLaunch } from "./pane-inventory";
+import type { ReloadWaiting, ReloadWaitingTarget } from "./reload-waiting";
 import type { Pane } from "./session-model";
 
 export type ReloadPublication = {
@@ -15,15 +16,27 @@ export type ReloadProgress = {
   reloaded: Set<string>;
   failed: Set<string>;
   inFlight: Map<string, InFlightReload>;
+  waiting: ReloadWaiting;
 };
 
+export function publishWaitingTargets(
+  {
+    waiting,
+    inFlight,
+  }: { waiting: ReloadWaiting; inFlight: ReadonlyMap<string, ReloadPublication> },
+  queued: readonly ReloadWaitingTarget[] = [],
+): void {
+  waiting.replace([...queued, ...[...inFlight.values()].map(({ pane }) => pane)]);
+}
+
 export function reportReloadFailure(
-  progress: Pick<ReloadProgress, "failed">,
+  progress: Pick<ReloadProgress, "failed" | "waiting">,
   id: string,
   reason: string,
 ): void {
   if (progress.failed.has(id)) return;
   progress.failed.add(id);
+  progress.waiting.settle(id);
   console.error(`pi-mux: reload ${id}: ${reason}`);
 }
 
@@ -52,8 +65,12 @@ export function wasReplacedByPeer(
   );
 }
 
-export function announceReloaded(progress: Pick<ReloadProgress, "reloaded">, id: string): void {
+export function announceReloaded(
+  progress: Pick<ReloadProgress, "reloaded" | "waiting">,
+  id: string,
+): void {
   progress.reloaded.add(id);
+  progress.waiting.settle(id);
   console.log(`reloaded ${id}`);
 }
 

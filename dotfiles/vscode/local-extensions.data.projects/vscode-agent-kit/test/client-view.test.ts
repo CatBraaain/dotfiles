@@ -582,6 +582,29 @@ describe("sessionListView", () => {
     );
   });
 
+  it("describes reload after the delay and before unread without replacing either icon", () => {
+    const session = {
+      ...atlasUnarchived,
+      state: "waiting-user" as const,
+      hasUnread: true,
+      publishDelayed: true,
+      reloadPending: true,
+    };
+    const elements = elementsIn(viewFor("all", [{ ...groups[0], sessions: [session] }]));
+    const slot = byClass(elements, "session-status")[0];
+
+    expect(slot.children).toHaveLength(3);
+    expect(byClass(elements, "session-reload-mark")[0].children).toEqual([
+      expect.objectContaining({
+        tag: "svg",
+        attrs: expect.objectContaining({ focusable: "false" }),
+      }),
+    ]);
+    expect(byClass(elements, "session-button")[0].attrs?.title).toBe(
+      `${session.displayName}\n${session.sessionId}\nWaiting for user\nState update delayed\nReload pending\nUnread`,
+    );
+  });
+
   it("omits the publish-delay mark for rows without a fresh delay", () => {
     const elements = elementsIn(
       viewFor("all", [

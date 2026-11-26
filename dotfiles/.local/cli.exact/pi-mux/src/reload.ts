@@ -10,9 +10,11 @@ import {
   matchesReloadPublication,
   type ReloadProgress,
   type ReloadPublication,
+  publishWaitingTargets,
   reportReloadFailure,
   wasReplacedByPeer,
 } from "./reload-publication";
+import { ReloadWaiting } from "./reload-waiting";
 import { bootstrapServer, snapshotSessions, startAndRestore } from "./restoration";
 import { readSnapshot } from "./restore-state";
 import { findSaved } from "./saved-sessions";
@@ -56,7 +58,12 @@ export async function reloadPanes(config: Config, onlyId?: string): Promise<numb
     await bootstrapServer(config, onlyId === undefined ? "start" : "existing");
     return await livePanes(config, "list");
   });
-  const progress: ReloadProgress = { reloaded: new Set(), failed: new Set(), inFlight: new Map() };
+  const progress: ReloadProgress = {
+    reloaded: new Set(),
+    failed: new Set(),
+    inFlight: new Map(),
+    waiting: new ReloadWaiting(config, original),
+  };
   let schedulingFailure: { cause: unknown } | undefined;
   try {
     while (true) {
@@ -66,6 +73,7 @@ export async function reloadPanes(config: Config, onlyId?: string): Promise<numb
             startNextReload(config, original, initialPanes, progress, onlyId),
           ).catch((cause: unknown) => {
             schedulingFailure = { cause };
+            publishWaitingTargets(progress);
             return "done" as const;
           });
       await confirmReloadPublications(config, original, progress);
@@ -76,6 +84,7 @@ export async function reloadPanes(config: Config, onlyId?: string): Promise<numb
       if (step !== "started") await Bun.sleep(POLL_INTERVAL_MS);
     }
   } finally {
+    progress.waiting.replace([]);
     await Promise.all([...progress.inFlight.values()].map(({ release }) => release()));
   }
 }
@@ -88,9 +97,10 @@ async function startNextReload(
   onlyId?: string,
 ): Promise<"started" | "wait" | "done"> {
   await verifyServerLifetime(config, original, "reload");
-  const targets = await scanReloadTargets(config, initialPanes, progress, onlyId);
-  if (!targets) return "done";
-  for (const target of targets) {
+  const scan = await scanReloadTargets(config, initialPanes, progress, onlyId);
+  publishWaitingTargets(progress, scan?.queued);
+  if (!scan) return "done";
+  for (const target of scan.ready) {
     const { id } = target.pane;
     const scope = `\0reload\0${original.pid}\0${original.generation}\0${id}`;
     const release = await tryAcquireLock(lockAddress(config, scope));
@@ -121,7 +131,7 @@ async function scanReloadTargets(
   initialPanes: readonly Pane[],
   progress: ReloadProgress,
   onlyId?: string,
-): Promise<ReloadTarget[] | undefined> {
+): Promise<{ ready: ReloadTarget[]; queued: ManagedSession[] } | undefined> {
   const { reloaded, failed, inFlight } = progress;
   const managed = (await managedSessions(config)).filter(
     ({ id }) =>
@@ -219,14 +229,16 @@ async function scanReloadTargets(
       },
     ]),
   );
-  const targets: ReloadTarget[] = [];
+  const ready: ReloadTarget[] = [];
+  const queued: ManagedSession[] = [];
   for (const [index, session] of pending.entries()) {
     const publishedRows = rows[index]!.filter((row) => row.published);
-    if (publishedRows.length === 0) {
-      if ((bootingBySession.get(session.id) ?? 0) > 0) continue;
+    const isBooting = (bootingBySession.get(session.id) ?? 0) > 0;
+    if (publishedRows.length === 0 && !isBooting) {
       reportReloadFailure(progress, session.id, "The managed pi is not running");
       continue;
     }
+    queued.push(session);
     for (const row of publishedRows) {
       const pane = owned.find((entry) => entry.pane === row.pane)!;
       const inspection = inspected.get(pane.pane)!;
@@ -234,16 +246,16 @@ async function scanReloadTargets(
         throw new Error(`Cannot inspect pending reload state: ${pane.id}`);
       if (inspection.state.exitCode !== 0)
         throw new Error(`Cannot inspect reload state: ${pane.id}`);
-      const ready =
+      const canRespawn =
         !inspection.blocker.stdout.trim() &&
         parseSessionState(inspection.state.stdout.trimEnd(), pane.id) === "waiting-user" &&
         pane.startup !== "accepted";
-      if (!ready) continue;
-      targets.push({ session, pane });
+      if (!canRespawn) continue;
+      ready.push({ session, pane });
       break;
     }
   }
-  return targets;
+  return { ready, queued };
 }
 
 async function respawnReloadTarget(

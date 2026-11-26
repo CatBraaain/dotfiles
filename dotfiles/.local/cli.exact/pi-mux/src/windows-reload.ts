@@ -20,9 +20,11 @@ import {
   matchesReloadPublication,
   type ReloadProgress,
   type ReloadPublication,
+  publishWaitingTargets,
   reportReloadFailure,
   wasReplacedByPeer,
 } from "./reload-publication";
+import { ReloadWaiting } from "./reload-waiting";
 import { startAndRestore } from "./restoration";
 import { readSnapshot, uniqueCandidates, writeSnapshot } from "./restore-state";
 import { findSaved } from "./saved-sessions";
@@ -76,7 +78,7 @@ type WindowsReloadPublication = Omit<ReloadPublication, "deadlineMs"> & {
   release: ReleaseLock;
 };
 
-type WindowsReloadProgress = Pick<ReloadProgress, "reloaded" | "failed"> & {
+type WindowsReloadProgress = Pick<ReloadProgress, "reloaded" | "failed" | "waiting"> & {
   inFlight: Map<string, WindowsReloadPublication>;
 };
 
@@ -251,6 +253,7 @@ export async function reloadWindowsPanes(config: Config, onlyId?: string): Promi
     reloaded: new Set(),
     failed: new Set(),
     inFlight: new Map(),
+    waiting: new ReloadWaiting(config, initial.original),
   };
   const context = { ...initial, config, management, rights, progress };
   let schedulingFailure: { cause: unknown } | undefined;
@@ -261,6 +264,7 @@ export async function reloadWindowsPanes(config: Config, onlyId?: string): Promi
         : await withLock(config, () => startNextWindowsReload(context, onlyId)).catch(
             (cause: unknown) => {
               schedulingFailure = { cause };
+              publishWaitingTargets(progress);
               return "done" as const;
             },
           );
@@ -272,6 +276,7 @@ export async function reloadWindowsPanes(config: Config, onlyId?: string): Promi
       if (step !== "started") await Bun.sleep(POLL_INTERVAL_MS);
     }
   } finally {
+    progress.waiting.replace([]);
     await Promise.all([...progress.inFlight.values()].map(({ release }) => release()));
   }
 }
@@ -296,7 +301,19 @@ async function startNextWindowsReload(
   for (const { session } of candidates)
     if (wasReplacedByPeer(initialPanes, livePanes, session.session, session.id))
       announceReloaded(progress, session.id);
-  const targets = candidates.filter(({ session: { id } }) => !progress.reloaded.has(id));
+  const targets = candidates
+    .filter(({ session: { id } }) => !progress.reloaded.has(id))
+    .map(({ peer, session }) => ({
+      peer,
+      session,
+      inspection: inspectReloadTarget(audit, peer, session),
+    }));
+  publishWaitingTargets(
+    progress,
+    targets.flatMap(({ peer, session, inspection }) =>
+      inspection.outcome === "excluded" ? [] : [{ ...session, name: peer.name }],
+    ),
+  );
   if (
     onlyId &&
     !audit.managed.some(({ id }) => id === onlyId) &&
@@ -304,7 +321,7 @@ async function startNextWindowsReload(
     !progress.inFlight.has(onlyId)
   )
     reportReloadFailure(progress, onlyId, "The managed pi is not running");
-  for (const { peer, session } of targets) {
+  for (const { session, inspection } of targets) {
     const { id } = session;
     const lockKey = JSON.stringify([
       management.lockResource,
@@ -317,7 +334,7 @@ async function startNextWindowsReload(
     );
     if (!release) continue;
     try {
-      const target = await selectWindowsReloadTarget(context, audit, peer, session);
+      const target = await selectWindowsReloadTarget(context, session, inspection);
       if (!target) continue;
       const publication = await respawnWindowsReloadTarget(context, audit, target);
       if (!publication) continue;
@@ -330,46 +347,62 @@ async function startNextWindowsReload(
   return targets.some(({ session }) => !progress.failed.has(session.id)) ? "wait" : "done";
 }
 
-async function selectWindowsReloadTarget(
-  context: WindowsReloadContext,
+type ReloadTargetInspection =
+  | { outcome: "published"; target: WindowsReloadTarget }
+  | { outcome: "starting"; right: string | undefined }
+  | { outcome: "excluded"; reason: string };
+
+function inspectReloadTarget(
   audit: WindowsLifecycleAudit,
   peer: WindowsLifecyclePeer,
   session: ManagedSession,
-): Promise<WindowsReloadTarget | undefined> {
-  const { config, progress, rights } = context;
+): ReloadTargetInspection {
   const { id } = session;
-  if (progress.failed.has(id)) return;
-  const owned = audit.entries.filter((entry) => entry.peer.identity === peer.identity);
+  const entry = audit.entries.find((entry) => entry.peer.identity === peer.identity);
   const observed = audit.panes.find(({ peer: observed }) => observed.identity === peer.identity);
   const sameId = audit.entries.filter(({ pi }) => pi?.id.toLowerCase() === id.toLowerCase());
   const owners = audit.managed.filter(
     (candidate) => candidate.id.toLowerCase() === id.toLowerCase(),
   );
-  if (owners.length !== 1 || sameId.length > 1 || (observed?.rows.length ?? 0) > 1) {
-    reportReloadFailure(progress, id, "Cannot uniquely identify the managed pi and pane");
-    return;
-  }
-  const entry = owned[0];
+  if (owners.length !== 1 || sameId.length > 1 || (observed?.rows.length ?? 0) > 1)
+    return { outcome: "excluded", reason: "Cannot uniquely identify the managed pi and pane" };
   const pane = entry?.pi;
   if (!entry || !pane || pane.id !== id) {
     if (
       entry &&
       !pane &&
       launchMatchesManagedSession(entry.launch ?? "", session, String(entry.panePid))
-    ) {
-      if (!entry.right) return;
-      const status = await rights.status(entry.right);
-      if (status.state === "reserved" || status.state === "pending" || status.state === "live")
-        return;
-      if (status.state === "unknown") throw new Error(`Cannot verify Windows launch for ${id}`);
-    }
+    )
+      return { outcome: "starting", right: entry.right };
+    return { outcome: "excluded", reason: "The managed pi is not running" };
+  }
+  if (pane.cwd !== session.cwd || pane.session !== session.session)
+    return { outcome: "excluded", reason: "Conflicting working directories or session ownership" };
+  return { outcome: "published", target: { session, entry, pane } };
+}
+
+async function selectWindowsReloadTarget(
+  context: WindowsReloadContext,
+  session: ManagedSession,
+  inspection: ReloadTargetInspection,
+): Promise<WindowsReloadTarget | undefined> {
+  const { config, progress, rights } = context;
+  const { id } = session;
+  if (progress.failed.has(id)) return;
+  if (inspection.outcome === "excluded") {
+    reportReloadFailure(progress, id, inspection.reason);
+    return;
+  }
+  if (inspection.outcome === "starting") {
+    if (!inspection.right) return;
+    const status = await rights.status(inspection.right);
+    if (status.state === "reserved" || status.state === "pending" || status.state === "live")
+      return;
+    if (status.state === "unknown") throw new Error(`Cannot verify Windows launch for ${id}`);
     reportReloadFailure(progress, id, "The managed pi is not running");
     return;
   }
-  if (pane.cwd !== session.cwd || pane.session !== session.session) {
-    reportReloadFailure(progress, id, "Conflicting working directories or session ownership");
-    return;
-  }
+  const { entry, pane } = inspection.target;
   if (!windowsPaneIsWaiting(config, entry) || !entry.launch) return;
   if (entry.right) {
     const status = await rights.status(entry.right);
@@ -383,7 +416,7 @@ async function selectWindowsReloadTarget(
     )
       throw new Error(`Cannot verify the current Windows pi launch for ${id}`);
   }
-  return { session, entry, pane };
+  return inspection.target;
 }
 
 async function respawnWindowsReloadTarget(

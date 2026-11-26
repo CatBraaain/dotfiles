@@ -413,14 +413,18 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
     this.archivedSessionIds = archivedIds;
     const currentUnreadIds = this.unreadIdsFor(workspaces);
+    const live = flattenPiMuxSessions(workspaces);
     const state: WebviewState = {
       groups: sessionViewGroups(sessions, {
         registeredCwds: [...addedCwds],
         archivedIds,
-        liveIds: new Set(flattenPiMuxSessions(workspaces).map(({ id }) => id)),
+        liveIds: new Set(live.map(({ id }) => id)),
         phases: phasesFromWorkspaces(workspaces),
         unreadIds: currentUnreadIds,
         delayedIds,
+        reloadPendingIds: new Set(
+          live.filter(({ reloadStatus }) => reloadStatus === "waiting-reload").map(({ id }) => id),
+        ),
       }),
       displayedSessionId: this.deps.registry.displayedSessionId,
     };

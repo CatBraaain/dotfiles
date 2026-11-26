@@ -11,6 +11,7 @@ import {
   type SessionState,
 } from "./pane-state";
 import { platform } from "./platform";
+import { readReloadWaiting, waitingKey } from "./reload-waiting";
 import { readSnapshot, registerWorkspaces } from "./restore-state";
 import { resolveSessionTitle } from "./saved-sessions";
 import type { Pane } from "./session-model";
@@ -20,7 +21,9 @@ const STATE_OPTION = "@pi_session_state";
 const PUBLISH_PENDING_OPTION = "@pi_session_state_pending";
 const PANE_OPTIONS_COMPLETE = "pi-mux-pane-options-complete";
 
-export type ListedSession = {
+type ReloadStatus = { reloadStatus?: "waiting-reload" };
+
+export type ListedSession = ReloadStatus & {
   id: string;
   file: string;
   state: SessionState | null;
@@ -30,25 +33,29 @@ export type ListedSession = {
   temporary?: true;
 };
 
-export type EmptySession = { id: string; file: string; temporary?: true };
+export type EmptySession = ReloadStatus & { id: string; file: string; temporary?: true };
 
 export type ListedWorkspace = { cwd: string; sessions: ListedSession[]; empty: EmptySession[] };
 
-export async function listWorkspaces(config: TmuxConfig): Promise<ListedWorkspace[]> {
+export async function listWorkspaces(
+  config: TmuxConfig,
+  reload: "include-reload" | "omit-reload" = "omit-reload",
+): Promise<ListedWorkspace[]> {
   const panes = await livePanes(config, "list");
   const current = readSnapshot(config);
   if (panes.some(({ cwd }) => !current?.cwds.includes(cwd))) {
     prepareDirectory(config.stateDirectory);
     return await withLock(config, async () =>
-      collectWorkspaceList(config, await livePanes(config, "list"), "register"),
+      collectWorkspaceList(config, await livePanes(config, "list"), reload, "register"),
     );
   }
-  return await collectWorkspaceList(config, panes);
+  return await collectWorkspaceList(config, panes, reload);
 }
 
 async function collectWorkspaceList(
   config: TmuxConfig,
   panes: Pane[],
+  reload: "include-reload" | "omit-reload",
   registration: "read" | "register" = "read",
 ): Promise<ListedWorkspace[]> {
   const saved = panes.filter((pane) => existsSync(pane.file));
@@ -63,7 +70,13 @@ async function collectWorkspaceList(
     ...unsaved.map(({ session }) => temporarySessionQuery(session)),
   ];
   const results = await listTmuxQueries(config, commands);
-  const sessions = saved.map(({ id, cwd, file, session }, index) => {
+  const reloadWaiting =
+    reload === "include-reload" && panes.length ? await readReloadWaiting(config) : undefined;
+  function statusFor(pane: Pane): ReloadStatus {
+    return reloadWaiting?.has(waitingKey(pane)) ? { reloadStatus: "waiting-reload" } : {};
+  }
+  const sessions = saved.map((pane, index) => {
+    const { id, cwd, file, session } = pane;
     const queryIndex = index * savedQueryCount;
     const temporaryIndex = queryIndex + savedQueryCount - 1;
     const [metadata, pending] = results.slice(queryIndex, temporaryIndex).map((result) => {
@@ -91,11 +104,13 @@ async function collectWorkspaceList(
         file,
         ...parseSessionMetadata(stateValue, id, file),
         publishPending: parsePublishPending(pendingValue, id),
+        ...statusFor(pane),
         ...(temporary ? { temporary: true as const } : {}),
       } satisfies ListedSession,
     };
   });
-  const empty = unsaved.map(({ id, cwd, file, session }, index) => {
+  const empty = unsaved.map((pane, index) => {
+    const { id, cwd, file, session } = pane;
     const result = results[savedQueries.length + index]!;
     const temporary = readTemporarySession(config, session, id, result, "allow-missing");
     return {
@@ -103,6 +118,7 @@ async function collectWorkspaceList(
       session: {
         id,
         file,
+        ...statusFor(pane),
         ...(temporary ? { temporary: true as const } : {}),
       } satisfies EmptySession,
     };

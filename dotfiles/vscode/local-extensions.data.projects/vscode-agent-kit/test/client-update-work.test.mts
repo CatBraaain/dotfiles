@@ -5,12 +5,13 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { WebviewSession, WebviewState } from "../src/webview/protocol";
+import type { ExtensionMessage, WebviewSession, WebviewState } from "../src/webview/protocol";
 import { webviewAppMarkup } from "../src/webview/webview-html";
 import { webviewStyles } from "../src/webview/webview-styles";
 
-type ChangedField = "displayName" | "updatedAtMs" | "state" | "hasUnread";
+type ChangedField = "displayName" | "updatedAtMs" | "state" | "hasUnread" | "reloadPending";
 type RowLocation = "onscreen" | "offscreen" | "excluded" | "collapsed";
+type ListMessage = Extract<ExtensionMessage, { type: "sessions" | "sessionsError" }>;
 interface UpdateCase {
   field: ChangedField;
   workspaceCount: number;
@@ -18,7 +19,13 @@ interface UpdateCase {
   location: RowLocation;
 }
 
-const changedFields: ChangedField[] = ["displayName", "updatedAtMs", "state", "hasUnread"];
+const changedFields: ChangedField[] = [
+  "displayName",
+  "updatedAtMs",
+  "state",
+  "hasUnread",
+  "reloadPending",
+];
 const updateCases: UpdateCase[] = [
   ...[1, 10].flatMap((workspaceCount) =>
     changedFields.flatMap((field): UpdateCase[] => [
@@ -28,7 +35,7 @@ const updateCases: UpdateCase[] = [
     ]),
   ),
   ...[1, 10].flatMap((workspaceCount) =>
-    (["displayName", "updatedAtMs"] as const).map((field): UpdateCase => ({
+    (["displayName", "updatedAtMs", "reloadPending"] as const).map((field): UpdateCase => ({
       field,
       workspaceCount,
       mode: "unarchived",
@@ -72,6 +79,9 @@ function changeField(session: WebviewSession, field: ChangedField): void {
       return;
     case "hasUnread":
       session.hasUnread = true;
+      return;
+    case "reloadPending":
+      session.reloadPending = true;
   }
 }
 
@@ -96,7 +106,7 @@ describe("single-row display work", () => {
           '"./document-scrollbar"',
           JSON.stringify(resolve("src/webview/document-scrollbar")),
         ) +
-      '\nglobalThis.__receiveSessions = (state) => flushRowUpdate(() => window.dispatchEvent(new MessageEvent("message", { data: { type: "sessions", state } })));';
+      '\nglobalThis.__receiveListMessage = (data) => flushRowUpdate(() => window.dispatchEvent(new MessageEvent("message", { data })));';
     const entryPath = join(outputDir, "client.tsx");
     await writeFile(entryPath, instrumented);
     await symlink(resolve("node_modules"), join(outputDir, "node_modules"), "dir");
@@ -129,7 +139,7 @@ describe("single-row display work", () => {
     });
     await page.addScriptTag({ type: "module", content: clientSource });
     await page.waitForFunction(
-      () => typeof Reflect.get(window, "__receiveSessions") === "function",
+      () => typeof Reflect.get(window, "__receiveListMessage") === "function",
     );
   });
 
@@ -142,13 +152,45 @@ describe("single-row display work", () => {
   });
 
   async function receive(state: WebviewState): Promise<string[]> {
-    return page.evaluate((state) => {
-      Reflect.set(window, "__rowBuilds", []);
-      const send = Reflect.get(window, "__receiveSessions") as (state: WebviewState) => void;
-      send(state);
-      return Reflect.get(window, "__rowBuilds") as string[];
-    }, state);
+    return receiveListMessage({ type: "sessions", state });
   }
+
+  async function receiveListMessage(message: ListMessage): Promise<string[]> {
+    return page.evaluate((message) => {
+      Reflect.set(window, "__rowBuilds", []);
+      const send = Reflect.get(window, "__receiveListMessage") as (message: ListMessage) => void;
+      send(message);
+      return Reflect.get(window, "__rowBuilds") as string[];
+    }, message);
+  }
+
+  it("exposes reload in the row description and retains it on list error", async () => {
+    const initial = createState(1);
+    const group = initial.groups[0];
+    group.sessions = group.sessions.slice(0, 6);
+    const session = group.sessions[0];
+    session.state = "running";
+    session.publishDelayed = true;
+    session.reloadPending = true;
+    await receive(initial);
+    const button = page.getByRole("button", { name: session.displayName, exact: true });
+    const mark = button.locator(".session-reload-mark");
+    const cdp = await page.context().newCDPSession(page);
+    const { nodes } = await cdp.send("Accessibility.getFullAXTree");
+    const row = nodes.find(
+      (node) => node.role?.value === "button" && node.name?.value === session.displayName,
+    );
+
+    expect(row?.description?.value).toMatch(/State update delayed\s+Reload pending/);
+    expect(await button.locator(".session-status > svg").count()).toBe(1);
+    expect(await button.locator(".session-delay-dot").count()).toBe(1);
+    expect(await mark.count()).toBe(1);
+    expect(await mark.locator("svg").getAttribute("focusable")).toBe("false");
+
+    expect(await receiveListMessage({ type: "sessionsError" })).toEqual([]);
+    expect(await mark.count()).toBe(1);
+    expect(await button.getAttribute("title")).toContain("Reload pending");
+  });
 
   it.each(updateCases)(
     "$field / $workspaceCount workspace / $mode / $location builds only the changed display content",
@@ -192,6 +234,18 @@ describe("single-row display work", () => {
       changeField(changed, field);
       const builtSessionIds = await receive(updated);
       expect(builtSessionIds).toEqual(isDisplayed ? [sessionId] : []);
+      if (field === "reloadPending") {
+        if (isDisplayed) {
+          expect(await target.locator(".session-reload-mark").count()).toBe(1);
+          expect(await target.getAttribute("title")).toContain("Reload pending");
+        }
+        expect(await receive(initial)).toEqual(isDisplayed ? [sessionId] : []);
+        if (isDisplayed) {
+          expect(await target.locator(".session-reload-mark").count()).toBe(0);
+          expect(await target.getAttribute("title")).not.toContain("Reload pending");
+        }
+        return;
+      }
       if (!isDisplayed) return;
       if (field === "displayName")
         expect(await target.textContent()).toContain(changed.displayName);

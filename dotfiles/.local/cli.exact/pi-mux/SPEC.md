@@ -462,7 +462,9 @@ JSONでは `[{"cwd":"/path/to/workspace","sessions":[{"id":"session-id","file":"
 
 各sessionは次の項目を持つ。一時再開中だけ `temporary: true` を追加する。通常状態では `temporary` 属性を省略する。一時再開中も `sessions` に掲載し、`id`・`file`・`state`・`title`・`publishPending` の意味は維持する。
 
-空新規（会話ファイルが未作成の稼働pi）は `sessions` に入れず、workspaceオブジェクトの `empty` 配列に置く。存在判定はmetadataの `file` パスに対する存在チェックによる。`empty` の各要素は `id` と `file` の2項目を持ち、`state`・`title`・`publishPending` は持たない。`temporary` の付与は `sessions` と同じで、一時再開中だけ `temporary: true` を追加する。`empty` も該当がなければ空配列になる。
+空新規（会話ファイルが未作成の稼働pi）は `sessions` に入れず、workspaceオブジェクトの `empty` 配列に置く。存在判定はmetadataの `file` パスに対する存在チェックによる。`empty` の各要素は `id` と `file` を持ち、`state`・`title`・`publishPending` は持たない。`temporary` の付与は `sessions` と同じで、一時再開中だけ `temporary: true` を追加する。`empty` も該当がなければ空配列になる。
+
+`list --active --json` は、[reload の待機状態](#reload-の待機状態)に該当する稼働piの要素に `"reloadStatus": "waiting-reload"` を追加する。`sessions` と `empty` に同じ条件を適用する。それ以外の要素では `reloadStatus` を省略する。掲載対象と `state`・`publishPending` の値は変えない。
 
 | 項目 | 型 | 値 |
 | --- | --- | --- |
@@ -682,6 +684,12 @@ CLIは対象の状態を繰り返し確認し、置き換えの条件を満た�
 | 置き換えられなかった会話が残った | 理由をstderrへ表示して終了コード2で終了する |
 
 置き換えた会話は復元記録の対象から外さず、保存済みの会話ファイルを維持する。待機条件を満たしたpiには実行中の処理がないため、`--force` や待機の省略は持たない。
+
+#### reload の待機状態
+
+現在の専用serverで、実行中の `reload` が対象と判定した会話のうち、置き換えの順番・条件または新しいpiの公開確認を待つ会話を `waiting-reload` とする。会話IDを指定した操作ではその会話だけを対象とする。全体リロードでは、実行中に追加で対象となった会話にも同じ条件を適用する。
+
+対象会話の成功・失敗が確定したとき、または対象から外れたときに、その操作の待機状態を解除する。操作が中断・異常終了した場合や専用serverが置き換わった場合も、その操作の待機状態を解除する。複数の操作が重なった場合は、同じ会話を待つ操作が1件以上ある間だけ待機状態を保つ。
 
 ### stop
 

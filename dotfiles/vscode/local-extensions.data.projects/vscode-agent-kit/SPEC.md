@@ -69,7 +69,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 
 ## データソース
 
-拡張機能は `pi-mux list --active --json` を pi-mux の workspace 登録と稼働 Pi の正本とする。応答は `[{cwd,sessions:[{id,file,state,title,publishPending?:{attemptAt:number}|null,lastRun?:{atMs:number,aborted:boolean},temporary?:true}],empty:[{id,file,temporary?:true}]}]` の JSON 配列であり、cwd と file は絶対パス、state と title は文字列または null である。`publishPending` は実行フェーズ公開の未完了を示す pi-mux の中継値であり、`{attemptAt}`（最後の公開試行の Unix epoch ミリ秒）または null を取る。省略と null は遅延なしとして扱い、`attemptAt` が正の整数でないオブジェクトやその他の値は不正応答として扱う。値の利用は「実行フェーズの表示」に従う。`lastRun` は最後の確定終了の時刻（正の安全な整数、Unix epoch ミリ秒）と中断の有無（真偽値）を表す。省略・型不正は確定終了記録なしとして扱う。`temporary` は一時 Pi にだけ `true` で存在し、省略は通常 Pi を表す。`false` やその他の値は不正応答として扱う。`sessions` には会話ファイルが存在する pane だけが載り、未作成分は `empty` に載る。空 workspace は `sessions: []`・`empty: []` として含まれる。独自のセッション所属集合や復元集合を保存しない。
+拡張機能は `pi-mux list --active --json` を pi-mux の workspace 登録と稼働 Pi の正本とする。応答は `[{cwd,sessions:[{id,file,state,title,publishPending?:{attemptAt:number}|null,lastRun?:{atMs:number,aborted:boolean},temporary?:true,reloadStatus?:"waiting-reload"}],empty:[{id,file,temporary?:true,reloadStatus?:"waiting-reload"}]}]` の JSON 配列であり、cwd と file は絶対パス、state と title は文字列または null である。`publishPending` は実行フェーズ公開の未完了を示す pi-mux の中継値であり、`{attemptAt}`（最後の公開試行の Unix epoch ミリ秒）または null を取る。省略と null は遅延なしとして扱い、`attemptAt` が正の整数でないオブジェクトやその他の値は不正応答として扱う。値の利用は「実行フェーズの表示」に従う。`lastRun` は最後の確定終了の時刻（正の安全な整数、Unix epoch ミリ秒）と中断の有無（真偽値）を表す。省略・型不正は確定終了記録なしとして扱う。`temporary` は一時 Pi にだけ `true` で存在し、省略は通常 Pi を表す。`false` やその他の値は不正応答として扱う。`reloadStatus` は `waiting-reload` だけを有効とし、省略やその他の値は待機なしとして扱う。`sessions` には会話ファイルが存在する pane だけが載り、未作成分は `empty` に載る。空 workspace は `sessions: []`・`empty: []` として含まれる。独自のセッション所属集合や復元集合を保存しない。
 
 保存済み会話は `pi-mux list --saved --json` から得る。応答は `[{id,cwd,file,title,btime,mtime,size}]` の JSON 配列（`mtime` 降順、`mtime` が `null` の要素は後方、同値は `file` 昇順）であり、pi-mux が登録済み workspace の保存会話の `*.jsonl` を列挙し（既定の保存先では group ディレクトリとその `archive/` の各直下、`PI_CODING_AGENT_SESSION_DIR` 指定時はその直下）、各ファイルのヘッダー id・cwd を正とする。`btime` は初回 user メッセージの送信日時（Unix epoch ミリ秒）で、初回 user メッセージが未保存なら `null` になる。有限の `number` と `null` のみを受け入れ、それ以外は不正応答として扱う。`mtime` はファイル内で物理的に最後の `message`/`compaction` エントリの `timestamp`（ミリ秒、該当エントリが無いとき `null`）である。title はセッション名（最後の `session_info` の `name`）で解決し、解決できないとき最初の user メッセージ（80 code points で丸め）を使い、いずれも無いとき `null` になる。
 
@@ -242,9 +242,19 @@ Webview 全体を document の標準スクロールで移動する。スクロ�
 | `publishPending` が `attemptAt` を持ち、`attemptAt` が基準時刻から10秒以内 | 状態アイコンのスロットへ公開遅延ドットを置き、ヒントへ `State update delayed` を追加する |
 | `publishPending` が省略・`null`・不正な値、または `attemptAt` が基準時刻から10秒を超える | 公開遅延ドットもヒント行も追加しない |
 
-公開遅延標識の判定は、アーカイブ済み・フェーズ情報なしの行でもフェーズの表示から独立に行う。フェーズの表示と公開遅延標識は同時に成立する。ヒントの行順は、表示名、セッション ID、フェーズの追加行、`State update delayed`、`Unread` とする。公開遅延ドットの見た目は `DESIGN.md` に従う。
+公開遅延標識の判定は、アーカイブ済み・フェーズ情報なしの行でもフェーズの表示から独立に行う。フェーズの表示と公開遅延標識は同時に成立する。公開遅延ドットの見た目は `DESIGN.md` に従う。
 
-拡張機能の起動から終了まで、直前の list 取得が成功または失敗してから約250ミリ秒後に list の次の取得を開始する。同時に list 取得を重ねず、古い応答で新しい状態を上書きしない。表示中は稼働 Pi の集合・workspace・title・実行フェーズを更新する。非表示中も list を取得し、UI 配信は停止する。初回失敗後も list の定期取得を続ける。保存済み会話の取得と再表示時の更新は「保存履歴の更新」に従う。
+リロード待ちの表示は、[`pi-mux list --active --json`](../../../.local/cli.exact/pi-mux/SPEC.md#稼働一覧) の応答で、セッション ID が一致する `sessions` の要素の `reloadStatus` に従う。端末と VS Code のどちらからリロードした場合も、同じ応答で判定する。
+
+| 条件 | 表示 |
+| --- | --- |
+| 正常応答で `reloadStatus` が `waiting-reload` | 左端の状態アイコンにリロードマークを添え、行のヒントに `Reload pending` を追加する |
+| 正常応答で該当のセッションに有効な `reloadStatus` がない | リロードマークと `Reload pending` を表示しない |
+| 一覧の取得に失敗 | 最後の正常な一覧とリロード待ちの表示を保つ |
+
+リロードマークはアーカイブ済み・フェーズ情報なしの行でも表示条件を満たせば表示し、実行フェーズのアイコンや公開遅延ドットと同時に表示できる。見た目は `DESIGN.md` に従う。行のヒントは行ボタンのアクセシブルな説明を兼ねる。ヒントの行順は、表示名、セッション ID、フェーズ、`State update delayed`、`Reload pending`、`Unread` とし、該当する行だけを表示する。
+
+拡張機能の起動から終了まで、直前の list 取得が成功または失敗してから約250ミリ秒後に list の次の取得を開始する。同時に list 取得を重ねず、古い応答で新しい状態を上書きしない。表示中は稼働 Pi の集合・workspace・title・実行フェーズ・リロード待ちを更新する。非表示中も list を取得し、UI 配信は停止する。初回失敗後も list の定期取得を続ける。保存済み会話の取得と再表示時の更新は「保存履歴の更新」に従う。
 
 未アーカイブで `waiting-user` のセッションについて、稼働一覧の `lastRun` と agent-kit で最後に正常に開いた時刻を照合する。時刻はセッション ID ごとに VS Code の拡張ストレージに保存し、Webview の再生成や VS Code の再起動後も使う。
 
@@ -278,7 +288,7 @@ Webview 全体を document の標準スクロールで移動する。スクロ�
 
 ### 単一行更新の性能
 
-Webview に一覧を描画済みで、グループ・行の集合と順序、表示モード、開閉状態、表示に使うローカル日付が直前と同じとき、1セッションの表示名・更新日時・実行フェーズ・未読だけが変わる一覧データの受信には、次の件数予算を適用する。一覧のほかの値は直前と同じとする。
+Webview に一覧を描画済みで、グループ・行の集合と順序、表示モード、開閉状態、表示に使うローカル日付が直前と同じとき、1セッションの表示名・更新日時・実行フェーズ・未読・リロード待ちだけが変わる一覧データの受信には、次の件数予算を適用する。一覧のほかの値は直前と同じとする。
 
 | 変更対象行の状態 | 受信1回当たりの変更対象行の再生成 | 受信1回当たりの未変更行の再生成 |
 | --- | --- | --- |

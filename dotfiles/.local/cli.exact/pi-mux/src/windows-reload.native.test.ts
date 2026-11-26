@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import type { ListedWorkspace } from "./session-list";
 import { writeWindowsNpmPiFixture } from "./windows-npm-fixture";
 import {
   observeWindowsIdentity,
@@ -78,9 +79,9 @@ type RecordFromPi = {
   file: string;
 };
 
-async function waitFor(condition: () => boolean): Promise<void> {
+async function waitFor(condition: () => boolean | Promise<boolean>): Promise<void> {
   const deadline = Date.now() + 12_000;
-  while (!condition()) {
+  while (!(await condition())) {
     if (Date.now() >= deadline) throw new Error("Timed out waiting for the Windows reload fixture");
     await Bun.sleep(40);
   }
@@ -141,6 +142,13 @@ it.skipIf(!tmux || !node)(
       assert.equal(result.code, 0, JSON.stringify({ command, ...result }));
       return result.stdout;
     }
+    async function activeSessions(overrides?: NodeJS.ProcessEnv) {
+      const workspaces: ListedWorkspace[] = JSON.parse(
+        await ok([mux, "list", "--active", "--json"], overrides),
+      );
+      return workspaces.flatMap(({ sessions }) => sessions);
+    }
+
     function log(id: string): RecordFromPi[] {
       try {
         return readFileSync(join(root, id + ".log"), "utf8")
@@ -215,7 +223,8 @@ it.skipIf(!tmux || !node)(
       const targetSession = sessionsById.split(/\r?\n/).find((row) => row.endsWith(" " + target));
       assert.ok(targetSession);
       const tmuxTarget = "=" + targetSession.split(" ")[0];
-      const pending = JSON.stringify({ version: 1, sessionId: target, attemptAt: Date.now() });
+      const attemptAt = Date.now();
+      const pending = JSON.stringify({ version: 1, sessionId: target, attemptAt });
       const pendingOption = "@pi_session_state_pending";
       await ok([
         tmux,
@@ -238,7 +247,24 @@ it.skipIf(!tmux || !node)(
       }).finally(() => {
         completed = true;
       });
-      await Bun.sleep(700);
+      await waitFor(async () =>
+        (await activeSessions()).some(({ reloadStatus }) => reloadStatus === "waiting-reload"),
+      );
+      const waiting = (await activeSessions()).filter(
+        ({ reloadStatus }) => reloadStatus !== undefined,
+      );
+      assert.deepEqual(
+        waiting.map(({ id }) => id),
+        [target],
+      );
+      assert.equal(waiting[0]?.state, "running");
+      assert.deepEqual(waiting[0]?.publishPending, { attemptAt });
+      const alternateAgent = { PI_CODING_AGENT_DIR: join(profile, "alternate-agent") };
+      const alternateSessions = await activeSessions(alternateAgent);
+      assert.deepEqual(
+        alternateSessions.filter(({ reloadStatus }) => reloadStatus !== undefined),
+        waiting,
+      );
       assert.equal(completed, false);
       assert.equal(log(target).length, 1);
 
@@ -260,6 +286,7 @@ it.skipIf(!tmux || !node)(
       assert.equal(completed, false);
       writeFileSync(join(root, target + ".publish"), "");
       assert.deepEqual(await reload, { code: 0, stdout: "reloaded " + target, stderr: "" });
+      assert.ok((await activeSessions()).every(({ reloadStatus }) => reloadStatus === undefined));
       const observedPending = await ok([
         tmux,
         "-S",

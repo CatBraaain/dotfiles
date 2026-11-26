@@ -37,7 +37,7 @@ export async function tryAcquireLock(address: string): Promise<ReleaseLock | und
     });
 }
 
-function canonicalSocketPath(path: string): string {
+export function canonicalSocketPath(path: string): string {
   try {
     return realpathSync(path);
   } catch (error) {

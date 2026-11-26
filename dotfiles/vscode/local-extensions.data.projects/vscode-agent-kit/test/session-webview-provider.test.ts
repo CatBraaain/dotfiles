@@ -4785,7 +4785,7 @@ describe("SessionWebviewProvider", () => {
   });
 });
 
-describe("publish delay display", () => {
+describe("session status indicators", () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   });
@@ -4855,6 +4855,69 @@ describe("publish delay display", () => {
     await fixture.provider.refresh();
     expect(row(fixture.webview)).toMatchObject({ isArchived: true, publishDelayed: true });
   });
+
+  it.each([false, true])(
+    "updates reload waiting through the list poll and keeps it on failure (archived: %s)",
+    async (isArchived) => {
+      const fixture = await archiveFixture();
+      if (isArchived) fixture.temporary.add(activeSessionId);
+      fixture.phases.set(activeSessionId, "running");
+      overlayPublishPending(fixture, () => Date.now());
+      const { mocks, provider, webview } = fixture;
+      const readList = mocks.list.getMockImplementation()!;
+      let isReloadPending = false;
+      mocks.list.mockImplementation(async () =>
+        (await readList()).map((workspace) => ({
+          ...workspace,
+          sessions: workspace.sessions.map((session) =>
+            isReloadPending && session.id === activeSessionId
+              ? { ...session, reloadStatus: "waiting-reload" }
+              : session,
+          ),
+          empty: [
+            ...workspace.empty,
+            {
+              id: unknownSessionId,
+              file: join(root, "not-yet-saved.jsonl"),
+              reloadStatus: "waiting-reload",
+            },
+          ],
+        })),
+      );
+      await tick(provider);
+      expect(row(webview)).not.toHaveProperty("reloadPending");
+      mocks.list.mockClear();
+      mocks.history.mockClear();
+
+      isReloadPending = true;
+      await tick(provider);
+      expect(row(webview)).toMatchObject({
+        isArchived,
+        publishDelayed: true,
+        reloadPending: true,
+        state: isArchived ? undefined : "running",
+      });
+      expect(row(webview, inactiveSessionId)).not.toHaveProperty("reloadPending");
+      expect(
+        sentState(webview).groups.flatMap((group) =>
+          group.sessions.map(({ sessionId }) => sessionId),
+        ),
+      ).not.toContain(unknownSessionId);
+      expect(mocks.list).toHaveBeenCalledOnce();
+      expect(mocks.history).not.toHaveBeenCalled();
+
+      mocks.list.mockRejectedValueOnce(new Error("list unavailable"));
+      await tick(provider);
+      expect(webview.postMessage).toHaveBeenLastCalledWith({ type: "sessionsError" });
+      expect(row(webview).reloadPending).toBe(true);
+
+      isReloadPending = false;
+      await tick(provider);
+      expect(row(webview)).not.toHaveProperty("reloadPending");
+      expect(mocks.list).toHaveBeenCalledTimes(3);
+      expect(mocks.history).not.toHaveBeenCalled();
+    },
+  );
 
   it("re-evaluates a stale attempt without any list change", async () => {
     const fixture = await archiveFixture();

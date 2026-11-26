@@ -32,6 +32,7 @@ export interface PiMuxSession {
   /** Last state publication attempt that pi-mux has not applied yet; null when none. */
   publishPending?: PiMuxPublishPending | null;
   lastRun?: PiMuxLastRun;
+  reloadStatus?: "waiting-reload";
   temporary?: true;
 }
 
@@ -142,9 +143,11 @@ export class PiMux {
     }
     return workspaces.map((workspace) => ({
       ...workspace,
-      sessions: workspace.sessions.map(({ lastRun, ...session }) =>
-        isPiMuxLastRun(lastRun) ? { ...session, lastRun } : session,
-      ),
+      sessions: workspace.sessions.map(({ lastRun, reloadStatus, ...session }) => ({
+        ...session,
+        ...(isPiMuxLastRun(lastRun) ? { lastRun } : {}),
+        ...(reloadStatus === "waiting-reload" ? { reloadStatus } : {}),
+      })),
     }));
   }
 
@@ -271,7 +274,10 @@ function parseJsonOutput(output: string, command: string): unknown {
   }
 }
 
-type PiMuxSessionPayload = Omit<PiMuxSession, "lastRun"> & { lastRun?: unknown };
+type PiMuxSessionPayload = Omit<PiMuxSession, "lastRun" | "reloadStatus"> & {
+  lastRun?: unknown;
+  reloadStatus?: unknown;
+};
 type PiMuxWorkspacePayload = Omit<PiMuxWorkspace, "sessions"> & { sessions: PiMuxSessionPayload[] };
 
 function isPiMuxWorkspace(workspace: unknown): workspace is PiMuxWorkspacePayload {
