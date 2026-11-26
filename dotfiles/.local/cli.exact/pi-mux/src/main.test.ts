@@ -1659,7 +1659,14 @@ fi`);
     try {
       const shell = fixture.shellSession("shellhost");
       const pidFile = join(fixture.directory, "child.pid");
-      fixture.tmux(["send-keys", "-t", shell.pane, `sleep 300 & echo $! > ${pidFile}`, "Enter"]);
+      const pendingPidFile = `${pidFile}.tmp`;
+      fixture.tmux([
+        "send-keys",
+        "-t",
+        shell.pane,
+        `sleep 300 & echo $! > '${pendingPidFile}' && mv '${pendingPidFile}' '${pidFile}' && wait "$!"`,
+        "Enter",
+      ]);
       await waitUntil(() => existsSync(pidFile));
       const childPid = Number(readFileSync(pidFile, "utf8").trim());
       assert.ok(Number.isSafeInteger(childPid) && childPid > 0, `child pid: ${childPid}`);
@@ -1688,7 +1695,6 @@ fi`);
         { cwd: fixture.cwd, sessions: [], empty: [{ id, file }] },
       ]);
       process.kill(childPid, "SIGKILL");
-      fixture.tmux(["send-keys", "-t", shell.pane, "Enter"]);
       await waitUntil(() => !existsSync(`/proc/${childPid}`));
       const after = fixture.run(["list", "--active", "--json"]);
       assert.equal(after.status, 0, after.stderr);
