@@ -20,6 +20,7 @@ Set-Alias -Name "j" -Value "just"
 Set-Alias -Name "mise-init" -Value "mise gen config -o mise.toml"
 Set-Alias -Name "mr" -Value "mise run"
 Set-Alias -Name "uv-python-update" -Value "uv python install --reinstall 3.11 3.12 3.13"
+Set-Alias -Name "wslfit" -Value "Optimize-WslStorage"
 
 function just-init {
     "_:`n  @just --list --unsorted" | Out-File -Encoding utf8 justfile
@@ -41,6 +42,73 @@ function restart-ime {
     Get-CimInstance Win32_Process |
         Where-Object { $_.Name -match 'IME|InputApp' } |
         Select-Object ProcessId, Name, ExecutablePath
+}
+
+function Optimize-WslStorage {
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+
+    $registryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
+    [guid]$distributionId = (Get-ItemProperty -LiteralPath $registryPath -ErrorAction Stop).DefaultDistribution
+    $distributionPath = Join-Path $registryPath $distributionId.ToString('B')
+    $distribution = Get-ItemProperty -LiteralPath $distributionPath -ErrorAction Stop
+    if ($distribution.Version -ne 2) {
+        throw 'The default WSL distribution must use WSL 2.'
+    }
+
+    $vhdName = 'ext4.vhdx'
+    $vhdNameProperty = $distribution.PSObject.Properties['VhdFileName']
+    if ($null -ne $vhdNameProperty -and -not [string]::IsNullOrWhiteSpace($vhdNameProperty.Value)) {
+        $vhdName = [string]$vhdNameProperty.Value
+    }
+    if ($vhdName.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0 -or [IO.Path]::GetExtension($vhdName) -ne '.vhdx') {
+        throw 'The default WSL distribution has an invalid VHDX file name.'
+    }
+    $vhd = Get-Item -LiteralPath (Join-Path $distribution.BasePath $vhdName) -ErrorAction Stop
+    if ($vhd -isnot [IO.FileInfo]) {
+        throw 'The registered WSL VHDX path must point to a file.'
+    }
+
+    $target = "$($distribution.DistributionName): $($vhd.FullName)"
+    $action = 'Stop all WSL distributions and compact this VHDX'
+    if ($WhatIfPreference) {
+        [void]$PSCmdlet.ShouldProcess($target, $action)
+        return
+    }
+
+    $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw 'Run wslfit from an administrator PowerShell session.'
+    }
+    $confirmation = Microsoft.PowerShell.Utility\Read-Host -Prompt "$action`n$target`nContinue? [y/N]" -ErrorAction Stop
+    if ($confirmation -ne 'y') {
+        return
+    }
+
+    $system = [Environment]::SystemDirectory
+    $wsl = Get-Command -Name (Join-Path $system 'wsl.exe') -CommandType Application -ErrorAction Stop
+    $hyperVPath = Join-Path $system 'WindowsPowerShell\v1.0\Modules\Hyper-V'
+    $hyperV = Import-Module -Name $hyperVPath -PassThru -ErrorAction Stop
+    $optimize = $hyperV.ExportedCommands['Optimize-VHD']
+    if ($null -eq $optimize) {
+        throw 'The Windows Hyper-V module does not export Optimize-VHD.'
+    }
+
+    & $wsl --shutdown
+    if ($LASTEXITCODE -ne 0) {
+        throw "WSL shutdown failed (exit code $LASTEXITCODE). The VHDX was not compacted."
+    }
+
+    $before = (Get-Item -LiteralPath $vhd.FullName -ErrorAction Stop).Length
+    & $optimize -Path $vhd.FullName -Confirm:$false -ErrorAction Stop
+    $after = (Get-Item -LiteralPath $vhd.FullName -ErrorAction Stop).Length
+    [pscustomobject]@{
+        Distribution = $distribution.DistributionName
+        VhdPath      = $vhd.FullName
+        BeforeGiB    = [Math]::Round($before / 1GB, 2)
+        AfterGiB     = [Math]::Round($after / 1GB, 2)
+        ReclaimedGiB = [Math]::Round(($before - $after) / 1GB, 2)
+    }
 }
 
 # DO NOT MODIFY -- coreutils -- 60b36fc6-2d59-49df-be51-28dd2f4c3c9a
