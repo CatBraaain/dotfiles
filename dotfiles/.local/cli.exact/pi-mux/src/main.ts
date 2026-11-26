@@ -68,7 +68,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux workspace unregister <cwd>
   pi-mux snapshot [server-generation]
   pi-mux restore
-  pi-mux stop
+  pi-mux stop [--force]
   pi-mux reload [<session-id>]
   pi-mux restart [--force]`);
       return 0;

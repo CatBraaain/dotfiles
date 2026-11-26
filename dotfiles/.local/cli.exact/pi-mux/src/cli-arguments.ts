@@ -45,7 +45,7 @@ export type Operation =
   | { kind: "workspace"; action: "register" | "unregister"; cwd: string }
   | { kind: "snapshot"; generation?: string }
   | { kind: "restore" }
-  | { kind: "stop" }
+  | { kind: "stop"; force: boolean }
   | { kind: "reload"; id?: string }
   | { kind: "restart"; force: boolean };
 
@@ -273,14 +273,17 @@ export function parseOperation(argv: string[]): Operation {
     const id = argv[1];
     if (argv.length === 2 && id && SESSION_ID_PATTERN.test(id)) return { kind: "reload", id };
   }
-  if (argv[0] === "restart" && (argv.length === 1 || (argv.length === 2 && argv[1] === "--force")))
-    return { kind: "restart", force: argv[1] === "--force" };
+  const lifecycleCommand = argv[0];
+  if (
+    (lifecycleCommand === "stop" || lifecycleCommand === "restart") &&
+    (argv.length === 1 || (argv.length === 2 && argv[1] === "--force"))
+  )
+    return { kind: lifecycleCommand, force: argv[1] === "--force" };
   if (argv.length === 1 && argv[0] === "restore") return { kind: "restore" };
-  if (argv.length === 1 && argv[0] === "stop") return { kind: "stop" };
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] [--detached] <session-id> | open --detached --expect-file <absolute-jsonl-path> <session-id> | inspect <session-id> | metadata <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | list --active [--json] | list --saved [--cwd <absolute-cwd>] [--json] | list --displayed [--client-pid <pid>] [--json] | switch <session-id> [--client-pid <pid>] | history [--cwd <absolute-cwd>] [--json] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | stop | reload [<session-id>] | restart [--force]]",
+    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] [--detached] <session-id> | open --detached --expect-file <absolute-jsonl-path> <session-id> | inspect <session-id> | metadata <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | list --active [--json] | list --saved [--cwd <absolute-cwd>] [--json] | list --displayed [--client-pid <pid>] [--json] | switch <session-id> [--client-pid <pid>] | history [--cwd <absolute-cwd>] [--json] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | stop [--force] | reload [<session-id>] | restart [--force]]",
   );
 }
 

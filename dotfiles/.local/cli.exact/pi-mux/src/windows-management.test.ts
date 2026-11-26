@@ -278,6 +278,12 @@ describe("Windows psmux management", () => {
     add("beta", laterPeer);
     current.instance = laterInstance;
     await assert.rejects(management.assertLive(basis), /generation changed/);
+    await assert.rejects(
+      management.prepareStartup(basis, ["old"], withClaimLock, () => {
+        assert.fail("The snapshot must not be saved for a replaced management generation");
+      }),
+      /generation changed/,
+    );
     await assert.rejects(management.audit(paneFormat), /not completed startup restore/);
     const replacement = await management.currentBasis();
     assert.ok(replacement);

@@ -442,9 +442,16 @@ test.skipIf(!tmux || !node)(
   100_000,
 );
 
-test.skipIf(!tmux || !node)(
-  "restarts a waiting Windows conversation launched directly through Node",
-  async () => {
+test
+  .skipIf(!tmux || !node)
+  .each([
+    "restart",
+    "stop --force",
+    "stop --force with a snapshot write error",
+    "stop --force with a startup record write error",
+  ] as const)(
+  "%s preserves a Windows conversation launched directly through Node",
+  async (command) => {
     assert.ok(tmux);
     const root = mkdtempSync(join(tmpdir(), "pi-mux-native-node-restart-"));
     const conf = join(root, ".config", "psmux", "pi.conf");
@@ -470,7 +477,7 @@ test.skipIf(!tmux || !node)(
         delete (env as NodeJS.ProcessEnv)[key];
     }
     async function run(command: string[]) {
-      const result = Bun.spawnSync(command, { env, cwd: root, timeout: 15_000, windowsHide: true });
+      const result = Bun.spawnSync(command, { env, cwd: root, timeout: 35_000, windowsHide: true });
       assert.equal(result.exitCode, 0, `${command.join(" ")}: ${result.stderr.toString()}`);
       return result.stdout.toString().trim();
     }
@@ -525,8 +532,58 @@ test.skipIf(!tmux || !node)(
         pid: processPid,
         token,
       });
-      await mux("state", id, "waiting-user", "--source", source, "--title", "null");
-      await mux("restart");
+      const state = command === "restart" ? "waiting-user" : "running";
+      await mux("state", id, state, "--source", source, "--title", "null");
+      if (command.endsWith("write error")) {
+        const snapshotName = "pi-mux-restore.json";
+        const startupName = "startup.json";
+        const snapshotPath = join(agent, "pi-tmux", snapshotName);
+        const startupPath = join(scope.storageDirectory, startupName);
+        const snapshot = JSON.stringify(json(readFileSync(snapshotPath, "utf8")), null, 2);
+        writeFileSync(snapshotPath, snapshot);
+        const lockSnapshot = command === "stop --force with a snapshot write error";
+        const lockedPath = lockSnapshot ? snapshotPath : startupPath;
+        const management = await mux("inspect", "--management", socket);
+        const result = Bun.spawnSync(
+          [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            `$ErrorActionPreference = 'Stop'
+$lock = [IO.File]::Open($env:PI_MUX_TEST_LOCKED_FILE, 'Open', 'Read', 'Read')
+try { & $env:PI_MUX_TEST_EXE stop --force; exit $LASTEXITCODE }
+finally { $lock.Dispose() }`,
+          ],
+          {
+            env: { ...env, PI_MUX_TEST_LOCKED_FILE: lockedPath, PI_MUX_TEST_EXE: muxExe },
+            cwd: root,
+            timeout: 15_000,
+            windowsHide: true,
+          },
+        );
+        assert.equal(result.exitCode, 1);
+        const error = result.stderr.toString();
+        assert.match(error, /rename/);
+        assert.ok(error.includes(lockSnapshot ? snapshotName : startupName), error);
+        assert.equal(readFileSync(snapshotPath, "utf8"), snapshot);
+        assert.equal(await mux("inspect", "--management", socket), management);
+        return;
+      }
+      if (command === "stop --force") {
+        await mux("stop", "--force");
+        const stopped = Bun.spawnSync([muxExe, "inspect", "--management", socket], {
+          env,
+          cwd: root,
+          timeout: 15_000,
+          windowsHide: true,
+        });
+        assert.equal(stopped.exitCode, 1);
+        assert.match(stopped.stderr.toString(), /not restored and running/);
+        await mux("restore");
+      } else {
+        await mux("restart");
+      }
       const [restoredServer, , , restoredMetadata] = (await panes()).split("\t");
       assert.notEqual(restoredServer, serverPid);
       assert.ok(restoredMetadata);

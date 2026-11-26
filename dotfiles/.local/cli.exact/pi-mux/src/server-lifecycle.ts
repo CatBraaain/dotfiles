@@ -228,8 +228,8 @@ async function windowsServerLifecycle(config: Config, operation: ServerOperation
           throw new Error("Dedicated psmux generation changed during stop");
         return 0;
       }
-      const force = operation.kind === "restart" && operation.force;
-      if (!(await tryStopWindowsServer(config, management, original, force))) return undefined;
+      if (!(await tryStopWindowsServer(config, management, original, operation.force)))
+        return undefined;
       if (operation.kind === "stop") return 0;
       prepareDirectory(config.directory);
       return (await startAndRestore(config, true, undefined, "fresh")).failures > 0 ? 2 : 0;
@@ -282,6 +282,14 @@ async function tryStopWindowsServer(
       ),
       ...audit.managed.filter(({ temporary }) => !temporary).map(({ id, cwd }) => ({ id, cwd })),
     ]);
+    function saveSnapshot() {
+      writeSnapshot(config, {
+        version: 1,
+        generation: audit.basis.instance,
+        cwds: previous?.cwds ?? [],
+        sessions: candidates,
+      });
+    }
     try {
       const peers = await stopWindowsPeers(management.scope, audit, undefined, async () => {
         if (force) {
@@ -295,24 +303,20 @@ async function tryStopWindowsServer(
             audit.basis,
             candidates.map(({ id }) => id),
             windowsClaimLock(management),
+            saveSnapshot,
           );
-        } else {
-          const final = await auditWindowsLifecycle(management);
-          if (!launchBasisStillLive(audit.basis, final.basis))
-            throw new Error("Dedicated psmux generation changed before restart stop");
-          if (
-            windowsStopInventory(final) !== windowsStopInventory(audit) ||
-            JSON.stringify(captureWindowsProcesses(final.pids)) !== JSON.stringify(panes) ||
-            !windowsRestartIsWaiting(config, final)
-          )
-            throw WINDOWS_RESTART_RECHECK;
+          return;
         }
-        writeSnapshot(config, {
-          version: 1,
-          generation: original.instance,
-          cwds: previous?.cwds ?? [],
-          sessions: candidates,
-        });
+        const final = await auditWindowsLifecycle(management);
+        if (!launchBasisStillLive(audit.basis, final.basis))
+          throw new Error("Dedicated psmux generation changed before restart stop");
+        if (
+          windowsStopInventory(final) !== windowsStopInventory(audit) ||
+          JSON.stringify(captureWindowsProcesses(final.pids)) !== JSON.stringify(panes) ||
+          !windowsRestartIsWaiting(config, final)
+        )
+          throw WINDOWS_RESTART_RECHECK;
+        saveSnapshot();
       });
       await waitForWindowsExit([...panes, ...activeLaunches.map(({ child }) => child), ...peers], {
         timeoutMs: STARTUP_TIMEOUT_MS,
@@ -335,7 +339,7 @@ async function tryStopWindowsServer(
 export async function serverLifecycle(config: Config, operation: ServerOperation): Promise<number> {
   if (platform.windows) return await windowsServerLifecycle(config, operation);
   const original = await withLock(config, () => serverLifetime(config));
-  const force = operation.kind === "restart" && operation.force;
+  const { force } = operation;
   while (true) {
     const result = await withLock(config, async () => {
       if (!original) {

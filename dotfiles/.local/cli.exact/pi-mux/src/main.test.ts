@@ -4686,9 +4686,11 @@ describe("state argument parsing", () => {
 });
 
 describe("stop", () => {
-  it("accepts no arguments", () => {
-    assert.deepEqual(parseOperation(["stop"]), { kind: "stop" });
-    assert.throws(() => parseOperation(["stop", "--force"]), /usage/);
+  it("accepts only the optional force argument", () => {
+    assert.deepEqual(parseOperation(["stop"]), { kind: "stop", force: false });
+    assert.deepEqual(parseOperation(["stop", "--force"]), { kind: "stop", force: true });
+    for (const args of [["--force", "--force"], ["extra"], ["--force", "extra"]])
+      assert.throws(() => parseOperation(["stop", ...args]), /usage/);
   });
 
   it.skipIf(process.platform !== "linux")(
@@ -4734,13 +4736,46 @@ describe("stop", () => {
   );
 
   it.skipIf(process.platform !== "linux")(
-    "succeeds without starting an absent server",
+    "saves a running conversation and leaves the server stopped with force",
     async () => {
       const fixture = new SessionFixture();
       try {
         prepareManagedPi(fixture);
+        const id = addManagedSession(fixture, "target", "running");
+        const pid = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_pid}"]);
+        const result = fixture.run(["stop", "--force"]);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(existsSync(`/proc/${pid}`), false);
+        const server = spawnSync(realTmux!, [
+          "-N",
+          "-S",
+          fixture.socket,
+          "display-message",
+          "-p",
+          "#{pid}",
+        ]);
+        assert.equal(server.status, 1, server.stderr.toString());
+        assert.deepEqual(restoreDocument(fixture).workspaces, [
+          { cwd: fixture.cwd, sessions: [id] },
+        ]);
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+    20_000,
+  );
+
+  it.skipIf(process.platform !== "linux").each([
+    ["stop", []],
+    ["stop --force", ["--force"]],
+  ] as const)(
+    "%s succeeds without starting an absent server",
+    async (_command, flags) => {
+      const fixture = new SessionFixture();
+      try {
+        prepareManagedPi(fixture);
         const snapshot = readFileSync(restoreFile(fixture), "utf8");
-        const result = fixture.run(["stop"]);
+        const result = fixture.run(["stop", ...flags]);
         assert.equal(result.status, 0, result.stderr);
         assert.equal(existsSync(fixture.socket), false);
         assert.equal(readFileSync(restoreFile(fixture), "utf8"), snapshot);
@@ -4881,23 +4916,6 @@ describe("restart", () => {
     }, 20000);
   }
 
-  it("does not stop a running pi when force cannot read the snapshot", async () => {
-    const fixture = new SessionFixture();
-    try {
-      prepareManagedPi(fixture);
-      addManagedSession(fixture, "target", "running");
-      const pid = fixture.tmux(["display-message", "-p", "#{pid}"]);
-      writeFileSync(restoreFile(fixture), "{broken");
-      const result = fixture.run(["restart", "--force"]);
-      assert.equal(result.status, 1);
-      assert.match(result.stderr, /snapshot/);
-      assert.equal(fixture.tmux(["display-message", "-p", "#{pid}"]), pid);
-      assert.equal(readFileSync(restoreFile(fixture), "utf8"), "{broken");
-    } finally {
-      await fixture.cleanup();
-    }
-  });
-
   it("retains retry candidates after post-stop restoration fails", async () => {
     const fixture = new SessionFixture();
     try {
@@ -4912,6 +4930,28 @@ describe("restart", () => {
       await fixture.cleanup();
     }
   }, 20000);
+});
+
+describe("forced shutdown safety", () => {
+  it.each(["stop", "restart"])(
+    "%s --force does not stop a running pi when the snapshot cannot be read",
+    async (command) => {
+      const fixture = new SessionFixture();
+      try {
+        prepareManagedPi(fixture);
+        addManagedSession(fixture, "target", "running");
+        const pid = fixture.tmux(["display-message", "-p", "#{pid}"]);
+        writeFileSync(restoreFile(fixture), "{broken");
+        const result = fixture.run([command, "--force"]);
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /snapshot/);
+        assert.equal(fixture.tmux(["display-message", "-p", "#{pid}"]), pid);
+        assert.equal(readFileSync(restoreFile(fixture), "utf8"), "{broken");
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+  );
 });
 
 describe("restart safety", () => {

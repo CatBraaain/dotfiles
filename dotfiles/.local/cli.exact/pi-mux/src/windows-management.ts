@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, win32 } from "node:path";
+import { errorMessage } from "./session-model";
 import {
   launchBasisStillLive,
   readWindowsScopeRecord,
@@ -153,11 +154,14 @@ export class WindowsManagement {
     basis: WindowsManagementBasis,
     restoringIds: string[],
     withClaimLock: WindowsClaimLock,
+    saveSnapshot?: () => void,
   ): Promise<void> {
     const restoring = [...new Set(restoringIds.map(validateId))];
     await withClaimLock(async () => {
       await this.assertLive(basis);
-      readStartupState(this.startupPath);
+      const previous = readStartupState(this.startupPath);
+      if (saveSnapshot && previous?.instance !== basis.instance)
+        throw new Error("No startup record for the live psmux management generation");
       mkdirSync(this.scope.storageDirectory, { recursive: true, mode: 0o700 });
       writeWindowsScopeRecord(this.startupPath, {
         version: 1,
@@ -165,6 +169,20 @@ export class WindowsManagement {
         restored: false,
         restoring,
       });
+      if (!saveSnapshot || !previous) return;
+      try {
+        saveSnapshot();
+      } catch (error) {
+        try {
+          writeWindowsScopeRecord(this.startupPath, previous);
+        } catch (rollbackError) {
+          throw new Error(
+            `Cannot restore psmux startup state after snapshot failure (${errorMessage(error)}): ${errorMessage(rollbackError)}`,
+            { cause: rollbackError },
+          );
+        }
+        throw error;
+      }
     });
   }
 
