@@ -125,29 +125,86 @@ export function rewriteSession(
 }
 
 const NANOSECONDS_PER_SECOND = 1_000_000_000n;
+const WINDOWS_TICK_NS = 100n;
+const WINDOWS_EPOCH_OFFSET_TICKS = 116_444_736_000_000_000n;
+const INVALID_HANDLE_VALUE = 0xffff_ffff_ffff_ffffn;
+const FILE_WRITE_ATTRIBUTES = 0x100;
+const FILE_SHARE_ALL = 0x7;
+const OPEN_EXISTING = 3;
+const FILE_FLAG_OPEN_REPARSE_POINT = 0x0020_0000;
 
 export function preserveMtime(fd: number, original: fs.BigIntStats, path: string): void {
   fs.futimesSync(fd, Number(original.atimeNs) / 1e9, Number(original.mtimeNs) / 1e9);
-  if (fs.fstatSync(fd, { bigint: true }).mtimeNs === original.mtimeNs) return;
-  const library =
-    process.platform === "linux"
-      ? "libc.so.6"
-      : process.platform === "darwin"
-        ? "/usr/lib/libSystem.B.dylib"
-        : undefined;
-  if (!library) throw new Error(`Cannot preserve mtime precision: ${JSON.stringify(path)}`);
+  if (hasPreservedMtime(fd, original)) return;
+  if (process.platform === "win32") setFileTime(path, original);
+  else futimens(fd, original, path);
+  if (!hasPreservedMtime(fd, original))
+    throw new Error(`Cannot preserve mtime precision: ${JSON.stringify(path)}`);
+}
+
+function hasPreservedMtime(fd: number, original: fs.BigIntStats): boolean {
+  return fs.fstatSync(fd, { bigint: true }).mtimeNs === original.mtimeNs;
+}
+
+function futimens(fd: number, original: fs.BigIntStats, path: string): void {
+  const library = process.platform === "linux" ? "libc.so.6" : "/usr/lib/libSystem.B.dylib";
   const native = dlopen(library, { futimens: { args: ["i32", "ptr"], returns: "i32" } });
   try {
     const times = new BigInt64Array([...timespec(original.atimeNs), ...timespec(original.mtimeNs)]);
-    if (
-      native.symbols.futimens(fd, ptr(times)) !== 0 ||
-      fs.fstatSync(fd, { bigint: true }).mtimeNs !== original.mtimeNs
-    ) {
-      throw new Error(`Cannot preserve mtime precision: ${JSON.stringify(path)}`);
-    }
+    if (native.symbols.futimens(fd, ptr(times)) !== 0)
+      throw new Error(`futimens failed: ${JSON.stringify(path)}`);
   } finally {
     native.close();
   }
+}
+
+function setFileTime(path: string, original: fs.BigIntStats): void {
+  const kernel32 = dlopen("kernel32.dll", {
+    CreateFileW: { args: ["ptr", "u32", "u32", "ptr", "u32", "u32", "ptr"], returns: "u64" },
+    GetLastError: { args: [], returns: "u32" },
+    SetFileTime: { args: ["u64", "ptr", "ptr", "ptr"], returns: "i32" },
+    CloseHandle: { args: ["u64"], returns: "i32" },
+  });
+  try {
+    const name = Buffer.from(`${extendedLengthPath(path)}\0`, "utf16le");
+    const handle = kernel32.symbols.CreateFileW(
+      ptr(name),
+      FILE_WRITE_ATTRIBUTES,
+      FILE_SHARE_ALL,
+      null,
+      OPEN_EXISTING,
+      FILE_FLAG_OPEN_REPARSE_POINT,
+      null,
+    );
+    if (handle === INVALID_HANDLE_VALUE) {
+      const error = kernel32.symbols.GetLastError();
+      throw new Error(`CreateFileW failed with Win32 error ${error}: ${JSON.stringify(path)}`);
+    }
+    try {
+      const accessTime = fileTime(original.atimeNs);
+      const writeTime = fileTime(original.mtimeNs);
+      if (kernel32.symbols.SetFileTime(handle, null, ptr(accessTime), ptr(writeTime)) === 0) {
+        const error = kernel32.symbols.GetLastError();
+        throw new Error(`SetFileTime failed with Win32 error ${error}: ${JSON.stringify(path)}`);
+      }
+    } finally {
+      kernel32.symbols.CloseHandle(handle);
+    }
+  } finally {
+    kernel32.close();
+  }
+}
+
+function fileTime(nanoseconds: bigint): Uint32Array {
+  const ticks = nanoseconds / WINDOWS_TICK_NS + WINDOWS_EPOCH_OFFSET_TICKS;
+  return new Uint32Array([Number(ticks & 0xffff_ffffn), Number(ticks >> 32n)]);
+}
+
+function extendedLengthPath(path: string): string {
+  const native = path.replace(/\//g, "\\");
+  if (native.startsWith("\\\\?\\")) return native;
+  if (native.startsWith("\\\\")) return `\\\\?\\UNC\\${native.slice(2)}`;
+  return `\\\\?\\${native}`;
 }
 
 function timespec(ns: bigint): [bigint, bigint] {

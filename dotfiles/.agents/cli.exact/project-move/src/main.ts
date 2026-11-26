@@ -475,7 +475,8 @@ function createArtifact(unit: Unit, location: "backup" | "destination"): void {
         if (!current.isDirectory() || !sameIdentity(artifact.identities.get(entry.name)!, current))
           fail("Created directory was replaced", path);
         guardDirectoryChain(path);
-        fs.fchmodSync(fd, permissions(entry.stat));
+        if (process.platform === "win32") fs.chmodSync(path, permissions(entry.stat));
+        else fs.fchmodSync(fd, permissions(entry.stat));
       } finally {
         fs.closeSync(fd);
       }

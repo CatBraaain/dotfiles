@@ -1,11 +1,14 @@
 import { afterEach, describe, it, mock, spyOn } from "bun:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, sep } from "node:path";
 import { run } from "./main";
 import { preserveMtime } from "./preserve";
 
-const TEMP_ROOT = "/tmp/work/dotfiles/project-move";
+const TEMP_ROOT = join(tmpdir(), "work", "dotfiles", "project-move");
+const FINEST_MTIME_NS =
+  process.platform === "win32" ? 1_700_000_000_123_456_700n : 1_700_000_000_123_456_789n;
 const EXECUTE = ["--execute", "--pi-stopped"];
 const fixtures: string[] = [];
 interface Fixture {
@@ -42,7 +45,7 @@ function fixture(): Fixture {
 }
 
 function write(path: string, bytes: string | Uint8Array): void {
-  assert.ok(path.startsWith(TEMP_ROOT + "/"));
+  assert.ok(path.startsWith(TEMP_ROOT + sep));
   fs.mkdirSync(dirname(path), { recursive: true });
   fs.writeFileSync(path, bytes);
 }
@@ -212,7 +215,7 @@ describe("migration and preservation", () => {
     const tail = Buffer.from([13, 10, 0, 255, 10, 13, 10]);
     const header = `{"type":"session","version":3,"id":"parent","timestamp":"t","cwd":${JSON.stringify(f.oldCwd)},"large":900719925474099312345,"nested":{"x":1e999,"negative":-0}}`;
     write(parent, Buffer.concat([Buffer.from(header), tail]));
-    const expectedNs = 1_700_000_000_123_456_789n;
+    const expectedNs = FINEST_MTIME_NS;
     const fd = fs.openSync(parent, "r+");
     try {
       const stat = fs.fstatSync(fd, { bigint: true });
@@ -285,7 +288,8 @@ describe("migration and preservation", () => {
     assert.equal(fs.existsSync(tickets.source), false);
     assert.equal(fs.readFileSync(ignored, "utf8"), "not a session");
     assert.ok(fs.statSync(join(sessionDir(f), "archive")).isDirectory());
-    assert.equal(Number(fs.statSync(dirname(dirname(work.backup))).mode) & 0o077, 0);
+    if (process.platform !== "win32")
+      assert.equal(Number(fs.statSync(dirname(dirname(work.backup))).mode) & 0o077, 0);
     assert.deepEqual(record(f, "result"), {
       sessionsCompleted: 2,
       sessionsPending: 0,
@@ -323,6 +327,28 @@ describe("migration and preservation", () => {
     fs.writeFileSync(source, bytes.subarray(0, bytes.length - 1));
     assert.equal(invoke(f), 0);
     assert.equal(fs.readFileSync(destination(f, source)).includes(10), false);
+  });
+
+  it("keeps a read-only session file read-only with its finest representable mtime", () => {
+    const f = fixture();
+    const source = session(f);
+    const fd = fs.openSync(source, "r+");
+    try {
+      const stat = fs.fstatSync(fd, { bigint: true });
+      preserveMtime(fd, { ...stat, mtimeNs: FINEST_MTIME_NS } as fs.BigIntStats, source);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.chmodSync(source, 0o444);
+    const mtime = fs.statSync(source, { bigint: true }).mtimeNs;
+    assert.equal(mtime, FINEST_MTIME_NS);
+    assert.equal(invoke(f), 0, f.stderr.join("\n"));
+    const target = targets(f)[0]!;
+    for (const path of [target.backup, target.destination]) {
+      assert.equal(Number(fs.statSync(path).mode) & 0o777, 0o444);
+      assert.equal(fs.statSync(path, { bigint: true }).mtimeNs, mtime);
+    }
+    assert.equal(fs.existsSync(source), false);
   });
 
   it("moves an empty work directory even with no sessions", () => {
@@ -395,16 +421,28 @@ describe("migration and preservation", () => {
     assert.equal(fs.readFileSync(existing, "utf8"), bytes);
   });
 
-  it("handles escaped header keys and quotes or newlines in paths without changing other header strings", () => {
+  it("rewrites an escaped header key without changing other header strings", () => {
     const f = fixture();
-    f.oldCwd = join(f.root, 'old"project\nname');
-    f.newCwd = join(f.root, 'new"project\nname');
-    fs.mkdirSync(f.newCwd);
     const source = session(f, "escaped", false, {
       custom: { text: 'quote\\" and {} [], :', cwd: f.oldCwd },
     });
     const text = fs.readFileSync(source, "utf8").replace('"cwd":', '"\\u0063wd":');
     fs.writeFileSync(source, text);
+    assert.equal(invoke(f), 0, f.stderr.join("\n"));
+    const header = JSON.parse(fs.readFileSync(destination(f, source), "utf8"));
+    assert.equal(header.cwd, f.newCwd);
+    assert.equal(header.custom.cwd, f.oldCwd);
+    assert.equal(header.custom.text, 'quote\\" and {} [], :');
+  });
+
+  it.skipIf(process.platform === "win32")("handles quotes or newlines in project paths", () => {
+    const f = fixture();
+    f.oldCwd = join(f.root, 'old"project\nname');
+    f.newCwd = join(f.root, 'new"project\nname');
+    fs.mkdirSync(f.newCwd);
+    const source = session(f, "quoted", false, {
+      custom: { text: 'quote\\" and {} [], :', cwd: f.oldCwd },
+    });
     assert.equal(invoke(f), 0, f.stderr.join("\n"));
     const header = JSON.parse(fs.readFileSync(destination(f, source), "utf8"));
     assert.equal(header.cwd, f.newCwd);
@@ -737,5 +775,61 @@ describe("changes and partial failures", () => {
     assert.equal(work.destinationState, "verified");
     assert.equal(fs.readFileSync(join(work.backup, "a"), "utf8"), "a");
     assert.equal(fs.readFileSync(join(work.destination, "b"), "utf8"), "b");
+  });
+});
+
+describe.skipIf(process.platform !== "win32")("Windows timestamps and attributes", () => {
+  it("preserves an exact 100-nanosecond mtime and atime", () => {
+    const f = fixture();
+    const path = join(f.root, "times.txt");
+    write(path, "x");
+    const fd = fs.openSync(path, "r+");
+    try {
+      const stat = fs.fstatSync(fd, { bigint: true });
+      const times = {
+        ...stat,
+        atimeNs: FINEST_MTIME_NS,
+        mtimeNs: FINEST_MTIME_NS,
+      } as fs.BigIntStats;
+      preserveMtime(fd, times, path);
+      const applied = fs.fstatSync(fd, { bigint: true });
+      assert.equal(applied.mtimeNs, FINEST_MTIME_NS);
+      assert.equal(applied.atimeNs, FINEST_MTIME_NS);
+    } finally {
+      fs.closeSync(fd);
+    }
+    assert.equal(fs.statSync(path, { bigint: true }).mtimeNs, FINEST_MTIME_NS);
+  });
+
+  it("stops when the mtime is finer than the 100-nanosecond filesystem tick", () => {
+    const f = fixture();
+    const path = join(f.root, "times.txt");
+    write(path, "x");
+    const fd = fs.openSync(path, "r+");
+    try {
+      const stat = fs.fstatSync(fd, { bigint: true });
+      assert.throws(
+        () =>
+          preserveMtime(fd, { ...stat, mtimeNs: FINEST_MTIME_NS + 89n } as fs.BigIntStats, path),
+        /Cannot preserve mtime precision/,
+      );
+    } finally {
+      fs.closeSync(fd);
+    }
+  });
+
+  it("keeps the read-only directory attribute in the backup and destination", () => {
+    const f = fixture();
+    session(f);
+    const locked = join(workDir(f), "locked");
+    write(join(locked, "plan.md"), "plan");
+    fs.chmodSync(locked, 0o444);
+    assert.equal(invoke(f), 0, f.stderr.join("\n"));
+    const work = targets(f).find((item) => item.kind === "work")!;
+    for (const location of [work.backup, work.destination]) {
+      assert.equal(Number(fs.statSync(join(location, "locked")).mode) & 0o777, 0o444);
+      assert.equal(fs.readFileSync(join(location, "locked", "plan.md"), "utf8"), "plan");
+    }
+    assert.equal(fs.existsSync(work.source), false);
   });
 });
