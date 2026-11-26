@@ -501,11 +501,22 @@ describe("agent message reception", () => {
     return Buffer.from(JSON.stringify({ v: 1, id, from, at, text })).toString("base64");
   }
 
-  function paneListing(options: { name: string; value: string }[]): string {
+  const originalIdentity = `pi-mux-rx:123,%3,${process.pid}`;
+
+  function paneListing(
+    options: { name: string; value: string }[],
+    finalIdentity = originalIdentity,
+  ): string {
     return [
+      originalIdentity,
       ...options.map(({ name, value }) => `${name} ${value}`),
       "@pi-tmux-session eyJpZCI6IngifQ==",
+      finalIdentity,
     ].join("\n");
+  }
+
+  function isPaneOptionListing(args: string[]): boolean {
+    return args.at(-1)?.includes(" ; show-options ") === true;
   }
 
   for (const { name, result, diagnostic, hasInitialStderr } of [
@@ -548,7 +559,7 @@ describe("agent message reception", () => {
         const handlers = captureHandlers(async (_command, args) => {
           if (args.includes("display-message"))
             return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
-          assert.ok(args.includes("show-options"));
+          assert.ok(isPaneOptionListing(args));
           listAttempts++;
           nowMs += listAttempts * 1_000;
           const payload = `${paneListing([])}\n@mouse-force ${listAttempts}\n@pi-mux-msg-fixture secret`;
@@ -584,19 +595,76 @@ describe("agent message reception", () => {
     });
   }
 
-  for (const source of ["stderr", "stdout", "rejection"] as const) {
+  it("receives a message after the connection to the same pane recovers", async () => {
+    await withManagedEnvironment(async () => {
+      const optionName = `@pi-mux-msg-${EARLY_ID}`;
+      const value = messageOptionValue(EARLY_ID, "2026-11-21T00:00:01.000Z", "after recovery");
+      const delivered: unknown[] = [];
+      let listAttempts = 0;
+      const handlers = captureHandlers(
+        async (_command, args) => {
+          if (args.includes("display-message"))
+            return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
+          if (!isPaneOptionListing(args)) return { stdout: "", stderr: "", code: 0, killed: false };
+          listAttempts++;
+          if (listAttempts === 2)
+            return {
+              stdout: "",
+              stderr: "error connecting to socket (Connection refused)",
+              code: 1,
+              killed: false,
+            };
+          const options =
+            listAttempts === 3
+              ? [
+                  { name: "@note", value: "multiline option\nERROR: can't find pane: %3" },
+                  { name: optionName, value },
+                ]
+              : [];
+          return { stdout: paneListing(options), stderr: "", code: 0, killed: false };
+        },
+        (message) => delivered.push(message.content),
+      );
+      const timer = {} as ReturnType<typeof setInterval>;
+      const interval = spyOn(globalThis, "setInterval").mockReturnValue(timer);
+      const clear = spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+      const stderr = spyOn(process.stderr, "write").mockReturnValue(true);
+      try {
+        await handlers.get("session_start")!({}, context().ctx);
+        const [poll] = interval.mock.calls[0]!;
+        await poll();
+        await poll();
+        if (clear.mock.calls.length === 0) await poll();
+        assert.deepEqual(delivered, [
+          "Message from pi session sender-session-id at 2026-11-21T00:00:01.000Z:\nafter recovery",
+        ]);
+      } finally {
+        stopMessageWatcher();
+        stderr.mockRestore();
+        clear.mockRestore();
+        interval.mockRestore();
+      }
+    });
+  });
+
+  for (const source of ["stderr", "stdout", "rejection", "successful command stdout"] as const) {
     it(`stops polling without logging a missing pane reported in ${source}`, async () => {
       await withManagedEnvironment(async () => {
         const reason = "no such pane: %3";
         const handlers = captureHandlers(async (_command, args) => {
           if (args.includes("display-message"))
             return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
-          assert.ok(args.includes("show-options"));
+          assert.ok(isPaneOptionListing(args));
           if (source === "rejection") throw new Error(reason);
           return {
-            stdout: source === "stdout" ? reason : "",
+            stdout:
+              source === "successful command stdout"
+                ? `${originalIdentity}\nERROR: ${reason}`
+                : source === "stdout"
+                  ? reason
+                  : "",
             stderr: source === "stderr" ? reason : "",
-            code: 1,
+            code: source === "successful command stdout" ? 0 : 1,
             killed: false,
           };
         });
@@ -620,6 +688,54 @@ describe("agent message reception", () => {
     });
   }
 
+  it("stops watching a replacement that uses the same pane ID", async () => {
+    await withManagedEnvironment(async () => {
+      const replacementOptions = paneListing(
+        [
+          {
+            name: `@pi-mux-msg-${EARLY_ID}`,
+            value: messageOptionValue(EARLY_ID, "2026-11-21T00:00:01.000Z", "replacement"),
+          },
+          { name: `@pi-mux-view-${LATE_ID}`, value: "e30=" },
+        ],
+        `pi-mux-rx:123,%3,${process.pid + 1}`,
+      );
+      let isReplaced = false;
+      const handlers = captureHandlers(
+        async (_command, args) => {
+          if (args.includes("display-message"))
+            return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
+          assert.ok(isPaneOptionListing(args), "A replacement pane's options must not be removed");
+          return {
+            stdout: isReplaced ? replacementOptions : paneListing([]),
+            stderr: "",
+            code: 0,
+            killed: false,
+          };
+        },
+        () => assert.fail("A replacement pane must not deliver messages"),
+      );
+      const timer = {} as ReturnType<typeof setInterval>;
+      const interval = spyOn(globalThis, "setInterval").mockReturnValue(timer);
+      const clear = spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+      const stderr = spyOn(process.stderr, "write").mockReturnValue(true);
+      try {
+        await handlers.get("session_start")!({}, context().ctx);
+        const [poll] = interval.mock.calls[0]!;
+        await poll();
+        isReplaced = true;
+        await poll();
+        assert.deepEqual(clear.mock.calls, [[timer]]);
+        assert.deepEqual(stderr.mock.calls, []);
+      } finally {
+        stopMessageWatcher();
+        stderr.mockRestore();
+        clear.mockRestore();
+        interval.mockRestore();
+      }
+    });
+  });
+
   it("injects valid messages in send order, unsets every option, and ignores foreign options", async () => {
     await withManagedEnvironment(async () => {
       stopMessageWatcher();
@@ -630,7 +746,7 @@ describe("agent message reception", () => {
           commands.push(args);
           if (args.includes("display-message"))
             return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
-          if (args.includes("show-options"))
+          if (isPaneOptionListing(args))
             return {
               stdout: paneListing([
                 {
@@ -669,7 +785,9 @@ describe("agent message reception", () => {
         optionName: `@pi-mux-msg-${EARLY_ID}`,
       });
       assert.deepEqual(delivered[0]!.options, { deliverAs: "steer", triggerTurn: true });
-      const unsets = commands.filter((args) => args.includes("if-shell"));
+      const unsets = commands.filter(
+        (args) => args.includes("if-shell") && !isPaneOptionListing(args),
+      );
       assert.equal(unsets.length, 3);
       assert.deepEqual(
         unsets.map((args) => parse(args.at(-1)!)),
@@ -708,7 +826,7 @@ describe("agent message reception", () => {
         exec: async (_command: string, args: string[]) => {
           if (args.includes("display-message"))
             return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
-          if (args.includes("show-options"))
+          if (isPaneOptionListing(args))
             return {
               stdout: paneListing([
                 {

@@ -18,12 +18,11 @@ import {
 const TMUX_TIMEOUT_MS = 1_000;
 const MESSAGE_POLL_INTERVAL_MS = 2_000;
 const TMUX_SUBCOMMAND_INDEX = 4;
-const PANE_UNAVAILABLE_REASON =
-  /can't find pane|no such pane|no server running|error connecting to|no sessions/;
-const PANE_UNAVAILABLE_STDOUT = new RegExp(
-  `^\\s*(?:(?:tmux|psmux):\\s*)?(?:${PANE_UNAVAILABLE_REASON.source})`,
-  "m",
-);
+const PANE_MISSING_REASON =
+  /^(?:(?:tmux|psmux|ERROR):[ \t]*)?(?:(?:can't find pane|no such pane)(?::[^\r\n]*)?|no sessions)$/;
+const PANE_IDENTITY_MARKER = "pi-mux-rx:";
+const PANE_IDENTITY_FORMAT = `${PANE_IDENTITY_MARKER}#{pid},#{pane_id},#{pane_pid}`;
+const PANE_IDENTITY_LINE = /^pi-mux-rx:\d+,%\d+,\d+$/;
 
 export function rejectSessionChange(ctx: ExtensionContext): { cancel: true } | undefined {
   if (ctx.mode !== "tui") return;
@@ -70,10 +69,7 @@ function startMessageWatcher(
 
 function reportMessagePollFailure(error: unknown, reportedFailures: Set<string>): void {
   const commandError = error instanceof MessagePollCommandError ? error : undefined;
-  const isPaneUnavailable = commandError
-    ? commandError.isPaneUnavailable
-    : PANE_UNAVAILABLE_REASON.test(error instanceof Error ? error.message : String(error));
-  if (isPaneUnavailable) {
+  if (commandError?.isPaneMissing) {
     stopMessageWatcher();
     return;
   }
@@ -95,11 +91,12 @@ export async function drainAgentMessages(
     return;
   }
   const identity = messageIdentity;
-  const listing = await execute(
-    "tmux",
-    tmuxArgs(paths, ["show-options", "-p", "-t", identity.pane]),
-  );
-  for (const { name, encoded } of viewOptions(listing.stdout)) {
+  const listing = await readMessageOptions(execute, paths, identity);
+  if (listing === undefined) {
+    stopMessageWatcher();
+    return;
+  }
+  for (const { name, encoded } of viewOptions(listing)) {
     if (!consumedViewOptions.has(name)) {
       recordViewReceipt(pi, ctx.sessionManager, encoded);
       consumedViewOptions.add(name);
@@ -107,7 +104,7 @@ export async function drainAgentMessages(
     await unsetMessageOption(execute, paths, identity, name);
     consumedViewOptions.delete(name);
   }
-  const { valid, invalid } = partitionMessageOptions(messageOptions(listing.stdout));
+  const { valid, invalid } = partitionMessageOptions(messageOptions(listing));
   for (const name of invalid) await unsetMessageOption(execute, paths, identity, name);
   for (const { name, message } of valid) {
     if (!injectedMessageNames.has(name)) {
@@ -116,6 +113,36 @@ export async function drainAgentMessages(
     }
     await unsetMessageOption(execute, paths, identity, name);
   }
+}
+
+async function readMessageOptions(
+  execute: MessageExecute,
+  paths: TmuxPaths,
+  { pane, pid, serverPid }: ManagedPaneIdentity,
+): Promise<string | undefined> {
+  const identityQuery = `${quote(["display-message", "-p", "-t", pane])} "${PANE_IDENTITY_FORMAT}"`;
+  const optionQuery = quote(["show-options", "-p", "-t", pane]);
+  const commandList = [identityQuery, optionQuery, identityQuery].join(" ; ");
+  // psmux needs the literal condition to forward the list without a separate format request: https://github.com/psmux/psmux/blob/v3.4.0/src/main.rs#L4782-L4824
+  const wrapper = process.platform === "win32" ? ["if-shell", "1"] : ["if-shell", "-F", "1"];
+  const { stdout } = await execute(
+    "tmux",
+    tmuxArgs(paths, [...wrapper, commandList]),
+    undefined,
+    "show-options",
+  );
+  const [before = "", ...options] = stdout.trimEnd().split(/\r?\n/);
+  const after = options.pop();
+  const hasInitialIdentity = PANE_IDENTITY_LINE.test(before);
+  const missingReason = hasInitialIdentity && options.length === 0 ? after : before;
+  if (options.length === 0 && missingReason && PANE_MISSING_REASON.test(missingReason))
+    return undefined;
+  if (!hasInitialIdentity || !after || !PANE_IDENTITY_LINE.test(after)) {
+    throw new Error("Incomplete pane option listing");
+  }
+  const expected = `${PANE_IDENTITY_MARKER}${serverPid},${pane},${pid}`;
+  if (before !== expected || after !== expected) return undefined;
+  return options.join("\n");
 }
 
 function deliverAgentMessage(
@@ -140,6 +167,8 @@ async function unsetMessageOption(
   identity: ManagedPaneIdentity,
   name: string,
 ): Promise<void> {
+  // psmux keeps the backslash before @ in unquoted option names: https://github.com/psmux/psmux/blob/v3.4.0/src/commands.rs#L883-L938
+  const option = quote([name]).replace(/^\\@/, "@");
   await execute(
     "tmux",
     tmuxArgs(paths, [
@@ -148,7 +177,7 @@ async function unsetMessageOption(
       "-t",
       identity.pane,
       `#{&&:#{==:#{pid},${identity.serverPid}},#{==:#{pane_pid},${identity.pid}}}`,
-      quote(["set-option", "-pu", "-t", identity.pane, name]),
+      `${quote(["set-option", "-pu", "-t", identity.pane])} ${option}`,
     ]),
   );
 }
@@ -306,10 +335,13 @@ function backgroundExecutor(pi: Pick<ExtensionAPI, "exec">, ctx: ExtensionContex
 }
 
 type MessageExecResult = Awaited<ReturnType<Execute>> & { truncated?: boolean };
+type MessageExecute = (
+  ...args: [...Parameters<Execute>, operationName?: string]
+) => Promise<MessageExecResult>;
 
 class MessagePollCommandError extends Error {
   readonly key: string;
-  readonly isPaneUnavailable: boolean;
+  readonly isPaneMissing: boolean;
 
   constructor(
     operation: string,
@@ -328,17 +360,18 @@ class MessagePollCommandError extends Error {
     const status = `exec_code=${execCode} timeout=${timeout} truncated=${truncation}`;
     super(`tmux ${operation} elapsed=${elapsedMs}ms ${status}`);
     this.key = `${operation} ${status}`;
-    const reason =
-      result?.stderr || (rejection instanceof Error ? rejection.message : String(rejection));
-    this.isPaneUnavailable =
-      PANE_UNAVAILABLE_REASON.test(reason) ||
-      (result !== undefined && !result.stderr && PANE_UNAVAILABLE_STDOUT.test(result.stdout));
+    const reason = result
+      ? result.stderr || result.stdout
+      : rejection instanceof Error
+        ? rejection.message
+        : String(rejection);
+    this.isPaneMissing = PANE_MISSING_REASON.test(reason.trim());
   }
 }
 
-function messageExecutor(pi: Pick<ExtensionAPI, "exec">, ctx: ExtensionContext): Execute {
-  return async function execute(command, args, options) {
-    const operation = args[TMUX_SUBCOMMAND_INDEX] ?? "unknown";
+function messageExecutor(pi: Pick<ExtensionAPI, "exec">, ctx: ExtensionContext): MessageExecute {
+  return async function execute(command, args, options, operationName) {
+    const operation = operationName ?? args[TMUX_SUBCOMMAND_INDEX] ?? "unknown";
     const startedMs = performance.now();
     let result: MessageExecResult;
     try {
