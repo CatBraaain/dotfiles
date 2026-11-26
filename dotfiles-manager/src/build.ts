@@ -45,6 +45,7 @@ export async function main(
       distRoot: distDir,
       router: await createCopyRouter(platform, distDir),
       platform,
+      remappedPaths: new Set(),
     });
   });
   await timed("path map", onPhase, () => applyPathMap(distDir, platform));
@@ -81,7 +82,18 @@ type CopyContext = {
   distRoot: string;
   router: CopyRouter;
   platform: Platform;
+  remappedPaths: Set<string>;
 };
+
+const platformFilePattern = /^(.+)\.(linux|windows|macos)\.([^.]+)$/;
+
+function selectPlatformFileName(name: string, platform: Platform): string | undefined {
+  const match = platformFilePattern.exec(name);
+  if (!match) return name;
+  const [, stem, filePlatform, extension] = match;
+  const targetPlatform = platform === "darwin" ? "macos" : platform;
+  return filePlatform === targetPlatform ? `${stem}.${extension}` : undefined;
+}
 
 async function copyDir(
   sourceDir: string,
@@ -91,17 +103,46 @@ async function copyDir(
   const { router } = context;
   await router.enter(sourceDir, destinationDir);
   await mkdir(destinationDir, { recursive: true });
-  for (const entry of await readdir(sourceDir, { withFileTypes: true })) {
-    if (entry.name.endsWith(".ignore")) continue;
+  const entries = await readdir(sourceDir, { withFileTypes: true });
+  const copies = entries.flatMap((entry) => {
+    if (entry.name.endsWith(".ignore")) return [];
+    const outputName = entry.isFile()
+      ? selectPlatformFileName(entry.name, context.platform)
+      : entry.name;
+    return outputName === undefined ? [] : [{ entry, outputName }];
+  });
+  const platformFiles = new Map(
+    copies
+      .filter(({ entry, outputName }) => entry.name !== outputName)
+      .map(({ entry, outputName }) => [outputName, entry.name] as const),
+  );
 
+  for (const { entry, outputName } of copies) {
     const route = await router.route(entry.name, entry.isFile());
     if (route.kind === "skip") continue;
+    if (route.kind === "copy" && entry.isFile() && entry.name === outputName) {
+      const platformFile = platformFiles.get(outputName);
+      if (platformFile && (await router.route(platformFile, true)).kind === "copy") continue;
+    }
     const sourcePath = join(sourceDir, entry.name);
     const destinationPath =
-      route.kind === "copy-to" ? route.destination : join(destinationDir, entry.name);
+      route.kind === "copy-to" ? route.destination : join(destinationDir, outputName);
+    if (
+      route.kind === "copy" &&
+      entry.name !== outputName &&
+      context.remappedPaths.has(destinationPath)
+    )
+      continue;
     if (entry.isDirectory()) {
       // A moved destination replaces any existing entry (spec: 置き換える).
-      if (route.kind === "copy-to") await rm(destinationPath, { recursive: true, force: true });
+      if (route.kind === "copy-to") {
+        await rm(destinationPath, { recursive: true, force: true });
+        for (const path of context.remappedPaths) {
+          if (path === destinationPath || path.startsWith(`${destinationPath}${sep}`)) {
+            context.remappedPaths.delete(path);
+          }
+        }
+      }
       await copyDir(sourcePath, destinationPath, context);
     } else {
       if (route.kind === "copy-to") await mkdir(dirname(destinationPath), { recursive: true });
@@ -116,6 +157,8 @@ async function copyDir(
         await cp(sourcePath, destinationPath);
       }
     }
+    if (route.kind === "copy-to") context.remappedPaths.add(destinationPath);
+    else if (!entry.isDirectory()) context.remappedPaths.delete(destinationPath);
   }
   router.exit();
 }

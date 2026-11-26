@@ -90,6 +90,102 @@ describe("run", () => {
     assert.equal(existsSync(join(distRoot, "stale-from-previous-build.txt")), false);
   });
 
+  it("copies only the target platform file under its unqualified name", async () => {
+    const variants = ["linux", "windows", "macos"] as const;
+    for (const variant of variants) {
+      await put(root, `dotfiles/nested/config.${variant}.json`, variant);
+    }
+    await put(root, "dotfiles/nested/keep.windows.txt/file.txt", "directory");
+    await put(root, "dotfiles/nested/optional.bsd.txt", "unqualified");
+
+    for (const [platform, variant] of [
+      ["linux", "linux"],
+      ["windows", "windows"],
+      ["darwin", "macos"],
+    ] as const) {
+      await main(root, platform, homeRoot);
+
+      assert.equal(await readFile(join(distRoot, "nested/config.json"), "utf8"), variant);
+      assert.equal(
+        await readFile(join(distRoot, "nested/keep.windows.txt/file.txt"), "utf8"),
+        "directory",
+      );
+      assert.equal(
+        await readFile(join(distRoot, "nested/optional.bsd.txt"), "utf8"),
+        "unqualified",
+      );
+      for (const suffix of variants) {
+        assert.equal(existsSync(join(distRoot, `nested/config.${suffix}.json`)), false);
+      }
+    }
+  });
+
+  it("prefers the target platform file and uses the common file on other platforms", async () => {
+    await put(root, "dotfiles/config.txt", "common");
+    await put(root, "dotfiles/config.linux.txt", "linux");
+
+    await main(root, "linux", homeRoot);
+    assert.equal(await readFile(join(distRoot, "config.txt"), "utf8"), "linux");
+
+    await main(root, "windows", homeRoot);
+    assert.equal(await readFile(join(distRoot, "config.txt"), "utf8"), "common");
+  });
+
+  it("respects remap rules for both the source file name and the normalized dist path", async () => {
+    await put(
+      root,
+      "dotfiles/remap.data.md",
+      [
+        "| key | linux | windows | macos |",
+        "| --- | --- | --- | --- |",
+        "| move.windows.txt | | moved.txt | |",
+        "| skip.windows.txt | | - | |",
+        "| hidden.txt | | - | |",
+      ].join("\n"),
+    );
+    await put(root, "dotfiles/move.txt", "common");
+    await put(root, "dotfiles/move.windows.txt", "windows");
+    await put(root, "dotfiles/skip.txt", "common");
+    await put(root, "dotfiles/skip.windows.txt", "windows");
+    await put(root, "dotfiles/hidden.windows.txt", "windows");
+
+    await main(root, "windows", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, "move.txt"), "utf8"), "common");
+    assert.equal(await readFile(join(distRoot, "moved.txt"), "utf8"), "windows");
+    assert.equal(await readFile(join(distRoot, "skip.txt"), "utf8"), "common");
+    assert.equal(existsSync(join(distRoot, "hidden.txt")), false);
+  });
+
+  it("keeps an explicit remap when an implicit platform file has the same destination", async () => {
+    await put(
+      root,
+      "dotfiles/remap.data.md",
+      [
+        "| key | linux | windows | macos |",
+        "| --- | --- | --- | --- |",
+        "| a/source.txt | | first.txt | |",
+        "| z/source.txt | | second.txt | |",
+        "| directory | | folder.txt | |",
+      ].join("\n"),
+    );
+    await put(root, "dotfiles/a/source.txt", "explicit first");
+    await put(root, "dotfiles/first.windows.txt", "implicit");
+    await put(root, "dotfiles/second.windows.txt", "implicit");
+    await put(root, "dotfiles/z/source.txt", "explicit second");
+    await put(root, "dotfiles/directory/file.txt", "explicit directory");
+    await put(root, "dotfiles/folder.windows.txt", "implicit");
+
+    await main(root, "windows", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, "first.txt"), "utf8"), "explicit first");
+    assert.equal(await readFile(join(distRoot, "second.txt"), "utf8"), "explicit second");
+    assert.equal(
+      await readFile(join(distRoot, "folder.txt/file.txt"), "utf8"),
+      "explicit directory",
+    );
+  });
+
   it("removes glob and exact targets and moves remaining entries from the selected column", async () => {
     await put(
       root,

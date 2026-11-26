@@ -22,6 +22,7 @@ An empty cell keeps the entry at its original path; `-` removes it from `dist/`.
 | **/SPEC.md | - | - | - |
 | **/REQUIREMENTS.md | - | - | - |
 | **/node_modules | - | - | - |
+| camoufox | .cache/camoufox | AppData/Local/camoufox/camoufox/Cache | - |
 | docker | .docker/desktop | AppData/Roaming/Docker | - |
 | fcitx5 | .config/fcitx5 | - | - |
 | git-cliff | .config/git-cliff | AppData/Roaming/git-cliff | - |
