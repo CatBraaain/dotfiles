@@ -717,12 +717,11 @@ describe("ticket dispatch real tmux", () => {
     const fixture = setup();
     const id = "20261123-100001";
     const openId = "a";
-    const env = { ...fixture.env, STUB_HOLD_ID: id };
+    const env = { ...fixture.env, STUB_WAIT: "1" };
     try {
       startServer(fixture, env);
       inspectionStub(fixture);
       seedLockedTicket(fixture, id, "departed");
-      writeTicket(fixture.store, openId, "open");
       const started = cli(
         fixture,
         ["dispatch", "start", "--status", "locked", "--status", "open", "--max", "1"],
@@ -734,13 +733,34 @@ describe("ticket dispatch real tmux", () => {
       const lockedRecord = join(fixture.records, `${id}.json`);
       const openRecord = join(fixture.records, `${openId}.json`);
       await waitFor(() => existsSync(lockedRecord), "locked pi did not start");
-      assert.equal(existsSync(openRecord), false);
+      const lockedPid = readFileSync(join(fixture.records, `${id}.pid`), "utf8");
+
+      writeTicket(fixture.store, openId, "open");
       const closed = cli(fixture, ["set", id, '{"status":"closed"}'], fixture.cwd, env);
       assert.equal(closed.status, 0, closed.stderr);
       await waitFor(() => existsSync(openRecord), "ticket status did not release the slot");
+      const worker = dispatcherName(fixture.project);
+      const openLaunch = `launched ${openId} as handle_${openId}`;
+      await waitDispatchLog(fixture, worker, openLaunch);
+      const log = isolatedTmux(fixture.socket, ["capture-pane", "-p", "-t", `=${worker}:0.0`]);
+      assert.equal(log.status, 0, log.stderr);
+      const lockedReleaseIndex = log.stdout.indexOf(`done ${id} status=closed`);
+      assert.ok(
+        lockedReleaseIndex >= 0 && lockedReleaseIndex < log.stdout.indexOf(openLaunch),
+        log.stdout,
+      );
+      writeTicket(fixture.store, openId, "closed");
       await waitFinished(fixture);
       assert.equal(readFileSync(join(fixture.records, "launches"), "utf8"), `${id}\n${openId}\n`);
-      assert.equal(isolatedTmux(fixture.socket, ["has-session", "-t", `=handle_${id}`]).status, 0);
+      const lockedPane = isolatedTmux(fixture.socket, [
+        "display-message",
+        "-p",
+        "-t",
+        `=handle_${id}:0.0`,
+        "#{pane_pid}",
+      ]);
+      assert.equal(lockedPane.status, 0, lockedPane.stderr);
+      assert.equal(lockedPane.stdout.trim(), lockedPid);
       const marker = isolatedTmux(fixture.socket, [
         "show-environment",
         "-t",
