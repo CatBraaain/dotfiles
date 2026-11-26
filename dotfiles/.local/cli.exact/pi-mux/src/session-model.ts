@@ -12,6 +12,7 @@ export type Pane = Session & {
   pid: number;
   panePid: number;
   startup?: "accepted" | "ready";
+  reloadReadiness?: "pending" | "drained";
   warm: boolean;
   metadata: string;
 };

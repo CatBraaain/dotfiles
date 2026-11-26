@@ -93,6 +93,78 @@ describe("Windows launch rights", () => {
     assert.deepEqual(await ledger.status(replacement), { state: "reserved" });
   });
 
+  it("reserves the verified launch keys after exit and preserves them in later dispatch audits", async () => {
+    const { create, observations } = fixture();
+    const ledger = create();
+    const originalKeys = [conversation, ticket];
+    const token = await reserve(ledger, originalKeys);
+    const old = await ledger.claimAndStart(token, randomUUID(), spawn);
+    assert.ok(old);
+    await ledger.complete(token, old.receipt);
+
+    const keys = await ledger.inspectReloadKeys({
+      token,
+      basis,
+      child,
+      conversationKey: conversation,
+    });
+    assert.deepEqual(keys, originalKeys);
+    assert.equal((await ledger.reserveAfterLifecycleAudit(keys, basis)).state, "conflict");
+
+    observations.child = { state: "ended" };
+    const replacement = await reserve(ledger, keys);
+    observations.child = {
+      state: "live",
+      identity: { ...child, creationTime: "133972000000000000" },
+    };
+    const started = await ledger.claimAndStart(replacement, randomUUID(), spawn);
+    assert.ok(started);
+    await ledger.complete(replacement, started.receipt);
+    await ledger.completeDispatched(replacement, started.receipt, basis, ticket);
+
+    assert.deepEqual(await ledger.fenceForDispatchInventory(), [replacement]);
+    assert.equal(await ledger.inspect([conversation]), "present");
+    assert.equal(await ledger.inspect([ticket]), "present");
+  });
+
+  it("rejects missing, mismatched or stale evidence without mutating the ledger", async () => {
+    const { create, path } = fixture();
+    const ledger = create();
+    const token = await reserve(ledger, [ticket]);
+    const old = await ledger.claimAndStart(token, randomUUID(), spawn);
+    assert.ok(old);
+    await ledger.complete(token, old.receipt);
+    const before = readFileSync(path, "utf8");
+    const expected = { token, basis, child, conversationKey: conversation };
+    for (const evidence of [
+      { ...expected, token: undefined },
+      { ...expected, token: randomUUID() },
+      { ...expected, basis: { ...basis, instance: "bbbbbbbbbbbbbbbb" } },
+      { ...expected, child: { ...child, creationTime: "133972000000000000" } },
+    ]) {
+      await assert.rejects(
+        ledger.inspectReloadKeys(evidence),
+        /Cannot verify.*receipt and ownership/,
+      );
+    }
+    assert.equal(readFileSync(path, "utf8"), before);
+  });
+
+  it("refuses a competing conversation key even when the target owns a verified ticket key", async () => {
+    const { create } = fixture();
+    const ledger = create();
+    const token = await reserve(ledger, [ticket]);
+    const old = await ledger.claimAndStart(token, randomUUID(), spawn);
+    assert.ok(old);
+    await ledger.complete(token, old.receipt);
+    await reserve(ledger, [conversation]);
+
+    await assert.rejects(
+      ledger.inspectReloadKeys({ token, basis, child, conversationKey: conversation }),
+      /already owns this conversation/,
+    );
+  });
+
   it("rejects a late claim after its unclaimed reservation is replaced", async () => {
     const { create } = fixture();
     const old = await reserve(create(), [conversation, ticket]);

@@ -62,8 +62,11 @@ if (previous.length > 0 && process.env.RELOAD_DEFER_PUBLICATION) {
   while (!existsSync(permit) && Date.now() < deadline) await sleep(40);
   if (!existsSync(permit)) process.exit(3);
 }
+const reloadReadiness =
+  previous.length === 0 && process.env.RELOAD_WITH_PROOF === "1" ? "pending" : undefined;
 const metadata = Buffer.from(JSON.stringify({
-  id, cwd: record.cwd, file: record.file, pid, processPid: process.pid, startup: "ready", token,
+  id, cwd: record.cwd, file: record.file, pid, processPid: process.pid, startup: "ready",
+  token, reloadReadiness,
 })).toString("base64");
 tmux("set-option", "-p", "-t", pane, "@pi-tmux-session", metadata);
 setInterval(() => {}, 1_000);
@@ -88,7 +91,7 @@ async function waitFor(condition: () => boolean | Promise<boolean>): Promise<voi
 }
 
 it.skipIf(!tmux || !node)(
-  "waits for a selected Windows Pi, replaces only its exact peer, and waits for its publication",
+  "opens with legacy readiness and replaces only the selected Windows pi after its input drains",
   async () => {
     assert.ok(tmux);
     const root = mkdtempSync(join(tmpdir(), "pi-mux-reload-"));
@@ -194,12 +197,18 @@ it.skipIf(!tmux || !node)(
         );
         await ok([mux, "open", "--detached", "--expect-file", file, id], {
           RELOAD_OLD_ENV: "stale",
+          RELOAD_WITH_PROOF: id === target ? "1" : undefined,
         });
         await publish(id, "waiting-user");
       }
 
       const original = log(target)[0]!;
       const other = log(sibling)[0]!;
+      const legacyReload = await run([mux, "reload", sibling]);
+      assert.equal(legacyReload.code, 2, JSON.stringify(legacyReload));
+      assert.equal(legacyReload.stdout, "");
+      assert.ok(legacyReload.stderr.includes(`${sibling}: Missing or invalid proof`));
+      assert.deepEqual(log(sibling), [other]);
       function identity(pid: number): WindowsProcessIdentity {
         const observation = inspectWindowsProcess(pid);
         assert.equal(observation.state, "live");
@@ -223,6 +232,18 @@ it.skipIf(!tmux || !node)(
       const targetSession = sessionsById.split(/\r?\n/).find((row) => row.endsWith(" " + target));
       assert.ok(targetSession);
       const tmuxTarget = "=" + targetSession.split(" ")[0];
+      const scope = [tmux, "-S", socket, "-f", conf];
+      const readMetadata = () =>
+        ok([...scope, "show-options", "-pqv", "-t", tmuxTarget, "@pi-tmux-session"]);
+      const pendingMetadata = await readMetadata();
+      const originalMetadata = JSON.parse(Buffer.from(pendingMetadata, "base64").toString("utf8"));
+      assert.equal(originalMetadata.startup, "ready");
+      assert.equal(originalMetadata.reloadReadiness, "pending");
+      await ok([...scope, "set-environment", "-u", "-t", tmuxTarget, "PI_TMUX_SESSION_ID"]);
+      assert.equal(
+        await ok([...scope, "display-message", "-p", "-t", tmuxTarget, "#{PI_TMUX_SESSION_ID}"]),
+        "",
+      );
       const attemptAt = Date.now();
       const pending = JSON.stringify({ version: 1, sessionId: target, attemptAt });
       const pendingOption = "@pi_session_state_pending";
@@ -269,6 +290,22 @@ it.skipIf(!tmux || !node)(
       assert.equal(log(target).length, 1);
 
       await publish(target, "waiting-user");
+      await Bun.sleep(700);
+      assert.equal(completed, false);
+      assert.equal(log(target).length, 1);
+      assert.equal(await readMetadata(), pendingMetadata);
+      assert.equal(
+        (await activeSessions()).find(({ id }) => id === target)?.reloadStatus,
+        "waiting-reload",
+      );
+      await ok([
+        mux,
+        "state",
+        target,
+        "--startup-input-drained",
+        "--source",
+        JSON.stringify(original.source),
+      ]);
       await waitFor(() => log(target).length === 2 || completed);
       if (completed) assert.fail(JSON.stringify(await reload));
       const replacement = log(target)[1]!;
@@ -285,7 +322,16 @@ it.skipIf(!tmux || !node)(
       assert.equal(observeWindowsIdentity(siblingProcess, inspectWindowsProcess), "present");
       assert.equal(completed, false);
       writeFileSync(join(root, target + ".publish"), "");
-      assert.deepEqual(await reload, { code: 0, stdout: "reloaded " + target, stderr: "" });
+      const result = await reload;
+      assert.equal(result.code, 0, JSON.stringify(result));
+      assert.equal(result.stdout, `reloaded ${target}`);
+      assert.equal(
+        result.stderr,
+        `pi-mux: reload ${target}: waiting for pi to drain its startup input`,
+      );
+      const published = JSON.parse(Buffer.from(await readMetadata(), "base64").toString("utf8"));
+      assert.equal(published.startup, "ready");
+      assert.equal(published.reloadReadiness, undefined);
       assert.ok((await activeSessions()).every(({ reloadStatus }) => reloadStatus === undefined));
       const observedPending = await ok([
         tmux,

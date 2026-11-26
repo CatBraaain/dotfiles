@@ -399,7 +399,9 @@ exec ${quote([realTmux])} "$@"
       .flatMap((line) => {
         const [pane, session, encoded] = line.split("\t");
         if (!encoded) return [];
-        return [{ ...JSON.parse(Buffer.from(encoded, "base64").toString()), pane, session }];
+        const metadata = JSON.parse(Buffer.from(encoded, "base64").toString());
+        delete metadata.reloadReadiness;
+        return [{ ...metadata, pane, session }];
       });
   }
 
@@ -2192,6 +2194,24 @@ describe("pi-mux warm conversations", () => {
         assert.equal(started.code, 0, started.err);
         const original = await firstPane(f);
         const source = await notificationSource(f, original);
+        async function waitForReloadReadiness(pane: Pane) {
+          return await waitFor(async () => {
+            const publication = await f.tmux([
+              "show-options",
+              "-pqv",
+              "-t",
+              pane.pane,
+              "@pi-tmux-session",
+            ]);
+            const metadata = JSON.parse(
+              Buffer.from(publication.out.trim(), "base64").toString("utf8") || "null",
+            );
+            return metadata?.pid === pane.pid && metadata.reloadReadiness === "drained"
+              ? metadata
+              : undefined;
+          });
+        }
+        await waitForReloadReadiness(original);
         await waitFor(async () => {
           const state = await f.tmux([
             "show-options",
@@ -2247,6 +2267,7 @@ describe("pi-mux warm conversations", () => {
         assert.equal(reused.code, 0, reused.err);
         assert.ok(reused.out.startsWith(`Pi session ${original.id}\n`));
         assert.deepEqual(await f.panes(), [replacement]);
+        await waitForReloadReadiness(replacement);
       });
     },
     TIMEOUT_MS,

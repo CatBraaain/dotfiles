@@ -237,6 +237,27 @@ test.skipIf(!tmux)(
         assert.deepEqual(JSON.parse(await original()), waiting);
         assert.equal(await get(peerPane, "#{@pi-mux-pending-restart-blocker}"), "");
         assert.deepEqual(JSON.parse(await get(peerPane, "#{@pi_session_state_pending}")), pending);
+
+        const pendingReadiness = encoded({ reloadReadiness: "pending", extra: { text: title } });
+        const drainedReadiness = encoded({ reloadReadiness: "drained", extra: { text: title } });
+        const publishReadiness = (overrides = {}) =>
+          run([
+            mux,
+            "state",
+            id,
+            "--startup-input-drained",
+            "--source",
+            JSON.stringify({ ...source, ...overrides }),
+          ]);
+        await set(peerPane, "@pi-tmux-session", pendingReadiness);
+        assert.equal((await publishReadiness({ token: randomUUID() })).exitCode, 1);
+        assert.equal(await get(peerPane, "#{@pi-tmux-session}"), pendingReadiness);
+        assert.deepEqual(await publishReadiness(), success);
+        assert.deepEqual(await publishReadiness(), success);
+        assert.equal(await get(peerPane, "#{@pi-tmux-session}"), drainedReadiness);
+        assert.deepEqual(JSON.parse(await original()), waiting);
+        assert.deepEqual(JSON.parse(await get(peerPane, "#{@pi_session_state_pending}")), pending);
+        assert.equal(await get("=two", "#{@pi_session_state}"), "peer-two");
       } finally {
         await new Promise<void>((resolve, reject) =>
           lock.close((error) => (error ? reject(error) : resolve())),

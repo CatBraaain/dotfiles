@@ -191,6 +191,49 @@ export class WindowsLaunchRights {
     });
   }
 
+  async inspectReloadKeys({
+    token,
+    basis,
+    child,
+    conversationKey,
+  }: {
+    token: string | undefined;
+    basis: WindowsManagementBasis;
+    child: WindowsProcessIdentity;
+    conversationKey: string;
+  }): Promise<string[]> {
+    return await this.access.withClaimLock(async () => {
+      const rights = readRights(this.access.path);
+      const matchingChildren = rights.filter(
+        (right) =>
+          right.state === "spawned" &&
+          right.child.pid === child.pid &&
+          right.child.creationTime === child.creationTime,
+      );
+      const [owned] = matchingChildren;
+      if (
+        (owned || token) &&
+        (matchingChildren.length !== 1 ||
+          owned?.state !== "spawned" ||
+          owned.token !== token ||
+          !owned.completed ||
+          owned.basis.instance !== basis.instance ||
+          this.observeChild(owned) !== "present")
+      )
+        throw new Error("Cannot verify the current Windows pi launch receipt and ownership");
+      if (
+        rights.some(
+          (right) =>
+            right !== owned &&
+            right.keys.includes(conversationKey) &&
+            (right.state !== "spawned" || this.observeChild(right) !== "ended"),
+        )
+      )
+        throw new Error("A Windows launch right already owns this conversation");
+      return owned?.keys ?? [conversationKey];
+    });
+  }
+
   async status(token: string): Promise<WindowsLaunchStatus> {
     return await this.access.withClaimLock(async () => {
       const right = readRights(this.access.path).find((entry) => entry.token === token);

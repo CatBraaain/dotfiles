@@ -13,10 +13,122 @@ import { clearStateOptions, type StateNotification, type StateSource } from "./p
 import { platform } from "./platform";
 import { snapshotSessions } from "./restoration";
 import { errorMessage, isRecord } from "./session-model";
-import { guardedTmuxLine, paneEntityGuard, serverOption, tmux, windowsManagement } from "./tmux";
+import {
+  guardedTmuxLine,
+  paneEntityGuard,
+  serverLifetime,
+  serverOption,
+  tmux,
+  windowsManagement,
+} from "./tmux";
 import { mutateWindowsPeerPane } from "./windows-lifecycle";
 import type { WindowsManagement } from "./windows-management";
 import { inspectWindowsProcess } from "./windows-process";
+
+type StartupTarget = {
+  panePid: number;
+  metadata: Record<string, unknown>;
+  encoded: string;
+  launch: string;
+};
+
+export async function notifyStartupInputDrained(
+  config: TmuxConfig,
+  id: string,
+  source: StateSource,
+): Promise<void> {
+  if (source.socket !== config.socket)
+    throw new Error("Source socket does not match the dedicated socket");
+
+  if (platform.windows) {
+    const management = windowsManagement(config);
+    const target = await verifyWindowsStateSource(management, id, source);
+    const drained = drainedStartupMetadata(target, id, source);
+    const outcome = await mutateWindowsPeerPane(
+      management.scope,
+      target.audit,
+      target.peer,
+      source.pane,
+      {
+        expected: windowsSourceExpectations(target),
+        mutations:
+          drained === target.encoded ? [] : [{ option: "@pi-tmux-session", value: drained }],
+        processes: target.processes,
+      },
+    );
+    if (outcome !== "applied") throw new Error("Cannot confirm guarded startup input notification");
+    return;
+  }
+
+  const server = await serverLifetime(config);
+  if (!server || server.pid !== source.serverPid)
+    throw new Error("Source server lifetime no longer matches");
+  const target = await verifyStateTarget(config, id, source);
+  const drained = drainedStartupMetadata(target, id, source);
+  if (
+    !platform.processIsAlive(target.panePid) ||
+    !platform.processIsAlive(source.pid) ||
+    !platform.processDescendsFrom(source.pid, target.panePid)
+  )
+    throw new Error("Source Pi process is not live in the pane");
+
+  const { pane } = source;
+  const guard = [
+    paneEntityGuard(server.pid, pane, target.panePid),
+    "#{==:#{pane_dead},0}",
+    formatEquals("@pi-mux-generation", server.generation),
+    formatEquals("@pi-mux-launch", target.launch),
+    formatEquals("@pi-tmux-session", target.encoded),
+  ].reduce((left, right) => `#{&&:${left},${right}}`);
+  const readback = ["show-options", "-pqv", "-t", pane, "@pi-tmux-session"];
+  const commands =
+    drained === target.encoded
+      ? [readback]
+      : [["set-option", "-p", "-t", pane, "@pi-tmux-session", drained], readback];
+  const update = guardedTmuxLine(pane, guard, commands);
+  const result = await tmux(config, ["source-file", "-"], false, `${update}\n`);
+  if (result.stdout.replace(/\n$/, "") !== drained)
+    throw new Error("Cannot confirm guarded startup input notification");
+}
+
+function drainedStartupMetadata(target: StartupTarget, id: string, source: StateSource): string {
+  const { panePid, metadata, encoded, launch } = target;
+  const pid = metadata.processPid === undefined ? panePid : metadata.processPid;
+  if (
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded) ||
+    !Number.isSafeInteger(panePid) ||
+    panePid <= 0 ||
+    metadata.id !== id ||
+    metadata.pid !== panePid ||
+    pid !== source.pid ||
+    metadata.token !== source.token ||
+    (launch && !matchesLaunch(launch, id, panePid, source.token))
+  )
+    throw new Error("Source Pi process does not match the startup metadata and launch");
+
+  if (metadata.reloadReadiness === "drained") return encoded;
+  if (metadata.reloadReadiness !== "pending")
+    throw new Error("Source Pi process has not published pending reload readiness");
+  return encodeDrainedStartupMetadata(metadata);
+}
+
+function encodeDrainedStartupMetadata(metadata: Record<string, unknown>): string {
+  return Buffer.from(JSON.stringify({ ...metadata, reloadReadiness: "drained" })).toString(
+    "base64",
+  );
+}
+
+function formatEquals(field: string, literal: string): string {
+  return `#{==:#{${field}},${literal.replace(/[#,}]/g, "#$&")}}`;
+}
+
+function windowsSourceExpectations({ panePid, encoded, launch }: StartupTarget) {
+  return [
+    ["pane_pid", String(panePid)],
+    ["@pi-tmux-session", encoded],
+    ["@pi-mux-launch", launch],
+  ] as const;
+}
 
 async function verifyStateSource(
   config: TmuxConfig,
@@ -110,31 +222,28 @@ async function notifyWindowsState(
 
   const ownState = ["@pi-mux-state-source", windowsStateJson({ id, ...source })] as const;
   const mutate = (
+    observed: WindowsStateTarget,
     mutations: Parameters<typeof mutateWindowsPeerPane>[4]["mutations"],
     owner?: typeof ownState,
     expected: Parameters<typeof mutateWindowsPeerPane>[4]["expected"] = [],
   ) =>
-    mutateWindowsPeerPane(management.scope, target.audit, target.peer, source.pane, {
-      expected: [
-        ["pane_pid", String(target.panePid)],
-        ["@pi-tmux-session", target.encoded],
-        ["@pi-mux-launch", target.launch],
-        ...expected,
-      ],
+    mutateWindowsPeerPane(management.scope, observed.audit, observed.peer, source.pane, {
+      expected: [...windowsSourceExpectations(observed), ...expected],
       owner,
       mutations,
-      processes: target.processes,
+      processes: observed.processes,
     });
 
   if (notification.clear) {
     await mutate(
+      target,
       clearStateOptions(source.pane).map((args) => ({ option: args.at(-1)! })),
       ownState,
     );
     return 0;
   }
 
-  await mutate([
+  const publication: Parameters<typeof mutate>[1] = [
     { option: ownState[0], value: ownState[1] },
     {
       option: "@pi_session_state",
@@ -147,33 +256,63 @@ async function notifyWindowsState(
       }),
     },
     { option: "@pi-mux-pending-restart-blocker" },
-  ]);
-  if (notification.state !== "running" || (!target.temporary && !target.audit.startup)) return 0;
+  ];
+  if (notification.state !== "running") {
+    await mutate(target, publication);
+    return 0;
+  }
 
-  const mutateOwned = async (
-    mutations: Parameters<typeof mutate>[0],
-    expected?: Parameters<typeof mutate>[2],
-  ) => {
-    if ((await mutate(mutations, ownState, expected)) !== "applied")
+  let currentTarget = target;
+  async function refreshTarget(): Promise<WindowsStateTarget> {
+    const current = await observe();
+    assertWindowsStateContinuity(currentTarget, current);
+    return current;
+  }
+
+  async function mutateWithAckRetry(
+    mutations: Parameters<typeof mutate>[1],
+    owner?: typeof ownState,
+    expected?: Parameters<typeof mutate>[3],
+  ) {
+    try {
+      return await mutate(currentTarget, mutations, owner, expected);
+    } catch (error) {
+      if (currentTarget.metadata.reloadReadiness !== "pending") throw error;
+      const current = await refreshTarget();
+      if (
+        current.encoded === currentTarget.encoded ||
+        current.temporary !== currentTarget.temporary
+      )
+        throw error;
+      currentTarget = current;
+      return await mutate(currentTarget, mutations, owner, expected);
+    }
+  }
+
+  async function mutateOwned(
+    mutations: Parameters<typeof mutate>[1],
+    expected?: Parameters<typeof mutate>[3],
+  ) {
+    if ((await mutateWithAckRetry(mutations, ownState, expected)) !== "applied")
       throw new Error("Source no longer owns the published session state");
-  };
+  }
+
+  await mutateWithAckRetry(publication);
+  if (!target.temporary && !target.audit.startup) return 0;
+
   try {
     return await withLock(
       config,
       async () => {
         if (target.temporary) {
-          const current = await observe();
-          if (
-            current.audit.basis.instance !== target.audit.basis.instance ||
-            current.peer.identity !== target.peer.identity ||
-            current.panePid !== target.panePid
-          )
-            throw new Error("Source pane changed before promotion");
-          if (current.temporary)
+          currentTarget = await refreshTarget();
+          if (currentTarget.temporary) {
             await mutateOwned([{ unsetTemporary: true }], [["PI_TMUX_TEMPORARY", id]]);
+            currentTarget = { ...currentTarget, temporary: false };
+          }
         }
-        await management.assertLive(target.audit.basis);
-        await snapshotSessions(config, target.audit.basis.instance, "repair");
+        await management.assertLive(currentTarget.audit.basis);
+        await snapshotSessions(config, currentTarget.audit.basis.instance, "repair");
         await mutateOwned([{ option: "@pi_session_state_pending" }]);
         return 0;
       },
@@ -192,6 +331,36 @@ async function notifyWindowsState(
     console.error(`pi-mux: state ${id}: ${errorMessage(error)}`);
     return 75;
   }
+}
+
+type WindowsStateTarget = Awaited<ReturnType<typeof verifyWindowsStateSource>>;
+
+function assertWindowsStateContinuity(
+  previous: WindowsStateTarget,
+  current: WindowsStateTarget,
+): void {
+  const sameMetadata =
+    previous.encoded === current.encoded ||
+    (previous.metadata.reloadReadiness === "pending" &&
+      current.encoded === encodeDrainedStartupMetadata(previous.metadata));
+  if (
+    !sameMetadata ||
+    current.launch !== previous.launch ||
+    current.audit.basis.instance !== previous.audit.basis.instance ||
+    current.peer.identity !== previous.peer.identity ||
+    current.peer.name !== previous.peer.name ||
+    current.peer.port !== previous.peer.port ||
+    current.peer.held !== previous.peer.held ||
+    current.pane !== previous.pane ||
+    current.panePid !== previous.panePid ||
+    current.processes.length !== previous.processes.length ||
+    current.processes.some(
+      (process, index) =>
+        process.pid !== previous.processes[index]?.pid ||
+        process.creationTime !== previous.processes[index]?.creationTime,
+    )
+  )
+    throw new Error("Source pane changed before running state update");
 }
 
 function windowsStateJson(value: unknown): string {
@@ -312,11 +481,7 @@ export async function notifyState(
   }
 }
 
-async function verifyStateTarget(
-  config: TmuxConfig,
-  id: string,
-  source: StateSource,
-): Promise<{ pane: string; pid: number; panePid: number; file?: string }> {
+async function verifyStateTarget(config: TmuxConfig, id: string, source: StateSource) {
   const result = await tmux(config, [
     "list-panes",
     "-a",
@@ -324,20 +489,13 @@ async function verifyStateTarget(
     "#{pane_id}|#{@pi-tmux-session}|#{pane_pid}|#{pane_dead}|#{@pi-mux-launch}",
   ]);
   const matching = result.stdout
-    .trimEnd()
     .split("\n")
     .filter(Boolean)
     .flatMap((line) => {
-      const [pane, encoded, panePid, dead, launchEncoded] = line.split("|");
+      const [pane, encoded, panePid, dead, ...launchFields] = line.split("|");
       if (dead !== "0" || !pane || !encoded) return [];
-      let metadata: {
-        id?: unknown;
-        pid?: unknown;
-        processPid?: unknown;
-        startup?: unknown;
-        token?: unknown;
-        file?: unknown;
-      };
+      const launch = launchFields.join("|");
+      let metadata: Record<string, unknown>;
       try {
         metadata = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
       } catch {
@@ -354,10 +512,10 @@ async function verifyStateTarget(
         return [];
       const pid = typeof metadata.processPid === "number" ? metadata.processPid : Number(panePid);
       if (!Number.isSafeInteger(pid) || pid <= 0) return [];
-      const token = launchRecordToken(launchEncoded) ?? metadata.token;
+      const token = launchRecordToken(launch) ?? metadata.token;
       const file =
         typeof metadata.file === "string" && isAbsolute(metadata.file) ? metadata.file : undefined;
-      return [{ pane, pid, panePid: Number(panePid), token, file }];
+      return [{ pane, pid, panePid: Number(panePid), token, file, metadata, encoded, launch }];
     });
   if (
     matching.length !== 1 ||

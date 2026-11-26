@@ -27,7 +27,7 @@ import { sessionMetadata, SessionMetadataCache } from "./session-metadata";
 import { errorMessage } from "./session-model";
 import { closeSession, unregisterWorkspace } from "./session-removal";
 import { printDetachedSession, startSession } from "./session-start";
-import { notifyState } from "./state-notification";
+import { notifyStartupInputDrained, notifyState } from "./state-notification";
 import { windowsManagement } from "./tmux";
 import { displayedSessions, SwitchResolutionError, switchSession } from "./tmux-clients";
 import {
@@ -180,6 +180,20 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       prepareDirectory(config.stateDirectory);
       try {
         return await notifyState(config, operation.id, operation.source, operation.notification);
+      } catch (error) {
+        console.error(`pi-mux: state ${operation.id}: ${errorMessage(error)}`);
+        return 1;
+      }
+    }
+    if (operation.kind === "startup-input-drained") {
+      try {
+        await notifyStartupInputDrained(
+          { ...tmuxConfiguration(), noStart: true },
+          operation.id,
+          operation.source,
+        );
+        console.log("PI_MUX_STARTUP_INPUT_DRAINED");
+        return 0;
       } catch (error) {
         console.error(`pi-mux: state ${operation.id}: ${errorMessage(error)}`);
         return 1;

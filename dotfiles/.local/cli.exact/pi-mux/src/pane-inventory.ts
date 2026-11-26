@@ -412,6 +412,7 @@ export function parseLivePaneRows(
         return [];
       }
     }
+    const reloadReadiness = metadata.reloadReadiness;
     return [
       {
         pane,
@@ -424,6 +425,10 @@ export function parseLivePaneRows(
         cwd: metadata.cwd,
         file: metadata.file,
         startup: metadata.startup,
+        reloadReadiness:
+          reloadReadiness === "pending" || reloadReadiness === "drained"
+            ? reloadReadiness
+            : undefined,
         warm: metadata.warm === true,
         metadata: encoded,
       },

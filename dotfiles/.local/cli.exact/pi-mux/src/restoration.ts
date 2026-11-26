@@ -4,7 +4,13 @@ import { dirname } from "node:path";
 import { cliInvocation, type Config, type TmuxConfig } from "./configuration";
 import { openResolvedSession, resolveSaved } from "./launch-session";
 import { windowsClaimLock } from "./locks";
-import { managedSessions } from "./pane-inventory";
+import {
+  launchRecordToken,
+  managedSessions,
+  matchesLaunch,
+  PANE_FORMAT,
+  parseLivePaneRows,
+} from "./pane-inventory";
 import { platform } from "./platform";
 import { readSnapshot, type RestoreState, uniqueCandidates, writeSnapshot } from "./restore-state";
 import {
@@ -13,11 +19,23 @@ import {
   POLL_INTERVAL_MS,
   STARTUP_TIMEOUT_MS,
 } from "./session-model";
-import { serverOption, tmux, tmuxQueries, windowsManagement } from "./tmux";
+import {
+  type ServerLifetime,
+  serverOption,
+  tmux,
+  tmuxQueries,
+  verifyServerLifetime,
+  windowsManagement,
+} from "./tmux";
 import { launchBasisStillLive, type WindowsManagementBasis } from "./windows-launch-rights";
 import { configureWindowsPeer, WINDOWS_BOOTSTRAP_PROOF } from "./windows-lifecycle";
 
 export type WindowsBootstrap = "start" | "fresh" | WindowsManagementBasis;
+
+export const RELOAD_MANAGED_OPTION = "@pi-mux-reload-managed";
+export const RELOAD_MANAGED_FLAG = "@pi-mux-has-reload-managed-panes";
+
+type ReloadSnapshot = { lifetime: ServerLifetime; target: Candidate & { temporary: boolean } };
 
 export async function bootstrapServer(
   config: Config,
@@ -167,36 +185,78 @@ export async function snapshotSessions(
   expectedGeneration?: string,
   mode: "existing" | "repair" = "existing",
 ): Promise<void> {
+  await saveSnapshot(config, expectedGeneration, mode);
+}
+
+export async function snapshotReloadTarget(
+  config: TmuxConfig,
+  lifetime: ServerLifetime,
+  target: ReloadSnapshot["target"],
+): Promise<boolean> {
+  await verifyServerLifetime(config, lifetime, "reload");
+  return await saveSnapshot(config, lifetime.generation, "repair", { lifetime, target });
+}
+
+async function saveSnapshot(
+  config: TmuxConfig,
+  expectedGeneration: string | undefined,
+  mode: "existing" | "repair",
+  reload?: ReloadSnapshot,
+): Promise<boolean> {
   const management = platform.windows ? windowsManagement(config) : undefined;
   const basis = await management?.currentBasis();
   const generation = management
     ? basis?.instance
     : await serverOption(config, "@pi-mux-generation");
   if (!generation) throw new Error("Dedicated server has not been initialized by pi-mux");
-  if (expectedGeneration !== undefined && generation !== expectedGeneration) return;
+  if (expectedGeneration !== undefined && generation !== expectedGeneration) {
+    if (reload) throw new Error("Dedicated server changed during reload snapshot");
+    return false;
+  }
   const previous = readSnapshot(config);
   if (previous && previous.generation !== "" && previous.generation !== generation) {
     if (mode === "repair") throw new Error("Snapshot belongs to another server generation");
-    return;
+    return false;
   }
-  if (!previous && mode === "existing") return;
+  if (!previous && mode === "existing") return false;
   const managed = await managedSessions(config);
-  const temporaryIds = new Set(managed.filter((entry) => entry.temporary).map((entry) => entry.id));
-  const candidates = (previous?.sessions ?? []).filter(
-    (candidate) => !temporaryIds.has(candidate.id),
-  );
+  const temporaryIds = new Set(managed.filter(({ temporary }) => temporary).map(({ id }) => id));
+  if (reload?.target.temporary) temporaryIds.add(reload.target.id);
+  const previouslyEligible = (previous?.sessions ?? []).filter(({ id }) => !temporaryIds.has(id));
   const restoringIds =
-    management && basis && candidates.length > 0
+    management && basis && previouslyEligible.length > 0
       ? new Set(management.startupState(basis)?.restoring)
       : undefined;
-  const restoring = restoringIds
-    ? candidates.filter(({ id }) => restoringIds.has(id.toLowerCase()))
-    : await readTmuxRestoringCandidates(config, candidates);
-  const sessions = uniqueCandidates([
-    ...restoring,
-    ...managed.filter((entry) => !entry.temporary).map(({ id, cwd }) => ({ id, cwd })),
-  ]);
-  if ((await serverOption(config, "@pi-mux-generation")) !== generation)
+  const markerState = restoringIds
+    ? {
+        restoring: previouslyEligible.filter(({ id }) => restoringIds.has(id.toLowerCase())),
+        hasEnrolledPanes: false,
+      }
+    : await readTmuxRestoreMarkers(config, previouslyEligible);
+  const enrolled = markerState.hasEnrolledPanes ? await readReloadManagedCandidates(config) : [];
+  for (const { id, temporary } of enrolled) if (temporary) temporaryIds.add(id);
+  const restoring = markerState.restoring.filter(({ id }) => !temporaryIds.has(id));
+  const observed = [...managed, ...enrolled];
+  const active = observed.filter(({ temporary }) => !temporary).map(({ id, cwd }) => ({ id, cwd }));
+  const previousCandidates = previous?.sessions ?? [];
+  if (reload) {
+    const { id, cwd, temporary } = reload.target;
+    const contradictsTarget = observed.some(
+      (entry) => entry.id === id && (entry.cwd !== cwd || entry.temporary !== temporary),
+    );
+    if (
+      contradictsTarget ||
+      previousCandidates.some((entry) => entry.id === id && entry.cwd !== cwd)
+    )
+      return false;
+    if (!temporary) active.push({ id, cwd });
+  }
+  const eligible = [...restoring, ...active];
+  const sessions = reload
+    ? preserveAmbiguousCandidates(eligible, previousCandidates, observed)
+    : uniqueCandidates(eligible);
+  if (reload) await verifyServerLifetime(config, reload.lifetime, "reload snapshot");
+  else if ((await serverOption(config, "@pi-mux-generation")) !== generation)
     throw new Error("Dedicated server changed during snapshot");
   writeSnapshot(config, {
     ...previous,
@@ -205,23 +265,75 @@ export async function snapshotSessions(
     cwds: previous?.cwds ?? [],
     sessions,
   });
+  return true;
 }
 
-async function readTmuxRestoringCandidates(
+function preserveAmbiguousCandidates(
+  active: Candidate[],
+  previous: Candidate[],
+  observed: (Candidate & { temporary: boolean })[],
+): Candidate[] {
+  const candidates = new Map<string, Candidate>();
+  const previousById = new Map(previous.map((entry) => [entry.id, entry]));
+  const conflicting = new Set<string>();
+  const observedById = new Map<string, (typeof observed)[number]>();
+  for (const entry of observed) {
+    const known = observedById.get(entry.id);
+    if (known && (known.cwd !== entry.cwd || known.temporary !== entry.temporary))
+      conflicting.add(entry.id);
+    observedById.set(entry.id, entry);
+  }
+  for (const candidate of active) {
+    const known = candidates.get(candidate.id) ?? previousById.get(candidate.id);
+    if (known && known.cwd !== candidate.cwd) conflicting.add(candidate.id);
+    candidates.set(candidate.id, candidate);
+  }
+  for (const id of conflicting) {
+    const prior = previousById.get(id);
+    if (prior) candidates.set(id, prior);
+    else candidates.delete(id);
+  }
+  return [...candidates.values()];
+}
+
+async function readReloadManagedCandidates(
   config: TmuxConfig,
-  candidates: Candidate[],
-): Promise<Candidate[]> {
-  const markers = await tmuxQueries(
-    config,
-    candidates.map(({ id }) => ["show-options", "-gqv", `@pi-mux-restoring-${id}`]),
-  );
-  return candidates.filter((_, index) => {
-    const result = markers[index]!;
+): Promise<(Candidate & { temporary: boolean })[]> {
+  const format = `${PANE_FORMAT}\t#{${RELOAD_MANAGED_OPTION}}\t#{@pi-mux-launch}\t#{PI_TMUX_TEMPORARY}`;
+  const result = await tmux(config, ["list-panes", "-a", "-F", format], true);
+  if (result.exitCode !== 0) {
+    if (/^(no sessions|no current target)$/.test(result.stderr.trim())) return [];
+    throw new Error(`Cannot inspect reload restore candidates: ${result.stderr.trim()}`);
+  }
+  return result.stdout
+    .split("\n")
+    .filter(Boolean)
+    .flatMap((line) => {
+      const fields = line.split("\t");
+      const [id, launch, temporary] = fields.slice(8);
+      if (!id || !launch || !fields[3] || fields[5] !== "0") return [];
+      const [pane] = parseLivePaneRows(fields.slice(0, 8).join("\t"), "list");
+      if (!pane || pane.id !== id || pane.pid !== pane.panePid) return [];
+      const token = JSON.parse(Buffer.from(pane.metadata, "base64").toString("utf8")).token;
+      if (launchRecordToken(launch) !== token || !matchesLaunch(launch, id, pane.panePid, token))
+        return [];
+      return [{ id, cwd: pane.cwd, temporary: temporary === id }];
+    });
+}
+
+async function readTmuxRestoreMarkers(config: TmuxConfig, candidates: Candidate[]) {
+  const commands = candidates.map(({ id }) => ["show-options", "-gqv", `@pi-mux-restoring-${id}`]);
+  if (!platform.windows) commands.push(["show-options", "-gqv", RELOAD_MANAGED_FLAG]);
+  const markers = (await tmuxQueries(config, commands)).map((result) => {
     if (result.exitCode !== 0) throw new Error(`tmux show-options failed: ${result.stderr.trim()}`);
     const marker = result.stdout.trim();
     if (marker && marker !== "1") throw new Error("Invalid in-memory restore state");
     return marker === "1";
   });
+  return {
+    restoring: candidates.filter((_, index) => markers[index]),
+    hasEnrolledPanes: !platform.windows && markers[candidates.length] === true,
+  };
 }
 
 export async function setRestoringSessions(config: Config, candidates: Candidate[]): Promise<void> {

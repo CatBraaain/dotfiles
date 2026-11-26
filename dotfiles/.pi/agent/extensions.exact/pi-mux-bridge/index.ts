@@ -1,11 +1,21 @@
 import { resolve } from "node:path";
-import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as sdk from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  InteractiveMode,
+} from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { quote } from "shell-quote";
 import { partitionMessageOptions, messageOptions, type AgentMessage } from "./messages.ts";
 import { registerLegacyDraftRecovery } from "./first-input-handoff.ts";
 import { recordDispatchTicket, recordViewReceipt, viewOptions } from "./session-metadata.ts";
 import { registerSessionState } from "./session-state.ts";
+import {
+  dedicatedSocketPath,
+  stateCommandArgs,
+  type ManagedPaneBinding,
+} from "./session-state-tmux.ts";
 import {
   getTmuxPaths,
   inspectManagedPane,
@@ -258,7 +268,7 @@ async function unsetMessageOption(
   );
 }
 
-export default function fixedSessionExtension(pi: ExtensionAPI, version = VERSION): void {
+export default function fixedSessionExtension(pi: ExtensionAPI, version = sdk.VERSION): void {
   const saveDiagnostics = canSaveMessagePollDiagnostics(version);
   pi.registerEntryRenderer(MESSAGE_POLL_ERROR_ENTRY, ({ data, timestamp }) => {
     if (typeof data !== "string" || !data || /[^ -~]/.test(data)) return;
@@ -268,33 +278,101 @@ export default function fixedSessionExtension(pi: ExtensionAPI, version = VERSIO
   });
   pi.on("session_before_switch", (_event, ctx) => rejectSessionChange(ctx));
   pi.on("session_before_fork", (_event, ctx) => rejectSessionChange(ctx));
-  pi.on("session_start", (_event, ctx) => {
+  let hasReloaded = false;
+  pi.on("session_start", (event, ctx) => {
+    hasReloaded ||= event?.reason === "reload";
     startMessageWatcher(pi, ctx, saveDiagnostics);
     if (ctx.mode === "tui") recordDispatchTicket(pi, ctx.sessionManager, process.env);
   });
-  pi.on("session_shutdown", () => stopMessageWatcher());
-  const startupCommand = process.env.PI_TMUX_STARTUP_COMMAND;
-  let startupPending = true;
+  const reloadMode = captureInteractiveMode();
+  let reloadProof: ReloadProof | undefined;
+  let detachReloadPublisher: (() => void) | undefined;
+  let isShuttingDown = false;
+  let isDetachingForReload = false;
+  let startupPublication: Promise<void> | undefined;
+  const isCreate = process.env.PI_TMUX_STARTUP_MODE === "create";
+  const startupCommand = isCreate ? undefined : process.env.PI_TMUX_STARTUP_COMMAND;
+  const acceptRoute = isCreate ? "create" : "external";
+  pi.on("session_shutdown", async (event, ctx) => {
+    isShuttingDown = true;
+    isDetachingForReload = event?.reason === "reload";
+    stopMessageWatcher();
+    reloadMode?.stop();
+    detachReloadPublisher?.();
+    if (!isDetachingForReload && reloadProof) finishReloadProof(reloadProof);
+    if (startupPublication) await startupPublication;
+    else if (isDetachingForReload && !hasReloaded && !startupCommand) await deferAcceptance(ctx);
+  });
+  const recoverDraft = startupCommand ? registerLegacyDraftRecovery(pi) : undefined;
   let ready: { id: string; pane: string; serverPid: number; panePid: number } | undefined;
-  if (process.env.PI_TMUX_STARTUP_MODE === "create")
-    pi.on("resources_discover", async (_event, ctx) => publish(ctx, "accepted"));
-  else if (startupCommand) {
-    const recoverDraft = registerLegacyDraftRecovery(pi);
+  if (startupCommand) {
     pi.registerCommand(startupCommand, {
       handler: async (_args, ctx) => {
-        await publish(ctx, "ready");
-        if (ready?.id === ctx.sessionManager.getSessionId()) recoverDraft(ctx);
+        if (isDetachingForReload && !startupPublication) {
+          const request = startupRequestKey(startupCommand, launchToken());
+          if (request) Reflect.set(globalThis, DEFERRED_STARTUP, request);
+          return;
+        }
+        await startStartupPublication(ctx, "ready");
       },
     });
     pi.on("session_shutdown", async (_event, ctx) => confirmReady(ctx));
-  } else {
-    pi.on("resources_discover", async (_event, ctx) => {
-      if ((process.env.TMUX ?? "").split(",")[0] !== getTmuxPaths().socketPath) return;
-      await publish(ctx, "accepted");
-    });
   }
-
+  pi.on("resources_discover", async (event, ctx) => {
+    if (isShuttingDown || ctx.mode !== "tui") return;
+    if (event?.reason === "reload") {
+      hasReloaded = true;
+      reloadMode?.stop();
+      const proof = currentReloadProof();
+      if (proof && matchesReloadContext(proof, ctx)) {
+        reloadProof = proof;
+        startReloadPublisher();
+      } else if (proof) {
+        reloadDiagnostic("the reloaded context does not match the observed launch");
+      }
+      const token = process.env.PI_TMUX_LAUNCH_TOKEN;
+      const request = startupCommand && token && startupRequestKey(startupCommand, token);
+      if (request && Reflect.get(globalThis, DEFERRED_STARTUP) === request) {
+        Reflect.deleteProperty(globalThis, DEFERRED_STARTUP);
+        await startStartupPublication(ctx, "ready");
+      } else if (!startupCommand && token) {
+        const acceptance: DeferredAcceptance | undefined = Reflect.get(
+          globalThis,
+          DEFERRED_ACCEPTANCE,
+        );
+        if (acceptance && acceptance.key === startupRequestKey(acceptRoute, token)) {
+          Reflect.deleteProperty(globalThis, DEFERRED_ACCEPTANCE);
+          await startStartupPublication(ctx, "accepted", acceptance);
+        }
+      }
+      return;
+    }
+    if (isCreate || (!startupCommand && isDedicatedSocket()))
+      await startStartupPublication(ctx, "accepted");
+  });
   registerSessionState(pi);
+
+  async function deferAcceptance(ctx: ExtensionContext): Promise<void> {
+    if (ctx.mode !== "tui") return;
+    try {
+      if (!isDedicatedSocket()) return;
+      const key = startupRequestKey(acceptRoute, launchToken());
+      if (!key) return;
+      const identity = await inspectManagedPane(backgroundExecutor(pi, ctx), getTmuxPaths());
+      const file = ctx.sessionManager.getSessionFile();
+      if (!identity || !file) return;
+      const acceptance: DeferredAcceptance = {
+        key,
+        identity,
+        id: ctx.sessionManager.getSessionId(),
+        file: resolve(file),
+        cwd: ctx.cwd,
+      };
+      Reflect.set(globalThis, DEFERRED_ACCEPTANCE, acceptance);
+    } catch {
+      process.stderr.write("pi-mux: cannot verify the pane for deferred startup acceptance\n");
+    }
+  }
 
   async function currentReady(ctx: ExtensionContext): Promise<typeof ready> {
     if (ctx.mode !== "tui") return;
@@ -304,18 +382,17 @@ export default function fixedSessionExtension(pi: ExtensionAPI, version = VERSIO
     const identity = await inspectManagedPane(execute, paths);
     if (!identity) return;
     const { pane, pid } = identity;
-    const published = await execute(
-      "tmux",
-      tmuxArgs(paths, ["display-message", "-p", "-t", pane, "#{@pi-tmux-session}"]),
-    );
-    if (!published.stdout.trim()) return;
-    const metadata = JSON.parse(Buffer.from(published.stdout.trim(), "base64").toString("utf8"));
+    const published = await readStartupMetadata(execute, paths, pane);
+    if (!published) return;
+    const metadata = JSON.parse(Buffer.from(published, "base64").toString("utf8"));
     const id = ctx.sessionManager.getSessionId();
+    const token = process.env.PI_TMUX_LAUNCH_TOKEN;
     if (
+      !token ||
       metadata?.id !== id ||
       metadata.pid !== pid ||
-      metadata.token !== launchToken() ||
-      (metadata.processPid !== undefined && metadata.processPid !== process.pid) ||
+      metadata.token !== token ||
+      (metadata.processPid ?? pid) !== process.pid ||
       metadata.startup !== "ready"
     )
       return;
@@ -340,31 +417,83 @@ export default function fixedSessionExtension(pi: ExtensionAPI, version = VERSIO
     );
   }
 
-  async function publish(ctx: ExtensionContext, startup: "accepted" | "ready"): Promise<void> {
-    if (ctx.mode !== "tui" || !startupPending) return;
-    startupPending = false;
+  function startStartupPublication(
+    ctx: ExtensionContext,
+    startup: "accepted" | "ready",
+    acceptance?: DeferredAcceptance,
+  ): Promise<void> | undefined {
+    if (isShuttingDown || startupPublication || ctx.mode !== "tui") return;
+    startupPublication = publishStartup();
+    return startupPublication;
+
+    async function publishStartup(): Promise<void> {
+      if (startup === "ready" && hasReloaded && (await currentReady(ctx))) return;
+      await publish(ctx, startup, acceptance);
+      if (startup === "ready" && ready?.id === ctx.sessionManager.getSessionId())
+        recoverDraft?.(ctx);
+    }
+  }
+
+  async function publish(
+    ctx: ExtensionContext,
+    startup: "accepted" | "ready",
+    acceptance?: DeferredAcceptance,
+  ): Promise<void> {
     let publishingReady = false;
+    let verifyingAcceptance = acceptance !== undefined;
     try {
       const execute = backgroundExecutor(pi, ctx);
       const paths = getTmuxPaths();
+      if (acceptance && (await readStartupMetadata(execute, paths, acceptance.identity.pane)))
+        return;
       const identity = await inspectManagedPane(execute, paths);
       const expectedId = process.env.PI_TMUX_SESSION_ID;
       const id = ctx.sessionManager.getSessionId();
-      if (!identity || (expectedId !== undefined && id !== expectedId))
+      if (!identity || (expectedId !== undefined && id !== expectedId)) {
+        if (acceptance) return;
         throw new Error("pi-mux session identity or pane does not match the requested session");
-      const { pane, pid } = identity;
+      }
+      const { pane, pid, serverPid } = identity;
       const file = ctx.sessionManager.getSessionFile();
-      if (!file) throw new Error("pi-mux requires a persistent session");
+      if (!file) {
+        if (acceptance) return;
+        throw new Error("pi-mux requires a persistent session");
+      }
+      const sessionFile = resolve(file);
+      const cwd = ctx.cwd;
+      const existingToken = process.env.PI_TMUX_LAUNCH_TOKEN;
+      if (
+        acceptance &&
+        (!existingToken ||
+          startupRequestKey(acceptRoute, existingToken) !== acceptance.key ||
+          id !== acceptance.id ||
+          cwd !== acceptance.cwd ||
+          sessionFile !== acceptance.file ||
+          pane !== acceptance.identity.pane ||
+          pid !== acceptance.identity.pid ||
+          serverPid !== acceptance.identity.serverPid)
+      )
+        return;
+      verifyingAcceptance = false;
+      const token = launchToken();
+      if (!isShuttingDown && !hasReloaded) {
+        try {
+          reloadProof = prepareReloadProof(reloadMode?.take(), ctx, sessionFile, identity, token);
+        } catch (error) {
+          reloadDiagnostic(`cannot install the input wait observer: ${String(error)}`);
+        }
+      }
       const metadata = Buffer.from(
         JSON.stringify({
           id,
-          file: resolve(file),
-          cwd: ctx.cwd,
+          file: sessionFile,
+          cwd,
           pid,
           startup,
-          token: launchToken(),
+          token,
           ...(process.env.PI_TMUX_STARTUP_MODE === "warm" ? { warm: true } : {}),
           ...(pid === process.pid ? {} : { processPid: process.pid }),
+          ...(reloadProof ? { reloadReadiness: "pending" } : {}),
         }),
       ).toString("base64");
       publishingReady = startup === "ready";
@@ -375,18 +504,25 @@ export default function fixedSessionExtension(pi: ExtensionAPI, version = VERSIO
       if (startup === "ready") {
         ready = { id, pane, serverPid: identity.serverPid, panePid: identity.pid };
       }
+      startReloadPublisher();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      if (verifyingAcceptance) {
+        process.stderr.write(`pi-mux: cannot verify deferred startup acceptance: ${reason}\n`);
+        return;
+      }
       if (publishingReady) {
         try {
           await confirmReady(ctx);
           if (ready) {
+            startReloadPublisher();
             process.stderr.write(
               `pi-mux: readiness confirmed after publication error: ${reason}\n`,
             );
             return;
           }
         } catch (verificationError) {
+          if (reloadProof) finishReloadProof(reloadProof);
           const verificationReason =
             verificationError instanceof Error
               ? verificationError.message
@@ -397,12 +533,301 @@ export default function fixedSessionExtension(pi: ExtensionAPI, version = VERSIO
           return;
         }
       }
+      if (reloadProof) finishReloadProof(reloadProof);
       process.stderr.write(`pi-mux: ${reason}\n`);
       ctx.ui.notify(reason, "error");
       process.exitCode = 1;
       ctx.shutdown();
     }
   }
+
+  function startReloadPublisher(): void {
+    if (
+      !reloadProof ||
+      isShuttingDown ||
+      detachReloadPublisher ||
+      reloadProof.controller.signal.aborted
+    )
+      return;
+    detachReloadPublisher = attachReloadPublisher(reloadProof, pi);
+    void reloadProof.publish?.();
+  }
+}
+
+type ReloadProof = {
+  id: string;
+  file: string;
+  cwd: string;
+  source: ManagedPaneBinding;
+  observed: boolean;
+  publishing: boolean;
+  controller: AbortController;
+  stopWaiting: () => void;
+  publish?: () => Promise<void>;
+};
+
+type DeferredAcceptance = {
+  key: string;
+  identity: ManagedPaneIdentity;
+  id: string;
+  file: string;
+  cwd: string;
+};
+
+const DEFERRED_ACCEPTANCE = Symbol.for("pi-mux-bridge.deferred-acceptance");
+const DEFERRED_STARTUP = Symbol.for("pi-mux-bridge.deferred-startup");
+const RELOAD_PROOF = Symbol.for("pi-mux-bridge.reload-proof");
+const VERIFIED_SDK_VERSIONS = new Set(["1.4.0", "1.6.1"]);
+const INITIAL_RELOAD_PUBLICATION_RETRY_DELAY_MS = 1_000;
+const MAX_RELOAD_PUBLICATION_RETRY_DELAY_MS = 30_000;
+const STARTUP_INPUT_DRAINED_ACK = "PI_MUX_STARTUP_INPUT_DRAINED";
+const SESSION_ID = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
+const LAUNCH_TOKEN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function startupRequestKey(command: string, token: string): string | undefined {
+  const { TMUX, TMUX_PANE, PI_TMUX_SESSION_ID } = process.env;
+  if (!TMUX || !TMUX_PANE) return;
+  return JSON.stringify([TMUX, TMUX_PANE, PI_TMUX_SESSION_ID, token, command]);
+}
+
+async function readStartupMetadata(
+  execute: Execute,
+  paths: TmuxPaths,
+  pane: string,
+): Promise<string> {
+  const result = await execute(
+    "tmux",
+    tmuxArgs(paths, ["display-message", "-p", "-t", pane, "#{@pi-tmux-session}"]),
+  );
+  return result.stdout.trim();
+}
+
+function isDedicatedSocket(): boolean {
+  return (process.env.TMUX ?? "").split(",")[0] === dedicatedSocketPath();
+}
+
+function currentReloadProof(): ReloadProof | undefined {
+  const prototype = sdk.InteractiveMode?.prototype;
+  return prototype && Reflect.get(prototype, RELOAD_PROOF);
+}
+
+function captureInteractiveMode() {
+  const prototype = sdk.InteractiveMode?.prototype;
+  if (!prototype || !VERIFIED_SDK_VERSIONS.has(sdk.VERSION) || currentReloadProof()) return;
+  const run = prototype.run;
+  if (typeof run !== "function" || typeof prototype.getUserInput !== "function") return;
+  try {
+    if (!process.env.TMUX || !isDedicatedSocket()) return;
+  } catch (error) {
+    reloadDiagnostic(String(error));
+    return;
+  }
+  let getMode: (() => InteractiveMode) | undefined;
+  if (!Reflect.set(prototype, "run", captureRun)) return;
+  return { stop, take };
+
+  function captureRun(this: InteractiveMode): Promise<void> {
+    stop();
+    getMode = () => this;
+    return run.call(this);
+  }
+
+  function stop(): void {
+    getMode = undefined;
+    if (prototype.run === captureRun) prototype.run = run;
+  }
+
+  function take(): InteractiveMode | undefined {
+    const mode = getMode?.();
+    stop();
+    return mode;
+  }
+}
+
+function matchesReloadContext(proof: ReloadProof, ctx: ExtensionContext): boolean {
+  const file = ctx.sessionManager.getSessionFile();
+  return (
+    !!file &&
+    proof.id === ctx.sessionManager.getSessionId() &&
+    proof.file === resolve(file) &&
+    proof.cwd === ctx.cwd &&
+    isDedicatedSocket() &&
+    proof.source.socketPath === dedicatedSocketPath() &&
+    proof.source.paneId === process.env.TMUX_PANE &&
+    proof.source.token === process.env.PI_TMUX_LAUNCH_TOKEN
+  );
+}
+
+function finishReloadProof(proof: ReloadProof): void {
+  proof.controller.abort();
+  delete proof.publish;
+  proof.stopWaiting();
+  if (currentReloadProof() === proof)
+    Reflect.deleteProperty(sdk.InteractiveMode.prototype, RELOAD_PROOF);
+}
+
+// Pi has no extension event after CLI prompts; observe the editor wait in run(): https://github.com/earendil-works/pi/blob/v1.6.1/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+function prepareReloadProof(
+  mode: InteractiveMode | undefined,
+  ctx: ExtensionContext,
+  file: string,
+  { pane, serverPid, pid }: ManagedPaneIdentity,
+  token: string,
+): ReloadProof | undefined {
+  if (!mode || !hasObservableEditorWait(mode)) {
+    reloadDiagnostic(`cannot verify the input wait in pi ${sdk.VERSION ?? "unknown"}`);
+    return;
+  }
+  const id = ctx.sessionManager.getSessionId();
+  if (
+    !SESSION_ID.test(id) ||
+    !LAUNCH_TOKEN.test(token) ||
+    !/^%\d+$/.test(pane) ||
+    !Number.isSafeInteger(serverPid) ||
+    serverPid <= 0 ||
+    !Number.isSafeInteger(pid) ||
+    pid <= 0 ||
+    mode["sessionManager"] !== ctx.sessionManager ||
+    Object.hasOwn(mode, "getUserInput") ||
+    currentReloadProof()
+  ) {
+    reloadDiagnostic("cannot verify the launch identity");
+    return;
+  }
+
+  const getUserInput = mode.getUserInput;
+  const proof: ReloadProof = {
+    id,
+    file,
+    cwd: ctx.cwd,
+    source: { socketPath: dedicatedSocketPath(), serverPid, paneId: pane, pid: process.pid, token },
+    observed: false,
+    publishing: false,
+    controller: new AbortController(),
+    stopWaiting,
+  };
+  if (!Reflect.set(mode, "getUserInput", observeEditorWait)) {
+    reloadDiagnostic("cannot install the input wait observer");
+    return;
+  }
+  if (!Reflect.set(sdk.InteractiveMode.prototype, RELOAD_PROOF, proof)) {
+    stopWaiting();
+    reloadDiagnostic("cannot retain the input wait observer");
+    return;
+  }
+  return proof;
+
+  function stopWaiting(): void {
+    if (mode!.getUserInput === observeEditorWait) Reflect.deleteProperty(mode!, "getUserInput");
+  }
+
+  function observeEditorWait(this: InteractiveMode): Promise<string> {
+    if (this !== mode || proof.controller.signal.aborted) return getUserInput.call(this);
+    if (!hasObservableEditorWait(this)) {
+      finishReloadProof(proof);
+      reloadDiagnostic(`cannot verify the input queue in pi ${sdk.VERSION}`);
+      return getUserInput.call(this);
+    }
+    const manager = this["sessionManager"];
+    const file = manager.getSessionFile();
+    if (
+      manager.getSessionId() !== proof.id ||
+      !file ||
+      resolve(file) !== proof.file ||
+      manager.getCwd() !== proof.cwd
+    ) {
+      finishReloadProof(proof);
+      reloadDiagnostic("input wait no longer matches the launch session");
+      return getUserInput.call(this);
+    }
+    const isQueueEmpty = this["pendingUserInputs"].length === 0;
+    const before = this["onInputCallback"];
+    const input = getUserInput.call(this);
+    const after = this["onInputCallback"];
+    if (isQueueEmpty && typeof after === "function" && after !== before) {
+      proof.observed = true;
+      stopWaiting();
+      void proof.publish?.();
+    }
+    return input;
+  }
+}
+
+function hasObservableEditorWait(mode: InteractiveMode): boolean {
+  return (
+    typeof mode.getUserInput === "function" &&
+    Array.isArray(mode["pendingUserInputs"]) &&
+    "onInputCallback" in mode
+  );
+}
+
+function attachReloadPublisher(proof: ReloadProof, pi: Pick<ExtensionAPI, "exec">): () => void {
+  const args = stateCommandArgs(proof.source, proof.id, ["--startup-input-drained"]);
+  const signal = proof.controller.signal;
+  let retryDelayMs = INITIAL_RELOAD_PUBLICATION_RETRY_DELAY_MS;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+  proof.publish = publish;
+  return () => {
+    if (isAttached()) delete proof.publish;
+    if (retryTimer !== undefined) {
+      clearTimeout(retryTimer);
+      retryTimer = undefined;
+    }
+  };
+
+  function isAttached(): boolean {
+    return proof.publish === publish;
+  }
+
+  async function publish(): Promise<void> {
+    if (
+      !proof.observed ||
+      proof.publishing ||
+      retryTimer !== undefined ||
+      signal.aborted ||
+      !isAttached()
+    )
+      return;
+    proof.publishing = true;
+    try {
+      const wasPublished = await sendProof();
+      if (signal.aborted) return;
+      if (wasPublished) finishReloadProof(proof);
+      else if (isAttached()) {
+        retryTimer = setTimeout(retry, retryDelayMs);
+        retryDelayMs = Math.min(retryDelayMs * 2, MAX_RELOAD_PUBLICATION_RETRY_DELAY_MS);
+      }
+    } finally {
+      proof.publishing = false;
+      if (!isAttached() && !signal.aborted) void proof.publish?.();
+    }
+  }
+
+  async function sendProof(): Promise<boolean> {
+    try {
+      // Windows must finish transport cleanup; SDK cancellation kills the CLI: https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/src/core/exec.ts
+      const options =
+        process.platform === "win32" ? undefined : { timeout: TMUX_TIMEOUT_MS, signal };
+      const result = await pi.exec("pi-mux", args, options);
+      return (
+        !result.killed &&
+        !("truncated" in result && result.truncated) &&
+        result.code === 0 &&
+        result.stdout.replace(/\r?\n$/, "") === STARTUP_INPUT_DRAINED_ACK
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  function retry(): void {
+    retryTimer = undefined;
+    void publish();
+  }
+}
+
+function reloadDiagnostic(reason: string): void {
+  process.stderr.write(`pi-mux: reload readiness not published: ${reason}\n`);
 }
 
 function backgroundExecutor(pi: Pick<ExtensionAPI, "exec">, ctx: ExtensionContext): Execute {

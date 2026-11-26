@@ -82,14 +82,18 @@ async function restartIsWaiting(config: TmuxConfig): Promise<boolean> {
 const WINDOWS_LIFECYCLE_FORMAT = `${PANE_FORMAT}\t#{PI_TMUX_SESSION_ID}\t#{PI_TMUX_TEMPORARY}\t#{session_path}\t#{@pi-mux-launch}\t#{TICKET_DISPATCH_ROLE}\t#{@pi-mux-windows-start-right}\t#{@pi_session_state}\t#{@pi-mux-state-source}\t#{@pi-mux-pending-restart-blocker}`;
 
 export async function auditWindowsLifecycle(management: WindowsManagement, mode = "restart") {
-  const audit = await management.audit(WINDOWS_LIFECYCLE_FORMAT, { requireRestored: false });
+  const format =
+    mode === "reload"
+      ? `${WINDOWS_LIFECYCLE_FORMAT}\t#{PI_MUX_WINDOWS_START_RIGHT}`
+      : WINDOWS_LIFECYCLE_FORMAT;
+  const audit = await management.audit(format, { requireRestored: false });
   if (!audit.startup) throw new Error("Dedicated psmux management has not been initialized");
   const managed: ManagedSession[] = [];
   const ownership: { peer: WindowsLifecyclePeer; session: ManagedSession }[] = [];
   const pids: number[] = [];
   const activeIds = new Set<string>();
   const entries = audit.panes.flatMap(({ peer, rows }) => {
-    let session: ManagedSession | undefined;
+    const sessions = new Map<string, ManagedSession>();
     const panes = rows.flatMap((row) => {
       const fields = row.split("\t");
       const [
@@ -110,22 +114,24 @@ export async function auditWindowsLifecycle(management: WindowsManagement, mode 
         state,
         owner,
         blocker,
+        inheritedRight,
       ] = fields;
+      const hasValidOwner = Boolean(id && SESSION_ID_PATTERN.test(id) && isAbsolute(cwd ?? ""));
       if (
-        fields.length !== 17 ||
+        fields.length !== (mode === "reload" ? 18 : 17) ||
         !/^%\d+$/.test(paneId ?? "") ||
         !sessionId ||
         name !== peer.name ||
         !["0", "1"].includes(dead ?? "") ||
-        (id && (!SESSION_ID_PATTERN.test(id) || !isAbsolute(cwd ?? ""))) ||
-        (temporary && temporary !== id)
+        (mode !== "reload" && ((id && !hasValidOwner) || (temporary && temporary !== id)))
       )
         throw new Error(`Invalid Windows pi-mux lifecycle inventory in ${peer.name}`);
-      if (id) {
+      if (id && hasValidOwner) {
         const candidate = { id, cwd: cwd!, session: sessionId, temporary: Boolean(temporary) };
-        if (session && JSON.stringify(session) !== JSON.stringify(candidate))
+        const key = JSON.stringify(candidate);
+        if (mode !== "reload" && sessions.size && !sessions.has(key))
           throw new Error(`Conflicting Windows conversation ownership in ${peer.name}`);
-        session = candidate;
+        sessions.set(key, candidate);
       }
       if (dead !== "0") return [];
       if (!/^[1-9]\d*$/.test(pid ?? ""))
@@ -144,6 +150,11 @@ export async function auditWindowsLifecycle(management: WindowsManagement, mode 
           paneId: paneId!,
           panePid: Number(pid),
           pi: pane,
+          temporary: temporary === (pane?.id ?? id) && Boolean(temporary),
+          observedId: id!,
+          observedTemporary: temporary!,
+          observedCwd: cwd!,
+          inheritedRight: inheritedRight ?? "",
           launch,
           role,
           right,
@@ -153,12 +164,13 @@ export async function auditWindowsLifecycle(management: WindowsManagement, mode 
         },
       ];
     });
-    if (session) {
+    for (const session of sessions.values()) {
       managed.push(session);
       ownership.push({ peer, session });
     }
-    const managedId = session?.id;
-    const unresolved = managedId !== undefined && !panes.some(({ pi }) => pi?.id === managedId);
+    const unresolved = [...sessions.values()].some(
+      ({ id }) => !panes.some(({ pi }) => pi?.id === id),
+    );
     const dispatchUnpublished =
       panes.some(({ role }) => role === "pi") && !panes.some(({ pi }) => pi);
     return panes.map((pane) => ({ ...pane, unresolved: unresolved || dispatchUnpublished }));
@@ -177,9 +189,19 @@ export type WindowsLifecycleEntry = WindowsLifecycleAudit["entries"][number];
 
 export type WindowsLifecyclePeer = PsmuxPeer;
 
-export function windowsPaneIsWaiting(config: TmuxConfig, entry: WindowsLifecycleEntry): boolean {
+export function windowsPaneIsWaiting(
+  config: Pick<TmuxConfig, "socket">,
+  entry: WindowsLifecycleEntry,
+): boolean {
+  return entry.pi?.startup !== "accepted" && windowsPaneHasWaitingUserState(config, entry);
+}
+
+export function windowsPaneHasWaitingUserState(
+  config: Pick<TmuxConfig, "socket">,
+  entry: WindowsLifecycleEntry,
+): boolean {
   const { pi, peer, paneId, launch, state, owner, blocker } = entry;
-  if (!pi || pi.startup === "accepted" || blocker || !owner) return false;
+  if (!pi || blocker || !owner) return false;
   if (parseSessionState(state, pi.id) !== "waiting-user") return false;
   try {
     const raw: unknown = JSON.parse(owner);

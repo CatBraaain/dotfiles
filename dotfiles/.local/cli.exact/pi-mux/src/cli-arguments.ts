@@ -37,6 +37,7 @@ export type Operation =
   | { kind: "record-view"; id: string; receipt: ViewReceipt }
   | DispatchTicketOperation
   | { kind: "state"; id: string; source: StateSource; notification: StateNotification }
+  | { kind: "startup-input-drained"; id: string; source: StateSource }
   | { kind: "send"; id: string; waitSeconds: number | undefined; text: string }
   | { kind: "close"; id: string; ifTemporary: boolean }
   | ListOperation
@@ -341,6 +342,12 @@ function parseStateOperation(argv: string[]): Operation {
   try {
     if (!id || !SESSION_ID_PATTERN.test(id)) throw new Error("Invalid complete conversation ID");
     const state = argv[2];
+    if (state === "--startup-input-drained") {
+      const [, , , key, value] = argv;
+      if (argv.length !== 5 || key !== "--source" || value === undefined)
+        throw new Error("Startup input notification requires only source");
+      return { kind: "startup-input-drained", id, source: parseSource(JSON.parse(value)) };
+    }
     const clear = state === "--clear";
     if (!clear && !isSessionState(state)) throw new Error("Invalid state");
     const options = new Map<string, unknown>();
