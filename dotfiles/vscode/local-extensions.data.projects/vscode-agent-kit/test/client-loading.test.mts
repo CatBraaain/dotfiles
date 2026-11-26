@@ -571,7 +571,7 @@ describe("session list loading in the mounted client", () => {
       const before = await button.boundingBox();
       await button.click();
       await expect.poll(() => button.getAttribute("aria-busy")).toBe("true");
-      expect(await button.isEnabled()).toBe(true);
+      expect(await button.isEnabled()).toBe(action === "archive");
       expect(await button.locator("path").getAttribute("d")).toBe("M21 12a9 9 0 1 1-6.219-8.56");
       expect(await button.boundingBox()).toEqual(before);
       const animation = await button.locator("svg").evaluate((svg) => {
@@ -593,6 +593,52 @@ describe("session list loading in the mounted client", () => {
       expect(await button.boundingBox()).toEqual(before);
     },
   );
+
+  it("ignores repeated Unarchive activation only for the pending row", async () => {
+    const group = state.groups[0];
+    const archived = group.sessions[1];
+    const otherArchived = { ...archived, sessionId: "archived-2", displayName: "Other archived" };
+    await receive({
+      type: "sessions",
+      state: { ...state, groups: [{ ...group, sessions: [...group.sessions, otherArchived] }] },
+    });
+    await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
+    const button = page.locator('[data-unarchive="archived-1"]');
+    await button.dblclick();
+    await expect.poll(() => button.isEnabled()).toBe(false);
+    await button.click({ force: true });
+    await button.press("Enter");
+    await page.locator('[data-row-session="archived-1"]').click({ button: "right" });
+    const menuItem = page.getByRole("menuitem", { name: "Unarchive", exact: true });
+    await expect.poll(() => menuItem.isEnabled()).toBe(false);
+    await menuItem.press("Enter");
+    expect(await menuItem.isVisible()).toBe(true);
+    await page.locator('[data-unarchive="archived-2"]').click();
+
+    const requests = await archiveRequests();
+    expect(requests.map(({ type, sessionId }) => ({ type, sessionId }))).toEqual([
+      { type: "unarchiveSession", sessionId: archived.sessionId },
+      { type: "unarchiveSession", sessionId: otherArchived.sessionId },
+    ]);
+  });
+
+  it("allows Unarchive to be retried after a failed request finishes", async () => {
+    await receive({ type: "sessions", state });
+    await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
+    const button = page.locator('[data-unarchive="archived-1"]');
+    await button.click();
+    const [failedRequest] = await archiveRequests();
+
+    await receive({ type: "error", message: "Could not restore session" });
+    await receive({ type: "unarchiveFinished", requestId: failedRequest.requestId });
+    await expect.poll(() => button.isEnabled()).toBe(true);
+    await button.press("Enter");
+
+    const requests = await archiveRequests();
+    expect(requests).toHaveLength(2);
+    expect(requests[1].sessionId).toBe(failedRequest.sessionId);
+    expect(requests[1].requestId).not.toBe(failedRequest.requestId);
+  });
 
   it("keeps all same-row archive requests pending and treats other rows independently", async () => {
     await receive({ type: "sessions", state });

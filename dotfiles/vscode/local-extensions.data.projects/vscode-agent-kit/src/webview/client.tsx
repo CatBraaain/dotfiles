@@ -413,6 +413,7 @@ function unarchiveDescriptor(sessionId: string, isPending = false): ElementDescr
       title: "Unarchive",
       "aria-label": "Unarchive",
       "aria-busy": String(isPending),
+      "aria-disabled": String(isPending),
     },
     children: [isPending ? spinnerIcon() : unarchiveIcon()],
   };
@@ -662,6 +663,7 @@ type ContextMenuState = WorkspaceMenuState | SessionMenuState;
 interface ContextMenuItem {
   label: string;
   run: () => void;
+  isDisabled?: boolean;
 }
 
 function ContextMenu({
@@ -748,14 +750,15 @@ function ContextMenu({
         buttons[next]?.focus();
       }}
     >
-      {items.map(({ label, run }) => (
+      {items.map(({ label, run, isDisabled }) => (
         <button
           key={label}
           type="button"
           role="menuitem"
           tabIndex={-1}
+          aria-disabled={isDisabled}
           onClick={(event) => {
-            if (!isSessionMenu && event.detail === 0) return;
+            if (isDisabled || (!isSessionMenu && event.detail === 0)) return;
             onClose();
             if (menu.kind === "session") menu.anchor.focus({ preventScroll: true });
             run();
@@ -797,7 +800,7 @@ function createClientStore(): {
   finishNewSession(requestId: string): void;
   startArchive(sessionId: string): string;
   finishArchive(requestId: string): void;
-  startUnarchive(sessionId: string): string;
+  startUnarchive(sessionId: string): string | undefined;
   finishUnarchive(requestId: string): void;
 } {
   let snapshot: ClientSnapshot = {
@@ -871,6 +874,9 @@ function createClientStore(): {
       publish({ ...snapshot, pendingArchives });
     },
     startUnarchive: (sessionId) => {
+      for (const pendingSessionId of snapshot.pendingUnarchives.values()) {
+        if (pendingSessionId === sessionId) return undefined;
+      }
       const requestId = crypto.randomUUID();
       const pendingUnarchives = new Map(snapshot.pendingUnarchives);
       pendingUnarchives.set(requestId, sessionId);
@@ -1140,12 +1146,14 @@ function SessionsApp({
       },
       onUnarchiveClick: (sessionId) => {
         const requestId = store.startUnarchive(sessionId);
+        if (requestId === undefined) return;
         bridge.postMessage({ type: "unarchiveSession", sessionId, requestId });
       },
     }),
     [bridge, store],
   );
 
+  const pendingUnarchiveIds = new Set(snapshot.pendingUnarchives.values());
   const menuItems: ContextMenuItem[] = [];
   if (contextMenu?.kind === "workspace") {
     const { cwd } = contextMenu;
@@ -1170,6 +1178,7 @@ function SessionsApp({
     menuItems.push(
       {
         label: isArchived ? "Unarchive" : "Archive",
+        isDisabled: isArchived && pendingUnarchiveIds.has(sessionId),
         run: () =>
           isArchived ? actions.onUnarchiveClick(sessionId) : actions.onArchiveClick(sessionId),
       },
@@ -1182,7 +1191,6 @@ function SessionsApp({
 
   const pendingNewSessionCwds = new Set(snapshot.pendingNewSessions.values());
   const pendingArchiveIds = new Set(snapshot.pendingArchives.values());
-  const pendingUnarchiveIds = new Set(snapshot.pendingUnarchives.values());
   const currentDay = new Date().toDateString();
   return (
     <SessionListMotion
