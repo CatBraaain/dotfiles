@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createBashTool } from "@earendil-works/pi-coding-agent";
@@ -46,7 +46,7 @@ describe("Windows CLI execution", () => {
       "win32",
     );
     assert.ok(command.includes("cd -- '//server/share/作業 場所' || exit"));
-    assert.ok(command.includes("mktemp -d -t pi-cli."));
+    assert.match(command, /cli_tmp=\$\(MSYS2_ARG_CONV_EXCL='\*' bun .*cli-capture\.ts' 'create'/);
     assert.ok(
       command.includes(
         "MSYS2_ARG_CONV_EXCL='*' 'C:/Agent Home/日本語/ticket.exe' '\\exact\\argument' '/literal/item' '日本語'\\''s'",
@@ -122,6 +122,7 @@ describe("Windows CLI execution", () => {
       "C:/Users/User Name/一時'\\''temp/pi-output.log",
     ],
     ["\\\\server\\share\\名前 空白\\pi-output.log", "//server/share/名前 空白/pi-output.log"],
+    ["/tmp/名前 空白/pi-output.log", "/tmp/名前 空白/pi-output.log"],
   ] as const) {
     it("recovers the complete UTF-8 result through registered Bash from " + path, async () => {
       const cli = { stdout: " 本文\r\n", stderr: "診断\r\n", code: 23 };
@@ -143,10 +144,13 @@ describe("Windows CLI execution", () => {
       assert.equal(outcome.status, "completed");
       assert.deepEqual(outcome.cli, cli);
       assert.strictEqual(outcome.result, original.result);
-      assert.deepEqual(calls.slice(1), [
-        `wc -c < '${shellPath}'`,
-        `dd if='${shellPath}' bs=524288 skip=0 count=1 status=none`,
-      ]);
+      assert.equal(calls.length, 3);
+      const exclusion = path.startsWith("/") ? "" : "*";
+      const prefix = `MSYS2_ARG_CONV_EXCL='${exclusion}' bun `;
+      assert.ok(calls[1]!.startsWith(prefix));
+      assert.ok(calls[1]!.endsWith(`cli-capture.ts' 'size' '${shellPath}'`));
+      assert.ok(calls[2]!.startsWith(prefix));
+      assert.ok(calls[2]!.endsWith(`cli-capture.ts' 'read' '${shellPath}' '0' '${output.length}'`));
     });
   }
 
@@ -173,6 +177,54 @@ describe("Windows CLI execution", () => {
   }
 });
 
+it.skipIf(process.platform === "win32")(
+  "recovers separate CLI streams using a PATH with Bun but no coreutils",
+  async () => {
+    const bin = await mkdtemp(join(tmpdir(), "pi-cli-bin-"));
+    const savedPaths = new Set<string>();
+    try {
+      await symlink(process.execPath, join(bin, "bun"));
+      const bash = createBashTool(tmpdir(), {
+        spawnHook: (config) => ({ ...config, env: { ...config.env, PATH: bin } }),
+      });
+      const context = {
+        async executeTool(name: string, input: unknown, options?: { signal?: AbortSignal }) {
+          assert.equal(name, "bash");
+          const result = await bash.execute("test", input as never, options?.signal);
+          const path = result.details?.fullOutputPath;
+          if (path) savedPaths.add(path);
+          return { toolCall: response("").toolCall, result, isError: result.isError ?? false };
+        },
+      };
+      const outcome = await runCliViaBash({
+        context,
+        params: {
+          executable: process.execPath,
+          args: [
+            "-e",
+            'process.stdout.write("本文\\r\\n".repeat(200000)); process.stderr.write(" 診断\\n"); process.exitCode = 23;',
+          ],
+        },
+      });
+      assert.equal(
+        outcome.status,
+        "completed",
+        outcome.status === "failed" ? String(outcome.error) : "Expected CLI completion",
+      );
+      assert.deepEqual(outcome.cli, {
+        stdout: "本文\r\n".repeat(200_000),
+        stderr: " 診断\n",
+        code: 23,
+      });
+      assert.ok(savedPaths.size > 0);
+    } finally {
+      await Promise.all([...savedPaths].map((path) => rm(path, { force: true })));
+      await rm(bin, { recursive: true, force: true });
+    }
+  },
+  30_000,
+);
+
 describe("runCliViaBash CLI input", () => {
   it("uses only the requested timeout and keeps cwd inside the authorized command", async () => {
     const calls: Array<Record<string, unknown>> = [];
@@ -187,6 +239,7 @@ describe("runCliViaBash CLI input", () => {
     assert.equal(first.status, "completed");
     assert.deepEqual(Object.keys(calls[0]!), ["command"]);
     assert.ok(String(calls[0]!.command).includes("cd -- '/tmp/a'\\''\nb' || exit"));
+    assert.match(String(calls[0]!.command), /'\/cli' >"\$cli_tmp\/stdout"/);
     await runCliViaBash({ context, params: { ...params, timeout: 300 } });
     assert.equal(calls[1]!.timeout, 300);
     assert.equal(String(calls[1]!.command).includes("cd --"), false);
@@ -359,7 +412,7 @@ describe("runCliViaBash CLI input", () => {
         assert.equal(Object.hasOwn(args as object, "timeout"), false);
         calls++;
         if (calls === 1) return original;
-        assert.doesNotMatch((args as { command: string }).command, /PI_CLI_V1/);
+        assert.doesNotMatch((args as { command: string }).command, /'\/cli' >|\b(wc|dd)\b/);
         if (calls === 2) return response(String(output.length));
         return response(output.slice((calls - 3) * 524_288, (calls - 2) * 524_288));
       },

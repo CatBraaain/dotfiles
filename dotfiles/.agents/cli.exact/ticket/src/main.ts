@@ -3,7 +3,7 @@
 // Deployed as a single compiled executable at `~/.agents/cli/ticket`
 // (cli.build.ts), so no runtime dependencies are required.
 
-import { execFileSync } from "node:child_process";
+import { $ } from "bun";
 import { randomUUID } from "node:crypto";
 import { link, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -21,6 +21,7 @@ import {
   workerCommand,
 } from "./dispatch";
 
+const MAX_PROJECT_LOOKUP_BYTES = 1_048_576;
 const STATUSES = ["draft", "open", "blocked", "locked", "closed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -297,24 +298,28 @@ function ticketJson(ticket: Ticket, withProject: boolean): Record<string, unknow
   return json;
 }
 
-function defaultProject(): string {
+async function defaultProject(): Promise<string> {
   const cwd = process.cwd();
+  const stdout = Buffer.alloc(MAX_PROJECT_LOOKUP_BYTES + 1);
+  let mainProject: string | undefined;
   try {
-    const porcelain = execFileSync("git", ["worktree", "list", "--porcelain"], {
-      cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const mainPath = porcelain.match(/^worktree (.+)$/m)?.[1];
-    if (mainPath !== undefined) return validateProject(basename(mainPath.trim()));
+    const { exitCode } = await $`git worktree list --porcelain > ${stdout}`
+      .cwd(cwd)
+      .quiet()
+      .nothrow();
+    const bytesWritten = stdout.indexOf(0);
+    if (exitCode === 0 && bytesWritten !== -1) {
+      const mainPath = stdout.toString("utf8", 0, bytesWritten).match(/^worktree (.+)$/m)?.[1];
+      if (mainPath !== undefined) mainProject = validateProject(basename(mainPath.trim()));
+    }
   } catch {
-    // Fall through when cwd is not inside a Git worktree.
+    mainProject = undefined;
   }
-  return validateProject(basename(cwd));
+  return mainProject ?? validateProject(basename(cwd));
 }
 
-function resolveProject(flags: Pick<Flags, "project">): string {
-  return validateProject(flags.project ?? defaultProject());
+async function resolveProject(flags: Pick<Flags, "project">): Promise<string> {
+  return flags.project === undefined ? defaultProject() : validateProject(flags.project);
 }
 
 function timestamp(date: Date): string {
@@ -469,7 +474,7 @@ async function withProjectWrite<T>(
 async function listCommand(positional: string[], flags: Flags): Promise<void> {
   if (positional.length > 0) usageFail();
   for (const status of flags.statuses) validateStatus(status);
-  const projects = flags.all ? await allProjects() : [resolveProject(flags)];
+  const projects = flags.all ? await allProjects() : [await resolveProject(flags)];
   const tickets = (await Promise.all(projects.map((project) => loadTickets(project)))).flat();
   const filtered =
     flags.statuses.length > 0
@@ -528,7 +533,8 @@ async function statsCommand(positional: string[], flags: Flags): Promise<void> {
 
 async function showCommand(positional: string[], flags: Flags): Promise<void> {
   if (positional.length > 1) usageFail();
-  const ticket = resolveSelector(await loadTickets(resolveProject(flags)), positional[0]);
+  const project = await resolveProject(flags);
+  const ticket = resolveSelector(await loadTickets(project), positional[0]);
   if (flags.json) return output({ ...ticketJson(ticket, false), body: ticket.body });
   // write (not console.log) so the body keeps its exact trailing whitespace,
   // which ticket_edit's literal matching depends on.
@@ -569,7 +575,7 @@ function parseCreateInput(raw: string | undefined): CreateInput {
 async function createCommand(positional: string[], flags: Flags): Promise<void> {
   if (positional.length !== 1) usageFail();
   const input = parseCreateInput(positional[0]);
-  const project = resolveProject(flags);
+  const project = await resolveProject(flags);
   const ticket = await withProjectWrite(
     project,
     async (dir) => {
@@ -651,7 +657,7 @@ async function setCommand(positional: string[], flags: Flags): Promise<void> {
   const [selector, jsonArg] =
     positional.length === 1 ? [undefined, positional[0]!] : [positional[0]!, positional[1]!];
   const patch = parseSetInput(jsonArg);
-  const project = resolveProject(flags);
+  const project = await resolveProject(flags);
   const updated = await withProjectWrite(project, async (dir) => {
     const tickets = await loadTickets(project);
     const target = resolveSelector(tickets, selector);
@@ -703,7 +709,7 @@ async function editCommand(positional: string[], flags: Flags): Promise<void> {
       ? [undefined, positional[0]!, positional[1]!]
       : [positional[0]!, positional[1]!, positional[2]!];
   if (!old || replacement === undefined) usageFail();
-  const project = resolveProject(flags);
+  const project = await resolveProject(flags);
   const updated = await withProjectWrite(project, async (dir) => {
     const target = resolveSelector(await loadTickets(project), selector);
     let matches = 0;
@@ -761,7 +767,7 @@ function findCycles(tickets: Ticket[]): string[][] {
 }
 
 async function checkCommand(flags: Flags): Promise<void> {
-  const projects = flags.all ? await allProjects() : [resolveProject(flags)];
+  const projects = flags.all ? await allProjects() : [await resolveProject(flags)];
   const issues: Issue[] = [];
   for (const project of projects) {
     const tickets = await loadTickets(project, issues);
@@ -821,7 +827,7 @@ async function main(): Promise<void> {
       ? null
       : isWorker
         ? validateProject(argv[0] ?? "")
-        : resolveProject(parsed);
+        : await resolveProject(parsed);
     if (parsed.action === "stop") return stopDispatcher(project);
     if (!isWorker && project !== null && parsed.project !== undefined)
       process.chdir(join(homedir(), "projects", project));

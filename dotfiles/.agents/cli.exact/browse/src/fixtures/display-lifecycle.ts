@@ -3,8 +3,15 @@ import * as childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import net from "node:net";
+import { join } from "node:path";
 
 const scenario = process.argv[2]!;
+const bin = process.env.XDG_CACHE_HOME!;
+process.env.PATH = bin;
+if (scenario !== "missing-vnc") {
+  const executable = process.platform === "win32" ? "x11vnc.exe" : "x11vnc";
+  fs.writeFileSync(join(bin, executable), "", { mode: 0o755 });
+}
 const events: unknown[][] = [];
 let socketReady = scenario === "existing";
 let now = 0;
@@ -23,10 +30,6 @@ mock.module("node:fs", () => ({
 }));
 mock.module("node:child_process", () => ({
   ...childProcess,
-  spawnSync: (command: string, args: string[]) => {
-    events.push(["which", command, args]);
-    return { status: scenario === "missing-vnc" ? 1 : 0 };
-  },
   spawn: (command: string, args: string[], options: unknown) => {
     events.push(["spawn", command, args, options]);
     return {

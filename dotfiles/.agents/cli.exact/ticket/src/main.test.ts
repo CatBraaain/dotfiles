@@ -84,18 +84,53 @@ describe("ticket list project selection", () => {
     },
   );
 
-  it("keeps cwd-based project selection when project is omitted", async () => {
-    const home = await ticketHome();
-    const id = create(home, "default", basename(home));
-    create(home, "wrong");
-    const result = run(home, ["list", "--json"]);
-    assert.equal(result.code, 0, result.stderr);
-    const tickets = JSON.parse(result.stdout) as Array<{ id: string }>;
-    assert.deepEqual(
-      tickets.map((ticket) => ticket.id),
-      [id],
-    );
-  });
+  it.each([true, false])(
+    "falls back to the cwd project outside Git (remove Git from PATH: %j)",
+    async (hideGit) => {
+      const home = await ticketHome();
+      const id = create(home, "default", basename(home));
+      create(home, "wrong");
+      const result = run(home, ["list", "--json"], hideGit ? { PATH: home } : {});
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.stderr, "");
+      const tickets = JSON.parse(result.stdout) as Array<{ id: string }>;
+      assert.deepEqual(
+        tickets.map((ticket) => ticket.id),
+        [id],
+      );
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "only uses Git output within the size limit",
+    async () => {
+      const home = await ticketHome();
+      const gitProject = "git-project";
+      const gitId = create(home, "from git", gitProject);
+      const cwdId = create(home, "from cwd", basename(home));
+      const git = join(home, "git");
+      for (const [bytes, expected] of [
+        [1_048_576, gitId],
+        [1_048_577, cwdId],
+      ] as const) {
+        const program = [
+          `#!${process.execPath}`,
+          `const prefix = ${JSON.stringify("worktree /example/" + gitProject + "\n")};`,
+          `process.stdout.write(prefix + " ".repeat(${bytes} - prefix.length));`,
+          'process.stderr.write("diagnostic");',
+        ].join("\n");
+        await writeFile(git, program, { mode: 0o755 });
+        const result = run(home, ["list", "--json"], { PATH: home });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.stderr, "");
+        const tickets = JSON.parse(result.stdout) as Array<{ id: string }>;
+        assert.deepEqual(
+          tickets.map((ticket) => ticket.id),
+          [expected],
+        );
+      }
+    },
+  );
 
   it("keeps status filtering and text output with a project flag", async () => {
     const home = await ticketHome();

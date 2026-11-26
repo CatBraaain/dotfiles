@@ -168,14 +168,20 @@ function renderedLines(component: { render(width: number): string[] }, width = 8
 const identityTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 
 describe("registered bash adapter", () => {
-  it("separates stdout, stderr and the CLI exit code", async () => {
+  it("separates stdout, stderr and the CLI exit code without changing whitespace", async () => {
+    const stdout = " out\r\n".repeat(16);
+    const stderr = " err\r\nPI_CLI_END\n".repeat(8);
     const result = await runWebCli(executionContext, process.execPath, [
       "-e",
-      'process.stdout.write("out\\n"); process.stderr.write("err\\n"); process.exit(3);',
+      "process.stdout.write(" +
+        JSON.stringify(stdout) +
+        "); process.stderr.write(" +
+        JSON.stringify(stderr) +
+        "); process.exitCode = 3;",
     ]);
     assert.deepEqual(
       { stdout: result.stdout, stderr: result.stderr, code: result.code },
-      { stdout: "out\n", stderr: "err\n", code: 3 },
+      { stdout, stderr, code: 3 },
     );
     assert.ok(result.bash.result);
     assert.equal(result.bash.isError, false);
@@ -280,14 +286,16 @@ describe("registered bash adapter", () => {
         if (calls === 1)
           return bashOutcome("partial", { truncated: true, full_output_path: "/tmp/saved-output" });
         if (calls === 2) {
-          assert.equal(command, "wc -c < '/tmp/saved-output'");
+          assert.ok(command.endsWith("cli-capture.ts' 'size' '/tmp/saved-output'"));
           return bashOutcome(String(output.length) + "\n");
         }
-        assert.equal(
-          command,
-          `dd if='/tmp/saved-output' bs=524288 skip=${chunkIndex} count=1 status=none`,
+        const offset = chunkIndex++ * 524_288;
+        const chunk = output.slice(offset, offset + 524_288);
+        assert.ok(
+          command.endsWith(
+            `cli-capture.ts' 'read' '/tmp/saved-output' '${offset}' '${chunk.length}'`,
+          ),
         );
-        const chunk = output.slice(chunkIndex * 524_288, ++chunkIndex * 524_288);
         return bashOutcome(chunk);
       },
     };

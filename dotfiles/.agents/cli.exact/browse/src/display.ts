@@ -1,5 +1,6 @@
 // Headed display helpers for the camoufox server: keep Xvfb (:99) and x11vnc
 // alive on Linux and toggle VNC access for `browse display show|hide`.
+import { $ } from "bun";
 import { spawn, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import net from "node:net";
@@ -82,10 +83,6 @@ function spawnDetachedLog(command: string, args: readonly string[], logPath: str
   }
 }
 
-function commandOnPath(command: string): boolean {
-  return spawnSync("which", [command], { encoding: "utf8" }).status === 0;
-}
-
 function portIsOpen(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = net.connect({ host: "127.0.0.1", port });
@@ -129,7 +126,8 @@ export async function ensureDisplay(): Promise<void> {
 }
 
 export async function ensureX11vnc(): Promise<void> {
-  if (!commandOnPath("x11vnc")) {
+  const { exitCode } = await $`which x11vnc`.quiet().nothrow();
+  if (exitCode !== 0) {
     console.error(
       "[camoufox-server] x11vnc not on PATH: human handoff disabled (bootstrap: apt x11vnc)",
     );

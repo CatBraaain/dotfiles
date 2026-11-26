@@ -1,4 +1,8 @@
 import type { AgentToolResult, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const CAPTURE_SCRIPT = fileURLToPath(new URL("./cli-capture.ts", import.meta.url));
 const RECOVERY_CHUNK_BYTES = 524_288;
 export type CliResponse = { result: AgentToolResult<unknown>; isError: boolean };
 export type CliOutcome =
@@ -43,14 +47,17 @@ export function bashPath(path: string, platform: NodeJS.Platform): string {
   return platform === "win32" ? path.replaceAll("\\", "/") : path;
 }
 
-function quoteRecoveryPath(path: unknown, platform: NodeJS.Platform): string {
+function isGitBashPath(path: string): boolean {
+  return path.startsWith("/") && !path.startsWith("//");
+}
+
+function recoveryPath(path: unknown, platform: NodeJS.Platform): string {
   if (typeof path === "string" && !path.includes("\0")) {
-    const shellPath = bashPath(path, platform);
-    if (platform !== "win32" && path.startsWith("/")) return quoteShell(path);
+    if (platform !== "win32" && path.startsWith("/")) return path;
     if (platform === "win32") {
-      const posixAbsolute = path.startsWith("/") && !shellPath.startsWith("//");
+      const shellPath = bashPath(path, platform);
       const windowsAbsolute = /^(?:[a-z]:\/|\/\/(?![?.]\/)[^/]+\/[^/]+\/)/i.test(shellPath);
-      if (posixAbsolute || windowsAbsolute) return quoteShell(shellPath);
+      if ((path.startsWith("/") && isGitBashPath(shellPath)) || windowsAbsolute) return shellPath;
     }
   }
   throw new Error("Truncated registered bash output has no valid full_output_path");
@@ -68,26 +75,45 @@ export function buildWindowsCliInvocation(executable: string, args: readonly str
   return ["MSYS2_ARG_CONV_EXCL='*'", command, ...args.map(quoteWindowsArgument)].join(" ");
 }
 
+function captureCommand(
+  platform: NodeJS.Platform,
+  mode: "create" | "cleanup" | "frame" | "size" | "read",
+  ...args: string[]
+): string {
+  const invocationArgs = [
+    "--no-install",
+    "--no-env-file",
+    "--cwd",
+    bashPath(dirname(CAPTURE_SCRIPT), platform),
+    bashPath(CAPTURE_SCRIPT, platform),
+    mode,
+    ...args,
+  ];
+  if (platform !== "win32") return ["bun", ...invocationArgs.map(quoteShell)].join(" ");
+  const path = mode === "size" || mode === "read" ? args[0] : undefined;
+  const argConversionExclusion = path && isGitBashPath(path) ? "" : "*";
+  return [
+    `MSYS2_ARG_CONV_EXCL='${argConversionExclusion}'`,
+    "bun",
+    ...invocationArgs.map(quoteWindowsArgument),
+  ].join(" ");
+}
+
 export function createCliCommand(params: CliParams, platform = process.platform): string {
   const invocation =
     platform === "win32"
       ? buildWindowsCliInvocation(params.executable, params.args)
       : [params.executable, ...params.args].map(quoteShell).join(" ");
-  const tempTemplate = platform === "win32" ? "-t pi-cli.XXXXXXXXXX" : "/tmp/pi-cli.XXXXXXXXXX";
+  const cleanup = captureCommand(platform, "cleanup") + ' "$cli_tmp"';
   return [
-    "set -o pipefail",
     ...(params.cwd === undefined
       ? []
       : [`cd -- ${quoteShell(bashPath(params.cwd, platform))} || exit`]),
-    `cli_tmp=$(mktemp -d ${tempTemplate}) || exit`,
-    "trap 'rm -rf -- \"$cli_tmp\"' EXIT",
+    `cli_tmp=$(${captureCommand(platform, "create")}) || exit`,
+    `trap ${quoteShell(cleanup)} EXIT`,
     "cli_code=0",
     `${invocation} >"$cli_tmp/stdout" 2>"$cli_tmp/stderr" || cli_code=$?`,
-    "printf 'PI_CLI_V1:%s\\n' \"$cli_code\"",
-    "base64 <\"$cli_tmp/stdout\" | tr -d '\\n' || exit",
-    "printf '\\n'",
-    "base64 <\"$cli_tmp/stderr\" | tr -d '\\n' || exit",
-    "printf '\\nPI_CLI_END\\n'",
+    captureCommand(platform, "frame") + ' "$cli_tmp" "$cli_code"',
   ].join("\n");
 }
 
@@ -158,8 +184,8 @@ export async function runCliViaBash(request: {
     firstResponse = first.response;
     let output = first.output;
     if (first.truncated) {
-      const quotedPath = quoteRecoveryPath(first.full_output_path, platform);
-      const sizeResult = await execute(`wc -c < ${quotedPath}`);
+      const path = recoveryPath(first.full_output_path, platform);
+      const sizeResult = await execute(captureCommand(platform, "size", path));
       const sizeText = sizeResult.output.trim();
       const sizeBytes = Number(sizeText);
       if (
@@ -171,10 +197,10 @@ export async function runCliViaBash(request: {
         throw new Error("Registered bash returned an invalid full output size");
       const chunks: string[] = [];
       for (let offsetBytes = 0; offsetBytes < sizeBytes; offsetBytes += RECOVERY_CHUNK_BYTES) {
-        const chunk = await execute(
-          `dd if=${quotedPath} bs=${RECOVERY_CHUNK_BYTES} skip=${offsetBytes / RECOVERY_CHUNK_BYTES} count=1 status=none`,
-        );
         const expectedBytes = Math.min(RECOVERY_CHUNK_BYTES, sizeBytes - offsetBytes);
+        const chunk = await execute(
+          captureCommand(platform, "read", path, String(offsetBytes), String(expectedBytes)),
+        );
         if (chunk.truncated || Buffer.byteLength(chunk.output, "utf8") !== expectedBytes)
           throw new Error("Registered bash full output recovery was truncated or incomplete");
         chunks.push(chunk.output);
