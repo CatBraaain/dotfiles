@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { platformFor } from "./platform";
+import { selectWindowsChildren } from "./windows-process";
 
 const linux = platformFor("linux");
 const windows = platformFor("win32");
@@ -100,7 +101,13 @@ describe("process inspection", () => {
       try {
         assert.deepEqual(await windows.clientPidsFor(process.pid, [child.pid]), [child.pid]);
         assert.deepEqual(await windows.clientPidsFor(child.pid, [child.pid]), [child.pid]);
+        assert.deepEqual(await windows.clientPidsFor(process.pid, [process.pid, child.pid]), [
+          process.pid,
+          child.pid,
+        ]);
         assert.deepEqual(await windows.clientPidsFor(process.ppid, [child.pid]), []);
+        await dead.exited;
+        assert.deepEqual(await windows.clientPidsFor(process.pid, [dead.pid]), []);
       } finally {
         child.kill();
         await child.exited;
@@ -127,6 +134,68 @@ describe("process inspection", () => {
     await dead.exited;
     assert.equal(linux.processIsAlive(dead.pid), false);
     assert.equal(windows.processIsAlive(dead.pid), false);
+  });
+});
+
+describe("Windows client ancestry", () => {
+  const parentPid = 100;
+  const clientPid = 200;
+  const parent = {
+    state: "live",
+    process: { creationTime: 10n, matchesExecutable: true },
+  } as const;
+
+  function child(creationTime: bigint, directParentPid = parentPid) {
+    return { state: "live", process: { creationTime, parentPid: directParentPid } } as const;
+  }
+
+  it("does not match a child older than or as old as a process that reused its parent's PID", () => {
+    for (const creationTime of [9n, 10n]) {
+      assert.deepEqual(
+        selectWindowsChildren(parentPid, parent, [clientPid], () => child(creationTime)),
+        [],
+      );
+    }
+  });
+
+  it("does not match when the live parent has a different executable", () => {
+    const differentExecutable = {
+      ...parent,
+      process: { ...parent.process, matchesExecutable: false },
+    };
+    assert.deepEqual(
+      selectWindowsChildren(parentPid, differentExecutable, [clientPid], () => child(11n)),
+      [],
+    );
+  });
+
+  it("rejects an unknown candidate even after confirming another match", () => {
+    const unknownPid = 201;
+    assert.throws(
+      () =>
+        selectWindowsChildren(parentPid, parent, [clientPid, unknownPid], (pid) =>
+          pid === clientPid ? child(11n) : { state: "unknown" },
+        ),
+      /Cannot inspect client process 201/,
+    );
+  });
+
+  it("rejects a possible match when the parent's executable cannot be verified", () => {
+    const unknownExecutable = {
+      ...parent,
+      process: { ...parent.process, matchesExecutable: undefined },
+    };
+    assert.throws(
+      () => selectWindowsChildren(parentPid, unknownExecutable, [clientPid], () => child(11n)),
+      /Cannot verify parent process identity/,
+    );
+  });
+
+  it("excludes an unrelated candidate even when the requested parent cannot be inspected", () => {
+    assert.deepEqual(
+      selectWindowsChildren(parentPid, { state: "unknown" }, [clientPid], () => child(11n, 300)),
+      [],
+    );
   });
 });
 

@@ -1,9 +1,8 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, win32 } from "node:path";
-import { promisify } from "node:util";
+import { windowsChildPids } from "./windows-process";
 
 export type PlatformApi = ReturnType<typeof platformFor>;
 
@@ -16,9 +15,6 @@ function powerShellLiteral(value: string): string {
 }
 
 const ENVIRONMENT_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const PROCESS_QUERY_TIMEOUT_MS = 5_000;
-const MAX_WINDOWS_PID = 0xffff_ffff;
-const execFileAsync = promisify(execFile);
 export const windowsPowerShell = win32.join(
   process.env.SystemRoot || "C:\\Windows",
   "System32",
@@ -29,48 +25,6 @@ export const windowsPowerShell = win32.join(
 
 export function encodePowerShell(script: string): string {
   return Buffer.from(script, "utf16le").toString("base64");
-}
-
-async function windowsChildPids(parentPid: number, clientPids: number[]): Promise<number[]> {
-  const candidates = clientPids.filter(
-    (pid) => Number.isInteger(pid) && pid > 0 && pid <= MAX_WINDOWS_PID,
-  );
-  if (
-    candidates.length === 0 ||
-    !Number.isInteger(parentPid) ||
-    parentPid <= 0 ||
-    parentPid > MAX_WINDOWS_PID
-  )
-    return [];
-
-  const filter = [parentPid, ...candidates].map((pid) => `ProcessId = ${pid}`).join(" OR ");
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    `$processes = Get-CimInstance Win32_Process -Filter '${filter}'`,
-    `$parent = $processes | Where-Object ProcessId -eq ${parentPid}`,
-    "if (!$parent) { exit 0 }",
-    "foreach ($client in $processes) {",
-    `  if ($client.ProcessId -eq ${parentPid} -or $client.ParentProcessId -ne ${parentPid}) { continue }`,
-    "  if (!$parent.CreationDate -or !$client.CreationDate -or !$parent.ExecutablePath) { throw 'Cannot verify parent process identity' }",
-    "  if ($parent.CreationDate -lt $client.CreationDate -and $parent.ExecutablePath -eq $env:PI_MUX_QUERY_EXE) { [Console]::WriteLine($client.ProcessId) }",
-    "}",
-  ].join("\n");
-  try {
-    const { stdout } = await execFileAsync(
-      windowsPowerShell,
-      ["-NoProfile", "-NonInteractive", "-EncodedCommand", encodePowerShell(script)],
-      {
-        env: { ...process.env, PI_MUX_QUERY_EXE: realpathSync(process.execPath) },
-        timeout: PROCESS_QUERY_TIMEOUT_MS,
-        windowsHide: true,
-      },
-    );
-    const matching = stdout.trim().split(/\r?\n/).filter(Boolean).map(Number);
-    if (matching.some((pid) => !candidates.includes(pid))) throw new Error("Invalid process IDs");
-    return matching;
-  } catch (error) {
-    throw new Error(`Cannot verify Windows client parent process ${parentPid}`, { cause: error });
-  }
 }
 
 const WINDOWS_ENVIRONMENT_KEY_PATTERN = /^[^=\0]+$/;
@@ -194,7 +148,7 @@ export function platformFor(platformName: string) {
     async clientPidsFor(parentPid: number, clientPids: number[]): Promise<number[]> {
       const children = clientPids.filter((pid) => pid !== parentPid);
       const matches = windows
-        ? await windowsChildPids(parentPid, children)
+        ? windowsChildPids(parentPid, children)
         : children.filter((pid) => readParentPid(pid) === parentPid);
       return clientPids.includes(parentPid) ? [parentPid, ...matches] : matches;
     },
