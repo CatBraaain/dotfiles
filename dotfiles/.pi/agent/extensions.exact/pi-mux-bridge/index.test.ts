@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { lstatSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, it, spyOn } from "bun:test";
 import {
   createEventBus,
@@ -15,6 +17,7 @@ let modelRegistry = {} as ExtensionContext["modelRegistry"];
 function captureHandlers(
   execute?: ExtensionAPI["exec"],
   sendMessage?: ExtensionAPI["sendMessage"],
+  appendEntry?: ExtensionAPI["appendEntry"],
 ) {
   const handlers = new Map<string, Handler>();
   const events = createEventBus();
@@ -47,6 +50,7 @@ function captureHandlers(
       (() => {
         throw new Error("No message fixture");
       }),
+    appendEntry,
   } as unknown as ExtensionAPI);
   return handlers;
 }
@@ -517,6 +521,128 @@ describe("agent message reception", () => {
 
   function isPaneOptionListing(args: string[]): boolean {
     return args.at(-1)?.includes(" ; show-options ") === true;
+  }
+
+  for (const { name, pending, restart, failure } of [
+    { name: "pane inspection finishing after restart", pending: "inspect", restart: true },
+    { name: "an option listing arriving after shutdown", pending: "list" },
+    { name: "an option listing arriving after restart", pending: "list", restart: true },
+    { name: "an option removal finishing after shutdown", pending: "unset" },
+    {
+      name: "a missing pane reported after restart",
+      pending: "list",
+      restart: true,
+      failure: "no such pane: %3",
+    },
+    {
+      name: "a polling error reported after restart",
+      pending: "list",
+      restart: true,
+      failure: "command failed",
+    },
+  ]) {
+    it(`ignores ${name} from the old watcher`, async () => {
+      await withManagedEnvironment(async () => {
+        delete process.env.PI_TMUX_STARTUP_COMMAND;
+        const file = realpathSync(fileURLToPath(import.meta.url));
+        const stat = lstatSync(file, { bigint: true });
+        const receipt = Buffer.from(
+          JSON.stringify({
+            v: 1,
+            sessionId: "fixed-id",
+            processPid: process.pid,
+            file,
+            fileIdentity: [stat.dev, stat.ino, stat.birthtimeNs].join(":"),
+            responseId: null,
+            viewedAt: "2026-11-21T00:00:01.000Z",
+          }),
+        ).toString("base64");
+        const listing = paneListing([
+          { name: `@pi-mux-view-${LATE_ID}`, value: receipt },
+          { name: "@pi-mux-msg-broken", value: "!!not-base64!!" },
+          {
+            name: `@pi-mux-msg-${EARLY_ID}`,
+            value: messageOptionValue(EARLY_ID, "2026-11-21T00:00:01.000Z", "text"),
+          },
+        ]);
+        const actions: string[] = [];
+        const queryStarted = Promise.withResolvers<void>();
+        const queryResponse = Promise.withResolvers<Awaited<ReturnType<ExtensionAPI["exec"]>>>();
+        let hasDeferred = false;
+        const handlers = captureHandlers(
+          async (_command, args) => {
+            const operation = args.includes("display-message")
+              ? "inspect"
+              : isPaneOptionListing(args)
+                ? "list"
+                : "unset";
+            actions.push(operation);
+            if (operation === pending && !hasDeferred) {
+              hasDeferred = true;
+              queryStarted.resolve();
+              return queryResponse.promise;
+            }
+            const stdout =
+              operation === "inspect" ? managedPaneOutput() : operation === "list" ? listing : "";
+            return { stdout, stderr: "", code: 0, killed: false };
+          },
+          () => {
+            actions.push("deliver");
+          },
+          (type) => {
+            actions.push(type);
+          },
+        );
+        const oldTimer = {} as ReturnType<typeof setInterval>;
+        const newTimer = {} as ReturnType<typeof setInterval>;
+        const interval = spyOn(globalThis, "setInterval")
+          .mockReturnValueOnce(oldTimer)
+          .mockReturnValue(newTimer);
+        const clear = spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+        const stderr = spyOn(process.stderr, "write").mockReturnValue(true);
+        const { ctx } = context();
+        ctx.sessionManager.getSessionFile = () => file;
+        try {
+          await handlers.get("session_start")!({}, ctx);
+          const [pollOld] = interval.mock.calls[0]!;
+          const oldPoll = pollOld();
+          await queryStarted.promise;
+          await handlers.get("session_shutdown")!({}, ctx);
+          if (restart) await handlers.get("session_start")!({}, ctx);
+
+          const actionsBeforeResponse = actions.slice();
+          queryResponse.resolve({
+            stdout: failure ? "" : pending === "inspect" ? managedPaneOutput() : listing,
+            stderr: failure ?? "",
+            code: failure ? 1 : 0,
+            killed: false,
+          });
+          await oldPoll;
+          assert.deepEqual(actions, actionsBeforeResponse);
+          assert.deepEqual(clear.mock.calls, [[oldTimer]]);
+          assert.deepEqual(stderr.mock.calls, []);
+
+          if (restart) {
+            const [pollNew] = interval.mock.calls[1]!;
+            await pollNew();
+            assert.deepEqual(actions.slice(actionsBeforeResponse.length), [
+              "inspect",
+              "list",
+              "pi-mux-viewed",
+              "unset",
+              "unset",
+              "deliver",
+              "unset",
+            ]);
+          }
+        } finally {
+          stopMessageWatcher();
+          stderr.mockRestore();
+          clear.mockRestore();
+          interval.mockRestore();
+        }
+      });
+    });
   }
 
   for (const { name, result, diagnostic, hasInitialStderr } of [

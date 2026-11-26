@@ -31,11 +31,13 @@ export function rejectSessionChange(ctx: ExtensionContext): { cancel: true } | u
 }
 
 let messageTimer: ReturnType<typeof setInterval> | undefined;
+let messageWatcherGeneration = 0;
 let messageIdentity: ManagedPaneIdentity | undefined;
 const injectedMessageNames = new Set<string>();
 const consumedViewOptions = new Set<string>();
 
 export function stopMessageWatcher(): void {
+  messageWatcherGeneration++;
   if (messageTimer !== undefined) {
     clearInterval(messageTimer);
     messageTimer = undefined;
@@ -52,15 +54,17 @@ function startMessageWatcher(
   stopMessageWatcher();
   if (ctx.mode !== "tui") return;
   if ((process.env.TMUX ?? "").split(",")[0] !== getTmuxPaths().socketPath) return;
+  const generation = messageWatcherGeneration;
   const reportedFailures = new Set<string>();
   let polling = false;
   messageTimer = setInterval(async () => {
-    if (polling) return;
+    if (polling || generation !== messageWatcherGeneration) return;
     polling = true;
     try {
       await drainAgentMessages(pi, ctx);
     } catch (error) {
-      reportMessagePollFailure(error, reportedFailures);
+      if (generation === messageWatcherGeneration)
+        reportMessagePollFailure(error, reportedFailures);
     } finally {
       polling = false;
     }
@@ -83,15 +87,25 @@ export async function drainAgentMessages(
   pi: Pick<ExtensionAPI, "exec" | "sendMessage" | "appendEntry">,
   ctx: ExtensionContext,
 ): Promise<void> {
+  const generation = messageWatcherGeneration;
+  function isCurrentWatcher(): boolean {
+    return generation === messageWatcherGeneration;
+  }
+
   const paths = getTmuxPaths();
   const execute = messageExecutor(pi, ctx);
-  messageIdentity ??= await inspectManagedPane(execute, paths);
-  if (!messageIdentity) {
-    stopMessageWatcher();
-    return;
+  let identity = messageIdentity;
+  if (!identity) {
+    identity = await inspectManagedPane(execute, paths);
+    if (!isCurrentWatcher()) return;
+    if (!identity) {
+      stopMessageWatcher();
+      return;
+    }
+    messageIdentity = identity;
   }
-  const identity = messageIdentity;
   const listing = await readMessageOptions(execute, paths, identity);
+  if (!isCurrentWatcher()) return;
   if (listing === undefined) {
     stopMessageWatcher();
     return;
@@ -101,24 +115,30 @@ export async function drainAgentMessages(
     await handleOption(async () => {
       if (!consumedViewOptions.has(name)) {
         recordViewReceipt(pi, ctx.sessionManager, encoded);
+        if (!isCurrentWatcher()) return;
         consumedViewOptions.add(name);
       }
       await unsetMessageOption(execute, paths, identity, name);
+      if (!isCurrentWatcher()) return;
       consumedViewOptions.delete(name);
     });
+    if (!isCurrentWatcher()) return;
   }
   const { valid, invalid } = partitionMessageOptions(messageOptions(listing));
   for (const name of invalid) {
     await handleOption(() => unsetMessageOption(execute, paths, identity, name));
+    if (!isCurrentWatcher()) return;
   }
   for (const { name, message } of valid) {
     await handleOption(async () => {
       if (!injectedMessageNames.has(name)) {
         deliverAgentMessage(pi, name, message);
+        if (!isCurrentWatcher()) return;
         injectedMessageNames.add(name);
       }
       await unsetMessageOption(execute, paths, identity, name);
     });
+    if (!isCurrentWatcher()) return;
   }
   if (firstOptionFailure) throw firstOptionFailure.error;
 
