@@ -8,15 +8,7 @@ pi起動時に、古いセッションファイルを各プロジェクトの `a
 
 ## 実行条件
 
-`session_start` イベントの `reason` によって、GC を実行するかどうかが決まる。
-
-| `session_start.reason` | GC を実行するか |
-| --- | --- |
-| `startup` | 起動のたびにする |
-| `reload` | しない |
-| `new` | しない |
-| `resume` | しない |
-| `fork` | しない |
+`session_start.reason` が `startup` で、TUI / RPC モードのときだけ GC を実行する。print / JSON モードでは対象の走査も行わない。
 
 ## 退避ルール
 

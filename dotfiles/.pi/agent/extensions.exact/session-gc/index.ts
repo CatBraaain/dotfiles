@@ -93,7 +93,7 @@ const defaultDeps: SessionGcDeps = {
 
 export default function sessionGcExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (event, ctx) => {
-    if (event.reason !== "startup") return;
+    if (event.reason !== "startup" || !ctx.hasUI) return;
     // Run after startup so the heavy file scan never blocks session loading.
     setTimeout(() => {
       const archived = runSessionGc(event, defaultDeps);

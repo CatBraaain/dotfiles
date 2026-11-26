@@ -11,9 +11,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, it } from "bun:test";
-import type { SessionStartEvent } from "@earendil-works/pi-coding-agent";
-import {
+import { afterEach, describe, it, spyOn } from "bun:test";
+import type { ExtensionAPI, SessionStartEvent } from "@earendil-works/pi-coding-agent";
+import sessionGcExtension, {
   KEEP_COUNT,
   collectArchiveTargets,
   executeArchives,
@@ -65,6 +65,34 @@ function writeSession(rigRig: TestRig, projectDir: string, name: string, mtime: 
 function startupEvent(reason: SessionStartEvent["reason"] = "startup"): SessionStartEvent {
   return { type: "session_start", reason };
 }
+
+describe("session-gc lifecycle", () => {
+  for (const { hasUI, expectedSchedules } of [
+    { hasUI: false, expectedSchedules: 0 },
+    { hasUI: true, expectedSchedules: 1 },
+  ]) {
+    it(`schedules ${expectedSchedules} scans on startup with hasUI=${hasUI}`, () => {
+      type SessionStart = (event: SessionStartEvent, ctx: { hasUI: boolean }) => void;
+      const handlers: SessionStart[] = [];
+      sessionGcExtension({
+        on(name: string, handler: SessionStart) {
+          if (name === "session_start") handlers.push(handler);
+        },
+      } as unknown as ExtensionAPI);
+      const handler = handlers[0];
+      assert.ok(handler);
+      const scheduleScan = spyOn(globalThis, "setTimeout").mockReturnValue(
+        {} as ReturnType<typeof setTimeout>,
+      );
+      try {
+        handler(startupEvent(), { hasUI });
+        assert.equal(scheduleScan.mock.calls.length, expectedSchedules);
+      } finally {
+        scheduleScan.mockRestore();
+      }
+    });
+  }
+});
 
 describe("collectArchiveTargets", () => {
   it("keep 件を残し、それより古い .jsonl を archive 対象にする", () => {

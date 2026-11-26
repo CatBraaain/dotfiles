@@ -45,7 +45,7 @@ function recordingSpawn(
   return { spawnProcess, calls };
 }
 
-type SessionStartHandler = (event: { reason: string }) => Promise<void>;
+type SessionStartHandler = (event: { reason: string }, ctx: { hasUI: boolean }) => Promise<void>;
 
 function loadExtension(spawnProcess: SpawnFn): { sessionStart: SessionStartHandler | undefined } {
   let sessionStart: SessionStartHandler | undefined;
@@ -63,9 +63,11 @@ function loadExtension(spawnProcess: SpawnFn): { sessionStart: SessionStartHandl
 async function startSession(
   spawnProcess: SpawnFn,
   reason: string,
+  ctx = { hasUI: true },
 ): Promise<ReturnType<typeof loadExtension>> {
   const captured = loadExtension(spawnProcess);
-  await captured.sessionStart?.({ reason });
+  assert.ok(captured.sessionStart);
+  await captured.sessionStart({ reason }, ctx);
   return captured;
 }
 
@@ -91,6 +93,12 @@ describe("spawn 条件", () => {
       calls.map(({ command, args }) => [command, args]),
       [[startupExecutablePath(), []]],
     );
+  });
+
+  it("does not spawn startup without a UI", async () => {
+    const { spawnProcess, calls } = recordingSpawn(fakeChild());
+    await startSession(spawnProcess, "startup", { hasUI: false });
+    assert.equal(calls.length, 0);
   });
 
   for (const reason of ["new", "resume", "fork", "reload"]) {

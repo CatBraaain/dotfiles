@@ -22,8 +22,8 @@ export function startupExecutablePath(
 }
 
 export default function startupExtension(pi: ExtensionAPI, spawnProcess: SpawnFn = spawn): void {
-  pi.on("session_start", async (event) => {
-    if (event.reason !== "startup") return;
+  pi.on("session_start", async (event, ctx) => {
+    if (event.reason !== "startup" || !ctx.hasUI) return;
     try {
       const child = spawnProcess(startupExecutablePath(), [], {
         detached: true,

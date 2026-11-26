@@ -1,13 +1,10 @@
 # startup拡張機能Spec
 
-pi のセッション開始時に、共通primingスクリプト `~/.agents/cli/startup`（windows は `startup.exe`。振る舞い契約は `dotfiles/.agents/cli.exact/startup/SPEC.md`）を detached実行する。エージェント向けツール、コマンド、UI表示は提供しない。スクリプトの中身（何を primingするか）はこの拡張の関知外であり、スクリプト側の spec が正本である。
+pi 起動時の準備を行う実行ファイルを detached で呼ぶ。自動更新と検索サービスの先行起動は [startup CLI の仕様](../../../../.agents/cli.exact/startup/SPEC.md) に従う。
 
 ## 起動条件
 
-| イベント | `event.reason` | 動作 |
-| --- | --- | --- |
-| `session_start` | `startup` | `~/.agents/cli/startup`（windows は `startup.exe`）を spawnする |
-| `session_start` | `startup` 以外（`new` / `resume` / `fork` / `reload`） | 何もしない |
+`session_start.reason` が `startup` で、TUI / RPC モードのときだけ実行ファイルを起動する。
 
 ## spawn の条件
 

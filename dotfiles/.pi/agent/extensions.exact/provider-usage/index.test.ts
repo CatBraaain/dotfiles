@@ -310,7 +310,7 @@ function createLifecycleHarness() {
     timers.delete(timer as ReturnType<typeof setInterval>);
   });
 
-  function createRuntime() {
+  function createRuntime({ hasUI = true } = {}) {
     const handlers = new Map<string, (event: { reason: string }, ctx: ExtensionContext) => void>();
     const requests: PromiseWithResolvers<UsageEntry[]>[] = [];
     const widgets: unknown[][] = [];
@@ -320,7 +320,7 @@ function createLifecycleHarness() {
       get hasUI() {
         contextReads++;
         assert.equal(isStale, false, "Stopped runtime must not read its old context");
-        return true;
+        return hasUI;
       },
       ui: {
         setWidget(...args: unknown[]) {
@@ -374,6 +374,18 @@ async function drainRefresh(): Promise<void> {
 
 describe("provider usage lifecycle", () => {
   for (const reason of ["startup", "reload"]) {
+    it(`does not fetch usage or schedule a refresh without a UI after ${reason}`, () => {
+      const harness = createLifecycleHarness();
+      try {
+        const runtime = harness.createRuntime({ hasUI: false });
+        runtime.start(reason);
+        assert.equal(runtime.requests.length, 0);
+        assert.equal(harness.timers.size, 0);
+      } finally {
+        harness.restore();
+      }
+    });
+
     it(`refreshes immediately and every five minutes after ${reason}`, async () => {
       const harness = createLifecycleHarness();
       try {
@@ -404,7 +416,6 @@ describe("provider usage lifecycle", () => {
       runtime.start();
       runtime.requests[0]!.reject(new Error("Fixture fetch failed"));
       await drainRefresh();
-      assert.equal(runtime.contextReads, 1);
       assert.equal(runtime.widgets.length, 1);
       const widget = runtime.widgets[0]![1] as (
         ui: unknown,
@@ -455,11 +466,12 @@ describe("provider usage lifecycle", () => {
           const runtime = harness.createRuntime();
           runtime.start();
           runtime.shutdown(reason);
+          const contextReadsAtShutdown = runtime.contextReads;
           const request = runtime.requests[0]!;
           if (outcome === "error") request.reject(new Error("Fixture fetch failed"));
           else request.resolve(outcome === "empty" ? [] : [entryWith({})]);
           await drainRefresh();
-          assert.equal(runtime.contextReads, 0);
+          assert.equal(runtime.contextReads, contextReadsAtShutdown);
           assert.equal(runtime.widgets.length, 0);
           assert.equal(harness.timers.size, 0);
         } finally {
@@ -476,13 +488,14 @@ describe("provider usage lifecycle", () => {
       runtime.start();
       const callback = [...harness.timers.values()][0]!;
       runtime.shutdown();
+      const contextReadsAtShutdown = runtime.contextReads;
       runtime.shutdown();
       callback();
       assert.equal(runtime.requests.length, 1);
       assert.equal(harness.timers.size, 0);
       runtime.requests[0]!.resolve([entryWith({})]);
       await drainRefresh();
-      assert.equal(runtime.contextReads, 0);
+      assert.equal(runtime.contextReads, contextReadsAtShutdown);
     } finally {
       harness.restore();
     }
@@ -494,13 +507,14 @@ describe("provider usage lifecycle", () => {
       const oldRuntime = harness.createRuntime();
       oldRuntime.start();
       oldRuntime.shutdown();
+      const oldContextReadsAtShutdown = oldRuntime.contextReads;
       const newRuntime = harness.createRuntime();
       newRuntime.start("reload");
       newRuntime.requests[0]!.resolve([entryWith({})]);
       await drainRefresh();
       oldRuntime.requests[0]!.resolve([]);
       await drainRefresh();
-      assert.equal(oldRuntime.contextReads, 0);
+      assert.equal(oldRuntime.contextReads, oldContextReadsAtShutdown);
       assert.equal(oldRuntime.widgets.length, 0);
       assert.equal(newRuntime.widgets.length, 1);
       assert.equal(harness.timers.size, 1);

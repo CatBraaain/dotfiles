@@ -204,6 +204,7 @@ export default function providerUsageExtension(
   pi.on("session_start", (event, ctx) => {
     if (event.reason !== "startup" && event.reason !== "reload") return;
     stopRefreshing();
+    if (!ctx.hasUI) return;
     const controller = new AbortController();
     refreshController = controller;
     void refreshUsageWidget(ctx, fetchEntries, controller.signal);
