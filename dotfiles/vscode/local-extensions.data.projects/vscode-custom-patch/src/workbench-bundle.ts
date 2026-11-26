@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { prepareScmBridge } from "./scm-bridge.ts";
+import { prepareAgentWorktreeVisibility, prepareScmBridge } from "./scm-bridge.ts";
 import { prepareExplorerSort } from "./sort-explorer.ts";
 
 type BundleResult = "patched" | "unpatched" | "fresh" | "bundle-unwritable" | "bundle-invalid";
@@ -18,6 +18,7 @@ type BundleOptions = { scmSelectionSource?: string; sortExplorer?: boolean };
 
 const scmBridge = sectionMarkers("SCM bridge");
 const explorerSort = sectionMarkers("sort-explorer");
+const agentWorktrees = sectionMarkers("agent worktree visibility");
 
 export function ensureWorkbenchBundle(appOut: string, options: BundleOptions = {}): BundleResult {
   const bundlePath = join(appOut, "vs", "workbench", "workbench.desktop.main.js");
@@ -26,20 +27,30 @@ export function ensureWorkbenchBundle(appOut: string, options: BundleOptions = {
     if (!stats?.isFile()) return "fresh";
     const bytes = readFileSync(bundlePath);
     const current = bytes.toString("utf8");
-    const withoutBridge = stripSection(current, scmBridge);
-    const original = withoutBridge === null ? null : stripSection(withoutBridge, explorerSort);
-    if (original === null) return "bundle-invalid";
+    let original = current;
+    for (const markers of [scmBridge, explorerSort, agentWorktrees]) {
+      const unpatched = stripSection(original, markers);
+      if (unpatched === null) return "bundle-invalid";
+      original = unpatched;
+    }
 
     const sort = options.sortExplorer ? prepareExplorerSort(original) : undefined;
     const bridge = options.scmSelectionSource
       ? prepareScmBridge(original, options.scmSelectionSource)
       : undefined;
-    const updated = original + wrapSection(explorerSort, sort) + wrapSection(scmBridge, bridge);
+    const visibility = options.scmSelectionSource
+      ? prepareAgentWorktreeVisibility(original)
+      : undefined;
+    const updated =
+      original +
+      wrapSection(agentWorktrees, visibility) +
+      wrapSection(explorerSort, sort) +
+      wrapSection(scmBridge, bridge);
     if (updated === current) return "fresh";
     if (!bytes.equals(Buffer.from(current))) return "bundle-invalid";
 
     replaceWorkbenchFile(bundlePath, updated, stats.mode);
-    return sort || bridge ? "patched" : "unpatched";
+    return sort || bridge || visibility ? "patched" : "unpatched";
   } catch (error) {
     if (isWorkbenchWriteUnavailable(error)) return "bundle-unwritable";
     throw error;
