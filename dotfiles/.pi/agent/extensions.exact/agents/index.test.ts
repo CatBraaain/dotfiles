@@ -8303,7 +8303,7 @@ describe("shipped agents.yaml through the shared usage entry", () => {
     assert.equal(shipped.defaultMode, "standard");
     assert.deepEqual(shipped.modes.standard, {
       high: [flagship, sol, commandcode, flash],
-      middle: [flash, sol, commandcode],
+      middle: [flagship, sol, commandcode],
       low: [luna, flash, commandcode],
       vision: [latestLuna, flash, commandcode],
     });
@@ -8423,7 +8423,7 @@ describe("shipped agents.yaml through the shared usage entry", () => {
       assert.deepEqual(appliedModelKeys(), [
         "openai-codex/gpt-6.1-sol",
         "commandcode/z-ai/glm-5.3-flash",
-        "zai/glm-5.3-flash",
+        "zai/glm-5.3",
       ]);
 
       extension.context.model = { provider: "external", id: "x" };
