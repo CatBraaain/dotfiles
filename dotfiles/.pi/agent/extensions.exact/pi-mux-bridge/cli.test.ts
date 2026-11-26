@@ -4758,11 +4758,13 @@ describe("pi-mux temporary conversations", () => {
     assert.deepEqual(parseOperation(["open", "--temporary", "complete-id"]), {
       kind: "open",
       temporary: true,
+      detached: false,
       id: "complete-id",
     });
     assert.deepEqual(parseOperation(["open", "complete-id"]), {
       kind: "open",
       temporary: false,
+      detached: false,
       id: "complete-id",
     });
     for (const argv of [
