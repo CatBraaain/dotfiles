@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { lstatSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, spyOn } from "bun:test";
 import {
   createEventBus,
+  SessionManager,
+  type EntryRenderer,
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
@@ -18,41 +21,52 @@ function captureHandlers(
   execute?: ExtensionAPI["exec"],
   sendMessage?: ExtensionAPI["sendMessage"],
   appendEntry?: ExtensionAPI["appendEntry"],
+  sessionManager = SessionManager.inMemory(),
+  piVersion = "1.5.0",
 ) {
   const handlers = new Map<string, Handler>();
+  const entryRenderers = new Map<string, EntryRenderer>();
   const events = createEventBus();
   modelRegistry = {} as ExtensionContext["modelRegistry"];
-  extension({
-    events,
-    on(event: string, handler: Handler) {
-      const previous = handlers.get(event);
-      handlers.set(
-        event,
-        previous
-          ? async (eventData: any, ctxData: any) => {
-              await previous(eventData, ctxData);
-              await handler(eventData, ctxData);
-            }
-          : handler,
-      );
-    },
-    registerCommand(name: string, definition: { handler: Handler }) {
-      assert.equal(name, process.env.PI_TMUX_STARTUP_COMMAND);
-      handlers.set("startup", definition.handler);
-    },
-    exec:
-      execute ??
-      (async () => {
-        throw new Error("No process fixture");
-      }),
-    sendMessage:
-      sendMessage ??
-      (() => {
-        throw new Error("No message fixture");
-      }),
-    appendEntry,
-  } as unknown as ExtensionAPI);
-  return handlers;
+  extension(
+    {
+      events,
+      on(event: string, handler: Handler) {
+        const previous = handlers.get(event);
+        handlers.set(
+          event,
+          previous
+            ? async (eventData: any, ctxData: any) => {
+                await previous(eventData, ctxData);
+                await handler(eventData, ctxData);
+              }
+            : handler,
+        );
+      },
+      registerCommand(name: string, definition: { handler: Handler }) {
+        assert.equal(name, process.env.PI_TMUX_STARTUP_COMMAND);
+        handlers.set("startup", definition.handler);
+      },
+      registerEntryRenderer(customType: string, renderer: EntryRenderer) {
+        entryRenderers.set(customType, renderer);
+      },
+      appendEntry:
+        appendEntry ??
+        ((customType: string, data: unknown) => sessionManager.appendCustomEntry(customType, data)),
+      exec:
+        execute ??
+        (async () => {
+          throw new Error("No process fixture");
+        }),
+      sendMessage:
+        sendMessage ??
+        (() => {
+          throw new Error("No message fixture");
+        }),
+    } as unknown as ExtensionAPI,
+    piVersion,
+  );
+  return Object.assign(handlers, { entryRenderers, sessionManager });
 }
 
 function context(mode = "tui") {
@@ -472,6 +486,7 @@ describe("fixed conversation identity", () => {
         registerCommand() {
           assert.fail("Ordinary Pi must not register a pi-mux startup command");
         },
+        registerEntryRenderer() {},
       } as unknown as ExtensionAPI);
       assert.deepEqual(registrations, [
         "session_before_switch",
@@ -677,8 +692,13 @@ describe("agent message reception", () => {
       result: undefined,
       diagnostic: "exec_code=unknown timeout=unknown truncated=unknown",
     },
+    {
+      name: "incomplete listing despite a successful command",
+      result: { code: 0, killed: false },
+      diagnostic: "tmux show-options: incomplete pane option listing",
+    },
   ]) {
-    it(`reports one line for ${name} even when it happens twice`, async () => {
+    it(`records ${name} once until a successful poll, then records recurrence`, async () => {
       await withManagedEnvironment(async () => {
         let nowMs = 0;
         let listAttempts = 0;
@@ -688,6 +708,8 @@ describe("agent message reception", () => {
           assert.ok(isPaneOptionListing(args));
           listAttempts++;
           nowMs += listAttempts * 1_000;
+          if (listAttempts === 3)
+            return { stdout: paneListing([]), stderr: "", code: 0, killed: false };
           const payload = `${paneListing([])}\n@mouse-force ${listAttempts}\n@pi-mux-msg-fixture secret`;
           if (!result) throw new Error(payload);
           return {
@@ -707,15 +729,165 @@ describe("agent message reception", () => {
           const [poll] = interval.mock.calls[0]!;
           await poll();
           await poll();
-          assert.equal(listAttempts, 2);
-          assert.deepEqual(stderr.mock.calls, [
-            [`pi-mux: message polling failed: tmux show-options elapsed=1000ms ${diagnostic}\n`],
-          ]);
+          await poll();
+          await poll();
+          const entries = handlers.sessionManager
+            .getEntries()
+            .filter((entry) => entry.type === "custom");
+          assert.equal(listAttempts, 4);
+          const commandSucceeded = result?.code === 0 && !result.killed;
+          assert.deepEqual(
+            entries.map(({ customType, data }) => ({ customType, data })),
+            [1_000, 4_000].map((elapsedMs) => ({
+              customType: "pi-mux-poll-error",
+              data: commandSucceeded
+                ? diagnostic
+                : `tmux show-options elapsed=${elapsedMs}ms ${diagnostic}`,
+            })),
+          );
+          assert.deepEqual(stderr.mock.calls, []);
         } finally {
           stopMessageWatcher();
           clock.mockRestore();
           stderr.mockRestore();
           interval.mockRestore();
+        }
+      });
+    });
+  }
+
+  it("shows a cleanup failure in Pi history without creating a file for an empty conversation", async () => {
+    await withManagedEnvironment(async () => {
+      const testRoot = "/tmp/work/dotfiles";
+      mkdirSync(testRoot, { recursive: true });
+      const directory = mkdtempSync(join(testRoot, "poll-history-"));
+      const manager = SessionManager.create(directory, directory);
+      const file = manager.getSessionFile();
+      const option = {
+        name: `@pi-mux-msg-${EARLY_ID}`,
+        value: messageOptionValue(EARLY_ID, "2026-11-21T00:00:01.000Z", "fixture message"),
+      };
+      const handlers = captureHandlers(
+        async (_command, args) => {
+          if (args.includes("display-message"))
+            return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
+          if (isPaneOptionListing(args))
+            return { stdout: paneListing([option]), stderr: "", code: 0, killed: false };
+          return { stdout: "", stderr: "fixture option deletion failed", code: 1, killed: false };
+        },
+        () => {},
+        undefined,
+        manager,
+      );
+      const interval = spyOn(globalThis, "setInterval").mockReturnValue(
+        {} as ReturnType<typeof setInterval>,
+      );
+      const stderr = spyOn(process.stderr, "write").mockReturnValue(true);
+      try {
+        const { ctx } = context();
+        await handlers.get("session_start")!({}, ctx);
+        const [poll] = interval.mock.calls[0]!;
+        await poll();
+        await poll();
+
+        const entries = manager.getEntries().filter((entry) => entry.type === "custom");
+        assert.equal(entries.length, 1, "Successful listing alone must not reset suppression");
+        const entry = entries[0]!;
+        assert.equal(entry.customType, "pi-mux-poll-error");
+        assert.match(
+          String(entry.data),
+          /^tmux if-shell elapsed=\d+ms exec_code=1 timeout=no truncated=no$/,
+        );
+        assert.ok(Number.isFinite(Date.parse(entry.timestamp)));
+        const render = handlers.entryRenderers.get(entry.customType);
+        assert.ok(render);
+        const theme = {} as Parameters<EntryRenderer>[2];
+        const displayed = render(entry, { expanded: false }, theme);
+        assert.equal(
+          displayed?.render(200).join("\n").trimEnd(),
+          `${entry.timestamp} pi-mux: message polling failed: ${entry.data}`,
+        );
+        assert.equal(
+          render({ ...entry, data: "text\u001b[2J" }, { expanded: false }, theme),
+          undefined,
+        );
+        assert.deepEqual(stderr.mock.calls, []);
+        assert.ok(file && !existsSync(file));
+
+        manager.appendMessage({ role: "user", content: "fixture prompt", timestamp: Date.now() });
+        const reopened = SessionManager.open(file);
+        assert.deepEqual(
+          reopened.getEntries().find((saved) => saved.type === "custom"),
+          entry,
+        );
+        assert.deepEqual(
+          reopened.buildSessionContext().messages.map((message) => message.role),
+          ["user"],
+        );
+      } finally {
+        stopMessageWatcher();
+        stderr.mockRestore();
+        interval.mockRestore();
+        rmSync(directory, { recursive: true });
+      }
+    });
+  });
+
+  for (const [piVersion, attemptsToSave] of [
+    ["1.4.0", false],
+    ["1.5.0-beta.1", false],
+    ["1.5.0", true],
+  ] as const) {
+    it(`warns again after recovery on Pi ${piVersion} when diagnostics cannot be saved`, async () => {
+      await withManagedEnvironment(async () => {
+        let listAttempts = 0;
+        const handlers = captureHandlers(
+          async (_command, args) => {
+            if (args.includes("display-message"))
+              return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
+            assert.ok(isPaneOptionListing(args));
+            if (++listAttempts === 3)
+              return { stdout: paneListing([]), stderr: "", code: 0, killed: false };
+            return { stdout: "", stderr: "raw command error", code: 1, killed: false };
+          },
+          undefined,
+          undefined,
+          undefined,
+          piVersion,
+        );
+        const append = spyOn(handlers.sessionManager, "appendCustomEntry").mockImplementation(
+          () => {
+            throw new Error("raw storage error");
+          },
+        );
+        const interval = spyOn(globalThis, "setInterval").mockReturnValue(
+          {} as ReturnType<typeof setInterval>,
+        );
+        const stderr = spyOn(process.stderr, "write").mockReturnValue(true);
+        try {
+          const { ctx, notifications } = context();
+          await handlers.get("session_start")!({}, ctx);
+          const [poll] = interval.mock.calls[0]!;
+          await poll();
+          await poll();
+          await poll();
+          await poll();
+          assert.equal(append.mock.calls.length, attemptsToSave ? 2 : 0);
+          assert.equal(notifications.length, 2);
+          for (const warning of notifications) {
+            assert.equal(warning.type, "warning");
+            assert.match(
+              warning.text,
+              /^\d{4}-\S+ pi-mux: message polling failed: tmux show-options elapsed=\d+ms exec_code=1 timeout=no truncated=no(?: \(not saved\))?$/,
+            );
+            assert.equal(warning.text.endsWith(" (not saved)"), attemptsToSave);
+          }
+          assert.deepEqual(stderr.mock.calls, []);
+        } finally {
+          stopMessageWatcher();
+          stderr.mockRestore();
+          interval.mockRestore();
+          append.mockRestore();
         }
       });
     });
@@ -840,6 +1012,7 @@ describe("agent message reception", () => {
           assert.deepEqual(delivered, []);
           assert.deepEqual(clear.mock.calls, [[timer]]);
           assert.deepEqual(stderr.mock.calls, []);
+          assert.deepEqual(handlers.sessionManager.getEntries(), []);
         } finally {
           stopMessageWatcher();
           stderr.mockRestore();

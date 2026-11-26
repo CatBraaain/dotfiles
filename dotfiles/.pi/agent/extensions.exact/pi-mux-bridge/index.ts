@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { quote } from "shell-quote";
 import { partitionMessageOptions, messageOptions, type AgentMessage } from "./messages.ts";
 import { registerLegacyDraftRecovery } from "./first-input-handoff.ts";
@@ -17,6 +18,7 @@ import {
 
 const TMUX_TIMEOUT_MS = 1_000;
 const MESSAGE_POLL_INTERVAL_MS = 2_000;
+const MESSAGE_POLL_ERROR_ENTRY = "pi-mux-poll-error";
 const TMUX_SUBCOMMAND_INDEX = 4;
 const PANE_MISSING_REASON =
   /^(?:(?:tmux|psmux|ERROR):[ \t]*)?(?:(?:can't find pane|no such pane)(?::[^\r\n]*)?|no sessions)$/;
@@ -50,6 +52,7 @@ export function stopMessageWatcher(): void {
 function startMessageWatcher(
   pi: Pick<ExtensionAPI, "exec" | "sendMessage" | "appendEntry">,
   ctx: ExtensionContext,
+  saveDiagnostics: boolean,
 ): void {
   stopMessageWatcher();
   if (ctx.mode !== "tui") return;
@@ -62,6 +65,7 @@ function startMessageWatcher(
     polling = true;
     try {
       await drainAgentMessages(pi, ctx);
+      reportedFailures.clear();
     } catch (error) {
       if (generation === messageWatcherGeneration)
         reportMessagePollFailure(error, reportedFailures);
@@ -69,18 +73,53 @@ function startMessageWatcher(
       polling = false;
     }
   }, MESSAGE_POLL_INTERVAL_MS);
+
+  function reportMessagePollFailure(error: unknown, seen: Set<string>): void {
+    if (error instanceof MessagePollCommandError && error.isPaneMissing) {
+      stopMessageWatcher();
+      return;
+    }
+    const pollError = error instanceof MessagePollError ? error : undefined;
+    const diagnostic = pollError?.message ?? "message handling";
+    const key = pollError?.key ?? diagnostic;
+    if (seen.has(key)) return;
+    seen.add(key);
+    publishMessagePollFailure(pi, ctx, diagnostic, saveDiagnostics);
+  }
 }
 
-function reportMessagePollFailure(error: unknown, reportedFailures: Set<string>): void {
-  const commandError = error instanceof MessagePollCommandError ? error : undefined;
-  if (commandError?.isPaneMissing) {
-    stopMessageWatcher();
-    return;
+function formatMessagePollError(timestamp: string, diagnostic: string): string {
+  return `${timestamp} pi-mux: message polling failed: ${diagnostic}`;
+}
+
+function canSaveMessagePollDiagnostics(version: string): boolean {
+  const release = /^(\d+)\.(\d+)\.\d+$/.exec(version);
+  if (!release) return false;
+  const major = Number(release[1]);
+  const minor = Number(release[2]);
+  // Pi 1.5.0 first rolls back the session entry on write failure: https://github.com/earendil-works/pi/pull/11486
+  return major > 1 || (major === 1 && minor >= 5);
+}
+
+function publishMessagePollFailure(
+  pi: Pick<ExtensionAPI, "appendEntry">,
+  ctx: ExtensionContext,
+  diagnostic: string,
+  saveDiagnostics: boolean,
+): void {
+  if (saveDiagnostics) {
+    try {
+      pi.appendEntry(MESSAGE_POLL_ERROR_ENTRY, diagnostic);
+      return;
+    } catch {
+      ctx.ui.notify(
+        `${formatMessagePollError(new Date().toISOString(), diagnostic)} (not saved)`,
+        "warning",
+      );
+      return;
+    }
   }
-  const key = commandError?.key ?? "message handling";
-  if (reportedFailures.has(key)) return;
-  reportedFailures.add(key);
-  process.stderr.write(`pi-mux: message polling failed: ${commandError?.message ?? key}\n`);
+  ctx.ui.notify(formatMessagePollError(new Date().toISOString(), diagnostic), "warning");
 }
 
 export async function drainAgentMessages(
@@ -175,7 +214,7 @@ async function readMessageOptions(
   if (options.length === 0 && missingReason && PANE_MISSING_REASON.test(missingReason))
     return undefined;
   if (!hasInitialIdentity || !after || !PANE_IDENTITY_LINE.test(after)) {
-    throw new Error("Incomplete pane option listing");
+    throw new MessagePollError("tmux show-options: incomplete pane option listing");
   }
   const expected = `${PANE_IDENTITY_MARKER}${serverPid},${pane},${pid}`;
   if (before !== expected || after !== expected) return undefined;
@@ -219,11 +258,18 @@ async function unsetMessageOption(
   );
 }
 
-export default function fixedSessionExtension(pi: ExtensionAPI): void {
+export default function fixedSessionExtension(pi: ExtensionAPI, version = VERSION): void {
+  const saveDiagnostics = canSaveMessagePollDiagnostics(version);
+  pi.registerEntryRenderer(MESSAGE_POLL_ERROR_ENTRY, ({ data, timestamp }) => {
+    if (typeof data !== "string" || !data || /[^ -~]/.test(data)) return;
+    const time = Date.parse(timestamp);
+    if (!Number.isFinite(time)) return;
+    return new Text(formatMessagePollError(new Date(time).toISOString(), data), 0, 0);
+  });
   pi.on("session_before_switch", (_event, ctx) => rejectSessionChange(ctx));
   pi.on("session_before_fork", (_event, ctx) => rejectSessionChange(ctx));
   pi.on("session_start", (_event, ctx) => {
-    startMessageWatcher(pi, ctx);
+    startMessageWatcher(pi, ctx, saveDiagnostics);
     if (ctx.mode === "tui") recordDispatchTicket(pi, ctx.sessionManager, process.env);
   });
   pi.on("session_shutdown", () => stopMessageWatcher());
@@ -376,8 +422,16 @@ type MessageExecute = (
   ...args: [...Parameters<Execute>, operationName?: string]
 ) => Promise<MessageExecResult>;
 
-class MessagePollCommandError extends Error {
-  readonly key: string;
+class MessagePollError extends Error {
+  constructor(
+    message: string,
+    readonly key = message,
+  ) {
+    super(message);
+  }
+}
+
+class MessagePollCommandError extends MessagePollError {
   readonly isPaneMissing: boolean;
 
   constructor(
@@ -395,8 +449,7 @@ class MessagePollCommandError extends Error {
         : (result?.code ?? "unknown");
     const truncation = result ? (truncated ? "yes" : "no") : "unknown";
     const status = `exec_code=${execCode} timeout=${timeout} truncated=${truncation}`;
-    super(`tmux ${operation} elapsed=${elapsedMs}ms ${status}`);
-    this.key = `${operation} ${status}`;
+    super(`tmux ${operation} elapsed=${elapsedMs}ms ${status}`, `${operation} ${status}`);
     const reason = result
       ? result.stderr || result.stdout
       : rejection instanceof Error
