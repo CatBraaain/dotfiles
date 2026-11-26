@@ -7188,11 +7188,66 @@ fi`);
       });
       await waitUntil(() => existsSync(pidFile) && Number(readFileSync(pidFile, "utf8")) > 0);
       siblingPid = Number(readFileSync(pidFile, "utf8"));
+      const commPath = `/proc/${siblingPid}/comm`;
+      await waitUntil(() => readFileSync(commPath, "utf8") === "sleep\n");
+      const ps = spawnSync("/usr/bin/ps", ["-p", String(siblingPid), "-o", "sid="], {
+        encoding: "utf8",
+      });
+      assert.equal(ps.stdout.trim(), target.pid, ps.stderr);
       fixture.tmux(["set-option", "-g", "@pi-mux-generation", "before-restart"]);
       restartState(fixture, target.pane, id, "waiting-user");
       const result = await finishReload(startReload(fixture, [id]));
-      assert.equal(result.status, 2, result.stderr);
+      assert.equal(result.status, 2, result.stderr || result.stdout);
       assert.match(result.stderr, /another process.*terminal/i);
+      assert.ok(
+        result.stderr.includes(`PID ${siblingPid}, process "sleep": same OS session as Pi`),
+        result.stderr,
+      );
+
+      const preload = join(fixture.directory, "detect-terminal-without-matching-sid.ts");
+      const injectedNamePath = join(fixture.directory, "injected-process-name");
+      writeFileSync(
+        preload,
+        `
+import { spyOn } from "bun:test";
+import * as fs from "node:fs";
+const spawn = Bun.spawnSync;
+spyOn(Bun, "spawnSync").mockImplementation((command, options) => {
+  const result = spawn(command, options);
+  if (command[0] !== "/usr/bin/ps" || command[3] !== "pid=,sid=,tty=,stat=") return result;
+  const rows = result.stdout.toString().split("\\n").map((row) => {
+    const [pid, , tty, stat] = row.trim().split(/\\s+/);
+    return pid === "${siblingPid}" ? [pid, pid, tty, stat].join(" ") : row;
+  });
+  return { ...result, stdout: Buffer.from(rows.join("\\n")) };
+});
+const readFile = fs.readFileSync;
+spyOn(fs, "readFileSync").mockImplementation((...args) => {
+  if (args[0] === ${JSON.stringify(commPath)}) {
+    return readFile(${JSON.stringify(injectedNamePath)}, "utf8");
+  }
+  return Reflect.apply(readFile, fs, args);
+});
+`,
+      );
+      const nameCases = [
+        { name: "worker name\x1b\x9b\n", label: '"worker name\\u001b\\u009b"' },
+        { name: undefined, label: "unknown" },
+      ];
+      for (const { name, label } of nameCases) {
+        if (name === undefined) rmSync(injectedNamePath);
+        else writeFileSync(injectedNamePath, name);
+        const controlling = await finishReload(startReload(fixture, [id], preload));
+        assert.equal(controlling.status, 2, controlling.stderr);
+        assert.ok(
+          controlling.stderr.includes(
+            `PID ${siblingPid}, process ${label}: pane terminal is its controlling terminal`,
+          ),
+          controlling.stderr,
+        );
+        assert.equal(controlling.stderr.includes("\x1b"), false);
+        assert.equal(controlling.stderr.includes("\x9b"), false);
+      }
       assert.equal(
         fixture.tmux(["display-message", "-p", "-t", target.pane, "#{pane_pid}"]),
         target.pid,
@@ -7237,6 +7292,7 @@ fi`);
         const tty = fixture.tmux(["display-message", "-p", "-t", target.pane, "#{pane_tty}"]);
         const expectedFd = route === "/dev/tty" ? route : tty;
         const fd = `/proc/${detachedPid}/fd`;
+        await waitUntil(() => readFileSync(`/proc/${detachedPid}/comm`, "utf8") === "sleep\n");
         assert.equal(readlinkSync(`${fd}/3`), expectedFd);
         for (const number of [0, 1, 2]) assert.equal(readlinkSync(`${fd}/${number}`), "/dev/null");
         await waitUntil(() =>
@@ -7248,10 +7304,20 @@ fi`);
 
         const result = await finishReload(startReload(fixture, [id]));
         assert.equal(result.status, 2, result.stderr);
-        assert.match(
-          result.stderr,
-          route === "/dev/tty" ? /cannot rule out.*\/dev\/tty/i : /another process.*terminal/i,
-        );
+        if (route === "/dev/tty") {
+          assert.equal(
+            result.stderr.trim(),
+            `pi-mux: reload ${id}: Cannot rule out another process using the pane terminal through /dev/tty`,
+          );
+        } else {
+          assert.match(result.stderr, /another process.*terminal/i);
+          assert.ok(
+            result.stderr.includes(
+              `PID ${detachedPid}, process "sleep": has an open file descriptor for the pane terminal`,
+            ),
+            result.stderr,
+          );
+        }
         assert.equal(result.stdout, "");
         assert.equal(
           fixture.tmux(["display-message", "-p", "-t", target.pane, "#{pane_pid}"]),

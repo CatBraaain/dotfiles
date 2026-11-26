@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { type BigIntStats, existsSync, opendirSync, readlinkSync, statSync } from "node:fs";
+import {
+  type BigIntStats,
+  existsSync,
+  opendirSync,
+  readFileSync,
+  readlinkSync,
+  statSync,
+} from "node:fs";
 import {
   type Config,
   GENERATED_ENV_KEYS,
@@ -20,6 +27,7 @@ import { parseSessionState } from "./pane-state";
 import { platform } from "./platform";
 import {
   announceReloaded,
+  formatReloadProcess,
   matchesReloadPublication,
   type ReloadProgress,
   type ReloadPublication,
@@ -571,7 +579,6 @@ const LINUX_TTY_MULTIPLEXER_RDEV = 5n << 8n;
 
 function terminalReplacementRisk(pane: Pane, tty?: string): string | undefined {
   const unknown = "Cannot verify that only Pi uses the pane terminal";
-  const shared = "Replacing the pane would affect another process using its terminal";
   if (process.platform !== "linux" || !tty?.startsWith("/dev/")) return unknown;
   const deadlineMs = performance.now() + TERMINAL_CHECK_TIMEOUT_MS;
   try {
@@ -603,21 +610,41 @@ function terminalReplacementRisk(pane: Pane, tty?: string): string | undefined {
     )
       return unknown;
     for (const [pid, sid, controllingTty] of live) {
-      if (Number(pid) === pane.pid) continue;
-      if (Number(sid) === pane.pid) return shared;
+      const processId = Number(pid);
+      if (processId === pane.pid) continue;
+      if (Number(sid) === pane.pid)
+        return sharedTerminalFailure(processId, "same OS session as Pi");
       if (`/dev/${controllingTty}` === tty) {
         const controllingDevice = readVisibleProc(() =>
           statSync(`/proc/${pid}/root${tty}`, { bigint: true }),
         );
-        if (isSameTerminal(controllingDevice, device)) return shared;
+        if (isSameTerminal(controllingDevice, device))
+          return sharedTerminalFailure(processId, "pane terminal is its controlling terminal");
       }
-      const descriptor = findTerminalDescriptor(Number(pid), tty, device, deadlineMs, "other");
-      if (descriptor === "pane") return shared;
+      const descriptor = findTerminalDescriptor(processId, tty, device, deadlineMs, "other");
+      if (descriptor === "pane")
+        return sharedTerminalFailure(
+          processId,
+          "has an open file descriptor for the pane terminal",
+        );
       if (descriptor === "multiplexer")
         return "Cannot rule out another process using the pane terminal through /dev/tty";
     }
   } catch {
     return unknown;
+  }
+}
+
+function sharedTerminalFailure(pid: number, reason: string): string {
+  const process = formatReloadProcess(pid, readProcessName(pid));
+  return `Replacing the pane would affect another process using its terminal (${process}: ${reason})`;
+}
+
+function readProcessName(pid: number): string | undefined {
+  try {
+    return readFileSync(`/proc/${pid}/comm`, "utf8").replace(/\n$/, "");
+  } catch {
+    return undefined;
   }
 }
 

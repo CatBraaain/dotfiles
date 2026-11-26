@@ -40,6 +40,18 @@ export function reportReloadFailure(
   console.error(`pi-mux: reload ${id}: ${reason}`);
 }
 
+export function formatReloadProcess(pid: number, name?: string): string {
+  if (!name?.trim()) return `PID ${pid}, process unknown`;
+  const label = JSON.stringify(name).replace(
+    /[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/gu,
+    (character) => {
+      const hex = character.charCodeAt(0).toString(16).padStart(4, "0");
+      return "\\u" + hex;
+    },
+  );
+  return `PID ${pid}, process ${label}`;
+}
+
 function conversationPanePids(
   panes: readonly Pick<Pane, "session" | "id" | "panePid">[],
   session: string,

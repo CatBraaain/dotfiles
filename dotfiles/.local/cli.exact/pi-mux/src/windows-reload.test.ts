@@ -491,6 +491,25 @@ const piProcess = {
 const peerProcess = { pid: 11, parent: 1, executable: "C:\\Tools\\tmux.exe", command: null };
 const directGroup = { peerPid: 11, panePid: 57, piPid: 57 };
 
+it("reports Windows Pi children by PID and safe executable name", () => {
+  const children = [
+    {
+      pid: 58,
+      parent: piProcess.pid,
+      executable: "C:\\Private\\shell\u009b.exe",
+      command: "shell.exe --private-argument",
+    },
+    { pid: 59, parent: piProcess.pid, executable: null, command: "unknown.exe --private-argument" },
+  ];
+  assert.throws(
+    () => verifyWindowsReloadGroup([peerProcess, piProcess, ...children], directGroup, paths),
+    {
+      message:
+        'Cannot replace pi without affecting its Windows child processes (Pi has direct child processes; observed non-Pi children: PID 58, process "shell\\u009b.exe"; PID 59, process unknown)',
+    },
+  );
+});
+
 function replacementPaneFields(
   entry: WindowsLifecycleAudit["entries"][number],
   { metadata = entry.pi!.metadata, blocker = "", dispatchRouting = ["", "", ""] } = {},
@@ -760,10 +779,39 @@ it("requires a receipt and a known wrapper with only the attributed child", () =
       ),
     /unverified Windows pane parent/,
   );
+  assert.throws(() => verifyWindowsReloadGroup([peerProcess, wrapper, piProcess], target, paths), {
+    message: "Cannot replace pi without affecting other Windows processes",
+  });
+  const other = {
+    pid: 58,
+    parent: wrapper.pid,
+    executable: "C:\\Private\\worker.exe",
+    command: null,
+  };
+  assert.throws(
+    () => verifyWindowsReloadGroup([peerProcess, wrapper, child, other], target, paths),
+    {
+      message:
+        'Cannot replace pi without affecting other Windows processes (pane process has multiple direct children; observed non-Pi children: PID 58, process "worker.exe")',
+    },
+  );
   assert.throws(
     () =>
-      verifyWindowsReloadGroup([peerProcess, wrapper, child, { ...child, pid: 58 }], target, paths),
-    /other Windows processes/,
+      verifyWindowsReloadGroup(
+        [
+          peerProcess,
+          wrapper,
+          { ...child, parent: peerProcess.pid },
+          other,
+          { ...other, pid: 59, executable: paths.wrapper },
+        ],
+        target,
+        paths,
+      ),
+    {
+      message:
+        'Cannot replace pi without affecting other Windows processes (pane process has multiple direct children; observed non-Pi children: PID 58, process "worker.exe"; PID 59, process "pi-mux.exe")',
+    },
   );
   assert.throws(
     () =>
@@ -783,8 +831,8 @@ it("requires a receipt and a known wrapper with only the attributed child", () =
   const nested = { ...wrapper, parent: shell.pid };
   const shellTarget = { ...target, panePid: shell.pid };
   assert.throws(
-    () => verifyWindowsReloadGroup([peerProcess, shell, nested, child], shellTarget, paths),
-    /wrapper and its only child/,
+    () => verifyWindowsReloadGroup([peerProcess, shell, nested, child, other], shellTarget, paths),
+    { message: "Cannot verify the Windows pi wrapper and its only child" },
   );
   const script = `& '${paths.wrapper}' 'windows-claim-launch' '${right}' 'payload'; exit $LASTEXITCODE`;
   const encodedScript = Buffer.from(script, "utf16le").toString("base64");
@@ -792,6 +840,11 @@ it("requires a receipt and a known wrapper with only the attributed child", () =
     ...shell,
     command: `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${encodedScript}`,
   };
+  assert.throws(
+    () =>
+      verifyWindowsReloadGroup([peerProcess, ownedShell, nested, piProcess], shellTarget, paths),
+    { message: "Cannot verify the Windows pi wrapper and its only child" },
+  );
   assert.deepEqual(
     verifyWindowsReloadGroup([peerProcess, ownedShell, nested, child], shellTarget, paths),
     [39, 40, 57],
@@ -856,7 +909,10 @@ it.each(["compiled", "source"])(
           target,
           paths,
         ),
-      /wrapper and its only child/,
+      {
+        message:
+          'Cannot verify the Windows pi wrapper and its only child (launch wrapper has multiple direct children; observed non-Pi children: PID 58, process "node.exe")',
+      },
     );
     assert.throws(
       () =>

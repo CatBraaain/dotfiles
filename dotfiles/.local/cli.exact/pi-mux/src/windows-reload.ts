@@ -22,6 +22,7 @@ import { clearStateOptions } from "./pane-state";
 import { platform } from "./platform";
 import {
   announceReloaded,
+  formatReloadProcess,
   matchesReloadPublication,
   type ReloadProgress,
   type ReloadPublication,
@@ -631,11 +632,19 @@ export function verifyWindowsReloadGroup(
     if (!verifiedRight || !UUID.test(verifiedRight))
       throw new Error("Cannot replace pi without also replacing an unverified Windows pane parent");
     const pane = byPid.get(panePid)!;
-    const child = children(panePid);
-    if (child.length !== 1)
-      throw new Error("Cannot replace pi without affecting other Windows processes");
-    if (child[0]!.pid !== piPid) {
-      const wrapper = child[0]!;
+    const paneChildren = children(panePid);
+    const paneChildrenFailure = "Cannot replace pi without affecting other Windows processes";
+    if (paneChildren.length > 1)
+      throw windowsReloadChildFailure(
+        paneChildrenFailure,
+        "pane process has multiple direct children",
+        paneChildren,
+        piPid,
+      );
+    const [paneChild] = paneChildren;
+    if (!paneChild) throw new Error(paneChildrenFailure);
+    if (paneChild.pid !== piPid) {
+      const wrapper = paneChild;
       const isPowerShell = /^(?:powershell|pwsh)\.exe$/i.test(
         win32.basename(pane.executable ?? ""),
       );
@@ -644,14 +653,19 @@ export function verifyWindowsReloadGroup(
       )?.[1];
       const script = encodedScript && Buffer.from(encodedScript, "base64").toString("utf16le");
       const operation = windowsClaimOperation(wrapper, paths.wrapper, verifiedRight);
-      if (
-        !isPowerShell ||
-        !operation ||
-        !script?.includes(`'${operation}' '${verifiedRight}'`) ||
-        children(wrapper.pid).length !== 1 ||
-        pi.parent !== wrapper.pid
-      )
-        throw new Error("Cannot verify the Windows pi wrapper and its only child");
+      const wrapperFailure = "Cannot verify the Windows pi wrapper and its only child";
+      if (!isPowerShell || !operation || !script?.includes(`'${operation}' '${verifiedRight}'`))
+        throw new Error(wrapperFailure);
+      const wrapperChildren = children(wrapper.pid);
+      if (wrapperChildren.length > 1)
+        throw windowsReloadChildFailure(
+          wrapperFailure,
+          "launch wrapper has multiple direct children",
+          wrapperChildren,
+          piPid,
+        );
+      if (wrapperChildren.length === 0 || pi.parent !== wrapper.pid)
+        throw new Error(wrapperFailure);
       chain.push(wrapper.pid);
     } else if (
       windowsClaimOperation(pane, paths.wrapper, verifiedRight) !== "windows-claim-launch"
@@ -660,9 +674,27 @@ export function verifyWindowsReloadGroup(
     }
     chain.push(piPid);
   }
-  if (children(piPid).length)
-    throw new Error("Cannot replace pi without affecting its Windows child processes");
+  const piChildren = children(piPid);
+  if (piChildren.length)
+    throw windowsReloadChildFailure(
+      "Cannot replace pi without affecting its Windows child processes",
+      "Pi has direct child processes",
+      piChildren,
+      piPid,
+    );
   return chain;
+}
+
+function windowsReloadChildFailure(
+  message: string,
+  condition: string,
+  children: WindowsProcessRow[],
+  piPid: number,
+): Error {
+  const observed = children
+    .filter(({ pid }) => pid !== piPid)
+    .map(({ pid, executable }) => formatReloadProcess(pid, win32.basename(executable ?? "")));
+  return new Error(`${message} (${condition}; observed non-Pi children: ${observed.join("; ")})`);
 }
 
 function windowsClaimOperation(
