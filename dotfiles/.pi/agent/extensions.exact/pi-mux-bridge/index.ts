@@ -96,22 +96,39 @@ export async function drainAgentMessages(
     stopMessageWatcher();
     return;
   }
+  let firstOptionFailure: { error: unknown } | undefined;
   for (const { name, encoded } of viewOptions(listing)) {
-    if (!consumedViewOptions.has(name)) {
-      recordViewReceipt(pi, ctx.sessionManager, encoded);
-      consumedViewOptions.add(name);
-    }
-    await unsetMessageOption(execute, paths, identity, name);
-    consumedViewOptions.delete(name);
+    await handleOption(async () => {
+      if (!consumedViewOptions.has(name)) {
+        recordViewReceipt(pi, ctx.sessionManager, encoded);
+        consumedViewOptions.add(name);
+      }
+      await unsetMessageOption(execute, paths, identity, name);
+      consumedViewOptions.delete(name);
+    });
   }
   const { valid, invalid } = partitionMessageOptions(messageOptions(listing));
-  for (const name of invalid) await unsetMessageOption(execute, paths, identity, name);
+  for (const name of invalid) {
+    await handleOption(() => unsetMessageOption(execute, paths, identity, name));
+  }
   for (const { name, message } of valid) {
-    if (!injectedMessageNames.has(name)) {
-      deliverAgentMessage(pi, name, message);
-      injectedMessageNames.add(name);
+    await handleOption(async () => {
+      if (!injectedMessageNames.has(name)) {
+        deliverAgentMessage(pi, name, message);
+        injectedMessageNames.add(name);
+      }
+      await unsetMessageOption(execute, paths, identity, name);
+    });
+  }
+  if (firstOptionFailure) throw firstOptionFailure.error;
+
+  async function handleOption(handle: () => Promise<void>): Promise<void> {
+    try {
+      await handle();
+    } catch (error) {
+      if (error instanceof MessagePollCommandError && error.isPaneMissing) throw error;
+      firstOptionFailure ??= { error };
     }
-    await unsetMessageOption(execute, paths, identity, name);
   }
 }
 

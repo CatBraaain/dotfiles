@@ -647,27 +647,60 @@ describe("agent message reception", () => {
     });
   });
 
-  for (const source of ["stderr", "stdout", "rejection", "successful command stdout"] as const) {
-    it(`stops polling without logging a missing pane reported in ${source}`, async () => {
+  for (const { operation, source } of [
+    { operation: "show-options", source: "stderr" },
+    { operation: "show-options", source: "stdout" },
+    { operation: "show-options", source: "rejection" },
+    { operation: "show-options", source: "successful command stdout" },
+    { operation: "if-shell", source: "stderr" },
+  ] as const) {
+    it(`stops polling when ${operation} reports a missing pane in ${source}`, async () => {
       await withManagedEnvironment(async () => {
         const reason = "no such pane: %3";
-        const handlers = captureHandlers(async (_command, args) => {
-          if (args.includes("display-message"))
-            return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
-          assert.ok(isPaneOptionListing(args));
-          if (source === "rejection") throw new Error(reason);
-          return {
-            stdout:
-              source === "successful command stdout"
-                ? `${originalIdentity}\nERROR: ${reason}`
-                : source === "stdout"
-                  ? reason
-                  : "",
-            stderr: source === "stderr" ? reason : "",
-            code: source === "successful command stdout" ? 0 : 1,
-            killed: false,
-          };
-        });
+        const invalidOption = "@pi-mux-msg-broken";
+        const delivered: unknown[] = [];
+        const attemptedRemovals: unknown[] = [];
+        const handlers = captureHandlers(
+          async (_command, args) => {
+            if (args.includes("display-message"))
+              return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
+            const isListing = isPaneOptionListing(args);
+            if (operation === "if-shell" && isListing)
+              return {
+                stdout: paneListing([
+                  { name: invalidOption, value: "invalid" },
+                  {
+                    name: `@pi-mux-msg-${LATE_ID}`,
+                    value: messageOptionValue(LATE_ID, "2026-11-21T00:00:02.000Z", "late text"),
+                  },
+                ]),
+                stderr: "",
+                code: 0,
+                killed: false,
+              };
+            if (operation === "show-options") {
+              assert.ok(isListing);
+            } else {
+              assert.ok(args.includes("if-shell"));
+              attemptedRemovals.push(parse(args.at(-1)!).at(-1));
+            }
+            if (source === "rejection") throw new Error(reason);
+            return {
+              stdout:
+                source === "successful command stdout"
+                  ? `${originalIdentity}\nERROR: ${reason}`
+                  : source === "stdout"
+                    ? reason
+                    : "",
+              stderr: source === "stderr" ? reason : "",
+              code: source === "successful command stdout" ? 0 : 1,
+              killed: false,
+            };
+          },
+          (message) => {
+            delivered.push(message);
+          },
+        );
         const timer = {} as ReturnType<typeof setInterval>;
         const interval = spyOn(globalThis, "setInterval").mockReturnValue(timer);
         const clear = spyOn(globalThis, "clearInterval").mockImplementation(() => {});
@@ -676,6 +709,9 @@ describe("agent message reception", () => {
           await handlers.get("session_start")!({}, context().ctx);
           const [poll] = interval.mock.calls[0]!;
           await poll();
+          const expectedRemovals = operation === "if-shell" ? [invalidOption] : [];
+          assert.deepEqual(attemptedRemovals, expectedRemovals);
+          assert.deepEqual(delivered, []);
           assert.deepEqual(clear.mock.calls, [[timer]]);
           assert.deepEqual(stderr.mock.calls, []);
         } finally {
@@ -817,43 +853,85 @@ describe("agent message reception", () => {
     });
   });
 
-  it("injects a message once while its unset keeps failing", async () => {
-    await withManagedEnvironment(async () => {
-      stopMessageWatcher();
-      const delivered: unknown[] = [];
-      let unsetAttempts = 0;
-      const pi = {
-        exec: async (_command: string, args: string[]) => {
-          if (args.includes("display-message"))
-            return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
-          if (isPaneOptionListing(args))
-            return {
-              stdout: paneListing([
-                {
-                  name: `@pi-mux-msg-${EARLY_ID}`,
-                  value: messageOptionValue(EARLY_ID, "2026-11-21T00:00:01.000Z", "text"),
-                },
-              ]),
-              stderr: "",
-              code: 0,
-              killed: false,
-            };
-          unsetAttempts++;
-          return { stdout: "", stderr: "pane option unset denied", code: 1, killed: false };
-        },
-        sendMessage: (message: unknown) => {
-          delivered.push(message);
-        },
-      };
-      for (let attempt = 0; attempt < 2; attempt++) {
-        await assert.rejects(
-          () => drainAgentMessages(pi as unknown as ExtensionAPI, context().ctx),
-          /^Error: tmux if-shell elapsed=\d+ms exec_code=1 timeout=no truncated=no$/,
-        );
-      }
-      assert.equal(delivered.length, 1);
-      assert.equal(unsetAttempts, 2);
-      stopMessageWatcher();
+  for (const failure of [
+    "message removal",
+    "message injection",
+    "invalid option removal",
+    "view receipt removal",
+  ] as const) {
+    it(`delivers later messages despite repeated ${failure} failure`, async () => {
+      await withManagedEnvironment(async () => {
+        stopMessageWatcher();
+        const earlyMessage = `@pi-mux-msg-${EARLY_ID}`;
+        const lateMessage = `@pi-mux-msg-${LATE_ID}`;
+        const failedOption = {
+          "message removal": earlyMessage,
+          "message injection": earlyMessage,
+          "invalid option removal": "@pi-mux-msg-broken",
+          "view receipt removal": `@pi-mux-view-${EARLY_ID}`,
+        }[failure];
+        const pendingOptions = new Map([
+          [
+            failedOption,
+            failedOption === earlyMessage
+              ? messageOptionValue(EARLY_ID, "2026-11-21T00:00:01.000Z", "early text")
+              : "invalid",
+          ],
+          [lateMessage, messageOptionValue(LATE_ID, "2026-11-21T00:00:02.000Z", "late text")],
+        ]);
+        const injected: string[] = [];
+        const injectionFailure = new Error("message injection failed");
+        const removalFailure =
+          /^Error: tmux if-shell elapsed=\d+ms exec_code=1 timeout=no truncated=no$/;
+        const expectedFailure = failure === "message injection" ? injectionFailure : removalFailure;
+        const injectedBeforeRecovery =
+          failure === "message removal" ? [earlyMessage, lateMessage] : [lateMessage];
+        let isFailureActive = true;
+        const pi: Parameters<typeof drainAgentMessages>[0] = {
+          exec: async (_command, args) => {
+            if (args.includes("display-message"))
+              return { stdout: managedPaneOutput(), stderr: "", code: 0, killed: false };
+            if (isPaneOptionListing(args))
+              return {
+                stdout: paneListing(
+                  Array.from(pendingOptions, ([name, value]) => ({ name, value })),
+                ),
+                stderr: "",
+                code: 0,
+                killed: false,
+              };
+            assert.ok(args.includes("if-shell"));
+            const name = String(parse(args.at(-1)!).at(-1));
+            if (name === failedOption && isFailureActive && failure !== "message injection")
+              return { stdout: "", stderr: "pane option unset denied", code: 1, killed: false };
+            assert.ok(pendingOptions.delete(name));
+            return { stdout: "", stderr: "", code: 0, killed: false };
+          },
+          sendMessage(message) {
+            const { optionName } = message.details as { optionName: string };
+            if (optionName === failedOption && isFailureActive && failure === "message injection")
+              throw injectionFailure;
+            injected.push(optionName);
+          },
+          appendEntry: () => assert.fail("An invalid receipt must not be recorded"),
+        };
+        try {
+          const { ctx } = context();
+          for (let attempt = 0; attempt < 2; attempt++) {
+            await assert.rejects(() => drainAgentMessages(pi, ctx), expectedFailure);
+            assert.deepEqual(injected, injectedBeforeRecovery);
+            assert.deepEqual([...pendingOptions.keys()], [failedOption]);
+          }
+          isFailureActive = false;
+          await drainAgentMessages(pi, ctx);
+          assert.equal(pendingOptions.size, 0);
+          const injectedAfterRecovery =
+            failure === "message injection" ? [lateMessage, earlyMessage] : injectedBeforeRecovery;
+          assert.deepEqual(injected, injectedAfterRecovery);
+        } finally {
+          stopMessageWatcher();
+        }
+      });
     });
-  });
+  }
 });
