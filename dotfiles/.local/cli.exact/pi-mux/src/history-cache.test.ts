@@ -1236,47 +1236,58 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
   it("rebuilds cache files containing malformed JSON or invalid versions and title values", () => {
     const fixture = new HistoryCacheFixture();
     try {
-      const cases = [
-        { corrupt: "{broken", field: undefined },
-        { corrupt: undefined, field: "version", invalid: 999 },
-        { corrupt: undefined, field: "version", invalid: 3 },
-        { corrupt: undefined, field: "header", invalid: null },
-        { corrupt: undefined, field: "header", invalid: { id: "bad id", cwd: "/", btime: 1 } },
-        {
-          corrupt: undefined,
-          field: "header",
-          invalid: { id: "valid", cwd: "relative", btime: 1 },
-        },
-        { corrupt: undefined, field: "header", invalid: { id: "valid", cwd: "/", btime: "old" } },
-        { corrupt: undefined, field: "title", invalid: 42 },
-        { corrupt: undefined, field: "mtime", invalid: "yesterday" },
-        { corrupt: undefined, field: "btime", invalid: "yesterday" },
-        { corrupt: undefined, field: "fingerprint", invalid: "incorrect-fingerprint" },
+      const corruptions = [
+        "{broken",
+        { version: 999 },
+        { version: 3 },
+        { header: null },
+        { header: { id: "bad id", cwd: "/", btime: 1 } },
+        { header: { id: "valid", cwd: "relative", btime: 1 } },
+        { header: { id: "valid", cwd: "/", btime: "old" } },
+        { title: 42 },
+        { mtime: "yesterday" },
+        { btime: "yesterday" },
+        { fingerprint: "incorrect-fingerprint" },
       ];
-      for (const [index, testCase] of cases.entries()) {
+      const sessions = [];
+      for (const [index, corruption] of corruptions.entries()) {
         const id = randomUUID();
+        const title = `Source ${index}`;
         const file = fixture.writeSession(fixture.cwd, id, [
           fixture.header(id),
           fixture.userMessage(),
-          fixture.sessionInfo(`Source ${index}`),
+          fixture.sessionInfo(title),
         ]);
-        fixture.history();
+        sessions.push({ id, title, file, corruption });
+      }
+
+      const seeded = fixture.history();
+      assert.equal(seeded.status, 0, seeded.stderr);
+      const corruptedSessions = [];
+      for (const session of sessions) {
+        const { file, corruption } = session;
         const cacheFile = fixture.cacheFileFor(file);
-        assert.ok(cacheFile);
-        if (testCase.corrupt !== undefined) {
-          writeFileSync(cacheFile, testCase.corrupt);
+        assert.ok(cacheFile, `Missing cache for ${file}`);
+        if (typeof corruption === "string") {
+          writeFileSync(cacheFile, corruption);
         } else {
           const validCache = JSON.parse(readFileSync(cacheFile, "utf8"));
-          const invalidCache = { ...validCache, [testCase.field!]: testCase.invalid };
-          writeFileSync(cacheFile, JSON.stringify(invalidCache));
+          writeFileSync(cacheFile, JSON.stringify({ ...validCache, ...corruption }));
         }
-        const result = fixture.history();
-        assert.equal(result.status, 0, result.stderr);
+        corruptedSessions.push({ ...session, cacheFile });
+      }
+
+      const result = fixture.history();
+      assert.equal(result.status, 0, result.stderr);
+      const entries: { id: string }[] = JSON.parse(result.stdout);
+      for (const { id, title, file, corruption, cacheFile } of corruptedSessions) {
+        const input = JSON.stringify(corruption);
         assert.deepEqual(
-          JSON.parse(result.stdout).find((entry: { id: string }) => entry.id === id),
-          fixture.expected(file, id, fixture.cwd, `Source ${index}`),
+          entries.find((entry) => entry.id === id),
+          fixture.expected(file, id, fixture.cwd, title),
+          input,
         );
-        assert.doesNotThrow(() => JSON.parse(readFileSync(cacheFile, "utf8")));
+        assert.doesNotThrow(() => JSON.parse(readFileSync(cacheFile, "utf8")), input);
       }
     } finally {
       fixture.cleanup();
@@ -1939,44 +1950,49 @@ describe("shared active list and history cache", () => {
     }
   });
 
-  it("refreshes appended, cleared, and truncated titles for list fallback and history", () => {
-    const fixture = new HistoryCacheFixture();
-    try {
-      const id = randomUUID();
-      const file = fixture.writeSession(fixture.cwd, id, [
-        fixture.header(id),
-        fixture.userMessage(),
-        fixture.sessionInfo("Initial"),
-      ]);
-      fixture.mockTmux(id, file, true);
-      assert.equal(fixture.history().status, 0);
-      for (const title of ["Updated", "  ", "After clear", null]) {
-        if (title === null) writeFileSync(file, JSON.stringify(fixture.header(id)) + "\n");
-        else
-          writeFileSync(
-            file,
-            readFileSync(file, "utf8") + JSON.stringify(fixture.sessionInfo(title)) + "\n",
-          );
-        const expected = title?.trim() || null;
-        const listed = fixture.run(["list", "--active", "--json"]);
-        assert.equal(listed.status, 0, listed.stderr);
-        assert.equal(JSON.parse(listed.stdout)[0].sessions[0].title, expected);
-        const history = fixture.history();
-        assert.equal(history.status, 0, history.stderr);
-        assert.deepEqual(JSON.parse(history.stdout), [
-          fixture.expected(
-            file,
-            id,
-            fixture.cwd,
-            expected,
-            title === null ? { btime: null, mtime: null } : {},
-          ),
+  const titleRefreshTimeoutMs = 10_000;
+  it(
+    "refreshes appended, cleared, and truncated titles for list fallback and history",
+    () => {
+      const fixture = new HistoryCacheFixture();
+      try {
+        const id = randomUUID();
+        const file = fixture.writeSession(fixture.cwd, id, [
+          fixture.header(id),
+          fixture.userMessage(),
+          fixture.sessionInfo("Initial"),
         ]);
+        fixture.mockTmux(id, file, true);
+        assert.equal(fixture.history().status, 0);
+        for (const title of ["Updated", "  ", "After clear", null]) {
+          if (title === null) writeFileSync(file, JSON.stringify(fixture.header(id)) + "\n");
+          else
+            writeFileSync(
+              file,
+              readFileSync(file, "utf8") + JSON.stringify(fixture.sessionInfo(title)) + "\n",
+            );
+          const expected = title?.trim() || null;
+          const listed = fixture.run(["list", "--active", "--json"]);
+          assert.equal(listed.status, 0, listed.stderr);
+          assert.equal(JSON.parse(listed.stdout)[0].sessions[0].title, expected);
+          const history = fixture.history();
+          assert.equal(history.status, 0, history.stderr);
+          assert.deepEqual(JSON.parse(history.stdout), [
+            fixture.expected(
+              file,
+              id,
+              fixture.cwd,
+              expected,
+              title === null ? { btime: null, mtime: null } : {},
+            ),
+          ]);
+        }
+      } finally {
+        fixture.cleanup();
       }
-    } finally {
-      fixture.cleanup();
-    }
-  });
+    },
+    titleRefreshTimeoutMs,
+  );
 
   it("invalidates list fallback after a same-size overwrite with restored mtime", () => {
     const fixture = new HistoryCacheFixture();
