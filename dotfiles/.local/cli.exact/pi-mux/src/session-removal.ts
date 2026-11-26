@@ -15,6 +15,7 @@ import {
   type StopTarget,
 } from "./session-model";
 import { serverIsAbsent, tmux, tmuxArguments } from "./tmux";
+import { closeWindowsPane } from "./windows-conversations";
 
 export async function closeSession(
   config: TmuxConfig,
@@ -22,6 +23,10 @@ export async function closeSession(
   ifTemporary = false,
 ): Promise<void> {
   try {
+    if (platform.windows) {
+      if (await closeWindowsPane(config, id, ifTemporary)) removeRestoreCandidate(config, id);
+      return;
+    }
     const panes = await livePanes(config, "list");
     const running = panes.filter((pane) => pane.id === id);
     const managed = (await managedSessions(config)).filter((session) => session.id === id);
@@ -62,15 +67,19 @@ export async function closeSession(
     const cleared = await tmux(config, ["set-option", "-gu", `@pi-mux-restoring-${id}`], true);
     if (cleared.exitCode !== 0 && !serverIsAbsent(config, cleared.stderr))
       throw new Error(`Cannot clear restore target: ${cleared.stderr.trim()}`);
-    const snapshot = readSnapshot(config);
-    if (snapshot?.sessions.some((session) => session.id === id))
-      writeSnapshot(config, {
-        ...snapshot,
-        sessions: snapshot.sessions.filter((session) => session.id !== id),
-      });
+    removeRestoreCandidate(config, id);
   } catch (error) {
     throw new Error(`Cannot close session ${id}: ${errorMessage(error)}`);
   }
+}
+
+function removeRestoreCandidate(config: TmuxConfig, id: string): void {
+  const snapshot = readSnapshot(config);
+  if (snapshot?.sessions.some((session) => session.id === id))
+    writeSnapshot(config, {
+      ...snapshot,
+      sessions: snapshot.sessions.filter((session) => session.id !== id),
+    });
 }
 
 async function isCloseTargetTemporary(

@@ -28,6 +28,7 @@ const main = join(import.meta.dir, "main.ts");
 const ticketMain = resolve(import.meta.dir, "../../../../.agents/cli.exact/ticket/src/main.ts");
 const uncCwd = import.meta.dir;
 const node = process.platform === "win32" && Bun.which("node.exe");
+const unpublishedRequest = "leave this Pi unpublished";
 
 const fixturePi = String.raw`
 import { execFileSync } from "node:child_process";
@@ -54,14 +55,17 @@ if (id) {
     const capture = join(process.env.PI_CODING_AGENT_SESSION_DIR, id + ".argv.log");
     const request = argv.at(-1);
     const inEnvironment = Object.values(process.env).some((value) => value.includes(request));
-    appendFileSync(capture, JSON.stringify({ argv, cwd, inEnvironment }) + "\n");
+    const unpublished = request === ${JSON.stringify(unpublishedRequest)};
+    appendFileSync(capture, JSON.stringify({ argv, cwd, inEnvironment, ...(unpublished ? { processPid: process.pid } : {}) }) + "\n");
   }
   const metadata = Buffer.from(JSON.stringify({
     id, cwd, file, pid,
     processPid: process.pid, startup: "ready", token: process.env.PI_TMUX_LAUNCH_TOKEN,
+    warm: process.env.PI_TMUX_STARTUP_MODE === "warm",
     reloadReadiness: process.env.PI_MUX_TEST_RELOAD_READINESS === "1" ? "pending" : undefined,
   })).toString("base64");
-  tmux("set-option", "-p", "-t", pane, "@pi-tmux-session", metadata);
+  if (argv.at(-1) !== ${JSON.stringify(unpublishedRequest)})
+    tmux("set-option", "-p", "-t", pane, "@pi-tmux-session", metadata);
 } else {
   writeFileSync(process.env.RECEIVED_PATH, JSON.stringify({
     argv, role: process.env.TICKET_DISPATCH_ROLE, project: process.env.TICKET_DISPATCH_PROJECT,
@@ -756,10 +760,15 @@ test.skipIf(!tmux || !node || !isUncPath(uncCwd))(
       assert.notEqual(reloadedSource.token, startupSource.token);
       mux("stop");
       mux("restore");
-      verifyPane(conversation);
+      const restoredSource = verifyPane(conversation);
+      mux("close", "--if-temporary", conversation);
+      assert.equal(verifyPane(conversation).token, restoredSource.token);
       mux("close", conversation);
+      mux("open", "--temporary", "--detached", conversation);
+      const temporarySource = verifyPane(conversation);
+      mux("close", "--if-temporary", conversation);
       mux("open", "--detached", conversation);
-      verifyPane(conversation);
+      assert.notEqual(verifyPane(conversation).token, temporarySource.token);
       env.npm_config_prefix = join(root, "missing-prefix");
       mux("snapshot");
       mux("stop");
@@ -1025,3 +1034,159 @@ test.skipIf(!tmux || !node)(
   },
   80_000,
 );
+
+test.skipIf(!tmux || !node)(
+  "reuses the earlier warm Pi when Windows peers share a pane ID",
+  async () => {
+    await withWindowsPeers(async ({ create, panes }) => {
+      const warmId = await create();
+      const otherId = await create("existing conversation");
+      const before = await panes();
+      const warm = before.find((pane) => pane.id === warmId);
+      const other = before.find((pane) => pane.id === otherId);
+      assert.ok(warm?.processPid && other?.processPid);
+      assert.notEqual(warm.peer, other.peer);
+      assert.equal(warm.pane, other.pane);
+
+      assert.equal(await create(), warmId);
+      assert.deepEqual(await panes(), before);
+    });
+  },
+  45_000,
+);
+
+test.skipIf(!tmux || !node)(
+  "closes only the timed-out Windows Pi when peers share a pane ID",
+  async () => {
+    await withWindowsPeers(async ({ create, mux, panes, requestProcessPid }) => {
+      const otherId = await create("existing conversation");
+      const timedOut = await mux("new", "--detached", unpublishedRequest);
+      assert.equal(timedOut.exitCode, 1, timedOut.stderr);
+      assert.match(timedOut.stderr, /startup timed out/);
+      const before = await panes();
+      const pending = before.find((pane) => !pane.processPid);
+      const other = before.find((pane) => pane.id === otherId);
+      assert.ok(pending && other?.processPid);
+      assert.notEqual(pending.peer, other.peer);
+      assert.equal(pending.pane, other.pane);
+      const pendingPiPid = requestProcessPid(pending.id);
+      assert.equal(process.kill(pendingPiPid, 0), true);
+
+      const closed = await mux("close", pending.id);
+      assert.equal(closed.exitCode, 0, closed.stderr);
+      assert.deepEqual(await panes(), [other]);
+      assert.throws(() => process.kill(pending.panePid, 0), { code: "ESRCH" });
+      assert.throws(() => process.kill(pendingPiPid, 0), { code: "ESRCH" });
+      assert.equal(process.kill(other.processPid, 0), true);
+    });
+  },
+  110_000,
+);
+
+async function withWindowsPeers(
+  check: (fixture: ReturnType<typeof windowsPeerFixture>) => Promise<void>,
+) {
+  const fixture = windowsPeerFixture();
+  try {
+    await check(fixture);
+  } finally {
+    await fixture.cleanup();
+  }
+}
+
+function windowsPeerFixture() {
+  assert.ok(tmux && node);
+  const root = mkdtempSync(join(tmpdir(), "pi-mux-native-peer-scope-"));
+  const conf = join(root, ".config", "psmux", "pi.conf");
+  const extension = join(root, ".pi", "agent", "extensions", "pi-mux-bridge");
+  const socket = join(root, ".local", "state", "pi-tmux", "server.sock");
+  const registry = join(root, "registry");
+  const sessions = join(root, "sessions");
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([key]) => !/^(TMUX(?:_PANE)?|PSMUX_.*|PI_.*|HOME|USERPROFILE|LOCALAPPDATA|PATH)$/i.test(key),
+    ),
+  );
+  Object.assign(env, {
+    HOME: root,
+    USERPROFILE: root,
+    LOCALAPPDATA: root,
+    PI_CODING_AGENT_SESSION_DIR: sessions,
+    PSMUX_DATA_DIR: registry,
+    PSMUX_NO_WARM: "1",
+    npm_config_prefix: root,
+    PATH: `${dirname(tmux)};${dirname(node)};${process.env.PATH}`,
+  });
+  async function run(args: string[]) {
+    const child = Bun.spawn(args, {
+      cwd: root,
+      env,
+      timeout: 90_000,
+      stdout: "pipe",
+      stderr: "pipe",
+      windowsHide: true,
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    return {
+      exitCode,
+      stdout: stdout.replaceAll("\r\n", "\n"),
+      stderr: stderr.replaceAll("\r\n", "\n"),
+    };
+  }
+  const control = [tmux, "-S", socket, "-f", conf];
+  const management = new WindowsManagement({
+    socket,
+    directory: dirname(socket),
+    env,
+    query: (args) => run([...control, ...args]),
+  });
+  for (const directory of [dirname(conf), extension, sessions, registry])
+    mkdirSync(directory, { recursive: true });
+  writeFileSync(conf, "set -g exit-empty off\nset -g remain-on-exit on\n");
+  writeFileSync(join(extension, "index.ts"), "export default () => {};\n");
+  writeWindowsNpmPiFixture(root, fixturePi);
+
+  function mux(...args: string[]) {
+    return run([process.execPath, main, ...args]);
+  }
+  async function create(request?: string) {
+    const result = await mux("new", "--detached", ...(request === undefined ? [] : [request]));
+    assert.equal(result.exitCode, 0, result.stderr);
+    const createdId = /^Pi session ([a-f0-9-]+)$/m.exec(result.stdout)?.[1];
+    assert.ok(createdId, result.stdout);
+    return createdId;
+  }
+  async function panes() {
+    const observation = await management.audit(
+      "#{pane_id}\t#{pane_pid}\t#{pane_dead}\t#{@pi-mux-launch}\t#{@pi-tmux-session}",
+    );
+    return observation.panes.flatMap(({ peer, rows }) =>
+      rows.flatMap((row) => {
+        const [pane, pid, dead, launch, metadata] = row.split("\t");
+        if (peer.held || dead === "1") return [];
+        assert.ok(pane && pid && launch);
+        const { id } = json<{ id: string }>(launch);
+        const processPid = metadata
+          ? json<{ processPid: number }>(Buffer.from(metadata, "base64").toString()).processPid
+          : undefined;
+        return [{ id, peer: peer.identity, pane, panePid: Number(pid), processPid }];
+      }),
+    );
+  }
+  async function cleanup() {
+    const listed = await run([...control, "list-sessions", "-F", "#{session_name}"]);
+    for (const session of listed.stdout.trim().split("\n").filter(Boolean))
+      await run([...control, "kill-session", "-t", `=${session}`]);
+    await run([...control, "kill-server"]);
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+  function requestProcessPid(id: string) {
+    const capture = readFileSync(join(sessions, `${id}.argv.log`), "utf8").trim();
+    return json<{ processPid: number }>(capture).processPid;
+  }
+  return { create, mux, panes, cleanup, requestProcessPid };
+}

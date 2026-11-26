@@ -1,5 +1,9 @@
 import { dlopen, ptr } from "bun:ffi";
+import { execFile } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { win32 } from "node:path";
+import { promisify } from "node:util";
+import { isRecord } from "./session-model";
 
 export type WindowsProcessIdentity = { pid: number; creationTime: string };
 type ProcessUnavailable = { state: "ended" } | { state: "unknown" };
@@ -11,6 +15,9 @@ type ParentProcess = { creationTime: bigint; matchesExecutable: boolean | undefi
 type ClientProcess = { creationTime: bigint; parentPid: number };
 export type InspectWindowsProcess = (pid: number) => WindowsProcessObservation;
 
+const PROCESS_QUERY_TIMEOUT_MS = 5000;
+const execFileAsync = promisify(execFile);
+const PROCESS_TERMINATE = 0x0001;
 const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 const SYNCHRONIZE = 0x100000;
 const ERROR_INVALID_PARAMETER = 87;
@@ -33,6 +40,7 @@ const symbols = {
   GetLastError: { args: [], returns: "u32" },
   QueryFullProcessImageNameW: { args: ["ptr", "u32", "ptr", "ptr"], returns: "i32" },
   CompareStringOrdinal: { args: ["ptr", "i32", "ptr", "i32", "i32"], returns: "i32" },
+  TerminateProcess: { args: ["ptr", "u32"], returns: "i32" },
 } as const;
 
 function loadNt() {
@@ -171,6 +179,27 @@ function readClient(api: Kernel, handle: ProcessHandle): ClientProcess | undefin
   return { creationTime, parentPid: Number(parentPid) };
 }
 
+export function terminateWindowsProcess(expected: WindowsProcessIdentity): void {
+  if (process.platform !== "win32" || !isWindowsProcessIdentity(expected))
+    throw new Error("Invalid Windows process identity for close");
+  const api = (kernel ??= loadKernel());
+  const { pid, creationTime } = expected;
+  const handle = api.OpenProcess(
+    PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+    0,
+    pid,
+  );
+  if (!handle) throw new Error(`Cannot open Windows Pi process ${pid} for close`);
+  try {
+    const actual = readCreationTime(api, handle);
+    if (actual?.toString() !== creationTime || api.WaitForSingleObject(handle, 0) !== WAIT_TIMEOUT)
+      throw new Error(`Windows Pi process ${pid} changed before close`);
+    if (!api.TerminateProcess(handle, 1)) throw new Error(`Cannot stop Windows Pi process ${pid}`);
+  } finally {
+    api.CloseHandle(handle);
+  }
+}
+
 export function observeWindowsIdentity(
   expected: WindowsProcessIdentity,
   inspect: InspectWindowsProcess,
@@ -181,6 +210,99 @@ export function observeWindowsIdentity(
   if (!isWindowsProcessIdentity(actual.identity) || actual.identity.pid !== expected.pid)
     return "unknown";
   return actual.identity.creationTime === expected.creationTime ? "present" : "ended";
+}
+
+export type WindowsProcessRow = {
+  pid: number;
+  parent: number;
+  executable: string | null;
+  command: string | null;
+};
+
+export async function readWindowsProcessGroup(
+  pids: readonly number[],
+): Promise<WindowsProcessRow[]> {
+  if (!pids.length || pids.some((pid) => !Number.isInteger(pid) || pid < 1 || pid > 0xffffffff))
+    throw new Error("Invalid Windows process scope");
+  const filter = pids
+    .flatMap((pid) => [`ProcessId = ${pid}`, `ParentProcessId = ${pid}`])
+    .join(" OR ");
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
+    `$rows = @(Get-CimInstance Win32_Process -Filter '${filter}' | ForEach-Object {`,
+    "  @{ pid = $_.ProcessId; parent = $_.ParentProcessId; executable = $_.ExecutablePath; command = $_.CommandLine }",
+    "})",
+    "[Console]::WriteLine((ConvertTo-Json -InputObject $rows -Compress))",
+  ].join("\n");
+  const powershell = win32.join(
+    process.env.SystemRoot || "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  try {
+    const { stdout } = await execFileAsync(
+      powershell,
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        Buffer.from(script, "utf16le").toString("base64"),
+      ],
+      {
+        windowsHide: true,
+        timeout: PROCESS_QUERY_TIMEOUT_MS,
+      },
+    );
+    const rows: unknown = JSON.parse(stdout);
+    if (
+      !Array.isArray(rows) ||
+      !rows.every(
+        (row) =>
+          isRecord(row) &&
+          Number.isSafeInteger(row.pid) &&
+          Number.isSafeInteger(row.parent) &&
+          (row.executable === null || typeof row.executable === "string") &&
+          (row.command === null || typeof row.command === "string"),
+      )
+    )
+      throw new Error("Invalid Windows process inventory");
+    return rows;
+  } catch (error) {
+    throw new Error("Cannot verify the Windows pane process tree", { cause: error });
+  }
+}
+
+export async function assertWindowsPaneAncestor(
+  process: WindowsProcessIdentity,
+  pane: WindowsProcessIdentity,
+): Promise<void> {
+  const visited = new Set<number>();
+  let child = process;
+  while (child.pid !== pane.pid && !visited.has(child.pid)) {
+    visited.add(child.pid);
+    const rows = await readWindowsProcessGroup([child.pid]);
+    const parentPid = rows.find(({ pid }) => pid === child.pid)?.parent;
+    const parent = parentPid && inspectWindowsProcess(parentPid);
+    if (
+      !parent ||
+      parent.state !== "live" ||
+      BigInt(parent.identity.creationTime) >= BigInt(child.creationTime) ||
+      observeWindowsIdentity(child, inspectWindowsProcess) !== "present"
+    )
+      break;
+    child = parent.identity;
+  }
+  if (
+    child.pid !== pane.pid ||
+    child.creationTime !== pane.creationTime ||
+    observeWindowsIdentity(pane, inspectWindowsProcess) !== "present"
+  )
+    throw new Error(
+      `Cannot verify Windows Pi process ${process.pid} belongs to pane process ${pane.pid}`,
+    );
 }
 
 function isWindowsPid(value: unknown): value is number {

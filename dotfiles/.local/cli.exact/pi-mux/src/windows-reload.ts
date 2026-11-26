@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, win32 } from "node:path";
-import { promisify } from "node:util";
 import {
   DISPATCH_TICKET_ID_MAX_LENGTH,
   DISPATCH_TICKET_ID_PATTERN,
@@ -75,11 +73,11 @@ import type { WindowsManagement } from "./windows-management";
 import {
   inspectWindowsProcess,
   observeWindowsIdentity,
+  readWindowsProcessGroup,
   type WindowsProcessIdentity,
+  type WindowsProcessRow,
 } from "./windows-process";
 
-const PROCESS_QUERY_TIMEOUT_MS = 5000;
-const execFileAsync = promisify(execFile);
 const DISPATCH_FIELDS = [
   "TICKET_DISPATCH_ROLE",
   "TICKET_DISPATCH_PROJECT",
@@ -602,67 +600,6 @@ function selectWindowsReloadTarget(
   }
   if (!windowsReloadIsWaiting(config, entry)) return;
   return { entry, pane, temporary: entry.temporary };
-}
-
-type WindowsProcessRow = {
-  pid: number;
-  parent: number;
-  executable: string | null;
-  command: string | null;
-};
-
-async function readWindowsProcessGroup(pids: readonly number[]): Promise<WindowsProcessRow[]> {
-  if (!pids.length || pids.some((pid) => !Number.isInteger(pid) || pid < 1 || pid > 0xffffffff))
-    throw new Error("Invalid Windows process scope");
-  const filter = pids
-    .flatMap((pid) => [`ProcessId = ${pid}`, `ParentProcessId = ${pid}`])
-    .join(" OR ");
-  const script = [
-    "$ErrorActionPreference = 'Stop'",
-    "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
-    `$rows = @(Get-CimInstance Win32_Process -Filter '${filter}' | ForEach-Object {`,
-    "  @{ pid = $_.ProcessId; parent = $_.ParentProcessId; executable = $_.ExecutablePath; command = $_.CommandLine }",
-    "})",
-    "[Console]::WriteLine((ConvertTo-Json -InputObject $rows -Compress))",
-  ].join("\n");
-  const powershell = win32.join(
-    process.env.SystemRoot || "C:\\Windows",
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
-  try {
-    const { stdout } = await execFileAsync(
-      powershell,
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-EncodedCommand",
-        Buffer.from(script, "utf16le").toString("base64"),
-      ],
-      {
-        windowsHide: true,
-        timeout: PROCESS_QUERY_TIMEOUT_MS,
-      },
-    );
-    const rows: unknown = JSON.parse(stdout);
-    if (
-      !Array.isArray(rows) ||
-      !rows.every(
-        (row) =>
-          isRecord(row) &&
-          Number.isSafeInteger(row.pid) &&
-          Number.isSafeInteger(row.parent) &&
-          (row.executable === null || typeof row.executable === "string") &&
-          (row.command === null || typeof row.command === "string"),
-      )
-    )
-      throw new Error("Invalid Windows process inventory");
-    return rows;
-  } catch (error) {
-    throw new Error("Cannot verify the Windows pane process tree", { cause: error });
-  }
 }
 
 function sameWindowsPath(first: string | null, second: string): boolean {

@@ -81,11 +81,14 @@ async function restartIsWaiting(config: TmuxConfig): Promise<boolean> {
 
 const WINDOWS_LIFECYCLE_FORMAT = `${PANE_FORMAT}\t#{PI_TMUX_SESSION_ID}\t#{PI_TMUX_TEMPORARY}\t#{session_path}\t#{@pi-mux-launch}\t#{TICKET_DISPATCH_ROLE}\t#{@pi-mux-windows-start-right}\t#{@pi_session_state}\t#{@pi-mux-state-source}\t#{@pi-mux-pending-restart-blocker}`;
 
-export async function auditWindowsLifecycle(management: WindowsManagement, mode = "restart") {
-  const format =
-    mode === "reload"
-      ? `${WINDOWS_LIFECYCLE_FORMAT}\t#{PI_MUX_WINDOWS_START_RIGHT}`
-      : WINDOWS_LIFECYCLE_FORMAT;
+export async function auditWindowsLifecycle(
+  management: WindowsManagement,
+  mode: "restart" | "reload" | "conversation" = "restart",
+) {
+  const requireUniqueOwners = mode === "restart";
+  const format = requireUniqueOwners
+    ? WINDOWS_LIFECYCLE_FORMAT
+    : `${WINDOWS_LIFECYCLE_FORMAT}\t#{PI_MUX_WINDOWS_START_RIGHT}`;
   const audit = await management.audit(format, { requireRestored: false });
   if (!audit.startup) throw new Error("Dedicated psmux management has not been initialized");
   const managed: ManagedSession[] = [];
@@ -118,18 +121,18 @@ export async function auditWindowsLifecycle(management: WindowsManagement, mode 
       ] = fields;
       const hasValidOwner = Boolean(id && SESSION_ID_PATTERN.test(id) && isAbsolute(cwd ?? ""));
       if (
-        fields.length !== (mode === "reload" ? 18 : 17) ||
+        fields.length !== (requireUniqueOwners ? 17 : 18) ||
         !/^%\d+$/.test(paneId ?? "") ||
         !sessionId ||
         name !== peer.name ||
         !["0", "1"].includes(dead ?? "") ||
-        (mode !== "reload" && ((id && !hasValidOwner) || (temporary && temporary !== id)))
+        (requireUniqueOwners && ((id && !hasValidOwner) || (temporary && temporary !== id)))
       )
         throw new Error(`Invalid Windows pi-mux lifecycle inventory in ${peer.name}`);
       if (id && hasValidOwner) {
         const candidate = { id, cwd: cwd!, session: sessionId, temporary: Boolean(temporary) };
         const key = JSON.stringify(candidate);
-        if (mode !== "reload" && sessions.size && !sessions.has(key))
+        if (requireUniqueOwners && sessions.size && !sessions.has(key))
           throw new Error(`Conflicting Windows conversation ownership in ${peer.name}`);
         sessions.set(key, candidate);
       }
@@ -139,7 +142,7 @@ export async function auditWindowsLifecycle(management: WindowsManagement, mode 
       pids.push(Number(pid));
       const [pane] = metadata ? parseLivePaneRows(fields.slice(0, 8).join("\t"), "list") : [];
       if (metadata) {
-        if (!pane || (mode !== "reload" && activeIds.has(pane.id.toLowerCase())))
+        if (!pane || (requireUniqueOwners && activeIds.has(pane.id.toLowerCase())))
           throw new Error(`Cannot uniquely identify Windows pi in ${peer.name}`);
         activeIds.add(pane.id.toLowerCase());
         pids.push(pane.pid);
@@ -176,7 +179,7 @@ export async function auditWindowsLifecycle(management: WindowsManagement, mode 
     return panes.map((pane) => ({ ...pane, unresolved: unresolved || dispatchUnpublished }));
   });
   if (
-    mode !== "reload" &&
+    requireUniqueOwners &&
     new Set(managed.map(({ id }) => id.toLowerCase())).size !== managed.length
   )
     throw new Error("Multiple Windows psmux sessions own the same conversation");

@@ -42,6 +42,7 @@ import {
   verifyServerLifetime,
   windowsManagement,
 } from "./tmux";
+import { findWindowsWarmPane } from "./windows-conversations";
 import {
   auditWindowsDispatchInventory,
   inspectWindowsBeforeOpen,
@@ -61,7 +62,10 @@ export async function createNew(
   windowsBasis?: WindowsManagementBasis,
 ): Promise<Pane> {
   const cwd = process.cwd();
-  if (request === undefined) {
+  if (request === undefined && windowsBasis) {
+    const existing = await findWindowsWarmPane(config, cwd, windowsBasis);
+    if (existing) return existing;
+  } else if (request === undefined && !platform.windows) {
     const candidates = (await livePanes(config, "list")).filter(
       (pane) => pane.warm && pane.cwd === cwd && pane.startup === "ready" && !existsSync(pane.file),
     );

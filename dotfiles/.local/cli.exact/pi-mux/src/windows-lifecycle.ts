@@ -234,6 +234,46 @@ export async function runWindowsPeerPaneCommands(
   }
 }
 
+export async function stopWindowsPeerPane(
+  scope: Scope,
+  observation: PsmuxObservation,
+  peer: PsmuxPeer,
+  pane: string,
+  expected: readonly PaneExpectation[],
+  processes: readonly WindowsProcessIdentity[],
+): Promise<void> {
+  const identity = auditedPaneIdentity(scope, observation, peer, pane);
+  const prefix = `PI_MUX_CLOSE_${randomUUID().replaceAll("-", "")}`;
+  const guards = [peerGuard(peer, identity.pid, observation.basis.instance)];
+  const prepare: string[] = [];
+  const cleanup: string[] = [];
+  for (const [index, [field, value]] of expected.entries()) {
+    if (!PANE_FIELD.test(field)) throw new Error("Invalid psmux pane close field");
+    const key = `${prefix}_${index}`;
+    prepare.push(`set-environment -gh ${key} ${wireArgument(value)}`);
+    guards.push(`#{==:#{${field}},#{${key}}}`);
+    cleanup.push(`set-environment -ghu ${key}`);
+  }
+  const guard = guards.reduce((first, second) => `#{&&:${first},${second}}`);
+  const command = [
+    ...prepare,
+    `if-shell -F ${wireArgument(guard)} ${wireArgument(`kill-pane -t ${pane}`)} "display-message -p PI_MUX_STOP_REFUSED"`,
+    ...cleanup,
+  ].join(" ; ");
+  const socket = await authenticate(scope, peer);
+  try {
+    if (
+      [identity, ...processes].some(
+        (process) => observeWindowsIdentity(process, inspectWindowsProcess) !== "present",
+      )
+    )
+      throw new Error(`psmux peer or pane process changed before close: ${peer.name} ${pane}`);
+    await exchange(socket, `${command}\n`, "pane-stop");
+  } finally {
+    socket.destroy();
+  }
+}
+
 type PaneExpectation = readonly [field: string, value: string];
 type PaneMutation = { option: string; value?: string; global?: boolean } | { unsetTemporary: true };
 
@@ -405,7 +445,7 @@ async function shutdown({ socket, peer, identity }: BoundPeer, instance: string)
 function exchange(
   socket: Socket,
   request: string,
-  phase: "auth" | "bootstrap" | "shutdown" | "pane-read",
+  phase: "auth" | "bootstrap" | "shutdown" | "pane-read" | "pane-stop",
   expected?: string,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -423,14 +463,15 @@ function exchange(
     const onEnd = () => {
       if (
         phase === "pane-read" ||
-        (phase === "shutdown" && !response) ||
+        ((phase === "shutdown" || phase === "pane-stop") && !response) ||
+        (phase === "pane-stop" && response === "OK\n") ||
         (phase === "bootstrap" && response === expected)
       )
         finish();
       else failure();
     };
     const onError = (error: NodeJS.ErrnoException) => {
-      if (phase === "shutdown" && !response && error.code === "ECONNRESET") onEnd();
+      if ((phase === "shutdown" || phase === "pane-stop") && error.code === "ECONNRESET") onEnd();
       else finish(error);
     };
     const timer = setTimeout(failure, CONTROL_TIMEOUT_MS);
