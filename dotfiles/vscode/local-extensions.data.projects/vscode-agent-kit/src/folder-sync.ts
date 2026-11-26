@@ -268,13 +268,24 @@ export class FolderSyncEngine {
       const appeared = await this.waitForFoldersEvent(
         workspace.workspaceFile === undefined ? EMPTY_WINDOW_OPEN_TIMEOUT_MS : undefined,
       );
-      if (!appeared && !this.stopped && (workspace.workspaceFolders?.length ?? 0) === 0) {
-        await this.deps.vscode.openFolder(this.agentsWorkspace);
+      if (!appeared && !this.stopped && this.currentFolders().length === 0) {
+        await this.openAgentsWorkspaceIfEmpty();
       }
       folders = workspace.workspaceFolders;
     }
     this.folderWaitSubscription = undefined;
     return this.stopped ? undefined : folders;
+  }
+
+  private async openAgentsWorkspaceIfEmpty(): Promise<void> {
+    try {
+      await this.ensureDirectory(this.agentsWorkspace);
+    } catch {
+      return;
+    }
+    if (this.stopped || this.deps.vscode.workspace.workspaceFile !== undefined) return;
+    if (this.currentFolders().length !== 0) return;
+    await this.deps.vscode.openFolder(this.agentsWorkspace);
   }
 
   /** Resolves true when the window's folders change; false on timeout or stop. */

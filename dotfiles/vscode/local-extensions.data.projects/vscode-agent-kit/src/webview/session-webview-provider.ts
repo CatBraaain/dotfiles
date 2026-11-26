@@ -3,7 +3,11 @@ import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { WorkspaceStore } from "../workspace-store";
 import { listSessionSnapshot, sessionFileExists, type SessionSummary } from "../session-store";
-import { expandWorkDirectoryInput, requireWorkDirectory } from "../work-directory";
+import {
+  expandWorkDirectoryInput,
+  requireWorkDirectory,
+  sameWorkDirectory,
+} from "../work-directory";
 import {
   DisplayRecoveryCancelledError,
   SwitchTargetExitedError,
@@ -675,18 +679,36 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       this.postError(`Invalid workspace path: ${errorMessage(error)}`);
       return;
     }
-    if (this.registeredCwds.has(directory)) {
+    while (!this.disposed) {
+      const registered = this.registeredCwds;
+      const alreadyRegistered =
+        registered.has(directory) || (await this.matchesRegisteredDirectory(registered, directory));
+      if (this.disposed) return;
+      if (!isDeepStrictEqual(registered, this.registeredCwds)) continue;
+      if (alreadyRegistered) {
+        this.post({ type: "workspaceAdded" });
+        return;
+      }
+      try {
+        await this.deps.registry.mux.registerWorkspace(directory);
+      } catch (error) {
+        this.postError(`Failed to register workspace ${directory}: ${errorMessage(error)}`);
+        return;
+      }
       this.post({ type: "workspaceAdded" });
+      await this.refresh(false);
       return;
     }
-    try {
-      await this.deps.registry.mux.registerWorkspace(directory);
-    } catch (error) {
-      this.postError(`Failed to register workspace ${directory}: ${errorMessage(error)}`);
-      return;
-    }
-    this.post({ type: "workspaceAdded" });
-    await this.refresh(false);
+  }
+
+  private async matchesRegisteredDirectory(
+    registered: ReadonlySet<string>,
+    directory: string,
+  ): Promise<boolean> {
+    const matches = await Promise.allSettled(
+      [...registered].map((cwd) => sameWorkDirectory(cwd, directory)),
+    );
+    return matches.some((match) => match.status === "fulfilled" && match.value);
   }
 
   private async openWorkspaceTerminal(cwd: string): Promise<void> {

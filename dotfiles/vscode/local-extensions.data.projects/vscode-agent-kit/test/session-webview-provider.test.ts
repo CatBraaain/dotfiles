@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -16,6 +16,7 @@ import {
   SessionWebviewProvider,
 } from "../src/webview/session-webview-provider";
 import * as sessionStore from "../src/session-store";
+import * as workDirectory from "../src/work-directory";
 import type { SessionPhase, WebviewState } from "../src/webview/protocol";
 import { sessionListView, type ElementDescriptor } from "../src/webview/client";
 import { cleanup, header, messageEntry, tempDir, writeJsonl } from "./fixtures";
@@ -3410,6 +3411,73 @@ describe("SessionWebviewProvider", () => {
       expect(sharedRuntimes.mocks.registerWorkspace).not.toHaveBeenCalled();
       expect(sharedRuntimes.mocks.list).not.toHaveBeenCalled();
       expect(webview.postMessage).toHaveBeenLastCalledWith({ type: "workspaceAdded" });
+    });
+
+    it("closes the form without registering an alias of an already listed workspace", async () => {
+      const alias = join(root, "workspace-alias");
+      await symlink(root, alias, "junction");
+      const { provider } = createProvider();
+      const webview = createView();
+      provider.resolveWebviewView(webview.view as never);
+      await webview.receive({ type: "ready" });
+      sharedRuntimes.mocks.list.mockClear();
+
+      await webview.receive({ type: "addWorkspace", path: alias });
+
+      expect(sharedRuntimes.mocks.registerWorkspace).not.toHaveBeenCalled();
+      expect(sharedRuntimes.mocks.list).not.toHaveBeenCalled();
+      expect(webview.postMessage).toHaveBeenLastCalledWith({ type: "workspaceAdded" });
+    });
+
+    it("does not register an alias when the directory is listed during comparison", async () => {
+      vi.useFakeTimers();
+      const directory = join(root, "external-workspace");
+      const alias = join(root, "external-alias");
+      await mkdir(directory);
+      await symlink(directory, alias, "junction");
+      const { provider } = createProvider();
+      const webview = createView();
+      provider.resolveWebviewView(webview.view as never);
+      await webview.receive({ type: "ready" });
+
+      let releaseComparison!: () => void;
+      const comparisonHeld = new Promise<void>((resolve) => {
+        releaseComparison = resolve;
+      });
+      const comparison = vi
+        .spyOn(workDirectory, "sameWorkDirectory")
+        .mockImplementationOnce(async () => {
+          await comparisonHeld;
+          return false;
+        });
+      const adding = webview.receive({ type: "addWorkspace", path: alias });
+      try {
+        await vi.waitFor(() => expect(comparison).toHaveBeenCalledWith(root, alias));
+        sharedRuntimes.workspaces.add(directory);
+        await tick(provider);
+        sharedRuntimes.mocks.list.mockClear();
+      } finally {
+        releaseComparison();
+        await adding;
+      }
+
+      expect(sharedRuntimes.mocks.registerWorkspace).not.toHaveBeenCalled();
+      expect(sharedRuntimes.mocks.list).not.toHaveBeenCalled();
+      expect(webview.postMessage).toHaveBeenLastCalledWith({ type: "workspaceAdded" });
+    });
+
+    it("registers a new workspace even when a listed workspace no longer exists", async () => {
+      sharedRuntimes.workspaces.add(join(root, "missing-workspace"));
+      const folder = join(root, "new-workspace");
+      await mkdir(folder);
+      const { provider } = createProvider();
+      const webview = createView();
+      provider.resolveWebviewView(webview.view as never);
+      await webview.receive({ type: "ready" });
+
+      await webview.receive({ type: "addWorkspace", path: folder });
+
+      expect(sharedRuntimes.mocks.registerWorkspace).toHaveBeenCalledExactlyOnceWith(folder);
     });
 
     it("preserves the form and input by withholding success when registration fails", async () => {

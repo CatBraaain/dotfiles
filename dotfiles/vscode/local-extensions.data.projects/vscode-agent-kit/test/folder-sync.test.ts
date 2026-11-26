@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { statSync } from "node:fs";
 import { access, mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -236,18 +237,57 @@ describe("startup folder-0 swap", () => {
     expect(api.folderPaths).toEqual([AGENTS, MAIN, FEAT]);
   });
 
-  it("opens the agents workspace when a folderless window never provides folders", async () => {
-    setup(undefined);
+  it("creates the agents workspace before opening it in an empty window", async () => {
+    const home = await tempDir("folder-sync-empty-home-");
+    try {
+      const agents = join(home, ".agents", "workspace");
+      api = new FakeVscode(undefined);
+      git = createFakeGit([mainEntry]);
+      let directoryExistedAtOpen: boolean | undefined;
+      const openFolder = vi.spyOn(api, "openFolder").mockImplementation(async (folderPath) => {
+        directoryExistedAtOpen =
+          statSync(folderPath, { throwIfNoEntry: false })?.isDirectory() ?? false;
+      });
+      engine = new FolderSyncEngine({ vscode: api, execFile: git.exec, homeDir: home });
+      disposable = engine.start();
+      const booting = boot();
+
+      await vi.advanceTimersByTimeAsync(EMPTY_WINDOW_OPEN_TIMEOUT_MS - 1);
+      expect(openFolder).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(openFolder).toHaveBeenCalledExactlyOnceWith(agents));
+      expect(directoryExistedAtOpen).toBe(true);
+
+      disposable.dispose();
+      await booting;
+      expect(api.added).toEqual([]);
+    } finally {
+      disposable?.dispose();
+      await cleanup(home);
+    }
+  });
+
+  it("continues waiting for folders when creating the agents workspace fails", async () => {
+    api = new FakeVscode(undefined);
+    git = createFakeGit([mainEntry]);
+    const ensureDirectory = vi.fn(async (_folderPath: string) => {});
+    ensureDirectory.mockRejectedValueOnce(new Error("mkdir failed"));
+    engine = new FolderSyncEngine({
+      vscode: api,
+      execFile: git.exec,
+      homeDir: HOME,
+      ensureDirectory,
+    });
+    disposable = engine.start();
     const booting = boot();
 
-    await vi.advanceTimersByTimeAsync(EMPTY_WINDOW_OPEN_TIMEOUT_MS - 1);
+    await vi.advanceTimersByTimeAsync(EMPTY_WINDOW_OPEN_TIMEOUT_MS);
+    expect(ensureDirectory).toHaveBeenCalledExactlyOnceWith(AGENTS);
     expect(api.openedFolders).toEqual([]);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(api.openedFolders).toEqual([AGENTS]);
 
-    disposable.dispose();
+    api.resolveFolders([MAIN]);
     await booting;
-    expect(api.added).toEqual([]);
+    expect(api.folderPaths).toEqual([AGENTS, MAIN]);
   });
 });
 
