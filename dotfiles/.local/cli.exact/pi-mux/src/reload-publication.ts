@@ -27,6 +27,36 @@ export function reportReloadFailure(
   console.error(`pi-mux: reload ${id}: ${reason}`);
 }
 
+function conversationPanePids(
+  panes: readonly Pick<Pane, "session" | "id" | "panePid">[],
+  session: string,
+  id: string,
+): number[] {
+  return panes
+    .filter((pane) => pane.session === session && pane.id === id)
+    .map((pane) => pane.panePid);
+}
+
+export function wasReplacedByPeer(
+  initialPanes: readonly Pick<Pane, "session" | "id" | "panePid">[],
+  livePanes: readonly Pick<Pane, "session" | "id" | "panePid">[],
+  session: string,
+  id: string,
+): boolean {
+  const initialPanePids = conversationPanePids(initialPanes, session, id);
+  const livePanePids = conversationPanePids(livePanes, session, id);
+  return (
+    initialPanePids.length > 0 &&
+    livePanePids.length > 0 &&
+    livePanePids.every((panePid) => !initialPanePids.includes(panePid))
+  );
+}
+
+export function announceReloaded(progress: Pick<ReloadProgress, "reloaded">, id: string): void {
+  progress.reloaded.add(id);
+  console.log(`reloaded ${id}`);
+}
+
 export function matchesReloadPublication(
   original: Pane,
   panePid: number,

@@ -16,10 +16,12 @@ import { launchMatchesManagedSession } from "./pane-inventory";
 import { clearStateOptions } from "./pane-state";
 import { platform } from "./platform";
 import {
+  announceReloaded,
   matchesReloadPublication,
   type ReloadProgress,
   type ReloadPublication,
   reportReloadFailure,
+  wasReplacedByPeer,
 } from "./reload-publication";
 import { startAndRestore } from "./restoration";
 import { readSnapshot, uniqueCandidates, writeSnapshot } from "./restore-state";
@@ -83,6 +85,7 @@ type WindowsReloadContext = {
   management: WindowsManagement;
   rights: WindowsLaunchRights;
   original: WindowsManagementBasis;
+  initialPanes: readonly Pane[];
   progress: WindowsReloadProgress;
 };
 
@@ -237,7 +240,10 @@ export async function reloadWindowsPanes(config: Config, onlyId?: string): Promi
         hookCommand,
         peerName: peer.name,
       });
-    return original;
+    return {
+      original,
+      initialPanes: audit.entries.flatMap(({ pi }) => (pi ? [pi] : [])),
+    };
   });
   if (typeof initial === "number") return initial;
 
@@ -246,7 +252,7 @@ export async function reloadWindowsPanes(config: Config, onlyId?: string): Promi
     failed: new Set(),
     inFlight: new Map(),
   };
-  const context = { config, management, original: initial, rights, progress };
+  const context = { ...initial, config, management, rights, progress };
   let schedulingFailure: { cause: unknown } | undefined;
   try {
     while (true) {
@@ -274,18 +280,23 @@ async function startNextWindowsReload(
   context: WindowsReloadContext,
   onlyId?: string,
 ): Promise<"started" | "wait" | "done"> {
-  const { management, original, progress } = context;
+  const { management, original, initialPanes, progress } = context;
   const audit = await auditWindowsLifecycle(management, "reload");
   if (!launchBasisStillLive(original, audit.basis) || !audit.startup.restored)
     throw new Error("Dedicated psmux generation changed during reload");
 
-  const targets = audit.ownership.filter(
+  const candidates = audit.ownership.filter(
     ({ session: { id } }) =>
       (!onlyId || id === onlyId) &&
       !progress.reloaded.has(id) &&
       !progress.failed.has(id) &&
       !progress.inFlight.has(id),
   );
+  const livePanes = audit.entries.flatMap(({ pi }) => (pi ? [pi] : []));
+  for (const { session } of candidates)
+    if (wasReplacedByPeer(initialPanes, livePanes, session.session, session.id))
+      announceReloaded(progress, session.id);
+  const targets = candidates.filter(({ session: { id } }) => !progress.reloaded.has(id));
   if (
     onlyId &&
     !audit.managed.some(({ id }) => id === onlyId) &&
@@ -684,8 +695,7 @@ async function confirmWindowsReloadPublications(context: WindowsReloadContext): 
             if (management.startupState(audit.basis)?.restoring.includes(id.toLowerCase()))
               await management.clearRestoring(audit.basis, id, windowsClaimLock(management));
           });
-          progress.reloaded.add(id);
-          console.log(`reloaded ${id}`);
+          announceReloaded(progress, id);
         }
       }
       if (!progress.reloaded.has(id) && !progress.failed.has(id)) {

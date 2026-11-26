@@ -5473,6 +5473,67 @@ exec `,
     }
   }, 20000);
 
+  it("replaces a conversation only once when concurrent reloads waited for it to become idle", async () => {
+    const fixture = new SessionFixture();
+    let first: ReturnType<typeof startReload> | undefined;
+    let second: ReturnType<typeof startReload> | undefined;
+    try {
+      prepareManagedPi(fixture);
+      const id = addManagedSession(fixture, "target", "running");
+      const pane = fixture.tmux(["display-message", "-p", "-t", "target", "#{pane_id}"]);
+      function panePid() {
+        return fixture.tmux(["display-message", "-p", "-t", pane, "#{pane_pid}"]);
+      }
+      const oldPid = panePid();
+      const firstScans = join(fixture.directory, "first-scans");
+      const secondScans = join(fixture.directory, "second-scans");
+      writeFileSync(firstScans, "");
+      writeFileSync(secondScans, "");
+      const wrapper = join(fixture.directory, "bin/tmux");
+      writeFileSync(
+        wrapper,
+        readFileSync(wrapper, "utf8").replace(
+          "exec ",
+          `case "$PI_MUX_FIXTURE_RELOAD_SCAN:$5:$*" in
+  1:-C:*@pi_session_state*) printf . >> ${JSON.stringify(firstScans)} ;;
+  2:-C:*@pi_session_state*) printf . >> ${JSON.stringify(secondScans)} ;;
+esac
+exec `,
+        ),
+      );
+      fixture.env.PI_MUX_FIXTURE_RELOAD_SCAN = "1";
+      first = startReload(fixture, [id]);
+      delete fixture.env.PI_MUX_FIXTURE_RELOAD_SCAN;
+      fixture.env.PI_MUX_FIXTURE_RELOAD_SCAN = "2";
+      second = startReload(fixture, [id]);
+      delete fixture.env.PI_MUX_FIXTURE_RELOAD_SCAN;
+      await waitUntil(
+        () => readFileSync(firstScans).length > 0 && readFileSync(secondScans).length > 0,
+      );
+
+      restartState(fixture, "target", id, "waiting-user");
+      await waitUntil(() => panePid() !== oldPid);
+      const replacementPid = panePid();
+      const [firstResult, secondResult] = await Promise.all([
+        finishReload(first),
+        finishReload(second),
+      ]);
+      assert.equal(firstResult.status, 0, firstResult.stderr);
+      assert.equal(secondResult.status, 0, secondResult.stderr);
+      assert.equal(firstResult.stdout.trim(), `reloaded ${id}`);
+      assert.equal(secondResult.stdout.trim(), `reloaded ${id}`);
+      assert.equal(panePid(), replacementPid);
+      const launches = join(fixture.directory, "launches.jsonl");
+      await waitUntil(() => existsSync(launches));
+      assert.equal(readFileSync(launches, "utf8").trim().split("\n").length, 1);
+    } finally {
+      first?.kill();
+      second?.kill();
+      await Promise.all([first?.exited, second?.exited]);
+      await fixture.cleanup();
+    }
+  }, 20000);
+
   it("protects an unconfirmed replacement while another reload starts a different conversation", async () => {
     const fixture = new SessionFixture();
     const allowConfirmation = join(fixture.directory, "allow-confirmation");

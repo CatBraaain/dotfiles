@@ -6,10 +6,12 @@ import { livePanes, managedSessions } from "./pane-inventory";
 import { parseSessionState } from "./pane-state";
 import { platform } from "./platform";
 import {
+  announceReloaded,
   matchesReloadPublication,
   type ReloadProgress,
   type ReloadPublication,
   reportReloadFailure,
+  wasReplacedByPeer,
 } from "./reload-publication";
 import { bootstrapServer, snapshotSessions, startAndRestore } from "./restoration";
 import { readSnapshot } from "./restore-state";
@@ -47,11 +49,12 @@ export async function reloadPanes(config: Config, onlyId?: string): Promise<numb
     });
   }
   if (!original.generation) throw new Error("Dedicated server has not been initialized by pi-mux");
-  await withLock(config, async () => {
+  const initialPanes = await withLock(config, async () => {
     await verifyServerLifetime(config, original, "reload");
     readSnapshot(config);
     if (onlyId) await validateReloadTarget(config, onlyId);
     await bootstrapServer(config, onlyId === undefined ? "start" : "existing");
+    return await livePanes(config, "list");
   });
   const progress: ReloadProgress = { reloaded: new Set(), failed: new Set(), inFlight: new Map() };
   let schedulingFailure: { cause: unknown } | undefined;
@@ -59,12 +62,12 @@ export async function reloadPanes(config: Config, onlyId?: string): Promise<numb
     while (true) {
       const step = schedulingFailure
         ? "done"
-        : await withLock(config, () => startNextReload(config, original, progress, onlyId)).catch(
-            (cause: unknown) => {
-              schedulingFailure = { cause };
-              return "done" as const;
-            },
-          );
+        : await withLock(config, () =>
+            startNextReload(config, original, initialPanes, progress, onlyId),
+          ).catch((cause: unknown) => {
+            schedulingFailure = { cause };
+            return "done" as const;
+          });
       await confirmReloadPublications(config, original, progress);
       if (step === "done" && progress.inFlight.size === 0) {
         if (schedulingFailure) throw schedulingFailure.cause;
@@ -80,11 +83,12 @@ export async function reloadPanes(config: Config, onlyId?: string): Promise<numb
 async function startNextReload(
   config: Config,
   original: ServerLifetime,
+  initialPanes: readonly Pane[],
   progress: ReloadProgress,
   onlyId?: string,
 ): Promise<"started" | "wait" | "done"> {
   await verifyServerLifetime(config, original, "reload");
-  const targets = await scanReloadTargets(config, progress, onlyId);
+  const targets = await scanReloadTargets(config, initialPanes, progress, onlyId);
   if (!targets) return "done";
   for (const target of targets) {
     const { id } = target.pane;
@@ -114,6 +118,7 @@ async function validateReloadTarget(config: Config, id: string): Promise<void> {
 
 async function scanReloadTargets(
   config: TmuxConfig,
+  initialPanes: readonly Pane[],
   progress: ReloadProgress,
   onlyId?: string,
 ): Promise<ReloadTarget[] | undefined> {
@@ -124,8 +129,12 @@ async function scanReloadTargets(
   );
   if (managed.length === 0) return;
   const panes = await livePanes(config, "list");
+  for (const { id, session } of managed)
+    if (wasReplacedByPeer(initialPanes, panes, session, id)) announceReloaded(progress, id);
+  const remaining = managed.filter(({ id }) => !reloaded.has(id));
+  if (remaining.length === 0) return;
   const owned = panes.filter((pane) =>
-    managed.some((session) => session.session === pane.session && session.id === pane.id),
+    remaining.some((session) => session.session === pane.session && session.id === pane.id),
   );
   for (const pane of owned) {
     if (failed.has(pane.id)) continue;
@@ -138,7 +147,7 @@ async function scanReloadTargets(
       reportReloadFailure(progress, pane.id, reason);
     }
   }
-  const pending = managed.filter(({ id }) => !failed.has(id));
+  const pending = remaining.filter(({ id }) => !failed.has(id));
   if (pending.length === 0) return;
   const rowsOfSession = await tmuxQueries(
     config,
@@ -384,8 +393,7 @@ async function confirmReloadPublications(
     } else if (
       matchesReloadPublication(pane, Number(pid), launchToken, preserveWarm, metadata, launch)
     ) {
-      progress.reloaded.add(id);
-      console.log(`reloaded ${id}`);
+      announceReloaded(progress, id);
     } else if (Date.now() >= deadlineMs) {
       reportReloadFailure(progress, id, "pi startup timed out during reload");
     } else {
