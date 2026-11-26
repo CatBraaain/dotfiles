@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, win32 } from "node:path";
-import { errorMessage } from "./session-model";
+import { errorMessage } from "../session-model";
 import {
   launchBasisStillLive,
   readWindowsScopeRecord,

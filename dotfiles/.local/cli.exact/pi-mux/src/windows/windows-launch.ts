@@ -5,7 +5,7 @@ import {
   DISPATCH_TICKET_ID_MAX_LENGTH,
   DISPATCH_TICKET_ID_PATTERN,
   type WindowsCreateDispatchWorker,
-} from "./cli-arguments";
+} from "../cli-arguments";
 import {
   cliInvocation,
   GENERATED_ENV_KEYS,
@@ -14,17 +14,17 @@ import {
   PSMUX_ROUTING,
   type TmuxConfig,
   tmuxConfiguration,
-} from "./configuration";
-import { InitialRequestFiles } from "./initial-request-files";
-import { windowsClaimLock } from "./locks";
+} from "../configuration";
+import { InitialRequestFiles } from "../initial-request-files";
+import { windowsClaimLock } from "../locks";
 import {
   launchRecordToken,
   matchesLaunch,
   PANE_FORMAT,
   parseLivePaneRows,
   sessionName,
-} from "./pane-inventory";
-import { platform } from "./platform";
+} from "../pane-inventory";
+import { platform } from "../platform";
 import {
   errorMessage,
   type ManagedSession,
@@ -32,8 +32,8 @@ import {
   SESSION_ID_PATTERN,
   STARTUP_TIMEOUT_MS,
   UUID,
-} from "./session-model";
-import { excludedGlobalEnvironment, tmux, windowsManagement } from "./tmux";
+} from "../session-model";
+import { excludedGlobalEnvironment, tmux, windowsManagement } from "../mux";
 import {
   conversationLaunchKey,
   launchBasisStillLive,

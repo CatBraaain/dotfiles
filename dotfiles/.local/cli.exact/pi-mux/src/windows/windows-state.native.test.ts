@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { platform } from "./platform";
+import { platform } from "../platform";
 import { mutateWindowsPeerPane } from "./windows-lifecycle";
 import { WindowsManagement } from "./windows-management";
 import { inspectWindowsProcess } from "./windows-process";
@@ -117,7 +117,7 @@ test.skipIf(!tmux)(
         process.execPath,
         "build",
         "--compile",
-        join(import.meta.dir, "main.ts"),
+        join(import.meta.dir, "..", "main.ts"),
         "--outfile",
         mux,
       ]);

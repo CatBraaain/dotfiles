@@ -41,20 +41,20 @@ import {
   tmux,
   verifyServerLifetime,
   windowsManagement,
-} from "./tmux";
-import { findWindowsWarmPane } from "./windows-conversations";
+} from "./mux";
+import { findWindowsWarmPane } from "./windows/windows-conversations";
 import {
   auditWindowsDispatchInventory,
   inspectWindowsBeforeOpen,
   inspectWindowsRunningSession,
   startWindowsLaunch,
-} from "./windows-launch";
-import { windowsNpmPiCommand } from "./windows-pi-command";
+} from "./windows/windows-launch";
+import { windowsNpmPiCommand } from "./windows/windows-pi-command";
 import {
   conversationLaunchKey,
   ticketLaunchKey,
   type WindowsManagementBasis,
-} from "./windows-launch-rights";
+} from "./windows/windows-launch-rights";
 
 export async function createNew(
   config: Config,

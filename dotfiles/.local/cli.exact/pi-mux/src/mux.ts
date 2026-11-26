@@ -1,6 +1,6 @@
 import { GENERATED_ENV_KEYS, type TmuxConfig } from "./configuration";
 import { platform } from "./platform";
-import { WindowsManagement } from "./windows-management";
+import { WindowsManagement } from "./windows/windows-management";
 
 export function paneEntityGuard(serverPid: number, pane: string, panePid: number): string {
   return `#{&&:#{==:#{pid},${serverPid}},#{&&:#{==:#{pane_id},${pane}},#{==:#{pane_pid},${panePid}}}}`;

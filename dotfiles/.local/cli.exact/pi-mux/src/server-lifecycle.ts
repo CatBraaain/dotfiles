@@ -28,15 +28,19 @@ import {
   tmuxQueries,
   verifyServerLifetime,
   windowsManagement,
-} from "./tmux";
+} from "./mux";
 import {
   conversationLaunchKey,
   launchBasisStillLive,
   type WindowsManagementBasis,
-} from "./windows-launch-rights";
-import { captureWindowsProcesses, stopWindowsPeers, waitForWindowsExit } from "./windows-lifecycle";
-import type { WindowsManagement } from "./windows-management";
-import type { PsmuxPeer } from "./windows-psmux";
+} from "./windows/windows-launch-rights";
+import {
+  captureWindowsProcesses,
+  stopWindowsPeers,
+  waitForWindowsExit,
+} from "./windows/windows-lifecycle";
+import type { WindowsManagement } from "./windows/windows-management";
+import type { PsmuxPeer } from "./windows/windows-psmux";
 
 function waitingUserStopChain(panes: string[], action: string, waitMarker: string): string {
   const wait = tmuxArguments(["display-message", "-p", waitMarker]);

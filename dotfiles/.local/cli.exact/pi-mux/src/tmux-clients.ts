@@ -2,15 +2,15 @@ import type { TmuxConfig } from "./configuration";
 import { livePanes, PANE_FORMAT, parseLivePaneRows } from "./pane-inventory";
 import { platform } from "./platform";
 import type { Pane, Session } from "./session-model";
-import { serverIsAbsent, tmux, windowsManagement } from "./tmux";
-import { launchBasisStillLive, type WindowsManagementBasis } from "./windows-launch-rights";
-import type { WindowsManagement } from "./windows-management";
+import { serverIsAbsent, tmux, windowsManagement } from "./mux";
+import { launchBasisStillLive, type WindowsManagementBasis } from "./windows/windows-launch-rights";
+import type { WindowsManagement } from "./windows/windows-management";
 import {
   inspectWindowsProcess,
   observeWindowsIdentity,
   type WindowsProcessIdentity,
-} from "./windows-process";
-import { waitForPsmuxClient, type PsmuxObservation, type PsmuxPeer } from "./windows-psmux";
+} from "./windows/windows-process";
+import { waitForPsmuxClient, type PsmuxObservation, type PsmuxPeer } from "./windows/windows-psmux";
 
 type TmuxClient = { name: string; pid: number; session: string };
 

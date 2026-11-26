@@ -4,13 +4,13 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { firstInputDirectory } from "./pane-inventory";
-import { platformFor } from "./platform";
+import { firstInputDirectory } from "../pane-inventory";
+import { platformFor } from "../platform";
 import {
   auditWindowsLifecycle,
   windowsPaneIsWaiting,
   type WindowsLifecycleAudit,
-} from "./server-lifecycle";
+} from "../server-lifecycle";
 import {
   planWindowsReload,
   replaceVerifiedWindowsReloadPane,

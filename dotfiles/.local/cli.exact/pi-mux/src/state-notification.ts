@@ -20,10 +20,10 @@ import {
   serverOption,
   tmux,
   windowsManagement,
-} from "./tmux";
-import { mutateWindowsPeerPane } from "./windows-lifecycle";
-import type { WindowsManagement } from "./windows-management";
-import { inspectWindowsProcess } from "./windows-process";
+} from "./mux";
+import { mutateWindowsPeerPane } from "./windows/windows-lifecycle";
+import type { WindowsManagement } from "./windows/windows-management";
+import { inspectWindowsProcess } from "./windows/windows-process";
 
 type StartupTarget = {
   panePid: number;

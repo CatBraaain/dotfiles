@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { platform } from "./platform";
-import { windowsNpmPiCommand } from "./windows-pi-command";
+import { windowsNpmPiCommand } from "./windows/windows-pi-command";
 
 export type Config = ReturnType<typeof configuration>;
 

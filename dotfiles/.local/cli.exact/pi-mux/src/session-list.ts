@@ -14,7 +14,7 @@ import { platform } from "./platform";
 import { readReloadWaiting, waitingKey } from "./reload-waiting";
 import { readSnapshot, registerWorkspaces } from "./restore-state";
 import type { Pane } from "./session-model";
-import { tmux, tmuxQueries } from "./tmux";
+import { tmux, tmuxQueries } from "./mux";
 
 const STATE_OPTION = "@pi_session_state";
 const PUBLISH_PENDING_OPTION = "@pi_session_state_pending";

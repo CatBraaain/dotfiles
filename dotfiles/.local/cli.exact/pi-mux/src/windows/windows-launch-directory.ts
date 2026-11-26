@@ -1,7 +1,7 @@
 import { dlopen, ptr } from "bun:ffi";
 import { win32 } from "node:path";
-import { encodePowerShell, windowsPowerShell } from "./platform";
-import { isRecord } from "./session-model";
+import { encodePowerShell, windowsPowerShell } from "../platform";
+import { isRecord } from "../session-model";
 
 const DRIVE_FIXED = 3;
 const FILE_ATTRIBUTE_DIRECTORY = 0x10;

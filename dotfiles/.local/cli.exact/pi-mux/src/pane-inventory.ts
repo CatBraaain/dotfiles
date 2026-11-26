@@ -15,8 +15,8 @@ import {
   type StopTarget,
   UUID,
 } from "./session-model";
-import { serverIsAbsent, tmux, tmuxQueries, windowsManagement } from "./tmux";
-import { assertWindowsPiWorkingDirectory } from "./windows-pi-command";
+import { serverIsAbsent, tmux, tmuxQueries, windowsManagement } from "./mux";
+import { assertWindowsPiWorkingDirectory } from "./windows/windows-pi-command";
 
 export const PANE_FORMAT =
   "#{pane_id}\t#{session_id}\t#{session_name}\t#{@pi-tmux-session}\t#{pane_pid}\t#{pane_dead}\t#{window_active}\t#{pane_active}";

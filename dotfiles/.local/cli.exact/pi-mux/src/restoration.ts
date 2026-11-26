@@ -26,9 +26,9 @@ import {
   tmuxQueries,
   verifyServerLifetime,
   windowsManagement,
-} from "./tmux";
-import { launchBasisStillLive, type WindowsManagementBasis } from "./windows-launch-rights";
-import { configureWindowsPeer, WINDOWS_BOOTSTRAP_PROOF } from "./windows-lifecycle";
+} from "./mux";
+import { launchBasisStillLive, type WindowsManagementBasis } from "./windows/windows-launch-rights";
+import { configureWindowsPeer, WINDOWS_BOOTSTRAP_PROOF } from "./windows/windows-lifecycle";
 
 export type WindowsBootstrap = "start" | "fresh" | WindowsManagementBasis;
 

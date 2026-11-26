@@ -8,7 +8,7 @@ import {
 } from "./pane-state";
 import { isViewReceipt, type ViewReceipt } from "./session-metadata";
 import { errorMessage, isRecord, SESSION_ID_PATTERN, UUID } from "./session-model";
-import { isWindowsProcessIdentity, type WindowsProcessIdentity } from "./windows-process";
+import { isWindowsProcessIdentity, type WindowsProcessIdentity } from "./windows/windows-process";
 import { parseWorktreeSnapshotRequest, type WorktreeSnapshotRequest } from "./worktree-snapshot";
 
 type ListOperation =

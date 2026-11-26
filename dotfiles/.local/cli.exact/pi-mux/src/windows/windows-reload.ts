@@ -5,7 +5,7 @@ import {
   DISPATCH_TICKET_ID_MAX_LENGTH,
   DISPATCH_TICKET_ID_PATTERN,
   type WindowsReloadRoute,
-} from "./cli-arguments";
+} from "../cli-arguments";
 import {
   cliInvocation,
   type Config,
@@ -15,11 +15,11 @@ import {
   PSMUX_ROUTING,
   tmuxConfiguration,
   type TmuxConfig,
-} from "./configuration";
-import { type ReleaseLock, tryAcquireLock, windowsClaimLock, withLock } from "./locks";
-import { findFirstInput, launchRecordToken, matchesLaunch } from "./pane-inventory";
-import { clearStateOptions } from "./pane-state";
-import { platform } from "./platform";
+} from "../configuration";
+import { type ReleaseLock, tryAcquireLock, windowsClaimLock, withLock } from "../locks";
+import { findFirstInput, launchRecordToken, matchesLaunch } from "../pane-inventory";
+import { clearStateOptions } from "../pane-state";
+import { platform } from "../platform";
 import {
   announceReloaded,
   formatReloadProcess,
@@ -28,18 +28,18 @@ import {
   type ReloadPublication,
   publishWaitingTargets,
   reportReloadFailure,
-} from "./reload-publication";
-import { ReloadWaiting } from "./reload-waiting";
-import { startAndRestore } from "./restoration";
-import { readSnapshot, uniqueCandidates, writeSnapshot } from "./restore-state";
-import { findSaved } from "./saved-sessions";
+} from "../reload-publication";
+import { ReloadWaiting } from "../reload-waiting";
+import { startAndRestore } from "../restoration";
+import { readSnapshot, uniqueCandidates, writeSnapshot } from "../restore-state";
+import { findSaved } from "../saved-sessions";
 import {
   auditWindowsLifecycle,
   type WindowsLifecycleAudit,
   type WindowsLifecycleEntry,
   type WindowsLifecyclePeer,
   windowsPaneHasWaitingUserState,
-} from "./server-lifecycle";
+} from "../server-lifecycle";
 import {
   errorMessage,
   isRecord,
@@ -48,8 +48,8 @@ import {
   SESSION_ID_PATTERN,
   STARTUP_TIMEOUT_MS,
   UUID,
-} from "./session-model";
-import { windowsManagement } from "./tmux";
+} from "../session-model";
+import { windowsManagement } from "../mux";
 import {
   configureWindowsPiEnvironment,
   WINDOWS_RIGHT_ENV,

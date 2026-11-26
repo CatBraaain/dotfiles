@@ -14,8 +14,8 @@ import {
   STARTUP_TIMEOUT_MS,
   type StopTarget,
 } from "./session-model";
-import { serverIsAbsent, tmux, tmuxArguments } from "./tmux";
-import { closeWindowsPane } from "./windows-conversations";
+import { serverIsAbsent, tmux, tmuxArguments } from "./mux";
+import { closeWindowsPane } from "./windows/windows-conversations";
 
 export async function closeSession(
   config: TmuxConfig,

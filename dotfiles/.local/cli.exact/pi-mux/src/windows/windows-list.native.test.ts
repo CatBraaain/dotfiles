@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 const tmux = process.platform === "win32" ? Bun.which("tmux.exe") : null;
-const cli = join(import.meta.dir, "main.ts");
+const cli = join(import.meta.dir, "..", "main.ts");
 
 async function withPsmux(
   action: (fixture: ReturnType<typeof createPsmuxFixture>) => void | Promise<void>,

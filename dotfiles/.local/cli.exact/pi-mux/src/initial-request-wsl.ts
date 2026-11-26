@@ -3,7 +3,7 @@ import { InitialRequestFiles } from "./initial-request-files";
 import { matchesLaunch, sessionName } from "./pane-inventory";
 import { platform } from "./platform";
 import { POLL_INTERVAL_MS, STARTUP_TIMEOUT_MS, UUID } from "./session-model";
-import { tmux } from "./tmux";
+import { tmux } from "./mux";
 
 function inheritedEnvironment(): Record<string, string> {
   const entries = platform.processEnvironment(process.pid) ?? [];

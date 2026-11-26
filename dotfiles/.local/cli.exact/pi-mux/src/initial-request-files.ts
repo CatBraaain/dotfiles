@@ -20,7 +20,7 @@ import {
   assertWindowsLaunchDirectory,
   hasPlainLocalWindowsDirectory,
   isPlainWindowsLaunchFile,
-} from "./windows-launch-directory";
+} from "./windows/windows-launch-directory";
 
 export const INITIAL_REQUEST_DIRECTORY = "pi-mux-launch-argv";
 export const INITIAL_REQUEST_TTL_MS = 2 * STARTUP_TIMEOUT_MS;

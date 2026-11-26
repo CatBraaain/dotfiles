@@ -30,15 +30,15 @@ import { errorMessage } from "./session-model";
 import { closeSession, unregisterWorkspace } from "./session-removal";
 import { printDetachedSession, startSession } from "./session-start";
 import { notifyStartupInputDrained, notifyState } from "./state-notification";
-import { windowsManagement } from "./tmux";
+import { windowsManagement } from "./mux";
 import { displayedSessions, SwitchResolutionError, switchSession } from "./tmux-clients";
 import {
   claimWindowsLaunch,
   claimWindowsInitialRequest,
   createWindowsDispatchWorker,
   auditWindowsDispatchInventory,
-} from "./windows-launch";
-import { claimWindowsReload } from "./windows-reload";
+} from "./windows/windows-launch";
+import { claimWindowsReload } from "./windows/windows-reload";
 import { getWorktreeSnapshot } from "./worktree-snapshot";
 
 export { parseOperation };

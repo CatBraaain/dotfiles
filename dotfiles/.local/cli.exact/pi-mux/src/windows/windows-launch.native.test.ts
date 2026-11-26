@@ -12,8 +12,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { INITIAL_REQUEST_DIRECTORY } from "./initial-request-files";
-import { metadataFileIdentity } from "./session-metadata";
+import { INITIAL_REQUEST_DIRECTORY } from "../initial-request-files";
+import { metadataFileIdentity } from "../session-metadata";
 import { WindowsManagement, windowsManagementScope } from "./windows-management";
 import { runWindowsPeerPaneCommands } from "./windows-lifecycle";
 import { writeWindowsNpmPiFixture } from "./windows-npm-fixture";
@@ -24,9 +24,9 @@ const id = "6ec4c4f8-3b28-4b3d-ab62-de7790d46e83";
 const ticketId = "20301108-140000";
 const name = `handle_${ticketId}`;
 const prompt = "alpha \"double\" 'single' `backtick` $env:PATH #{pid};\nsecond line 雪";
-const main = join(import.meta.dir, "main.ts");
-const ticketMain = resolve(import.meta.dir, "../../../../.agents/cli.exact/ticket/src/main.ts");
-const uncCwd = import.meta.dir;
+const main = join(import.meta.dir, "..", "main.ts");
+const ticketMain = resolve(import.meta.dir, "../../../../../.agents/cli.exact/ticket/src/main.ts");
+const uncCwd = dirname(import.meta.dir);
 const node = process.platform === "win32" && Bun.which("node.exe");
 const unpublishedRequest = "leave this Pi unpublished";
 

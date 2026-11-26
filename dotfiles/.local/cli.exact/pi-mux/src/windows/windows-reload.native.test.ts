@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ListedWorkspace } from "./session-list";
+import type { ListedWorkspace } from "../session-list";
 import { writeWindowsNpmPiFixture } from "./windows-npm-fixture";
 import {
   observeWindowsIdentity,
@@ -13,7 +13,7 @@ import {
 } from "./windows-process";
 
 const tmux = process.platform === "win32" ? Bun.which("tmux.exe") : null;
-const main = join(import.meta.dir, "main.ts");
+const main = join(import.meta.dir, "..", "main.ts");
 const node = process.platform === "win32" && Bun.which("node.exe");
 
 const fixturePi = `

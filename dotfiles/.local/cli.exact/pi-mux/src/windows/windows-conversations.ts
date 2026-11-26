@@ -1,15 +1,15 @@
 import { existsSync } from "node:fs";
-import type { TmuxConfig } from "./configuration";
-import { windowsClaimLock } from "./locks";
-import { launchRecordToken, matchesLaunch } from "./pane-inventory";
-import { readSnapshot } from "./restore-state";
+import type { TmuxConfig } from "../configuration";
+import { windowsClaimLock } from "../locks";
+import { launchRecordToken, matchesLaunch } from "../pane-inventory";
+import { readSnapshot } from "../restore-state";
 import {
   auditWindowsLifecycle,
   type WindowsLifecycleAudit,
   type WindowsLifecycleEntry,
-} from "./server-lifecycle";
-import { type Pane, POLL_INTERVAL_MS, STARTUP_TIMEOUT_MS, UUID } from "./session-model";
-import { windowsManagement } from "./tmux";
+} from "../server-lifecycle";
+import { type Pane, POLL_INTERVAL_MS, STARTUP_TIMEOUT_MS, UUID } from "../session-model";
+import { windowsManagement } from "../mux";
 import { WINDOWS_RIGHT_ENV, WINDOWS_RIGHT_OPTION } from "./windows-launch";
 import {
   conversationLaunchKey,

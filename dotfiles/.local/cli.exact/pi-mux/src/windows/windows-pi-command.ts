@@ -1,6 +1,6 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { win32 } from "node:path";
-import { errorMessage, isRecord } from "./session-model";
+import { errorMessage, isRecord } from "../session-model";
 
 const PI_PACKAGE = "@earendil-works/pi-coding-agent";
 const NPM_QUERY_TIMEOUT_MS = 5_000;

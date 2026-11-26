@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
-import { writeWindowsNpmPiFixture } from "../../../../.local/cli.exact/pi-mux/src/windows-npm-fixture";
+import { writeWindowsNpmPiFixture } from "../../../../.local/cli.exact/pi-mux/src/windows/windows-npm-fixture";
 
 const ticketMain = join(import.meta.dir, "main.ts");
 const muxMain = resolve(import.meta.dir, "../../../../.local/cli.exact/pi-mux/src/main.ts");

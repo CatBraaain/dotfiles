@@ -23,7 +23,7 @@ import {
 import {
   hasPlainLocalWindowsDirectory,
   isPrivateWindowsLaunchAcl,
-} from "./windows-launch-directory";
+} from "./windows/windows-launch-directory";
 
 function fixture() {
   const base = "/tmp/work/dotfiles";

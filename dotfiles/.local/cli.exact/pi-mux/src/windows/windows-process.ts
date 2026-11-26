@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { win32 } from "node:path";
 import { promisify } from "node:util";
-import { isRecord } from "./session-model";
+import { isRecord } from "../session-model";
 
 export type WindowsProcessIdentity = { pid: number; creationTime: string };
 type ProcessUnavailable = { state: "ended" } | { state: "unknown" };

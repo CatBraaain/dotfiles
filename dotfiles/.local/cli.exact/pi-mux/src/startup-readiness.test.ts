@@ -9,10 +9,10 @@ import * as locks from "./locks";
 import { platform } from "./platform";
 import * as restoration from "./restoration";
 import { notifyStartupInputDrained, notifyState } from "./state-notification";
-import * as tmuxModule from "./tmux";
-import * as windowsLifecycle from "./windows-lifecycle";
-import { WindowsManagement } from "./windows-management";
-import * as windowsProcess from "./windows-process";
+import * as tmuxModule from "./mux";
+import * as windowsLifecycle from "./windows/windows-lifecycle";
+import { WindowsManagement } from "./windows/windows-management";
+import * as windowsProcess from "./windows/windows-process";
 
 const id = "startup-input-test";
 const token = randomUUID();

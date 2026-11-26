@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, win32 } from "node:path";
-import { windowsChildPids } from "./windows-process";
+import { windowsChildPids } from "./windows/windows-process";
 
 export type PlatformApi = ReturnType<typeof platformFor>;
 

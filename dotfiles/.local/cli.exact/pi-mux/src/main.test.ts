@@ -5363,7 +5363,7 @@ describe("restart safety", () => {
         `
 import { spyOn } from "bun:test";
 import { writeFileSync } from "node:fs";
-import * as tmux from ${JSON.stringify(join(import.meta.dir, "tmux.ts"))};
+import * as tmux from ${JSON.stringify(join(import.meta.dir, "mux.ts"))};
 const serverLifetime = tmux.serverLifetime;
 let captured = false;
 spyOn(tmux, "serverLifetime").mockImplementation(async (config) => {

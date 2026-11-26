@@ -11,7 +11,7 @@ import { snapshotSessions, startAndRestore, type WindowsBootstrap } from "./rest
 import { registerWorkspaces, SnapshotReadError } from "./restore-state";
 import { configuredSessionRoot, rememberSessionRoot } from "./saved-sessions";
 import { errorMessage, type Pane } from "./session-model";
-import { windowsManagement } from "./tmux";
+import { windowsManagement } from "./mux";
 import { switchSession, switchWindowsNewClient } from "./tmux-clients";
 
 type SessionStartOperation = Extract<Operation, { kind: "new" | "open" | "restore" }>;

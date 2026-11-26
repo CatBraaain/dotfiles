@@ -6,10 +6,10 @@ import { livePanes, paneExists, PANE_FORMAT, parseLivePaneRows } from "./pane-in
 import { platform } from "./platform";
 import { metadataFileIdentity, type ViewReceipt } from "./session-metadata";
 import { errorMessage, type Pane } from "./session-model";
-import { guardedTmuxLine, paneEntityGuard, serverLifetime, tmux, windowsManagement } from "./tmux";
-import { mutateWindowsPeerPane, readWindowsPeerPaneFields } from "./windows-lifecycle";
-import type { WindowsManagement } from "./windows-management";
-import type { PsmuxObservation, PsmuxPeer } from "./windows-psmux";
+import { guardedTmuxLine, paneEntityGuard, serverLifetime, tmux, windowsManagement } from "./mux";
+import { mutateWindowsPeerPane, readWindowsPeerPaneFields } from "./windows/windows-lifecycle";
+import type { WindowsManagement } from "./windows/windows-management";
+import type { PsmuxObservation, PsmuxPeer } from "./windows/windows-psmux";
 
 const SEND_WAIT_POLL_INTERVAL_MS = 100;
 

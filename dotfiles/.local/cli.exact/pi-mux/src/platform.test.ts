@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { platformFor } from "./platform";
-import { selectWindowsChildren } from "./windows-process";
+import { selectWindowsChildren } from "./windows/windows-process";
 
 const linux = platformFor("linux");
 const windows = platformFor("win32");

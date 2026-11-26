@@ -5,8 +5,8 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { TmuxConfig } from "./configuration";
 import { platform } from "./platform";
 import { POLL_INTERVAL_MS, STARTUP_TIMEOUT_MS } from "./session-model";
-import { windowsManagement } from "./tmux";
-import type { WindowsManagement } from "./windows-management";
+import { windowsManagement } from "./mux";
+import type { WindowsManagement } from "./windows/windows-management";
 
 export class LockBusyError extends Error {}
 

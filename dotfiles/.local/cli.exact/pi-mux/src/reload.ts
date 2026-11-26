@@ -58,8 +58,8 @@ import {
   tmuxArguments,
   tmuxQueries,
   verifyServerLifetime,
-} from "./tmux";
-import { reloadWindowsPanes } from "./windows-reload";
+} from "./mux";
+import { reloadWindowsPanes } from "./windows/windows-reload";
 
 type ReloadTarget = { pane: Pane; temporary: boolean };
 

@@ -13,14 +13,14 @@ import type { TmuxConfig } from "./configuration";
 import { canonicalSocketPath } from "./locks";
 import { platform } from "./platform";
 import { errorMessage, isRecord, SESSION_ID_PATTERN } from "./session-model";
-import { serverLifetime, type ServerLifetime, windowsManagement } from "./tmux";
+import { serverLifetime, type ServerLifetime, windowsManagement } from "./mux";
 import {
   isWindowsManagementBasis,
   launchBasisStillLive,
   type WindowsManagementBasis,
-} from "./windows-launch-rights";
-import type { WindowsManagement } from "./windows-management";
-import { inspectWindowsProcess, isWindowsProcessIdentity } from "./windows-process";
+} from "./windows/windows-launch-rights";
+import type { WindowsManagement } from "./windows/windows-management";
+import { inspectWindowsProcess, isWindowsProcessIdentity } from "./windows/windows-process";
 
 type ReloadBasis = ServerLifetime | WindowsManagementBasis;
 export type ReloadWaitingTarget = { id: string; session: string; name?: string };
