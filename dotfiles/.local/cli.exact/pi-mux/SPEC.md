@@ -312,7 +312,7 @@ pane-local user option `@pi_session_state` に、次のJSON文字列を公開す
 
 テキスト上限の2800 code pointsは、tmux optionの計測容量（約4KBのbase64値は格納可能、16KBは失敗）から設定した運用上限である。
 
-optionの書き込みは、対象paneのserver PID・pane ID・pane PIDの一致を条件とした `source-file` 上の `if-shell` で行い、書き込み後にoption値の読み戻しで確認する。確認が取れないとき、および対象のpaneが書き込み時点で消滅・置換しているときは、エラーにする。
+optionの書き込みは、対象paneのserver PID・pane ID・pane PIDの一致を条件とする。書き込みとoption値の読み戻しは、同じサーバー側のコマンド列で行う。Windows 以外では、対象の照合・書き込み・読み戻しを `source-file` 上の `if-shell` で行う。Windows の経路は「Windows での挙動差」に従う。消費を待つ場合は、読み戻した値が一致した後に消費を確認する。書き込みを確認できないとき、および対象paneが書き込み時点で消滅・置換しているときはエラーにする。
 
 受信側(pi-mux-bridge拡張)は、専用tmux内のTUIセッションで自身のpane optionを約2秒間隔で確認し、`@pi-mux-msg-` 接頭辞のoptionを処理する。有効なエンベロープのメッセージは、送信側の識別と時刻を本文に付した attributed custom message(`customType: "agent-message"`)として `deliverAs: "steer"`・`triggerTurn: true` で会話へ注入し、注入後に同一条件の `if-shell` でoptionを除去する。不正な値のoptionは注入せず、除去して記録する。
 
@@ -792,6 +792,7 @@ Windows では、tmuxの代わりに PATH上の `tmux` コマンドとして psm
 | IME | Windows で `pi-mux` が起動する pi プロセスにのみ `PI_HARDWARE_CURSOR=1` を渡し、IME が参照する端末カーソルを表示する |
 | 排他 | 操作の排他に使う接続先を名前付きパイプに切り替える。排他の待機・競合時の扱いは共通とする |
 | サーバーとpaneの同一性 | サーバーの識別は `#{pid}` のPIDとserver世代で、piの識別は起動トークンで行い、POSIXと同じ手順で通知元を検証する |
+| メッセージ・閲覧通知 | 対象会話を所有する psmux プロセスに送信操作を送り、そのプロセスと pane の一致を条件に、書き込みと値の読み戻しを同じサーバー側のコマンド列で行う。消費の確認は書き込んだプロセスと pane を対象とする。閲覧通知が時間内に消費されない場合は、同じプロセスと pane の一致を確認できた場合に限り、option の削除を試みる。 |
 | `reload`・通常の `restart` | psmux 3.4.0 で、1会話を1セッション・1 pane・1 pi で管理する起動経路を対象にする。pi-mux 経由の起動・停止・置き換えを同じ排他で扱い、専用管理先と対象を照合して操作の直前に有効な `waiting-user` を再確認する。確認と操作は不可分ではないため、同じ pi の実行フェーズがその間に変わる競合を許容する。psmux の直接操作による同時の分割、pi 起動、同じ pane でのプロセス置き換えは、この排他と競合防御の対象外とする。 |
 | 起動中piの特定 | 起動中の管理piを `/proc` の環境変数とcwdで照会しない。paneの `@pi-mux-launch` の会話ID・PID・トークンの形式の一致だけで特定する |
 | クライアント特定 | `--client-pid` は、接続中の `psmux` クライアント自身の PID、またはそのクライアントを直接起動した稼働中の `pi-mux` の PID と照合する。親 PID が再利用されている場合は一致とみなさない。一致候補の件数は `switch`・`list --displayed` の規定に従う。親子関係を照合できず別の一致を排除できない場合は、確認済みの一致が1件でもエラーにする |

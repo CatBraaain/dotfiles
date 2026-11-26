@@ -109,7 +109,8 @@ export async function stopWindowsPeers(
   }
 }
 
-async function authenticate(scope: Scope, peer: PsmuxPeer): Promise<Socket> {
+async function authenticate(scope: Scope, peer: PsmuxPeer, signal?: AbortSignal): Promise<Socket> {
+  signal?.throwIfAborted();
   if (
     !PEER_NAME.test(peer.name) ||
     !Number.isInteger(peer.port) ||
@@ -121,9 +122,9 @@ async function authenticate(scope: Scope, peer: PsmuxPeer): Promise<Socket> {
   const file = await lstat(path);
   if (!file.isFile() || file.size > RESPONSE_LIMIT)
     throw new Error(`Invalid psmux control key file for ${peer.name}`);
-  const key = (await readFile(path, "utf8")).replace(/\r?\n$/, "");
+  const key = (await readFile(path, { encoding: "utf8", signal })).replace(/\r?\n$/, "");
   if (!AUTH_KEY.test(key)) throw new Error(`Invalid psmux control key for ${peer.name}`);
-  const socket = createConnection({ host: "127.0.0.1", port: peer.port });
+  const socket = createConnection({ host: "127.0.0.1", port: peer.port, signal });
   socket.setEncoding("utf8");
   socket.on("error", () => {});
   try {
@@ -174,6 +175,7 @@ export async function readWindowsPeerPaneFields(
   pane: string,
   fields: readonly string[],
   inspect: InspectWindowsProcess = inspectWindowsProcess,
+  signal?: AbortSignal,
 ): Promise<string[]> {
   const identity = auditedPaneIdentity(scope, observation, peer, pane);
   if (fields.length === 0 || fields.some((field) => !PANE_FIELD.test(field)))
@@ -182,7 +184,7 @@ export async function readWindowsPeerPaneFields(
   const fixedFields = ["pid", "server_instance", "session_name", "pane_id"];
   const prefix = [String(identity.pid), basis.instance, peer.name, pane].join("\t") + "\t";
   const format = [...fixedFields, ...fields].map((field) => `#{${field}}`).join("\t");
-  const socket = await authenticate(scope, peer);
+  const socket = await authenticate(scope, peer, signal);
   try {
     if (observeWindowsIdentity(identity, inspect) !== "present")
       throw new Error(`psmux peer changed before pane read: ${peer.name}`);

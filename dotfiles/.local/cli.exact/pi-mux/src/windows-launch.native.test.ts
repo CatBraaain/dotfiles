@@ -4,7 +4,9 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { windowsManagementScope } from "./windows-management";
+import { metadataFileIdentity } from "./session-metadata";
+import { WindowsManagement, windowsManagementScope } from "./windows-management";
+import { runWindowsPeerPaneCommands } from "./windows-lifecycle";
 import { writeWindowsNpmPiFixture } from "./windows-npm-fixture";
 import { isUncPath } from "./windows-pi-command";
 
@@ -659,4 +661,203 @@ test.skipIf(!tmux || !node || !isUncPath(uncCwd))(
     }
   },
   180_000,
+);
+
+test.skipIf(!tmux || !node)(
+  "routes Windows messages and view receipts to the exact conversation when pane IDs overlap",
+  async () => {
+    assert.ok(tmux && node);
+    const root = mkdtempSync(join(tmpdir(), "pi-mux-native-delivery-"));
+    const conf = join(root, ".config", "psmux", "pi.conf");
+    const extension = join(root, ".pi", "agent", "extensions", "pi-mux-bridge");
+    const socket = join(root, ".local", "state", "pi-tmux", "server.sock");
+    const registry = join(root, "registry");
+    const sessions = join(root, "sessions");
+    const env = Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([key]) =>
+          !/^(TMUX(?:_PANE)?|PSMUX_.*|PI_.*|HOME|USERPROFILE|LOCALAPPDATA|PATH)$/i.test(key),
+      ),
+    );
+    Object.assign(env, {
+      HOME: root,
+      USERPROFILE: root,
+      LOCALAPPDATA: root,
+      PI_SESSION_ID: id,
+      PI_CODING_AGENT_SESSION_DIR: sessions,
+      PSMUX_DATA_DIR: registry,
+      PSMUX_NO_WARM: "1",
+      npm_config_prefix: root,
+      PATH: `${dirname(tmux)};${dirname(node)};${process.env.PATH}`,
+    });
+    async function run(args: string[]) {
+      const child = Bun.spawn(args, {
+        cwd: root,
+        env,
+        timeout: 30_000,
+        stdout: "pipe",
+        stderr: "pipe",
+        windowsHide: true,
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      return { exitCode, stdout, stderr };
+    }
+    const control = [tmux, "-S", socket, "-f", conf];
+    const management = new WindowsManagement({
+      socket,
+      directory: dirname(socket),
+      env,
+      async query(args) {
+        const result = await run([...control, ...args]);
+        return {
+          ...result,
+          stdout: result.stdout.replaceAll("\r\n", "\n"),
+          stderr: result.stderr.replaceAll("\r\n", "\n"),
+        };
+      },
+    });
+    async function mux(...args: string[]) {
+      return run([process.execPath, main, ...args]);
+    }
+    try {
+      for (const directory of [dirname(conf), extension, sessions, registry])
+        mkdirSync(directory, { recursive: true });
+      writeFileSync(conf, "set -g exit-empty off\nset -g remain-on-exit on\n");
+      writeFileSync(join(extension, "index.ts"), "export default () => {};\n");
+      writeWindowsNpmPiFixture(root, fixturePi);
+      for (const request of ["First request", "Second request"]) {
+        const created = await mux("new", "--detached", "--cwd", root, request);
+        assert.equal(created.exitCode, 0, created.stderr);
+      }
+      const observation = await management.audit("#{pane_id}\t#{@pi-tmux-session}");
+      const peers = observation.panes.filter(({ peer }) => !peer.held);
+      assert.equal(peers.length, 2);
+      const [other, target] = [peers[0]!, peers[1]!];
+      const [pane, metadata] = target.rows[0]!.split("\t");
+      assert.ok(pane && metadata);
+      assert.equal(other.rows[0]!.split("\t")[0], pane);
+      const conversation = json<{ id: string; file: string; processPid: number }>(
+        Buffer.from(metadata, "base64").toString(),
+      );
+      async function paneCommand(peer: typeof target.peer, ...args: string[]) {
+        return runWindowsPeerPaneCommands(management.scope, observation, peer, pane!, [args]);
+      }
+      function options(peer: typeof target.peer) {
+        return paneCommand(peer, "show-options", "-p", "-t", pane!);
+      }
+      async function pendingOption(prefix: string) {
+        const pattern = new RegExp(`^(${prefix}[-a-f0-9]+) ([A-Za-z0-9+/=]+)$`, "m");
+        let match: RegExpMatchArray | undefined;
+        await poll(async () => {
+          match = (await options(target.peer)).match(pattern) ?? undefined;
+          return match !== undefined;
+        });
+        const option = match?.[1];
+        const value = match?.[2];
+        assert.ok(option && value);
+        return { option, value };
+      }
+      async function consume(prefix: string) {
+        const { option, value } = await pendingOption(prefix);
+        await paneCommand(target.peer, "set-option", "-pu", "-t", pane!, option);
+        return json<Record<string, unknown>>(Buffer.from(value, "base64").toString());
+      }
+      const text = `-literal '" \\ 日本語\n${"🌏".repeat(2780)}`;
+      const sent = await mux("send", conversation.id, text);
+      assert.equal(sent.exitCode, 0, sent.stderr);
+      assert.equal(sent.stdout, "");
+      const envelope = await consume("@pi-mux-msg-");
+      assert.equal(envelope.text, text);
+      assert.equal(envelope.from, id);
+
+      const waitText = "wait for consumption";
+      const [waited, waitedEnvelope] = await Promise.all([
+        mux("send", "--wait", "6", conversation.id, waitText),
+        consume("@pi-mux-msg-"),
+      ]);
+      assert.equal(waited.exitCode, 0, waited.stderr);
+      assert.equal(waited.stdout.trim(), "delivered");
+      assert.equal(waitedEnvelope.text, waitText);
+      assert.equal(waitedEnvelope.from, id);
+
+      const receipt = {
+        file: conversation.file,
+        fileIdentity: metadataFileIdentity(conversation.file),
+        responseId: null,
+        viewedAt: "2026-11-26T00:00:00.000Z",
+      };
+      const [recorded, viewed] = await Promise.all([
+        mux("record-view", conversation.id, JSON.stringify(receipt)),
+        consume("@pi-mux-view-"),
+      ]);
+      assert.equal(recorded.exitCode, 0, recorded.stderr);
+      assert.deepEqual(viewed, {
+        ...receipt,
+        v: 1,
+        sessionId: conversation.id,
+        processPid: conversation.processPid,
+      });
+      const timedOut = await mux("record-view", conversation.id, JSON.stringify(receipt));
+      assert.equal(timedOut.exitCode, 1);
+      assert.match(timedOut.stderr, /View receipt not consumed .*: timeout/);
+      assert.doesNotMatch(await options(target.peer), /^@pi-mux-view-/m);
+
+      const waiting = mux("send", "--wait", "6", conversation.id, "target replacement");
+      const { option } = await pendingOption("@pi-mux-msg-");
+      const replacementMetadata = other.rows[0]!.split("\t")[1];
+      assert.ok(replacementMetadata);
+      await paneCommand(
+        target.peer,
+        "set-option",
+        "-p",
+        "-t",
+        pane,
+        "@pi-tmux-session",
+        replacementMetadata,
+      );
+      await paneCommand(target.peer, "set-option", "-pu", "-t", pane, option);
+      const replaced = await waiting;
+      assert.equal(replaced.exitCode, 1);
+      assert.equal(replaced.stdout, "");
+      assert.match(replaced.stderr, /Target pane disappeared before consuming @pi-mux-msg-/);
+
+      await paneCommand(target.peer, "set-option", "-p", "-t", pane, "@pi-tmux-session", metadata);
+      const waitForRemovedPeer = mux("send", "--wait", "6", conversation.id, "target removal");
+      const pendingRemoval = await pendingOption("@pi-mux-msg-");
+      const stopped = await run([...control, "kill-session", "-t", `=${target.peer.name}`]);
+      assert.equal(stopped.exitCode, 0, stopped.stderr);
+      const removed = await waitForRemovedPeer;
+      assert.equal(removed.exitCode, 1);
+      assert.equal(removed.stdout, "");
+      assert.ok(
+        removed.stderr.includes(`Cannot inspect ${pendingRemoval.option} in the target pane`) ||
+          removed.stderr.includes(
+            `Target pane disappeared before consuming ${pendingRemoval.option}`,
+          ),
+        removed.stderr,
+      );
+      const sessionsAfterRemoval = await run([
+        ...control,
+        "list-sessions",
+        "-F",
+        "#{session_name}",
+      ]);
+      assert.equal(sessionsAfterRemoval.exitCode, 0, sessionsAfterRemoval.stderr);
+      assert.deepEqual(sessionsAfterRemoval.stdout.trim().split(/\r?\n/), [other.peer.name]);
+      const otherOptions = await options(other.peer);
+      assert.match(otherOptions, /^@pi-tmux-session /m);
+      assert.doesNotMatch(otherOptions, /^@pi-mux-(msg|view)-/m);
+    } finally {
+      const listed = await run([...control, "list-sessions", "-F", "#{session_name}"]);
+      for (const session of listed.stdout.trim().split(/\r?\n/).filter(Boolean))
+        await run([...control, "kill-session", "-t", `=${session}`]);
+      await run([...control, "kill-server"]);
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
+  },
+  80_000,
 );
