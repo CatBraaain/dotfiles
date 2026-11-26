@@ -258,7 +258,7 @@ export function registerAgentTool(pi: ExtensionAPI): void {
     name: "agent",
     label: "Agent",
     description:
-      "Deliver a message to an agent session, or create a new one. Without session-id, creates a detached, independent main-agent pi session in a tmux window and starts it with the message as the initial prompt. The tool returns only the session information; it does not wait for, converse with, or collect results from the new session. With session-id, delivers the message to that live session; wait optionally blocks until the recipient consumes it. Requires interactive approval.",
+      "Deliver a message to an agent session, or create a new one. For a 'newagent' request, use this tool without session-id to start a detached, independent main-agent pi session in a tmux window. In the initial prompt (message), tell the new session to do the assigned work there. Do not forward the instruction to use 'newagent' or start that session, even when quoting the user's approval. The tool returns only the session information; it does not wait for, converse with, or collect results from the new session. With session-id, delivers the message to that live session; wait optionally blocks until the recipient consumes it. Requires interactive approval.",
     parameters,
     outputSchema,
     reachesTools() {
