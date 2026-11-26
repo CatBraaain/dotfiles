@@ -4,6 +4,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run } from "./main";
+import { spawnFixtureCli } from "./test-fixtures";
 
 const tempHomes: string[] = [];
 
@@ -301,21 +302,14 @@ describe("reading and role options", () => {
   }
 
   it("runs as a process with JSON output and exit code zero", () => {
-    const env = createFixtureHome();
-    const result = Bun.spawnSync(
-      [
-        process.execPath,
-        join(import.meta.dir, "main.ts"),
-        "show",
-        "01a15c51",
-        "--json",
-        "--role",
-        "user",
-      ],
-      { env: { ...process.env, HOME: env.homeDir } },
-    );
-    assert.equal(result.exitCode, 0);
-    assert.equal(JSON.parse(result.stdout.toString()).returned, 1);
+    const { homeDir } = createFixtureHome();
+    const result = spawnFixtureCli(["show", "01a15c51", "--json", "--role", "user"], homeDir);
+
+    assert.equal(result.exitCode, 0, result.stderr.toString());
+    const page = JSON.parse(result.stdout.toString());
+    assert.equal(page.returned, 1);
+    assert.equal(page.records[0].role, "user");
+    assert.equal(page.records[0].text, "search the worktree");
     assert.equal(result.stderr.toString(), "");
   });
 

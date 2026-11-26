@@ -2,10 +2,12 @@ import { afterAll, describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { listSessionFiles, type SessionFile } from "./sessions";
 import { parseRgOutputLine, RgUnavailableError, runSearch } from "./search";
+import { spawnFixtureCli } from "./test-fixtures";
 
+const FAKE_RG_IDLE_MS = 30_000;
 const tempRoots: string[] = [];
 
 function createSessionTree(): string {
@@ -21,6 +23,20 @@ function writeSession(root: string, sessionId: string, lines: string[]): void {
     join(projectDir, `2026-10-21T00-00-00-000Z_${sessionId}.jsonl`),
     `${lines.join("\n")}\n`,
   );
+}
+
+function compileFakeRg(root: string, source: string): string {
+  const entry = join(root, "fake-rg.ts");
+  const dist = join(root, "dist");
+  const executable = join(dist, process.platform === "win32" ? "rg.exe" : "rg");
+  mkdirSync(dist);
+  writeFileSync(entry, source);
+  const build = Bun.spawnSync(
+    [process.execPath, "build", "--compile", entry, "--outfile", executable],
+    { cwd: root },
+  );
+  assert.equal(build.exitCode, 0, build.stderr.toString());
+  return executable;
 }
 
 afterAll(() => {
@@ -283,48 +299,40 @@ console.log(JSON.stringify(hits.map(({ invocationId, eventIndex }) => [invocatio
     const root = createSessionTree();
     const homeDir = join(root, "home");
     const sessionDir = join(homeDir, ".pi", "agent", "sessions", "--home-username-projects-demo--");
-    const binDir = join(root, "bin");
     const sessionId = "00000000-0000-0000-0000-000000000001";
+    const sessionFile = join(sessionDir, `2026-10-21T00-00-00-000Z_${sessionId}.jsonl`);
+    const entry = inlineLog("call-signal", [
+      { type: "assistant.message", data: { content: "needle answer" } },
+    ]);
     mkdirSync(sessionDir, { recursive: true });
-    mkdirSync(binDir);
-    writeFileSync(
-      join(sessionDir, `2026-10-21T00-00-00-000Z_${sessionId}.jsonl`),
-      `${JSON.stringify({
-        type: "custom",
-        customType: "agents.subagent-log",
-        data: {
-          agent: "junior",
-          invocationId: "call-signal",
-          task: "unrelated task",
-          events: [{ type: "assistant.message", data: { content: "needle answer" } }],
-        },
-      })}\n`,
-    );
-    const realRg = Bun.which("rg");
-    assert.ok(realRg);
-    const rgWrapper = join(binDir, "rg");
-    writeFileSync(
-      rgWrapper,
-      `#!/bin/sh\ncase " $* " in\n  *" --with-filename "*) exec '${realRg}' "$@" ;;\n  *) kill -TERM $$ ;;\nesac\n`,
-      { mode: 0o755 },
+    writeFileSync(sessionFile, `${entry}\n`);
+    const parentHit = `${sessionFile}\u00001:${entry}`;
+    compileFakeRg(
+      root,
+      `if (process.argv.includes("--with-filename")) {
+  console.log(${JSON.stringify(parentHit)});
+} else {
+  await Bun.stdin.stream().getReader().read();
+  process.kill(process.pid, "SIGTERM");
+  await Bun.sleep(${FAKE_RG_IDLE_MS});
+  console.error("SIGTERM did not stop fake rg");
+  process.exit(2);
+}`,
     );
 
-    const result = Bun.spawnSync(
-      [
-        process.execPath,
-        join(import.meta.dir, "main.ts"),
-        "search",
-        "needle",
-        "--role",
-        "assistant",
-        "--json",
-      ],
-      { env: { ...process.env, HOME: homeDir, PATH: `${binDir}:${process.env.PATH}` } },
-    );
+    const result = spawnFixtureCli(["search", "needle", "--role", "assistant", "--json"], homeDir, {
+      ...process.env,
+      PATH: [join(root, "dist"), process.env.PATH].join(delimiter),
+      RIPGREP_CONFIG_PATH: undefined,
+    });
 
-    assert.notEqual(result.exitCode, 0);
+    assert.equal(result.exitCode, 1, result.stderr.toString());
     assert.equal(result.stdout.toString(), "");
-    assert.match(result.stderr.toString(), /rg event search failed.*SIGTERM/);
+    const expectedError =
+      process.platform === "win32"
+        ? /rg event search ended before all replies arrived/
+        : /rg event search failed \(signal SIGTERM\)/;
+    assert.match(result.stderr.toString(), expectedError);
   });
 
   it("returns each matching child event body instead of the task", async () => {
@@ -520,20 +528,22 @@ describe("search process lifetime", () => {
     const sessionId = "00000000-0000-0000-0000-000000000001";
     writeSession(root, sessionId, [userLineWithText("needle")]);
     const files = listSessionFiles(root);
-    const executable = join(root, "fake-rg");
     const output = `${files[0]!.path}\u00001:${userLineWithText("needle")}`;
-    writeFileSync(
-      executable,
-      `#!/usr/bin/env bun\nconsole.log(${JSON.stringify(output)});\nawait new Promise((resolve) => setTimeout(resolve, 30000));\n`,
-      { mode: 0o755 },
+    const pidFile = join(root, "rg.pid");
+    const executable = compileFakeRg(
+      root,
+      `await Bun.write(${JSON.stringify(pidFile)}, String(process.pid));
+console.log(${JSON.stringify(output)});
+await Bun.sleep(${FAKE_RG_IDLE_MS});`,
     );
-    const started = performance.now();
+
     const hits = await runSearch(files, "needle", {
       limit: 1,
       role: "user",
       rgCommand: executable,
     });
     assert.equal(hits.length, 1);
-    assert.ok(performance.now() - started < 2000);
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
   });
 });
