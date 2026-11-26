@@ -3271,10 +3271,10 @@ ${
 while (gated && !(await Bun.file(${JSON.stringify(publicationGates.metadata)}).exists())) await Bun.sleep(10);`
     : ""
 }
+appendFileSync(${JSON.stringify(join(fixture.directory, "launches.jsonl"))}, JSON.stringify({id,cwd:process.cwd(),args:process.argv.slice(2)}) + "\\n");
 tmux(["set-option", "-p", "-t", pane, "@pi-tmux-session", Buffer.from(JSON.stringify(metadata)).toString("base64")]);
 ${publicationGates ? `while (gated && !(await Bun.file(${JSON.stringify(publicationGates.state)}).exists())) await Bun.sleep(10);` : ""}
 tmux(["set-option", "-p", "-t", pane, "@pi_session_state", JSON.stringify({version:1,sessionId:id,state:"waiting-user"})]);
-appendFileSync(${JSON.stringify(join(fixture.directory, "launches.jsonl"))}, JSON.stringify({id,cwd:process.cwd(),args:process.argv.slice(2)}) + "\\n");
 await Bun.sleep(300000);
 `,
     { mode: 0o700 },
@@ -3296,8 +3296,9 @@ function startRestart(fixture: SessionFixture, args: string[] = []) {
   return startLifecycleCommand(fixture, ["restart", ...args]);
 }
 
-function startLifecycleCommand(fixture: SessionFixture, args: string[]) {
-  return Bun.spawn([process.execPath, "run", source, ...args], {
+function startLifecycleCommand(fixture: SessionFixture, args: string[], preload?: string) {
+  const options = preload ? ["--preload", preload] : [];
+  return Bun.spawn([process.execPath, "run", ...options, source, ...args], {
     cwd: fixture.cwd,
     env: fixture.env,
     stdout: "pipe",
@@ -5195,19 +5196,53 @@ describe("restart safety", () => {
     try {
       prepareManagedPi(fixture);
       const id = addManagedSession(fixture, "target", "running");
-      children.push(startRestart(fixture), startRestart(fixture));
-      await Bun.sleep(300);
-      assert.equal(
-        children.every((child) => child.exitCode === null),
-        true,
+      const originalGeneration = fixture.tmux(["show-options", "-gqv", "@pi-mux-generation"]);
+      assert.ok(originalGeneration);
+      const preload = join(fixture.directory, "record-restart-generation.ts");
+      const capturePrefix = join(fixture.directory, "restart-generation-");
+      writeFileSync(
+        preload,
+        `
+import { spyOn } from "bun:test";
+import { writeFileSync } from "node:fs";
+import * as tmux from ${JSON.stringify(join(import.meta.dir, "tmux.ts"))};
+const serverLifetime = tmux.serverLifetime;
+let captured = false;
+spyOn(tmux, "serverLifetime").mockImplementation(async (config) => {
+  const lifetime = await serverLifetime(config);
+  if (!captured) {
+    writeFileSync(${JSON.stringify(capturePrefix)} + process.pid, lifetime?.generation ?? "");
+    captured = true;
+  }
+  return lifetime;
+});
+`,
+      );
+      children.push(
+        startLifecycleCommand(fixture, ["restart"], preload),
+        startLifecycleCommand(fixture, ["restart"], preload),
+      );
+      const captures = children.map((child) => capturePrefix + child.pid);
+      await waitUntil(() =>
+        captures.every(
+          (path) => existsSync(path) && readFileSync(path, "utf8") === originalGeneration,
+        ),
       );
       restartState(fixture, "target", id, "waiting-user");
-      const statuses = await Promise.all(children.map((child) => child.exited));
-      assert.deepEqual(statuses.sort(), [0, 1]);
-      assert.equal(
-        readFileSync(join(fixture.directory, "launches.jsonl"), "utf8").trim().split("\n").length,
-        1,
+      const results = await Promise.all(
+        children.map((child) => Promise.all([child.exited, new Response(child.stderr).text()])),
       );
+      const statuses = results.map(([status]) => status).sort();
+      assert.deepEqual(statuses, [0, 1], results.map(([, stderr]) => stderr).join("\n"));
+      const rejection = results.find(([status]) => status === 1);
+      assert.ok(rejection);
+      assert.match(rejection[1], /Dedicated server changed during restart/);
+      const launchLog = join(fixture.directory, "launches.jsonl");
+      const restoredIds = readFileSync(launchLog, "utf8")
+        .trimEnd()
+        .split("\n")
+        .map((line) => JSON.parse(line).id);
+      assert.deepEqual(restoredIds, [id]);
     } finally {
       for (const child of children) {
         child.kill();
