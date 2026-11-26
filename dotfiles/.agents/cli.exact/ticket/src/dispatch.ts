@@ -459,15 +459,14 @@ export async function startDispatcher(input: StartDispatcherInput): Promise<void
     }
     const sessionDirKey = "PI_CODING_AGENT_SESSION_DIR";
     const sessionDir = process.env[sessionDirKey];
-    const command = lockedEnabled
-      ? [
-          "/usr/bin/env",
-          ...(sessionDir === undefined
-            ? ["-u", sessionDirKey]
-            : [`${sessionDirKey}=${sessionDir}`]),
-          ...input.command,
-        ]
-      : input.command;
+    const sessionDirSetup =
+      sessionDir === undefined
+        ? `unset ${sessionDirKey}`
+        : `export ${sessionDirKey}=${shQuote(sessionDir)}`;
+    const workerCommand = `exec ${input.command.map(shQuote).join(" ")}`;
+    const paneCommand = lockedEnabled
+      ? ["/bin/sh", "-c", `${sessionDirSetup}; ${workerCommand}`]
+      : [workerCommand];
     const result = tmux(socket, [
       "new-session",
       "-d",
@@ -484,7 +483,7 @@ export async function startDispatcher(input: StartDispatcherInput): Promise<void
             `PI_CODING_AGENT_DIR=${process.env.PI_CODING_AGENT_DIR ?? ""}`,
           ]
         : []),
-      `exec ${command.map(shQuote).join(" ")}`,
+      ...paneCommand,
     ]);
     if (!result.ok) throw new Error(`dispatcher start failed for ${name}: ${result.stderr.trim()}`);
     console.log(`dispatcher ${restarted ? "restarted" : "started"}: ${name}`);

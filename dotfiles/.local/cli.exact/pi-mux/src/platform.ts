@@ -262,13 +262,12 @@ export function platformFor(platformName: string) {
           .filter(Boolean)
           .join("; ")} }`;
       }
-      return [
-        "/usr/bin/env",
-        ...Object.entries(environment).map(([key, value]) => `${key}=${value}`),
-        ...invocation,
-      ]
-        .map(shLiteral)
-        .join(" ");
+      const assignments = Object.entries(environment).map(([key, value]) => {
+        if (!ENVIRONMENT_KEY_PATTERN.test(key))
+          throw new Error(`Invalid hook environment key: ${key}`);
+        return `${key}=${shLiteral(value)}`;
+      });
+      return [...assignments, ...invocation.map(shLiteral)].join(" ");
     },
   };
 }

@@ -334,7 +334,7 @@ describe("ticket dispatch with real pi-mux", () => {
         const sessionDirKey = "PI_CODING_AGENT_SESSION_DIR";
         const staleRoot = join(fixture.root, "stale sessions");
         const settingsRoot = join(fixture.root, "settings sessions");
-        const customRoot = join(fixture.root, "caller sessions;");
+        const customRoot = join(fixture.root, "caller's $sessions;");
         if (rootMode === "custom" || rootMode === "empty")
           env[sessionDirKey] = rootMode === "custom" ? customRoot : "";
         const expectedRoot = rootMode === "custom" || global ? customRoot : settingsRoot;

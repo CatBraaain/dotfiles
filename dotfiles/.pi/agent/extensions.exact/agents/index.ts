@@ -1219,12 +1219,13 @@ export default function agentsExtension(
 
   async function routeCandidates(
     candidates: readonly ModelCandidate[],
+    cwd: string,
     signal?: AbortSignal,
   ): Promise<readonly ModelCandidate[]> {
     let usageStdout: string | undefined;
     if (!routingUsageDisabled) {
       try {
-        const { exitCode, stdout } = await executeUsage(pi, signal);
+        const { exitCode, stdout } = await executeUsage(pi, signal, { cwd });
         if (exitCode === 127) routingUsageDisabled = true;
         if (exitCode === 0) usageStdout = stdout;
       } catch (error) {
@@ -1281,7 +1282,7 @@ export default function agentsExtension(
       cooldowns,
       (provider, id) => ctx.modelRegistry.find(provider, id),
       Date.now(),
-      (survivors) => routeCandidates(survivors, signal),
+      (survivors) => routeCandidates(survivors, ctx.cwd, signal),
     );
   }
 

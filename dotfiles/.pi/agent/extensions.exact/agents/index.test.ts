@@ -40,6 +40,10 @@ import { runUsage, scoreCandidates } from "./usage.ts";
 import { parseUsageJson } from "../provider-usage/index.ts";
 import type { ModelCandidate } from "./routing.ts";
 
+function runUsageThroughMockExec(pi: Pick<ExtensionAPI, "exec">, signal?: AbortSignal) {
+  return runUsage(pi, signal, { platform: "win32" });
+}
+
 function usageFixture(
   rows: Array<{
     provider: string;
@@ -8403,7 +8407,7 @@ describe("shipped agents.yaml through the shared usage entry", () => {
           { provider: "openai-codex", id: "gpt-6-luna" },
           { provider: "commandcode", id: "z-ai/glm-5.3-flash" },
         ],
-        executeUsage: runUsage,
+        executeUsage: runUsageThroughMockExec,
         usageExec: async () => {
           usageCalls++;
           return { code: 0, stdout: usageJson, stderr: "", killed: false, truncated: false };
@@ -8505,7 +8509,7 @@ describe("titles through the agents owner resolver", () => {
     const extension = captureAgentsExtension(
       { config: injected },
       {
-        executeUsage: runUsage,
+        executeUsage: runUsageThroughMockExec,
         hasConfiguredAuth: (model) => model.id !== "unconfigured",
         resolveAuth: async (model) =>
           model.id === "invalid" ? { ok: false, error: "expired" } : { ok: true },
@@ -8534,7 +8538,7 @@ describe("titles through the agents owner resolver", () => {
     const extension = captureAgentsExtension(
       { config: injected },
       {
-        executeUsage: runUsage,
+        executeUsage: runUsageThroughMockExec,
         usageExec: async () => ({
           code: 127,
           stdout: "",
@@ -8564,7 +8568,7 @@ describe("titles through the agents owner resolver", () => {
     const extension = captureAgentsExtension(
       { config: injected },
       {
-        executeUsage: runUsage,
+        executeUsage: runUsageThroughMockExec,
         usageExec: async () => ({
           code: 0,
           stdout: "[]",
@@ -8600,7 +8604,7 @@ describe("shared owner candidate selection for titles", () => {
         },
       },
       {
-        executeUsage: runUsage,
+        executeUsage: runUsageThroughMockExec,
         usageExec: async () => ({
           code: 1,
           stdout: "[]",

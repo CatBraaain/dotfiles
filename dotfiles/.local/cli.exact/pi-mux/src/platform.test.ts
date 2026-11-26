@@ -359,7 +359,35 @@ describe("shell command generation", () => {
   it("builds POSIX hook commands with environment assignments", () => {
     assert.equal(
       linux.hookCommand(["/usr/bin/pi-mux", "snapshot"], { HOME: "/home/u", PATH: "/bin" }),
-      `'/usr/bin/env' 'HOME=/home/u' 'PATH=/bin' '/usr/bin/pi-mux' 'snapshot'`,
+      `HOME='/home/u' PATH='/bin' '/usr/bin/pi-mux' 'snapshot'`,
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "passes literal environment and arguments to a POSIX hook",
+    () => {
+      const agentDirectory = "agent's $dir; name";
+      const generation = "generation's $id";
+      const hook = linux.hookCommand(
+        [
+          process.execPath,
+          "-e",
+          "console.log(JSON.stringify([process.env.PI_CODING_AGENT_DIR, process.env.PATH, process.argv[1]]))",
+          "--",
+          generation,
+        ],
+        { PI_CODING_AGENT_DIR: agentDirectory, PATH: "" },
+      );
+      const result = Bun.spawnSync(["/bin/sh", "-c", hook]);
+      assert.equal(result.exitCode, 0, result.stderr.toString());
+      assert.deepEqual(JSON.parse(result.stdout.toString()), [agentDirectory, "", generation]);
+    },
+  );
+
+  it("rejects invalid POSIX hook environment keys", () => {
+    assert.throws(
+      () => linux.hookCommand(["/usr/bin/pi-mux", "snapshot"], { "invalid key": "value" }),
+      /Invalid hook environment key/,
     );
   });
 
