@@ -154,7 +154,8 @@ class HistoryCacheFixture {
       join(bin, "tmux"),
       `#!${bunExecutable}
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-const args = process.argv.slice(process.argv[4] === "-f" ? 6 : 4);
+const hasConfigFile = ["-f", "-uf"].includes(process.argv[4]);
+const args = process.argv.slice(hasConfigFile ? 6 : 4);
 const directory = ${JSON.stringify(this.directory)};
 const runningFile = ${JSON.stringify(runningFile)};
 let pane = ${JSON.stringify(pane)};

@@ -1387,6 +1387,40 @@ describe("list scopes", () => {
 });
 
 describe("list workspace panes", () => {
+  it("lists the same running session under C and UTF-8 locales", async () => {
+    const fixture = new SessionFixture();
+    try {
+      const id = randomUUID();
+      const file = conversationFile(fixture.agentDir, fixture.cwd, id);
+      const title = "Café";
+      fixture.piSession("saved", { id, file });
+      const pane = fixture.tmux(["display-message", "-p", "-t", "saved", "#{pane_id}"]);
+      fixture.tmux([
+        "set-option",
+        "-p",
+        "-t",
+        pane,
+        "@pi_session_state",
+        JSON.stringify({ version: 1, sessionId: id, state: "running", title }),
+      ]);
+
+      const expected: ListedWorkspace[] = [
+        {
+          cwd: fixture.cwd,
+          sessions: [{ id, file, state: "running", title, publishPending: null }],
+          empty: [],
+        },
+      ];
+      for (const locale of ["C.UTF-8", "C"]) {
+        const result = fixture.run(["list", "--active", "--json"], { LC_ALL: locale });
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(JSON.parse(result.stdout), expected, `LC_ALL=${locale}`);
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  }, 20_000);
+
   it("shows saved and unsaved panes without a row for an empty workspace", async () => {
     const fixture = new SessionFixture();
     try {

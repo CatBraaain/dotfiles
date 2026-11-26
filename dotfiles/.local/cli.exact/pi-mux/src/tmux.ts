@@ -145,9 +145,10 @@ export async function tmux(
   allowFailure = false,
   input?: string,
 ) {
+  const configFileFlag = platform.windows ? "-f" : "-uf";
   const clientFlags = config.noStart && !platform.windows ? ["-N"] : [];
   const child = Bun.spawn(
-    [config.tmux, "-S", config.socket, "-f", config.tmuxConfig, ...clientFlags, ...args],
+    [config.tmux, "-S", config.socket, configFileFlag, config.tmuxConfig, ...clientFlags, ...args],
     {
       env: config.env,
       timeout: config.timeout,
