@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  type BigIntStats,
   closeSync,
   constants,
   existsSync,
@@ -14,7 +15,7 @@ import {
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { type Config, expandPath, prepareDirectory, type TmuxConfig } from "./configuration";
-import { HistorySummaryCache, readSessionHeader } from "./history-summary";
+import { type HistorySummaryCache, readSessionHeader } from "./history-summary";
 import { readSnapshot } from "./restore-state";
 import {
   metadataFileRevision,
@@ -34,6 +35,10 @@ export type HistoryEntry = {
   size: number;
 };
 
+export type LiveArchiveLookup = (session: Pick<Session, "id" | "file">) => HistoryEntry | undefined;
+
+type HistorySelection = { scope: "history"; cwd: string | undefined } | { scope: "list" };
+
 type SavedSessionConfig = Pick<TmuxConfig, "agentDir"> & {
   env: NodeJS.ProcessEnv;
 };
@@ -46,54 +51,114 @@ function sessionGroupName(cwd: string): string {
 
 export async function historySessions(
   config: TmuxConfig,
-  cwdFilter: string | undefined,
-): Promise<HistoryEntry[]> {
+  summaries: HistorySummaryCache,
+  selection: HistorySelection,
+): Promise<{ entries: HistoryEntry[]; resolveLiveArchive?: LiveArchiveLookup }> {
   const registered = readSnapshot(config)?.cwds ?? [];
+  const cwdFilter = selection.scope === "history" ? selection.cwd : undefined;
   const cwds = cwdFilter === undefined ? registered : registered.filter((cwd) => cwd === cwdFilter);
-  if (cwds.length === 0) return [];
+  if (cwds.length === 0) return { entries: [] };
   const targetCwds = new Set(cwds);
   const groups = [
     ...new Set(cwds.map((cwd) => join(config.agentDir, "sessions", sessionGroupName(cwd)))),
   ];
   const { customRoot, layers } = await savedSessionLayers(config, groups);
+  const enumeratedLayers =
+    selection.scope === "history" ? layers : layers.filter(({ archived }) => !archived);
   const listed = await Promise.all(
-    layers.flatMap(({ directories, archived }) =>
-      directories.map(async (directory) =>
-        (await sessionFiles(directory)).map((file) => ({ file, archived })),
-      ),
+    enumeratedLayers.flatMap(({ directories, archived }) =>
+      directories.map(async (directory) => ({
+        directory,
+        archived,
+        files: await sessionFiles(directory),
+      })),
     ),
   );
-  const history: HistoryEntry[] = [];
+  const entries: HistoryEntry[] = [];
   const normalIds = new Set<string>();
-  const summaries = new HistorySummaryCache();
-  for (const { file, archived } of listed.flat()) {
+  for (const { file, archived } of listed.flatMap(({ files, archived }) =>
+    files.map((file) => ({ file, archived })),
+  )) {
     const summary = summaries.resolveHistory(file, (header) => {
       if (customRoot && !targetCwds.has(header.cwd)) return false;
       const shadowedByNormalCopy = archived && normalIds.has(header.id);
       return !shadowedByNormalCopy;
     });
-    const header = summary?.header;
-    if (!summary || !header) continue;
-    if (!archived) normalIds.add(header.id);
-    history.push({
-      id: header.id,
-      cwd: header.cwd,
-      file,
-      title: summary.title,
-      btime: summary.btime,
-      mtime: summary.mtime,
-      size: summary.size,
-    });
+    const entry = historyEntry(file, summary);
+    if (!entry) continue;
+    if (!archived) normalIds.add(entry.id);
+    entries.push(entry);
   }
-  return history.sort(
+  for (const { directory, files } of listed) summaries.recordDiscoveredFiles(directory, files);
+  entries.sort(
     (a, b) =>
       (b.mtime ?? Number.NEGATIVE_INFINITY) - (a.mtime ?? Number.NEGATIVE_INFINITY) ||
       a.file.localeCompare(b.file),
   );
+
+  const archive = layers.find(({ archived }) => archived);
+  return selection.scope === "list" && archive
+    ? { entries, resolveLiveArchive: liveArchiveLookup(archive.directories, summaries) }
+    : { entries };
 }
 
-export function resolveSessionTitle(file: string): string | null {
-  return new HistorySummaryCache().resolve(file).title;
+function historyEntry(
+  file: string,
+  summary: ReturnType<HistorySummaryCache["resolveHistory"]>,
+): HistoryEntry | undefined {
+  if (!summary?.header) return undefined;
+  return {
+    id: summary.header.id,
+    cwd: summary.header.cwd,
+    file,
+    title: summary.title,
+    btime: summary.btime,
+    mtime: summary.mtime,
+    size: summary.size,
+  };
+}
+
+function liveArchiveLookup(
+  directories: string[],
+  summaries: HistorySummaryCache,
+): LiveArchiveLookup {
+  const archiveDirectories = new Set(directories);
+  const normalDirectories = new Set(directories.map(dirname));
+  return ({ id, file }) => {
+    const parent = dirname(file);
+    if (normalDirectories.has(parent) || !file.endsWith(".jsonl")) return undefined;
+    try {
+      const parentStat = statSync(parent, { bigint: true });
+      if (!parentStat.isDirectory() || parentStat.ino === 0n) return undefined;
+      const registered = archiveDirectories.has(parent)
+        ? parent
+        : directories.find((directory) => matchesDirectory(directory, parentStat));
+      if (registered === undefined) return undefined;
+      return historyEntry(
+        file,
+        summaries.resolveDirectHistory(
+          file,
+          (header) => header.id === id,
+          () =>
+            matchesDirectory(parent, parentStat) &&
+            (registered === parent || matchesDirectory(registered, parentStat)),
+        ),
+      );
+    } catch {
+      return undefined;
+    }
+  };
+}
+
+function matchesDirectory(path: string, expected: BigIntStats): boolean {
+  try {
+    const actual = statSync(path, { bigint: true, throwIfNoEntry: false });
+    return (
+      actual?.isDirectory() === true && actual.dev === expected.dev && actual.ino === expected.ino
+    );
+  } catch {
+    return false;
+  }
 }
 
 export async function configuredSessionRoot(

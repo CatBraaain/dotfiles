@@ -1,4 +1,4 @@
-import type { HistoryEntry } from "./saved-sessions";
+import type { HistoryEntry, LiveArchiveLookup } from "./saved-sessions";
 import type { EmptySession, ListedSession, ListedWorkspace } from "./session-list";
 
 type UnifiedSession = ListedSession & {
@@ -14,6 +14,7 @@ type UnifiedWorkspace = { cwd: string; sessions: UnifiedSession[] };
 export function mergeSessionLists(
   active: ListedWorkspace[],
   history: HistoryEntry[],
+  resolveLiveArchive?: LiveArchiveLookup,
 ): UnifiedWorkspace[] {
   const workspaces = new Map<string, UnifiedWorkspace>(
     active.map(({ cwd }) => [cwd, { cwd, sessions: [] }]),
@@ -30,8 +31,9 @@ export function mergeSessionLists(
     for (const entry of entries) {
       if (seenActive.has(entry.id)) continue;
       seenActive.add(entry.id);
-      const saved = savedById.get(entry.id);
       const hasLiveFile = "state" in entry;
+      const saved =
+        savedById.get(entry.id) ?? (hasLiveFile ? resolveLiveArchive?.(entry) : undefined);
       workspace.sessions.push({
         id: entry.id,
         file: saved?.file ?? entry.file,

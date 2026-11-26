@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { prepareDirectory, type TmuxConfig } from "./configuration";
-import { type LastRun, parseLastRun } from "./history-summary";
+import { type HistorySummaryCache, type LastRun, parseLastRun } from "./history-summary";
 import { withLock } from "./locks";
 import { livePanes, readTemporarySession, temporarySessionQuery } from "./pane-inventory";
 import {
@@ -13,7 +13,6 @@ import {
 import { platform } from "./platform";
 import { readReloadWaiting, waitingKey } from "./reload-waiting";
 import { readSnapshot, registerWorkspaces } from "./restore-state";
-import { resolveSessionTitle } from "./saved-sessions";
 import type { Pane } from "./session-model";
 import { tmux, tmuxQueries } from "./tmux";
 
@@ -39,6 +38,7 @@ export type ListedWorkspace = { cwd: string; sessions: ListedSession[]; empty: E
 
 export async function listWorkspaces(
   config: TmuxConfig,
+  summaries: HistorySummaryCache,
   reload: "include-reload" | "omit-reload" = "omit-reload",
 ): Promise<ListedWorkspace[]> {
   const panes = await livePanes(config, "list");
@@ -46,15 +46,16 @@ export async function listWorkspaces(
   if (panes.some(({ cwd }) => !current?.cwds.includes(cwd))) {
     prepareDirectory(config.stateDirectory);
     return await withLock(config, async () =>
-      collectWorkspaceList(config, await livePanes(config, "list"), reload, "register"),
+      collectWorkspaceList(config, await livePanes(config, "list"), summaries, reload, "register"),
     );
   }
-  return await collectWorkspaceList(config, panes, reload);
+  return await collectWorkspaceList(config, panes, summaries, reload);
 }
 
 async function collectWorkspaceList(
   config: TmuxConfig,
   panes: Pane[],
+  summaries: HistorySummaryCache,
   reload: "include-reload" | "omit-reload",
   registration: "read" | "register" = "read",
 ): Promise<ListedWorkspace[]> {
@@ -102,7 +103,7 @@ async function collectWorkspaceList(
       session: {
         id,
         file,
-        ...parseSessionMetadata(stateValue, id, file),
+        ...parseSessionMetadata(stateValue, id, file, summaries),
         publishPending: parsePublishPending(pendingValue, id),
         ...statusFor(pane),
         ...(temporary ? { temporary: true as const } : {}),
@@ -184,10 +185,12 @@ function parseSessionMetadata(
   encoded: string | undefined,
   id: string,
   file: string,
+  summaries: HistorySummaryCache,
 ): Pick<ListedSession, "state" | "title" | "lastRun"> {
   const published = parseSessionOption(encoded, id);
   const state = isSessionState(published?.state) ? published.state : null;
-  const title = typeof published?.title === "string" ? published.title : resolveSessionTitle(file);
+  const title =
+    typeof published?.title === "string" ? published.title : summaries.resolve(file).title;
   const lastRun = parseLastRun(published?.lastRun);
   return { state, title, ...(lastRun ? { lastRun } : {}) };
 }

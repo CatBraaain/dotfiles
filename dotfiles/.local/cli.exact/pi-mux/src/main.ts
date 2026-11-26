@@ -6,6 +6,7 @@ import {
   resolveAgentDirectory,
   tmuxConfiguration,
 } from "./configuration";
+import { HistorySummaryCache } from "./history-summary";
 import { claimWslInitialRequest } from "./initial-request-wsl";
 import { inspectSession, launchDispatchedTicket, openExactSession } from "./launch-session";
 import {
@@ -217,8 +218,13 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       operation.kind === "history" ||
       (operation.kind === "list" && operation.scope === "saved")
     ) {
-      const history = await historySessions(tmuxConfiguration(), operation.cwd);
-      console.log(operation.json ? JSON.stringify(history) : renderHistoryTable(history));
+      const summaries = new HistorySummaryCache();
+      const { entries } = await historySessions(tmuxConfiguration(), summaries, {
+        scope: "history",
+        cwd: operation.cwd,
+      });
+      summaries.flush();
+      console.log(operation.json ? JSON.stringify(entries) : renderHistoryTable(entries));
       return 0;
     }
     if (operation.kind === "list") {
@@ -241,15 +247,21 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         );
         return 0;
       }
+      const summaries = new HistorySummaryCache();
       const active = await listWorkspaces(
         config,
+        summaries,
         operation.scope === "active" && operation.json ? "include-reload" : "omit-reload",
       );
       if (operation.scope === "active") {
+        summaries.flush();
         console.log(operation.json ? JSON.stringify(active) : renderActiveTable(active));
       } else {
-        const history = await historySessions(config, undefined);
-        const unified = mergeSessionLists(active, history);
+        const { entries, resolveLiveArchive } = await historySessions(config, summaries, {
+          scope: "list",
+        });
+        const unified = mergeSessionLists(active, entries, resolveLiveArchive);
+        summaries.flush();
         console.log(operation.json ? JSON.stringify(unified) : renderUnifiedTable(unified));
       }
       return 0;

@@ -41,7 +41,7 @@ CLIのsession-dirs記録と、稼働piの保存先を探索に使わない。
 | `pi-mux send [--wait <seconds>] <session-id> <text...>` | 稼働している対象会話へ短いメッセージを1件届ける。稼働はpi実体の生存を指し、エージェントの実行状態は送信の可否に影響しない。`--wait` は対象の受信拡張が消費するまで待つ |
 | `pi-mux close <session-id>` | 完全一致する会話IDのpiを非対話で終了し、その会話を復元対象から除く。保存会話・workspace登録を保持する |
 | `pi-mux close --if-temporary <session-id>` | 一時再開中のpiだけを `close` と同じ手順で終了し、復元対象から除く。通常状態のpiと稼働対象がないIDは、変更せず成功する |
-| `pi-mux list [--json]` | 稼働中のpiと保存済み会話を統合して列挙する |
+| `pi-mux list [--json]` | 稼働中のpiと未退避の保存会話を統合して列挙する |
 | `pi-mux list --active [--json]` | 稼働中のpiを列挙する。JSONには空workspaceの登録も含める |
 | `pi-mux list --saved [--cwd <absolute-cwd>] [--json]` | 保存済み会話を列挙する |
 | `pi-mux list --displayed [--client-pid <pid>] [--json]` | 表示中のpi会話をクライアントごとに列挙する |
@@ -430,11 +430,9 @@ Windows では、Git for Windows の Bash で使う `/c/path` などのドライ
 
 ### list
 
-既定では登録済みworkspace・稼働pi・保存済み会話を1つの一覧にする。保存済み会話の探索範囲と抽出条件は [history](#history) と同じで、通常側とarchive側を含む。
-
 | オプション | 対象と出力 |
 | --- | --- |
-| 指定なし | 稼働中と保存済みを1つの一覧にする |
+| 指定なし | [統合一覧](#統合一覧)：稼働中のpiと未退避の保存会話を1つの一覧にする |
 | `--active` | [稼働一覧](#稼働一覧)：履歴の列挙を行わない |
 | `--saved` | [history](#history) と同じ対象・並び・表・JSON。専用tmuxを参照しない。任意で `--cwd <absolute-cwd>` を指定できる |
 | `--displayed` | [表示中の会話一覧](#表示中の会話一覧)。任意で `--client-pid <pid>` を指定できる |
@@ -442,6 +440,10 @@ Windows では、Git for Windows の Bash で使う `/c/path` などのドライ
 `list` の各オプションは1回まで指定できる。`--active`・`--saved`・`--displayed` は同時指定できない。`--cwd` は `--saved` と、`--client-pid` は `--displayed` とだけ組み合わせる。
 
 #### 統合一覧
+
+登録済みworkspaceの保存会話は、[history](#history) と同じ抽出条件で通常側だけを列挙する。カスタム保存先では `history` と同じ範囲を使う。
+
+通常側の履歴に会話IDがない場合、稼働一覧のpaneが公開したファイルから履歴を個別に取得する。対象は、親ディレクトリが既定の保存先における登録済みcwdグループの `archive/` とファイルシステム上で同一であり、ヘッダーの会話IDが一致する、読み取り可能な `.jsonl` の通常ファイルに限る。archive側は列挙せず、公開されたパスから取得できない場合も別のファイルを探さない。
 
 JSONは `[{cwd,sessions:[{id,file,active,saved,state,title,publishPending,lastRun?,btime,mtime,size,temporary?}]}]` の配列。セッション0件の登録済みworkspaceも含める。workspaceは稼働一覧の順とし、履歴だけに現れるcwdはその後に並べる。同じ会話IDはcwdが異なっても1件にまとめる。IDごとに稼働一覧と履歴の各先頭を採用し、所属cwdは稼働一覧の値を優先する。各workspaceでは稼働一覧の順に稼働中の会話を並べた後、保存済みだけの会話を `history` の順に並べる。
 

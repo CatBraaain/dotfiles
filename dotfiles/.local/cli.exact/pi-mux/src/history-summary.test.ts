@@ -19,7 +19,10 @@ function resolveTitleIsolated(cacheHome: string, file: string): string | null {
   const previous = process.env.XDG_CACHE_HOME;
   process.env.XDG_CACHE_HOME = cacheHome;
   try {
-    return new HistorySummaryCache().resolve(file).title;
+    const summaries = new HistorySummaryCache();
+    const summary = summaries.resolve(file);
+    summaries.flush();
+    return summary.title;
   } finally {
     if (previous === undefined) delete process.env.XDG_CACHE_HOME;
     else process.env.XDG_CACHE_HOME = previous;
@@ -108,6 +111,7 @@ describe("history summary read consistency", () => {
     fs.writeFileSync(
       file,
       [
+        JSON.stringify({ type: "session", id: "session", cwd: directory, timestamp: 0 }),
         JSON.stringify({ type: "session_info", name: "Before update" }),
         JSON.stringify({ type: "message", text: "x".repeat(1024 * 1024) }),
         JSON.stringify(assistantMessage("Last activity")),
@@ -135,6 +139,7 @@ describe("history summary read consistency", () => {
     try {
       const summaries = new HistorySummaryCache();
       const duringUpdate = summaries.resolve(file);
+      summaries.flush();
       assert.equal(updated, true);
       const expected = { title: "After update", mtime: Date.parse("2026-01-01T00:00:01.000Z") };
       assert.deepEqual(duringUpdate, expected);
@@ -142,7 +147,8 @@ describe("history summary read consistency", () => {
       const [cacheFile, ...otherCacheFiles] = fs.readdirSync(cacheDirectory);
       assert.ok(cacheFile);
       assert.deepEqual(otherCacheFiles, []);
-      const { title, mtime } = JSON.parse(fs.readFileSync(join(cacheDirectory, cacheFile), "utf8"));
+      const group = JSON.parse(fs.readFileSync(join(cacheDirectory, cacheFile), "utf8"));
+      const { title, mtime } = group.entries[file];
       assert.deepEqual({ title, mtime }, expected);
     } finally {
       read.mockRestore();
@@ -221,26 +227,68 @@ describe("history summary read consistency", () => {
     const fingerprint = [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
     const cacheDirectory = join(cacheHome, "pi-mux", "history-titles");
     fs.mkdirSync(cacheDirectory, { recursive: true, mode: 0o700 });
-    const entry = join(cacheDirectory, `${createHash("sha256").update(file).digest("hex")}.json`);
-    fs.writeFileSync(
-      entry,
-      `${JSON.stringify({
-        version: 5,
-        file,
-        fingerprint,
-        title: "Title from cache",
-        btime: null,
-        mtime: null,
-        header: {
-          id: "cached-session",
-          cwd: "/tmp",
-          btime: Date.parse("2026-01-01T00:00:00.000Z"),
-        },
-      })}\n`,
-      { mode: 0o600 },
-    );
-    assert.equal(resolveTitleIsolated(cacheHome, file), "Title from cache");
-    assert.equal(resolveTitleIsolated(cacheHome, file), "Title from cache");
+    const directory = dirname(file);
+    const key = createHash("sha256").update(directory).digest("hex");
+    const group = join(cacheDirectory, `group-${key}.json`);
+    try {
+      fs.writeFileSync(
+        group,
+        `${JSON.stringify({
+          version: 6,
+          directory,
+          entries: {
+            [file]: {
+              fingerprint,
+              title: "Title from cache",
+              btime: null,
+              mtime: null,
+              header: {
+                id: "cached-session",
+                cwd: "/tmp",
+                btime: Date.parse("2026-01-01T00:00:00.000Z"),
+              },
+            },
+          },
+        })}\n`,
+        { mode: 0o600 },
+      );
+      assert.equal(resolveTitleIsolated(cacheHome, file), "Title from cache");
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("merges a sibling added and saved after another cache instance discovered the group", () => {
+    const header = { type: "session", cwd: "/tmp", timestamp: "2026-01-01T00:00:00.000Z" };
+    const { file, cacheHome } = writeSummaryFixture([{ ...header, id: "one" }, sessionInfo("One")]);
+    const directory = dirname(file);
+    const sibling = join(directory, "sibling.jsonl");
+    const previous = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = cacheHome;
+    try {
+      const first = new HistorySummaryCache();
+      const second = new HistorySummaryCache();
+      assert.equal(first.resolve(file).title, "One");
+      first.recordDiscoveredFiles(directory, [file]);
+      fs.writeFileSync(
+        sibling,
+        [{ ...header, id: "two" }, sessionInfo("Two")]
+          .map((entry) => JSON.stringify(entry))
+          .join("\n") + "\n",
+      );
+      assert.equal(second.resolve(sibling).title, "Two");
+      second.flush();
+      first.flush();
+      const cacheDirectory = join(cacheHome, "pi-mux", "history-titles");
+      const [cacheFile] = fs.readdirSync(cacheDirectory);
+      assert.ok(cacheFile);
+      const group = JSON.parse(fs.readFileSync(join(cacheDirectory, cacheFile), "utf8"));
+      assert.deepEqual(Object.keys(group.entries).sort(), [file, sibling].sort());
+    } finally {
+      if (previous === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = previous;
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
 
@@ -634,13 +682,16 @@ describe("history first user message fallback", () => {
   });
 
   it("lets a later session_info name replace a cached first-message title", () => {
-    const { file, cacheHome } = writeSummaryFixture([userMessage("first message title")]);
+    const { file, cacheHome } = writeSummaryFixture([
+      { type: "session", id: "session", cwd: temporaryRoot, timestamp: 0 },
+      userMessage("first message title"),
+    ]);
     assert.equal(resolveTitleIsolated(cacheHome, file), "first message title");
     const cacheDirectory = join(cacheHome, "pi-mux", "history-titles");
     const [cached] = fs.readdirSync(cacheDirectory);
     assert.ok(cached);
     assert.equal(
-      JSON.parse(fs.readFileSync(join(cacheDirectory, cached), "utf8")).title,
+      JSON.parse(fs.readFileSync(join(cacheDirectory, cached), "utf8")).entries[file].title,
       "first message title",
     );
     fs.appendFileSync(file, JSON.stringify(sessionInfo("Named later")) + "\n");

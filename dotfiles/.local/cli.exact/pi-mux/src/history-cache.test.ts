@@ -9,6 +9,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -17,7 +18,8 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const source = join(import.meta.dir, "main.ts");
 const bunExecutable = process.execPath;
@@ -258,7 +260,9 @@ switch (args[0]) {
   }: { forbidArchive?: boolean; forbidHistory?: boolean } = {}): void {
     const preload = join(this.directory, "trace-reads.ts");
     const trace = join(this.directory, "reads.jsonl");
+    const cacheTrace = join(this.directory, "cache-reads.jsonl");
     writeFileSync(trace, "");
+    writeFileSync(cacheTrace, "");
     writeFileSync(
       preload,
       `import { spyOn } from "bun:test";
@@ -270,6 +274,15 @@ spyOn(fs, "readSync").mockImplementation((...args) => {
   const file = fs.readlinkSync("/proc/self/fd/" + args[0]);
   if (file.endsWith(".jsonl")) fs.appendFileSync(trace, JSON.stringify({ file, length: args[3] }) + "\\n");
   return Reflect.apply(originalRead, fs, args);
+});
+const readCache = fs.readFileSync;
+spyOn(fs, "readFileSync").mockImplementation((...args) => {
+  if (typeof args[0] === "number") {
+    const file = fs.readlinkSync("/proc/self/fd/" + args[0]);
+    if (file.startsWith(${JSON.stringify(this.cacheDirectory + "/")}))
+      fs.appendFileSync(${JSON.stringify(cacheTrace)}, JSON.stringify(file) + "\\n");
+  }
+  return Reflect.apply(readCache, fs, args);
 });
 const originalReaddir = promises.readdir;
 spyOn(promises, "readdir").mockImplementation((...args) => {
@@ -285,6 +298,13 @@ spyOn(promises, "readdir").mockImplementation((...args) => {
 
   reads(): { file: string; length: number }[] {
     const trace = join(this.directory, "reads.jsonl");
+    const lines = readFileSync(trace, "utf8").trim();
+    writeFileSync(trace, "");
+    return lines ? lines.split("\n").map((line) => JSON.parse(line)) : [];
+  }
+
+  cacheReads(): string[] {
+    const trace = join(this.directory, "cache-reads.jsonl");
     const lines = readFileSync(trace, "utf8").trim();
     writeFileSync(trace, "");
     return lines ? lines.split("\n").map((line) => JSON.parse(line)) : [];
@@ -330,13 +350,9 @@ spyOn(promises, "readdir").mockImplementation((...args) => {
   }
 
   cacheFileFor(file: string): string | undefined {
-    return this.cacheFiles().find((cacheFile) => {
-      try {
-        return JSON.parse(readFileSync(cacheFile, "utf8")).file === file;
-      } catch {
-        return false;
-      }
-    });
+    const key = createHash("sha256").update(dirname(file)).digest("hex");
+    const path = join(this.cacheDirectory, `group-${key}.json`);
+    return existsSync(path) ? path : undefined;
   }
 
   cleanup(): void {
@@ -481,13 +497,13 @@ describe("history birth time", () => {
       }
       const cacheFile = fixture.cacheFileFor(file);
       assert.ok(cacheFile);
-      assert.equal(JSON.parse(readFileSync(cacheFile, "utf8")).btime, null);
+      assert.equal(JSON.parse(readFileSync(cacheFile, "utf8")).entries[file].btime, null);
     } finally {
       fixture.cleanup();
     }
   });
 
-  it("rebuilds version 4 caches instead of returning the header creation time", () => {
+  it("ignores legacy per-file cache entries and leaves their bytes intact", () => {
     const fixture = new HistoryCacheFixture();
     try {
       const id = randomUUID();
@@ -515,6 +531,7 @@ describe("history birth time", () => {
         }),
         { mode: cacheFileMode },
       );
+      const legacy = readFileSync(cacheFile, "utf8");
       for (let iteration = 0; iteration < 2; iteration++) {
         const result = fixture.history();
         assert.equal(result.status, 0, result.stderr);
@@ -525,7 +542,10 @@ describe("history birth time", () => {
           }),
         ]);
       }
-      assert.equal(JSON.parse(readFileSync(cacheFile, "utf8")).version, 5);
+      const group = fixture.cacheFileFor(file);
+      assert.ok(group);
+      assert.equal(JSON.parse(readFileSync(group, "utf8")).version, 6);
+      assert.equal(readFileSync(cacheFile, "utf8"), legacy);
     } finally {
       fixture.cleanup();
     }
@@ -835,10 +855,10 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       assert.equal(cold.status, 0, cold.stderr);
       const cacheFile = fixture.cacheFileFor(file);
       assert.ok(cacheFile);
-      const cached = JSON.parse(readFileSync(cacheFile, "utf8"));
-      cached.title = "Untrusted";
-      cached.header.id = "untrusted";
-      writeFileSync(cacheFile, JSON.stringify(cached));
+      const group = JSON.parse(readFileSync(cacheFile, "utf8"));
+      group.entries[file].title = "Untrusted";
+      group.entries[file].header.id = "untrusted";
+      writeFileSync(cacheFile, JSON.stringify(group));
       chmodSync(cacheFile, 0o644);
       const result = fixture.history();
       assert.equal(result.status, 0, result.stderr);
@@ -849,7 +869,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
     }
   });
 
-  it("creates a private per-file cache and preserves identical warm output without rewriting it", () => {
+  it("creates a private group cache and preserves identical warm output without rewriting it", () => {
     const fixture = new HistoryCacheFixture();
     try {
       const id = randomUUID();
@@ -866,8 +886,11 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const cacheFiles = fixture.cacheFiles();
       assert.equal(cacheFiles.length, 1);
       const cacheFile = cacheFiles[0]!;
-      const cache = JSON.parse(readFileSync(cacheFile, "utf8"));
-      assert.equal(cache.version, 5);
+      const group = JSON.parse(readFileSync(cacheFile, "utf8"));
+      assert.equal(group.version, 6);
+      assert.equal(group.directory, dirname(file));
+      assert.deepEqual(Object.keys(group.entries), [file]);
+      const cache = group.entries[file];
       assert.deepEqual(cache.header, {
         id,
         cwd: fixture.cwd,
@@ -875,7 +898,6 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       });
       assert.equal(cache.title, "Cached title");
       assert.equal(cache.mtime, Date.parse("2026-01-01T00:00:00.000Z"));
-      assert.equal(cache.file, file);
       assert.equal(typeof cache.fingerprint, "string");
       assert.equal(statSync(fixture.cacheDirectory).mode & 0o777, cacheDirectoryMode);
       assert.equal(statSync(cacheFile).mode & 0o777, cacheFileMode);
@@ -1050,7 +1072,7 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
     }
   });
 
-  it("refreshes the latest activity time from appended entries and reuses it warm", () => {
+  it("refreshes only changed or added summaries and omits deleted originals in a warm group", () => {
     const fixture = new HistoryCacheFixture();
     try {
       const id = randomUUID();
@@ -1059,28 +1081,87 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
         fixture.userMessage(),
         { type: "message", timestamp: "2026-01-02T00:00:00.000Z" },
       ]);
+      const siblingId = randomUUID();
+      const sibling = fixture.writeSession(fixture.cwd, siblingId, [
+        fixture.header(siblingId),
+        fixture.userMessage(),
+      ]);
       const first = fixture.history();
       assert.equal(first.status, 0, first.stderr);
-      const cacheFile = fixture.cacheFileFor(file);
-      assert.ok(cacheFile);
-      const cache = JSON.parse(readFileSync(cacheFile, "utf8"));
-      assert.equal(cache.mtime, Date.parse("2026-01-02T00:00:00.000Z"));
-      const cacheMtime = statSync(cacheFile).mtimeMs;
-      const warm = fixture.history();
-      assert.equal(warm.status, 0, warm.stderr);
-      assert.equal(warm.stdout, first.stdout);
-      assert.equal(statSync(cacheFile).mtimeMs, cacheMtime);
-      writeFileSync(
-        file,
-        `${readFileSync(file, "utf8")}${JSON.stringify({ type: "compaction", timestamp: "2026-01-03T00:00:00.000Z" })}\n`,
-      );
+      fixture.traceReads();
+      const nextMtime = "2026-01-03T00:00:00.000Z";
+      appendFileSync(file, JSON.stringify({ type: "compaction", timestamp: nextMtime }) + "\n");
       const refreshed = fixture.history();
       assert.equal(refreshed.status, 0, refreshed.stderr);
-      assert.deepEqual(JSON.parse(refreshed.stdout), [
-        fixture.expected(file, id, fixture.cwd, null, {
-          mtime: Date.parse("2026-01-03T00:00:00.000Z"),
-        }),
+      const updated = fixture.expected(file, id, fixture.cwd, null, {
+        mtime: Date.parse(nextMtime),
+      });
+      const unchanged = fixture.expected(sibling, siblingId, fixture.cwd, null);
+      assert.deepEqual(JSON.parse(refreshed.stdout), [updated, unchanged]);
+      assert.deepEqual(new Set(fixture.reads().map(({ file }) => file)), new Set([file]));
+
+      const addedId = randomUUID();
+      const added = fixture.writeSession(fixture.cwd, addedId, [
+        fixture.header(addedId),
+        fixture.userMessage("2026-01-04T00:00:00.000Z", "Added"),
       ]);
+      const afterAdd = fixture.history();
+      assert.equal(afterAdd.status, 0, afterAdd.stderr);
+      const addedTime = Date.parse("2026-01-04T00:00:00.000Z");
+      const addition = fixture.expected(added, addedId, fixture.cwd, "Added", {
+        btime: addedTime,
+        mtime: addedTime,
+      });
+      assert.deepEqual(JSON.parse(afterAdd.stdout), [addition, updated, unchanged]);
+      assert.deepEqual(new Set(fixture.reads().map(({ file }) => file)), new Set([added]));
+
+      unlinkSync(file);
+      const afterDelete = fixture.history();
+      assert.equal(afterDelete.status, 0, afterDelete.stderr);
+      assert.deepEqual(JSON.parse(afterDelete.stdout), [addition, unchanged]);
+      assert.deepEqual(fixture.reads(), []);
+      const cacheFile = fixture.cacheFileFor(sibling);
+      assert.ok(cacheFile);
+      const group = JSON.parse(readFileSync(cacheFile, "utf8"));
+      assert.deepEqual(Object.keys(group.entries).sort(), [added, sibling].sort());
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("prunes a deleted original when the warm custom file URL ends with a slash", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const customRoot = join(fixture.directory, "shared-sessions");
+      fixture.env.PI_CODING_AGENT_SESSION_DIR = pathToFileURL(customRoot + sep).href;
+      const deletedId = randomUUID();
+      const deleted = fixture.writeSession(fixture.cwd, deletedId, [fixture.header(deletedId)], {
+        file: join(customRoot, "deleted.jsonl"),
+      });
+      const keptId = randomUUID();
+      const kept = fixture.writeSession(
+        fixture.cwd,
+        keptId,
+        [fixture.header(keptId), fixture.userMessage(undefined, "Still listed")],
+        { file: join(customRoot, "kept.jsonl") },
+      );
+      const cold = fixture.history();
+      assert.equal(cold.status, 0, cold.stderr);
+      const cacheFile = fixture.cacheFileFor(kept);
+      assert.ok(cacheFile);
+      const before = JSON.parse(readFileSync(cacheFile, "utf8"));
+      assert.deepEqual(Object.keys(before.entries).sort(), [deleted, kept].sort());
+
+      fixture.traceReads();
+      unlinkSync(deleted);
+      const warm = fixture.history();
+      assert.equal(warm.status, 0, warm.stderr);
+      assert.deepEqual(JSON.parse(warm.stdout), [
+        fixture.expected(kept, keptId, fixture.cwd, "Still listed"),
+      ]);
+      assert.deepEqual(fixture.reads(), []);
+      const after = JSON.parse(readFileSync(cacheFile, "utf8"));
+      assert.deepEqual(after.entries, { [kept]: before.entries[kept] });
     } finally {
       fixture.cleanup();
     }
@@ -1233,13 +1314,10 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
     }
   });
 
-  it("rebuilds cache files containing malformed JSON or invalid versions and title values", () => {
+  it("rebuilds groups or entries containing invalid cached summaries", () => {
     const fixture = new HistoryCacheFixture();
     try {
-      const corruptions = [
-        "{broken",
-        { version: 999 },
-        { version: 3 },
+      const invalidEntries = [
         { header: null },
         { header: { id: "bad id", cwd: "/", btime: 1 } },
         { header: { id: "valid", cwd: "relative", btime: 1 } },
@@ -1249,8 +1327,17 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
         { btime: "yesterday" },
         { fingerprint: "incorrect-fingerprint" },
       ];
-      const sessions = [];
-      for (const [index, corruption] of corruptions.entries()) {
+      const invalidGroups = [
+        "{broken",
+        { version: 999 },
+        { version: 3 },
+        {
+          directory: "/different-directory",
+        },
+        { entries: [] },
+      ];
+
+      const sessions = [...invalidEntries, undefined].map((corruption, index) => {
         const id = randomUUID();
         const title = `Source ${index}`;
         const file = fixture.writeSession(fixture.cwd, id, [
@@ -1258,41 +1345,51 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
           fixture.userMessage(),
           fixture.sessionInfo(title),
         ]);
-        sessions.push({ id, title, file, corruption });
-      }
+        return { id, title, file, corruption };
+      });
 
       const seeded = fixture.history();
       assert.equal(seeded.status, 0, seeded.stderr);
-      const corruptedSessions = [];
-      for (const session of sessions) {
-        const { file, corruption } = session;
-        const cacheFile = fixture.cacheFileFor(file);
-        assert.ok(cacheFile, `Missing cache for ${file}`);
-        if (typeof corruption === "string") {
-          writeFileSync(cacheFile, corruption);
-        } else {
-          const validCache = JSON.parse(readFileSync(cacheFile, "utf8"));
-          writeFileSync(cacheFile, JSON.stringify({ ...validCache, ...corruption }));
-        }
-        corruptedSessions.push({ ...session, cacheFile });
+      const cacheFile = fixture.cacheFileFor(sessions[0]!.file);
+      assert.ok(cacheFile);
+      fixture.traceReads();
+      const expected = JSON.parse(seeded.stdout);
+
+      for (const corruption of invalidGroups) {
+        const group = JSON.parse(readFileSync(cacheFile, "utf8"));
+        const corrupted =
+          typeof corruption === "string" ? corruption : JSON.stringify({ ...group, ...corruption });
+        writeFileSync(cacheFile, corrupted);
+        const result = fixture.history();
+        assert.equal(result.status, 0, result.stderr);
+        assert.deepEqual(JSON.parse(result.stdout), expected, corrupted);
+        const rebuilt = JSON.parse(readFileSync(cacheFile, "utf8"));
+        assert.equal(rebuilt.version, 6);
+        assert.deepEqual(
+          new Set(fixture.reads().map(({ file }) => file)),
+          new Set(sessions.map(({ file }) => file)),
+        );
       }
 
+      const group = JSON.parse(readFileSync(cacheFile, "utf8"));
+      const corrupted = sessions.filter(({ corruption }) => corruption !== undefined);
+      for (const { file, corruption } of corrupted) {
+        Object.assign(group.entries[file], corruption);
+      }
+      writeFileSync(cacheFile, JSON.stringify(group));
       const result = fixture.history();
       assert.equal(result.status, 0, result.stderr);
-      const entries: { id: string }[] = JSON.parse(result.stdout);
-      for (const { id, title, file, corruption, cacheFile } of corruptedSessions) {
-        const input = JSON.stringify(corruption);
-        assert.deepEqual(
-          entries.find((entry) => entry.id === id),
-          fixture.expected(file, id, fixture.cwd, title),
-          input,
-        );
-        assert.doesNotThrow(() => JSON.parse(readFileSync(cacheFile, "utf8")), input);
-      }
+      assert.deepEqual(JSON.parse(result.stdout), expected);
+      const rebuilt = JSON.parse(readFileSync(cacheFile, "utf8"));
+      for (const { file, title } of sessions) assert.equal(rebuilt.entries[file].title, title);
+      assert.deepEqual(
+        new Set(fixture.reads().map(({ file }) => file)),
+        new Set(corrupted.map(({ file }) => file)),
+      );
     } finally {
       fixture.cleanup();
     }
-  });
+  }, 20_000);
 
   it("returns correct history when the cache path is blocked, unsafe, or a symlink", () => {
     const fixture = new HistoryCacheFixture();
@@ -1376,9 +1473,8 @@ spyOn(fs, "readFileSync").mockImplementation((...args) => {
       const cache = fixture
         .cacheFiles()
         .map((cacheFile) => JSON.parse(readFileSync(cacheFile, "utf8")));
-      assert.ok(
-        cache.every((record) => record.version === 5 && typeof record.fingerprint === "string"),
-      );
+      assert.ok(cache.every((group) => group.version === 6));
+      assert.ok(cache.some((group) => typeof group.entries[movedFile]?.fingerprint === "string"));
       assert.equal(readFileSync(movedFile, "utf8"), movedContents);
     } finally {
       fixture.cleanup();
@@ -1710,6 +1806,20 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
       assert.deepEqual(JSON.parse(otherListed.stdout), [
         fixture.expected(other, otherId, fixture.otherCwd, null),
       ]);
+
+      fixture.mockTmux(mineId, mine);
+      const unified = fixture.run(["list", "--json"]);
+      assert.equal(unified.status, 0, unified.stderr);
+      const workspaces: { cwd: string; sessions: { file: string }[] }[] = JSON.parse(
+        unified.stdout,
+      );
+      assert.deepEqual(
+        workspaces.map(({ cwd, sessions }) => [cwd, sessions.map(({ file }) => file)]),
+        [
+          [fixture.cwd, [mine]],
+          [fixture.otherCwd, [other]],
+        ],
+      );
     } finally {
       fixture.cleanup();
     }
@@ -1836,9 +1946,16 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
       const fixture = new HistoryCacheFixture();
       try {
         writeFileSync(join(fixture.agentDir, "settings.json"), settings);
-        const result = fixture.history(fixture.cwd);
-        assert.equal(result.status, 1);
-        assert.ok(result.stderr.length > 0);
+        fixture.mockTmux(randomUUID(), join(fixture.directory, "inactive.jsonl"));
+        for (const args of [
+          ["history", "--cwd", fixture.cwd, "--json"],
+          ["list", "--json"],
+        ]) {
+          const result = fixture.run(args);
+          assert.equal(result.status, 1);
+          assert.equal(result.stdout, "");
+          assert.ok(result.stderr.length > 0);
+        }
       } finally {
         fixture.cleanup();
       }
@@ -1865,6 +1982,261 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
       fixture.cleanup();
     }
   });
+});
+
+describe("default list archive scope", () => {
+  it("resolves the active archive file without enumerating or reading its neighbors", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const archive = join(dirname(fixture.sessionFile(fixture.cwd, id)), "archive");
+      const active = fixture.writeSession(
+        fixture.cwd,
+        id,
+        [fixture.header(id), fixture.userMessage(), fixture.sessionInfo("Active archive")],
+        { file: join(archive, "active.jsonl") },
+      );
+      const inactiveId = randomUUID();
+      const inactive = fixture.writeSession(
+        fixture.cwd,
+        inactiveId,
+        [fixture.header(inactiveId), fixture.userMessage()],
+        { file: join(archive, "inactive.jsonl") },
+      );
+      fixture.mockTmux(id, active, true);
+      for (const args of [
+        ["history", "--json"],
+        ["list", "--saved", "--json"],
+      ]) {
+        const listed = fixture.run(args);
+        assert.equal(listed.status, 0, listed.stderr);
+        assert.deepEqual(JSON.parse(listed.stdout), [
+          fixture.expected(active, id, fixture.cwd, "Active archive"),
+          fixture.expected(inactive, inactiveId, fixture.cwd, null),
+        ]);
+      }
+
+      const activity = "2026-01-02T00:00:00.000Z";
+      appendFileSync(active, JSON.stringify(fixture.userMessage(activity)) + "\n");
+      fixture.traceReads({ forbidArchive: true });
+      const args = ["list", "--json"];
+      const listed = fixture.run(args);
+      assert.equal(listed.status, 0, listed.stderr);
+      const { cwd, ...metadata } = fixture.expected(active, id, fixture.cwd, "Active archive", {
+        mtime: Date.parse(activity),
+      });
+      assert.deepEqual(JSON.parse(listed.stdout), [
+        {
+          cwd,
+          sessions: [{ ...metadata, active: true, saved: true, state: null, publishPending: null }],
+        },
+        { cwd: fixture.otherCwd, sessions: [] },
+      ]);
+      assert.deepEqual([...new Set(fixture.reads().map(({ file }) => file))], [active]);
+
+      const archiveGroup = fixture.cacheFileFor(active);
+      assert.ok(archiveGroup);
+      fixture.cacheReads();
+
+      unlinkSync(inactive);
+      const warm = fixture.run(args);
+      assert.equal(warm.status, 0, warm.stderr);
+      assert.equal(warm.stdout, listed.stdout);
+      assert.deepEqual(fixture.cacheReads(), [archiveGroup]);
+      assert.deepEqual(fixture.reads(), []);
+      const cacheGroup = JSON.parse(readFileSync(archiveGroup, "utf8"));
+      assert.ok(Object.hasOwn(cacheGroup.entries, inactive));
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  for (const alias of ["agent directory", "published parent"] as const) {
+    it.skipIf(process.platform === "win32")(
+      `resolves archive metadata across a symlinked ${alias}`,
+      () => {
+        const fixture = new HistoryCacheFixture();
+        try {
+          const id = randomUUID();
+          const archive = join(dirname(fixture.sessionFile(fixture.cwd, id)), "archive");
+          const original = fixture.writeSession(
+            fixture.cwd,
+            id,
+            [fixture.header(id), fixture.userMessage(), fixture.sessionInfo("Archived")],
+            { file: join(archive, "active.jsonl") },
+          );
+          const aliasPath = join(fixture.directory, "linked");
+          symlinkSync(alias === "agent directory" ? fixture.agentDir : archive, aliasPath);
+          if (alias === "agent directory") fixture.env.PI_CODING_AGENT_DIR = aliasPath;
+          const published =
+            alias === "agent directory" ? realpathSync(original) : join(aliasPath, "active.jsonl");
+          fixture.mockTmux(id, published, true);
+          fixture.traceReads({ forbidArchive: true });
+
+          const listed = fixture.run(["list", "--json"]);
+          assert.equal(listed.status, 0, listed.stderr);
+          const { cwd, ...metadata } = fixture.expected(published, id, fixture.cwd, "Archived");
+          assert.deepEqual(JSON.parse(listed.stdout), [
+            {
+              cwd,
+              sessions: [
+                { ...metadata, active: true, saved: true, state: null, publishPending: null },
+              ],
+            },
+            { cwd: fixture.otherCwd, sessions: [] },
+          ]);
+        } finally {
+          fixture.cleanup();
+        }
+      },
+    );
+  }
+
+  for (const phase of ["opened descriptor", "final descriptor", "final parent"] as const) {
+    it(`does not accept archive metadata when verification disagrees about the ${phase}`, () => {
+      const fixture = new HistoryCacheFixture();
+      try {
+        const id = randomUUID();
+        const archive = join(dirname(fixture.sessionFile(fixture.cwd, id)), "archive");
+        const file = fixture.writeSession(
+          fixture.cwd,
+          id,
+          [fixture.header(id), fixture.userMessage()],
+          { file: join(archive, "active.jsonl") },
+        );
+        fixture.mockTmux(id, file, true);
+        writeFileSync(
+          join(fixture.directory, "published.json"),
+          JSON.stringify({ version: 1, sessionId: id, title: "Published" }),
+        );
+        fixture.traceReads({ forbidArchive: true });
+        const marker = join(fixture.directory, "verification-mismatch");
+        const preload = join(fixture.directory, "verify-archive.ts");
+        writeFileSync(
+          preload,
+          `import assert from "node:assert/strict";
+import { spyOn } from "bun:test";
+import * as fs from "node:fs";
+const file = ${JSON.stringify(file)};
+const archive = ${JSON.stringify(archive)};
+const phase = ${JSON.stringify(phase)};
+let descriptor;
+let observations = 0;
+const open = fs.openSync;
+spyOn(fs, "openSync").mockImplementation((...args) => {
+  const fd = Reflect.apply(open, fs, args);
+  if (args[0] === file) {
+    assert.equal(args[1] & fs.constants.O_NOFOLLOW, fs.constants.O_NOFOLLOW | 0);
+    descriptor = fd;
+    observations = 0;
+  }
+  return fd;
+});
+const fstat = fs.fstatSync;
+spyOn(fs, "fstatSync").mockImplementation((...args) => {
+  const stat = Reflect.apply(fstat, fs, args);
+  if (args[0] === descriptor) {
+    observations++;
+    if ((phase === "opened descriptor" && observations === 1) ||
+        (phase === "final descriptor" && observations > 1)) return mismatch(stat);
+  }
+  return stat;
+});
+const statPath = fs.statSync;
+spyOn(fs, "statSync").mockImplementation((...args) => {
+  const stat = Reflect.apply(statPath, fs, args);
+  return phase === "final parent" && args[0] === archive && observations > 1
+    ? mismatch(stat)
+    : stat;
+});
+function mismatch(stat) {
+  fs.appendFileSync(${JSON.stringify(marker)}, "mismatch\\n");
+  return Object.assign(stat, { ino: stat.ino + 1n });
+}
+`,
+        );
+        fixture.preloads.push("--preload", preload);
+
+        const listed = fixture.run(["list", "--json"]);
+        assert.equal(listed.status, 0, listed.stderr);
+        assert.deepEqual(JSON.parse(listed.stdout)[0].sessions, [
+          {
+            id,
+            file,
+            active: true,
+            saved: true,
+            state: null,
+            title: "Published",
+            publishPending: null,
+            btime: null,
+            mtime: null,
+            size: null,
+          },
+        ]);
+        assert.ok(existsSync(marker));
+        if (phase === "opened descriptor") assert.deepEqual(fixture.reads(), []);
+        assert.deepEqual(fixture.cacheFiles(), []);
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
+
+  for (const kind of ["out-of-scope", "mismatched", "symlinked", "relocated"] as const) {
+    it(`retains the active row without history metadata when its archive path is ${kind}`, () => {
+      const fixture = new HistoryCacheFixture();
+      try {
+        const id = randomUUID();
+        const archive = join(dirname(fixture.sessionFile(fixture.cwd, id)), "archive");
+        const outside = join(fixture.directory, "archive", "pane.jsonl");
+        const file = kind === "out-of-scope" ? outside : join(archive, "pane.jsonl");
+        const original =
+          kind === "symlinked"
+            ? outside
+            : kind === "relocated"
+              ? join(archive, "moved.jsonl")
+              : file;
+        const headerId = kind === "mismatched" ? randomUUID() : id;
+        fixture.writeSession(
+          fixture.cwd,
+          headerId,
+          [fixture.header(headerId), fixture.userMessage()],
+          { file: original },
+        );
+        if (kind === "symlinked") {
+          mkdirSync(archive, { recursive: true });
+          symlinkSync(original, file);
+        }
+        fixture.mockTmux(id, file, true);
+        fixture.traceReads({ forbidArchive: true });
+
+        const listed = fixture.run(["list", "--json"]);
+        assert.equal(listed.status, 0, listed.stderr);
+        assert.deepEqual(JSON.parse(listed.stdout), [
+          {
+            cwd: fixture.cwd,
+            sessions: [
+              {
+                id,
+                file,
+                active: true,
+                saved: kind !== "relocated",
+                state: null,
+                title: null,
+                publishPending: null,
+                btime: null,
+                mtime: null,
+                size: null,
+              },
+            ],
+          },
+          { cwd: fixture.otherCwd, sessions: [] },
+        ]);
+      } finally {
+        fixture.cleanup();
+      }
+    });
+  }
 });
 
 describe("shared active list and history cache", () => {
@@ -1901,6 +2273,70 @@ describe("shared active list and history cache", () => {
       }
     });
   }
+
+  it("reads each warm group once across active title fallback and saved history", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const activeId = randomUUID();
+      const active = fixture.writeSession(fixture.cwd, activeId, [
+        fixture.header(activeId),
+        fixture.sessionInfo("Active"),
+      ]);
+      const siblingId = randomUUID();
+      const sibling = fixture.writeSession(fixture.cwd, siblingId, [
+        fixture.header(siblingId),
+        fixture.sessionInfo("Sibling"),
+      ]);
+      const otherId = randomUUID();
+      const other = fixture.writeSession(fixture.otherCwd, otherId, [
+        fixture.header(otherId, fixture.otherCwd),
+        fixture.sessionInfo("Other workspace"),
+      ]);
+      const archiveId = randomUUID();
+      const archive = fixture.writeSession(
+        fixture.cwd,
+        archiveId,
+        [fixture.header(archiveId), fixture.sessionInfo("Archive")],
+        { file: join(dirname(active), "archive", "archived.jsonl") },
+      );
+      fixture.mockTmux(activeId, active, true);
+      const cold = fixture.run(["list", "--json"]);
+      assert.equal(cold.status, 0, cold.stderr);
+      const activeGroup = fixture.cacheFileFor(active);
+      const otherGroup = fixture.cacheFileFor(other);
+      assert.ok(activeGroup && otherGroup);
+      assert.equal(fixture.cacheFileFor(sibling), activeGroup);
+      assert.deepEqual(fixture.cacheFiles().sort(), [activeGroup, otherGroup].sort());
+
+      const history = fixture.history();
+      assert.equal(history.status, 0, history.stderr);
+      const archiveGroup = fixture.cacheFileFor(archive);
+      assert.ok(archiveGroup);
+
+      fixture.traceReads();
+      const warm = fixture.run(["list", "--json"]);
+      assert.equal(warm.status, 0, warm.stderr);
+      assert.equal(warm.stdout, cold.stdout);
+      assert.deepEqual(fixture.cacheReads().sort(), [activeGroup, otherGroup].sort());
+      assert.deepEqual(fixture.reads(), []);
+
+      const activeOnly = fixture.run(["list", "--active", "--json"]);
+      assert.equal(activeOnly.status, 0, activeOnly.stderr);
+      assert.equal(JSON.parse(activeOnly.stdout)[0].sessions[0].title, "Active");
+      assert.deepEqual(fixture.cacheReads(), [activeGroup]);
+      assert.deepEqual(fixture.reads(), []);
+
+      unlinkSync(archive);
+      assert.equal(fixture.history().status, 0);
+      assert.equal(existsSync(archiveGroup), false);
+      fixture.cacheReads();
+      assert.equal(fixture.history().status, 0);
+      assert.deepEqual(fixture.cacheReads(), [activeGroup]);
+      assert.deepEqual(fixture.reads(), []);
+    } finally {
+      fixture.cleanup();
+    }
+  });
 
   it("lists active panes with published titles without scanning history or creating a cache", () => {
     const fixture = new HistoryCacheFixture();
@@ -2026,6 +2462,60 @@ describe("shared active list and history cache", () => {
       assert.deepEqual(JSON.parse(history.stdout), [
         fixture.expected(file, id, fixture.cwd, "Other title"),
       ]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("drops invalid siblings and unknown fields when rewriting an active title", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const active = fixture.writeSession(fixture.cwd, id, [
+        fixture.header(id),
+        fixture.sessionInfo("Original title"),
+      ]);
+      const siblingId = randomUUID();
+      const sibling = fixture.writeSession(fixture.cwd, siblingId, [
+        fixture.header(siblingId),
+        fixture.sessionInfo("Sibling"),
+      ]);
+      const invalidId = randomUUID();
+      const invalid = fixture.writeSession(fixture.cwd, invalidId, [
+        fixture.header(invalidId),
+        fixture.sessionInfo("Invalid cache entry"),
+      ]);
+      fixture.mockTmux(id, active, true);
+      const cold = fixture.history();
+      assert.equal(cold.status, 0, cold.stderr);
+      const cacheFile = fixture.cacheFileFor(active);
+      assert.ok(cacheFile);
+      const group = JSON.parse(readFileSync(cacheFile, "utf8"));
+      const validSibling = group.entries[sibling];
+      const placeholder = "nested-cache-value";
+      group.entries[sibling] = {
+        ...validSibling,
+        ignored: placeholder,
+        header: { ...validSibling.header, ignored: placeholder },
+      };
+      group.entries[invalid].title = placeholder;
+      const depth = 20_000;
+      const nestedJson = "[".repeat(depth) + "null" + "]".repeat(depth);
+      writeFileSync(
+        cacheFile,
+        JSON.stringify(group).replaceAll(JSON.stringify(placeholder), nestedJson),
+      );
+
+      appendFileSync(active, JSON.stringify(fixture.sessionInfo("Updated title")) + "\n");
+      fixture.traceReads();
+      const result = fixture.run(["list", "--active", "--json"]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(JSON.parse(result.stdout)[0].sessions[0].title, "Updated title");
+      assert.deepEqual(new Set(fixture.reads().map(({ file }) => file)), new Set([active]));
+      const saved = JSON.parse(readFileSync(cacheFile, "utf8"));
+      assert.equal(saved.entries[active].title, "Updated title");
+      assert.deepEqual(saved.entries[sibling], validSibling);
+      assert.equal(Object.hasOwn(saved.entries, invalid), false);
     } finally {
       fixture.cleanup();
     }

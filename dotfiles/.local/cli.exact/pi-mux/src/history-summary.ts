@@ -11,15 +11,16 @@ import {
   renameSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
   type BigIntStats,
 } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { platform } from "./platform";
 
 const SUMMARY_READ_CHUNK_BYTES = 256 * 1024;
-const SUMMARY_CACHE_VERSION = 5;
+const SUMMARY_CACHE_VERSION = 6;
 const SESSION_HEADER_MAX_BYTES = 64 * 1024;
 const SESSION_HEADER_PREFIX_BYTES = 1024;
 const SESSION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
@@ -50,6 +51,13 @@ type StoredSummary = SavedSessionSummary & {
   fingerprint?: string;
 };
 type SavedSessionHistory = StoredSummary & { size: number };
+type CachedSummary = StoredSummary & { fingerprint: string; header: SavedSessionHeader };
+type SummaryGroup = {
+  path: string;
+  entries: Record<string, unknown>;
+  updates: Map<string, CachedSummary>;
+  discoveredFiles?: ReadonlySet<string>;
+};
 type SummaryScan = { mtime: number | null; mayHaveUserMessage: boolean };
 
 export function parseEpochMs(value: unknown): number | undefined {
@@ -62,20 +70,8 @@ export function parseEpochMs(value: unknown): number | undefined {
 }
 
 export class HistorySummaryCache {
-  private readonly directory: string | undefined;
-
-  constructor() {
-    const configured = process.env.XDG_CACHE_HOME;
-    const root = configured && isAbsolute(configured) ? configured : join(homedir(), ".cache");
-    const directory = join(root, "pi-mux", "history-titles");
-    try {
-      mkdirSync(directory, { recursive: true, mode: 0o700 });
-      const stat = lstatSync(directory);
-      if (stat.isDirectory() && platform.ownedFileEntry(stat)) this.directory = directory;
-    } catch {
-      this.directory = undefined;
-    }
-  }
+  private directory: string | null | undefined;
+  private readonly groups = new Map<string, SummaryGroup>();
 
   resolve(file: string): SavedSessionSummary {
     const summary = this.resolveHistory(file);
@@ -86,36 +82,106 @@ export class HistorySummaryCache {
     file: string,
     acceptHeader?: (header: SavedSessionHeader) => boolean,
   ): SavedSessionHistory | undefined {
-    return this.resolveFile(file, this.directory, acceptHeader, true);
+    return this.resolveFile(file, acceptHeader, true);
+  }
+
+  resolveDirectHistory(
+    file: string,
+    acceptHeader: (header: SavedSessionHeader) => boolean,
+    verifyParent: () => boolean,
+  ): SavedSessionHistory | undefined {
+    return this.resolveFile(file, acceptHeader, true, verifyParent);
+  }
+
+  recordDiscoveredFiles(sourceDirectory: string, files: string[]): void {
+    const group = this.loadGroup(resolve(sourceDirectory));
+    if (group) group.discoveredFiles = new Set(files);
+  }
+
+  flush(): void {
+    const dirtyGroups = [...this.groups].filter(
+      ([sourceDirectory, group]) =>
+        group.updates.size > 0 ||
+        (group.discoveredFiles &&
+          Object.keys(group.entries).some((file) =>
+            isMissingOriginal(sourceDirectory, group.discoveredFiles, file),
+          )),
+    );
+    if (dirtyGroups.length === 0 || !this.directory || !isPrivateCacheDirectory(this.directory))
+      return;
+    for (const [sourceDirectory, group] of dirtyGroups) {
+      const latest = loadSummaryGroup(group.path, sourceDirectory);
+      const entries = entriesToSave(sourceDirectory, group, latest);
+      const saved =
+        Object.keys(entries).length > 0
+          ? saveSummaryGroup(group.path, sourceDirectory, entries)
+          : !latest || removeEmptySummaryGroup(group.path);
+      if (!saved) continue;
+      group.entries = entries;
+      group.updates.clear();
+    }
+  }
+
+  private loadGroup(sourceDirectory: string): SummaryGroup | undefined {
+    const loaded = this.groups.get(sourceDirectory);
+    if (loaded) return loaded;
+    if (this.directory === undefined) this.directory = prepareSummaryCacheDirectory();
+    if (!this.directory) return undefined;
+    const key = createHash("sha256").update(sourceDirectory).digest("hex");
+    const path = join(this.directory, `group-${key}.json`);
+    const group = {
+      path,
+      entries: loadSummaryGroup(path, sourceDirectory) ?? {},
+      updates: new Map<string, CachedSummary>(),
+    };
+    this.groups.set(sourceDirectory, group);
+    return group;
   }
 
   private resolveFile(
     file: string,
-    directory: string | undefined,
     acceptHeader: ((header: SavedSessionHeader) => boolean) | undefined,
     allowsRetry: boolean,
+    verifyParent?: () => boolean,
   ): SavedSessionHistory | undefined {
     let fd: number | undefined;
     try {
-      fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK);
+      const originalName = verifyParent ? lstatSync(file, { bigint: true }) : undefined;
+      if (originalName && !originalName.isFile()) return undefined;
+      const noFollow = verifyParent ? constants.O_NOFOLLOW : 0;
+      fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK | noFollow);
       const before = fstatSync(fd, { bigint: true });
       if (!before.isFile()) return undefined;
+      if (verifyParent) {
+        const currentName = directHistoryName(file, verifyParent);
+        if (
+          !originalName ||
+          before.ino === 0n ||
+          !sameIdentity(before, originalName) ||
+          !currentName ||
+          !sameIdentity(before, currentName)
+        )
+          return undefined;
+      }
       const fingerprint = fileFingerprint(before);
-      const path = directory
-        ? join(directory, `${createHash("sha256").update(file).digest("hex")}.json`)
-        : undefined;
-      const cached = path ? this.load(path, file, fingerprint) : undefined;
+      const group = this.loadGroup(dirname(file));
+      const cached = group ? getCachedSummary(group, file, fingerprint) : undefined;
       const header = cached ? cached.header : readSavedSessionHeader(fd);
       if (acceptHeader && (!header || !acceptHeader(header))) return undefined;
       const resolved = cached ?? readSavedSessionSummary(fd, Number(before.size), header);
-      const stable =
-        sameFingerprint(before, fstatSync(fd, { bigint: true })) &&
-        sameFingerprint(before, statSync(file, { bigint: true }));
-      if (!stable) {
-        if (allowsRetry) return this.resolveFile(file, directory, acceptHeader, false);
-        return { ...resolved, size: Number(before.size) };
+      let stable = sameFingerprint(before, fstatSync(fd, { bigint: true }));
+      if (stable) {
+        const currentName = verifyParent
+          ? directHistoryName(file, verifyParent)
+          : statSync(file, { bigint: true });
+        stable = currentName !== undefined && sameFingerprint(before, currentName);
       }
-      if (!cached && path && resolved.fingerprint === fingerprint) this.save(path, file, resolved);
+      if (!stable) {
+        if (allowsRetry) return this.resolveFile(file, acceptHeader, false, verifyParent);
+        return verifyParent ? undefined : { ...resolved, size: Number(before.size) };
+      }
+      if (!cached && group && isValidCachedSummary(resolved, fingerprint))
+        group.updates.set(file, resolved);
       return { ...resolved, size: Number(before.size) };
     } catch {
       return undefined;
@@ -123,55 +189,156 @@ export class HistorySummaryCache {
       if (fd !== undefined) closeSync(fd);
     }
   }
+}
 
-  private load(path: string, file: string, fingerprint: string): StoredSummary | undefined {
-    let fd: number | undefined;
+function directHistoryName(file: string, verifyParent: () => boolean): BigIntStats | undefined {
+  const named = lstatSync(file, { bigint: true, throwIfNoEntry: false });
+  return named?.isFile() && verifyParent() ? named : undefined;
+}
+
+function sameIdentity(a: BigIntStats, b: BigIntStats): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+function prepareSummaryCacheDirectory(): string | null {
+  const configured = process.env.XDG_CACHE_HOME;
+  const root = configured && isAbsolute(configured) ? configured : join(homedir(), ".cache");
+  const directory = join(root, "pi-mux", "history-titles");
+  try {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+  } catch {
+    return null;
+  }
+  return isPrivateCacheDirectory(directory) ? directory : null;
+}
+
+function isPrivateCacheDirectory(directory: string): boolean {
+  try {
+    const stat = lstatSync(directory);
+    return stat.isDirectory() && platform.ownedFileEntry(stat);
+  } catch {
+    return false;
+  }
+}
+
+function loadSummaryGroup(
+  path: string,
+  sourceDirectory: string,
+): Record<string, unknown> | undefined {
+  try {
+    const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
-      fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       const stat = fstatSync(fd);
       if (!stat.isFile() || !platform.ownedFileEntry(stat)) return undefined;
-      const entry: unknown = JSON.parse(readFileSync(fd, "utf8"));
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
-      const record = entry as Record<string, unknown>;
+      const group: unknown = JSON.parse(readFileSync(fd, "utf8"));
       if (
-        record.version !== SUMMARY_CACHE_VERSION ||
-        record.file !== file ||
-        record.fingerprint !== fingerprint ||
-        !isValidTitle(record.title) ||
-        !isValidTime(record.btime) ||
-        !isValidTime(record.mtime) ||
-        !isValidHeader(record.header)
+        !isJsonObject(group) ||
+        group.version !== SUMMARY_CACHE_VERSION ||
+        group.directory !== sourceDirectory ||
+        !isJsonObject(group.entries)
       )
         return undefined;
-      return {
-        title: record.title as string | null,
-        btime: record.btime as number | null,
-        mtime: record.mtime as number | null,
-        header: record.header as SavedSessionHeader | null,
-      };
-    } catch {
-      return undefined;
+      return group.entries;
     } finally {
-      if (fd !== undefined) closeSync(fd);
+      closeSync(fd);
     }
+  } catch {
+    return undefined;
   }
+}
 
-  private save(path: string, file: string, resolved: StoredSummary): void {
-    const temporary = `${path}.${randomUUID()}.tmp`;
+function getCachedSummary(
+  group: SummaryGroup,
+  file: string,
+  fingerprint: string,
+): StoredSummary | undefined {
+  const entry =
+    group.updates.get(file) ??
+    (Object.hasOwn(group.entries, file) ? group.entries[file] : undefined);
+  if (!isValidCachedSummary(entry, fingerprint)) return undefined;
+  return { title: entry.title, btime: entry.btime, mtime: entry.mtime, header: entry.header };
+}
+
+function isValidCachedSummary(entry: unknown, fingerprint?: string): entry is CachedSummary {
+  return (
+    isJsonObject(entry) &&
+    (fingerprint === undefined
+      ? typeof entry.fingerprint === "string"
+      : entry.fingerprint === fingerprint) &&
+    isValidTitle(entry.title) &&
+    isValidTime(entry.btime) &&
+    isValidTime(entry.mtime) &&
+    isValidHeader(entry.header)
+  );
+}
+
+function isMissingOriginal(
+  sourceDirectory: string,
+  discoveredFiles: ReadonlySet<string> | undefined,
+  file: string,
+): boolean {
+  if (!discoveredFiles || discoveredFiles.has(file) || dirname(file) !== sourceDirectory)
+    return false;
+  try {
+    return lstatSync(file, { throwIfNoEntry: false }) === undefined;
+  } catch {
+    return false;
+  }
+}
+
+function entriesToSave(
+  sourceDirectory: string,
+  group: SummaryGroup,
+  latest: Record<string, unknown> | undefined,
+): Record<string, CachedSummary> {
+  const merged = { ...latest, ...Object.fromEntries(group.updates) };
+  const entries = new Map<string, CachedSummary>();
+  for (const [file, entry] of Object.entries(merged)) {
+    if (dirname(file) !== sourceDirectory || !isValidCachedSummary(entry)) continue;
+    if (isMissingOriginal(sourceDirectory, group.discoveredFiles, file)) continue;
+    const { fingerprint, title, btime, mtime, header } = entry;
+    entries.set(file, {
+      fingerprint,
+      title,
+      btime,
+      mtime,
+      header: { id: header.id, cwd: header.cwd, btime: header.btime },
+    });
+  }
+  return Object.fromEntries(entries);
+}
+
+function removeEmptySummaryGroup(path: string): boolean {
+  try {
+    unlinkSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function saveSummaryGroup(
+  path: string,
+  sourceDirectory: string,
+  entries: Record<string, unknown>,
+): boolean {
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(
+      temporary,
+      JSON.stringify({ version: SUMMARY_CACHE_VERSION, directory: sourceDirectory, entries }) +
+        "\n",
+      { mode: 0o600, flag: "wx" },
+    );
+    renameSync(temporary, path);
+    return true;
+  } catch {
     try {
-      writeFileSync(
-        temporary,
-        JSON.stringify({ version: SUMMARY_CACHE_VERSION, file, ...resolved }) + "\n",
-        { mode: 0o600, flag: "wx" },
-      );
-      renameSync(temporary, path);
+      rmSync(temporary, { force: true });
     } catch {
-      try {
-        rmSync(temporary, { force: true });
-      } catch {
-        return;
-      }
+      return false;
     }
+    return false;
   }
 }
 

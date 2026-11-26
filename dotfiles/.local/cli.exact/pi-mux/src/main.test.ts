@@ -1151,9 +1151,13 @@ describe("list scopes", () => {
       const liveCwd = join(fixture.directory, "live-workspace");
       mkdirSync(liveCwd);
       const sharedId = randomUUID();
-      const paneFile = conversationFile(fixture.agentDir, liveCwd, sharedId, {
-        title: "Older copy",
-      });
+      const paneFile = archiveConversation(
+        conversationFile(fixture.agentDir, liveCwd, sharedId, {
+          title: "Archived live copy",
+          activity: "2026-01-04T00:00:00.000Z",
+        }),
+      );
+      conversationFile(fixture.agentDir, liveCwd, sharedId, { title: "Older copy" });
       const recentActivity = "2026-01-03T00:00:00.000Z";
       const historyFile = conversationFile(fixture.agentDir, fixture.cwd, sharedId, {
         title: "Recent copy",
@@ -1222,7 +1226,9 @@ describe("list scopes", () => {
       );
 
       appendFileSync(archivedFile, lastRunLine(archivedId, laterTime));
+      fixture.piSessionIn("archived", liveCwd, { id: archivedId, file: archivedFile });
 
+      archiveConversation(conversationFile(fixture.agentDir, liveCwd, randomUUID()));
       const closedId = randomUUID();
       const closedFile = conversationFile(fixture.agentDir, liveCwd, closedId, {
         title: "Closed title",
@@ -1231,23 +1237,18 @@ describe("list scopes", () => {
       const listed = fixture.run(["list", "--json"]);
       assert.equal(listed.status, 0, listed.stderr);
       assert.ok(listed.stdout.endsWith("\n"));
-      const savedOnly = [
-        {
-          id: archivedId,
-          file: archivedFile,
-          title: "Archived title",
-          mtime: Date.parse(archivedActivity),
-        },
-        { id: closedId, file: closedFile, title: "Closed title", mtime: fixtureBtimeMs },
-      ].map((entry) => ({
-        ...entry,
-        active: false,
+      const activeArchive = {
+        id: archivedId,
+        file: archivedFile,
+        active: true,
         saved: true,
         state: null,
+        title: "Archived title",
         publishPending: null,
         btime: fixtureBtimeMs,
-        size: statSync(entry.file).size,
-      }));
+        mtime: Date.parse(archivedActivity),
+        size: statSync(archivedFile).size,
+      };
       assert.deepEqual(JSON.parse(listed.stdout), [
         { cwd: fixture.cwd, sessions: [] },
         {
@@ -1266,6 +1267,7 @@ describe("list scopes", () => {
               mtime: Date.parse(recentActivity),
               size: statSync(historyFile).size,
             },
+            activeArchive,
             {
               id: unsavedId,
               file: unsavedFile,
@@ -1279,7 +1281,18 @@ describe("list scopes", () => {
               size: null,
               temporary: true,
             },
-            ...savedOnly,
+            {
+              id: closedId,
+              file: closedFile,
+              active: false,
+              saved: true,
+              state: null,
+              title: "Closed title",
+              publishPending: null,
+              btime: fixtureBtimeMs,
+              mtime: fixtureBtimeMs,
+              size: statSync(closedFile).size,
+            },
           ],
         },
       ]);
@@ -1299,6 +1312,13 @@ describe("list scopes", () => {
               publishPending: null,
               lastRun,
             },
+            {
+              id: archivedId,
+              file: archivedFile,
+              state: null,
+              title: "Archived title",
+              publishPending: null,
+            },
           ],
           empty: [{ id: unsavedId, file: unsavedFile, temporary: true }],
         },
@@ -1309,8 +1329,8 @@ describe("list scopes", () => {
       assert.deepEqual(tableRows(table.stdout), [
         ["WORKSPACE", "SESSION ID", "STATE", "UPDATED (UTC)", "TITLE"],
         [liveCwd, sharedId, "waiting-user", recentActivity, "Live title"],
+        [liveCwd, archivedId, "active", archivedActivity, "Archived title"],
         [liveCwd, unsavedId, "unsaved", "-", "-"],
-        [liveCwd, archivedId, "inactive", archivedActivity, "Archived title"],
         [liveCwd, closedId, "inactive", new Date(fixtureBtimeMs).toISOString(), "Closed title"],
       ]);
     } finally {

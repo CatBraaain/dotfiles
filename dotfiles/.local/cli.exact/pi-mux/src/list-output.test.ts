@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TmuxConfig } from "./configuration";
+import { HistorySummaryCache } from "./history-summary";
 import { mergeSessionLists, renderTable } from "./list-output";
 import { PANE_FORMAT } from "./pane-inventory";
 import { platform } from "./platform";
@@ -15,7 +16,7 @@ const cwd = "/workspace";
 describe("Windows active list", () => {
   it("reads both pane-local options without changing the list in at most 21 launches for ten panes", async () => {
     await withWindowsListFixture(async ({ config, sessions, launchCount }) => {
-      const workspaces = await listWorkspaces(config);
+      const workspaces = await listWorkspaces(config, new HistorySummaryCache());
       assert.deepEqual(workspaces, [{ cwd: config.stateDirectory, sessions, empty: [] }]);
       assert.ok(launchCount() <= 21, `psmux launches: ${launchCount()}`);
     });
@@ -23,14 +24,17 @@ describe("Windows active list", () => {
 
   it("reports a failed pane option query instead of returning a partial list", async () => {
     await withWindowsListFixture(async ({ config }) => {
-      await assert.rejects(listWorkspaces(config), /tmux show-options failed: can't find pane/);
+      await assert.rejects(
+        listWorkspaces(config, new HistorySummaryCache()),
+        /tmux show-options failed: can't find pane/,
+      );
     }, "error");
   });
 
   it("rejects a successful exit after only the first pane option reply", async () => {
     await withWindowsListFixture(async ({ config }) => {
       await assert.rejects(
-        listWorkspaces(config),
+        listWorkspaces(config, new HistorySummaryCache()),
         /tmux show-options failed: incomplete pane option response/,
       );
     }, "truncated");
