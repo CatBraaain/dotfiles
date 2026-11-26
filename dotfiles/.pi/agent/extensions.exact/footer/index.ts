@@ -252,9 +252,19 @@ async function loadAssignments(
   }
 }
 
+function getSessionEntryCount(
+  sessionManager: ExtensionContext["sessionManager"],
+): number | undefined {
+  if (!("getEntryCount" in sessionManager) || typeof sessionManager.getEntryCount !== "function")
+    return undefined;
+  const count: unknown = sessionManager.getEntryCount();
+  return typeof count === "number" ? count : undefined;
+}
+
 function getFooterRenderData(
   ctx: ExtensionContext,
   footerData: ReadonlyFooterDataProvider,
+  sessionCostUsd: number,
 ): FooterRenderData {
   const model = ctx.model;
   return {
@@ -264,7 +274,7 @@ function getFooterRenderData(
     sessionName: ctx.sessionManager.getSessionName(),
     sessionId: ctx.sessionManager.getSessionId(),
     contextUsage: ctx.getContextUsage(),
-    sessionCostUsd: sumSessionCostUsd(ctx.sessionManager.getEntries()),
+    sessionCostUsd,
     model: model
       ? {
           provider: model.provider,
@@ -302,6 +312,7 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): () => void {
   let pollTimer: ReturnType<typeof setInterval> | undefined;
 
   ctx.ui.setFooter((tui, theme, footerData) => {
+    let cachedCost: { sessionId: string; entryCount: number | undefined; usd: number } | undefined;
     requestRender = () => tui.requestRender();
     const unsubscribe = footerData.onBranchChange(requestRender);
     return {
@@ -311,7 +322,21 @@ function installFooter(pi: ExtensionAPI, ctx: ExtensionContext): () => void {
       },
       invalidate() {},
       render(width) {
-        const footer = getFooterRenderData(ctx, footerData);
+        const { sessionManager } = ctx;
+        const currentSessionId = sessionManager.getSessionId();
+        const entryCount = getSessionEntryCount(sessionManager);
+        if (
+          entryCount === undefined ||
+          cachedCost?.sessionId !== currentSessionId ||
+          cachedCost.entryCount !== entryCount
+        ) {
+          cachedCost = {
+            sessionId: currentSessionId,
+            entryCount,
+            usd: sumSessionCostUsd(sessionManager.getEntries()),
+          };
+        }
+        const footer = getFooterRenderData(ctx, footerData, cachedCost.usd);
         if (footer.sessionId === sessionId) footer.assignments = assignments;
         return buildFooterLines(width, footer, theme);
       },

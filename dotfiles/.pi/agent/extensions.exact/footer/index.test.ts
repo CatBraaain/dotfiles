@@ -68,20 +68,34 @@ describe("formatting", () => {
   });
 });
 
+function usage(total: number) {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: total, output: 0, cacheRead: 0, cacheWrite: 0, total },
+  };
+}
+
+function compactionEntry(id: string, costUsd: number): SessionEntry {
+  return {
+    type: "compaction",
+    id,
+    parentId: null,
+    timestamp: new Date(0).toISOString(),
+    firstKeptEntryId: "kept",
+    summary: "",
+    tokensBefore: 0,
+    usage: usage(costUsd),
+  };
+}
+
 describe("session cost", () => {
   it("adds costs from assistant messages, tool results, branch summaries and compactions", () => {
     const timestamp = Date.now();
     const entry = { id: "entry", parentId: null, timestamp: new Date(timestamp).toISOString() };
-    function usage(total: number) {
-      return {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: total, output: 0, cacheRead: 0, cacheWrite: 0, total },
-      };
-    }
     const entries: SessionEntry[] = [
       {
         ...entry,
@@ -111,14 +125,7 @@ describe("session cost", () => {
         },
       },
       { ...entry, type: "branch_summary", fromId: "old", summary: "", usage: usage(0.5) },
-      {
-        ...entry,
-        type: "compaction",
-        firstKeptEntryId: "kept",
-        summary: "",
-        tokensBefore: 0,
-        usage: usage(1),
-      },
+      compactionEntry("compaction", 1),
     ];
 
     assert.equal(sumSessionCostUsd(entries), 1.875);
@@ -155,16 +162,20 @@ function createFooterHarness(mode = "tui", sessionFile: string | null = "/sessio
   let footer: ReturnType<FooterFactory> | undefined;
   let renderRequests = 0;
   let sessionId = SESSION_ID;
+  let entries: SessionEntry[] = [];
+  const getEntries = mock(() => entries.slice());
+  const sessionManager = {
+    getSessionId: () => sessionId,
+    getSessionFile: () => sessionFile,
+    getSessionName: () => undefined,
+    getCwd: () => "/workspace/project",
+    getEntryCount: () => entries.length,
+    getEntries,
+  };
   const ctx = {
     mode,
     cwd: "/workspace/project",
-    sessionManager: {
-      getSessionId: () => sessionId,
-      getSessionFile: () => sessionFile,
-      getSessionName: () => undefined,
-      getCwd: () => "/workspace/project",
-      getEntries: () => [],
-    },
+    sessionManager,
     getContextUsage: () => undefined,
     ui: {
       setFooter(factory: FooterFactory) {
@@ -201,6 +212,8 @@ function createFooterHarness(mode = "tui", sessionFile: string | null = "/sessio
 
   return {
     queries,
+    getEntries,
+    sessionManager,
     schedulePoll,
     poll: () => timers.forEach((callback) => callback()),
     timerCount: () => timers.size,
@@ -209,6 +222,9 @@ function createFooterHarness(mode = "tui", sessionFile: string | null = "/sessio
     renderRequests: () => renderRequests,
     setSessionId: (id: string) => {
       sessionId = id;
+    },
+    setEntries: (nextEntries: SessionEntry[]) => {
+      entries = nextEntries;
     },
   };
 }
@@ -248,6 +264,58 @@ describe("extension lifecycle", () => {
     harness.emit("session_start");
 
     assert.match(harness.render()?.at(-1) ?? "", /^Context \? \/ 0 · Session \$0\.000 /);
+  });
+
+  it("reuses the displayed cost without reading unchanged history again", () => {
+    const harness = createFooterHarness("tui", null);
+    harness.setEntries([compactionEntry("first", 0.375)]);
+    harness.emit("session_start");
+
+    const firstRender = harness.render();
+    assert.match(firstRender?.at(-1) ?? "", /Session \$0\.375 /);
+    assert.deepEqual(harness.render(), firstRender);
+    assert.equal(harness.getEntries.mock.calls.length, 1);
+  });
+
+  it("updates the displayed cost when the session manager does not expose an entry count", () => {
+    const harness = createFooterHarness("tui", null);
+    Reflect.deleteProperty(harness.sessionManager, "getEntryCount");
+    const first = compactionEntry("first", 0.375);
+    harness.setEntries([first]);
+    harness.emit("session_start");
+    assert.match(harness.render()?.at(-1) ?? "", /Session \$0\.375 /);
+
+    harness.setEntries([first, compactionEntry("second", 0.25)]);
+    assert.match(harness.render()?.at(-1) ?? "", /Session \$0\.625 /);
+  });
+
+  it("updates the displayed cost when an entry is appended", () => {
+    const harness = createFooterHarness("tui", null);
+    const first = compactionEntry("first", 0.375);
+    harness.setEntries([first]);
+    harness.emit("session_start");
+    assert.match(harness.render()?.at(-1) ?? "", /Session \$0\.375 /);
+
+    harness.setEntries([first, compactionEntry("second", 0.25)]);
+    assert.match(harness.render()?.at(-1) ?? "", /Session \$0\.625 /);
+    assert.equal(harness.getEntries.mock.calls.length, 2);
+  });
+
+  it.each([
+    { reason: "resume", sessionId: "new-session" },
+    { reason: "reload", sessionId: SESSION_ID },
+  ])("recalculates cost after $reason even when the number of entries is unchanged", (next) => {
+    const harness = createFooterHarness("tui", null);
+    harness.setEntries([compactionEntry("first", 0.375)]);
+    harness.emit("session_start");
+    assert.match(harness.render()?.at(-1) ?? "", /Session \$0\.375 /);
+
+    harness.emit("session_shutdown");
+    harness.setSessionId(next.sessionId);
+    harness.setEntries([compactionEntry("second", 0.625)]);
+    harness.emit("session_start", { reason: next.reason });
+    assert.match(harness.render()?.at(-1) ?? "", /Session \$0\.625 /);
+    assert.equal(harness.getEntries.mock.calls.length, 2);
   });
 
   it("skips the CLI for an in-memory session", () => {
