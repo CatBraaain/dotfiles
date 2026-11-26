@@ -1074,7 +1074,7 @@ export default function agentsExtension(
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
-    description: "Spawn an isolated child pi process using a configured agent.",
+    description: "設定済みのエージェントを使い、独立した pi の子プロセスを起動する。",
     parameters: Type.Object({
       task: Type.String({ description: "Task to delegate to the child process" }),
       agent: Type.String({ description: "Configured child agent name" }),

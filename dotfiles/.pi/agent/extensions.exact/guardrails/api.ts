@@ -35,7 +35,11 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
     name: "ask_permission",
     label: "ask_permission",
     description:
-      "Ask the user to grant write access to a directory subtree, or to approve a command rejected as requiring a reason. For a path: request access only when the effective write action is ask or unset and the path is not credentials; explicit deny and credentials cannot be granted. Use it before edit-heavy work on such a path. Approval updates Guardrails write permissions for the subtree for the rest of the session. All tools using those permissions share the grant. Explicit deny and credentials remain protected. For a command: pass the exact rejected command; the user can approve it once (re-sending the same bash call runs it without another dialog) or approve its matched config pattern for this turn or the rest of the session. Turn approval expires at the next user message.",
+      "ディレクトリとその配下への書き込み許可、または理由が必要として拒否されたコマンドの実行承認をユーザーに求める。" +
+      " パスの場合は、実効書き込みルールが `ask` または未設定で、認証情報のパスでない場合に限って申請できる。明示的な `deny` と認証情報のパスは許可できない。" +
+      " 対象パスで編集作業が多い場合は、着手前に使う。承認すると、対象ディレクトリとその配下に対する Guardrails の書き込み権限がセッション終了まで更新され、その権限を使うすべてのツールで共有される。明示的な `deny` と認証情報のパスは保護されたまま。" +
+      " コマンドの場合は、拒否されたコマンドをそのまま渡す。ユーザーは1回限りで承認するか、一致した設定パターンをこのターン中またはセッション終了まで承認できる。" +
+      " 1回限りの承認後は、同じ `bash` 呼び出しを再送すると確認なしで実行される。ターン承認は次のユーザーメッセージで失効する。",
     promptSnippet: "Ask the user for write access to a directory subtree or command approval",
     promptGuidelines: [
       writePermissionGuideline(guardrail.getWritePathsByFinalAction()),

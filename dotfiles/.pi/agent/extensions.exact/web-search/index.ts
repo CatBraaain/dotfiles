@@ -180,7 +180,7 @@ export default function (pi: ExtensionAPI, deps: WebCliDeps = {}) {
   pi.registerTool({
     name: "web_search",
     label: "Web Search",
-    description: "Search the web with a single query.",
+    description: "1つの検索クエリでウェブを検索する。",
     parameters: searchParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const args = [params.query, ...(params.lang ? ["--lang", params.lang] : []), "--json"];
@@ -209,7 +209,7 @@ export default function (pi: ExtensionAPI, deps: WebCliDeps = {}) {
   pi.registerTool({
     name: "web_fetch",
     label: "Web Fetch",
-    description: "Fetch a single URL as Markdown.",
+    description: "1つの URL の内容を Markdown 形式で取得する。",
     parameters: fetchParameters,
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       try {

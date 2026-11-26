@@ -12,6 +12,8 @@ import {
   createLsTool,
   createReadTool,
   createWriteTool,
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_LINES,
 } from "@earendil-works/pi-coding-agent";
 import {
   createGuardrailsAPI,
@@ -78,7 +80,7 @@ function registerGuardedTool(
 ): void {
   pi.registerTool({
     ...definition,
-    description: definition.description + (TOOL_GUIDANCE[definition.name] ?? ""),
+    description: TOOL_DESCRIPTIONS[definition.name] ?? definition.description,
     ...(definition.name === "edit" ? { renderShell: "default" as const } : {}),
     async execute(id, params, signal, onUpdate, context) {
       const input = params as Record<string, unknown>;
@@ -112,10 +114,37 @@ function initializeGuardrails(
   }
 }
 
-const TOOL_GUIDANCE: Record<string, string> = {
-  read: " Image files are returned as Vision input when the current model supports image input. A model without image input gets an error that directs delegation to the vision agent instead.",
+const maxOutputKb = DEFAULT_MAX_BYTES / 1024;
+const writePermissionGuidance =
+  " 実効書き込みルールが `ask` または未設定のパスでは、ユーザーに許可を求める。明示的な `deny` と認証情報のパスは確認なしで拒否する。" +
+  " 承認すると、対象範囲の Guardrails の書き込み権限がセッション終了まで更新され、その権限を使うすべてのツールで共有される。明示的な `deny` と認証情報のパスは保護されたまま。";
+
+const TOOL_DESCRIPTIONS: Partial<Record<string, string>> = {
+  read:
+    "ファイルの内容を読み取る。テキストと画像（jpg、png、gif、webp、bmp）に対応し、画像は添付で返す。" +
+    ` テキストは ${DEFAULT_MAX_LINES} 行と ${maxOutputKb}KB のうち先に達した上限で切り詰める。大きなファイルには \`offset\` と \`limit\` を使う。全文が必要なら \`offset\` を進めて最後まで読む。` +
+    " 現在のモデルが画像入力に対応する場合、画像を Vision 入力として返す。非対応の場合は `vision` エージェントへの委譲を案内するエラーを返す。",
   write:
-    " Writing to a path whose effective action is ask or unset prompts the user for permission. Explicit deny and credentials paths are rejected without a prompt. Approval updates Guardrails write permissions for the selected scope for the rest of the session. All tools using those permissions share the grant. Explicit deny and credentials remain protected.",
-  edit: " Editing a path whose effective action is ask or unset prompts the user for permission. Explicit deny and credentials paths are rejected without a prompt. Approval updates Guardrails write permissions for the selected scope for the rest of the session. All tools using those permissions share the grant. Explicit deny and credentials remain protected.",
-  bash: ' The filesystem is sandboxed: writes outside approved paths fail with "Read-only file system". Do not retry such commands with bash. Request access with ask_permission only for paths whose effective write action is ask or unset; explicit deny and credentials paths cannot be granted. Approval updates Guardrails write permissions for the approved scope for all tools using those permissions; explicit deny and credentials remain protected. Commands rejected with "Command requires a reason" must be re-requested via ask_permission with that exact command and a reason; do not rewrite them to bypass the gate.',
+    "ファイルに内容を書き込む。ファイルがなければ作成し、既存のファイルは上書きする。親ディレクトリは自動で作成する。" +
+    writePermissionGuidance,
+  edit:
+    "完全一致するテキストを置換して、1つのファイルを編集する。" +
+    " 各 `edits[].oldText` は元のファイル内で1箇所にだけ一致し、ほかの置換範囲と重複してはならない。同じブロックや近接する行を編集する場合は1件にまとめる。離れた変更をつなぐためだけに、大きな未変更範囲を含めない。" +
+    writePermissionGuidance,
+  grep:
+    "ファイルの内容からパターンを検索し、一致した行をファイルパスと行番号付きで返す。`.gitignore` に従う。" +
+    ` 出力は100件と ${maxOutputKb}KB のうち先に達した上限で切り詰める。長い行は500文字で切り詰める。`,
+  find:
+    "glob パターンでファイルを検索し、一致したパスを検索ディレクトリからの相対パスで返す。`.gitignore` に従う。" +
+    ` 出力は1000件と ${maxOutputKb}KB のうち先に達した上限で切り詰める。`,
+  ls:
+    "ディレクトリの内容を名前順で返す。ドットファイルも含め、ディレクトリ名の末尾には `/` を付ける。" +
+    ` 出力は500件と ${maxOutputKb}KB のうち先に達した上限で切り詰める。`,
+  bash:
+    "現在の作業ディレクトリで Bash コマンドを実行し、標準出力と標準エラーを返す。" +
+    ` 出力は末尾から最大 ${DEFAULT_MAX_LINES} 行または ${maxOutputKb}KB（先に達した上限）に収める。切り詰めた場合は全出力を一時ファイルに保存する。タイムアウトは秒単位で指定できる。` +
+    ' ファイルシステムはサンドボックスで保護されている。許可範囲外への書き込みは "Read-only file system" で失敗する。この場合、同じ操作を `bash` で再試行しない。' +
+    " `ask_permission` で申請できるのは、実効書き込みルールが `ask` または未設定のパスに限る。明示的な `deny` と認証情報のパスは許可できない。" +
+    " 承認すると、許可された範囲の Guardrails の書き込み権限が更新され、その権限を使うすべてのツールで共有される。明示的な `deny` と認証情報のパスは保護されたまま。" +
+    ' "Command requires a reason" で拒否された場合は、拒否されたコマンドを変更せず、理由を添えて `ask_permission` で申請する。承認を迂回するためにコマンドを書き換えない。',
 };

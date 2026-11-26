@@ -585,8 +585,8 @@ describe("registered Tools image read", () => {
 
   it("read の説明文は画像の Vision 入力と非対応時の vision 委譲を示す", () => {
     const description = captureRegisteredTools().get("read").description;
-    assert.match(description, /Image files are returned as Vision input/);
-    assert.match(description, /delegation to the vision agent/);
+    assert.match(description, /画像を Vision 入力として返す/);
+    assert.match(description, /vision.*エージェントへの委譲/);
   });
 
   it(
@@ -2803,9 +2803,8 @@ describe("§2.3 承認ノート", () => {
       (name) => tools.get(name).description,
     );
     for (const description of descriptions) {
-      assert.match(description, /Guardrails write permissions/);
-      assert.match(description, /[Aa]ll tools using/);
-      assert.doesNotMatch(description, /writable via fs tools and bash|including via bash/);
+      assert.match(description, /Guardrails の書き込み権限/);
+      assert.match(description, /その権限を使うすべてのツールで共有/);
     }
     const note = writeApprovalNote({
       operation: "write",
@@ -4217,10 +4216,10 @@ commands:
   it("ツール説明と promptGuidelines は書き込み許可の境界を示す", () => {
     const tools = captureRegisteredTools();
     const permissionTool = tools.get("ask_permission");
-    assert.match(permissionTool.description, /effective write action is ask or unset/i);
-    assert.match(permissionTool.description, /explicit deny and credentials cannot be granted/i);
-    assert.match(permissionTool.description, /before edit-heavy work/i);
-    assert.match(permissionTool.description, /exact rejected command/i);
+    assert.match(permissionTool.description, /実効書き込みルールが `ask` または未設定/);
+    assert.match(permissionTool.description, /明示的な `deny` と認証情報のパスは許可できない/);
+    assert.match(permissionTool.description, /編集作業が多い場合は、着手前/);
+    assert.match(permissionTool.description, /拒否されたコマンドをそのまま渡す/);
     assert.equal(permissionTool.promptGuidelines?.length, 2);
     assert.match(
       permissionTool.promptGuidelines[0],
@@ -4239,11 +4238,8 @@ commands:
     assert.match(permissionTool.promptGuidelines[1], /Command requires a reason/);
     for (const toolName of ["write", "edit"]) {
       const description = tools.get(toolName).description;
-      assert.match(description, /effective action is ask or unset/);
-      assert.match(
-        description,
-        /explicit deny and credentials paths are rejected without a prompt/i,
-      );
+      assert.match(description, /実効書き込みルールが `ask` または未設定/);
+      assert.match(description, /明示的な `deny` と認証情報のパスは確認なしで拒否/);
     }
   });
 
@@ -5282,10 +5278,10 @@ matched: {"command":"git","args":["push"]}`,
 
   it("bash の説明文は許可要求の境界と理由必須ゲートを示す", () => {
     const tool = captureRegisteredTools().get("bash");
-    assert.match(tool.description, /effective write action is ask or unset/);
-    assert.match(tool.description, /explicit deny and credentials paths cannot be granted/);
+    assert.match(tool.description, /実効書き込みルールが `ask` または未設定/);
+    assert.match(tool.description, /明示的な `deny` と認証情報のパスは許可できない/);
     assert.match(tool.description, /Command requires a reason/);
-    assert.match(tool.description, /do not rewrite them to bypass the gate/);
+    assert.match(tool.description, /承認を迂回するためにコマンドを書き換えない/);
   });
 
   it(

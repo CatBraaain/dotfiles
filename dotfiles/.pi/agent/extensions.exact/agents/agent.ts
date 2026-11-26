@@ -258,7 +258,12 @@ export function registerAgentTool(pi: ExtensionAPI): void {
     name: "agent",
     label: "Agent",
     description:
-      "Deliver a message to an agent session, or create a new one. For a 'newagent' request, use this tool without session-id to start a detached, independent main-agent pi session in a tmux window. In the initial prompt (message), tell the new session to do the assigned work there. Do not forward the instruction to use 'newagent' or start that session, even when quoting the user's approval. The tool returns only the session information; it does not wait for, converse with, or collect results from the new session. With session-id, delivers the message to that live session; wait optionally blocks until the recipient consumes it. Requires interactive approval.",
+      "エージェントのセッションにメッセージを送るか、新しいセッションを作成する。" +
+      " `newagent` の依頼では `session-id` を省略し、独立した main エージェントの pi セッションを別の tmux ウィンドウで起動する。起動先には自動接続しない。" +
+      " 初回の `message` には、新しいセッションで担当作業を実行するよう書く。ユーザーの承認を引用する場合も、`newagent` の使用やセッション起動の指示は転送しない。" +
+      " 新規作成時に返すのはセッション情報のみ。完了を待ったり、新しいセッションと対話したり、結果を回収したりしない。" +
+      " `session-id` を指定すると、稼働中のセッションにメッセージを送る。`wait` を指定すると、相手の pi がメッセージを取り込むまで待てる。" +
+      " 対話形式の承認が必要。",
     parameters,
     outputSchema,
     reachesTools() {

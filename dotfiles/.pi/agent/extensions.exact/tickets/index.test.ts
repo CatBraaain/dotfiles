@@ -282,7 +282,7 @@ describe("tool descriptions", () => {
       ticketToolDescriptions.ticket_edit,
     ]) {
       assert.match(description, /next/);
-      assert.match(description, /prefix/i); // "ID / unique prefix / next" (SPEC: common selector wording)
+      assert.match(description, /一意な接頭辞/);
     }
   });
 
@@ -313,21 +313,23 @@ describe("tool descriptions", () => {
     assert.match(edit, /\bnew\b/);
     assert.match(edit, /selector/);
     assert.match(edit, /ticket_show/);
-    assert.match(edit, /line breaks/);
+    assert.match(edit, /改行も含めて/);
   });
 
   it("describes the cwd-derived project default for every tool", () => {
     for (const description of Object.values(ticketToolDescriptions)) {
-      assert.match(description, /project.*defaults to the project resolved from the session cwd/i);
+      assert.match(
+        description,
+        /project.*省略時はセッションの作業ディレクトリからプロジェクトを特定/,
+      );
     }
   });
 
   it("describes ticket_set behavior: linkage, explicit status, closed release, and validation", () => {
     const description = ticketToolDescriptions.ticket_set;
-    assert.match(description, /linkage|blocks/i);
-    assert.match(description, /closed/);
-    assert.match(description, /release/i);
-    assert.match(description, /cycle/i);
+    assert.match(description, /status.*明示しない場合.*blocked/);
+    assert.match(description, /closed.*blocked.*open/);
+    assert.match(description, /循環する依存関係は CLI が拒否/);
   });
 });
 

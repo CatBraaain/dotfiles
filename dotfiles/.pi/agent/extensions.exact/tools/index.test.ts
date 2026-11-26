@@ -43,6 +43,15 @@ describe("tools with the guardrails public API", () => {
   );
 
   it(
+    "registers Japanese descriptions for the guarded tools",
+    withFixture(async ({ tools }) => {
+      for (const [name, tool] of tools) {
+        assert.match(tool.description, /\p{Script=Hiragana}/u, name);
+      }
+    }),
+  );
+
+  it(
     "returns text, images, and details without changing the API result",
     withFixture(async ({ tools, context }) => {
       const expected: AgentToolResult<unknown> = {

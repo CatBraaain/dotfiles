@@ -186,39 +186,40 @@ export function buildEditArgs(params: TicketEditParams): string[] {
 
 // --- tool descriptions / prompt snippets (SPEC: 共通の振る舞い + per-tool notes) ---
 
+const projectDescription =
+  "`project` でチケットストアを指定する。省略時はセッションの作業ディレクトリからプロジェクトを特定する。";
+
 export const ticketToolDescriptions = {
   ticket_list:
-    "List tickets in a ticket store via the `ticket list` CLI subcommand. " +
-    "Returns one ticket per line as id, status, and title; without status this lists open tickets only. " +
-    "status filters tickets by the given statuses; all=true lists every project and prefixes each line with the project name; " +
-    "project selects the ticket store (defaults to the project resolved from the session cwd). " +
-    "Ticket IDs are unique by prefix, so a prefix returned here can be passed as a selector to the other ticket tools.",
+    "`ticket list` でチケットストアのチケットを一覧表示する。1件につき1行で `id`・`status`・`title` を返す。" +
+    " `status` で状態を絞り込む。省略時は `open` のみ表示する。`all=true` なら全プロジェクトを対象とし、各行の先頭にプロジェクト名を付ける。 " +
+    projectDescription +
+    " 一覧に表示された ID の一意な接頭辞は、ほかのチケットツールの `selector` に渡せる。",
   ticket_show:
-    "Show one ticket via the `ticket show` CLI subcommand. " +
-    "Returns id, status, after, title, and body. " +
-    'selector is a ticket ID, a prefix unique to one ticket, or "next" for the oldest actionable ticket (open with its after resolved); omitted means "next". ' +
-    "project selects the ticket store (defaults to the project resolved from the session cwd).",
+    "`ticket show` でチケット1件の `id`・`status`・`after`・`title`・`body` を表示する。" +
+    " `selector` にはチケット ID、一意な接頭辞、または着手可能な最古のチケット（`open` かつ待機先が解消済み）を示す `next` を指定する。省略時は `next`。 " +
+    projectDescription,
   ticket_create:
-    "Create a ticket via the `ticket create` CLI subcommand and return the created id, status, after, and path. " +
-    "title becomes the ticket H1; body is optional text placed after the H1; " +
-    "status defaults to open for immediate handoff. Set locked if you are starting the work yourself. " +
-    "To wait for another ticket, set after to its ID (same project, unique prefix allowed) and omit status to create a blocked ticket. " +
-    "project selects the ticket store (defaults to the project resolved from the session cwd). " +
-    "The CLI validates the fields, so creation can fail with the CLI's error text.",
+    "`ticket create` でチケットを作成し、`id`・`status`・`after`・`path` を返す。" +
+    " `title` はチケットの H1 見出しになる。`body` を指定すると、H1 の直後に本文として追加する。" +
+    " `status` の既定は `open` で、すぐに引き渡せる。自分で着手する場合は `locked` を指定する。" +
+    " ほかのチケットを待つ場合は、同じプロジェクトのチケット ID（一意な接頭辞も可）を `after` に指定し、`status` を省略すると `blocked` になる。 " +
+    projectDescription +
+    " 入力は CLI が検証し、不正な場合は CLI のエラーを返す。",
   ticket_set:
-    "Update a ticket's frontmatter via the `ticket set` CLI subcommand and return the updated id, status, after, and path. " +
-    'Only status and/or after can be set; selector is a ticket ID, a unique prefix, or "next" (default). ' +
-    "The linkage auto-switches the status unless an explicit status is given: setting an unresolved after blocks the ticket, " +
-    "clearing after (null) reopens a blocked ticket. Setting status to closed releases dependent blocked tickets back to open. " +
-    "The CLI validates the update: after must exist and must not be closed or cancelled, and cycles fail without rewriting. " +
-    "project selects the ticket store (defaults to the project resolved from the session cwd).",
+    "`ticket set` でチケットのフロントマターを更新し、更新後の `id`・`status`・`after`・`path` を返す。" +
+    " 更新できるのは `status` と `after` のみ。`selector` にはチケット ID、一意な接頭辞、または `next`（既定）を指定する。" +
+    " `status` を明示しない場合、未解消の待機先を `after` に設定すると `blocked` になり、`after` を `null` にすると `blocked` から `open` に戻る。" +
+    " `status` を `closed` にすると、このチケットを待つ `blocked` のチケットが `open` に戻る。" +
+    " `after` は実在するチケットを指定し、`closed` または `cancelled` のチケットは指定できない。循環する依存関係は CLI が拒否し、書き換えない。 " +
+    projectDescription,
   ticket_edit:
-    "Edit a ticket's body via the `ticket edit` CLI subcommand and return the updated id, status, after, and path. " +
-    "Call ticket_show first and copy old exactly from its body, including line breaks. " +
-    "Replaces the single occurrence of old with new (empty new deletes it); the H1 is part of the body, so it can be replaced. " +
-    "Zero or multiple occurrences of old fail without rewriting. " +
-    'selector is a ticket ID, a unique prefix, or "next" (default); project selects the ticket store ' +
-    "and defaults to the project resolved from the session cwd.",
+    "`ticket edit` でチケット本文を編集し、更新後の `id`・`status`・`after`・`path` を返す。" +
+    " 先に `ticket_show` を呼び、本文から改行も含めて正確に `old` をコピーする。" +
+    " 一致する1箇所を `new` に置換する。`new` が空文字列なら削除する。H1 見出しも本文に含まれ、置換できる。" +
+    " `old` が0箇所または複数箇所に一致する場合は、書き換えずに失敗する。" +
+    " `selector` にはチケット ID、一意な接頭辞、または `next`（既定）を指定する。 " +
+    projectDescription,
 } as const;
 
 function truncateTicketOutput(

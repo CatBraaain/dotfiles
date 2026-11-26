@@ -115,12 +115,10 @@ export default function recontextExtension(pi: ExtensionAPI): void {
     name: "recontext",
     label: "Recontext",
     description:
-      "Use this tool only when a context reset is needed before a substantial next work phase. " +
-      "Do not use it for ordinary completion reports, owner decisions, or finish/discard worktree approval; " +
-      "when only approval remains, report Ready or Waiting and ask normally. " +
-      "Keep raw history in this session and replace prior model context with handoff, without LLM summarization. " +
-      "Approval is required on the third replacement or when switching to Max mode. " +
-      "The tool asks at the turn boundary; do not ask the user for approval in advance.",
+      "まとまった次の作業フェーズを始める前に、コンテキストのリセットが必要な場合にだけ使う。" +
+      " 通常の完了報告、ユーザーの判断、worktree の finish・discard の承認には使わない。承認のみが残る場合は Ready または Waiting と報告し、通常の質問で確認する。" +
+      " 元の履歴はこのセッションに保持し、LLM による要約を挟まず、モデルのコンテキストを `handoff` で置き換える。" +
+      " 3回目の置き換え、または Max モードへの切り替えには承認が必要。ツールがターンの境目で承認を求めるため、事前にユーザーへ承認を求めない。",
     promptGuidelines: [
       "Use recontext only before a substantial next phase, such as a convergence loop or long work after implementation or review. Do not call it just because work finished. For finish/discard approval, owner decisions, or completion reports, report Ready or Waiting and ask normally. Include the goal, approved spec and work file paths, decisions, completed work and checks, open questions, and completion conditions in handoff. Continue as the main agent and delegate the next phase to another senior. If approval is denied, the current agent receives no(<reason>). The tool asks for approval at the end of the turn when switching to Max mode or on the third replacement. Do not ask the user for this approval in advance.",
     ],
