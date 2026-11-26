@@ -790,19 +790,38 @@ describe("single tool rows", () => {
   });
 
   for (const status of ["granted", "denied", "already granted"]) {
-    it(`folds the ${status} permission result without altering it`, () => {
+    it(`colors the ${status} permission result without altering it`, () => {
+      dispose();
+      const theme = activeTheme;
+      dispose = installToolRowFolding(
+        (row, width) => formatCollapsedToolRow(row, theme, width),
+        theme,
+      );
       const row = createRow("ask_permission");
+      row.updateArgs({ path: "./directory" });
+      const isDenied = status === "denied";
+      const reason = "Not needed";
+      const firstOutputLine = isDenied ? "User denied write access." : status;
+      const output = isDenied ? `${firstOutputLine}\nUser reason: ${reason}` : firstOutputLine;
       const result = Object.freeze({
-        content: Object.freeze([{ type: "text", text: status }]),
-        details: Object.freeze({ status }),
+        content: [{ type: "text" as const, text: output }],
+        details: Object.freeze({ status, ...(isDenied ? { reason } : {}) }),
         isError: false,
       });
-      row.updateResult(result as Parameters<ToolExecutionComponent["updateResult"]>[0]);
-      assert.equal(row.render(80).length, 1);
-      assert.ok(renderedText(row).includes(status));
+      row.updateResult(result);
+      const background = theme.getBgAnsi(isDenied ? "toolErrorBg" : "toolSuccessBg");
+      const collapsedLines = row.render(80);
+      assert.equal(collapsedLines.length, 1);
+      const [collapsed] = collapsedLines;
+      assert.ok(collapsed);
+      assert.ok(collapsed.startsWith(background));
+      const summary = isDenied ? `${status} — ${reason}` : status;
+      assert.ok(stripTerminalSequences(collapsed).trimEnd().endsWith(summary));
+      assert.ok(collapsed.includes(theme.fg(isDenied ? "error" : "success", status)));
       clickHeader(row);
-      assert.ok(renderedText(row).includes(status));
-      assert.equal(result.details.status, status);
+      const expandedOutput = row.render(80).find((line) => line.includes(firstOutputLine));
+      assert.ok(expandedOutput?.includes(background));
+      assert.equal(result.isError, false);
     });
   }
 

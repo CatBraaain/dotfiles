@@ -28,7 +28,7 @@ import {
   type ToolResultLike,
 } from "../shared/tool-text.ts";
 
-import { installToolRowFolding, type ToolRowState } from "./tool-rows.ts";
+import { installToolRowFolding, isPermissionDenied, type ToolRowState } from "./tool-rows.ts";
 
 export type ToolTheme = Pick<Theme, "fg" | "bold">;
 export type ToolRenderers = {
@@ -239,7 +239,7 @@ function formatRowSummary(
       (details ? successLine(details[display.source] ?? "", details) : "done")
     );
   }
-  if (result.isError) {
+  if (result.isError && !isPermissionDenied(toolName, result.details)) {
     return theme.fg("error", singleLine(allTextContent(result)) || "Error");
   }
   if (Object.hasOwn(SESSION_DISPLAYS, toolName)) {
@@ -339,7 +339,9 @@ function formatFsResult(
     const progress = name === "bash" ? resultText(result) : "";
     return theme.fg("warning", progress === "" ? "Running..." : progress);
   }
-  if (context.isError) return formatToolError(result, theme);
+  if (context.isError && !isPermissionDenied(name, result.details)) {
+    return formatToolError(result, theme);
+  }
   const state = context.state;
   const durationMs =
     context.durationMs ??
@@ -526,12 +528,11 @@ export function formatToolResultSummary(
       const status = details?.status;
       if (status !== "granted" && status !== "denied" && status !== "already granted")
         return undefined;
-      const reason = status === "denied" ? details?.reason : undefined;
-      if (typeof reason !== "string" || reason === "") return theme.fg("success", status);
-      return (
-        theme.fg("success", "denied — ") +
-        theme.fg("dim", truncateText(reason, DENIED_REASON_PREVIEW_LIMIT))
-      );
+      const isDenied = status === "denied";
+      const label = theme.fg(isDenied ? "error" : "success", status);
+      const reason = isDenied ? details?.reason : undefined;
+      if (typeof reason !== "string" || reason === "") return label;
+      return `${label} — ${theme.fg("dim", truncateText(reason, DENIED_REASON_PREVIEW_LIMIT))}`;
     }
     default:
       return undefined;

@@ -28,12 +28,23 @@ export type ToolRowState = {
   ui: TUI;
 };
 
+export function isPermissionDenied(toolName: string, details: unknown): boolean {
+  return (
+    toolName === "ask_permission" &&
+    typeof details === "object" &&
+    details !== null &&
+    "status" in details &&
+    details.status === "denied"
+  );
+}
+
 export function installToolRowFolding(
   compose: (row: ToolRowState, width: number) => string,
   theme: Pick<Theme, "bg" | "getBgAnsi">,
 ): () => void {
   const prototype = ToolExecutionComponent.prototype;
   const originalRender = prototype.render;
+  const originalUpdateResult = prototype.updateResult;
   const originalHandleMouse = prototype.handleMouse;
   const originalContainerRender = Container.prototype.render;
   const headerRows = new WeakMap<ToolExecutionComponent, number>();
@@ -167,14 +178,29 @@ export function installToolRowFolding(
     return row.expanded ? originalHandleMouse.call(this, event) : undefined;
   }
 
+  function updateResult(
+    this: ToolExecutionComponent,
+    result: Parameters<ToolExecutionComponent["updateResult"]>[0],
+    isPartial = false,
+  ): void {
+    const row = this as unknown as ToolRowState;
+    const displayResult =
+      active && !isPartial && !result.isError && isPermissionDenied(row.toolName, result.details)
+        ? { ...result, isError: true }
+        : result;
+    originalUpdateResult.call(this, displayResult, isPartial);
+  }
+
   Container.prototype.render = renderContainer;
   prototype.render = render;
+  prototype.updateResult = updateResult;
   prototype.handleMouse = handleMouse;
   return function dispose() {
     active = false;
     if (Container.prototype.render === renderContainer)
       Container.prototype.render = originalContainerRender;
     if (prototype.render === render) prototype.render = originalRender;
+    if (prototype.updateResult === updateResult) prototype.updateResult = originalUpdateResult;
     if (prototype.handleMouse === handleMouse) prototype.handleMouse = originalHandleMouse;
   };
 }
