@@ -418,7 +418,7 @@ export function formatPercent(rate: number | null): string {
 
 export function projectOfSession(sessionPath: string): string {
   const withoutExtension = sessionPath.replace(/\.jsonl$/, "");
-  const segments = withoutExtension.split("/");
+  const segments = withoutExtension.split(/[\\/]/);
   return segments.length >= 2 ? (segments[segments.length - 2] ?? "") : "";
 }
 

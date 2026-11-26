@@ -146,6 +146,13 @@ describe("projectOfSession", () => {
     assert.equal(projectOfSession("/home/u/.pi/agent/sessions/--proj-x--/a.jsonl"), "--proj-x--");
     assert.equal(projectOfSession("a.jsonl"), "");
   });
+
+  it("extracts the project directory name from a Windows drive-letter path", () => {
+    assert.equal(
+      projectOfSession("C:\\Users\\u\\.pi\\agent\\sessions\\--proj-x--\\a.jsonl"),
+      "--proj-x--",
+    );
+  });
 });
 
 describe("formatters", () => {
