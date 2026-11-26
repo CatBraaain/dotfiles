@@ -10,7 +10,7 @@ import {
   type GuardedToolRequest,
 } from "../guardrails/execute.ts";
 import { Guardrail } from "../guardrails/guardrail.ts";
-import { SandboxRunner } from "../guardrails/sandbox-runner.ts";
+import { WorkerPool } from "../guardrails/worker-pool.ts";
 import { realBwrapTest } from "../guardrails/bwrap-test-support.ts";
 
 const png = Buffer.from(
@@ -18,7 +18,7 @@ const png = Buffer.from(
   "base64",
 );
 const visionModel = { provider: "fixture", id: "vision", input: ["text", "image"] };
-const entrypoint = fileURLToPath(new URL("./read.ts", import.meta.url));
+const entrypoint = fileURLToPath(new URL("./run-tools.ts", import.meta.url));
 
 function withFixture(test: (fixture: ReturnType<typeof createFixture>) => Promise<void>) {
   return async () => {
@@ -52,14 +52,14 @@ function createFixture(commandRules = "") {
   );
   const guardrail = new Guardrail(root, config);
   const mountArguments: string[][] = [];
-  const runner = new SandboxRunner(root, (mode, cwd, readOnly) => {
-    const args = guardrail.buildArgs(mode, cwd, readOnly);
+  const pool = new WorkerPool(root, (mode, cwd) => {
+    const args = guardrail.buildArgs(mode, cwd);
     mountArguments.push(args);
     return args;
   });
   const context = { hasUI: false, model: visionModel } as GuardedToolContext;
   function read(path: string, overrides: Partial<GuardedToolRequest> = {}) {
-    return executeGuardedTool(guardrail, runner, root, {
+    return executeGuardedTool(guardrail, pool, root, {
       id: "read-fixture",
       toolName: "read",
       params: { path },
@@ -71,7 +71,7 @@ function createFixture(commandRules = "") {
       },
     });
   }
-  return { root, allowed, runner, context, read, mountArguments };
+  return { root, allowed, pool, context, read, mountArguments };
 }
 
 describe("sandboxed image read", () => {
@@ -96,9 +96,9 @@ describe("sandboxed image read", () => {
   );
 
   realBwrapTest(
-    "mounts even writable paths read-only for MIME detection",
-    withFixture(async ({ allowed, runner, mountArguments }) => {
-      const result = await runner.runTool(
+    "reads inside the common fs worker mounts, where writable paths stay writable",
+    withFixture(async ({ allowed, pool, mountArguments }) => {
+      const result = await pool.runTool(
         "read",
         { path: join(allowed, "fixture.png") },
         {
@@ -110,7 +110,7 @@ describe("sandboxed image read", () => {
       assert.equal(mountArguments.length, 1);
       const args = mountArguments[0]!;
       const index = args.findIndex((arg, index) => arg === allowed && args[index + 1] === allowed);
-      assert.equal(args[index - 1], "--ro-bind-try");
+      assert.equal(args[index - 1], "--bind-try");
     }),
   );
 
@@ -141,7 +141,7 @@ describe("sandboxed image read", () => {
     realBwrapTest(
       `rejects the original ${directory} path before detection`,
       withFixture(async (fixture) => {
-        fixture.runner.runTool = async () => {
+        fixture.pool.runTool = async () => {
           throw new Error("Read worker must not run");
         };
         await assert.rejects(

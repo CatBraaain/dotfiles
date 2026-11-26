@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -23,7 +22,7 @@ import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { quote } from "shell-quote";
 import toolsExtension from "./index.ts";
 import { Guardrail } from "../guardrails/guardrail.ts";
-import { SandboxRunner } from "../guardrails/sandbox-runner.ts";
+import { WorkerPool } from "../guardrails/worker-pool.ts";
 
 describe("tools with the guardrails public API", () => {
   it(
@@ -53,15 +52,15 @@ describe("tools with the guardrails public API", () => {
         ],
         details: { source: "runner" },
       };
-      const originalRun = SandboxRunner.prototype.runTool;
-      SandboxRunner.prototype.runTool = async () => expected;
+      const originalRun = WorkerPool.prototype.runTool;
+      WorkerPool.prototype.runTool = async () => expected;
       try {
         const result = await tools
           .get("bash")!
           .execute("result", { command: "echo ok" }, undefined, undefined, context);
         assert.strictEqual(result, expected);
       } finally {
-        SandboxRunner.prototype.runTool = originalRun;
+        WorkerPool.prototype.runTool = originalRun;
       }
     }),
   );
@@ -69,7 +68,7 @@ describe("tools with the guardrails public API", () => {
   it(
     "forwards cancellation, progress, and each call's fresh context",
     withFixture(async ({ tools }) => {
-      const originalRun = SandboxRunner.prototype.runTool;
+      const originalRun = WorkerPool.prototype.runTool;
       const originalAuthorize = Guardrail.prototype.authorizeCommand;
       const contexts: unknown[] = [];
       const updates: unknown[] = [];
@@ -78,9 +77,9 @@ describe("tools with the guardrails public API", () => {
         contexts.push(context);
         return false;
       };
-      SandboxRunner.prototype.runTool = async (_name, _params, options) => {
+      WorkerPool.prototype.runTool = async (_name, _params, options) => {
         assert.strictEqual(options.signal, controller.signal);
-        options.onData?.(Buffer.from("progress\n"), "stderr");
+        options.onStderrLine?.("progress");
         return { content: [], details: {} };
       };
       const first = { hasUI: false } as ExtensionToolContext;
@@ -105,7 +104,7 @@ describe("tools with the guardrails public API", () => {
           details: {},
         });
       } finally {
-        SandboxRunner.prototype.runTool = originalRun;
+        WorkerPool.prototype.runTool = originalRun;
         Guardrail.prototype.authorizeCommand = originalAuthorize;
       }
     }),
@@ -126,9 +125,9 @@ describe("tools with the guardrails public API", () => {
   it(
     "keeps parallel results associated with the calling tool",
     withFixture(async ({ tools, context }) => {
-      const originalRun = SandboxRunner.prototype.runTool;
+      const originalRun = WorkerPool.prototype.runTool;
       const first = Promise.withResolvers<void>();
-      SandboxRunner.prototype.runTool = async (_name, params) => {
+      WorkerPool.prototype.runTool = async (_name, params) => {
         const command = (params as { command: string }).command;
         if (command === "echo first") await first.promise;
         return { content: [{ type: "text", text: command }], details: {} };
@@ -145,7 +144,7 @@ describe("tools with the guardrails public API", () => {
         assert.deepEqual((await pending).content, [{ type: "text", text: "echo first" }]);
       } finally {
         first.resolve();
-        SandboxRunner.prototype.runTool = originalRun;
+        WorkerPool.prototype.runTool = originalRun;
       }
     }),
   );
@@ -455,41 +454,6 @@ describe("tools with the guardrails public API", () => {
   );
 
   it(
-    "cancels a full read after the real sandbox opens the file",
-    withFixture(async ({ tools, context, directory }) => {
-      const path = join(directory, "SKILL.md");
-      assert.equal(spawnSync("mkfifo", [path]).status, 0);
-      const controller = new AbortController();
-      const pending = tools
-        .get("read")!
-        .execute("running-skill", { path }, controller.signal, undefined, context);
-      const writer = spawn("sh", [
-        "-c",
-        'exec 3>"$1"; printf connected; cat >/dev/null',
-        "writer",
-        path,
-      ]);
-      const connected = new Promise<void>((resolveConnected, rejectConnected) => {
-        writer.stdout.once("data", () => resolveConnected());
-        writer.once("error", rejectConnected);
-      });
-      try {
-        await Promise.race([
-          connected,
-          pending.then(() => {
-            throw new Error("full read ended before cancellation");
-          }),
-        ]);
-        controller.abort();
-        await assert.rejects(pending, /aborted/);
-      } finally {
-        controller.abort();
-        writer.kill("SIGKILL");
-      }
-    }),
-  );
-
-  it(
     "keeps image reads ahead of the Tools worker even with a SKILL.md filename",
     withFixture(async ({ tools, context, directory }) => {
       const path = join(directory, "SKILL.md");
@@ -613,7 +577,7 @@ describe("registered Bash RTK authorization", () => {
       const command = `git log --format='日本語'; $(touch ${quote([marker])})\nprintf '$HOME'`;
       const rewritten = "printf rewritten";
       const input = { command, timeout: 10 };
-      const originalRun = SandboxRunner.prototype.runTool;
+      const originalRun = WorkerPool.prototype.runTool;
       const originalAuthorize = Guardrail.prototype.authorizeCommand;
       const authorized: string[] = [];
       const executed: string[] = [];
@@ -621,7 +585,7 @@ describe("registered Bash RTK authorization", () => {
         authorized.push(command);
         return originalAuthorize.call(this, command, context);
       };
-      SandboxRunner.prototype.runTool = async function (name, params, options) {
+      WorkerPool.prototype.runTool = async function (name, params, options) {
         const command = (params as { command: string }).command;
         executed.push(command);
         if (!command.startsWith("rtk rewrite "))
@@ -647,7 +611,7 @@ describe("registered Bash RTK authorization", () => {
         assert.deepEqual(input, { command, timeout: 10 });
         assert.equal(existsSync(marker), false);
       } finally {
-        SandboxRunner.prototype.runTool = originalRun;
+        WorkerPool.prototype.runTool = originalRun;
         Guardrail.prototype.authorizeCommand = originalAuthorize;
       }
     }, "registered"),
@@ -656,7 +620,7 @@ describe("registered Bash RTK authorization", () => {
   it(
     "authorizes the original command normally when rewriting is denied",
     withFixture(async ({ tools, context }) => {
-      const originalRun = SandboxRunner.prototype.runTool;
+      const originalRun = WorkerPool.prototype.runTool;
       const originalAuthorize = Guardrail.prototype.authorizeCommand;
       const authorized: string[] = [];
       const executed: string[] = [];
@@ -665,7 +629,7 @@ describe("registered Bash RTK authorization", () => {
         if (command.startsWith("rtk rewrite ")) throw new Error("Access denied: rewrite");
         return originalAuthorize.call(this, command, context);
       };
-      SandboxRunner.prototype.runTool = async (_name, params) => {
+      WorkerPool.prototype.runTool = async (_name, params) => {
         executed.push((params as { command: string }).command);
         return { content: [{ type: "text", text: "original" }], details: {} };
       };
@@ -678,7 +642,7 @@ describe("registered Bash RTK authorization", () => {
         assert.equal(authorized[1], "printf original");
         assert.deepEqual(executed, ["printf original"]);
       } finally {
-        SandboxRunner.prototype.runTool = originalRun;
+        WorkerPool.prototype.runTool = originalRun;
         Guardrail.prototype.authorizeCommand = originalAuthorize;
       }
     }, "registered"),
@@ -687,14 +651,14 @@ describe("registered Bash RTK authorization", () => {
   it(
     "does not fall back to the original command when main authorization rejects the rewrite",
     withFixture(async ({ tools, context }) => {
-      const originalRun = SandboxRunner.prototype.runTool;
+      const originalRun = WorkerPool.prototype.runTool;
       const originalAuthorize = Guardrail.prototype.authorizeCommand;
       const executed: string[] = [];
       Guardrail.prototype.authorizeCommand = async function (command, context) {
         if (command === "printf rewritten") throw new Error("Access denied: rewritten main");
         return originalAuthorize.call(this, command, context);
       };
-      SandboxRunner.prototype.runTool = async (_name, params) => {
+      WorkerPool.prototype.runTool = async (_name, params) => {
         executed.push((params as { command: string }).command);
         return {
           content: [],
@@ -712,7 +676,7 @@ describe("registered Bash RTK authorization", () => {
         assert.equal(executed.length, 1);
         assert.match(executed[0]!, /^rtk rewrite /);
       } finally {
-        SandboxRunner.prototype.runTool = originalRun;
+        WorkerPool.prototype.runTool = originalRun;
         Guardrail.prototype.authorizeCommand = originalAuthorize;
       }
     }, "registered"),
@@ -721,9 +685,9 @@ describe("registered Bash RTK authorization", () => {
   it(
     "discards partial rewrite stdout on the real two-second Bash timeout",
     withFixture(async ({ tools, context }) => {
-      const originalRun = SandboxRunner.prototype.runTool;
+      const originalRun = WorkerPool.prototype.runTool;
       const executed: Record<string, unknown>[] = [];
-      SandboxRunner.prototype.runTool = async function (name, params, options) {
+      WorkerPool.prototype.runTool = async function (name, params, options) {
         executed.push(params as Record<string, unknown>);
         const command = (params as { command: string }).command;
         const stub = "rtk() { printf 'printf partial'; sleep 3; }; ";
@@ -745,7 +709,7 @@ describe("registered Bash RTK authorization", () => {
         assert.equal(executed[0]!.timeout, 2);
         assert.equal(executed[1]!.command, "printf original");
       } finally {
-        SandboxRunner.prototype.runTool = originalRun;
+        WorkerPool.prototype.runTool = originalRun;
       }
     }, "registered"),
   );
@@ -753,10 +717,10 @@ describe("registered Bash RTK authorization", () => {
   it(
     "does not execute either main command after cancellation during rewriting",
     withFixture(async ({ tools, context }) => {
-      const originalRun = SandboxRunner.prototype.runTool;
+      const originalRun = WorkerPool.prototype.runTool;
       const executed: string[] = [];
       const controller = new AbortController();
-      SandboxRunner.prototype.runTool = async (_name, params, options) => {
+      WorkerPool.prototype.runTool = async (_name, params, options) => {
         executed.push((params as { command: string }).command);
         assert.strictEqual(options.signal, controller.signal);
         controller.abort(new Error("cancelled rewrite"));
@@ -782,7 +746,7 @@ describe("registered Bash RTK authorization", () => {
         assert.equal(executed.length, 1);
         assert.match(executed[0]!, /^rtk rewrite /);
       } finally {
-        SandboxRunner.prototype.runTool = originalRun;
+        WorkerPool.prototype.runTool = originalRun;
       }
     }, "registered"),
   );

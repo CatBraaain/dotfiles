@@ -9,6 +9,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { createGuardrailsAPI } from "./api.ts";
+import { WORKER_ENTRYPOINT } from "./bwrap-test-support.ts";
 
 const routes = [
   { tool: "ask_permission", choice: "Yes, allow", directory: true },
@@ -65,7 +66,13 @@ function fixture(directory: string, layout: "ask ancestor" | "ask files") {
   );
   const context = { hasUI: false } as ExtensionToolContext;
   function execute(toolName: string, params: Record<string, unknown>, ctx = context) {
-    return api.execute({ id: toolName, toolName, params, context: ctx });
+    return api.execute({
+      id: toolName,
+      toolName,
+      params,
+      context: ctx,
+      executor: { entrypoint: WORKER_ENTRYPOINT },
+    });
   }
   function bashWrite(path: string, content: string) {
     return execute("bash", {

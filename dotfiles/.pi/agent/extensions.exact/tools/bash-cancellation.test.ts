@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
@@ -13,12 +21,16 @@ import toolsExtension from "./index.ts";
 
 const TEMP_ROOT = "/tmp/work/dotfiles/bash-cancellation-tests";
 
-function isRunning(pid: number): boolean {
-  try {
-    return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1]?.[0] !== "Z";
-  } catch {
-    return false;
+/** Host pids of processes whose command line contains `marker` (sandbox pids are namespace-local). */
+function markerProcesses(marker: string): number[] {
+  const pids: number[] = [];
+  for (const entry of readdirSync("/proc")) {
+    if (!/^\d+$/.test(entry)) continue;
+    try {
+      if (readFileSync(`/proc/${entry}/cmdline`, "utf8").includes(marker)) pids.push(Number(entry));
+    } catch {}
   }
+  return pids;
 }
 
 async function waitUntil(condition: () => boolean): Promise<void> {
@@ -27,6 +39,25 @@ async function waitUntil(condition: () => boolean): Promise<void> {
     assert.ok(Date.now() < deadline, "fixture condition did not become true");
     await sleep(10);
   }
+}
+
+function textOf(result: { content: { type: string; text?: string }[] }): string {
+  return result.content.map((part) => part.text ?? "").join("\n");
+}
+
+function shellQuote(value: string): string {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
+/** A loop that records `outcome` once `releasePath` exists, running under argv[0] = `marker`. */
+function loopCommand(marker: string, statePath: string, releasePath: string, outcome: string) {
+  const loop = `i=0; while [ "$i" -lt 240 ]; do if [ -e ${releasePath} ]; then printf ${outcome} > ${statePath}; break; fi; i=$((i+1)); sleep 0.025; done`;
+  return `bash -c ${shellQuote(`exec -a ${marker} bash -c ${shellQuote(loop)}`)}`;
+}
+
+/** Runs `command` detached and waits until its argv[0] equals `marker`. */
+function detachedCommand(marker: string, command: string) {
+  return `setsid ${command} >/dev/null 2>&1 & pid=$!; until [ "$(tr '\\0' ' ' < /proc/$pid/cmdline 2>/dev/null | cut -d' ' -f1)" = ${shellQuote(marker)} ]; do :; done`;
 }
 
 async function withBashRuntime(
@@ -92,14 +123,26 @@ async function withBashRuntime(
     await test({ directory, bash: definitions.get("bash")!, context });
   } finally {
     for (const handler of handlers.get("session_shutdown") ?? []) await handler({}, context);
-    const pidPath = join(directory, "pid");
-    if (existsSync(pidPath)) {
-      const pid = Number(readFileSync(pidPath, "utf8"));
-      if (isRunning(pid)) process.kill(-pid, "SIGKILL");
-      await waitUntil(() => !isRunning(pid));
-    }
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+function expectAbortedVia(
+  route: "registered" | "context",
+  bash: ToolDefinition,
+  context: ExtensionToolContext,
+  command: string,
+  signal: AbortSignal,
+) {
+  const aborted = (error: unknown) => assert.match(String(error), /aborted/);
+  return route === "registered"
+    ? bash.execute("aborted", { command }, signal, undefined, context).then(() => {
+        throw new Error("cancelled command completed");
+      }, aborted)
+    : context.executeTool("bash", { command }, { signal }).then((outcome) => {
+        assert.equal(outcome.isError, true);
+        assert.match(JSON.stringify(outcome.result.content), /aborted/);
+      });
 }
 
 for (const route of ["registered", "context"] as const) {
@@ -108,35 +151,16 @@ for (const route of ["registered", "context"] as const) {
     async () => {
       await withBashRuntime(async ({ directory, bash, context }) => {
         const controller = new AbortController();
-        const pidPath = join(directory, "pid");
+        const marker = "rtw-cancelled-loop";
         const statePath = join(directory, "state");
         const releasePath = join(directory, "release");
-        const childPidPath = join(directory, "childpid");
-        const command = `(i=0; while [ "$i" -lt 240 ]; do if [ -e ${releasePath} ]; then printf stale > ${statePath}; break; fi; i=$((i+1)); sleep 0.025; done) & printf '%s' "$!" > ${childPidPath}; printf '%s' "$$" > ${pidPath}; wait`;
-        const pending =
-          route === "registered"
-            ? bash.execute("old", { command }, controller.signal, undefined, context).then(
-                () => {
-                  throw new Error("cancelled command completed");
-                },
-                (error: unknown) => {
-                  assert.match(String(error), /aborted/);
-                },
-              )
-            : context
-                .executeTool("bash", { command }, { signal: controller.signal })
-                .then((outcome) => {
-                  assert.equal(outcome.isError, true);
-                  assert.match(JSON.stringify(outcome.result.content), /aborted/);
-                });
+        const command = `(${loopCommand(marker, statePath, releasePath, "stale")}) & wait`;
+        const pending = expectAbortedVia(route, bash, context, command, controller.signal);
         try {
-          await waitUntil(() => existsSync(pidPath));
-          const pid = Number(readFileSync(pidPath, "utf8"));
-          const childPid = Number(readFileSync(childPidPath, "utf8"));
+          await waitUntil(() => markerProcesses(marker).length > 0);
           controller.abort();
           await pending;
-          const runningAfterSettlement = isRunning(pid);
-          const childRunningAfterSettlement = isRunning(childPid);
+          await waitUntil(() => markerProcesses(marker).length === 0);
           await bash.execute(
             "replacement",
             { command: `printf current > ${statePath}` },
@@ -144,18 +168,9 @@ for (const route of ["registered", "context"] as const) {
             undefined,
             context,
           );
+          assert.equal(readFileSync(statePath, "utf8"), "current");
           writeFileSync(releasePath, "release");
-          await waitUntil(() => !isRunning(pid) && !isRunning(childPid));
-          assert.equal(
-            runningAfterSettlement,
-            false,
-            "execution settled while its shell was running",
-          );
-          assert.equal(
-            childRunningAfterSettlement,
-            false,
-            "execution settled while an ordinary child was running",
-          );
+          await sleep(100);
           assert.equal(readFileSync(statePath, "utf8"), "current");
         } finally {
           controller.abort();
@@ -168,11 +183,11 @@ for (const route of ["registered", "context"] as const) {
   );
 
   realBwrapTest(
-    `${route} Bash preserves SDK timeout and waits for its shell`,
+    `${route} Bash preserves SDK timeout and leaves no process behind`,
     async () => {
-      await withBashRuntime(async ({ directory, bash, context }) => {
-        const pidPath = join(directory, "pid");
-        const params = { command: `printf '%s' "$$" > ${pidPath}; sleep 10`, timeout: 0.2 };
+      await withBashRuntime(async ({ bash, context }) => {
+        const marker = "rtw-timeout-sleep";
+        const params = { command: `exec -a ${marker} sleep 10`, timeout: 0.2 };
         if (route === "registered") {
           await assert.rejects(
             bash.execute("timeout", params, undefined, undefined, context),
@@ -186,53 +201,47 @@ for (const route of ["registered", "context"] as const) {
             /Command timed out after 0.2 seconds/,
           );
         }
-        const pid = Number(readFileSync(pidPath, "utf8"));
-        assert.equal(isRunning(pid), false);
+        await waitUntil(() => markerProcesses(marker).length === 0);
       });
     },
     20_000,
   );
 
   realBwrapTest(
-    `${route} cancellation retains the SDK boundary for setsid descendants`,
+    `${route} cancellation leaves no setsid descendants behind`,
     async () => {
       await withBashRuntime(async ({ directory, bash, context }) => {
         const controller = new AbortController();
-        const pidPath = join(directory, "pid");
+        const marker = "rtw-setsid-loop";
         const statePath = join(directory, "state");
         const releasePath = join(directory, "release");
-        const detached = `printf '%s' "$$" > ${pidPath}; i=0; while [ "$i" -lt 240 ]; do if [ -e ${releasePath} ]; then printf detached > ${statePath}; break; fi; i=$((i+1)); sleep 0.025; done`;
-        const command = `setsid bash -c '${detached}' >/dev/null 2>&1 & wait`;
-        const pending =
-          route === "registered"
-            ? bash
-                .execute("detached", { command }, controller.signal, undefined, context)
-                .catch((error: unknown) => {
-                  assert.match(String(error), /aborted/);
-                })
-            : context
-                .executeTool("bash", { command }, { signal: controller.signal })
-                .then((outcome) => {
-                  assert.equal(outcome.isError, true);
-                  assert.match(JSON.stringify(outcome.result.content), /aborted/);
-                });
+        const detached = detachedCommand(
+          marker,
+          loopCommand(marker, statePath, releasePath, "detached"),
+        );
+        const pending = expectAbortedVia(
+          route,
+          bash,
+          context,
+          `${detached}; wait`,
+          controller.signal,
+        );
         try {
-          await waitUntil(() => existsSync(pidPath));
-          const pid = Number(readFileSync(pidPath, "utf8"));
+          await waitUntil(() => markerProcesses(marker).length > 0);
           controller.abort();
           await pending;
-          assert.equal(
-            isRunning(pid),
-            true,
-            "SDK-independent descendants retain their existing lifetime",
-          );
+          await waitUntil(() => markerProcesses(marker).length === 0);
           writeFileSync(releasePath, "release");
-          await waitUntil(() => !isRunning(pid));
-          assert.equal(readFileSync(statePath, "utf8"), "detached");
+          await sleep(100);
+          assert.equal(
+            existsSync(statePath),
+            false,
+            "a detached process must not outlive its request",
+          );
         } finally {
           controller.abort();
           writeFileSync(releasePath, "release");
-          await pending;
+          await pending.catch(() => {});
         }
       });
     },
@@ -241,34 +250,37 @@ for (const route of ["registered", "context"] as const) {
 }
 
 realBwrapTest(
-  "a successful daemon survives cancellation of a separate Bash request",
+  "a daemon from a completed request does not survive, and the worker keeps serving",
   async () => {
     await withBashRuntime(async ({ directory, bash, context }) => {
-      const pidPath = join(directory, "pid");
+      const marker = "rtw-daemon-loop";
+      const statePath = join(directory, "state");
       const releasePath = join(directory, "release");
-      const daemon = `printf '%s' "$$" > ${pidPath}; i=0; while [ "$i" -lt 360 ]; do [ -e ${releasePath} ] && break; i=$((i+1)); sleep 0.025; done`;
+      const daemon = detachedCommand(
+        marker,
+        loopCommand(marker, statePath, releasePath, "detached"),
+      );
       const result = await bash.execute(
         "daemon",
-        { command: `setsid bash -c '${daemon}' >/dev/null 2>&1 &` },
+        { command: `${daemon}; echo started` },
         undefined,
         undefined,
         context,
       );
       assert.equal(result.isError, undefined);
-      await waitUntil(() => existsSync(pidPath));
-      const pid = Number(readFileSync(pidPath, "utf8"));
-      const controller = new AbortController();
-      const pending = bash.execute(
+      assert.equal(textOf(result), "started\n");
+      await waitUntil(() => markerProcesses(marker).length === 0);
+      writeFileSync(releasePath, "release");
+      await sleep(100);
+      assert.equal(existsSync(statePath), false);
+      const next = await bash.execute(
         "other",
-        { command: "echo ready >&2; sleep 10" },
-        controller.signal,
-        () => controller.abort(),
+        { command: "echo alive" },
+        undefined,
+        undefined,
         context,
       );
-      await assert.rejects(pending, /aborted/);
-      assert.equal(isRunning(pid), true);
-      writeFileSync(releasePath, "release");
-      await waitUntil(() => !isRunning(pid));
+      assert.equal(textOf(next), "alive\n");
     });
   },
   20_000,

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "bun:test";
 import { executeGuardedTool, type GuardedToolRequest } from "./execute.ts";
 import { Guardrail } from "./guardrail.ts";
-import { SandboxRunner } from "./sandbox-runner.ts";
+import { WorkerPool } from "./worker-pool.ts";
 
 describe.skipIf(process.platform !== "linux")("guarded execution boundary", () => {
   it("awaits approval before executing the requested tool", async () => {
@@ -17,11 +17,11 @@ describe.skipIf(process.platform !== "linux")("guarded execution boundary", () =
         `read:\n  - ask: ${directory}\ncommands:\n  - file:\n      - allow: []\n`,
       );
       const guardrail = new Guardrail(directory, config);
-      const runner = new SandboxRunner(directory, (mode) => guardrail.buildArgs(mode));
+      const pool = new WorkerPool(directory, (mode) => guardrail.buildArgs(mode));
       const dialog = Promise.withResolvers<boolean>();
       const shown = Promise.withResolvers<void>();
       let executions = 0;
-      runner.runTool = async (_name, params, options) => {
+      pool.runTool = async (_name, params, options) => {
         executions++;
         assert.deepEqual(options.executor, { entrypoint: join(directory, "fixture.ts") });
         assert.equal(options.mode, "fs");
@@ -42,7 +42,7 @@ describe.skipIf(process.platform !== "linux")("guarded execution boundary", () =
           },
         },
       } as unknown as GuardedToolRequest;
-      const pending = executeGuardedTool(guardrail, runner, directory, request);
+      const pending = executeGuardedTool(guardrail, pool, directory, request);
       await shown.promise;
       assert.equal(executions, 0);
       dialog.resolve(true);
@@ -53,18 +53,18 @@ describe.skipIf(process.platform !== "linux")("guarded execution boundary", () =
     }
   });
 
-  it("does not execute a supplied executor after cancellation while approval is pending", async () => {
+  it("does not execute the worker after cancellation while approval is pending", async () => {
     const directory = mkdtempSync(join(tmpdir(), "guarded-abort-"));
     try {
       const config = join(directory, "config.yaml");
       writeFileSync(config, `read:\n  - ask: ${directory}\n`);
       const guardrail = new Guardrail(directory, config);
-      const runner = new SandboxRunner(directory, (mode) => guardrail.buildArgs(mode));
+      const pool = new WorkerPool(directory, (mode) => guardrail.buildArgs(mode));
       const dialog = Promise.withResolvers<boolean>();
       const shown = Promise.withResolvers<void>();
       const controller = new AbortController();
       let executions = 0;
-      runner.runTool = async () => {
+      pool.runTool = async () => {
         executions++;
         return { content: [], details: {} };
       };
@@ -83,7 +83,7 @@ describe.skipIf(process.platform !== "linux")("guarded execution boundary", () =
           },
         },
       } as unknown as GuardedToolRequest;
-      const pending = executeGuardedTool(guardrail, runner, directory, request);
+      const pending = executeGuardedTool(guardrail, pool, directory, request);
       await shown.promise;
       controller.abort(new Error("cancelled in dialog"));
       dialog.resolve(true);
@@ -94,15 +94,15 @@ describe.skipIf(process.platform !== "linux")("guarded execution boundary", () =
     }
   });
 
-  it("does not start a supplied executor after approval is denied", async () => {
+  it("does not start the worker after approval is denied", async () => {
     const directory = mkdtempSync(join(tmpdir(), "guarded-denied-"));
     try {
       const config = join(directory, "config.yaml");
       writeFileSync(config, `read:\n  - ask: ${directory}\n`);
       const guardrail = new Guardrail(directory, config);
-      const runner = new SandboxRunner(directory, (mode) => guardrail.buildArgs(mode));
+      const pool = new WorkerPool(directory, (mode) => guardrail.buildArgs(mode));
       let executions = 0;
-      runner.runTool = async () => {
+      pool.runTool = async () => {
         executions++;
         return { content: [], details: {} };
       };
@@ -113,7 +113,7 @@ describe.skipIf(process.platform !== "linux")("guarded execution boundary", () =
         context: { hasUI: true, ui: { confirm: async () => false } },
       } as unknown as GuardedToolRequest;
       await assert.rejects(
-        executeGuardedTool(guardrail, runner, directory, request),
+        executeGuardedTool(guardrail, pool, directory, request),
         /Access denied by user/,
       );
       assert.equal(executions, 0);
@@ -128,10 +128,14 @@ describe.skipIf(process.platform !== "linux")("guarded execution boundary", () =
       const config = join(directory, "config.yaml");
       writeFileSync(config, "read: []\n");
       const guardrail = new Guardrail(directory, config);
-      const runner = new SandboxRunner(directory, (mode) => guardrail.buildArgs(mode));
-      const request = { toolName: "unknown", params: {} } as GuardedToolRequest;
+      const pool = new WorkerPool(directory, (mode) => guardrail.buildArgs(mode));
+      const request = {
+        toolName: "unknown",
+        params: {},
+        executor: { entrypoint: join(directory, "fixture.ts") },
+      } as GuardedToolRequest;
       await assert.rejects(
-        executeGuardedTool(guardrail, runner, directory, request),
+        executeGuardedTool(guardrail, pool, directory, request),
         /Unsupported guarded tool: unknown/,
       );
     } finally {
@@ -139,27 +143,28 @@ describe.skipIf(process.platform !== "linux")("guarded execution boundary", () =
     }
   });
 
-  it("does not fall back to a host read when Linux sandboxing is unavailable", async () => {
-    const directory = mkdtempSync(join(tmpdir(), "guarded-image-fallback-"));
+  it("requires an executor descriptor for every call", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "guarded-executor-"));
     try {
       const config = join(directory, "config.yaml");
-      writeFileSync(config, `read:\n  - allow: "*"\ncommands:\n  - file:\n      - allow: []\n`);
+      writeFileSync(config, 'read:\n  - allow: "*"\n');
       const guardrail = new Guardrail(directory, config);
-      const runner = new SandboxRunner(
-        directory,
-        (mode) => guardrail.buildArgs(mode),
-        () => false,
-      );
+      let builds = 0;
+      const pool = new WorkerPool(directory, () => {
+        builds++;
+        return [];
+      });
       const request = {
-        id: "fixture",
         toolName: "read",
         params: { path: join(directory, "input.txt") },
-        context: { hasUI: false, model: undefined, thinkingLevel: "off" },
-      } satisfies GuardedToolRequest;
+        executor: undefined,
+        context: { hasUI: false },
+      } as unknown as GuardedToolRequest;
       await assert.rejects(
-        executeGuardedTool(guardrail, runner, directory, request),
-        /requires fs sandbox isolation/,
+        executeGuardedTool(guardrail, pool, directory, request),
+        /absolute file path/,
       );
+      assert.equal(builds, 0);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

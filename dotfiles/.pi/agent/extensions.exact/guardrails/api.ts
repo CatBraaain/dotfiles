@@ -11,6 +11,7 @@ import { Type } from "typebox";
 import { pathCovers } from "./config.ts";
 import { Guardrail, writeApprovalNote } from "./guardrail.ts";
 import { withNormalizedPath } from "./normalize-path.ts";
+import { WorkerPool } from "./worker-pool.ts";
 
 export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): GuardrailsAPI {
   let active = true;
@@ -19,9 +20,9 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
   }
   const cwd = process.cwd();
   const guardrail = new Guardrail(cwd, configPath);
-  const runner = new SandboxRunner(cwd, (mode, commandCwd, readOnly) =>
-    guardrail.buildArgs(mode, commandCwd, readOnly),
-  );
+  const buildArgs = guardrail.buildArgs.bind(guardrail);
+  const pool = new WorkerPool(cwd, buildArgs);
+  const runner = new SandboxRunner(cwd, buildArgs, pool);
 
   const scopedExecution = new AsyncLocalStorage<ScopedExecutionState>();
 
@@ -155,6 +156,7 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
   });
   pi.on("session_shutdown", () => {
     active = false;
+    pool.shutdown();
     guardrail.clearDirectoryGrants();
     guardrail.expireTurnCommandApprovals();
   });
@@ -169,7 +171,7 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
     async execute(request) {
       assertActive();
       const scope = request.toolName === "bash" ? getScopedExecutionState(request.id) : undefined;
-      if (!scope) return executeGuardedTool(guardrail, runner, cwd, request);
+      if (!scope) return executeGuardedTool(guardrail, pool, cwd, request);
       const { call, command, sessionId } = scope;
       const signal = request.signal
         ? AbortSignal.any([scope.signal, request.signal])
@@ -187,17 +189,22 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
       const protectedPaths = guardrail.planScopedWriteProtection(
         call.write?.paths ?? [],
         call.write?.directories ?? [],
-        runner.sandboxed(),
+        pool.sandboxed(),
         call.write?.unlinkSymlinks,
       );
-      const result = await runner.runScopedExecution(call, protectedPaths, signal);
+      const result = await runner.runScopedExecution(
+        call,
+        protectedPaths,
+        signal,
+        request.executor,
+      );
       scope.executed = true;
       return result;
     },
     grantScopedExecution(call, id, sessionId, signal) {
       assertActive();
       signal.throwIfAborted();
-      call = validateScopedExecution(call, runner.sandboxed());
+      call = validateScopedExecution(call, pool.sandboxed());
       const command = `/bin/false scoped-execution-${randomUUID()}`;
       const scope: ScopedExecutionState = {
         id,
@@ -231,7 +238,7 @@ export function createGuardrailsAPI(pi: ExtensionAPI, configPath?: string): Guar
       assertActive();
       if (directories === undefined) guardrail.assertScopedWriteAllowed(paths);
       else
-        guardrail.planScopedWriteProtection(paths, directories, runner.sandboxed(), unlinkSymlinks);
+        guardrail.planScopedWriteProtection(paths, directories, pool.sandboxed(), unlinkSymlinks);
     },
     grantExistingDirectory(path, validate) {
       assertActive();

@@ -1,13 +1,11 @@
-import { constants, readFileSync, statSync } from "node:fs";
+import { constants, statSync } from "node:fs";
 import { open, stat, type FileHandle } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join } from "node:path";
 import type { WASMagic } from "wasmagic";
-import {
-  executeOpenedStandardRead,
-  executeToolRequest,
-  type OpenedReadExecutor,
-  type ToolRequest,
-} from "../guardrails/run-tools.ts";
+import type { AgentToolResult, ReadToolInput } from "@earendil-works/pi-coding-agent";
+import type { ToolRequest } from "../guardrails/config.ts";
+
+type PiTools = typeof import("@earendil-works/pi-coding-agent");
 
 const DETECTION_MAX_BYTES = 7 * 1024 * 1024;
 let detector: Promise<WASMagic> | undefined;
@@ -62,7 +60,31 @@ function readPath(request: ToolRequest): string {
   return path;
 }
 
-export const executeOpenedRead: OpenedReadExecutor = async (request, file, size) => {
+function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function readOpenedFile(
+  request: ToolRequest,
+  pi: PiTools,
+  cwd: string,
+  file: FileHandle,
+  size: bigint,
+): Promise<AgentToolResult<unknown>> {
   const path = readPath(request);
   const mimeType = await detectOpenFileMimeType(file, size);
   if (isVisionImageFile(path, mimeType)) {
@@ -88,21 +110,50 @@ export const executeOpenedRead: OpenedReadExecutor = async (request, file, size)
       details: {},
     };
   }
-  if (!shouldReadInFull(path)) return executeOpenedStandardRead(request, file, size);
+  if (!shouldReadInFull(path)) {
+    const operations = {
+      access: async () => {},
+      readFile: () => file.readFile(),
+    };
+    return pi
+      .createReadToolDefinition(cwd, { operations })
+      .execute(
+        request.toolCallId ?? "cli",
+        request.params as ReadToolInput,
+        undefined,
+        undefined,
+        undefined as never,
+      );
+  }
   const text = await file.readFile("utf8");
   return { content: [{ type: "text", text }], structuredContent: text, details: undefined };
-};
+}
 
-async function executeRead(request: ToolRequest) {
+export async function executeRead(
+  request: ToolRequest,
+  pi: PiTools,
+  cwd: string,
+  signal: AbortSignal,
+): Promise<AgentToolResult<unknown>> {
   const path = readPath(request);
-  if (!(await stat(path)).isFile()) return executeToolRequest("read", request);
+  if (!(await stat(path)).isFile())
+    return pi
+      .createReadToolDefinition(cwd)
+      .execute(
+        request.toolCallId ?? "cli",
+        request.params as ReadToolInput,
+        signal,
+        undefined,
+        undefined as never,
+      );
   const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
   try {
     const info = await file.stat({ bigint: true });
     if (!info.isFile()) throw new Error(`Not a regular file: ${path}`);
-    return await executeOpenedRead(request, file, info.size);
+    return await abortable(readOpenedFile(request, pi, cwd, file, info.size), signal);
   } finally {
-    await file.close();
+    if (signal.aborted) void file.close();
+    else await file.close();
   }
 }
 
@@ -129,17 +180,3 @@ function hasSkillFile(skillDirectory: string): boolean {
     throw error;
   }
 }
-
-async function main(): Promise<void> {
-  try {
-    const request = JSON.parse(readFileSync(0, "utf8")) as ToolRequest;
-    const result = await executeRead(request);
-    process.stdout.write(JSON.stringify({ ok: true, result }));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stdout.write(JSON.stringify({ ok: false, error: message }));
-    process.exitCode = 1;
-  }
-}
-
-if (import.meta.main) await main();

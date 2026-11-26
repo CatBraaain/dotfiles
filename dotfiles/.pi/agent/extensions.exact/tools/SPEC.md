@@ -1,10 +1,12 @@
 # Tools — 仕様書
 
-pi の標準7ツールを登録する Tools拡張の振る舞いを定める。読者はツールの利用者と保守担当である。本書は `read` の画像・テキスト返却と、外部コマンド実行の境界を定める。認可と隔離実行は [Guardrails 仕様](../guardrails/SPEC.md) に従う。
+pi の標準7ツールを登録する Tools拡張の振る舞いを定める。読者はツールの利用者と保守担当である。本書は `read` の画像・テキスト返却、7ツールの実行を担う worker、外部コマンド実行の境界を定める。認可と隔離実行は [Guardrails 仕様](../guardrails/SPEC.md) に従う。
+
+この仕様書は、ツール結果・エラー・worker の入出力など観測可能な振る舞いを確定し、実現方法は実装に委ねる。実現方法まで固定するのは、「画像の読み取り」の WASMagic による判定、「実行境界」と「worker」の executor descriptor による entrypoint の受け渡し・`run-tools.ts --worker` 内での `read.ts` と pi 標準定義への振り分け・依存の向き、「ツール登録」の標準tool factory からの定義の取り込み、「BashのRTK書換え」の書換えCLI の呼び出し方、「拡張からの外部コマンド実行」の `ctx.executeTool` と Git Bash 経由の実行経路である。
 
 ## 画像の読み取り
 
-Windows、Linux、macOS の `read` は WASMagic でファイルの内容を調べる。Bash と `file` は使わない。画像判定は Guardrails が許可した読み取り処理の中で行う。Linux では判定も fs sandbox 内で実行する。
+Windows、Linux、macOS の `read` は WASMagic でファイルの内容を調べる。Bash と `file` は使わない。画像判定は Guardrails が許可した読み取り処理の中で行う。Linux では判定も fs worker の sandbox 内で実行する。
 
 MIME タイプが `image/*` であれば画像として扱う。ただし `image/svg+xml` はテキストとして扱う。MIME タイプが不明な場合のみ、拡張子 `.png`、`.jpg`、`.jpeg`、`.webp`、`.gif`、`.bmp`、`.tiff`、`.tif` で画像と判定する。
 
@@ -26,9 +28,17 @@ MIME タイプが `image/*` であれば画像として扱う。ただし `image
 
 ## 実行境界
 
-Tools はすべての `read` で、Tools の worker と現在のモデルの画像対応情報を Guardrails の内部 executor descriptor で渡す。モデルのツール引数から executor・entrypoint・画像対応情報を採用しない。
+Tools は全ツールで、Tools の worker（下記「worker」）の entrypoint を Guardrails の内部 executor descriptor で渡す。`read` では現在のモデルの画像対応情報も descriptor の `data` として渡す。モデルのツール引数から executor・entrypoint・画像対応情報を採用しない。
 
 認可・sandbox・キャンセルは [Guardrails 仕様](../guardrails/SPEC.md) に従う。画像判定はテキスト処理より先に行う。`references/` の兄弟にある `SKILL.md` は認可後に確認する。全文読みの対象でないテキストは標準 `read` で処理する。worker が失敗した場合は、別の実行経路で読み直さない。
+
+## worker
+
+Tools の worker は `run-tools.ts` の `--worker` モードで、[Guardrails 仕様](../guardrails/SPEC.md) §7 の常駐プロトコルを話す。要求の `tool` ごとの振り分け先は、`read` が Tools の read 処理（`read.ts`）、その他が pi 標準tool definition である。
+
+worker は `bun` で起動されるため Bun 固有の API を使える。拡張プロセスで動く `index.ts` と、Guardrails と共有するプロトコルの型（Guardrails の `config.ts`）は [.pi/README](../../../README) の拡張ランタイムの規則に従う。依存の向きは Tools から Guardrails の一方向である。
+
+`run-tools.ts` と `read.ts` は拡張の entry ではない。pi の拡張 discovery は `extensions/*/index.ts` までで、これらのファイルは拡張として読み込まれない。
 
 ## ツール登録
 

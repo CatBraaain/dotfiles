@@ -6,6 +6,8 @@ pi の全built-in fsツール（read / write / edit / grep / find / ls / bash）
 
 利用者自身のマシンとリポジトリでの利用を前提とする。信頼できないコードの安全な実行を保証するものではない。
 
+この仕様書は、条件ごとの外部から観測できる結果（ツール結果・エラー・確認ダイアログ・進捗・応答時の残留プロセスの有無）を確定し、実現方法は実装に委ねる。実現方法まで固定するのは、§2.2 と §6.1 の bwrap による bind とマスク、§3 の起動時の glob 展開、§6 の `guardrails.yaml` の記法、§7 の公開APIの形（`createGuardrailsAPI`・`execute(request)`・executor descriptor）、「worker」の構成・再利用条件・プロトコル・ファイル配置、Linux の bash 要求ごとの nested user namespace と PID namespace の作成、「bwrap起動」の bwrap 引数、§7.1 の PATH の作り方である。stderr 進捗の受信方法、キャンセル後の待機時間、bwrap 引数の並び順（本文で順序を指定した箇所を除く）などの手段と値は、振る舞いだけを固定し、実装に委ねる。
+
 ---
 
 ## 1. ツールごとの扱い
@@ -38,7 +40,9 @@ read / write の各操作ごとに、対応する設定セクションからパ�
 
 ### 2.1 Windows ネイティブの読み取り
 
-`read` は、認可できるドライブ文字付きのパスを扱う。UNC パスは読み取り前に拒否する。指定されたパスを認可してからファイルを開く。開いたファイルの実体パスも確認して認可し、その後の読み取りには同じハンドルを使う。実体を確認できない場合や認可されない場合は、内容を読まずに失敗させる。実体パスの確認をキャンセルした後の応答は、読み取りも動的許可の登録も行わない。
+Windows ネイティブの `read` は、他の fs系ツールと同じ fs worker で実行する（§7。Windows では bwrap を使わず、host の直接 child process として起動し続ける）。認可は毎回、正規化後の `params.path` に対して §2・§3 の既存規則で行い、他の fs系ツールと同じ扱いにする。開いたファイルの実体パス（最終パス）の確認と再認可は行わない。UNC パスなどのドライブ文字付きでないパスは、§3 の Windows のパス取り扱い（ローカルドライブの表記ゆれの同一視）の適用外であり、正規化後のパスと設定パターンの一致だけで判定される。
+
+リンク・ジャンクション等による、認可したパスと読み取る実体の不一致（すり替え）は検出しない。すり替えの検出は本来 sandbox（隔離）が担う防御であり、Windows では sandbox を利用できないため、保証しない既知の上限とする。解除条件は、Windows で worker に読み取りの隔離を適用できる sandbox が利用できるようになったときである。
 
 ### 2.2 credentials の例外
 
@@ -109,7 +113,7 @@ read / write の各操作ごとに、対応する設定セクションからパ�
 
 ### ツール引数パスの正規化（authorize前）
 
-fs系ツール（`read` `write` `edit` `grep` `find` `ls`）と `ask_permission` が引数に受け取るパスは、アクション判定（authorize）の前に guardrails が正規化する。fs系ツールでは、正規化後にセッションの cwd基準で解決した絶対パスを `params.path` に設定し、承認（§2.3 のダイアログ・許可要求）と実行（§7 の run-tools へ渡すパス）の両方に同一の値を用いる。
+fs系ツール（`read` `write` `edit` `grep` `find` `ls`）と `ask_permission` が引数に受け取るパスは、アクション判定（authorize）の前に guardrails が正規化する。fs系ツールでは、正規化後にセッションの cwd基準で解決した絶対パスを `params.path` に設定し、承認（§2.3 のダイアログ・許可要求）と実行（§7 の worker へ渡すパス）の両方に同一の値を用いる。
 
 | 引数の記述 | 正規化 |
 | --- | --- |
@@ -346,79 +350,108 @@ fs系ツール（`read` `write` `edit` `grep` `find` `ls`）用の sandbox で�
 
 bashコマンドの sandbox ではこのマスクを行わない。`credentials` のパスは §2.2 のとおりread-only で bindされる。`write` の deny・ask に確定したパスは、書き込み可能bind の配下にあるとき §6.1 のとおりread-only で bindし直される。
 
+`read` は他の fs系ツールと同じ fs worker で実行するため、`read` の実行中も `write` の `allow` 確定パスと動的許可のパスは書き込み可能なまま見える。`read` 専用の読み取り専用構成は、fs worker を1つにまとめて worker の入れ替え（§7「worker」の再利用条件）を避けるために使わない。これは既知の上限であり、読み取り専用の fs worker を分離しても再利用条件による worker の入れ替えが頻発しない構成を取れるようになったときに解除する。
+
 ---
 
-## 7. run-tools CLI によるfs IO
+## 7. worker によるツール実行
 
 公開APIは `createGuardrailsAPI(pi, configPath?)` で取得する。取得時に登録される `ask_permission` と `execute(request)` は同じ認可・承認状態を使う。
 
 信頼された拡張コードは、同じ API で、実在するディレクトリの絶対パスに確認ダイアログなしでセッション内の書き込み許可を追加できる。許可は指定先とその配下だけに適用し、既存のパス認可と sandbox の共通状態を使う。明示 `deny` と credentials の保護は維持する。存在しないパスは作成せずエラーを返す。この API はエージェントツールとして公開しない。
 
-呼び出し元は追加した許可だけを解除できる。別経路の許可は解除しない。セッション切り替え・終了時には追加した許可を破棄する。追加・解除は後続のツール呼び出しに適用し、起動済みの sandbox は変更しない。
+呼び出し元は追加した許可だけを解除できる。別経路の許可は解除しない。セッション切り替え・終了時には追加した許可を破棄する。追加・解除は後続のツール呼び出しに適用する。実行中の呼び出しは同じ worker で完了させ、起動済みの worker の構成は変更しない。追加・解除のあとの呼び出しは、その時点の構成に一致する worker で実行する（下記「worker」）。
 
-`execute(request)` は、ツール名・引数・呼び出しごとのcontext・AbortSignal・onUpdateを受け付ける。要求ごとに認可（§2〜§4）し、認可済みの呼び出しをsandbox内で実行する。最終ツール結果はPromiseで返し、認可・実行時の例外はrejectionで返す。
+`execute(request)` は、ツール名・引数・呼び出しごとのcontext・AbortSignal・onUpdateと、executor descriptor を必須として受け付ける。要求ごとに認可（§2〜§4）し、認可済みの呼び出しを worker で実行する。最終ツール結果はPromiseで返し、認可・実行時の例外はrejectionで返す。
 
-呼び出し元の信頼されたコードは、モデル向け引数 `params` とは別に、内部専用の executor descriptor を渡せる。descriptor は絶対ファイルパスの `entrypoint` と任意の JSON データ `data` を持つ。データは worker に渡すだけで、認可・実行ファイル・環境変数・bind・sandbox mode の決定には使わない。認可対象とfs/bashのmodeはツール名と正規化後の引数で決まる。
+executor descriptor は絶対ファイルパスの `entrypoint` と任意の JSON データ `data` を持つ。`entrypoint` は worker の実行ファイルで、呼び出し元の信頼されたコードがモデル向け引数 `params` とは別に指定する。paramsから採用しない。データは worker に渡すだけで、認可・実行ファイル・環境変数・bind・sandbox mode の決定には使わない。認可対象とfs/bashのmodeはツール名と正規化後の引数で決まる。
 
 | 要求・状態 | 実行結果 |
 | --- | --- |
-| descriptorなし（Windows の `read` を除く） | sandbox内で `bun run-tools.ts <tool-name>` → pi標準tool definitionのexecute |
-| descriptorあり、認可済みの処理（Windows の `read` を除く） | 同じsandbox内で `bun <entrypoint> <tool-name>` を実行 |
-| Windows ネイティブの `read` | §2.1 で認可したハンドルを読み取る。descriptor を指定した場合は、その executor の `executeOpenedRead` に認可済みハンドルを渡す。対応しない executor は拒否する |
-| 指定パスやコマンドの認可拒否・承認前 | worker を起動しない。Windows の `read` は指定パスの認可後に worker が実体パスを確認する |
-| entrypoint不在・sandbox内で不可視・worker失敗・不正な応答 | 呼び出しを失敗させる。host実行・標準executorへのfallbackやbind拡大は行わない |
+| 認可済みの呼び出し | ツールに対応する種類の worker（fs系ツールは fs worker、`bash` は bash worker）で実行し、その応答を結果として返す |
+| 指定パスやコマンドの認可拒否・承認前 | worker へ要求を送らない。一致する worker がなければ起動しない |
+| entrypoint不在・sandbox内で不可視・worker の起動失敗・異常終了・不正な応答 | 呼び出しを失敗させる。host実行への fallback や bind 拡大は行わない |
 | `ask_permission` | 許可要求（§3・§4） |
 
 bash のツール結果（stdout/stderr）に `Read-only file system` が含まれるとき、結果の末尾にヒント文を追記する。ヒント文はコマンドを書き換えて再試行しないことを伝え、対象の最終アクションが `ask` または未設定で credentials に遮断されない場合にだけ `ask_permission` で許可要求できることを示す。明示 `deny` は許可できない。承認は Guardrails の共通書込許可を更新し、その許可を利用するすべてのツールに適用されることと、明示 `deny` と credentials の保護が維持されることを伝える。
 
-- **入力**: argv に toolName、stdin に `toolCallId`・正規化後の `params`・必要な `session` 情報・descriptor の `executorData` を JSON で渡す。entrypointは内部descriptorから選び、paramsから採用しない。
-- **出力**: stdout にJSON envelope（`{ ok: true, result }` または `{ ok: false, error }`）を返す。成功時は終了コード0とし、失敗時は非0で終了する。Guardrailsはenvelopeを検査して結果またはエラーを伝達し、workerの成功結果を組み立てない。
-- 既定executorでは、標準tool definition が担当する処理（offset/limit、`oldText` / `newText` 置換、diff、結果の truncation、glob結果整形、rg実行、shell実行と timeout）は本拡張で再実装しない。
+- **入力**: 要求の `request` に、`toolCallId`・正規化後の `params`・必要な `session` 情報・descriptor の `data` を JSON で渡す（形式は下記「worker」）。セッションの cwd と異なる作業ディレクトリで実行する要求は `cwd` も渡す。entrypointは descriptor から選び、paramsから採用しない。
+- **出力**: 応答は、要求ごとに JSON envelope（`{ id, ok: true, result }` または `{ id, ok: false, error }`）を1行で返す。Guardrails は envelope を検査して結果またはエラーを伝達し、worker の成功結果を組み立てない。
+- worker は pi 標準tool definition の execute を呼び出す。標準tool definition が担当する処理（offset/limit、`oldText` / `newText` 置換、diff、結果の truncation、glob結果整形、rg実行、shell実行と timeout）は本拡張で再実装しない。
 - `edit` は pi標準の `oldText` / `newText` 形式を使い、行ハッシュアンカー形式は使わない。
-- ツールの最終結果はコマンド完了時に一度に返る。bash では、コマンド実行中に子プロセスの stderr への書き出しを行単位で onUpdate として送出し、実行中の進捗表示に使う（描画は chat-renderer SPEC §bash）。stdout は run-tools CLI の JSON envelope に使うため、送出の対象外である。送出はツールの最終結果を変えず、最終結果は完了時に一度に返る。
+- ツールの最終結果は要求の完了時に一度に返る。bash では、コマンド実行中に子プロセスの stderr への書き出しを行単位で進捗メッセージとして送出し、拡張が `onUpdate` で送る（描画は chat-renderer SPEC §bash）。stdout は最終結果にのみ含め、送出の対象外である。送出はツールの最終結果を変えず、最終結果は完了時に一度に返る。
 
-通常のSDK経路で拒否された呼び出しはエラー結果となり、pi の `tool_result` イベントでも観測できる。承認・拒否の理由と結果は呼び出し元へ返り、別要求の結果と混ざらない。進捗は `onUpdate`、最終結果はツールの戻り値で返す。開始前・確認待ち後にキャンセル済みなら、隔離実行を開始しない。実行中のキャンセルは下記「実行中のキャンセルと timeout」に従う。
+通常のSDK経路で拒否された呼び出しはエラー結果となり、pi の `tool_result` イベントでも観測できる。承認・拒否の理由と結果は呼び出し元へ返り、別要求の結果と混ざらない。進捗は `onUpdate`、最終結果はツールの戻り値で返す。開始前・確認待ち後にキャンセル済みなら、worker へ要求を送らない。実行中のキャンセルは下記「実行中のキャンセルと timeout」に従う。
 
-`session_shutdown` 後は、取得済みAPIの `execute` と登録済み `ask_permission` の新規呼び出しを `guardrails API is no longer active` で拒否する。再読み込み時は公開APIを新しく取得し、前の動的許可・コマンド承認を持ち越さない。`ask_permission` と各ツールの実行は同じ有効期間を持つ。
+`session_shutdown` 後は、取得済みAPIの `execute` と登録済み `ask_permission` の新規呼び出しを `guardrails API is no longer active` で拒否する。再読み込み時は公開APIを新しく取得し、前の動的許可・コマンド承認を持ち越さない。保持する worker は終了する。`ask_permission` と各ツールの実行は同じ有効期間を持つ。
 
-Linux の `read` は、既定 executor と差替え executor のいずれも読み取り専用の fs sandbox で実行する。隔離を利用できない場合は実行しない。認可と実行準備が完了した要求は、実行中のほかの sandbox の終了を待たずに開始する。
+Linux では、7ツールの実行は隔離した worker で行い、隔離を利用できない場合は実行しない。認可と実行準備が完了した要求は、実行中の他の要求の終了を待たずに worker へ渡す。
+
+### worker
+
+worker は、呼び出しをまたいで起動し続けるプロセスである。種類は fs worker（`read` `write` `edit` `grep` `find` `ls` を担当）と bash worker（`bash` を担当）の2つで、セッションで種類ごとに1つずつ保持する。
+
+- 起動: `bun <entrypoint> --worker` を、sandbox対象プラットフォームではその種類の bwrap 引数で（fs は §6.1 の fs 用の bind と deny・credentials のマスク、bash は bash 用の bind とデバイス）、それ以外のプラットフォームでは host の直接 child process として起動する。cwd はセッションの cwd とする。
+- 再利用: 呼び出しのたびに、その呼び出しのために新規に作る bwrap 引数・セッションの cwd・entrypoint が一致する同種の worker があれば再利用し、なければ起動する。一致しない worker は新しい呼び出しに使わず、実行中の要求の完了後に終了する。bwrap 引数は動的許可を含むため（§6.1）、許可の追加・解除で bwrap 引数が変わったときは、そのあとの最初の呼び出しで、その種類の worker が入れ替わる。入れ替わりの間、同種の worker が一時的に2つ存在する。
+- 並行処理: worker は受け付けた要求を並行して処理する。同一ファイルへの `write` / `edit` の直列化は pi 標準定義が行うものであり、拡張は直列化を追加しない。
+- 要求ごとの cwd: 要求が `cwd` を持つとき、worker はその要求の実行だけをそのディレクトリで行う。worker 自身の cwd と再利用条件は変えない。
+- bash worker は要求ごとに pi の bash 定義により shell を新規に起動し、前の要求の shell とその状態を引き継がない。Linux では、要求ごとの nested user namespace と PID namespace の中で shell を起動し、bash 要求の中では `/proc` とプロセス一覧はその要求のプロセスだけを示す。`unshare`（util-linux 2.38 以降）を利用できない Linux 環境では bash を実行しない。
+- 認可は拡張プロセス内で行う。worker は認可しない。
+- 応答を返す前に worker が終了した要求は失敗として返し、同じ要求を自動的に再送しない。終了した worker は次の呼び出しで起動し直す。
+- 維持と終了: 一致する worker はセッションの間維持する。`session_shutdown`、上記の構成の不一致、拡張との接続の切断（stdin の EOF）で終了する。
+
+拡張と worker は、stdin と stdout の JSON Lines（1行に1メッセージ）で通信する。`id` は拡張が要求ごとに割り当て、同じ worker インスタンスの中では再利用しない。
+
+| メッセージ | 向き | 形式と意味 |
+| --- | --- | --- |
+| 要求 | 拡張 → worker | `{ id, tool, request }`。`tool` はツール名、`request` は上記の入力 |
+| 応答 | worker → 拡張 | `{ id, ok: true, result }` または `{ id, ok: false, error }` |
+| キャンセル | 拡張 → worker | `{ id, cancel: true }`。その id の要求を中断する |
+| 進捗 | worker → 拡張 | `{ id, stderr }`。その id の bash コマンドの stderr の1行 |
+
+受信側は、worker インスタンス・id・要求の進行状態のすべてに一致しない古いメッセージ・重複メッセージを破棄する。破棄したメッセージによって、読み取り・状態の登録・結果の配送のどれも行わない。
+
+stdin の EOF は、拡張との接続の切断を表す。worker は EOF を受けたら、実行中の要求を中断して終了する。拡張プロセスが異常終了した場合も、worker は残留しない。Linux の bwrap 起動では、`--die-with-parent` も拡張プロセスの終了に追従させる。
+
+拡張は、worker の起動・一致の判定・再起動・終了・キャンセルの配送を `worker-pool.ts` で、信頼済み拡張の単発実行の呼び出しごとの起動を `sandbox-runner.ts` で担う。ToolRequest・応答 envelope・プロトコルの型は `config.ts` に置き、拡張プロセスと worker が共有する。worker の実体は Tools 拡張が持つ（`../tools/SPEC.md`）。
 
 ### 信頼済み拡張の単発実行
 
 信頼済み拡張は、固定した実行ファイル・引数・環境変数・作業ディレクトリ、および必要な書き込み先とそのマウント範囲を指定できる。エージェント向けの API ではなく、通常の Bash 引数からは指定できない。登録済み Bash には単独で実行しても処理を起動しない識別子を渡す。セッション・呼び出し ID・識別子がすべて一致する1回だけ認可する。実際のコマンドに対する明示的な拒否は適用し、確認を求める規則や未設定を理由に追加確認は出さない。通常の Bash に適用する規則は変わらない。
 
-Linux では、既存の一般書き込み許可を持ち込まず、当該操作に必要な範囲を、その呼び出しの bwrap 内でだけ書き込み可能にする。書き込み先とマウント範囲に対する明示 `deny` と credentials の保護を維持する。マウント範囲にある実在の保護対象は読み取り専用とし、予定書き込み先と衝突する場合は実行前に拒否する。この隔離に必要な Bash の設定 `read: allow: "*"` がなければ書き込みを拒否する。呼び出し元が指定する読み取り専用ビューや置換ファイルは当該 sandbox 内でだけ使う。失敗・キャンセル時を含め、通常の Bash や後続の呼び出しに権限を引き継がない。
+Linux では、この実行は呼び出しごとに専用の bwrap を起動し、常駐する worker は使わない。既存の一般書き込み許可を持ち込まず、当該操作に必要な範囲を、その bwrap 内でだけ書き込み可能にする。書き込み先とマウント範囲に対する明示 `deny` と credentials の保護を維持する。マウント範囲にある実在の保護対象は読み取り専用とし、予定書き込み先と衝突する場合は実行前に拒否する。この隔離に必要な Bash の設定 `read: allow: "*"` がなければ書き込みを拒否する。呼び出し元が指定する読み取り専用ビューや置換ファイルは当該 sandbox 内でだけ使う。中断 signal と timeout では bwrap child を停止し、その終了を待って実行を終端する。失敗・キャンセル時を含め、通常の Bash や後続の呼び出しに権限を引き継がない。
 
-sandbox 対象外の OS では、書き込み先へのポリシー判定と呼び出し元による検証を適用してから、標準 Bash worker と既存の停止・終了待機を使う。bwrap のマウントは適用しない。
+sandbox 対象外の OS では、書き込み先へのポリシー判定と呼び出し元による検証を適用してから、呼び出し元が指定した作業ディレクトリを要求の `cwd` として渡し、bash worker で実行する。bwrap のマウントは適用しない。中止はその要求のキャンセルとして「実行中のキャンセルと timeout」の契約に従い、要求の終了を待つ。
 
 ### bwrap起動
 
-sandbox対象プラットフォームでは、各ツール呼び出しは次の構成で `bwrap` を起動する。
+sandbox対象プラットフォームでは、worker の起動時に次の構成で `bwrap` を起動する。信頼済み拡張の単発実行の bwrap 構成は「信頼済み拡張の単発実行」に従い、この構成は適用しない。
 
 1. `--die-with-parent` を設定する。`read.allow` に `"*"` が含まれる場合は `/` を read-only bindしてから、新しいprocfs を `--proc /proc` でマウントする。新しい `/dev` は `--dev /dev` でマウントする。procfs は root bind より後にマウントし、nested user namespace に必要な書き込みを可能にする。bash では、GPU用デバイス `/dev/dxg` と `/dev/dri` をそれぞれ `--dev-bind-try /dev/dxg /dev/dxg` と `--dev-bind-try /dev/dri /dev/dri` で追加公開する。`--dev-bind-try` は対象が存在しない環境では無視される。
 2. 設定済みの allowパスを `--bind-try`、read-onlyパスと credentials を `--ro-bind-try` で bindする。設定由来の `write` の書き込み可能bind は後勝ちで `allow` に確定したパスのみとする。動的許可と bash の read-only 保護は §6.1 に従う。
 3. NixOS で `bun`・実行ファイル・共有ライブラリを解決できるよう `/nix` 等の runtime path（`~/.nix-profile` を含む）を read-only で bindする。piパッケージ自体は `/nix` 配下のため追加の bind不要。
-4. sandbox内で選択されたentrypointをbunで実行し、network namespace は分離しない。ホストで user namespace が利用可能な場合、sandbox内のプロセスは nested user namespace を作成でき、Firefox のプロセスsandbox や GTK の nested `bwrap` helper が起動できる。
+4. sandbox内で `bun <entrypoint> --worker` を実行し、network namespace は分離しない。ホストで user namespace が利用可能な場合、sandbox内のプロセスは nested user namespace を作成できる。bash worker はこれを利用し、要求ごとの nested user namespace と PID namespace を作って shell を起動する（上記「worker」）。その中でも、Firefox のプロセスsandbox や GTK の nested `bwrap` helper は、さらに nested user namespace を作成して起動できる。
 5. 実行中のキャンセルと timeout は次の契約に従う。
 
 ### sandbox対象外プラットフォームの直実行
 
-bwrap は Linux 固有の機能に依存するため、`process.platform` が `linux` 以外の環境（windows・macOS）では bwrap を起動せず、worker（`bun` と選択されたentrypoint）を host の直接 child process として起動する。`buildSandboxArgs` は構築せず、mount 構成（書き込み制限・denyパス・credentials の隠蔽・bash 用デバイス公開）は適用されない。この環境の実行は認可（§2・§4）とコマンド照合のみで守る。child process 環境の sanitize（§7.1 を含む）は両経路で適用する。キャンセルと timeout の契約は bwrap 起動時と同一で、停止対象が bwrap child の代わりに直接 child になるだけである。
+bwrap は Linux 固有の機能に依存するため、`process.platform` が `linux` 以外の環境（windows・macOS）では bwrap を起動せず、worker（`bun <entrypoint> --worker`）を host の直接 child process として起動する。`buildSandboxArgs` は構築せず、mount 構成（書き込み制限・denyパス・credentials の隠蔽・bash 用デバイス公開）は適用されない。worker の再利用条件は entrypoint と cwd の一致になる。この環境の実行は認可（§2・§4）とコマンド照合のみで守る。child process 環境の sanitize（§7.1 を含む）は両経路で適用する。キャンセルと timeout の契約は bwrap 起動時と同一である。この環境には PID namespace や subreaper に相当する仕組みがないため、SDK の停止対象（プロセスグループ）から `setsid` 等で離脱した子孫はコマンド終了後も残り得る。これは既知の上限であり、OS が subreaper や PID namespace 相当の仕組みを提供したときに解除する。
 
 ### 実行中のキャンセルと timeout
 
-公開APIへのBash要求は、呼び出し経路によらず同じキャンセル契約を持つ。既定executorでは、中断をsandbox内のSDK標準Bashへ伝達する。SDKが管理するshellの終了と標準tool definitionの終了を待ち、workerとsandbox childの終了後に実行Promiseを中断エラーで終端する。呼び出し元が要求結果を先に確定した場合も、この実行終端の条件は変わらない。
+worker で実行する要求のキャンセル契約は、呼び出し経路とツールによらず同じである。中断はプロトコルのキャンセルメッセージで worker へ伝える。bash worker は実行中のSDK標準Bashへ中断を伝達し、fs worker は受け付けた要求の実行を中断する。拡張は下位の終了（Bashでは SDK が管理するshellの終了と標準tool definitionの終了）を待ち、その要求の応答を受けて実行Promiseを中断エラーで終端する。呼び出し元が要求結果を先に確定した場合も、この実行終端の条件は変わらない。
 
 | 条件 | 結果 |
 | --- | --- |
-| Bashの `params.timeout` に達する | sandbox内のSDK標準Bashが停止と終了待機を行い、標準tool definitionのtimeout結果を返す |
-| 既定Bashのsandbox実行自体にtimeoutを適用する | キャンセルと同じ中断伝達・終了待機を行い、実行Promiseをtimeoutエラーで終端する |
+| Bashの `params.timeout` に達する | worker内のSDK標準Bashが停止と終了待機を行い、標準tool definitionのtimeout結果を返す |
+| Bashの要求自体にtimeoutを適用する | キャンセルと同じ中断伝達・終了待機を行い、実行Promiseをtimeoutエラーで終端する |
+| fs系ツールのキャンセル | キャンセルメッセージを fs worker へ送り、その要求の応答を受けて実行Promiseを中断エラーで終端する。キャンセルは要求単位で機能し、同じ worker で実行中の他の要求と worker は継続する |
 | 中断の通知失敗・workerの異常終了 | 実行エラーとして返す。下位の終了未確認を停止完了として扱わない |
-| 非Bashまたは差替えexecutorのキャンセル | sandbox child process（bwrap または直実行 child）を停止し、終了を待って実行Promiseを終端する |
+| キャンセルを伝えても要求が終了しない（拡張が定める待機時間内にその要求の応答がない） | その worker を終了させ、実行エラーとして返す。終了した worker で実行中だった他の要求は「worker」の項のとおり失敗として返し、次の呼び出しで worker を起動し直す |
 
-SDK管理下の終了待機は、`setsid` 等で離脱した子孫や、正常終了後に残る常駐プロセス全体の終了確認とは区別する。既定Bashでは、SDKの停止対象から離脱した子孫が存続する場合がある。
+Linux の bash worker では、コマンドの正常終了・非ゼロ終了・timeout・キャンセルのいずれの場合も、応答を返す時点でそのコマンドから派生したプロセス（`setsid` 等で SDK の停止対象から離脱した子孫、正常終了後に残る常駐プロセスを含む）は残らない。コマンドのプロセスは次の要求に引き継がれない。worker 自体が異常終了した場合は、この保証の対象外である。
 
-キャンセルによる変更は、通常完了・非ゼロ終了のツール結果、stderr進捗、認可・承認状態、隔離構成、差替えexecutorの既存の入出力契約を維持する。
+キャンセルによる変更は、通常完了・非ゼロ終了のツール結果、stderr進捗、認可・承認状態、隔離構成、executor の既存の入出力契約を維持する。
 
 ### 7.1 WSL の child process環境
 
@@ -427,7 +460,7 @@ WSL上で bwrap を起動するとき、sandboxed child process に渡す `PATH`
 - WSL は `WSL_INTEROP` または `WSL_DISTRO_NAME` の環境変数、または kernel release の `microsoft` / `wsl` marker で判定する。native Linux の `/mnt` を理由に WSL と判定しない。
 - WSL と判定したときだけ、`/mnt/<単一の英字ドライブ名>`（例: `/mnt/c/Windows/System32`）で始まるPATH要素を除外する。
 - その他の PATH要素（runtime path、rtk の PATH を含む）は保持する。WSL でない環境の PATH は変更しない。
-- 変更対象は bwrap child process の環境だけであり、host の shell・WSL・Git Bash の PATH は変更しない。
+- 変更対象は worker と単発実行の bwrap child process の環境だけであり、host の shell・WSL・Git Bash の PATH は変更しない。
 - PATH filtering は bare command の解決に適用する。`/mnt/c/.../*.exe` のような絶対パスの実行を禁止せず、既存の `/mnt` ask と役割を分担する。
 
 ---

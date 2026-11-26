@@ -22,7 +22,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
 import toolsExtension from "../tools/index";
 import { executeGuardedTool } from "./execute.ts";
-import { SandboxRunner } from "./sandbox-runner.ts";
+import { WorkerPool } from "./worker-pool.ts";
 import { createGuardrailsAPI } from "./api.ts";
 import { Guardrail, writeApprovalNote } from "./guardrail.ts";
 
@@ -49,8 +49,8 @@ import {
   isWslEnvironment,
   sanitizeSandboxEnvironment,
 } from "./config.ts";
-import { startStderrTeeReceiver } from "./run-tools";
-import { realBwrapTest } from "./bwrap-test-support.ts";
+import { startStderrTeeReceiver } from "../tools/run-tools.ts";
+import { realBwrapTest, WORKER_ENTRYPOINT } from "./bwrap-test-support.ts";
 import { writePaths } from "./sandbox.ts";
 
 function sourcePathFromSymlink(symlinkPath: URL): URL {
@@ -227,6 +227,15 @@ const runSessionStart = (configYaml: string): { message: string; level: string }
     rmSync(tempDir, { recursive: true, force: true });
   }
 };
+
+/** Launch workers through a fixed command instead of bwrap; restore via the return value. */
+function stubWorkerLaunch(launch: () => { command: string; args: string[] }): () => void {
+  const original = WorkerPool.prototype.launchCommand;
+  WorkerPool.prototype.launchCommand = launch;
+  return () => {
+    WorkerPool.prototype.launchCommand = original;
+  };
+}
 
 function renderToolCall(toolName: string, args: Record<string, unknown>): string {
   return renderersOf(toolName)!.renderCall!(args, plainTheme, undefined)
@@ -586,12 +595,12 @@ describe("registered Tools image read", () => {
       const svg = '<svg xmlns="http://www.w3.org/2000/svg"><circle r="1"/></svg>';
       const svgPath = join(directory, "icon.svg");
       writeFileSync(svgPath, svg);
-      const originalRunTool = SandboxRunner.prototype.runTool;
+      const originalRunTool = WorkerPool.prototype.runTool;
       let didRunRead = false;
-      SandboxRunner.prototype.runTool = (async (toolName) => {
+      WorkerPool.prototype.runTool = (async (toolName) => {
         didRunRead = toolName === "read";
         return { content: [{ type: "text", text: svg }], details: {} };
-      }) as SandboxRunner["runTool"];
+      }) as WorkerPool["runTool"];
 
       try {
         const result = await captureRegisteredTools()
@@ -609,7 +618,7 @@ describe("registered Tools image read", () => {
           false,
         );
       } finally {
-        SandboxRunner.prototype.runTool = originalRunTool;
+        WorkerPool.prototype.runTool = originalRunTool;
       }
     }),
   );
@@ -999,13 +1008,25 @@ describe("§3.a パス文字列の解決", () => {
         }),
       );
       const guardrail = new Guardrail(linkedWorktreePath, configPath);
-      const runner = new SandboxRunner(linkedWorktreePath, (mode, commandCwd, readOnly) =>
-        guardrail.buildArgs(mode, commandCwd, readOnly),
+      const pool = new WorkerPool(linkedWorktreePath, (mode, commandCwd) =>
+        guardrail.buildArgs(mode, commandCwd),
       );
       const path = join(worktreeParent, "topic");
       const command = `git -C ${JSON.stringify(mainWorktreePath)} worktree add --detach ${JSON.stringify(path)} HEAD`;
       assert.equal(await guardrail.authorizeCommand(command, { cwd: linkedWorktreePath }), false);
-      const result = await runner.runTool("bash", { command }, { mode: "bash" });
+      let result: Awaited<ReturnType<WorkerPool["runTool"]>>;
+      try {
+        result = await pool.runTool(
+          "bash",
+          { command },
+          {
+            mode: "bash",
+            executor: { entrypoint: WORKER_ENTRYPOINT },
+          },
+        );
+      } finally {
+        pool.shutdown();
+      }
       const output = result.structuredContent as { exit_code: number; output: string };
       assert.equal(output.exit_code, 0, output.output);
       assert.equal(existsSync(join(path, ".git")), true);
@@ -2627,23 +2648,15 @@ describe("§2.3 承認ノート", () => {
       }
     };
 
-  /** Replace Guardrail.run with a canned run-tools envelope; restore via the return value. */
-  const stubGuardrailRun = (resultText: string) => {
-    const envelope = JSON.stringify({
-      ok: true,
-      result: { content: [{ type: "text", text: resultText }] },
-    });
-    const guardrailPrototype = SandboxRunner.prototype as unknown as {
-      run: (command: string, commandArgs: string[], options: any) => Promise<unknown>;
-    };
-    const originalRun = guardrailPrototype.run;
-    guardrailPrototype.run = async () => ({
-      exitCode: 0,
-      stdout: Buffer.from(envelope),
-      stderr: Buffer.alloc(0),
+  /** Replace the worker run with a canned result; restore via the return value. */
+  const stubWorkerRun = (resultText: string) => {
+    const originalRunTool = WorkerPool.prototype.runTool;
+    WorkerPool.prototype.runTool = async () => ({
+      content: [{ type: "text", text: resultText }],
+      details: {},
     });
     return () => {
-      guardrailPrototype.run = originalRun;
+      WorkerPool.prototype.runTool = originalRunTool;
     };
   };
 
@@ -2806,7 +2819,7 @@ describe("§2.3 承認ノート", () => {
   it("write のディレクトリスコープ承認は subtree の承認ノートを付け、以降の同配下書き込みには付かない", async () => {
     // The grant directory must already exist so the dynamic grant performs no host-side writes.
     const filePath = join(homedir(), "projects", "guardrail-note-probe.txt");
-    const restore = stubGuardrailRun(`Successfully wrote 10 bytes to ${filePath}`);
+    const restore = stubWorkerRun(`Successfully wrote 10 bytes to ${filePath}`);
     try {
       const handlers = new Map();
       const writeTool = captureRegisteredTools(undefined, handlers).get("write");
@@ -2848,7 +2861,7 @@ describe("§2.3 承認ノート", () => {
 
   it("write のディレクトリスコープ承認は subtree の承認ノートを付ける", async () => {
     const filePath = join(homedir(), "projects", "guardrail-note-dir.txt");
-    const restore = stubGuardrailRun(`Successfully wrote 10 bytes to ${filePath}`);
+    const restore = stubWorkerRun(`Successfully wrote 10 bytes to ${filePath}`);
     try {
       const handlers = new Map();
       const writeTool = captureRegisteredTools(undefined, handlers).get("write");
@@ -2877,7 +2890,7 @@ describe("§2.3 承認ノート", () => {
 
   it("edit の write 承認で結果末尾に承認ノートが付く", async () => {
     const filePath = join(homedir(), "projects", "guardrail-note-edit.txt");
-    const restore = stubGuardrailRun(`Successfully replaced 1 block(s) in ${filePath}.`);
+    const restore = stubWorkerRun(`Successfully replaced 1 block(s) in ${filePath}.`);
     try {
       const handlers = new Map();
       const editTool = captureRegisteredTools(undefined, handlers).get("edit");
@@ -2905,7 +2918,7 @@ describe("§2.3 承認ノート", () => {
   });
 
   it("bash の ask 承認で結果末尾に承認ノートが付く", async () => {
-    const restore = stubGuardrailRun("1 file changed, 2 insertions(+)");
+    const restore = stubWorkerRun("1 file changed, 2 insertions(+)");
     try {
       const handlers = new Map();
       const bashTool = captureRegisteredTools(undefined, handlers).get("bash");
@@ -2933,7 +2946,7 @@ describe("§2.3 承認ノート", () => {
   });
 
   it("bash の EROFS ではヒント文の後に承認ノートが最終行に来る", async () => {
-    const restore = stubGuardrailRun("touch: cannot touch '/outside/x': Read-only file system");
+    const restore = stubWorkerRun("touch: cannot touch '/outside/x': Read-only file system");
     try {
       const handlers = new Map();
       const bashTool = captureRegisteredTools(undefined, handlers).get("bash");
@@ -2963,7 +2976,7 @@ describe("§2.3 承認ノート", () => {
 
   it("read の結果には承認ノートを付けない", async () => {
     const filePath = join(process.cwd(), "guardrail-note-noappend.txt");
-    const restore = stubGuardrailRun("file body");
+    const restore = stubWorkerRun("file body");
     try {
       const handlers = new Map();
       const readTool = captureRegisteredTools(undefined, handlers).get("read");
@@ -3692,7 +3705,7 @@ describe("§3 許可要求ツール", () => {
 
   it("ask_permission ツールの承認は動的許可と承認文言を返す", async () => {
     // The test runner itself is inside the bash sandbox, so the §6.1 host-side
-    // directory creation is stubbed out (same pattern as stubGuardrailRun).
+    // directory creation is stubbed out (same pattern as stubWorkerRun).
     const probeDirectory = join(homedir(), "projects", "guardrail-ask-perm-probe");
     const createdGrants: { grantPath: string; scope: string }[] = [];
     const guardrailPrototype = Guardrail.prototype as unknown as {
@@ -4356,12 +4369,12 @@ describe("§3 ツール引数パスの正規化", () => {
     const authorized: { operation: string; path: string }[] = [];
     const runToolCalls: { toolName: string; params: any }[] = [];
     const originalAuthorizePath = Guardrail.prototype.authorizePath;
-    const originalRunTool = SandboxRunner.prototype.runTool;
+    const originalRunTool = WorkerPool.prototype.runTool;
     Guardrail.prototype.authorizePath = async function (operation, path) {
       authorized.push({ operation, path });
       return undefined;
     };
-    SandboxRunner.prototype.runTool = async function (toolName, params, _options) {
+    WorkerPool.prototype.runTool = async function (toolName, params, _options) {
       runToolCalls.push({ toolName, params });
       return { content: [{ type: "text", text: "stub" }], details: undefined };
     };
@@ -4433,7 +4446,7 @@ describe("§3 ツール引数パスの正規化", () => {
       }
     } finally {
       Guardrail.prototype.authorizePath = originalAuthorizePath;
-      SandboxRunner.prototype.runTool = originalRunTool;
+      WorkerPool.prototype.runTool = originalRunTool;
     }
   });
 
@@ -4468,7 +4481,7 @@ describe("tool path environment expansion", () => {
   const pathCases = [...fsCases, ["ask_permission", { reason: "fixture" }] as const];
   const originalAuthorize = Guardrail.prototype.authorizePath;
   const originalRequest = Guardrail.prototype.requestWritePermission;
-  const originalRun = SandboxRunner.prototype.runTool;
+  const originalRun = WorkerPool.prototype.runTool;
   let previousPath: string | undefined;
   let directory: string;
   let tools: Map<string, any>;
@@ -4498,7 +4511,7 @@ describe("tool path environment expansion", () => {
   afterEach(() => {
     Guardrail.prototype.authorizePath = originalAuthorize;
     Guardrail.prototype.requestWritePermission = originalRequest;
-    SandboxRunner.prototype.runTool = originalRun;
+    WorkerPool.prototype.runTool = originalRun;
     if (previousPath === undefined) delete process.env[variableName];
     else process.env[variableName] = previousPath;
     rmSync(directory, { recursive: true, force: true });
@@ -4513,7 +4526,7 @@ describe("tool path environment expansion", () => {
         authorized.push({ operation, path });
         return originalAuthorize.call(this, operation, path, context);
       };
-      SandboxRunner.prototype.runTool = async (_name, params) => {
+      WorkerPool.prototype.runTool = async (_name, params) => {
         executed.push((params as { path: string }).path);
         return { content: [], details: {} };
       };
@@ -4575,51 +4588,59 @@ describe("tool path environment expansion", () => {
             }),
           );
           const guardrail = new Guardrail(cwd, config);
-          const runner = new SandboxRunner(cwd, (mode) => guardrail.buildArgs(mode));
+          const pool = new WorkerPool(cwd, (mode) => guardrail.buildArgs(mode));
           const authorized: { operation: string; path: string }[] = [];
           const executed: string[] = [];
           Guardrail.prototype.authorizePath = async function (operation, path, context) {
             authorized.push({ operation, path });
             return originalAuthorize.call(this, operation, path, context);
           };
-          runner.runTool = async (toolName, params, options) => {
+          pool.runTool = async (toolName, params, options) => {
             executed.push((params as { path: string }).path);
-            return originalRun.call(runner, toolName, params, options);
+            return originalRun.call(pool, toolName, params, options);
           };
           const context = { hasUI: false } as ExtensionToolContext;
-          const result = await executeGuardedTool(guardrail, runner, cwd, {
-            id: "literal-read",
-            toolName: "read",
-            params: { path: `\${${variableName}}` },
-            context,
-          });
-          assert.deepEqual(result.content, [{ type: "text", text: "literal fixture" }]);
-          await executeGuardedTool(guardrail, runner, cwd, {
-            id: "literal-write",
-            toolName: "write",
-            params: { path: `\${${variableName}}`, content: "updated fixture" },
-            context,
-          });
-          assert.equal(readFileSync(target, "utf8"), "updated fixture");
-          assert.equal(readFileSync(decoy, "utf8"), "other fixture");
-          assert.deepEqual(authorized, [
-            { operation: "read", path: target },
-            { operation: "write", path: target },
-          ]);
-          assert.deepEqual(executed, [target, target]);
-          const denyConfig = join(directory, "deny-backend.yaml");
-          writeFileSync(denyConfig, JSON.stringify({ read: [{ allow: "*" }, { deny: target }] }));
-          const denyingGuardrail = new Guardrail(cwd, denyConfig);
-          await assert.rejects(
-            executeGuardedTool(denyingGuardrail, runner, cwd, {
-              id: "literal-deny",
+          const executor = { entrypoint: WORKER_ENTRYPOINT, data: { supportsImages: false } };
+          try {
+            const result = await executeGuardedTool(guardrail, pool, cwd, {
+              id: "literal-read",
               toolName: "read",
               params: { path: `\${${variableName}}` },
               context,
-            }),
-            /Access denied:/,
-          );
-          assert.deepEqual(executed, [target, target]);
+              executor,
+            });
+            assert.deepEqual(result.content, [{ type: "text", text: "literal fixture" }]);
+            await executeGuardedTool(guardrail, pool, cwd, {
+              id: "literal-write",
+              toolName: "write",
+              params: { path: `\${${variableName}}`, content: "updated fixture" },
+              context,
+              executor: { entrypoint: WORKER_ENTRYPOINT },
+            });
+            assert.equal(readFileSync(target, "utf8"), "updated fixture");
+            assert.equal(readFileSync(decoy, "utf8"), "other fixture");
+            assert.deepEqual(authorized, [
+              { operation: "read", path: target },
+              { operation: "write", path: target },
+            ]);
+            assert.deepEqual(executed, [target, target]);
+            const denyConfig = join(directory, "deny-backend.yaml");
+            writeFileSync(denyConfig, JSON.stringify({ read: [{ allow: "*" }, { deny: target }] }));
+            const denyingGuardrail = new Guardrail(cwd, denyConfig);
+            await assert.rejects(
+              executeGuardedTool(denyingGuardrail, pool, cwd, {
+                id: "literal-deny",
+                toolName: "read",
+                params: { path: `\${${variableName}}` },
+                context,
+                executor,
+              }),
+              /Access denied:/,
+            );
+            assert.deepEqual(executed, [target, target]);
+          } finally {
+            pool.shutdown();
+          }
         } finally {
           if (previousHome === undefined) delete process.env.HOME;
           else process.env.HOME = previousHome;
@@ -4637,7 +4658,7 @@ describe("tool path environment expansion", () => {
       return approval;
     };
     const executed: string[] = [];
-    SandboxRunner.prototype.runTool = async (_name, params) => {
+    WorkerPool.prototype.runTool = async (_name, params) => {
       executed.push((params as { path: string }).path);
       return { content: [], details: {} };
     };
@@ -4669,7 +4690,7 @@ describe("tool path environment expansion", () => {
           calls.push("request");
           return { status: "denied", grantedPath: path };
         };
-        SandboxRunner.prototype.runTool = async () => {
+        WorkerPool.prototype.runTool = async () => {
           calls.push("execute");
           return { content: [], details: {} };
         };
@@ -4698,7 +4719,7 @@ describe("tool path environment expansion", () => {
       const target = join(directory, "denied", "note.txt");
       process.env[variableName] = target;
       let executions = 0;
-      SandboxRunner.prototype.runTool = async () => {
+      WorkerPool.prototype.runTool = async () => {
         executions++;
         return { content: [], details: {} };
       };
@@ -4732,7 +4753,7 @@ describe("tool path environment expansion", () => {
         requested.push(path);
         return originalRequest.call(this, path, reason, context);
       };
-      SandboxRunner.prototype.runTool = async (_name, params) => {
+      WorkerPool.prototype.runTool = async (_name, params) => {
         executed.push((params as { path: string }).path);
         return { content: [], details: {} };
       };
@@ -4772,7 +4793,7 @@ describe("tool path environment expansion", () => {
     delete process.env[variableName];
     const command = `printf '%s' "$${variableName}"`;
     const executed: unknown[] = [];
-    SandboxRunner.prototype.runTool = async (_name, params) => {
+    WorkerPool.prototype.runTool = async (_name, params) => {
       executed.push(params);
       return { content: [], details: {} };
     };
@@ -5980,52 +6001,19 @@ describe("§6.1 bind とパスの実在保証", () => {
 
 describe("§7 bash の stderr 逐次表示", () => {
   it("stderr 行を onUpdate へ逐次流し、最終結果は完了時に一度に返る", async () => {
-    const envelope = JSON.stringify({
-      ok: true,
-      result: { content: [{ type: "text", text: "final output" }] },
-    });
-    // Simulate a slow run-tools child: delayed stderr lines (one split across
-    // chunks, one empty) and the JSON envelope on stdout only at completion.
-    // bwrap is not usable in every test environment, so replace Guardrail.run's
-    // child spawn; runTool and the bash execute stay real.
-    const childScript = [
-      "echo one >&2",
+    // Simulate a slow worker: it answers progress lines with delays and the
+    // response envelope only at completion. runTool and the bash execute stay real.
+    const script = [
+      "IFS= read -r request",
+      '[[ $request =~ \\"id\\":([0-9]+) ]] && id=${BASH_REMATCH[1]}',
+      'echo "{\\"id\\":$id,\\"stderr\\":\\"one\\"}"',
       "sleep 0.3",
-      "printf par >&2",
-      "sleep 0.1",
-      "printf 'tial\\n' >&2",
-      "echo >&2",
+      'echo "{\\"id\\":$id,\\"stderr\\":\\"partial\\"}"',
       "sleep 0.3",
-      "echo two >&2",
-      `printf '%s\\n' '${envelope}'`,
+      'echo "{\\"id\\":$id,\\"stderr\\":\\"two\\"}"',
+      'echo "{\\"id\\":$id,\\"ok\\":true,\\"result\\":{\\"content\\":[{\\"type\\":\\"text\\",\\"text\\":\\"final output\\"}],\\"details\\":{}}}"',
     ].join("; ");
-    const guardrailPrototype = SandboxRunner.prototype as unknown as {
-      run: (command: string, commandArgs: string[], options: any) => Promise<unknown>;
-    };
-    const originalRun = guardrailPrototype.run;
-    guardrailPrototype.run = function (_command, _commandArgs, runOptions) {
-      return new Promise((resolveRun, rejectRun) => {
-        const child = spawn("bash", ["-c", childScript], { stdio: ["ignore", "pipe", "pipe"] });
-        const stdout: Buffer[] = [];
-        const stderr: Buffer[] = [];
-        child.stdout?.on("data", (chunk: Buffer) => {
-          stdout.push(chunk);
-          runOptions.onData?.(chunk, "stdout");
-        });
-        child.stderr?.on("data", (chunk: Buffer) => {
-          stderr.push(chunk);
-          runOptions.onData?.(chunk, "stderr");
-        });
-        child.on("error", rejectRun);
-        child.on("close", (exitCode) =>
-          resolveRun({
-            exitCode,
-            stdout: Buffer.concat(stdout),
-            stderr: Buffer.concat(stderr),
-          }),
-        );
-      });
-    };
+    const restore = stubWorkerLaunch(() => ({ command: "bash", args: ["-c", script] }));
     try {
       const updates: { text: string; at: number }[] = [];
       const result = await captureRegisteredTools()
@@ -6047,7 +6035,7 @@ describe("§7 bash の stderr 逐次表示", () => {
       );
       assert.equal(result.content[0].text, "final output");
     } finally {
-      guardrailPrototype.run = originalRun;
+      restore();
     }
   });
 
@@ -6062,45 +6050,15 @@ describe("§7 bash の stderr 逐次表示", () => {
   });
 
   it("実コマンドの stderr が行単位で onUpdate へ流れ、最終結果は envelope から一度に返る", async () => {
-    // Full chain without bwrap (unavailable in every test environment):
-    // replace Guardrail.run's bwrap spawn with a direct bun spawn of run-tools,
-    // keeping runTool, execute, and parseRunToolsResponse real. Inside
-    // run-tools the real pi bash definition runs the command with the stderr
-    // tee commandPrefix, so the command's stderr reaches this process's
-    // stderr only through the new forwarding path.
-    const guardrailPrototype = SandboxRunner.prototype as unknown as {
-      run: (command: string, commandArgs: string[], options: any) => Promise<unknown>;
-    };
-    const originalRun = guardrailPrototype.run;
-    guardrailPrototype.run = function (_command, _commandArgs, runOptions) {
-      return new Promise((resolveRun, rejectRun) => {
-        const child = spawn(_command, _commandArgs, {
-          cwd: process.cwd(),
-          env: runOptions.env,
-          stdio: ["pipe", "pipe", "pipe"],
-        });
-        const stdout: Buffer[] = [];
-        const stderr: Buffer[] = [];
-        child.stdout?.on("data", (chunk: Buffer) => {
-          stdout.push(chunk);
-          runOptions.onData?.(chunk, "stdout");
-        });
-        child.stderr?.on("data", (chunk: Buffer) => {
-          stderr.push(chunk);
-          runOptions.onData?.(chunk, "stderr");
-        });
-        child.on("error", rejectRun);
-        child.on("close", (exitCode) =>
-          resolveRun({
-            exitCode,
-            stdout: Buffer.concat(stdout),
-            stderr: Buffer.concat(stderr),
-          }),
-        );
-        if (runOptions.cooperativeCancellation) child.stdin?.write(`${runOptions.input}\n`);
-        else child.stdin?.end(runOptions.input);
-      });
-    };
+    // Full chain without bwrap (unavailable in every test environment): launch
+    // the real worker directly, keeping runTool, execute, and the protocol real.
+    // Inside the worker the real pi bash definition runs the command with the
+    // stderr tee prefix, so the command's stderr reaches onUpdate only through
+    // the progress messages.
+    const restore = stubWorkerLaunch(() => ({
+      command: "bun",
+      args: [WORKER_ENTRYPOINT, "--worker"],
+    }));
     try {
       // Delayed stderr with a multibyte line split across two chunks, an empty
       // line, and a trailing partial line without a newline.
@@ -6137,13 +6095,13 @@ describe("§7 bash の stderr 逐次表示", () => {
       assert.ok(finalText.includes("行中"), `split multibyte broken in result: ${finalText}`);
       assert.ok(finalText.includes("tail"), `partial tail missing from result: ${finalText}`);
     } finally {
-      guardrailPrototype.run = originalRun;
+      restore();
     }
   });
 
   it("falls back after a refused receiver connection and preserves the command result", async () => {
     // Close the receiver before the command's /dev/tcp connection attempt.
-    const tee = await startStderrTeeReceiver();
+    const tee = await startStderrTeeReceiver(() => {});
     await tee.close();
     const pi = await import("@earendil-works/pi-coding-agent");
     const runBash = (options: { commandPrefix: string } | undefined) =>
@@ -6224,6 +6182,8 @@ describe("§7 WSL の子プロセス PATH", () => {
 });
 
 describe("§7 concurrent sandbox execution", () => {
+  const executor = { entrypoint: WORKER_ENTRYPOINT };
+
   it(
     "does not start a request cancelled while authorization is pending",
     withTempDirectory(async (directory) => {
@@ -6237,23 +6197,15 @@ describe("§7 concurrent sandbox execution", () => {
       const release = Promise.withResolvers<void>();
       const controller = new AbortController();
       const originalAuthorize = Guardrail.prototype.authorizeCommand;
-      const runtime = SandboxRunner.prototype as unknown as {
-        runSandboxProcess: () => Promise<{ exitCode: number; stdout: Buffer; stderr: Buffer }>;
-      };
-      const originalProcess = runtime.runSandboxProcess;
-      let starts = 0;
+      let launches = 0;
+      const restore = stubWorkerLaunch(() => {
+        launches++;
+        return { command: "bun", args: [WORKER_ENTRYPOINT, "--worker"] };
+      });
       Guardrail.prototype.authorizeCommand = async function (...args) {
         entered.resolve();
         await release.promise;
         return originalAuthorize.apply(this, args);
-      };
-      runtime.runSandboxProcess = async () => {
-        starts++;
-        return {
-          exitCode: 0,
-          stdout: Buffer.from(JSON.stringify({ ok: true, result: { content: [], details: {} } })),
-          stderr: Buffer.alloc(0),
-        };
       };
       try {
         const request = api.execute({
@@ -6261,6 +6213,7 @@ describe("§7 concurrent sandbox execution", () => {
           toolName: "bash",
           params: { command: "echo late" },
           signal: controller.signal,
+          executor,
           context: { hasUI: false } as ExtensionToolContext,
         });
         const rejected = assert.rejects(request, /cancelled during authorization/);
@@ -6268,17 +6221,17 @@ describe("§7 concurrent sandbox execution", () => {
         controller.abort(new Error("cancelled during authorization"));
         release.resolve();
         await rejected;
-        assert.equal(starts, 0);
+        assert.equal(launches, 0);
       } finally {
         release.resolve();
         Guardrail.prototype.authorizeCommand = originalAuthorize;
-        runtime.runSandboxProcess = originalProcess;
+        restore();
       }
     }),
   );
 
   it(
-    "starts all API requests before any sandbox finishes",
+    "hands all API requests to the worker before any of them finishes",
     withTempDirectory(async (directory) => {
       const config = join(directory, "config.yaml");
       writeFileSync(config, `write:\n  - allow: "${directory}"\n`);
@@ -6290,29 +6243,21 @@ describe("§7 concurrent sandbox execution", () => {
         } as unknown as ExtensionAPI,
         config,
       );
-      const runtime = SandboxRunner.prototype as unknown as {
-        runSandboxProcess: () => Promise<{ exitCode: number; stdout: Buffer; stderr: Buffer }>;
-      };
-      const original = runtime.runSandboxProcess;
-      const release = Promise.withResolvers<void>();
-      const allStarted = Promise.withResolvers<void>();
-      let starts = 0;
-      runtime.runSandboxProcess = async () => {
-        if (++starts === 8) allStarted.resolve();
-        await release.promise;
-        return {
-          exitCode: 0,
-          stdout: Buffer.from(
-            JSON.stringify({
-              ok: true,
-              result: { content: [{ type: "text", text: "done" }], details: {} },
-            }),
-          ),
-          stderr: Buffer.alloc(0),
-        };
-      };
+      const log = join(directory, "arrivals.log");
+      const releasePath = join(directory, "release");
+      const script = [
+        "while IFS= read -r request; do",
+        '  (echo "$request" >> ' + log + "; until [ -e " + releasePath + " ]; do sleep 0.02; done;",
+        '   id=${request#*\\"id\\":}; id=${id%%,*};',
+        '   echo "{\\"id\\":$id,\\"ok\\":true,\\"result\\":{\\"content\\":[{\\"type\\":\\"text\\",\\"text\\":\\"done\\"}],\\"details\\":{}}}") &',
+        "done; wait",
+      ].join(" ");
+      let launches = 0;
+      const restore = stubWorkerLaunch(() => {
+        launches++;
+        return { command: "bash", args: ["-c", script] };
+      });
       const requests: ReturnType<typeof api.execute>[] = [];
-      let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
         requests.push(
           ...Array.from({ length: 8 }, (_, index) =>
@@ -6320,30 +6265,26 @@ describe("§7 concurrent sandbox execution", () => {
               id: `parallel-${index}`,
               toolName: "write",
               params: { path: join(directory, `output-${index}.txt`), content: "fixture" },
+              executor,
               context: { hasUI: false } as ExtensionToolContext,
             }),
           ),
         );
-        await Promise.race([
-          allStarted.promise,
-          new Promise<never>((_resolve, reject) => {
-            timeout = setTimeout(
-              () => reject(new Error("API requests waited for another sandbox")),
-              1_000,
-            );
-          }),
-        ]);
-        assert.equal(starts, 8);
-        release.resolve();
+        const deadline = Date.now() + 8_000;
+        while (!existsSync(log) || readFileSync(log, "utf8").trim().split("\n").length < 8) {
+          assert.ok(Date.now() < deadline, "API requests waited for another request to finish");
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        assert.equal(launches, 1, "all requests share one worker");
+        writeFileSync(releasePath, "release");
         const results = await Promise.all(requests);
         assert.equal(results.length, 8);
         for (const result of results)
           assert.deepEqual(result.content, [{ type: "text", text: "done" }]);
       } finally {
-        clearTimeout(timeout);
-        release.resolve();
+        writeFileSync(releasePath, "release");
         await Promise.allSettled(requests);
-        runtime.runSandboxProcess = original;
+        restore();
       }
     }),
   );

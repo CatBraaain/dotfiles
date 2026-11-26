@@ -7,6 +7,7 @@ import { parse as parseYaml } from "yaml";
 import { parseCommandSegments, type CommandSegment, type TokenRange } from "./command-parser.ts";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { isDrivePath, WindowsPathLookup, type PathCoverage } from "./windows-path-identity.ts";
 
 export type PathAction = "allow" | "deny" | "ask";
@@ -29,7 +30,7 @@ export type CommandAction = PathAction | "ask_with_reason";
 
 export type ToolName = "read" | "write" | "edit" | "grep" | "find" | "ls" | "bash";
 
-/** Session metadata forwarded to run-tools so the sandboxed bash tool can expose PI_* env vars. */
+/** Session metadata forwarded to the worker so the sandboxed bash tool can expose PI_* env vars. */
 export type ToolSession = {
   sessionId?: string;
   sessionFile?: string;
@@ -37,6 +38,25 @@ export type ToolSession = {
   modelId?: string;
   reasoningLevel?: string;
 };
+
+export type ExecutorDescriptor = { entrypoint: string; data?: Record<string, unknown> };
+
+export type ToolRequest = {
+  toolCallId?: string;
+  params: unknown;
+  session?: ToolSession;
+  executorData?: Record<string, unknown>;
+  cwd?: string;
+};
+
+export type WorkerRequestMessage = { id: number; tool: ToolName; request: ToolRequest };
+export type WorkerCancelMessage = { id: number; cancel: true };
+export type WorkerResponseMessage =
+  | { id: number; ok: true; result: AgentToolResult<unknown> }
+  | { id: number; ok: false; error: string };
+export type WorkerProgressMessage = { id: number; stderr: string };
+export type ExtensionToWorkerMessage = WorkerRequestMessage | WorkerCancelMessage;
+export type WorkerToExtensionMessage = WorkerResponseMessage | WorkerProgressMessage;
 
 /** One `{action: pattern(s)}` element of the flat rule lists (SPEC §6). */
 type PathRuleEntry = { action: PathAction; patterns: string[] };

@@ -4,41 +4,44 @@ import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSy
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { realBwrapTest } from "./bwrap-test-support.ts";
+import { realBwrapTest, WORKER_ENTRYPOINT } from "./bwrap-test-support.ts";
 import { Guardrail } from "./guardrail.ts";
-import { SandboxRunner } from "./sandbox-runner.ts";
+import { WorkerPool } from "./worker-pool.ts";
 import type { SandboxMode } from "./sandbox.ts";
+
+const WORKER = { entrypoint: WORKER_ENTRYPOINT, data: { supportsImages: false } };
 
 describe("real bwrap safety boundaries", () => {
   for (const mode of ["fs", "bash"] as const) {
     realBwrapTest(
       `${mode} rejects writes outside allow with EROFS`,
-      withSandbox(async ({ directory, runner, observe }) => {
+      withSandbox(async ({ directory, pool, observe }) => {
         const allowed = join(directory, "allowed", "output");
         const blocked = join(directory, "outside");
-        const allowedResult = await observe(runner, "write", allowed, mode);
-        const blockedResult = await observe(runner, "write", blocked, mode);
-        assert.equal(allowedResult, "written");
-        assert.deepEqual(blockedResult, { code: "EROFS" });
+        const allowedResult = await observe(mode, "write", { path: allowed, content: "x" });
+        const blockedResult = await observe(mode, "write", { path: blocked, content: "x" });
+        assert.equal(allowedResult.error, undefined);
+        assert.match(blockedResult.error ?? "", /EROFS/);
+        assert.equal(readFileSync(allowed, "utf8"), "x");
       }),
     );
 
     realBwrapTest(
       `${mode} permits writes after a dynamic directory grant`,
-      withSandbox(async ({ directory, policy, runner, observe }) => {
+      withSandbox(async ({ directory, policy, pool, observe }) => {
         const target = join(directory, "requested");
         const path = join(target, "output");
         mkdirSync(target);
-        const beforeGrant = await observe(runner, "write", path, mode);
-        assert.deepEqual(beforeGrant, { code: "EROFS" });
+        const beforeGrant = await observe(mode, "write", { path, content: "sandbox write" });
+        assert.match(beforeGrant.error ?? "", /EROFS/);
         const grant = await policy.requestWritePermission(target, "Test a synthetic fixture", {
           hasUI: true,
           ui: { confirm: async () => true },
         });
         assert.equal(grant.status, "granted");
         assert.equal(grant.grantedPath, target);
-        const afterGrant = await observe(runner, "write", path, mode);
-        assert.equal(afterGrant, "written");
+        const afterGrant = await observe(mode, "write", { path, content: "sandbox write" });
+        assert.equal(afterGrant.error, undefined);
         assert.equal(readFileSync(path, "utf8"), "sandbox write");
       }),
     );
@@ -47,23 +50,22 @@ describe("real bwrap safety boundaries", () => {
   for (const protectedKind of ["denied", "credential"] as const) {
     realBwrapTest(
       `fs hides ${protectedKind} file and directory contents`,
-      withSandbox(async ({ directory, runner, observe }) => {
+      withSandbox(async ({ directory, observe }) => {
         const file = join(directory, `${protectedKind}-file`);
         const folder = join(directory, `${protectedKind}-directory`);
         const secret = "synthetic secret";
         writeFileSync(file, secret);
         writeFileSync(join(folder, "secret"), secret);
-        const fileContents = await observe(runner, "read", file, "fs");
-        const directoryContents = await observe(runner, "list", folder, "fs");
+        const fileContents = await observe("fs", "read", { path: file });
+        const directoryContents = await observe("fs", "ls", { path: folder });
         assert.ok(
-          fileContents === "" ||
-            (typeof fileContents === "object" &&
-              fileContents !== null &&
-              "code" in fileContents &&
-              ["EACCES", "ENOENT"].includes(String(fileContents.code))),
+          fileContents.text === "" || /EACCES|ENOENT/.test(fileContents.error ?? ""),
           `masked file result: ${JSON.stringify(fileContents)}`,
         );
-        assert.deepEqual(directoryContents, []);
+        assert.ok(
+          directoryContents.error === undefined && !directoryContents.text.includes("secret"),
+          `masked directory result: ${JSON.stringify(directoryContents)}`,
+        );
         assert.equal(readFileSync(file, "utf8"), secret);
         assert.equal(readFileSync(join(folder, "secret"), "utf8"), secret);
       }),
@@ -72,7 +74,7 @@ describe("real bwrap safety boundaries", () => {
 
   realBwrapTest(
     "bash shares the host network namespace and reaches its loopback server",
-    withSandbox(async ({ directory, runner }) => {
+    withSandbox(async ({ directory, pool }) => {
       const marker = "host loopback reached";
       const server = createServer((socket) => socket.end(marker));
       await new Promise<void>((resolve, reject) => {
@@ -93,10 +95,10 @@ describe("real bwrap safety boundaries", () => {
           socket.on("data", (data) => process.stdout.write(data));
           socket.on("error", (error) => { console.error(error); process.exitCode = 1; });`,
         );
-        const result = await runner.runTool(
+        const result = await pool.runTool(
           "bash",
           { command: `bun ${JSON.stringify(client)}` },
-          { mode: "bash" },
+          { mode: "bash", executor: WORKER },
         );
         assert.equal(result.isError, undefined);
         const output = result.content
@@ -112,16 +114,17 @@ describe("real bwrap safety boundaries", () => {
   );
 });
 
+type Observation = { text: string; error?: string };
+
 type SandboxFixture = {
   directory: string;
   policy: Guardrail;
-  runner: SandboxRunner;
+  pool: WorkerPool;
   observe: (
-    runner: SandboxRunner,
-    operation: "read" | "list" | "write",
-    path: string,
     mode: SandboxMode,
-  ) => Promise<unknown>;
+    tool: "read" | "ls" | "write",
+    params: Record<string, unknown>,
+  ) => Promise<Observation>;
 };
 
 function withSandbox(test: (fixture: SandboxFixture) => Promise<void>): () => Promise<void> {
@@ -143,41 +146,26 @@ function withSandbox(test: (fixture: SandboxFixture) => Promise<void>): () => Pr
           credentials: [credentialFile, credentialDirectory],
         }),
       );
-      const entrypoint = join(directory, "observe.ts");
-      writeFileSync(
-        entrypoint,
-        `import { readFileSync, readdirSync, writeFileSync } from "node:fs";
-        const { params } = JSON.parse(readFileSync(0, "utf8"));
-        let observed;
-        try {
-          switch (params.operation) {
-            case "read": observed = readFileSync(params.path, "utf8"); break;
-            case "list": observed = readdirSync(params.path); break;
-            case "write": writeFileSync(params.path, "sandbox write"); observed = "written"; break;
-            default: throw new Error("Unknown observation");
-          }
-        } catch (error) { observed = { code: error.code }; }
-        console.log(JSON.stringify({ ok: true, result: { content: [], details: { observed } } }));`,
-      );
       const policy = new Guardrail(directory, config);
-      const runner = new SandboxRunner(directory, (mode) => policy.buildArgs(mode));
+      const pool = new WorkerPool(directory, (mode) => policy.buildArgs(mode));
       async function observe(
-        runner: SandboxRunner,
-        operation: "read" | "list" | "write",
-        path: string,
         mode: SandboxMode,
-      ): Promise<unknown> {
-        const result = await runner.runTool(
-          "read",
-          { operation, path },
-          {
-            mode,
-            executor: { entrypoint },
-          },
-        );
-        return result.details.observed;
+        tool: "read" | "ls" | "write",
+        params: Record<string, unknown>,
+      ): Promise<Observation> {
+        try {
+          const result = await pool.runTool(tool, params, { mode, executor: WORKER });
+          return {
+            text: result.content
+              .filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("\n"),
+          };
+        } catch (error) {
+          return { text: "", error: error instanceof Error ? error.message : String(error) };
+        }
       }
-      await test({ directory, policy, runner, observe });
+      await test({ directory, policy, pool, observe });
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

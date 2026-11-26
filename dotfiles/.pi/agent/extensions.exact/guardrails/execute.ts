@@ -5,13 +5,13 @@ import type {
   ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
 import { Guardrail, writeApprovalNote, type PathApproval, type ToolContext } from "./guardrail.ts";
-import { SandboxRunner, type ExecutorDescriptor } from "./sandbox-runner.ts";
+import type { WorkerPool } from "./worker-pool.ts";
 import { withNormalizedPath } from "./normalize-path.ts";
-import type { ToolName, ToolSession } from "./config.ts";
+import type { ExecutorDescriptor, ToolName, ToolSession } from "./config.ts";
 
 export async function executeGuardedTool(
   guardrail: Guardrail,
-  runner: SandboxRunner,
+  pool: Pick<WorkerPool, "runTool">,
   cwd: string,
   request: GuardedToolRequest,
 ): Promise<AgentToolResult<unknown>> {
@@ -30,38 +30,25 @@ export async function executeGuardedTool(
     commandApproved = await guardrail.authorizeCommand(params.command as string, context);
   } else {
     const path = params.path as string;
-    if (toolName !== "write")
-      await guardrail.authorizePath(
-        "read",
-        path,
-        context,
-        toolName === "read" && process.platform === "win32" ? signal : undefined,
-      );
+    if (toolName !== "write") await guardrail.authorizePath("read", path, context);
     if (toolName === "write" || toolName === "edit") {
       approval = await guardrail.authorizePath("write", path, context);
     }
   }
   signal?.throwIfAborted();
-  if (toolName === "read" && process.platform === "win32") {
-    return runner.runWindowsRead(params, {
-      authorize: async (path, authorizationSignal) => {
-        await guardrail.authorizePath("read", path, context, authorizationSignal);
-      },
-      executor: request.executor,
-      signal,
-    });
-  }
-  if (toolName === "read" && process.platform === "linux" && !runner.sandboxed())
-    throw new Error("Read requires fs sandbox isolation");
-  const result = await runner.runTool(toolName as ToolName, params, {
-    mode: toolName === "bash" ? "bash" : "fs",
+  const isBash = toolName === "bash";
+  const result = await pool.runTool(toolName as ToolName, params, {
+    mode: isBash ? "bash" : "fs",
     executor: request.executor,
     signal,
-    session: toolName === "bash" ? sessionFromContext(context) : undefined,
-    onData: toolName === "bash" && onUpdate ? stderrLineUpdater(onUpdate) : undefined,
+    session: isBash ? sessionFromContext(context) : undefined,
+    onStderrLine:
+      isBash && onUpdate
+        ? (line) => onUpdate({ content: [{ type: "text", text: line }], details: {} })
+        : undefined,
   });
   const notes: string[] = [];
-  if (toolName === "bash") {
+  if (isBash) {
     const text = result.content.map((part) => (part.type === "text" ? part.text : "")).join("");
     if (text.includes("Read-only file system")) notes.push(EROFS_HINT);
     if (commandApproved) notes.push(COMMAND_APPROVAL_NOTE);
@@ -84,7 +71,7 @@ export type GuardedToolRequest = {
   id: string;
   toolName: string;
   params: Record<string, unknown>;
-  executor?: ExecutorDescriptor;
+  executor: ExecutorDescriptor;
   signal?: AbortSignal;
   onUpdate?: (result: AgentToolResult<unknown>) => void;
   context: GuardedToolContext;
@@ -102,24 +89,5 @@ function sessionFromContext(context: GuardedToolContext): ToolSession {
     provider: context?.model?.provider,
     modelId: context?.model?.id,
     reasoningLevel: context?.thinkingLevel,
-  };
-}
-
-function stderrLineUpdater(
-  onUpdate: (partialResult: AgentToolResult<any>) => void,
-): (data: Buffer, stream: "stdout" | "stderr") => void {
-  let pending = Buffer.alloc(0);
-  return (data, stream) => {
-    if (stream !== "stderr") return;
-    pending = Buffer.concat([pending, data]);
-    for (
-      let newlineAt = pending.indexOf(0x0a);
-      newlineAt !== -1;
-      newlineAt = pending.indexOf(0x0a)
-    ) {
-      const line = pending.subarray(0, newlineAt).toString("utf8").replace(/\r$/, "");
-      pending = pending.subarray(newlineAt + 1);
-      if (line !== "") onUpdate({ content: [{ type: "text", text: line }], details: {} });
-    }
   };
 }

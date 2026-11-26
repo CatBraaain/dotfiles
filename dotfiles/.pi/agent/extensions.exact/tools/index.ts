@@ -22,10 +22,10 @@ import {
 import { rewriteBashCommand } from "./rtk.ts";
 import { modelSupportsImages } from "../shared/image-input.ts";
 
-const READ_ENTRYPOINT = fileURLToPath(new URL("./read.ts", import.meta.url));
+const WORKER_ENTRYPOINT = fileURLToPath(new URL("./run-tools.ts", import.meta.url));
 
 export default function toolsExtension(pi: ExtensionAPI, configPath?: string): void {
-  const { guardrails, initializationError } = initializeGuardrails(pi, configPath);
+  const guardrails = initializeGuardrails(pi, configPath);
   const cwd = process.cwd();
   const bash = createBashTool(cwd);
   const definitions = [
@@ -38,7 +38,7 @@ export default function toolsExtension(pi: ExtensionAPI, configPath?: string): v
     bash,
   ];
   for (const definition of definitions) {
-    const execute = createGuardedExecutor(definition, guardrails, initializationError);
+    const execute = createGuardedExecutor(definition, guardrails);
     registerGuardedTool(pi, definition, execute);
   }
 }
@@ -50,24 +50,22 @@ type GuardedExecutor = (
 function createGuardedExecutor(
   definition: ToolDefinition,
   guardrails: Pick<GuardrailsAPI, "execute">,
-  initializationError: unknown,
 ): GuardedExecutor {
   return async function execute(request) {
     const model = request.context?.model;
-    const executor =
-      initializationError === undefined && definition.name === "read"
+    const readData =
+      definition.name === "read"
         ? {
-            entrypoint: READ_ENTRYPOINT,
             data: {
               supportsImages: modelSupportsImages(model ?? {}),
               provider: model?.provider,
               modelId: model?.id,
             },
           }
-        : undefined;
+        : {};
     return guardrails.execute({
       ...request,
-      executor,
+      executor: { entrypoint: WORKER_ENTRYPOINT, ...readData },
       toolName: definition.name,
     });
   };
@@ -96,22 +94,19 @@ function registerGuardedTool(
 function initializeGuardrails(
   pi: ExtensionAPI,
   configPath?: string,
-): { guardrails: Pick<GuardrailsAPI, "execute">; initializationError?: unknown } {
+): Pick<GuardrailsAPI, "execute"> {
   try {
     const guardrails = createGuardrailsAPI(pi, configPath);
     publishDirectoryWriteAccess(pi, guardrails);
-    return { guardrails };
+    return guardrails;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     pi.on("session_start", (_event, context) => {
       context.ui.notify(message, "error");
     });
     return {
-      initializationError: error,
-      guardrails: {
-        async execute() {
-          throw error;
-        },
+      async execute() {
+        throw error;
       },
     };
   }

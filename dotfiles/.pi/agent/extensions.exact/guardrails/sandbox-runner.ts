@@ -10,26 +10,10 @@ import {
   rmdirSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { getPackageDir, type AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { type ToolName, type ToolSession, sanitizeSandboxEnvironment } from "./config.ts";
+import { type ExecutorDescriptor, sanitizeSandboxEnvironment } from "./config.ts";
 import type { SandboxMode } from "./sandbox.ts";
-
-export type ExecutorDescriptor = { entrypoint: string; data?: Record<string, unknown> };
-
-type RunOptions = {
-  input?: string | Buffer;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  onData?: (data: Buffer, stream: "stdout" | "stderr") => void;
-  signal?: AbortSignal;
-  timeout?: number;
-  mode?: SandboxMode;
-  cooperativeCancellation?: boolean;
-  maxOutputBytes?: number;
-  authorizeReadPath?: (path: string, signal: AbortSignal) => Promise<void>;
-  sandbox?: { args: string[]; mountFds: number[] };
-};
+import type { WorkerPool } from "./worker-pool.ts";
 
 export type ScopedExecution = {
   executable: string;
@@ -47,6 +31,21 @@ export type ScopedExecution = {
     validate(): void;
   };
 };
+
+type RunOptions = {
+  input?: string;
+  signal?: AbortSignal;
+  timeout: number;
+  maxOutputBytes: number;
+  sandbox: { args: string[]; mountFds: number[] };
+};
+
+type RunResult = { exitCode: number | null; stdout: Buffer; stderr: Buffer };
+
+type BuildArgs = (mode: SandboxMode, commandCwd?: string, readOnly?: boolean) => string[];
+
+const SCOPED_TIMEOUT_SECONDS = 60;
+const SCOPED_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
 
 function scopedShellCommand(argv: readonly string[], env: NodeJS.ProcessEnv): string {
   function shellArg(value: string): string {
@@ -76,121 +75,33 @@ function validateMountDirectory(path: string): void {
     throw new Error(`Invalid scoped execution directory: ${path}`);
 }
 
-function validateExecutor(executor: ExecutorDescriptor | undefined): void {
-  if (
-    executor !== undefined &&
-    (typeof executor.entrypoint !== "string" ||
-      !isAbsolute(executor.entrypoint) ||
-      executor.entrypoint.includes("\0"))
-  )
-    throw new Error("Executor entrypoint must be an absolute file path");
-}
-
-type RunResult = { exitCode: number | null; stdout: Buffer; stderr: Buffer };
-
-type RunToolsResponse = { ok: true; result: AgentToolResult<any> } | { ok: false; error: string };
-
-// bwrap relies on Linux-only user namespaces; every other platform runs the
-// worker as a direct child process with authorization checks only.
-function platformSandboxes(): boolean {
-  return process.platform === "linux";
-}
-
 export class SandboxRunner {
-  private readonly runToolsPath = join(dirname(fileURLToPath(import.meta.url)), "run-tools.ts");
-  private readonly piPackageDir = getPackageDir();
-
   constructor(
     private readonly cwd: string,
-    readonly buildArgs: (mode: SandboxMode, commandCwd?: string, readOnly?: boolean) => string[],
-    readonly sandboxed: () => boolean = platformSandboxes,
+    private readonly buildArgs: BuildArgs,
+    private readonly pool: WorkerPool,
   ) {}
 
-  async runWindowsRead(
-    params: Record<string, unknown>,
-    options: {
-      authorize: NonNullable<RunOptions["authorizeReadPath"]>;
-      executor?: ExecutorDescriptor;
-      signal?: AbortSignal;
-    },
-  ): Promise<AgentToolResult<unknown>> {
-    if (process.platform !== "win32" || this.sandboxed())
-      throw new Error("Windows read requires a native worker");
-    const { authorize, executor, signal } = options;
-    validateExecutor(executor);
-    const execution = await this.run("bun", [this.runToolsPath, "windows-read"], {
-      input: JSON.stringify({
-        params,
-        openedReadExecutor: executor?.entrypoint,
-        executorData: executor?.data,
-      }),
-      authorizeReadPath: authorize,
-      signal,
-      env: { GUARDRAIL_PI_PACKAGE_DIR: this.piPackageDir },
-    });
-    const response = parseRunToolsResponse(execution);
-    if (!response.ok) throw new Error(response.error);
-    return response.result;
-  }
-
-  async runTool(
-    toolName: ToolName,
-    params: unknown,
-    options: {
-      mode: SandboxMode;
-      cwd?: string;
-      executor?: ExecutorDescriptor;
-      signal?: AbortSignal;
-      session?: ToolSession;
-      onData?: (data: Buffer, stream: "stdout" | "stderr") => void;
-    },
-  ): Promise<AgentToolResult<any>> {
-    options.signal?.throwIfAborted();
-    const entrypoint = options.executor?.entrypoint ?? this.runToolsPath;
-    validateExecutor(options.executor);
-    const request = JSON.stringify({
-      toolCallId: "cli",
-      params,
-      session: options.session,
-      executorData: options.executor?.data,
-    });
-    const cooperativeCancellation = toolName === "bash" && options.executor === undefined;
-    const execution = await this.run(
-      "bun",
-      [entrypoint, toolName, ...(cooperativeCancellation ? ["--cancel-on-stdin-close"] : [])],
-      {
-        input: request,
-        cwd: options.cwd,
-        cooperativeCancellation,
-        mode: options.mode,
-        ...(toolName === "read" && this.sandboxed()
-          ? { sandbox: { args: this.buildArgs("fs", options.cwd, true), mountFds: [] } }
-          : {}),
-        signal: options.signal,
-        env: { ...process.env, GUARDRAIL_PI_PACKAGE_DIR: this.piPackageDir },
-        onData: options.onData,
-      },
-    );
-    const response = parseRunToolsResponse(execution);
-    if (!response.ok) throw new Error(response.error);
-    return response.result;
+  private sandboxed(): boolean {
+    return this.pool.sandboxed();
   }
 
   async runScopedExecution(
     call: ScopedExecution,
     protectedPaths: readonly string[],
     signal: AbortSignal,
+    executor: ExecutorDescriptor,
   ): Promise<AgentToolResult<unknown>> {
     const { executable, args, cwd, env, write, allowedCodes } = call;
     if (!this.sandboxed()) {
       write?.validate();
-      const result = await this.runTool(
+      const result = await this.pool.runTool(
         "bash",
         {
           command: scopedShellCommand([executable, ...args], env),
-          timeout: 60,
+          timeout: SCOPED_TIMEOUT_SECONDS,
         },
-        { mode: "bash", cwd, signal },
+        { mode: "bash", cwd, signal, executor, timeout: SCOPED_TIMEOUT_SECONDS },
       );
       const output = result.structuredContent as {
         output?: string;
@@ -217,7 +128,7 @@ export class SandboxRunner {
     const created = new Map<string, { dev: bigint; ino: bigint }>();
     const sandboxArgs = write
       ? ["--die-with-parent", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev"]
-      : this.buildArgs("bash", cwd, true);
+      : [...this.buildArgs("bash", cwd, true)];
     sandboxArgs.push("--unshare-pid", "--unshare-net", "--clearenv");
     for (const [name, value] of Object.entries(env))
       if (value !== undefined) sandboxArgs.push("--setenv", name, value);
@@ -265,8 +176,8 @@ export class SandboxRunner {
       const result = await this.run(executable, [...args], {
         ...(write?.readOnlyFile ? { input: write.readOnlyFile.contents } : {}),
         sandbox: { args: sandboxArgs, mountFds: mounts },
-        timeout: 60,
-        maxOutputBytes: 8 * 1024 * 1024,
+        timeout: SCOPED_TIMEOUT_SECONDS,
+        maxOutputBytes: SCOPED_OUTPUT_LIMIT_BYTES,
         signal,
       });
       const decode = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
@@ -300,184 +211,63 @@ export class SandboxRunner {
     return outcome;
   }
 
-  private run(
-    command: string,
-    commandArgs: string[],
-    options: RunOptions = {},
-  ): Promise<RunResult> {
-    options.signal?.throwIfAborted();
-    return this.runSandboxProcess(command, commandArgs, options);
-  }
-
-  private runSandboxProcess(
-    command: string,
-    commandArgs: string[],
-    options: RunOptions,
-  ): Promise<RunResult> {
+  private run(command: string, commandArgs: string[], options: RunOptions): Promise<RunResult> {
     return new Promise((resolveRun, rejectRun) => {
       options.signal?.throwIfAborted();
-      const environment = sanitizeSandboxEnvironment({
-        ...process.env,
-        ...options.env,
+      const child = spawn("bwrap", [...options.sandbox.args, command, ...commandArgs], {
+        cwd: this.cwd,
+        env: sanitizeSandboxEnvironment({
+          ...process.env,
+          GUARDRAIL_PI_PACKAGE_DIR: getPackageDir(),
+        }),
+        stdio: [
+          options.input === undefined ? "ignore" : "pipe",
+          "pipe",
+          "pipe",
+          ...options.sandbox.mountFds,
+        ],
       });
-      const isolated = this.sandboxed();
-      if (options.sandbox && !isolated) throw new Error("bwrap isolation is unavailable");
-      const child = spawn(
-        isolated ? "bwrap" : command,
-        isolated
-          ? [
-              ...(options.sandbox?.args ?? this.buildArgs(options.mode ?? "fs")),
-              command,
-              ...commandArgs,
-            ]
-          : commandArgs,
-        {
-          cwd: options.cwd ?? this.cwd,
-          env: environment,
-          stdio: [
-            options.input === undefined ? "ignore" : "pipe",
-            "pipe",
-            "pipe",
-            ...(options.authorizeReadPath ? ["ipc" as const] : (options.sandbox?.mountFds ?? [])),
-          ],
-        },
-      );
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
-      let timedOut = false;
       let outputBytes = 0;
       let outputExceeded = false;
+      let timedOut = false;
       let processError: Error | undefined;
       let inputError: Error | undefined;
-      let authorizationError: { cause: unknown } | undefined;
-      let receivedAuthorizationRequest = false;
-      let authorized = false;
-      const authorizeReadPath = options.authorizeReadPath;
-      const authorization = authorizeReadPath ? new AbortController() : undefined;
-      function failAuthorization(cause: unknown): void {
-        authorizationError ??= { cause };
-        child.kill("SIGKILL");
-      }
-      if (authorizeReadPath && authorization) {
-        child.once("disconnect", () => {
-          if (!authorized)
-            authorization.abort(new Error("Windows read authorization channel closed"));
-        });
-        child.on("message", (message: unknown) => {
-          if (!child.connected || authorizationError || options.signal?.aborted) return;
-          if (
-            receivedAuthorizationRequest ||
-            typeof message !== "string" ||
-            !isAbsolute(message) ||
-            message.includes("\0")
-          ) {
-            failAuthorization(new Error("Invalid opened file path from Windows read worker"));
-            return;
-          }
-          receivedAuthorizationRequest = true;
-          void authorizeReadPath(message, authorization.signal)
-            .then(() => {
-              if (!child.connected || authorizationError || options.signal?.aborted) return;
-              child.send(true, (error) => {
-                if (error) failAuthorization(error);
-              });
-              authorized = true;
-            })
-            .catch(failAuthorization);
-        });
-      }
-      function stopExecution(): void {
-        if (options.cooperativeCancellation) child.stdin?.end();
-        else child.kill("SIGKILL");
-      }
+      const onAbort = () => child.kill("SIGKILL");
       child.stdin?.on("error", (error: Error) => {
         inputError = error;
       });
-      const timeoutHandle =
-        options.timeout && options.timeout > 0
-          ? setTimeout(() => {
-              timedOut = true;
-              stopExecution();
-            }, options.timeout * 1000)
-          : undefined;
-      const onAbort = () => {
-        authorization?.abort(options.signal?.reason);
-        stopExecution();
-      };
+      const timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, options.timeout * 1000);
       options.signal?.addEventListener("abort", onAbort, { once: true });
       function collect(buffers: Buffer[], chunk: Buffer): void {
         outputBytes += chunk.length;
-        if (options.maxOutputBytes !== undefined && outputBytes > options.maxOutputBytes) {
-          if (!outputExceeded) stopExecution();
+        if (outputBytes > options.maxOutputBytes) {
+          if (!outputExceeded) child.kill("SIGKILL");
           outputExceeded = true;
         } else buffers.push(chunk);
       }
-      child.stdout?.on("data", (chunk: Buffer) => {
-        collect(stdout, chunk);
-        options.onData?.(chunk, "stdout");
-      });
-      child.stderr?.on("data", (chunk: Buffer) => {
-        collect(stderr, chunk);
-        options.onData?.(chunk, "stderr");
-      });
+      child.stdout?.on("data", (chunk: Buffer) => collect(stdout, chunk));
+      child.stderr?.on("data", (chunk: Buffer) => collect(stderr, chunk));
       child.on("error", (error: Error) => {
         processError = error;
       });
       child.on("close", (exitCode) => {
-        authorization?.abort(new Error("Windows read worker closed"));
-        if (timeoutHandle) clearTimeout(timeoutHandle);
+        clearTimeout(timeoutHandle);
         options.signal?.removeEventListener("abort", onAbort);
-        if (authorizeReadPath && options.signal?.aborted) return rejectRun(options.signal.reason);
-        if (authorizationError) return rejectRun(authorizationError.cause);
-        if (authorizeReadPath && exitCode === 0 && !authorized)
-          return rejectRun(new Error("Windows read worker returned before authorization"));
         if (processError) return rejectRun(processError);
         if (outputExceeded) return rejectRun(new Error("Scoped command output exceeds the limit"));
         if (inputError)
-          return rejectRun(new Error("Sandbox worker input failed", { cause: inputError }));
-        const execution = {
-          exitCode,
-          stdout: Buffer.concat(stdout),
-          stderr: Buffer.concat(stderr),
-        };
-        if (options.cooperativeCancellation && (options.signal?.aborted || timedOut)) {
-          const response = parseRunToolsResponse(execution);
-          if (!response.ok)
-            return rejectRun(
-              new Error(
-                timedOut ? `timeout:${options.timeout}: ${response.error}` : response.error,
-              ),
-            );
-        }
+          return rejectRun(new Error("Scoped command input failed", { cause: inputError }));
         if (options.signal?.aborted) return rejectRun(new Error("aborted"));
         if (timedOut) return rejectRun(new Error(`timeout:${options.timeout}`));
-        resolveRun(execution);
+        resolveRun({ exitCode, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) });
       });
-      if (options.input !== undefined) {
-        if (options.cooperativeCancellation) child.stdin?.write(`${options.input}\n`);
-        else child.stdin?.end(options.input);
-      }
+      if (options.input !== undefined) child.stdin?.end(options.input);
       if (options.signal?.aborted) onAbort();
     });
   }
-}
-
-function parseRunToolsResponse(execution: RunResult): RunToolsResponse {
-  try {
-    const parsed = JSON.parse(execution.stdout.toString("utf8")) as {
-      ok?: boolean;
-      result?: AgentToolResult<any>;
-      error?: string;
-    };
-    if (execution.exitCode === 0 && parsed.ok === true && parsed.result !== undefined)
-      return { ok: true, result: parsed.result };
-    if (parsed.ok === false && typeof parsed.error === "string")
-      return { ok: false, error: parsed.error };
-  } catch {}
-  const stderrText = execution.stderr.toString("utf8").trim();
-  const exitDetail =
-    execution.exitCode !== null
-      ? `run-tools exited with code ${execution.exitCode}`
-      : "run-tools terminated";
-  return { ok: false, error: stderrText || exitDetail };
 }

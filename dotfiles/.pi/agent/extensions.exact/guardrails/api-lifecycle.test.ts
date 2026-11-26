@@ -11,7 +11,9 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "bun:test";
-import { realBwrapTest } from "./bwrap-test-support.ts";
+import { realBwrapTest, WORKER_ENTRYPOINT } from "./bwrap-test-support.ts";
+
+const EXECUTOR = { entrypoint: WORKER_ENTRYPOINT };
 import type {
   ExtensionAPI,
   ExtensionToolContext,
@@ -330,6 +332,7 @@ describe("guardrails API lifetime", () => {
         const result = await grant.run(() =>
           api.execute({
             id: "parent/1",
+            executor: EXECUTOR,
             toolName: "bash",
             params: { command: grant.command },
             signal,
@@ -378,6 +381,7 @@ describe("guardrails API lifetime", () => {
       function execute(id: string, command: string, sessionId = "fixture") {
         return api.execute({
           id,
+          executor: EXECUTOR,
           toolName: "bash",
           params: { command },
           signal,
@@ -438,6 +442,7 @@ describe("guardrails API lifetime", () => {
           return await grant.run(() =>
             api.execute({
               id: "parent/1",
+              executor: EXECUTOR,
               toolName: "bash",
               params: { command: grant.command },
               signal,
@@ -556,6 +561,7 @@ describe("guardrails API lifetime", () => {
       const context = { hasUI: false } as ExtensionToolContext;
       await first.api.execute({
         id: "write",
+        executor: EXECUTOR,
         toolName: "write",
         params: { path, content: "same owner" },
         context,
@@ -565,6 +571,7 @@ describe("guardrails API lifetime", () => {
       await assert.rejects(
         second.api.execute({
           id: "isolated",
+          executor: EXECUTOR,
           toolName: "write",
           params: { path, content: "other instance" },
           context,
@@ -584,6 +591,7 @@ describe("guardrails API lifetime", () => {
       await assert.rejects(
         api.execute({
           id: "old",
+          executor: EXECUTOR,
           toolName: "read",
           params: { path: join(directory, "config.yaml") },
           context,
@@ -606,6 +614,7 @@ describe("guardrails API lifetime", () => {
       context.executeTool = async (name, args, options) => {
         const result = await replacement.api.execute({
           id: "nested",
+          executor: EXECUTOR,
           toolName: name,
           params: args as Record<string, unknown>,
           context,
@@ -624,6 +633,7 @@ describe("guardrails API lifetime", () => {
       };
       const result = await replacement.api.execute({
         id: "new",
+        executor: EXECUTOR,
         toolName: "read",
         params: { path: join(directory, "config.yaml") },
         context,
@@ -652,6 +662,7 @@ describe("guardrails API lifetime", () => {
         );
       const result = await api.execute({
         id: "allowed",
+        executor: EXECUTOR,
         toolName: "bash",
         params: { command: "echo approved" },
         context,
@@ -661,6 +672,7 @@ describe("guardrails API lifetime", () => {
       await assert.rejects(
         api.execute({
           id: "expired",
+          executor: EXECUTOR,
           toolName: "bash",
           params: { command: "echo approved" },
           context,

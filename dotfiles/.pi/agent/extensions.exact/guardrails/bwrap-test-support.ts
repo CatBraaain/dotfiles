@@ -1,5 +1,8 @@
 import { it } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+export const WORKER_ENTRYPOINT = fileURLToPath(new URL("../tools/run-tools.ts", import.meta.url));
 
 export function probeBwrap(
   args = [
