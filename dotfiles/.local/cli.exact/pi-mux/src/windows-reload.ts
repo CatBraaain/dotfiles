@@ -706,16 +706,19 @@ export function verifyWindowsReloadGroup(
         /\s-NoProfile\s+-NonInteractive\s+-EncodedCommand\s+"?([A-Za-z0-9+/]+={0,2})"?\s*$/i,
       )?.[1];
       const script = encodedScript && Buffer.from(encodedScript, "base64").toString("utf16le");
+      const operation = windowsClaimOperation(wrapper, paths.wrapper, verifiedRight);
       if (
         !isPowerShell ||
-        !script?.includes(`'windows-claim-launch' '${verifiedRight}'`) ||
-        !isWindowsClaimWrapper(wrapper, paths.wrapper, verifiedRight) ||
+        !operation ||
+        !script?.includes(`'${operation}' '${verifiedRight}'`) ||
         children(wrapper.pid).length !== 1 ||
         pi.parent !== wrapper.pid
       )
         throw new Error("Cannot verify the Windows pi wrapper and its only child");
       chain.push(wrapper.pid);
-    } else if (!isWindowsClaimWrapper(pane, paths.wrapper, verifiedRight)) {
+    } else if (
+      windowsClaimOperation(pane, paths.wrapper, verifiedRight) !== "windows-claim-launch"
+    ) {
       throw new Error("Cannot verify the Windows pi wrapper executable and assigned launch right");
     }
     chain.push(piPid);
@@ -725,13 +728,19 @@ export function verifyWindowsReloadGroup(
   return chain;
 }
 
-function isWindowsClaimWrapper(row: WindowsProcessRow, wrapper: string, token: string): boolean {
-  if (!sameWindowsPath(row.executable, wrapper)) return false;
+function windowsClaimOperation(
+  row: WindowsProcessRow,
+  wrapper: string,
+  token: string,
+): "windows-claim-launch" | "claim-initial-request" | undefined {
+  if (!sameWindowsPath(row.executable, wrapper)) return;
   const [, first, second, third] = windowsCommandPrefix(row.command, 4);
-  if (first === "windows-claim-launch") return second === token;
-  return (
-    /[\\/]main\.ts$/i.test(first ?? "") && second === "windows-claim-launch" && third === token
-  );
+  const [operation, claimToken] = /[\\/]main\.ts$/i.test(first ?? "")
+    ? [second, third]
+    : [first, second];
+  if (claimToken !== token) return;
+  if (operation === "windows-claim-launch" || operation === "claim-initial-request")
+    return operation;
 }
 
 function windowsCommandPrefix(command: string | null | undefined, count: number): string[] {

@@ -51,7 +51,7 @@ if (id) {
   if (process.env.PI_TMUX_STARTUP_MODE === "create" && !existsSync(file))
     writeFileSync(file, JSON.stringify({ type: "session", version: 3, id, cwd, timestamp: new Date().toISOString() }) + "\n");
   if (argv.includes("--agent")) {
-    const capture = join(process.env.PI_CODING_AGENT_SESSION_DIR, id + ".argv.jsonl");
+    const capture = join(process.env.PI_CODING_AGENT_SESSION_DIR, id + ".argv.log");
     const request = argv.at(-1);
     const inEnvironment = Object.values(process.env).some((value) => value.includes(request));
     appendFileSync(capture, JSON.stringify({ argv, cwd, inEnvironment }) + "\n");
@@ -59,6 +59,7 @@ if (id) {
   const metadata = Buffer.from(JSON.stringify({
     id, cwd, file, pid,
     processPid: process.pid, startup: "ready", token: process.env.PI_TMUX_LAUNCH_TOKEN,
+    reloadReadiness: process.env.PI_MUX_TEST_RELOAD_READINESS === "1" ? "pending" : undefined,
   })).toString("base64");
   tmux("set-option", "-p", "-t", pane, "@pi-tmux-session", metadata);
 } else {
@@ -644,6 +645,7 @@ test.skipIf(!tmux || !node || !isUncPath(uncCwd))(
       PSMUX_DATA_DIR: registry,
       PSMUX_NO_WARM: "1",
       LOCALAPPDATA: root,
+      PI_MUX_TEST_RELOAD_READINESS: "1",
       npm_config_prefix: root,
       PATH: `${root};${dirname(tmux)};${dirname(node)};${process.env.PATH}`,
     };
@@ -684,21 +686,23 @@ test.skipIf(!tmux || !node || !isUncPath(uncCwd))(
       );
       assert.equal(state.id, expectedId);
       assert.equal(state.cwd, uncCwd);
+      const source = {
+        socket,
+        serverPid: Number(serverPid),
+        pane,
+        pid: state.processPid,
+        token: state.token,
+      };
       mux(
         "state",
         expectedId,
         "waiting-user",
         "--source",
-        JSON.stringify({
-          socket,
-          serverPid: Number(serverPid),
-          pane,
-          pid: state.processPid,
-          token: state.token,
-        }),
+        JSON.stringify(source),
         "--title",
         "null",
       );
+      return source;
     }
     try {
       for (const directory of [dirname(conf), extension, sessions, registry])
@@ -716,8 +720,8 @@ test.skipIf(!tmux || !node || !isUncPath(uncCwd))(
       const output = ok([muxExe, "new", "--detached", request], uncCwd);
       const conversation = /^Pi session (\S+)/.exec(output)?.[1];
       assert.ok(conversation, output);
-      verifyPane(conversation);
-      const capture = readFileSync(join(sessions, `${conversation}.argv.jsonl`), "utf8")
+      const startupSource = verifyPane(conversation);
+      const capture = readFileSync(join(sessions, `${conversation}.argv.log`), "utf8")
         .trimEnd()
         .split("\n");
       assert.equal(capture.length, 1);
@@ -740,8 +744,16 @@ test.skipIf(!tmux || !node || !isUncPath(uncCwd))(
         readFileSync(join(sessions, `${conversation}.jsonl`), "utf8"),
       );
       assert.equal(header.cwd, uncCwd);
+      mux(
+        "state",
+        conversation,
+        "--startup-input-drained",
+        "--source",
+        JSON.stringify(startupSource),
+      );
       mux("reload", conversation);
-      verifyPane(conversation);
+      const reloadedSource = verifyPane(conversation);
+      assert.notEqual(reloadedSource.token, startupSource.token);
       mux("stop");
       mux("restore");
       verifyPane(conversation);
@@ -837,7 +849,7 @@ test.skipIf(!tmux || !node)(
         assert.equal(created.exitCode, 0, created.stderr);
         const createdId = /^Pi session ([a-f0-9-]+)\r?$/m.exec(created.stdout)?.[1];
         assert.ok(createdId, created.stdout);
-        const capture = join(sessions, `${createdId}.argv.jsonl`);
+        const capture = join(sessions, `${createdId}.argv.log`);
         await poll(() => existsSync(capture));
 
         const directCapture = join(root, "direct-argv.json");

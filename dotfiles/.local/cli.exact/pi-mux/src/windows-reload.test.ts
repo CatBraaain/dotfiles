@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { firstInputDirectory } from "./pane-inventory";
+import { platformFor } from "./platform";
 import {
   auditWindowsLifecycle,
   windowsPaneIsWaiting,
@@ -796,6 +797,78 @@ it("requires a receipt and a known wrapper with only the attributed child", () =
     [39, 40, 57],
   );
 });
+
+it.each(["compiled", "source"])(
+  "verifies an initial-request launch only with matching PowerShell and wrapper ownership (%s)",
+  (launchMode) => {
+    const right = randomUUID();
+    const invocation =
+      launchMode === "compiled" ? [paths.wrapper] : [paths.wrapper, "C:\\Pi Mux\\main.ts"];
+    const windows = platformFor("win32");
+    function shellFor(operation: string, token: string) {
+      const launch = windows.newSessionLaunch([...invocation, operation, token], {}, ["TEST_ENV"]);
+      const [executable, ...flags] = windows.tmuxPaneCommand(launch.paneCommand);
+      return {
+        pid: 39,
+        parent: 11,
+        executable: executable!,
+        command: `"${executable}" ${flags.join(" ")}`,
+      };
+    }
+    const shell = shellFor("claim-initial-request", right);
+    const wrapper = {
+      pid: 40,
+      parent: shell.pid,
+      executable: paths.wrapper,
+      command: [...invocation, "claim-initial-request", right].map((arg) => `"${arg}"`).join(" "),
+    };
+    const child = { ...piProcess, parent: wrapper.pid };
+    const target = { ...directGroup, panePid: shell.pid, verifiedRight: right };
+    assert.deepEqual(
+      verifyWindowsReloadGroup([peerProcess, shell, wrapper, child], target, paths),
+      [shell.pid, wrapper.pid, child.pid],
+    );
+    for (const [reason, invalidShell, invalidWrapper] of [
+      ["wrong shell operation", shellFor("windows-claim-launch", right), wrapper],
+      ["wrong shell right", shellFor("claim-initial-request", randomUUID()), wrapper],
+      [
+        "wrong wrapper right",
+        shell,
+        { ...wrapper, command: wrapper.command.replace(right, randomUUID()) },
+      ],
+      ["wrong wrapper executable", shell, { ...wrapper, executable: paths.node }],
+    ] as const) {
+      assert.throws(
+        () =>
+          verifyWindowsReloadGroup(
+            [peerProcess, invalidShell, invalidWrapper, child],
+            target,
+            paths,
+          ),
+        /wrapper and its only child/,
+        reason,
+      );
+    }
+    assert.throws(
+      () =>
+        verifyWindowsReloadGroup(
+          [peerProcess, shell, wrapper, child, { ...child, pid: 58 }],
+          target,
+          paths,
+        ),
+      /wrapper and its only child/,
+    );
+    assert.throws(
+      () =>
+        verifyWindowsReloadGroup(
+          [peerProcess, { ...wrapper, parent: peerProcess.pid }, child],
+          { ...target, panePid: wrapper.pid },
+          paths,
+        ),
+      /assigned launch right/,
+    );
+  },
+);
 
 it("rejects a conflicting cwd before recognizing any replaced target", async () => {
   const test = fixture();
