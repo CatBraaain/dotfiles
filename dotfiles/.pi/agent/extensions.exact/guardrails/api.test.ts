@@ -8,6 +8,7 @@ import {
   type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import { execFileSync, spawn } from "node:child_process";
+import * as childProcess from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -860,6 +861,80 @@ describe("§3.a パス文字列の解決", () => {
         section.flatMap((entry) => entry.paths),
         [join(workspacePath, "main-worktrees")],
       );
+    }),
+  );
+
+  it(
+    "resolves the Git worktree once per path decision and once per sandbox build outside Git",
+    withTempDirectory(async (directory) => {
+      const configPath = join(directory, "config.yaml");
+      writeFileSync(
+        configPath,
+        'read:\n  - {allow: "${GIT_MAIN_WORKTREE_PATH}"}\nwrite:\n  - {allow: "${GIT_MAIN_WORKTREE_PATH}"}\n',
+      );
+      const guardrail = new Guardrail(directory, configPath);
+      const path = join(directory, "note.md");
+      const gitCalls = spyOn(childProcess, "execFileSync");
+      try {
+        for (const operation of ["read", "write"] as const) {
+          gitCalls.mockClear();
+          await guardrail.authorizePath(operation, path, { cwd: directory });
+          assert.equal(gitCalls.mock.calls.length, 1, operation);
+        }
+        for (const mode of ["fs", "bash"] as const) {
+          gitCalls.mockClear();
+          guardrail.buildArgs(mode, directory, mode === "fs");
+          assert.equal(gitCalls.mock.calls.length, 1, mode);
+        }
+      } finally {
+        gitCalls.mockRestore();
+      }
+    }),
+  );
+
+  it(
+    "recomputes credential denial and writable mounts after a repository is initialized",
+    withTempDirectory(async (directory) => {
+      const cwd = join(directory, "subdir");
+      const previousWriteRoot = join(cwd, "writable");
+      const newWriteRoot = join(directory, "writable");
+      const credentialPath = join(directory, "protected.txt");
+      mkdirSync(previousWriteRoot, { recursive: true });
+      mkdirSync(newWriteRoot);
+      writeFileSync(credentialPath, "protected");
+      const configPath = join(directory, "config.yaml");
+      writeFileSync(
+        configPath,
+        'read:\n  - {allow: "*"}\nwrite:\n  - {allow: "${GIT_MAIN_WORKTREE_PATH}/writable"}\ncredentials:\n  - "${GIT_MAIN_WORKTREE_PATH}/protected.txt"\n',
+      );
+      const guardrail = new Guardrail(cwd, configPath);
+      await guardrail.authorizePath("read", credentialPath, { cwd });
+      const previousBashArgs = guardrail.buildArgs("bash");
+      assert.ok(
+        previousBashArgs.some(
+          (arg, index) => arg === "--bind-try" && previousBashArgs[index + 1] === previousWriteRoot,
+        ),
+      );
+
+      runGit(directory, ["init"]);
+
+      await assert.rejects(
+        () => guardrail.authorizePath("read", credentialPath, { cwd }),
+        /Access denied for credential path/,
+      );
+      const bashArgs = guardrail.buildArgs("bash");
+      assert.ok(
+        bashArgs.some((arg, index) => arg === "--bind-try" && bashArgs[index + 1] === newWriteRoot),
+      );
+      assert.ok(!bashArgs.includes(previousWriteRoot));
+
+      const readOnlyArgs = guardrail.buildArgs("fs", cwd, true);
+      assert.ok(
+        readOnlyArgs.some(
+          (arg, index) => arg === "--ro-bind-try" && readOnlyArgs[index + 1] === newWriteRoot,
+        ),
+      );
+      assert.ok(!readOnlyArgs.includes("--bind-try"));
     }),
   );
 

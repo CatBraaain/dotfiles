@@ -41,45 +41,36 @@ export function warmGlobCache(config: GuardrailConfig, cwd: string): GlobCache {
   return globCache;
 }
 
-// Path sections are recomputed on every access instead of cached, so
-// Git variables re-run `git worktree list` per authorization and bind
-// decision (§3). Globs stay startup-expanded via globCache.
+export function resolvePolicyWorktreePath(cwd: string): string {
+  return resolveGitMainWorktreePath(cwd) ?? resolve(cwd);
+}
+
 export function readPaths(
   config: GuardrailConfig,
   cwd: string,
   globCache: GlobCache,
 ): ExpandedPathSection {
-  const worktree = resolveGitMainWorktreePath(cwd) ?? resolve(cwd);
-  return expandPathSection(config.read, cwd, true, worktree, globCache);
+  return expandPathSection(config.read, cwd, true, resolvePolicyWorktreePath(cwd), globCache);
 }
 
 export function writePaths(
   config: GuardrailConfig,
   cwd: string,
   globCache: GlobCache,
+  mainWorktree = resolvePolicyWorktreePath(cwd),
 ): ExpandedPathSection {
-  const worktree = resolveGitMainWorktreePath(cwd) ?? resolve(cwd);
-  return expandPathSection(config.write, cwd, false, worktree, globCache).map((entry) =>
+  return expandPathSection(config.write, cwd, false, mainWorktree, globCache).map((entry) =>
     entry.action === "allow" ? { ...entry, paths: [...new Set(entry.paths)] } : entry,
   );
 }
 
-export function credentialPaths(
+export function credentialSnapshot(
   config: GuardrailConfig,
   cwd: string,
   globCache: GlobCache,
-): string[] {
-  return credentialSnapshot(config, cwd, globCache).paths;
-}
-
-export function credentialSnapshot(config: GuardrailConfig, cwd: string, globCache: GlobCache) {
-  return expandPathSnapshot(
-    config.credentials,
-    cwd,
-    resolveGitMainWorktreePath(cwd),
-    false,
-    globCache,
-  );
+  mainWorktree = resolvePolicyWorktreePath(cwd),
+) {
+  return expandPathSnapshot(config.credentials, cwd, mainWorktree, false, globCache);
 }
 
 /**
@@ -94,10 +85,10 @@ export function readActionMatch(
   config: GuardrailConfig,
   cwd: string,
   globCache: GlobCache,
-  candidatePath: string,
-  comparison = new AuthorizationPath(resolve(candidatePath)),
+  comparison: AuthorizationPath,
+  mainWorktree: string,
 ): PathActionMatch {
-  const mainWorktree = resolveGitMainWorktreePath(cwd) ?? resolve(cwd);
+  const candidatePath = comparison.absolutePath;
   const section = expandPathSection(config.read, cwd, true, mainWorktree, globCache);
   const name = repositoryName(cwd, mainWorktree);
   const legacyDenyGlobs = comparison.windows
@@ -140,17 +131,12 @@ function resolvedGlobs(
  * used by fs authorization. `restricted` preserves deny/ask bind ordering
  * for the bash sandbox (§6.1).
  */
-export function writePathsByFinalAction(
-  config: GuardrailConfig,
-  cwd: string,
-  globCache: GlobCache,
-): {
+export function writePathsByFinalAction(section: ExpandedPathSection): {
   allow: string[];
   ask: string[];
   deny: string[];
   restricted: string[];
 } {
-  const section = writePaths(config, cwd, globCache);
   const pathsByAction = {
     allow: new Set<string>(),
     ask: new Set<string>(),
@@ -180,21 +166,15 @@ export function readAllPaths(config: GuardrailConfig): boolean {
   return actionPatterns(config.read, "allow").includes("*");
 }
 
-export function hiddenFsPaths(
+function hiddenFsPaths(
   config: GuardrailConfig,
   cwd: string,
   globCache: GlobCache,
+  mainWorktree: string,
 ): string[] {
-  const gitMainWorktreePath = resolveGitMainWorktreePath(cwd);
   return [
-    ...expandPathPatterns(
-      actionPatterns(config.read, "deny"),
-      cwd,
-      gitMainWorktreePath,
-      false,
-      globCache,
-    ),
-    ...expandPathPatterns(config.credentials, cwd, gitMainWorktreePath, false, globCache),
+    ...expandPathPatterns(actionPatterns(config.read, "deny"), cwd, mainWorktree, false, globCache),
+    ...expandPathPatterns(config.credentials, cwd, mainWorktree, false, globCache),
   ];
 }
 
@@ -207,7 +187,8 @@ export function prepareWriteDirectories(
     process.platform === "win32"
       ? credentialSnapshot(config, cwd, globCache).uncertainSubtrees
       : undefined;
-  for (const path of writePathsByFinalAction(config, cwd, globCache).allow) {
+  const writeSection = writePaths(config, cwd, globCache);
+  for (const path of writePathsByFinalAction(writeSection).allow) {
     if (
       uncertainCredentials &&
       new AuthorizationPath(path).matchesRestriction({
@@ -253,14 +234,12 @@ function addConfiguredMounts(
     mode: SandboxMode;
     readOnly?: boolean;
   },
+  mainWorktree: string,
 ): void {
-  const gitMainWorktreePath = resolveGitMainWorktreePath(input.cwd);
   const writableMountPaths: string[] = [];
-  const { allow: allowFinalPaths, restricted: restrictedFinalPaths } = writePathsByFinalAction(
-    input.config,
-    input.cwd,
-    input.globCache,
-  );
+  const writeSection = writePaths(input.config, input.cwd, input.globCache, mainWorktree);
+  const { allow: allowFinalPaths, restricted: restrictedFinalPaths } =
+    writePathsByFinalAction(writeSection);
 
   function mount(path: string, writable: boolean): void {
     const normalized = resolve(path);
@@ -272,7 +251,7 @@ function addConfiguredMounts(
     for (const path of expandPathPatterns(
       actionPatterns(input.config.read, "allow"),
       input.cwd,
-      gitMainWorktreePath,
+      mainWorktree,
       true,
       input.globCache,
     ))
@@ -300,7 +279,6 @@ function addConfiguredMounts(
   function hasWriteGrant(path: string): boolean {
     return writeGrants.some((grant) => pathCovers(grant, path));
   }
-  const writeSection = writePaths(input.config, input.cwd, input.globCache);
   const permissionPaths = new Set([
     ...restrictedFinalPaths,
     ...writeGrants,
@@ -315,7 +293,8 @@ function addConfiguredMounts(
     if (writable || writableMountPaths.some((parent) => pathCovers(parent, path)))
       mount(path, writable);
   }
-  for (const path of credentialPaths(input.config, input.cwd, input.globCache)) mount(path, false);
+  const credentials = credentialSnapshot(input.config, input.cwd, input.globCache, mainWorktree);
+  for (const path of credentials.paths) mount(path, false);
 }
 
 function addHiddenPaths(
@@ -326,9 +305,10 @@ function addHiddenPaths(
     globCache: GlobCache;
     mode: SandboxMode;
   },
+  mainWorktree: string,
 ): void {
   if (input.mode === "bash") return;
-  for (const path of hiddenFsPaths(input.config, input.cwd, input.globCache)) {
+  for (const path of hiddenFsPaths(input.config, input.cwd, input.globCache, mainWorktree)) {
     if (!existsSync(path)) continue;
     addParentDirectories(args, path);
     if (statSync(path).isDirectory()) args.push("--tmpfs", path);
@@ -367,8 +347,9 @@ export function buildSandboxArgs(input: {
     if (!readAllPaths(input.config) && existsSync(runtimePath))
       args.push("--ro-bind-try", runtimePath, runtimePath);
   }
-  addConfiguredMounts(args, input);
-  addHiddenPaths(args, input);
+  const mainWorktree = resolvePolicyWorktreePath(input.cwd);
+  addConfiguredMounts(args, input, mainWorktree);
+  addHiddenPaths(args, input, mainWorktree);
   args.push("--chdir", input.commandCwd ?? input.cwd);
   return args;
 }

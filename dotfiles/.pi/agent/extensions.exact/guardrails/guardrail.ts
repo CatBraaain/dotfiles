@@ -44,6 +44,7 @@ import {
   prepareWriteDirectories,
   readActionMatch,
   readAllPaths,
+  resolvePolicyWorktreePath,
   warmGlobCache,
   writePaths,
   writePathsByFinalAction,
@@ -363,7 +364,8 @@ export class Guardrail {
 
   /** Effective write paths, excluding paths covered by the credentials deny list. */
   getWritePathsByFinalAction(): { allow: string[]; ask: string[]; deny: string[] } {
-    const { allow, ask, deny } = writePathsByFinalAction(this.config, this.cwd, this.globCache);
+    const writeSection = writePaths(this.config, this.cwd, this.globCache);
+    const { allow, ask, deny } = writePathsByFinalAction(writeSection);
     const credentials = credentialSnapshot(this.config, this.cwd, this.globCache);
     const excludeCredentials = (paths: string[]) =>
       paths.filter((path) => !new AuthorizationPath(path).matchesRestriction(credentials));
@@ -554,14 +556,16 @@ export class Guardrail {
   private pathAction(operation: "read" | "write", comparison: AuthorizationPath) {
     comparison.assertVerified();
     const path = comparison.absolutePath;
-    if (comparison.matchesRestriction(credentialSnapshot(this.config, this.cwd, this.globCache)))
+    const mainWorktree = resolvePolicyWorktreePath(this.cwd);
+    const credentials = credentialSnapshot(this.config, this.cwd, this.globCache, mainWorktree);
+    if (comparison.matchesRestriction(credentials))
       throw new Error(`Access denied for credential path: ${path}`);
 
     const match =
       operation === "read"
-        ? readActionMatch(this.config, this.cwd, this.globCache, path, comparison)
+        ? readActionMatch(this.config, this.cwd, this.globCache, comparison, mainWorktree)
         : resolvePathActionMatch(
-            writePaths(this.config, this.cwd, this.globCache),
+            writePaths(this.config, this.cwd, this.globCache, mainWorktree),
             path,
             comparison,
           );
