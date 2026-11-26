@@ -30,7 +30,7 @@ Layout: 一覧の通信エラー — 通信障害を一覧より先に読み、�
 
 Layout: New workspace フッター — 一覧が短いときも長いときも操作の下余白を一覧の上余白に揃える → sticky-footer の document 内下端追従版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/viewport-shell/sticky-footer.md)）; scroll owner: `html`（document）; anti-patterns: 上下で異なる外側余白、入力への切替による高さの増減、一覧だけの別スクロール領域。
 
-Layout: ワークスペース見出し — 左の開閉・名前、右のモード切替・New session を一列に配置する → split-nav の固定操作幅版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/in-line-grouping/split-nav.md)）; scroll owner: `html`（document）; anti-patterns: 操作の折り返し、名前による操作の押し出し。名前を省略して操作幅を保つ。
+Layout: ワークスペース見出し — 左の開閉・名前、右のモード切替・New session を一列に配置し、グループ内をスクロール中も名前が分かるようにする → split-nav の固定操作幅版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/in-line-grouping/split-nav.md)）をグループ内で上端固定にする; scroll owner: `html`（document）; anti-patterns: 操作の折り返し、名前による操作の押し出し、前のグループ見出しの残留。名前を省略して操作幅を保つ。見出しは Webview の上端に達すると、所属グループの範囲内で上端に留まる。見出しの背景はサイドバーと揃え、下を通る行を覆う。
 
 Layout: セッション行の日時 — 行全体の選択領域を保ち、日時と行操作を右端へ重ねる → imposter の右寄せ・自然幅版（[参照](https://github.com/changeroa/StyleGallery/blob/main/patterns/overlay-exception/imposter.md)）; scroll owner: `html`（document）; anti-patterns: 文字間隔の拡大で日時が欠ける固定幅、表示名・操作との重なり。
 

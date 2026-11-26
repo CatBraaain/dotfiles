@@ -1,6 +1,6 @@
 /** Styles for the sessions webview; shared as-is by the stories catalog. */
 export const webviewStyles = `
-    :root { --session-radius: 9.6px; color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
+    :root { --session-radius: 9.6px; --group-header-height: 24px; scroll-padding-top: var(--group-header-height); color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
     body { margin: 0; padding: 0; color: var(--vscode-foreground); background: var(--vscode-sideBar-background); }
     html.session-overlay-scrollbars { scrollbar-width: none; }
     html.session-overlay-scrollbars::-webkit-scrollbar { display: none; }
@@ -16,9 +16,8 @@ export const webviewStyles = `
     button:hover { background: var(--vscode-list-hoverBackground); }
     svg { flex: none; pointer-events: none; }
     #app { box-sizing: border-box; display: flex; flex-direction: column; min-height: 100dvh; padding: 12px 12px 0; }
-    .group-header { display: flex; align-items: center; }
     #sessions { margin-bottom: 12px; }
-    .footer { position: sticky; bottom: 0; display: flex; flex-direction: column; gap: 8px; margin-top: auto; padding: 12px; border-top: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); background: var(--vscode-sideBar-background); }
+    .footer { position: sticky; bottom: 0; z-index: 1; display: flex; flex-direction: column; gap: 8px; margin-top: auto; padding: 12px; border-top: 1px solid color-mix(in srgb, var(--vscode-widget-border) 50%, transparent); background: var(--vscode-sideBar-background); }
     .workspace-control { position: relative; display: grid; }
     .new-workspace { display: inline-flex; align-items: center; width: 100%; height: 32px; padding: 0 10px 0 32px; border-radius: var(--session-radius); color: var(--vscode-foreground); font-size: 13px; font-weight: 500; text-align: left; }
     .new-workspace[hidden] { display: none; }
@@ -30,8 +29,8 @@ export const webviewStyles = `
     #workspace-path::placeholder { color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground)); }
     .group { min-width: 0; }
     .group + .group { margin-top: 12px; }
-    .group-header { gap: 4px; min-width: 0; min-height: 24px; }
-    .group-toggle { display: flex; flex: 0 1 auto; align-items: center; gap: 0; min-width: 0; margin-left: -8px; border-radius: var(--session-radius); }
+    .group-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 4px; min-width: 0; min-height: var(--group-header-height); margin-left: -8px; background: var(--vscode-sideBar-background); }
+    .group-toggle { display: flex; flex: 0 1 auto; align-items: center; gap: 0; min-width: 0; border-radius: var(--session-radius); }
     .group-toggle:hover { background: var(--vscode-list-hoverBackground); }
     .group-toggle > button:hover { background: transparent; }
     .group-chevron, .group-new-session, .group-mode-toggle { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-foreground); }

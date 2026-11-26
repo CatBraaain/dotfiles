@@ -424,6 +424,42 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
+  it("pins each workspace heading only within its group and keeps keyboard focus visible", async () => {
+    const page = await openStory("sessions-sidebar--all-mode", { width: 320, height: 180 });
+    await page.locator(".session-row.archived").waitFor();
+    const group = page.locator('[data-group-cwd="~/projects/pi-tools"]');
+    const heading = group.locator(".group-header");
+    const nextHeading = group.locator("+ .group").locator(".group-header");
+    const { top, bottom } = await group.evaluate((element) =>
+      element.getBoundingClientRect().toJSON(),
+    );
+    const nextTop = await nextHeading.evaluate((element) => element.getBoundingClientRect().top);
+    const scrollTo = (y: number) => page.evaluate((value) => window.scrollTo(0, value), y);
+
+    await scrollTo(top + 32);
+    expect(await heading.boundingBox()).toMatchObject({ y: 0 });
+
+    await group
+      .locator(".group-new-session")
+      .evaluate((button) => button.focus({ preventScroll: true }));
+    await page.keyboard.press("Tab");
+    const firstSession = group.locator(".session-button").first();
+    expect(await firstSession.evaluate((button) => button === document.activeElement)).toBe(true);
+    const headingBottom = await heading.evaluate(
+      (element) => element.getBoundingClientRect().bottom,
+    );
+    expect((await firstSession.boundingBox())!.y).toBeGreaterThanOrEqual(headingBottom);
+
+    await scrollTo(bottom - 4);
+    expect(await heading.evaluate((element) => element.getBoundingClientRect().bottom)).toBe(4);
+    await scrollTo(nextTop + 8);
+    expect(
+      await heading.evaluate((element) => element.getBoundingClientRect().bottom),
+    ).toBeLessThan(0);
+    expect(await nextHeading.boundingBox()).toMatchObject({ y: 0 });
+    await page.close();
+  });
+
   it("preserves native document keyboard scrolling outside the overlay", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions", { width: 320, height: 180 });
     await page.locator(".session-button").first().focus();
