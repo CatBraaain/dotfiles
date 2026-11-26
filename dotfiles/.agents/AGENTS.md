@@ -406,7 +406,9 @@ ASD-STE100 は方向性の参考とし、厳格な規格準拠や語彙・語数
 編集を伴うセッションは、最初の編集前に `git worktree add` で自分専用のサブworktree とブランチを作成する。main worktree や別セッションの worktree では編集しない。
 
 - 同じ作業を続けるときは、途中で要件や方針が変わっても、このセッションでその作業用に作成した worktree を使い続ける。レビュー済みの範囲を user が追えるよう、作業先を作り直さず、「Git index の所有権」に従って既存のステージングを保持する。
-- worktree のディレクトリ名が作業内容と合わなくなったら、同じ worktree を `git -C '<main worktree の絶対パス>' worktree move '<旧パス>' '<新パス>'` でリネームする。pi では移動先を追跡できるよう、実際の絶対パスを含むコマンドを Bash ツールに直接渡す。
+- worktree のディレクトリ名が作業内容と合わなくなったら、「作成」の命名規則に従い、同じ worktree と対応するブランチの両方をリネームする。
+  1. `git -C '<main worktree の絶対パス>' worktree move '<旧パス>' '<新パス>'` で worktree を移動する。pi が移動先を追跡できるよう、実際の絶対パスを含むコマンドを Bash ツールに直接渡す。
+  2. 移動が成功したら、`git -C '<新パス>' branch -m '<新ブランチ名>'` でその worktree のブランチをリネームする。
 - 同じセッションは複数の worktree を担当できる。引き続き必要な worktree は残し、不要になったものは user の承認を得て、「finish・discard・close」に従って閉じる。
 - 別セッションからの引き継ぎを明示的に依頼された場合は、「引き継ぎ」に従って変更だけを自分専用の worktree に複製する。開始 `cwd` が既存のサブworktree 内でも、その worktree を新しいセッションの編集先にしない。
 - まとまった作業単位の完了時は、user の承認を得てから「finish・discard・close」の finish を実行する。
