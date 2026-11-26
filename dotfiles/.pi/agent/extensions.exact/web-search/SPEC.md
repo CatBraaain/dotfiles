@@ -55,7 +55,7 @@ backend の順序とフォールバック、challenge / captcha再試行、タ�
 
 ## camoufox server の配置
 
-camoufox server は `browse` CLI に内蔵され、`browse server start` サブコマンドが起動する。search / fetch の実行時に server が未接続なら CLI自身が `browse server start` をバックグラウンド起動し、共通の startup script（`~/.agents/scripts/startup`）も先行起動する。この拡張は server本体を同梱しない。
+camoufox server は `browse` CLI に内蔵され、`browse server start` サブコマンドが起動する。search / fetch の実行時に server が未接続なら CLI自身が `browse server start` をバックグラウンド起動し、共通の startup script（`~/.agents/cli/startup`）も先行起動する。この拡張は server本体を同梱しない。
 
 ### camoufox の表示モード（Xvfb headed と x11vnc）
 

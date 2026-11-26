@@ -1,24 +1,24 @@
 # startup拡張機能Spec
 
-pi のセッション開始時に、共通primingスクリプト `~/.agents/scripts/startup`（振る舞い契約は `dotfiles/.agents/scripts.exact/startup.spec.md`）を detached実行する。エージェント向けツール、コマンド、UI表示は提供しない。スクリプトの中身（何を primingするか）はこの拡張の関知外であり、スクリプト側の spec が正本である。
+pi のセッション開始時に、共通primingスクリプト `~/.agents/cli/startup`（windows は `startup.exe`。振る舞い契約は `dotfiles/.agents/cli.exact/startup/SPEC.md`）を detached実行する。エージェント向けツール、コマンド、UI表示は提供しない。スクリプトの中身（何を primingするか）はこの拡張の関知外であり、スクリプト側の spec が正本である。
 
 ## 起動条件
 
 | イベント | `event.reason` | 動作 |
 | --- | --- | --- |
-| `session_start` | `startup` | `~/.agents/scripts/startup` を spawnする |
+| `session_start` | `startup` | `~/.agents/cli/startup`（windows は `startup.exe`）を spawnする |
 | `session_start` | `startup` 以外（`new` / `resume` / `fork` / `reload`） | 何もしない |
 
 ## spawn の条件
 
-| 項目 | POSIX | windows |
-| --- | --- | --- |
-| コマンド | `startupScriptPath()` = `~/.agents/scripts/startup`（実行ビット付きで直接実行） | `bun`（PATH から解決） |
-| 引数 | なし | スクリプトのパス 1件 |
-| `detached` | `true`（pi終了後も子プロセスが生きる） | 同じ |
-| `stdio` | `"ignore"` | 同じ |
+| 項目 | 契約 |
+| --- | --- |
+| コマンド | `startupExecutablePath()` = `~/.agents/cli/startup`（windows は `startup.exe`）。直接実行する |
+| 引数 | なし |
+| `detached` | `true`（pi終了後も子プロセスが生きる） |
+| `stdio` | `"ignore"` |
 
-windows には実行ビットと shebang による解決がないため、bun 経由でスクリプトを実行する。bun が PATH に無い場合は spawn が失敗し、「失敗時」の節どおり握り潰す。
+コマンドはこのスクリプトを単一の実行ファイルにしたもので、`bun` を介さずに起動する。
 
 spawnした子プロセスは `unref()` し、pi の終了を妨げない。
 

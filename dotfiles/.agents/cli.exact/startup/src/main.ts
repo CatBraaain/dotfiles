@@ -2,20 +2,59 @@
 import { $ } from "bun";
 import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
-import { connect } from "node:net";
+import { connect, createServer } from "node:net";
 import { homedir } from "node:os";
 
-await Promise.allSettled([updatePi(), startCamoufox(), startOpenserp()]);
+const UPDATE_TASK_ARG = "update";
+const UPDATE_LOCK_PIPE = "\\\\.\\pipe\\pi-update";
+const PI_UPDATE_ARGS = ["update", "--all"];
+const SELF_RUN_ARGV: readonly [string, ...string[]] = Bun.isStandaloneExecutable
+  ? [process.execPath]
+  : [process.execPath, import.meta.path];
+
+const requestedTask = process.argv[2];
+const tasks =
+  requestedTask === UPDATE_TASK_ARG
+    ? [updatePiUnderLock()]
+    : [updatePi(), startCamoufox(), startOpenserp()];
+
+await Promise.allSettled(tasks);
 process.exit(0);
 
 async function updatePi() {
   const pi = Bun.which("pi");
+  if (!pi) return;
   const flock = Bun.which("flock");
-  if (!pi || !flock) return;
+  if (flock) {
+    const lock = `${process.env.TMPDIR || "/tmp"}/pi-update.lock`;
+    // flock owns the lock until pi exits, independently of this startup process.
+    startDetached(flock, ["-n", lock, pi, ...PI_UPDATE_ARGS]);
+    return;
+  }
+  if (process.platform === "win32") {
+    startDetached(SELF_RUN_ARGV[0], [...SELF_RUN_ARGV.slice(1), UPDATE_TASK_ARG]);
+  }
+}
 
-  const lock = `${process.env.TMPDIR || "/tmp"}/pi-update.lock`;
-  // flock owns the lock until pi exits, independently of this startup process.
-  startDetached(flock, ["-n", lock, pi, "update", "--all"]);
+async function updatePiUnderLock() {
+  if (process.platform !== "win32") return;
+  const pi = Bun.which("pi");
+  if (!pi) return;
+
+  const lock = createServer((socket) => socket.destroy());
+  const isAcquired = await new Promise<boolean>((resolve) => {
+    lock.once("error", () => resolve(false));
+    lock.listen(UPDATE_LOCK_PIPE, () => resolve(true));
+  });
+  if (!isAcquired) return;
+
+  // child_process.spawn() rejects .cmd shims such as npm's pi.cmd without a shell: https://nodejs.org/api/child_process.html#spawning-bat-and-cmd-files-on-windows
+  const updateProcess = Bun.spawn([pi, ...PI_UPDATE_ARGS], {
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  await updateProcess.exited;
 }
 
 function browseCliPath(): string {

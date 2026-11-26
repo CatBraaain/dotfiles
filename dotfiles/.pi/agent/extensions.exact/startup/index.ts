@@ -10,29 +10,25 @@ export type SpawnFn = (
   options: SpawnOptions,
 ) => ChildProcess;
 
-// Shared priming script deployed from
-// dotfiles/.agents/scripts.exact/startup.executable (behavior contract:
-// dotfiles/.agents/scripts.exact/startup.spec.md).
-export function startupScriptPath(home: string = homedir()): string {
-  return join(home, ".agents", "scripts", "startup");
-}
-
-export type SpawnTarget = { command: string; args: readonly string[] };
-
-export function spawnTarget(
-  scriptPath: string,
+// Shared priming executable deployed from
+// dotfiles/.agents/cli.exact/startup/src/main.ts (behavior contract:
+// dotfiles/.agents/cli.exact/startup/SPEC.md).
+export function startupExecutablePath(
+  home: string = homedir(),
   platform: NodeJS.Platform = process.platform,
-): SpawnTarget {
-  if (platform === "win32") return { command: "bun", args: [scriptPath] };
-  return { command: scriptPath, args: [] };
+): string {
+  const suffix = platform === "win32" ? ".exe" : "";
+  return join(home, ".agents", "cli", `startup${suffix}`);
 }
 
 export default function startupExtension(pi: ExtensionAPI, spawnProcess: SpawnFn = spawn): void {
   pi.on("session_start", async (event) => {
     if (event.reason !== "startup") return;
-    const { command, args } = spawnTarget(startupScriptPath());
     try {
-      const child = spawnProcess(command, args, { detached: true, stdio: "ignore" });
+      const child = spawnProcess(startupExecutablePath(), [], {
+        detached: true,
+        stdio: "ignore",
+      });
       // Script absence arrives as an async "error" event: without a listener
       // it would crash pi, even though priming is optional here.
       child.on("error", () => {});

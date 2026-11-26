@@ -3,7 +3,7 @@ import { describe, it } from "bun:test";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import startupExtension, { spawnTarget, startupScriptPath, type SpawnFn } from "./index";
+import startupExtension, { startupExecutablePath, type SpawnFn } from "./index";
 
 interface FakeChild {
   errorListener: (() => void) | undefined;
@@ -70,41 +70,27 @@ async function startSession(
 }
 
 describe("スクリプトのパス", () => {
-  it(".agents/scripts/startup を指す", () => {
+  it("POSIX では .agents/cli/startup を指す", () => {
     const home = join(homedir(), "test home");
-    assert.equal(startupScriptPath(home), join(home, ".agents", "scripts", "startup"));
-  });
-});
-
-describe("spawn コマンド", () => {
-  it("POSIX ではスクリプトを実行ビット付きで直接実行する", () => {
-    const target = spawnTarget("/home/u/.agents/scripts/startup", "linux");
-    assert.deepEqual(target, {
-      command: "/home/u/.agents/scripts/startup",
-      args: [],
-    });
+    assert.equal(startupExecutablePath(home, "linux"), join(home, ".agents", "cli", "startup"));
   });
 
-  it("windows では bun 経由でスクリプトを実行する", () => {
-    const scriptPath = "C:\\Users\\u\\.agents\\scripts\\startup";
-    const target = spawnTarget(scriptPath, "win32");
-    assert.deepEqual(target, { command: "bun", args: [scriptPath] });
+  it("windows では .agents/cli/startup.exe を指す", () => {
+    assert.equal(
+      startupExecutablePath("C:\\Users\\u", "win32"),
+      join("C:\\Users\\u", ".agents", "cli", "startup.exe"),
+    );
   });
 });
 
 describe("spawn 条件", () => {
-  it("reason が startup のとき startup スクリプトを spawn する", async () => {
+  it("reason が startup のとき startup スクリプトを引数なしで spawn する", async () => {
     const { spawnProcess, calls } = recordingSpawn(fakeChild());
     await startSession(spawnProcess, "startup");
-    assert.equal(calls.length, 1);
-    const scriptPath = join(homedir(), ".agents", "scripts", "startup");
-    if (process.platform === "win32") {
-      assert.equal(calls[0]?.command, "bun");
-      assert.deepEqual(calls[0]?.args, [scriptPath]);
-    } else {
-      assert.equal(calls[0]?.command, scriptPath);
-      assert.deepEqual(calls[0]?.args, []);
-    }
+    assert.deepEqual(
+      calls.map(({ command, args }) => [command, args]),
+      [[startupExecutablePath(), []]],
+    );
   });
 
   for (const reason of ["new", "resume", "fork", "reload"]) {
