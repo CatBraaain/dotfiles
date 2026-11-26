@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
-import { $ } from "bun";
 import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { connect, createServer } from "node:net";
 import { homedir } from "node:os";
+import { join } from "node:path";
 
 const UPDATE_TASK_ARG = "update";
 const UPDATE_LOCK_PIPE = "\\\\.\\pipe\\pi-update";
@@ -24,16 +25,15 @@ process.exit(0);
 async function updatePi() {
   const pi = Bun.which("pi");
   if (!pi) return;
-  const flock = Bun.which("flock");
-  if (flock) {
-    const lock = `${process.env.TMPDIR || "/tmp"}/pi-update.lock`;
-    // flock owns the lock until pi exits, independently of this startup process.
-    startDetached(flock, ["-n", lock, pi, ...PI_UPDATE_ARGS]);
-    return;
-  }
   if (process.platform === "win32") {
     startDetached(SELF_RUN_ARGV[0], [...SELF_RUN_ARGV.slice(1), UPDATE_TASK_ARG]);
+    return;
   }
+
+  const flock = Bun.which("flock");
+  if (!flock) return;
+  const lock = `${process.env.TMPDIR || "/tmp"}/pi-update.lock`;
+  startDetached(flock, ["-n", lock, pi, ...PI_UPDATE_ARGS]);
 }
 
 async function updatePiUnderLock() {
@@ -59,7 +59,7 @@ async function updatePiUnderLock() {
 
 function browseCliPath(): string {
   const suffix = process.platform === "win32" ? ".exe" : "";
-  return `${homedir()}/.agents/cli/browse${suffix}`;
+  return join(homedir(), ".agents", "cli", `browse${suffix}`);
 }
 
 async function startCamoufox() {
@@ -71,9 +71,10 @@ async function startCamoufox() {
   const port = Number(url.port || (url.protocol === "wss:" ? "443" : "80"));
   if (await portOpen(host, port)) return;
 
-  const logDir = `${process.env.XDG_CACHE_HOME || `${homedir()}/.cache`}/pi/web-search`;
-  await $`mkdir -p ${logDir}`.quiet();
-  const log = openSync(`${logDir}/camoufox-server.log`, "a");
+  const cacheDir = process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
+  const logDir = join(cacheDir, "pi", "web-search");
+  await mkdir(logDir, { recursive: true });
+  const log = openSync(join(logDir, "camoufox-server.log"), "a");
   try {
     startDetached(cli, ["server", "start"], log);
   } finally {
@@ -97,6 +98,7 @@ async function startOpenserp() {
 function startDetached(command: string, args: string[], output: number | "ignore" = "ignore") {
   const child = spawn(command, args, {
     detached: true,
+    windowsHide: true,
     stdio: ["ignore", output, output],
   });
   child.on("error", () => {});

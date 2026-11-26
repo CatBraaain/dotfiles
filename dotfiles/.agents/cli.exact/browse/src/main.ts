@@ -34,6 +34,7 @@ import { emitJson, fail, selfRunArgv, usageFail } from "./util";
 // even when the holder crashes; the lock file is only an anchor and may stay
 // behind. Reddit / StackOverflow fetches and `server start` need no slot;
 async function runInSlot(run: () => Promise<void>): Promise<void> {
+  if (process.platform === "win32") return run();
   if (process.argv[2] === LOCKED_SUBCOMMAND) {
     // Spec: 獲得の直後にも restart ロックの保持を探知し、進行していれば让位する。
     // Exiting with the conflict code makes the parent treat the slot as busy;
@@ -47,7 +48,7 @@ async function runInSlot(run: () => Promise<void>): Promise<void> {
   while (true) {
     for (let slot = 0; slot < SLOT_COUNT; slot++) {
       const outcome = runUnderSlotFlock(stateDirPath, slot, "probe");
-      if (outcome === "flock-unavailable") return run(); // no flock(1) (e.g. Windows): run unlocked
+      if (outcome === "flock-unavailable") return run();
       if (outcome === "busy") continue;
     }
     // All slots busy (or their winners just yielded): if a restart is in
@@ -197,12 +198,13 @@ async function main(): Promise<void> {
   }
 }
 
-// Spec: login は camoufox を使うため、search / fetch と共有ロックで直列化する。
 async function loginCommand(argv: string[]): Promise<void> {
   const [target, ...extra] = argv;
   if (extra.length > 0 || target !== "twitter") usageFail(LOGIN_USAGE);
-  // Spec: login は camoufox を使うため、search / fetch と render スロットで
-  // 待ち合わせる。
+  if (process.platform === "win32") {
+    console.error("browse login twitter is not supported on Windows.");
+    return;
+  }
   await runInSlot(loginTwitter);
 }
 
@@ -237,6 +239,10 @@ function displayCommand(argv: string[]): void {
   if (argv.length !== 1 || (action !== "show" && action !== "hide")) {
     usageFail(DISPLAY_USAGE);
   }
+  if (process.platform === "win32") {
+    console.error(`browse display ${action} is not supported on Windows.`);
+    return;
+  }
   const requests = action === "show" ? ["nodeny"] : ["deny", "disconnect:all"];
   for (const request of requests) runX11vncRequest(request, action);
 }
@@ -252,7 +258,7 @@ function serverCommand(argv: string[]): Promise<void> {
 
 async function runAfterDrainingRenderSlots(action: "stop" | "restart"): Promise<void> {
   const run = action === "stop" ? stopCamoufoxServer : restartCamoufoxServer;
-  if (process.argv[2] === LOCKED_SUBCOMMAND) return run();
+  if (process.platform === "win32" || process.argv[2] === LOCKED_SUBCOMMAND) return run();
   const stateDirPath = stateDir();
   mkdirSync(stateDirPath, { recursive: true });
   const chain = [join(stateDirPath, RESTART_LOCK_FILE)];

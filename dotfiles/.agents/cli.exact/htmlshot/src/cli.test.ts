@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert/strict";
 import { describe, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { browserCandidates, resolveBrowser, resolveScale } from "./shot";
@@ -21,10 +21,17 @@ const hasBrowser = resolveBrowser() !== null;
 
 type RgbaImage = { width: number; height: number; pixels: Buffer };
 
-function runCli(args: string[], environment: Record<string, string> = {}) {
-  return Bun.spawnSync(["bun", mainPath, ...args], {
-    env: { ...process.env, ...environment },
-  });
+function runCli(args: string[], env: NodeJS.ProcessEnv = process.env) {
+  return Bun.spawnSync([process.execPath, mainPath, ...args], { env });
+}
+
+function isolatedBrowserEnv(root: string): NodeJS.ProcessEnv {
+  return {
+    SystemRoot: process.env.SystemRoot,
+    PATH: root,
+    LOCALAPPDATA: root,
+    XDG_CACHE_HOME: root,
+  };
 }
 
 function readRgbaImage(pngPath: string): RgbaImage {
@@ -85,63 +92,59 @@ const bound = (html: string): Buffer =>
   insertMetadata(syntheticPng(), buildEnvelope(html, { width: 1200, height: 800, scale: 1 }));
 
 describe("browserCandidates", () => {
-  it("prefers the newest Playwright chromium and its win64 layout on Windows", () => {
-    const candidates = browserCandidates({
-      platform: "win32",
-      playwrightCache: {
-        dir: "C:\\Users\\u\\AppData\\Local\\ms-playwright",
-        entries: [
-          "chromium-999",
-          "chromium_headless_shell-1228",
-          "ffmpeg-1011",
-          "chromium-1000",
-          "chromium-1228",
-        ],
-      },
-      searchPath: "C:\\Tools;D:\\Browsers",
-    });
+  it("prefers newer full Chromium revisions and the win64 layout on Windows", () => {
+    const candidates = browserCandidates(
+      "C:\\Users\\u\\AppData\\Local\\ms-playwright",
+      ["chromium-999", "chromium_headless_shell-1228", "ffmpeg-1011", "chromium-1228"],
+      "win32",
+    );
     assert.deepEqual(candidates, [
       "C:\\Users\\u\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win64\\chrome.exe",
       "C:\\Users\\u\\AppData\\Local\\ms-playwright\\chromium-1228\\chrome-win\\chrome.exe",
-      "C:\\Users\\u\\AppData\\Local\\ms-playwright\\chromium-1000\\chrome-win64\\chrome.exe",
-      "C:\\Users\\u\\AppData\\Local\\ms-playwright\\chromium-1000\\chrome-win\\chrome.exe",
       "C:\\Users\\u\\AppData\\Local\\ms-playwright\\chromium-999\\chrome-win64\\chrome.exe",
       "C:\\Users\\u\\AppData\\Local\\ms-playwright\\chromium-999\\chrome-win\\chrome.exe",
-      "C:\\Tools\\chromium.exe",
-      "C:\\Tools\\chrome.exe",
-      "D:\\Browsers\\chromium.exe",
-      "D:\\Browsers\\chrome.exe",
     ]);
   });
 
-  it("keeps the Linux Playwright layout and PATH names", () => {
-    const candidates = browserCandidates({
-      platform: "other",
-      playwrightCache: { dir: "/home/u/.cache/ms-playwright", entries: ["chromium-1200"] },
-      searchPath: "/usr/bin:/opt/google/chrome",
-    });
+  it("uses the Playwright Chromium layouts on Linux", () => {
+    const candidates = browserCandidates(
+      "/home/u/.cache/ms-playwright",
+      ["chromium-1200"],
+      "linux",
+    );
     assert.deepEqual(candidates, [
       "/home/u/.cache/ms-playwright/chromium-1200/chrome-linux64/chrome",
       "/home/u/.cache/ms-playwright/chromium-1200/chrome-linux/chrome",
-      "/usr/bin/chromium",
-      "/usr/bin/chromium-browser",
-      "/usr/bin/google-chrome-stable",
-      "/usr/bin/google-chrome",
-      "/opt/google/chrome/chromium",
-      "/opt/google/chrome/chromium-browser",
-      "/opt/google/chrome/google-chrome-stable",
-      "/opt/google/chrome/google-chrome",
     ]);
   });
+});
 
-  it("falls back to PATH when the Playwright cache is missing", () => {
-    const candidates = browserCandidates({
-      platform: "win32",
-      playwrightCache: undefined,
-      searchPath: "C:\\Browsers",
+it("reports missing Playwright Chromium even when other browser paths exist", () => {
+  const root = mkdtempSync(join(tmpdir(), "htmlshot-missing-chromium-"));
+  try {
+    const htmlPath = join(root, "sample.html");
+    const programFiles = join(root, "Program Files");
+    const systemChromeDir = join(programFiles, "Google", "Chrome", "Application");
+    const systemChrome = join(systemChromeDir, "chrome.exe");
+    mkdirSync(systemChromeDir, { recursive: true });
+    writeFileSync(systemChrome, "");
+    writeFileSync(join(root, process.platform === "win32" ? "chromium.exe" : "chromium"), "");
+    writeFileSync(htmlPath, "<!doctype html><p>Example</p>");
+
+    const result = runCli(["shot", htmlPath], {
+      ...isolatedBrowserEnv(root),
+      ProgramFiles: programFiles,
+      HTMLSHOT_BROWSER: systemChrome,
     });
-    assert.deepEqual(candidates, ["C:\\Browsers\\chromium.exe", "C:\\Browsers\\chrome.exe"]);
-  });
+    assert.equal(result.exitCode, 1);
+    assert.match(
+      result.stderr.toString(),
+      /Playwright Chromium not found\. Run: playwright-cli install-browser chrome-for-testing --no-shell/,
+    );
+    assert.equal(existsSync(join(root, "sample.html.png")), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 describe("resolveScale", () => {
@@ -306,12 +309,10 @@ describe("cli constraints", () => {
       try {
         const htmlPath = join(dir, "sample.html");
         writeFileSync(htmlPath, `<!doctype html><body>${html}</body>`);
-        const result = runCli(["shot", htmlPath], {
-          HTMLSHOT_BROWSER: join(dir, "missing-browser"),
-        });
+        const result = runCli(["shot", htmlPath], isolatedBrowserEnv(dir));
         assert.equal(result.exitCode, 1);
         assert.match(result.stderr.toString(), kind);
-        assert.doesNotMatch(result.stderr.toString(), /HTMLSHOT_BROWSER/);
+        assert.doesNotMatch(result.stderr.toString(), /Playwright Chromium not found/);
         assert.equal(existsSync(join(dir, "sample.html.png")), false);
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -412,56 +413,71 @@ describe("cli", () => {
     }
   });
 
-  it("binds and re-extracts byte-exact html with a real browser", () => {
-    if (resolveBrowser() === null) return;
-    const dir = mkdtempSync(join(tmpdir(), "htmlshot-cli-"));
-    try {
-      const html = [
-        "<!doctype html><meta charset='utf-8'>",
-        "<body style='margin:0;background:#fff'>",
-        "<div style='font:24px sans-serif;padding:20px'>図版テスト</div>",
-        "</body>",
-      ].join("");
-      const htmlPath = join(dir, "sample.html");
-      writeFileSync(htmlPath, html);
-      const bind = runCli(["shot", htmlPath, "--width", "320", "--height", "200", "--scale", "1"]);
-      assert.equal(bind.exitCode, 0, bind.stderr.toString());
-      assert.match(
-        bind.stdout.toString(),
-        /shot: .*sample\.html\.png \(320x200@1x, html \d+ bytes\)/,
-      );
-      const boundPng = readFileSync(join(dir, "sample.html.png"));
-      assert.ok(boundPng.subarray(0, 8).equals(PNG_SIGNATURE));
-      const extract = runCli(["extract", join(dir, "sample.html.png")]);
-      assert.equal(extract.exitCode, 0, extract.stderr.toString());
-      assert.equal(readFileSync(join(dir, "sample.html"), "utf8"), html);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+  it.skipIf(!hasBrowser)(
+    "binds and re-extracts byte-exact html with a real browser",
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), "htmlshot-cli-"));
+      try {
+        const html = [
+          "<!doctype html><meta charset='utf-8'>",
+          "<body style='margin:0;background:#fff'>",
+          "<div style='font:24px sans-serif;padding:20px'>図版テスト</div>",
+          "</body>",
+        ].join("");
+        const htmlPath = join(dir, "sample.html");
+        writeFileSync(htmlPath, html);
+        const bind = runCli([
+          "shot",
+          htmlPath,
+          "--width",
+          "320",
+          "--height",
+          "200",
+          "--scale",
+          "1",
+        ]);
+        assert.equal(bind.exitCode, 0, bind.stderr.toString());
+        assert.match(
+          bind.stdout.toString(),
+          /shot: .*sample\.html\.png \(320x200@1x, html \d+ bytes\)/,
+        );
+        const boundPng = readFileSync(join(dir, "sample.html.png"));
+        assert.ok(boundPng.subarray(0, 8).equals(PNG_SIGNATURE));
+        const extract = runCli(["extract", join(dir, "sample.html.png")]);
+        assert.equal(extract.exitCode, 0, extract.stderr.toString());
+        assert.equal(readFileSync(join(dir, "sample.html"), "utf8"), html);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    BROWSER_TEST_TIMEOUT_MS,
+  );
 
-  it("auto-selects the render scale from the canvas size with a real browser", () => {
-    if (resolveBrowser() === null) return;
-    const dir = mkdtempSync(join(tmpdir(), "htmlshot-cli-"));
-    try {
-      const html =
-        "<!doctype html><meta charset='utf-8'><body style='margin:0;background:#fff'></body>";
-      const htmlPath = join(dir, "sample.html");
-      writeFileSync(htmlPath, html);
-      const bind = runCli(["shot", htmlPath, "--width", "320", "--height", "200"]);
-      assert.equal(bind.exitCode, 0, bind.stderr.toString());
-      assert.match(
-        bind.stdout.toString(),
-        /shot: .*sample\.html\.png \(320x200@3x, html \d+ bytes\)/,
-      );
-      const rendered = verifyPng(readFileSync(join(dir, "sample.html.png")));
-      assert.deepEqual(rendered.envelope.render, { width: 320, height: 200, scale: 3 });
-      assert.equal(rendered.pixelWidth, 960);
-      assert.equal(rendered.pixelHeight, 600);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+  it.skipIf(!hasBrowser)(
+    "auto-selects the render scale from the canvas size with a real browser",
+    () => {
+      const dir = mkdtempSync(join(tmpdir(), "htmlshot-cli-"));
+      try {
+        const html =
+          "<!doctype html><meta charset='utf-8'><body style='margin:0;background:#fff'></body>";
+        const htmlPath = join(dir, "sample.html");
+        writeFileSync(htmlPath, html);
+        const bind = runCli(["shot", htmlPath, "--width", "320", "--height", "200"]);
+        assert.equal(bind.exitCode, 0, bind.stderr.toString());
+        assert.match(
+          bind.stdout.toString(),
+          /shot: .*sample\.html\.png \(320x200@3x, html \d+ bytes\)/,
+        );
+        const rendered = verifyPng(readFileSync(join(dir, "sample.html.png")));
+        assert.deepEqual(rendered.envelope.render, { width: 320, height: 200, scale: 3 });
+        assert.equal(rendered.pixelWidth, 960);
+        assert.equal(rendered.pixelHeight, 600);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    BROWSER_TEST_TIMEOUT_MS,
+  );
 
   it("reports render settings and pixel size in verify output", () => {
     const dir = mkdtempSync(join(tmpdir(), "htmlshot-cli-"));

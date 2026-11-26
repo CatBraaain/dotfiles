@@ -29,6 +29,14 @@ const refreshPath = [
 const npmInstall = ["cmd", "/c", "npm", "install", "-g", "--ignore-scripts"];
 const piInstall = [...npmInstall, "@earendil-works/pi-coding-agent"];
 const playwrightInstall = [...npmInstall, "@playwright/cli@0.1.22"];
+const chromiumInstall = [
+  "cmd",
+  "/c",
+  "playwright-cli",
+  "install-browser",
+  "chrome-for-testing",
+  "--no-shell",
+];
 const vitePlusInstall = [...npmInstall, "vite-plus"];
 const prettierInstall = [...npmInstall, "prettier"];
 const markdownTableInstall = [...npmInstall, "prettier-markdown-table"];
@@ -94,6 +102,7 @@ function windowsFixture(configText?: string) {
       | "winget"
       | "pi"
       | "playwright"
+      | "chromium"
       | "camoufox"
       | "trafilatura"
       | "update-shell"
@@ -105,28 +114,46 @@ function windowsFixture(configText?: string) {
     const errors: string[] = [];
     const lookups: { executable: string; after: string[] | undefined; path: string | undefined }[] =
       [];
-    const workingDirectoryOverrides: { command: string | undefined; cwd: string }[] = [];
-    const spawn = spyOn(Bun, "spawnSync").mockImplementation((args, options?: { cwd?: string }) => {
-      assert.ok(Array.isArray(args), "expected an argument vector");
-      commands.push(args);
-      const [command] = args;
-      if (options?.cwd !== undefined) workingDirectoryOverrides.push({ command, cwd: options.cwd });
-      if (command === "cmd") npmPaths.push(process.env.Path);
-      const refreshesPath = command === "powershell" && args[3]?.startsWith("[Environment]");
-      const stdout = refreshesPath ? "machine;user" : "1.0.0";
-      const fails =
-        (failingCommands.includes("winget") && command === "winget") ||
-        (failingCommands.includes("pi") && args.at(-1) === piInstall.at(-1)) ||
-        (failingCommands.includes("playwright") && args.at(-1) === playwrightInstall.at(-1)) ||
-        (failingCommands.includes("camoufox") && args.includes("daijro/camoufox")) ||
-        (failingCommands.includes("trafilatura") && args.at(-1) === "trafilatura") ||
-        (failingCommands.includes("update-shell") && args.at(-1) === "update-shell");
-      return {
-        stdout: Buffer.from(stdout),
-        stderr: Buffer.alloc(0),
-        exitCode: fails ? 1 : 0,
-      } as ReturnType<typeof Bun.spawnSync>;
-    });
+    const workingDirectoryOverrides: { args: string[]; cwd: string }[] = [];
+    const browserEnvOverrides: {
+      args: string[];
+      env: NodeJS.ProcessEnv;
+      path: string | undefined;
+    }[] = [];
+    const spawn = spyOn(Bun, "spawnSync").mockImplementation(
+      (args, options?: { cwd?: string; env?: NodeJS.ProcessEnv }) => {
+        assert.ok(Array.isArray(args), "expected an argument vector");
+        commands.push(args);
+        const [command] = args;
+        if (options?.cwd !== undefined) workingDirectoryOverrides.push({ args, cwd: options.cwd });
+        if (command === "cmd" && args[2] === "npm") npmPaths.push(process.env.Path);
+        if (options?.env) {
+          const env = Object.fromEntries(
+            Object.entries(options.env).filter(([name]) =>
+              ["PLAYWRIGHT_BROWSERS_PATH", "PLAYWRIGHT_SKIP_BROWSER_GC"].includes(
+                name.toUpperCase(),
+              ),
+            ),
+          );
+          browserEnvOverrides.push({ args, env, path: options.env.Path ?? options.env.PATH });
+        }
+        const refreshesPath = command === "powershell" && args[3]?.startsWith("[Environment]");
+        const stdout = refreshesPath ? "machine;user" : "1.0.0";
+        const fails =
+          (failingCommands.includes("winget") && command === "winget") ||
+          (failingCommands.includes("pi") && args.at(-1) === piInstall.at(-1)) ||
+          (failingCommands.includes("playwright") && args.at(-1) === playwrightInstall.at(-1)) ||
+          (failingCommands.includes("chromium") && args[2] === "playwright-cli") ||
+          (failingCommands.includes("camoufox") && args.includes("daijro/camoufox")) ||
+          (failingCommands.includes("trafilatura") && args.at(-1) === "trafilatura") ||
+          (failingCommands.includes("update-shell") && args.at(-1) === "update-shell");
+        return {
+          stdout: Buffer.from(stdout),
+          stderr: Buffer.alloc(0),
+          exitCode: fails ? 1 : 0,
+        } as ReturnType<typeof Bun.spawnSync>;
+      },
+    );
     const relaunch = spyOn(Bun, "spawn").mockImplementation(() =>
       assert.fail("unexpected relaunch"),
     );
@@ -141,7 +168,14 @@ function windowsFixture(configText?: string) {
     try {
       const readConfig = configText === undefined ? undefined : async () => configText;
       await installWindows(profile, desktop, readConfig);
-      return { commands, npmPaths, errors, lookups, workingDirectoryOverrides };
+      return {
+        commands,
+        npmPaths,
+        errors,
+        lookups,
+        workingDirectoryOverrides,
+        browserEnvOverrides,
+      };
     } finally {
       stderr.mockRestore();
       which.mockRestore();
@@ -170,7 +204,7 @@ test("dev installs only its selected packages after the elevation check and refr
   const fixture = windowsFixture();
   try {
     const camoufoxVersionFile = fixture.seedCamoufox();
-    const { commands, npmPaths, errors, lookups } = await fixture.run("dev", "playwright");
+    const { commands, npmPaths, errors, lookups } = await fixture.run("dev");
     assert.deepEqual(commands, [
       elevationCheck,
       wingetInstall(devBeforeDocker),
@@ -179,6 +213,7 @@ test("dev installs only its selected packages after the elevation check and refr
       refreshPath,
       piInstall,
       playwrightInstall,
+      chromiumInstall,
       vitePlusInstall,
       prettierInstall,
       markdownTableInstall,
@@ -189,9 +224,68 @@ test("dev installs only its selected packages after the elevation check and refr
     assert.deepEqual(lookups, [
       { executable: "openserp", after: markdownTableInstall, path: "machine;user" },
     ]);
-    assert.deepEqual(errors, [`command failed with exit code 1: ${playwrightInstall.join(" ")}`]);
+    assert.deepEqual(errors, []);
     assert.ok(existsSync(camoufoxVersionFile));
     assert.equal(readFileSync(fixture.desktopShortcut, "utf8"), "desktop shortcut");
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test("uses the standard cache and disables browser GC only for the Chromium install process", async () => {
+  const fixture = windowsFixture(`dev:
+  - custom: playwright-chromium
+  - npm: next-tool
+work: []
+personal: []
+`);
+  const previousBrowserPath = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  const previousSkipBrowserGc = process.env.playwright_skip_browser_gc;
+  process.env.PLAYWRIGHT_BROWSERS_PATH = String.raw`D:\custom-cache`;
+  process.env.playwright_skip_browser_gc = "0";
+  try {
+    const { browserEnvOverrides } = await fixture.run("dev");
+    assert.deepEqual(browserEnvOverrides, [
+      {
+        args: chromiumInstall,
+        path: "machine;user",
+        env: {
+          PLAYWRIGHT_BROWSERS_PATH: join(fixture.appData, "ms-playwright"),
+          PLAYWRIGHT_SKIP_BROWSER_GC: "1",
+        },
+      },
+    ]);
+    assert.equal(process.env.PLAYWRIGHT_BROWSERS_PATH, String.raw`D:\custom-cache`);
+    assert.equal(process.env.playwright_skip_browser_gc, "0");
+  } finally {
+    if (previousBrowserPath === undefined) delete process.env.PLAYWRIGHT_BROWSERS_PATH;
+    else process.env.PLAYWRIGHT_BROWSERS_PATH = previousBrowserPath;
+    if (previousSkipBrowserGc === undefined) delete process.env.playwright_skip_browser_gc;
+    else process.env.playwright_skip_browser_gc = previousSkipBrowserGc;
+    fixture.dispose();
+  }
+});
+
+test("reports a failed Chromium install and continues to later packages", async () => {
+  const fixture = windowsFixture(`dev:
+  - npm: "@playwright/cli@0.1.22"
+  - custom: playwright-chromium
+  - npm: next-tool
+work: []
+personal: []
+`);
+  try {
+    const { commands, errors } = await fixture.run("dev", "chromium");
+    assert.deepEqual(commands, [
+      elevationCheck,
+      refreshPath,
+      playwrightInstall,
+      chromiumInstall,
+      [...npmInstall, "next-tool"],
+    ]);
+    assert.deepEqual(errors, [
+      `playwright-chromium install failed: command failed with exit code 1: ${chromiumInstall.join(" ")}`,
+    ]);
   } finally {
     fixture.dispose();
   }
@@ -200,13 +294,21 @@ test("dev installs only its selected packages after the elevation check and refr
 test.each([
   [
     String.raw`\\wsl.localhost\Ubuntu\home\user\dotfiles`,
-    [{ command: "cmd", cwd: String.raw`C:\Windows` }],
+    [
+      { args: playwrightInstall, cwd: String.raw`C:\Windows` },
+      { args: chromiumInstall, cwd: String.raw`C:\Windows` },
+    ],
   ],
   [String.raw`C:\Users\user\dotfiles`, []],
 ])(
-  "sets a local working directory only for npm launched from a UNC path: %s",
+  "sets a local working directory for npm and Playwright only when launched from a UNC path: %s",
   async (cwd, expected) => {
-    const fixture = windowsFixture("dev: [{ npm: cli-tool }]\nwork: []\npersonal: []");
+    const fixture = windowsFixture(`dev:
+  - npm: "@playwright/cli@0.1.22"
+  - custom: playwright-chromium
+work: []
+personal: []
+`);
     const getCwd = spyOn(process, "cwd").mockReturnValue(cwd);
     const previousSystemRoot = process.env.SystemRoot;
     process.env.SystemRoot = String.raw`C:\Windows`;
@@ -302,6 +404,7 @@ test.each(["work", "personal"] as const)(
         refreshPath,
         piInstall,
         playwrightInstall,
+        chromiumInstall,
         vitePlusInstall,
         prettierInstall,
         markdownTableInstall,

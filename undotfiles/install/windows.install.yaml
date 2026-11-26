@@ -18,6 +18,7 @@ dev:
 
   - npm: "@earendil-works/pi-coding-agent"
   - npm: "@playwright/cli@0.1.22"
+  - custom: playwright-chromium
   - npm: vite-plus
   - npm: prettier
   - npm: prettier-markdown-table

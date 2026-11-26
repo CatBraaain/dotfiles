@@ -6,7 +6,7 @@
 
 | 項目 | 契約 |
 | --- | --- |
-| 呼び出し元 | pi拡張 `startup`（detached で呼ぶ。OS を問わず直接実行する）。windows で `flock` が PATH に無い場合の pi update では、スクリプト自身も `update` 引数付きで自身を detached に再実行する |
+| 呼び出し元 | pi拡張 `startup`（detached で呼ぶ。OS を問わず直接実行する）。Windows の pi update では、スクリプト自身も `update` 引数付きで自身を detached に再実行する |
 | 複数回実行 | 許容する。各タスクが自身で冪等性を持つ |
 | 完了待ち | `update` 引数なしの実行ではしない。スクリプトは全タスクを fire-and-forget で起動して即座に終了する。`update` 引数付きの実行は「pi update」の表にある windows の場合に限る。この実行は pi update だけを行い、`pi update --all` の終了を待つ |
 | 失敗 | スクリプトの失敗が呼び出し元（harness の起動）に影響しない |
@@ -29,9 +29,9 @@
 
 | 環境 | 起動コマンド（detached） | ロック |
 | --- | --- | --- |
-| `flock` が PATH にある | `flock -n <ロックファイル> pi update --all` | flock が更新プロセスの終了まで保持する |
-| windows で `flock` が PATH に無い | `~/.agents/cli/startup.exe update` | 再実行されたプロセスが名前付きパイプ `\\.\pipe\pi-update` をロックとして取得できたときだけ `pi update --all` を実行し、終了を待つ。ロックはそのプロセスの終了とともに OS が解放する |
-| 上記以外で `flock` が PATH に無い | 起動しない | なし |
+| Windows | `~/.agents/cli/startup.exe update` | 再実行されたプロセスが名前付きパイプ `\\.\pipe\pi-update` をロックとして取得できたときだけ `pi update --all` を実行し、終了を待つ。ロックはそのプロセスの終了とともに OS が解放する |
+| Windows 以外で `flock` が PATH にある | `flock -n <ロックファイル> pi update --all` | flock が更新プロセスの終了まで保持する |
+| Windows 以外で `flock` が PATH に無い | 起動しない | なし |
 
 ## スコープ外
 

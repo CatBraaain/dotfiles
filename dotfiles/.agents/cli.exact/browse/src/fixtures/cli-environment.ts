@@ -26,7 +26,9 @@ mock.module("node:child_process", () => ({
   spawnSync: (command: string, args: string[], options: childProcess.SpawnSyncOptions = {}) => {
     trace({ event: "spawnSync", command, args });
     if (scenario === "no-flock") return { error: new Error("ENOENT"), status: null };
-    if (command !== "flock") throw new Error(`unexpected process: ${command}`);
+    if (process.platform === "win32" || command !== "flock") {
+      throw new Error(`unexpected process: ${command}`);
+    }
     if (fixturePlatform) {
       return {
         error: Object.assign(new Error("flock not found"), { code: "ENOENT" }),
@@ -62,6 +64,10 @@ if (fixturePlatform === "win32") {
 }
 mock.module("../server", () => ({
   ...server,
+  ensureCamoufoxServer: async () => {
+    trace({ event: "ensure-camoufox-server" });
+    throw new Error("unexpected Camoufox server access");
+  },
   ensureOpenserpServer: async () => {},
   startCamoufoxServer: async () => {
     trace({ event: "start" });

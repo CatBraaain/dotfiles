@@ -1,6 +1,6 @@
 # htmlshot CLI spec
 
-コマンド `htmlshot` の仕様。サブコマンド `shot` / `extract` / `verify` を持ち、HTML正本をメタデータとして埋め込んだ製本PNG の生成・復元・検証をコマンドラインから実行する。実行は `~/.agents/cli/htmlshot` で行い、apply が owner実行権を付与する単一実行ファイルのため依存のインストールも不要である。
+コマンド `htmlshot` の仕様。サブコマンド `shot` / `extract` / `verify` を持ち、HTML正本をメタデータとして埋め込んだ製本PNG の生成・復元・検証をコマンドラインから実行する。実行は `~/.agents/cli/htmlshot` で行い、apply が owner実行権を付与する単一実行ファイルであり、npm 依存のインストールは不要である。
 
 読者はこの spec だけを読んで要件の go/no-go をするユーザーと、実装・テストの担当者。
 
@@ -59,7 +59,7 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 
 | 項目 | 値 |
 | --- | --- |
-| ブラウザの決定順 | 環境変数 `HTMLSHOT_BROWSER` → Playwright のブラウザキャッシュ（`~/.cache/ms-playwright`。Windows は `%LOCALAPPDATA%\ms-playwright`）の `chromium-*` のうちバージョン番号が大きい順に、その配下の `chrome-linux64/chrome`、無いとき `chrome-linux/chrome`（Windows は `chrome-win64/chrome.exe`、無いとき `chrome-win/chrome.exe`）→ PATH上（Windows は `;` 区切り）の `chromium`・`chromium-browser`・`google-chrome-stable`・`google-chrome`（Windows は `chromium.exe`・`chrome.exe`）の最初に見つけたもの |
+| ブラウザの決定順 | Playwright の標準ブラウザキャッシュ内の `chromium-<番号>` を番号の降順に探索する。各フォルダで Linux は `chrome-linux64/chrome`、次に `chrome-linux/chrome` を確認する。Windows は `chrome-win64/chrome.exe`、次に `chrome-win/chrome.exe` を確認する。最初に見つかった実行ファイルを直接起動する |
 | 読み込み | 正本の絶対パスの `file://` URL |
 | 起動フラグ | `--headless`、`--screenshot=<一時ファイル>`、`--window-size=<width>,<height>`、`--force-device-scale-factor=<scale>`、`--default-background-color=00000000`、`--hide-scrollbars`、`--virtual-time-budget=5000` |
 | 既定のレンダ設定 | width 1200、height 800。`--scale` を省略したときの scale は、width が height 以上のとき 1920 ÷ width、それ以外のとき 1080 ÷ height を四捨五入し、1〜3 の範囲に制限した値。`--width`・`--height`・`--scale` で変更する |
@@ -69,7 +69,7 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 - レンダで得たPNG の `IEND` 直前に `iTXt` を挿入し、出力先へ書き出す。他の chunk は変更しない。
 - 出力先の既定は正本名から拡張子 `.html` を除いた名前に `.html.png` を付けたパス（`a.html` → `a.html.png`）。`-o` で変更できる。既存ファイルの上書きは確認せずに行う。
 - 成功時は stdout に `shot: <output> (<width>x<height>@<scale>x, html <bytes> bytes)` と出す。
-- ブラウザが決定できないとき、レンダが失敗したとき、出力PNG が妥当な PNG でないときはエラーを stderr へ出し、終了コード非0 で終了する。
+- Playwright 管理の Chromium が標準キャッシュにないときは、見つからなかった旨と導入コマンド `playwright-cli install-browser chrome-for-testing --no-shell` を stderr に案内し、終了コード非0 で終了する。レンダが失敗したときや出力PNG が妥当な PNG でないときも、エラーを stderr へ出し、終了コード非0 で終了する。
 
 ## extract
 
@@ -105,7 +105,7 @@ usage: htmlshot shot <input.html> [-o <output.png>] [--width <n>] [--height <n>]
 ## 前提と依存
 
 - npm依存を持たない。PNG chunk操作・CRC32・deflate・sha256 は実装と Bun の標準API（`node:zlib`・`node:crypto`）で賄う。
-- `shot` だけが Chromium に依存する。`extract` と `verify` はレンダ環境なしで動く。
+- `shot` だけが、Playwright の標準キャッシュに導入済みの Chromium を使う。標準キャッシュは Linux では `${XDG_CACHE_HOME:-~/.cache}/ms-playwright`、Windows では `%LOCALAPPDATA%\ms-playwright`（`LOCALAPPDATA` が未設定ならホームの `AppData\Local\ms-playwright`）。`extract` と `verify` はレンダ環境なしで動く。
 
 ## テスト
 

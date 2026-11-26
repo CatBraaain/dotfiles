@@ -152,6 +152,7 @@ export async function recoverCamoufoxServer(): Promise<void> {
     await waitForServerHealthy(camoufoxBaseUrl(), AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));
     return;
   }
+  if (process.platform === "win32") return restartCamoufoxServer();
   const outcome = tryRunRecoveryRestart();
   if (outcome === "won") return;
   if (outcome === "no-flock") return restartCamoufoxServer();
@@ -407,14 +408,17 @@ export async function runCamoufoxServer(): Promise<void> {
   // hangs.
   console.log(`[camoufox-server] starting on ${baseUrl} at ${new Date().toISOString()}`);
 
+  const headless = resolveHeadless();
+  if (process.platform === "win32" && process.env.CAMOUFOX_HEADLESS === "0") {
+    console.log("[camoufox-server] headed mode is not supported on Windows; using headless mode");
+  }
+
   const camoufoxJsUrl = resolveCamoufoxJsUrl();
   const windowsExecutablePath =
     process.platform === "win32" ? await validateWindowsCamoufoxInstall(camoufoxJsUrl) : undefined;
   const { launchOptions } = (await import(camoufoxJsUrl)) as CamoufoxJsModule;
   const { firefox } = resolvePlaywrightCore();
 
-  // Linux では既定で headed（Xvfb 上）。CAMOUFOX_HEADLESS=1 で従来の headless。
-  const headless = resolveHeadless();
   if (!headless) {
     await ensureDisplay();
     await ensureX11vnc();

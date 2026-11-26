@@ -71,8 +71,8 @@ export function currentSlotNumber(): number | undefined {
 // pid stands in for the slot so concurrent runs never share a session either
 // way.
 export function camoufoxSessionKey(base: string): string {
-  const slot = currentSlotNumber();
-  return slot === undefined ? `${base}-${process.pid}` : `${base}-${slot}`;
+  const slot = process.platform === "win32" ? undefined : currentSlotNumber();
+  return `${base}-${slot ?? process.pid}`;
 }
 
 export function camoufoxBaseUrl(): string {

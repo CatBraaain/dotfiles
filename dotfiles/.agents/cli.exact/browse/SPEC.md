@@ -29,15 +29,15 @@ usage: browse search "<query>" [--lang <code>] [--json]
 - camoufox server は起動引数に待受ポート番号を持つ。`CAMOUFOX_BASE_URL` のポートを使い、省略時は `ws:` が80、`wss:` が443とする。ポート0は拒否する。PID ファイルの読み書きは行わない。新規起動の判定・停止・再起動・自動復旧では、同じ OS 上で同じユーザー・同じ実行ファイル・同じポート番号のローカルサーバーを探す。ホストやパスが異なっても、同じポート番号で複数台を管理することはできない。Windows は PowerShell のプロセス情報、Linux は `pgrep` と `/proc` を使う
 - Windows の camoufox server は、選択したインストール先の `version.json` から対応バージョンを確認し、実行ファイルが存在することを確認してから起動する。メタデータや実行ファイルが欠落している場合、またはバージョンが未対応の場合は、理由をサーバーログに出して異常終了する。Camoufox 本体の自動ダウンロードやインストール先の削除は行わない。
 - `search` と `fetch` が Camoufox で描画するときは、Playwright CLI の動作に上書きがなく、PATH 上の Playwright CLI と同じインストール先から `playwright-core` の接続 API を読み込める場合は、その JS API で稼働中のサーバーに直接接続する。試行ごとに新しいブラウザコンテキストを使い、cookie とページ状態を分離する。試行の成否にかかわらず、そのコンテキストを解放して接続を閉じる。接続の終了ではサーバーを停止しない。
-- `login twitter` とサーバーの機能ヘルスチェックは、Camoufox を firefox の remote endpoint に指定した `playwright-cli` を使う。描画でも、環境変数やユーザー全体の設定で Playwright CLI の動作を上書きする場合、作業ディレクトリに `.playwright/cli.config.json` がある場合、または `playwright-core` の接続 API を利用できない場合は、同じ経路を使う。ユーザー全体または環境変数の出力先設定だけでは Playwright CLI の動作を上書きしたとはみなさない。Windows では PATH 上の `playwright-cli.cmd` に対応する `@playwright/cli` を Node.js で直接起動し、それ以外では PATH 上の `playwright-cli` を起動する。
+- サーバーの機能ヘルスチェックと、Windows 以外で行う `login twitter` は、Camoufox を firefox の remote endpoint に指定した `playwright-cli` を使う。描画でも、環境変数やユーザー全体の設定で Playwright CLI の動作を上書きする場合、作業ディレクトリに `.playwright/cli.config.json` がある場合、または `playwright-core` の接続 API を利用できない場合は、同じ経路を使う。ユーザー全体または環境変数の出力先設定だけでは Playwright CLI の動作を上書きしたとはみなさない。Windows では PATH 上の `playwright-cli.cmd` に対応する `@playwright/cli` を Node.js で直接起動し、それ以外では PATH 上の `playwright-cli` を起動する。
 - Camoufox を使う描画の前に、対話用 Playwright CLI の接続先を `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/playwright-cli.config.json` に書き出す。
-- playwright-cli を使う描画と機能ヘルスチェックは、検索が `web-search-<n>`、フェッチが `web-fetch-<n>`、機能ヘルスチェックが `web-health-<n>`（`<n>` は renderスロット番号。`flock(1)` が無い環境ではプロセスの PID）をセッションキーに使い、各実行の冒頭と終了時に対象セッションを閉じる。
+- playwright-cli を使う描画と機能ヘルスチェックは、検索が `web-search-<n>`、フェッチが `web-fetch-<n>`、機能ヘルスチェックが `web-health-<n>`（`<n>` は renderスロット番号。Windows または `flock(1)` が無い環境ではプロセスの PID）をセッションキーに使い、各実行の冒頭と終了時に対象セッションを閉じる。
 - server の機能ヘルスチェックは、websocket接続と、ローカルHTTP（127.0.0.1）へのページopen の完了で判定する。ページopen がタイムアウトまでに完了しなければ応答不能とする（websocket応答だけでは、ページopen は成功するが HTTPナビゲーションが一切完了しないbrowser のハングを検知できない）
-- camoufox を使う `search` と `fetch` は、renderスロットセマフォ（既定4スロット）で並列実行する。スロットは `flock(1)` に依存し、利用できない環境では待ち合わせせずに実行する。スロットの獲得は、コマンド自身を内部サブコマンド `__locked`（usage には出ない）付きで空いているスロットの `flock(1)` の下へ再実行することで行う。4スロットすべてが埋まっていれば待つ。待機中と獲得の直後には restartロックの保持を探知し、server停止・再起動が進行していれば、まだrender を開始していない分はその完了まで待機し、完了後にスロットを取り直す。`__locked` が直接渡された実行はスロットを取得せずにコマンド本体を実行する。この再入は、スロット保持中の search / fetch が detached で server起動を依頼するときにも使う
-- `browse server stop` と `browse server restart` は restartロックと 4つすべての renderスロットを `flock(1)` で獲得してから実行する。実行中の render は完了まで、新規の render は停止・再起動操作の完了まで待つ。`flock(1)` が無い環境では待ち合わせずに実行する
-- render復旧に伴うserver再起動は restartロックで仲裁する。restartロックを獲得した側は、自分の renderスロット以外を獲得してから再起動する（自身のスロットは呼び出し元が保持中のため、4スロットすべてが再起動中に排除される）。獲得できなかった側は再起動を申請せず、server の healthy を 15秒まで待つ
+- camoufox を使う `search` と `fetch` は、renderスロットセマフォ（既定4スロット）で並列実行する。スロットは `flock(1)` に依存し、Windows または `flock(1)` が無い環境では待ち合わせずに実行する。Windows では server の停止・再起動・自動復旧も `flock(1)` を呼ばずに実行する。スロットの獲得は、コマンド自身を内部サブコマンド `__locked`（usage には出ない）付きで空いているスロットの `flock(1)` の下へ再実行することで行う。4スロットすべてが埋まっていれば待つ。待機中と獲得の直後には restartロックの保持を探知し、server停止・再起動が進行していれば、まだrender を開始していない分はその完了まで待機し、完了後にスロットを取り直す。`__locked` が直接渡された実行はスロットを取得せずにコマンド本体を実行する。この再入は、スロット保持中の search / fetch が detached で server起動を依頼するときにも使う
+- `browse server stop` と `browse server restart` は Windows 以外で `flock(1)` を利用できるとき、restartロックと 4つすべての renderスロットを `flock(1)` で獲得してから実行する。実行中の render は完了まで、新規の render は停止・再起動操作の完了まで待つ
+- Windows 以外で `flock(1)` を利用できるとき、render復旧に伴うserver再起動は restartロックで仲裁する。restartロックを獲得した側は、自分の renderスロット以外を獲得してから再起動する（自身のスロットは呼び出し元が保持中のため、4スロットすべてが再起動中に排除される）。獲得できなかった側は再起動を申請せず、server の healthy を 15秒まで待つ
 - server が起動してから 30秒以内の render復旧による再起動申請は、再起動せずserver の healthy を 15秒まで待つ。起動時刻は OS が報告するプロセスの開始時刻とする。対象がいない、または時刻を取得できない場合はクールダウンを適用しない
-- Reddit / StackOverflow / YouTube / Twitter / Hacker News / Wikipedia / arXiv の専用経路と `server start` は renderスロットを取得しない。GitHub は camoufox へのフォールバックを持つため取得する
+- Reddit / StackOverflow / YouTube / Twitter / Hacker News / Wikipedia / arXiv の専用経路と `server start` は renderスロットを取得しない。GitHub は camoufox へのフォールバックを持つため、排他が有効な環境では取得する
 
 ## 共通の振る舞い
 
@@ -48,9 +48,8 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | すべての backend が失敗した | 実行 | `All <operation> backends failed: <backend>: <error>; ...`（`<operation>` は `web search` または `web fetch`）を 1行stderr へ出力し、終了コード1 で終わる |
 | render が abortされる | 実行 | ローカルHTTP へのページopen を含む機能ヘルスチェックを行い、応答不能ならserverを自動再起動して同じbackendを再試行する。自動復旧後も全backendが失敗した場合は、`All ... failed` 行の次行へ `Hint: ...` 形式で、失敗が過渡的な可能性を示した再試行と、手動再起動 `~/.agents/cli/browse server restart` を案内する |
 | challenge / captcha を検出した | 実行 | 同一backend を1回だけ新しいsessionで再試行し、それでも失敗したら次のbackendへ進む |
-| Camoufoxのrenderがabort・timeout・切断した | 実行 | serverの機能ヘルスチェックを行う。応答不能ならserverを再起動してから新しいsessionで同じbackendを再試行する。再起動はrestartロックで仲裁し、自分以外のrenderスロットの完了を待って再起動する。仲裁に負けた側は再起動を申請せず、再起動の完了を15秒まで待つ。1コマンド全体のserver復旧再試行は1回までとし、失敗後は次のbackendへ進む |
+| Camoufoxのrenderがabort・timeout・切断した | 実行 | serverの機能ヘルスチェックを行う。応答不能ならserverを再起動してから新しいsessionで同じbackendを再試行する。再起動の仲裁は「前提と依存」の排他規則に従う。1コマンド全体のserver復旧再試行は1回までとし、失敗後は次のbackendへ進む |
 | 直接接続による描画で対象 URL が `file:`、またはページが JavaScript ダイアログを開く | 実行 | 描画失敗とし、DOM を返さない |
-| `search` または camoufox経路の `fetch` が同時に起動された | 実行 | 空いているrenderスロットで並列実行する（上限4）。すべてのスロットが埋まっていたら先に開始した実行の完了を待つ。待機中に server停止・再起動が始まったら、未開始の render はその完了まで待つ（開始済みの render は継続する）。Reddit / StackOverflow / YouTube / Twitter / Hacker News / Wikipedia / arXiv の専用経路はスロットを取得せず待ち合わせない。`login` は camoufox を使うためスロットを取得する |
 | 引数が `--help` だけ | 実行 | 冒頭の usage を stdout へ出力し、stderr には出力せず、終了コード0 で終わる |
 | 上記のヘルプ指定以外で、引数がないか、未知のサブコマンドを渡した | 実行 | usage を stderr へ出力し、終了コード1 で終わる |
 | 未知のフラグを渡した | 実行 | 対象サブコマンドの usage行を stderr へ出力し、終了コード1 で終わる |
@@ -69,7 +68,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | `browse server stop` / `browse server restart` の最初の終了要求後の待機 | 10秒 |
 | ページopen・ナビゲーション・DOM取得 | 30秒 |
 | 直接接続による描画で、ナビゲーションが `DOMContentLoaded` に到達した後 | `load` を最大5秒待ち、完了または待ち時間の満了後に challenge 検出待ちへ進む。描画全体の上限の内側で待つ |
-| render中に他の実行の server再起動が始まったとき | 実行中の render は再起動を待たず実行を継続する（再起動側が renderスロットの解放を待つため、実行中render が再起動の完了を待つ循環待ちは起きない） |
+| Windows 以外で `flock(1)` を使っており、render中に他の実行の server再起動が始まったとき | 実行中の render は再起動を待たず実行を継続する（再起動側が renderスロットの解放を待つため、実行中render が再起動の完了を待つ循環待ちは起きない） |
 | openserpパース・trafilatura変換・Reddit の各要求・StackOverflow の各要求・GitHub API の各要求・Hacker News / Wikipedia / arXiv / RSS / fxtwitter の各要求 | 15秒 |
 | yt-dlp によるYouTubeメタデータ・字幕の取得 | 60秒 |
 | `twikit_client.py` の実行（login・ツイート・タイムライン・検索） | 120秒 |
@@ -141,11 +140,11 @@ hangしたcamoufox server の復旧用に、[`browse server stop`](#browse-serve
 
 ## `browse login twitter`
 
-共有camoufoxブラウザで X (Twitter) に人間がログインし、後続の Twitter取得用に cookie を保存するサブコマンド。X がパスワードログインflow を廃止したため、CLI は認証情報を受け取らず人間のブラウザ操作に頼る。利用には Xアカウントが必要で、スクレイピングはアカウント凍結リスクを伴うため捨てアカウントの使用を推奨する。
+共有camoufoxブラウザで X (Twitter) に人間がログインし、後続の Twitter取得用に cookie を保存するサブコマンド。X がパスワードログインflow を廃止したため、CLI は認証情報を受け取らず人間のブラウザ操作に頼る。利用には Xアカウントが必要で、スクレイピングはアカウント凍結リスクを伴うため捨てアカウントの使用を推奨する。Windows は未対応の案内を stderr に1行出し、ブラウザ操作も cookie 保存も行わず終了コード0 で終わる。下表は Windows 以外に適用する。
 
 | 条件・状態 | 操作 | 結果 |
 | --- | --- | --- |
-| 実行 | 準備 | renderスロットを取得した上で camoufox server を確保し、session `twitter-login` で `https://x.com/login` を開く。x11vnc が利用可能なら VNC接続受付を開く（`display show` と同じ要求。失敗時は無視して続行する） |
+| 実行 | 準備 | `flock(1)` を利用できるときは renderスロットを取得する。camoufox server を確保し、session `twitter-login` で `https://x.com/login` を開く。x11vnc が利用可能なら VNC接続受付を開く（`display show` と同じ要求。失敗時は無視して続行する） |
 | 準備後 | 待ち合わせ | 「ログイン待ち」である旨と `browse display show` の案内を stderr へ出力し、x.com / twitter.com の cookie に `auth_token` が現れるまで pollする。poll間隔5秒、上限10分 |
 | `auth_token` を確認したら | 保存 | x.com / twitter.com の cookie を `twifork` の `load_cookies` が受け付ける `{name: value}` の flat JSON に変換し、`<XDG_CACHE_HOME または ~/.cache>/pi/web-search/twitter-cookies.json` に保存する |
 | 保存成功 | 終了 | `Logged in. Cookies saved to <path>` を1行stdout へ出力し、終了コード0 で終わる |
@@ -154,7 +153,7 @@ hangしたcamoufox server の復旧用に、[`browse server stop`](#browse-serve
 
 ## `browse display show` / `browse display hide`
 
-Xvfb `:99` 上の headed browser を VNC で人間へ引き継ぐための接続受付を切り替える。ブラウザ、ページ、cookie、playwright-cliセッションは再起動しない。headless browserそのものを headed に変更する操作ではない。
+Xvfb `:99` 上の headed browser を VNC で人間へ引き継ぐための接続受付を切り替える。ブラウザ、ページ、cookie、playwright-cliセッションは再起動しない。headless browserそのものを headed に変更する操作ではない。Windows は未対応の案内を stderr に1行出し、VNC を操作せず終了コード0 で終わる。下表は Windows 以外に適用する。
 
 | 条件・状態 | 操作 | 結果 |
 | --- | --- | --- |
@@ -170,11 +169,12 @@ Xvfb `:99` 上の headed browser を VNC で人間へ引き継ぐための接続
 
 | 条件 | 表示モード |
 | --- | --- |
-| `CAMOUFOX_HEADLESS=1` | headless |
-| `CAMOUFOX_HEADLESS=0` | headed |
-| それ以外（未指定・1 と 0以外の値） | Windows は headless、Windows以外の OS は headed |
+| Windows で `CAMOUFOX_HEADLESS=0` | headless。headed は未対応である旨をサーバーログに出す |
+| Windows で上記以外 | headless |
+| Windows 以外で `CAMOUFOX_HEADLESS=1` | headless |
+| Windows 以外で上記以外 | headed |
 
-headless のときは Xvfb も x11vnc も起動しない。headless と headed の両方で Firefox の content・GMP・RDD・socket process sandbox を有効に保つ。headed のとき、server は起動時に次のとおり補助プロセスを整える:
+headless のときは Xvfb と x11vnc を起動せず、`which` による x11vnc の探索も行わない。headless と headed の両方で Firefox の content・GMP・RDD・socket process sandbox を有効に保つ。headed のとき、server は起動時に次のとおり補助プロセスを整える:
 
 - ディスプレイの socket（`/tmp/.X11-unix/X99`。ファイルシステムsocket または Linux abstract socket）が存在しなければ `Xvfb :99` をバックグラウンドで起動し、socket が出現するのを待ってからブラウザを起動する。10秒以内に出現しなければ起動を断念し、server はエラーメッセージを出力して終了コード1 で終わる
 - ブラウザは起動時に `DISPLAY=:99` と Wayland の無効化（`MOZ_ENABLE_WAYLAND=0`）を与えられ、ウィンドウは Xvfb の :99 へ出る。`WAYLAND_DISPLAY` がある環境（WSLg など）でも、実画面（Wayland・XWayland を含む）にはウィンドウを表示しない
@@ -227,14 +227,14 @@ OpenSERP の各結果フィールドは省略できる。フィールドが存�
 | ツイートURL（`x.com/<user>/status/<id>` と twitter.com同等形） | フェッチ | fxtwitter API（`api.fxtwitter.com/status/<id>`、ログイン不要）で本文・統計・メディア・引用ツイートを markdown で出力する。失敗したらtwikit backend（cookie があればリプライも含む）を試す（renderスロットを取得しない） |
 | ツイートURL で fxtwitter が失敗し cookie がある | フェッチ | twikit backend が `scripts/twikit_client.py tweet <id>` を実行し、本文とリプライを markdown で出力する |
 | Twitterユーザーページ（`x.com/<user>`）・検索URL（`x.com/search?q=<query>`） | フェッチ | twikit backend が `scripts/twikit_client.py user` / `search` を実行し、ツイート一覧を markdown で出力する。cookie が無いときはエラーになり後続backend へ進む |
-| GitHubリポジトリ（`<owner>/<repo>`） | フェッチ | GitHub API でメタデータと README（base64デコード）を markdown で出力する（camoufox へのフォールバックを持つためrenderスロットを取得する） |
+| GitHubリポジトリ（`<owner>/<repo>`） | フェッチ | GitHub API でメタデータと README（base64デコード）を markdown で出力する（camoufox へのフォールバックを持つため、排他が有効な環境では renderスロットを取得する） |
 | GitHub issues / pull request URL | フェッチ | GitHub API で本文（issue comments、PR は review comments も含む）を markdown で出力する |
 | GitHub discussions URL | フェッチ | `GITHUB_TOKEN` / `GH_TOKEN` があれば GraphQL で本文とコメントを markdown で出力する。token が無いときは GitHub backend が失敗する |
 | GitHub以外の GitHub URL（コード・リリース等） | フェッチ | GitHub backend は判別せず失敗し、camoufox経路へ進む |
 | Hacker NewsアイテムURL | フェッチ | Algolia API（`hn.algolia.com/api/v1/items/<id>`）でタイトル・ポイント・コメントツリーを markdown で出力する（camoufox を使わないためrenderスロットも取得しない） |
 | Wikipedia記事URL（`<lang>.wikipedia.org/wiki/<title>`） | フェッチ | MediaWiki action API で plain text の本文を markdown で出力する（camoufox を使わないためrenderスロットも取得しない） |
 | arXiv abs URL（`arxiv.org/abs/<id>`） | フェッチ | arXiv API でタイトル・著者・カテゴリ・abstract を markdown で出力する（camoufox を使わないためrenderスロットも取得しない） |
-| その他の URL | フェッチ | renderスロットを取得した上で、まずRSS backend が直接fetchしてRSS / Atom / RDF としてパースできるか試し、フィードとして成立すれば記事情報を markdown で出力する。成立しなければ camoufox で描画し、trafilatura で markdown化して出力する。renderがabort・timeout・切断した場合は、機能ヘルスチェックと必要なserver再起動を行った後、新しいsessionで同じURLを1回だけ再試行する |
+| その他の URL | フェッチ | 排他が有効な環境では renderスロットを取得し、まずRSS backend が直接fetchしてRSS / Atom / RDF としてパースできるか試し、フィードとして成立すれば記事情報を markdown で出力する。成立しなければ camoufox で描画し、trafilatura で markdown化して出力する。renderがabort・timeout・切断した場合は、機能ヘルスチェックと必要なserver再起動を行った後、新しいsessionで同じURLを1回だけ再試行する |
 | Reddit / StackOverflow で全取得経路が失敗した | フェッチ | 共通の全backend失敗の振る舞いに従う。`<error>` は Reddit では `Unable to fetch Reddit post <postId> (RSS <status>)`（`<status>` は RSS要求の HTTP status番号。要求自体が失敗したときはそのエラー文言）、StackOverflow では `Unable to fetch StackOverflow question <questionId>` |
 
 markdown出力の構造（Reddit）: `# <title>`、`- Author:`、`- Permalink:`、`- Updated:`（feed の更新日時を取得できたときのみ出力）、`- Comments:`（常に出力。feed を取得できたときは `<n> fetched` または `<n> fetched / <m> displayed`、取得できなかったときは `unavailable`（embed から表示コメント数が取れるときは `unavailable (Reddit displays <m>)`））、`## Post`、`## Comments (<n> retrieved)`（feed を取得できたときのみ）、コメントは `### <番号>. <author>`。コメントのスコアと返信階層は RSS に無い旨の注記を入れる。

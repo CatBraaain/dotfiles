@@ -12,15 +12,11 @@ export const DISPLAY_NUMBER = 99;
 const VNC_PORT = 5900;
 const XVFB_SCREEN = "1920x1080x24";
 
-// Spec: Linux では既定で headed（Xvfb 上）。`CAMOUFOX_HEADLESS=1` で従来の
-// headless に戻せる。Xvfb のない Windows では既定で headless のまま。
 export function resolveHeadless(
   env: Record<string, string | undefined> = process.env,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  if (env.CAMOUFOX_HEADLESS === "1") return true;
-  if (env.CAMOUFOX_HEADLESS === "0") return false;
-  return platform === "win32";
+  return platform === "win32" || env.CAMOUFOX_HEADLESS === "1";
 }
 
 // Readiness probe for the display: Xvfb creates this unix socket on startup.

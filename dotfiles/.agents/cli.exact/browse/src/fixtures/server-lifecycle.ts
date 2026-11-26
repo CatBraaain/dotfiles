@@ -2,6 +2,7 @@ import { mock, spyOn } from "bun:test";
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as nodeModule from "node:module";
+import * as display from "../display";
 import { openLinuxProcess } from "../linux-process";
 import { delimiter, join } from "node:path";
 import * as util from "../util";
@@ -92,6 +93,9 @@ spyOn(process, "exit").mockImplementation(((code: number) => {
 mock.module("../windows-process", () => ({
   findWindowsServerProcesses: () => {
     if (scenario.startsWith("windows-stop-")) return [{ pid: 41001, identity: "fixture" }];
+    if (scenario === "windows-recover-cooldown") {
+      return [{ pid: 41001, identity: "fixture", startedAtMs: now }];
+    }
     return [...alive].map((pid) => ({ pid, identity: "fixture" }));
   },
   stopWindowsProcess: () => {
@@ -216,8 +220,7 @@ class FixtureWebSocket extends EventTarget {
 globalThis.WebSocket = FixtureWebSocket as unknown as typeof WebSocket;
 
 mock.module("../display", () => ({
-  DISPLAY_NUMBER: 99,
-  resolveHeadless: () => scenario !== "internal-headed",
+  ...display,
   ensureDisplay: async () => {
     events.push(["display"]);
   },
@@ -292,7 +295,7 @@ try {
     healthy = await camoufoxServerHealthy("ws://fixture.invalid/", AbortSignal.timeout(15000));
   } else if (scenario.startsWith("openserp")) {
     await ensureOpenserpServer(AbortSignal.timeout(15000));
-  } else if (scenario.startsWith("recover-")) {
+  } else if (scenario.startsWith("recover-") || scenario.startsWith("windows-recover-")) {
     await recoverCamoufoxServer();
   } else if (scenario.startsWith("stop-")) {
     await stopCamoufoxServer();

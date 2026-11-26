@@ -1,8 +1,9 @@
-import { test } from "bun:test";
+import { afterAll, beforeAll, test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -13,9 +14,48 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-function getStartupCommand(args: string[]): string[] {
-  if (process.env.STARTUP_BIN) return [process.env.STARTUP_BIN, ...args];
-  return [process.execPath, join(import.meta.dir, "main.ts"), ...args];
+const isWindows = process.platform === "win32";
+const posixTest = test.skipIf(isWindows);
+const windowsTest = test.skipIf(!isWindows);
+const CLEAN_EXIT = { exitCode: 0, stdout: "", stderr: "" };
+const UPDATE_TASK_ARG = "update";
+const UPDATE_LOCK_PIPE = "\\\\.\\pipe\\pi-update";
+const LOG_ARGS = 'printf "%s\\n" "$@" >> "$PROBE_LOG"\n';
+const STUB_MAX_WAIT_SECONDS = 30;
+const STARTUP_PROCESS_TIMEOUT_MS = 5000;
+const STARTUP_TEST_TIMEOUT_MS = 10_000;
+const WINDOWS_UPDATE_TEST_TIMEOUT_MS = 30_000;
+
+let windowsStubDir: string | undefined;
+
+if (isWindows) {
+  beforeAll(async () => {
+    windowsStubDir = mkdtempSync(join(tmpdir(), "startup-windows-stubs-"));
+    const source = join(windowsStubDir, "log-args.ts");
+    mkdirSync(join(windowsStubDir, "dist"));
+    writeFileSync(
+      source,
+      'import { appendFileSync } from "node:fs";\n' +
+        'appendFileSync(process.env.PROBE_LOG!, process.argv.slice(2).join("\\n") + "\\n");\n',
+    );
+    const build = Bun.spawn(
+      [
+        process.execPath,
+        "build",
+        "--compile",
+        source,
+        "--outfile",
+        windowsStubPath(windowsStubDir),
+      ],
+      { cwd: windowsStubDir, stdout: "ignore", stderr: "pipe", timeout: 20_000 },
+    );
+    const [exitCode, stderr] = await Promise.all([build.exited, new Response(build.stderr).text()]);
+    assert.equal(exitCode, 0, stderr);
+  }, 25_000);
+
+  afterAll(() => {
+    if (windowsStubDir) removeTestDirectory(windowsStubDir);
+  });
 }
 
 const cases = [
@@ -32,84 +72,66 @@ const cases = [
 ];
 
 for (const { status, launches, label } of cases) {
-  test(label, async () => {
-    const home = mkdtempSync(join(tmpdir(), "startup-health-"));
-    const bin = join(home, "bin");
-    const spawnLog = join(home, "spawn.log");
-    mkdirSync(bin, { recursive: true });
-    const stub = join(bin, "openserp");
-    writeFileSync(stub, '#!/bin/sh\nprintf "%s\\n" "$@" >> "$PROBE_LOG"\n');
-    chmodSync(stub, 0o755);
+  test(
+    label,
+    async () => {
+      const home = mkdtempSync(join(tmpdir(), "startup-health-"));
+      const bin = join(home, "bin");
+      const spawnLog = join(home, "spawn.log");
+      mkdirSync(bin, { recursive: true });
+      installArgvStub(join(bin, "openserp"));
 
-    const requests: string[] = [];
-    const server = Bun.serve({
-      hostname: "127.0.0.1",
-      port: 0,
-      fetch(request) {
-        const pathname = new URL(request.url).pathname;
-        requests.push(pathname);
-        return new Response(null, {
-          status: pathname === "/ready" ? status : 200,
-          headers: { Location: "/ready-target" },
-        });
-      },
-    });
+      const requests: string[] = [];
+      const server = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch(request) {
+          const pathname = new URL(request.url).pathname;
+          requests.push(pathname);
+          return new Response(null, {
+            status: pathname === "/ready" ? status : 200,
+            headers: { Location: "/ready-target" },
+          });
+        },
+      });
 
-    try {
-      const child = Bun.spawn(getStartupCommand([]), {
-        cwd: home,
-        env: {
+      try {
+        const result = await runScript({
           HOME: home,
           PATH: bin,
           TMPDIR: home,
-          XDG_CACHE_HOME: home,
           OPENSERP_BASE_URL: `http://127.0.0.1:${server.port}`,
           PROBE_LOG: spawnLog,
-        },
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const [exitCode, stdout, stderr] = await Promise.all([
-        child.exited,
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-      ]);
-      assert.equal(exitCode, 0);
-      assert.equal(stdout, "");
-      assert.equal(stderr, "");
+        });
+        assert.deepEqual(result, CLEAN_EXIT);
+        assert.deepEqual(requests, ["/ready"]);
 
-      if (launches) {
-        await waitForFile(spawnLog, 2000);
-      } else {
-        await Bun.sleep(150);
-      }
+        if (!launches) {
+          await assertNothingLogged(spawnLog);
+          return;
+        }
 
-      assert.deepEqual(requests, ["/ready"]);
-      assert.equal(existsSync(spawnLog), launches);
-      if (launches) {
-        const stubArgs = readFileSync(spawnLog, "utf8").trim().split("\n");
-        assert.deepEqual(stubArgs, [
-          "serve",
-          "-a",
-          "127.0.0.1",
-          "-p",
-          String(server.port),
-          "--quiet",
-        ]);
+        const expectedArgs = ["serve", "-a", "127.0.0.1", "-p", String(server.port), "--quiet"];
+        const stubArgs = await waitForLogLines(spawnLog, expectedArgs.length);
+        assert.deepEqual(stubArgs, expectedArgs);
+      } finally {
+        server.stop(true);
+        removeTestDirectory(home);
       }
-    } finally {
-      server.stop(true);
-      rmSync(home, { recursive: true, force: true });
-    }
-  });
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+}
+
+function getStartupCommand(args: string[]): string[] {
+  if (process.env.STARTUP_BIN) return [process.env.STARTUP_BIN, ...args];
+  return [process.execPath, join(import.meta.dir, "main.ts"), ...args];
 }
 
 function writeBrowseStub(home: string): void {
   const cliDir = join(home, ".agents", "cli");
   mkdirSync(cliDir, { recursive: true });
-  const stub = join(cliDir, "browse");
-  writeFileSync(stub, '#!/bin/sh\nprintf "%s\\n" "$@" >> "$PROBE_LOG"\n');
-  chmodSync(stub, 0o755);
+  installArgvStub(join(cliDir, "browse"));
 }
 
 async function runScript(
@@ -122,9 +144,13 @@ async function runScript(
 }> {
   const child = Bun.spawn(getStartupCommand(args), {
     cwd: env.HOME,
-    env,
+    env: {
+      ...(isWindows ? { SystemRoot: process.env.SystemRoot, USERPROFILE: env.HOME } : {}),
+      ...env,
+    },
     stdout: "pipe",
     stderr: "pipe",
+    timeout: STARTUP_PROCESS_TIMEOUT_MS,
   });
   const [exitCode, stdout, stderr] = await Promise.all([
     child.exited,
@@ -134,74 +160,62 @@ async function runScript(
   return { exitCode, stdout, stderr };
 }
 
-test("launches browse server start when the camoufox port is closed", async () => {
-  const home = mkdtempSync(join(tmpdir(), "startup-camoufox-"));
-  const spawnLog = join(home, "spawn.log");
-  writeBrowseStub(home);
+test(
+  "launches browse server start when the camoufox port is closed",
+  async () => {
+    const home = mkdtempSync(join(tmpdir(), "startup-camoufox-"));
+    const spawnLog = join(home, "spawn.log");
+    writeBrowseStub(home);
 
-  const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
-  const camoufoxPort = probe.port;
-  probe.stop(true);
+    const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+    const camoufoxPort = probe.port;
+    probe.stop(true);
 
-  try {
-    const { exitCode, stdout, stderr } = await runScript({
-      HOME: home,
-      PATH: home,
-      TMPDIR: home,
-      XDG_CACHE_HOME: home,
-      CAMOUFOX_BASE_URL: `ws://127.0.0.1:${camoufoxPort}/camoufox`,
-      PROBE_LOG: spawnLog,
-    });
-    assert.equal(exitCode, 0);
-    assert.equal(stdout, "");
-    assert.equal(stderr, "");
+    try {
+      const result = await runScript({
+        HOME: home,
+        PATH: home,
+        TMPDIR: home,
+        XDG_CACHE_HOME: home,
+        CAMOUFOX_BASE_URL: `ws://127.0.0.1:${camoufoxPort}/camoufox`,
+        PROBE_LOG: spawnLog,
+      });
+      assert.deepEqual(result, CLEAN_EXIT);
+      assert.deepEqual(await waitForLogLines(spawnLog, 2), ["server", "start"]);
+    } finally {
+      removeTestDirectory(home);
+    }
+  },
+  STARTUP_TEST_TIMEOUT_MS,
+);
 
-    await waitForFile(spawnLog, 2000);
-    const stubArgs = readFileSync(spawnLog, "utf8").trim().split("\n");
-    assert.deepEqual(stubArgs, ["server", "start"]);
-  } finally {
-    rmSync(home, { recursive: true, force: true });
-  }
-});
+test(
+  "skips browse server start when the camoufox port is open",
+  async () => {
+    const home = mkdtempSync(join(tmpdir(), "startup-camoufox-"));
+    const spawnLog = join(home, "spawn.log");
+    writeBrowseStub(home);
 
-test("skips browse server start when the camoufox port is open", async () => {
-  const home = mkdtempSync(join(tmpdir(), "startup-camoufox-"));
-  const spawnLog = join(home, "spawn.log");
-  writeBrowseStub(home);
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
 
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
-
-  try {
-    const { exitCode, stdout, stderr } = await runScript({
-      HOME: home,
-      PATH: home,
-      TMPDIR: home,
-      XDG_CACHE_HOME: home,
-      CAMOUFOX_BASE_URL: `ws://127.0.0.1:${server.port}/camoufox`,
-      PROBE_LOG: spawnLog,
-    });
-    assert.equal(exitCode, 0);
-    assert.equal(stdout, "");
-    assert.equal(stderr, "");
-
-    await Bun.sleep(150);
-    assert.equal(existsSync(spawnLog), false);
-  } finally {
-    server.stop(true);
-    rmSync(home, { recursive: true, force: true });
-  }
-});
-
-const isWindows = process.platform === "win32";
-const posixTest = test.skipIf(isWindows);
-const windowsTest = test.skipIf(!isWindows);
-const CLEAN_EXIT = { exitCode: 0, stdout: "", stderr: "" };
-const UPDATE_TASK_ARG = "update";
-const UPDATE_LOCK_PIPE = "\\\\.\\pipe\\pi-update";
-const LOG_ARGS = 'printf "%s\\n" "$@" >> "$PROBE_LOG"\n';
-const CONCURRENT_HOLDER_SETTLE_MS = 1500;
-const STUB_MAX_WAIT_SECONDS = 30;
-const WINDOWS_TEST_TIMEOUT_MS = 20_000;
+    try {
+      const result = await runScript({
+        HOME: home,
+        PATH: home,
+        TMPDIR: home,
+        XDG_CACHE_HOME: home,
+        CAMOUFOX_BASE_URL: `ws://127.0.0.1:${server.port}/camoufox`,
+        PROBE_LOG: spawnLog,
+      });
+      assert.deepEqual(result, CLEAN_EXIT);
+      await assertNothingLogged(spawnLog);
+    } finally {
+      server.stop(true);
+      removeTestDirectory(home);
+    }
+  },
+  STARTUP_TEST_TIMEOUT_MS,
+);
 
 posixTest("runs flock -n <lock> pi update --all when flock is available", async () => {
   const fixture = createShStubHome({ pi: LOG_ARGS, flock: LOG_ARGS });
@@ -253,31 +267,31 @@ posixTest("does not run pi update for the update argument outside windows", asyn
 });
 
 windowsTest(
-  "runs pi update --all once when pi starts concurrently without flock",
+  "runs only one pi update while the pipe is held even with flock.exe on PATH",
   async () => {
     const fixture = createPiUpdateFixture();
     try {
+      const flockPath = installArgvStub(join(fixture.env.PATH, "flock"));
+      assert.equal(Bun.which("flock", { PATH: fixture.env.PATH }), flockPath);
       await waitForUpdateLockReleased();
-      const results = await Promise.all([
-        runScript(fixture.env),
-        runScript(fixture.env),
-        runScript(fixture.env),
-      ]);
-      for (const result of results) {
-        assert.deepEqual(result, CLEAN_EXIT);
-      }
 
-      await waitForLogLines(fixture.spawnLog, 1);
-      await Bun.sleep(CONCURRENT_HOLDER_SETTLE_MS);
+      assert.deepEqual(await runScript(fixture.env), CLEAN_EXIT);
+      assert.deepEqual(await waitForLogLines(fixture.spawnLog, 1), ["update --all"]);
+
+      const contenders = await Promise.all([
+        runScript(fixture.env, [UPDATE_TASK_ARG]),
+        runScript(fixture.env, [UPDATE_TASK_ARG]),
+      ]);
+      assert.deepEqual(contenders, [CLEAN_EXIT, CLEAN_EXIT]);
       assert.equal(await tryListen(UPDATE_LOCK_PIPE), false, "the first update is still running");
       assert.deepEqual(readLogLines(fixture.spawnLog), ["update --all"]);
     } finally {
       writeFileSync(fixture.releaseFile, "");
       await waitForUpdateLockReleased();
-      rmSync(fixture.home, { recursive: true, force: true });
+      removeTestDirectory(fixture.home);
     }
   },
-  WINDOWS_TEST_TIMEOUT_MS,
+  WINDOWS_UPDATE_TEST_TIMEOUT_MS,
 );
 
 windowsTest(
@@ -297,11 +311,12 @@ windowsTest(
         "update --all",
       ]);
     } finally {
+      writeFileSync(fixture.releaseFile, "");
       await waitForUpdateLockReleased();
-      rmSync(fixture.home, { recursive: true, force: true });
+      removeTestDirectory(fixture.home);
     }
   },
-  WINDOWS_TEST_TIMEOUT_MS,
+  WINDOWS_UPDATE_TEST_TIMEOUT_MS,
 );
 
 function createShStubHome(stubs: Record<string, string>): {
@@ -330,9 +345,29 @@ function writeShStub(path: string, body: string): void {
   chmodSync(path, 0o755);
 }
 
+function installArgvStub(path: string): string {
+  if (!isWindows) {
+    writeShStub(path, LOG_ARGS);
+    return path;
+  }
+
+  assert.ok(windowsStubDir);
+  const exePath = `${path}.exe`;
+  linkSync(windowsStubPath(windowsStubDir), exePath);
+  return exePath;
+}
+
+function windowsStubPath(dir: string): string {
+  return join(dir, "dist", "log-args.exe");
+}
+
+function removeTestDirectory(dir: string): void {
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+}
+
 function createPiUpdateFixture(): {
   home: string;
-  env: Record<string, string>;
+  env: { HOME: string; PATH: string; PROBE_LOG: string; PROBE_RELEASE: string };
   spawnLog: string;
   releaseFile: string;
 } {
@@ -358,20 +393,9 @@ function createPiUpdateFixture(): {
     ].join("\r\n"),
   );
 
-  const env: Record<string, string | undefined> = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (key.toUpperCase() === "PATH") delete env[key];
-  }
   return {
     home,
-    env: {
-      ...env,
-      HOME: home,
-      USERPROFILE: home,
-      PATH: bin,
-      PROBE_LOG: spawnLog,
-      PROBE_RELEASE: releaseFile,
-    },
+    env: { HOME: home, PATH: bin, PROBE_LOG: spawnLog, PROBE_RELEASE: releaseFile },
     spawnLog,
     releaseFile,
   };
@@ -411,14 +435,6 @@ function tryListen(address: string): Promise<boolean> {
     probe.once("error", () => resolve(false));
     probe.listen(address, () => probe.close(() => resolve(true)));
   });
-}
-
-async function waitForFile(path: string, timeoutMs: number): Promise<void> {
-  await waitFor(
-    () => existsSync(path),
-    timeoutMs,
-    `file not created within ${timeoutMs}ms: ${path}`,
-  );
 }
 
 async function waitFor(

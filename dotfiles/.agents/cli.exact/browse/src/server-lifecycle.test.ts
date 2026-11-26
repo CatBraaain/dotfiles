@@ -12,6 +12,7 @@ interface Report {
   probes: number;
   pid: number;
   root: string;
+  stdout: string;
 }
 
 function runServer(
@@ -71,8 +72,9 @@ function runServer(
       },
     );
     assert.equal(child.exitCode, 0, child.stderr.toString());
-    const lastLine = child.stdout.toString().trim().split("\n").at(-1)!;
-    return { ...JSON.parse(lastLine), root };
+    const stdout = child.stdout.toString();
+    const lastLine = stdout.trim().split("\n").at(-1)!;
+    return { ...JSON.parse(lastLine), root, stdout };
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -319,9 +321,20 @@ describe("internal server contract", () => {
     const launch = report.events.find(([name]) => name === "launchServer")?.[1];
     assert.equal(launch.executablePath, join(installDir, "camoufox.exe"));
     assert.equal(launch.port, 9378);
+    assert.doesNotMatch(report.stdout, /headed mode is not supported/);
     assert.ok(
       !report.events.some(([name, path]) => name === "require" && path === "playwright-core"),
     );
+  });
+
+  it("logs the Windows headed fallback and launches headless without display helpers", () => {
+    const report = runServer("windows-internal", { CAMOUFOX_HEADLESS: "0" });
+    assert.equal(report.error, undefined);
+    assert.match(report.stdout, /headed mode is not supported on Windows; using headless mode/);
+    const fingerprint = report.events.find(([name]) => name === "launchOptions")?.[1];
+    assert.equal(fingerprint.headless, true);
+    assert.equal(fingerprint.virtual_display, undefined);
+    assert.ok(!report.events.some(([name]) => name === "display" || name === "vnc"));
   });
 
   it("uses the Windows install override to resolve both metadata and the default executable", () => {
@@ -410,20 +423,26 @@ describe("internal server contract", () => {
     assert.ok(!Object.keys(launch.env).some((name) => name.startsWith("MOZ_DISABLE_")));
   });
 
-  it("prepares headed helpers first and forces Xvfb and X11 even when Wayland is inherited", () => {
-    const report = runServer("internal-headed", { WAYLAND_DISPLAY: "wayland-0" });
-    assert.equal(report.error, undefined);
-    const names = report.events.map(([name]) => name);
-    assert.ok(names.indexOf("display") < names.indexOf("vnc"));
-    assert.ok(names.indexOf("vnc") < names.indexOf("launchOptions"));
-    const fingerprint = report.events.find(([name]) => name === "launchOptions")?.[1];
-    const launch = report.events.find(([name]) => name === "launchServer")?.[1];
-    assert.equal(fingerprint.headless, false);
-    assert.equal(fingerprint.virtual_display, ":99");
-    assert.equal(launch.env.DISPLAY, ":99");
-    assert.equal(launch.env.MOZ_ENABLE_WAYLAND, "0");
-    assert.equal(launch.env.EXISTING, "kept");
-  });
+  it.skipIf(process.platform === "win32")(
+    "prepares headed helpers first and forces Xvfb and X11 even when Wayland is inherited",
+    () => {
+      const report = runServer("internal-headed", {
+        CAMOUFOX_HEADLESS: "0",
+        WAYLAND_DISPLAY: "wayland-0",
+      });
+      assert.equal(report.error, undefined);
+      const names = report.events.map(([name]) => name);
+      assert.ok(names.indexOf("display") < names.indexOf("vnc"));
+      assert.ok(names.indexOf("vnc") < names.indexOf("launchOptions"));
+      const fingerprint = report.events.find(([name]) => name === "launchOptions")?.[1];
+      const launch = report.events.find(([name]) => name === "launchServer")?.[1];
+      assert.equal(fingerprint.headless, false);
+      assert.equal(fingerprint.virtual_display, ":99");
+      assert.equal(launch.env.DISPLAY, ":99");
+      assert.equal(launch.env.MOZ_ENABLE_WAYLAND, "0");
+      assert.equal(launch.env.EXISTING, "kept");
+    },
+  );
 });
 
 describe("bootstrap and recovery timing", () => {
@@ -557,6 +576,23 @@ describe("bootstrap and recovery timing", () => {
       );
     },
   );
+
+  it("recovers on Windows by restarting directly without flock", () => {
+    const report = runServer("windows-recover-direct");
+    assert.equal(report.error, undefined);
+    assert.equal(report.events.filter(([name]) => name === "spawn").length, 1);
+    assert.equal(report.probes, 3);
+    assert.ok(
+      !report.events.some(([name, command]) => name === "spawnSync" && command === "flock"),
+    );
+  });
+
+  it("keeps the Windows recovery cooldown without flock", () => {
+    const report = runServer("windows-recover-cooldown");
+    assert.equal(report.error, undefined);
+    assert.equal(report.probes, 3);
+    assert.ok(!report.events.some(([name]) => name === "spawn" || name === "spawnSync"));
+  });
 
   it.skipIf(process.platform === "win32")(
     "performs the restart directly when flock is unavailable",

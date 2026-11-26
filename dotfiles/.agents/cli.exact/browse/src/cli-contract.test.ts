@@ -1,6 +1,6 @@
 import { describe, it } from "bun:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,6 +8,9 @@ const project = join(import.meta.dir, "..");
 const preload = join(import.meta.dir, "fixtures/cli-environment.ts");
 const searchUsage = 'usage: browse search "<query>" [--lang <code>] [--json]\n';
 const fetchUsage = "usage: browse fetch <url> [--json]\n";
+const loginUsage = "usage: browse login twitter\n";
+const displayUsage = "usage: browse display show\n       browse display hide\n";
+const windowsPlatform = { BROWSE_FIXTURE_PLATFORM: "win32" };
 const topLevelUsage = `${searchUsage}       browse fetch <url> [--json]
        browse login twitter
        browse server start
@@ -22,9 +25,15 @@ interface CliFixtureOutput {
   fallbacks?: { backend: string }[];
 }
 
-function runCli(args: string[], extraEnv: Record<string, string> = {}) {
+function runCli(args: string[], extraEnv: Record<string, string> = {}, existingCookies?: string) {
   const root = mkdtempSync(join(tmpdir(), "browse-cli-contract-"));
   try {
+    const cookiesDir = join(root, "pi", "web-search");
+    const cookiesPath = join(cookiesDir, "twitter-cookies.json");
+    if (existingCookies !== undefined) {
+      mkdirSync(cookiesDir, { recursive: true });
+      writeFileSync(cookiesPath, existingCookies);
+    }
     const trace = join(root, "trace");
     const child = Bun.spawnSync([process.execPath, "--preload", preload, project, ...args], {
       env: {
@@ -46,6 +55,7 @@ function runCli(args: string[], extraEnv: Record<string, string> = {}) {
       code: child.exitCode,
       stdout: child.stdout.toString(),
       stderr: child.stderr.toString(),
+      cookies: existsSync(cookiesPath) ? readFileSync(cookiesPath, "utf8") : undefined,
       events,
     };
   } finally {
@@ -204,17 +214,20 @@ describe("CLI output and failure contract", () => {
     assert.equal(JSON.parse(result.stdout).engine, "google");
   });
 
-  it("restarts once through the public command when flock is unavailable", () => {
-    const result = runCli(["server", "restart"], { BROWSE_FIXTURE_SCENARIO: "no-flock" });
-    assert.equal(result.code, 0, result.stderr);
-    assert.equal(result.stdout, "");
-    assert.equal(result.stderr, "");
-    assert.equal(result.events.filter((event) => event.event === "restart").length, 1);
-    const flockCalls = result.events.filter((event) => event.command === "flock");
-    assert.equal(flockCalls.length, 1);
-    assert.ok(flockCalls[0].args[0].endsWith("browse-restart.lock"));
-    assert.deepEqual(flockCalls[0].args.slice(-3), ["__locked", "server", "restart"]);
-  });
+  it.skipIf(process.platform === "win32")(
+    "restarts once through the public command when flock is unavailable",
+    () => {
+      const result = runCli(["server", "restart"], { BROWSE_FIXTURE_SCENARIO: "no-flock" });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.stdout, "");
+      assert.equal(result.stderr, "");
+      assert.equal(result.events.filter((event) => event.event === "restart").length, 1);
+      const flockCalls = result.events.filter((event) => event.command === "flock");
+      assert.equal(flockCalls.length, 1);
+      assert.ok(flockCalls[0].args[0].endsWith("browse-restart.lock"));
+      assert.deepEqual(flockCalls[0].args.slice(-3), ["__locked", "server", "restart"]);
+    },
+  );
 
   it("does not acquire a render slot for a Reddit fetch", () => {
     const result = runCli(["fetch", "https://www.reddit.com/r/bun/comments/abc123/", "--json"]);
@@ -224,10 +237,78 @@ describe("CLI output and failure contract", () => {
   });
 });
 
+describe("Windows CLI contract", () => {
+  for (const action of ["show", "hide"]) {
+    it(`reports display ${action} as unsupported without touching VNC`, () => {
+      const result = runCli(["display", action], windowsPlatform);
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.stdout, "");
+      assert.equal(result.stderr, `browse display ${action} is not supported on Windows.\n`);
+      assert.deepEqual(result.events, []);
+    });
+  }
+
+  for (const cookies of [undefined, '{"auth_token":"fixture"}']) {
+    it(`reports Twitter login as unsupported and ${cookies ? "preserves" : "does not create"} cookies`, () => {
+      const result = runCli(["login", "twitter"], windowsPlatform, cookies);
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.stdout, "");
+      assert.equal(result.stderr, "browse login twitter is not supported on Windows.\n");
+      assert.deepEqual(result.events, []);
+      assert.equal(result.cookies, cookies);
+    });
+  }
+
+  for (const [args, usage] of [
+    [["display"], displayUsage],
+    [["display", "toggle"], displayUsage],
+    [["display", "hide", "extra"], displayUsage],
+    [["login"], loginUsage],
+    [["login", "other"], loginUsage],
+    [["login", "twitter", "extra"], loginUsage],
+  ] as const) {
+    it(`rejects malformed arguments: ${args.join(" ")}`, () => {
+      const result = runCli([...args], windowsPlatform);
+      assert.equal(result.code, 1);
+      assert.equal(result.stdout, "");
+      assert.equal(result.stderr, usage);
+      assert.deepEqual(result.events, []);
+    });
+  }
+
+  for (const args of [
+    ["search", "query", "--json"],
+    ["fetch", "https://example.com/article", "--json"],
+    ["__locked", "search", "query", "--json"],
+  ]) {
+    it(`renders with a per-process session and no flock: ${args.join(" ")}`, () => {
+      const result = runCli(args, { ...windowsPlatform, BROWSE_SLOT: "0" });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.stderr, "");
+      const render = result.events.find(({ event }) => event === "begin");
+      assert.ok(render);
+      const operation = args.includes("search") ? "search" : "fetch";
+      assert.equal(render.session, `web-${operation}-${render.pid}`);
+      assert.ok(!result.events.some(({ command }) => command === "flock"));
+    });
+  }
+
+  it("restarts once without flock", () => {
+    const result = runCli(["server", "restart"], windowsPlatform);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "");
+    assert.deepEqual(
+      result.events.map(({ command, event }) => command ?? event),
+      ["restart"],
+    );
+  });
+});
+
 describe("CLI server stop contract", () => {
   const port = "19378";
   const serverUrl = `ws://127.0.0.1:${port}/camoufox`;
-  const windows = { BROWSE_FIXTURE_PLATFORM: "win32", CAMOUFOX_BASE_URL: serverUrl };
+  const windows = { ...windowsPlatform, CAMOUFOX_BASE_URL: serverUrl };
 
   it("stops the matching Windows server without starting another one", () => {
     const result = runCli(["server", "stop"], windows);
@@ -236,10 +317,10 @@ describe("CLI server stop contract", () => {
     assert.equal(result.stderr, "");
     assert.deepEqual(
       result.events.map(({ event, command }) => command ?? event),
-      ["flock", "find-windows-server", "stop-windows-process"],
+      ["find-windows-server", "stop-windows-process"],
     );
-    assert.equal(result.events[1].port, port);
-    const stoppedProcess = result.events[2];
+    assert.equal(result.events[0].port, port);
+    const stoppedProcess = result.events[1];
     assert.equal(stoppedProcess.targetPid, 41001);
     assert.equal(stoppedProcess.identity, "fixture");
   });
@@ -249,7 +330,7 @@ describe("CLI server stop contract", () => {
     assert.equal(result.code, 0, result.stderr);
     assert.deepEqual(
       result.events.map(({ event }) => event),
-      ["spawnSync", "find-windows-server"],
+      ["find-windows-server"],
     );
   });
 
@@ -260,6 +341,7 @@ describe("CLI server stop contract", () => {
     });
     assert.equal(result.code, 1);
     assert.equal(result.stderr, "Could not confirm the Windows Camoufox server exited\n");
+    assert.ok(!result.events.some(({ command }) => command === "flock"));
   });
 
   it("reports the shared process discovery error outside Linux and Windows", () => {

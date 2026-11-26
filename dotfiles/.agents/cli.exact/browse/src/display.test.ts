@@ -36,7 +36,7 @@ describe("server display mode", () => {
       it(`resolves CAMOUFOX_HEADLESS=${value} on ${platform}`, () => {
         assert.equal(
           resolveHeadless({ CAMOUFOX_HEADLESS: value }, platform),
-          value === "1" || (value !== "0" && platform === "win32"),
+          platform === "win32" || value === "1",
         );
       });
     }
