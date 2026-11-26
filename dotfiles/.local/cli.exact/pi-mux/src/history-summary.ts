@@ -24,8 +24,17 @@ const SESSION_HEADER_MAX_BYTES = 64 * 1024;
 const SESSION_HEADER_PREFIX_BYTES = 1024;
 const SESSION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
 const FIRST_MESSAGE_MAX_CODE_POINTS = 80;
-const SESSION_INFO_TYPE_BYTES = Buffer.from("session_info");
 const JSON_UNICODE_ESCAPE_BYTES = Buffer.from("\\u");
+const SESSION_INFO_TYPE_BYTES = Buffer.from('"session_info"');
+const USER_ROLE_BYTES = Buffer.from('"user"');
+const UNDERSCORE_BYTE = "_".charCodeAt(0);
+const LOWERCASE_U_BYTE = "u".charCodeAt(0);
+const SUMMARY_MARKER_OVERLAP_BYTES =
+  Math.max(
+    SESSION_INFO_TYPE_BYTES.length,
+    USER_ROLE_BYTES.length,
+    JSON_UNICODE_ESCAPE_BYTES.length,
+  ) - 1;
 const LAST_RUN_SCAN_BYTES = 16 * 1024 * 1024;
 const LAST_RUN_CUSTOM_TYPE = "pi-mux-last-run";
 const LAST_RUN_CUSTOM_TYPE_BYTES = Buffer.from(`"${LAST_RUN_CUSTOM_TYPE}"`);
@@ -41,6 +50,7 @@ type StoredSummary = SavedSessionSummary & {
   fingerprint?: string;
 };
 type SavedSessionHistory = StoredSummary & { size: number };
+type SummaryScan = { mtime: number | null; mayHaveUserMessage: boolean };
 
 export function parseEpochMs(value: unknown): number | undefined {
   if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
@@ -300,37 +310,34 @@ function readSavedSessionSummary(
   header: SavedSessionHeader | null,
 ): StoredSummary {
   try {
-    let title: string | null = null;
-    let titleFound = false;
-    let mtime: number | null = null;
-    let mtimeFound = false;
-    for (const line of reverseLines(fd, size)) {
-      if (line.length === 0 || (mtimeFound && !mayContainSessionInfo(line))) continue;
+    let namedTitle: string | null | undefined;
+    const scan: SummaryScan = { mtime: null, mayHaveUserMessage: false };
+    for (const line of reverseSummaryLines(fd, size, scan)) {
+      if (line.length === 0 || !mayContainSummaryLine(line, scan.mtime)) continue;
       let entry: unknown;
       try {
         entry = JSON.parse(line.toString("utf8"));
       } catch {
         continue;
       }
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-      const record = entry as Record<string, unknown>;
-      if (!titleFound && record.type === "session_info") {
-        title = typeof record.name === "string" ? record.name.trim() || null : null;
-        titleFound = true;
+      if (!isJsonObject(entry)) continue;
+      if (namedTitle === undefined && entry.type === "session_info") {
+        namedTitle = typeof entry.name === "string" ? entry.name.trim() || null : null;
       }
-      if (!mtimeFound && (record.type === "message" || record.type === "compaction")) {
-        const ms = parseEpochMs(record.timestamp);
-        if (ms !== undefined) {
-          mtime = ms;
-          mtimeFound = true;
-        }
+      if (scan.mtime === null && (entry.type === "message" || entry.type === "compaction")) {
+        scan.mtime = parseEpochMs(entry.timestamp) ?? null;
       }
-      if (titleFound && mtimeFound) break;
+      if (namedTitle !== undefined && scan.mtime !== null) break;
     }
-    const firstUser = readFirstUserMessage(fd, size, title);
+    const title = namedTitle ?? null;
+    const didStopBeforeStart = namedTitle !== undefined && scan.mtime !== null;
+    const firstUser =
+      didStopBeforeStart || scan.mayHaveUserMessage
+        ? readFirstUserMessage(fd, size, title)
+        : { title, btime: null };
     return {
       ...firstUser,
-      mtime,
+      mtime: scan.mtime,
       header,
       fingerprint: fileFingerprint(fstatSync(fd, { bigint: true })),
     };
@@ -339,32 +346,27 @@ function readSavedSessionSummary(
   }
 }
 
-function* forwardLines(fd: number, size: number): Generator<string> {
-  let position = 0;
+function* forwardLines(fd: number, size: number, from = 0): Generator<Buffer, void> {
+  let position = from;
   let parts: Buffer[] = [];
   while (position < size) {
     const length = Math.min(SUMMARY_READ_CHUNK_BYTES, size - position);
-    position += length;
     const buffer = Buffer.allocUnsafe(length);
-    let filled = 0;
-    while (filled < length) {
-      const count = readSync(fd, buffer, filled, length - filled, position - length + filled);
-      if (count === 0) throw new Error("Session changed during title lookup");
-      filled += count;
-    }
+    readSummaryBytes(fd, buffer, position);
+    position += length;
     let start = 0;
     let newline = buffer.indexOf(10, start);
     while (newline >= 0) {
       const prefix = buffer.subarray(start, newline);
       const line = parts.length > 0 ? Buffer.concat([...parts, prefix]) : prefix;
-      yield line.toString("utf8");
+      yield line;
       parts = [];
       start = newline + 1;
       newline = start < length ? buffer.indexOf(10, start) : -1;
     }
     if (start < length) parts.push(buffer.subarray(start, length));
   }
-  if (parts.length > 0) yield Buffer.concat(parts).toString("utf8");
+  if (parts.length > 0) yield Buffer.concat(parts);
 }
 
 function readFirstUserMessage(
@@ -376,25 +378,21 @@ function readFirstUserMessage(
   let btime: number | null = null;
   let firstUserFound = false;
   for (const line of forwardLines(fd, size)) {
-    if (!line) continue;
+    if (line.length === 0) continue;
     let entry: unknown;
     try {
-      entry = JSON.parse(line);
+      entry = JSON.parse(line.toString("utf8"));
     } catch {
       continue;
     }
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const record = entry as Record<string, unknown>;
-    if (record.type !== "message") continue;
-    const message = record.message;
-    if (!message || typeof message !== "object" || Array.isArray(message)) continue;
-    const { role, content } = message as Record<string, unknown>;
-    if (role !== "user") continue;
+    if (!isJsonObject(entry) || entry.type !== "message") continue;
+    const { message } = entry;
+    if (!isJsonObject(message) || message.role !== "user") continue;
     if (!firstUserFound) {
-      btime = parseEpochMs(record.timestamp) ?? null;
+      btime = parseEpochMs(entry.timestamp) ?? null;
       firstUserFound = true;
     }
-    if (title === null) title = shapeFirstMessageTitle(messageText(content)) || null;
+    if (title === null) title = shapeFirstMessageTitle(messageText(message.content)) || null;
     if (title !== null) break;
   }
   return { title, btime };
@@ -429,23 +427,108 @@ function truncateCodePoints(text: string, limit: number): string {
   return text.slice(0, end);
 }
 
-function mayContainSessionInfo(line: Buffer): boolean {
-  return line.includes(SESSION_INFO_TYPE_BYTES) || line.includes(JSON_UNICODE_ESCAPE_BYTES);
+function containsSessionInfoMarker(bytes: Buffer): boolean {
+  return bytes.includes(UNDERSCORE_BYTE) && bytes.includes(SESSION_INFO_TYPE_BYTES);
 }
 
-function* reverseLines(fd: number, size: number, start = 0): Generator<Buffer> {
+function mayContainSummaryLine(bytes: Buffer, mtime: number | null): boolean {
+  return (
+    mtime === null || containsSessionInfoMarker(bytes) || bytes.includes(JSON_UNICODE_ESCAPE_BYTES)
+  );
+}
+
+function* reverseSummaryLines(fd: number, size: number, scan: SummaryScan): Generator<Buffer> {
+  const bufferSize = Math.min(SUMMARY_READ_CHUNK_BYTES + SUMMARY_MARKER_OVERLAP_BYTES, size);
+  let buffer = Buffer.allocUnsafe(bufferSize);
+  let position = size;
+  let lineEnd: number | undefined = size;
+  let pendingCandidate = false;
+  let activityLineParts: Buffer[] = [];
+  while (position > 0) {
+    const length = position % SUMMARY_READ_CHUNK_BYTES || SUMMARY_READ_CHUNK_BYTES;
+    const endWithOverlap = Math.min(size, position + SUMMARY_MARKER_OVERLAP_BYTES);
+    position -= length;
+    const chunk = buffer.subarray(0, endWithOverlap - position);
+    readSummaryBytes(fd, chunk, position);
+    const hasLowercaseU = chunk.includes(LOWERCASE_U_BYTE);
+    const hasUnicodeEscape = hasLowercaseU && chunk.includes(JSON_UNICODE_ESCAPE_BYTES);
+    scan.mayHaveUserMessage ||=
+      hasUnicodeEscape || (hasLowercaseU && chunk.includes(USER_ROLE_BYTES));
+    if (
+      scan.mtime !== null &&
+      !pendingCandidate &&
+      !hasUnicodeEscape &&
+      !containsSessionInfoMarker(chunk)
+    ) {
+      lineEnd = undefined;
+      continue;
+    }
+    const lineBytes = chunk.subarray(0, length);
+    let newline = lineBytes.lastIndexOf(10);
+    const suffixStart = newline + 1;
+    const lineStart = position + suffixStart;
+    const suffix = chunk.subarray(
+      suffixStart,
+      lineEnd === undefined ? chunk.length : lineEnd - position,
+    );
+    pendingCandidate ||= mayContainSummaryLine(suffix, scan.mtime);
+    if (newline < 0) {
+      if (scan.mtime === null) {
+        activityLineParts.push(lineBytes);
+        buffer = Buffer.allocUnsafe(bufferSize);
+      }
+      continue;
+    }
+    if (activityLineParts.length > 0) {
+      yield Buffer.concat([lineBytes.subarray(suffixStart), ...activityLineParts.reverse()]);
+      activityLineParts = [];
+    } else if (pendingCandidate && (lineEnd === undefined || lineEnd > lineStart)) {
+      if (lineEnd === undefined) {
+        const line = forwardLines(fd, size, lineStart).next().value;
+        if (line) yield line;
+      } else {
+        yield lineEnd <= endWithOverlap ? suffix : readSummaryLine(fd, lineStart, lineEnd);
+      }
+    }
+    let end = newline;
+    if (mayContainSummaryLine(lineBytes.subarray(0, end), scan.mtime)) {
+      newline = end > 0 ? lineBytes.lastIndexOf(10, end - 1) : -1;
+      while (newline >= 0) {
+        yield lineBytes.subarray(newline + 1, end);
+        end = newline;
+        newline = end > 0 ? lineBytes.lastIndexOf(10, end - 1) : -1;
+      }
+      pendingCandidate = mayContainSummaryLine(lineBytes.subarray(0, end), scan.mtime);
+    } else {
+      end = lineBytes.indexOf(10);
+      pendingCandidate = false;
+    }
+    lineEnd = position + end;
+    if (scan.mtime === null && end > 0) {
+      activityLineParts.push(lineBytes.subarray(0, end));
+      buffer = Buffer.allocUnsafe(bufferSize);
+    }
+  }
+  if (activityLineParts.length > 0) {
+    yield Buffer.concat(activityLineParts.reverse());
+  } else if (pendingCandidate) {
+    if (lineEnd === undefined) {
+      const line = forwardLines(fd, size).next().value;
+      if (line) yield line;
+    } else if (lineEnd > 0) {
+      yield readSummaryLine(fd, 0, lineEnd);
+    }
+  }
+}
+
+function* reverseLines(fd: number, size: number, start: number): Generator<Buffer> {
   let position = size;
   let parts: Buffer[] = [];
   while (position > start) {
     const length = Math.min(SUMMARY_READ_CHUNK_BYTES, position - start);
     position -= length;
     const buffer = Buffer.allocUnsafe(length);
-    let filled = 0;
-    while (filled < length) {
-      const count = readSync(fd, buffer, filled, length - filled, position + filled);
-      if (count === 0) throw new Error("Session changed during summary lookup");
-      filled += count;
-    }
+    readSummaryBytes(fd, buffer, position);
     let end = length;
     let newline = buffer.lastIndexOf(10, end - 1);
     while (newline >= 0) {
@@ -458,6 +541,21 @@ function* reverseLines(fd: number, size: number, start = 0): Generator<Buffer> {
     if (end > 0) parts.push(buffer.subarray(0, end));
   }
   if (start === 0 && parts.length > 0) yield Buffer.concat(parts.reverse());
+}
+
+function readSummaryLine(fd: number, start: number, end: number): Buffer {
+  const line = Buffer.allocUnsafe(end - start);
+  readSummaryBytes(fd, line, start);
+  return line;
+}
+
+function readSummaryBytes(fd: number, buffer: Buffer, position: number): void {
+  let filled = 0;
+  while (filled < buffer.length) {
+    const count = readSync(fd, buffer, filled, buffer.length - filled, position + filled);
+    if (count === 0) throw new Error("Session changed during summary lookup");
+    filled += count;
+  }
 }
 
 function fileFingerprint(stat: BigIntStats): string {

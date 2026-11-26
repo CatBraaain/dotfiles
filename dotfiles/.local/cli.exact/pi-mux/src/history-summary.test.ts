@@ -377,13 +377,19 @@ describe("history reverse line boundaries", () => {
   const title = "Boundary 🙂";
   const messageLine = JSON.stringify(userMessage("First message"));
   const titleLine = JSON.stringify(sessionInfo(title));
-  const emptyPaddedTitle = JSON.stringify({ type: "session_info", name: title, padding: "" });
+  const bytesBeforeTitle = Buffer.byteLength([headerLine, messageLine, ""].join("\n"));
+  const bytesThroughMarkerPrefix = Buffer.byteLength(
+    titleLine.slice(0, titleLine.indexOf("session_info") + 5),
+  );
+  const olderTitleLine = JSON.stringify(sessionInfo("Older title"));
+  const emptyPaddedTitle = JSON.stringify({ type: "session_info", padding: "", name: title });
   const characterOffset = Buffer.from(emptyPaddedTitle).indexOf(Buffer.from("🙂"));
-  const paddingBytes = chunkBytes + 1 - (Buffer.byteLength(emptyPaddedTitle) - characterOffset);
+  const paddingBytes =
+    chunkBytes - 1 - bytesBeforeTitle - Buffer.byteLength(olderTitleLine + "\n") - characterOffset;
   const splitTitleLine = JSON.stringify({
     type: "session_info",
-    name: title,
     padding: "x".repeat(paddingBytes),
+    name: title,
   });
   const laterMessageLine = JSON.stringify(assistantMessage("Later message"));
   const cases = [
@@ -401,13 +407,8 @@ describe("history reverse line boundaries", () => {
       name: "a title entry type split across the reverse chunk boundary",
       contents: [
         messageLine,
+        "x".repeat(chunkBytes - bytesBeforeTitle - bytesThroughMarkerPrefix - 1),
         titleLine,
-        "x".repeat(
-          chunkBytes -
-            Buffer.byteLength(laterMessageLine) -
-            Buffer.byteLength(titleLine.slice(titleLine.indexOf("session_info") + 5)) -
-            2,
-        ),
         laterMessageLine,
       ].join("\n"),
       mtime: "2026-01-01T00:00:01.000Z",
@@ -415,13 +416,16 @@ describe("history reverse line boundaries", () => {
     { name: "empty lines", contents: ["", messageLine, "", titleLine, "", ""].join("\n") },
     {
       name: "a newline at the reverse chunk boundary",
-      contents: [messageLine, titleLine, "x".repeat(chunkBytes)].join("\n"),
+      contents: [
+        messageLine,
+        titleLine,
+        "x".repeat(chunkBytes - bytesBeforeTitle - Buffer.byteLength(titleLine + "\n")),
+        "",
+      ].join("\n"),
     },
     {
       name: "a title character split across the reverse chunk boundary",
-      contents: [messageLine, JSON.stringify(sessionInfo("Older title")), splitTitleLine].join(
-        "\n",
-      ),
+      contents: [messageLine, olderTitleLine, splitTitleLine].join("\n"),
     },
   ];
 
@@ -446,6 +450,121 @@ describe("history reverse line boundaries", () => {
 });
 
 describe("history first user message fallback", () => {
+  const chunkBytes = 256 * 1024;
+  const header = {
+    type: "session",
+    id: "untitled",
+    cwd: "/tmp",
+    timestamp: "2026-01-01T00:00:00.000Z",
+  };
+  const longContent = "x".repeat(1024 * 1024);
+  const lastActivityTimestamp = "2026-01-02T00:00:00.000Z";
+  const readCases = [
+    {
+      name: "uses a single scan when there are no user messages",
+      entries: [assistantMessage(longContent)],
+      title: null,
+      btime: null,
+      extraReadBudgetBytes: 1024,
+    },
+    {
+      name: "does not reread long user attachments after the first usable title",
+      entries: [
+        userMessage([]),
+        userMessage("First usable title", "m2"),
+        userMessage([{ type: "image", data: longContent }], "m3"),
+      ],
+      title: "First usable title",
+      btime: Date.parse(header.timestamp),
+      extraReadBudgetBytes: chunkBytes + 1024,
+    },
+    {
+      name: "does not reread a long appended entry needed to find the latest activity time",
+      entries: [userMessage("First usable title")],
+      appendedRecord: {
+        type: "message",
+        timestamp: lastActivityTimestamp,
+        message: { role: "assistant", content: longContent },
+      },
+      title: "First usable title",
+      btime: Date.parse(header.timestamp),
+      extraReadBudgetBytes: chunkBytes + 1024,
+    },
+  ];
+  for (const testCase of readCases) {
+    it(testCase.name, () => {
+      const { file, cacheHome } = writeSummaryFixture([header, ...testCase.entries]);
+      const previous = process.env.XDG_CACHE_HOME;
+      process.env.XDG_CACHE_HOME = cacheHome;
+      const originalReadSync = fs.readSync;
+      let historyBytesRead = 0;
+      const read = spyOn(fs, "readSync").mockImplementation((...args: unknown[]) => {
+        const bytes: number = Reflect.apply(originalReadSync, fs, args);
+        if (typeof args[4] === "number" && typeof args[3] === "number" && args[3] > 1024) {
+          historyBytesRead += bytes;
+        }
+        return bytes;
+      });
+      try {
+        const summaries = new HistorySummaryCache();
+        summaries.resolveHistory(file);
+        const appendedRecord = testCase.appendedRecord ?? {
+          type: "compaction",
+          timestamp: lastActivityTimestamp,
+        };
+        fs.appendFileSync(file, JSON.stringify(appendedRecord) + "\n");
+        historyBytesRead = 0;
+        const size = fs.statSync(file).size;
+        const summary = summaries.resolveHistory(file);
+        assert.deepEqual(
+          { title: summary?.title, btime: summary?.btime, mtime: summary?.mtime },
+          {
+            title: testCase.title,
+            btime: testCase.btime,
+            mtime: Date.parse(lastActivityTimestamp),
+          },
+        );
+        assert.ok(
+          historyBytesRead <= size + testCase.extraReadBudgetBytes,
+          `Scanned ${historyBytesRead} bytes for ${size} bytes of history`,
+        );
+        historyBytesRead = 0;
+        assert.deepEqual(summaries.resolve(file), { title: testCase.title, mtime: summary?.mtime });
+        assert.equal(historyBytesRead, 0);
+      } finally {
+        read.mockRestore();
+        if (previous === undefined) delete process.env.XDG_CACHE_HOME;
+        else process.env.XDG_CACHE_HOME = previous;
+        fs.rmSync(dirname(file), { recursive: true, force: true });
+      }
+    });
+  }
+
+  it("keeps user fallback when the only user marker is an escape split across chunks", () => {
+    const first = JSON.stringify(header);
+    const second = JSON.stringify(userMessage("First usable title", "m2"))
+      .replace('"user"', '"\\u0075ser"')
+      .replace("00:00:00.000Z", "00:00:02.000Z");
+    const last = JSON.stringify(assistantMessage("Later activity"));
+    const splitAfter = second.indexOf("\\u0075") + 1;
+    const padding =
+      chunkBytes - Buffer.byteLength(first) - Buffer.byteLength(second.slice(0, splitAfter)) - 2;
+    const { file, cacheHome } = writeSummaryFixture([]);
+    const previous = process.env.XDG_CACHE_HOME;
+    process.env.XDG_CACHE_HOME = cacheHome;
+    try {
+      fs.writeFileSync(file, [first, "x".repeat(padding), second, last].join("\n"));
+      const summary = new HistorySummaryCache().resolveHistory(file);
+      assert.equal(summary?.title, "First usable title");
+      assert.equal(summary?.btime, Date.parse("2026-01-01T00:00:02.000Z"));
+      assert.equal(summary?.mtime, Date.parse("2026-01-01T00:00:01.000Z"));
+    } finally {
+      if (previous === undefined) delete process.env.XDG_CACHE_HOME;
+      else process.env.XDG_CACHE_HOME = previous;
+      fs.rmSync(dirname(file), { recursive: true, force: true });
+    }
+  });
+
   it("extracts a string user message as the title", () => {
     const { file, cacheHome } = writeSummaryFixture([userMessage("fix the build")]);
     assert.equal(resolveTitleIsolated(cacheHome, file), "fix the build");
