@@ -510,7 +510,7 @@ describe("SessionWebviewProvider", () => {
   });
 
   describe("automatic list refresh", () => {
-    beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
+    beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] }));
 
     it("does not acquire history for an empty workspace registry", async () => {
       const runtime = providerRuntimes();
@@ -847,7 +847,7 @@ describe("SessionWebviewProvider", () => {
       webview.postMessage.mockClear();
       history.get(activeSessionId)!.title = "Changed while hidden";
       await provider.onSessionFileChanged();
-      await tick(provider, LIST_REFRESH_INTERVAL_MS);
+      await tick(provider, 1_000);
       expect(mocks.history).not.toHaveBeenCalled();
       expect(webview.postMessage).not.toHaveBeenCalled();
       webview.setVisible(true);
@@ -1093,8 +1093,33 @@ describe("SessionWebviewProvider", () => {
       expect(execute).toHaveBeenCalledWith("pi-mux", ["list", "--saved", "--json"], undefined);
     });
 
-    it("polls the list every 250 milliseconds", () => {
-      expect(LIST_REFRESH_INTERVAL_MS).toBe(250);
+    it.each([
+      { visibility: "shown", isVisible: true, count: 4 },
+      { visibility: "hidden", isVisible: false, count: 1 },
+    ])(
+      "polls $count times in one second when the list is $visibility",
+      async ({ isVisible, count }) => {
+        const { webview, mocks } = await unreadFixture();
+        if (!isVisible) webview.setVisible(false);
+        mocks.list.mockClear();
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(mocks.list).toHaveBeenCalledTimes(count);
+      },
+    );
+
+    it("replaces the scheduled visible poll using the last completion time when hidden", async () => {
+      const { mocks, webview } = await unreadFixture();
+      mocks.list.mockClear();
+      const elapsedBeforeHideMs = 200;
+      await vi.advanceTimersByTimeAsync(elapsedBeforeHideMs);
+      webview.setVisible(false);
+
+      await vi.advanceTimersByTimeAsync(999 - elapsedBeforeHideMs);
+      expect(mocks.list).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mocks.list).toHaveBeenCalledOnce();
     });
 
     it("waits for a slow query before scheduling the next interval", async () => {
@@ -1150,18 +1175,179 @@ describe("SessionWebviewProvider", () => {
       const { provider, webview, mocks, phases, markCompletion, row } = await unreadFixture();
       const scan = vi.spyOn(sessionStore, "listSessionSnapshot");
       mocks.list.mockClear();
+      mocks.history.mockClear();
       webview.postMessage.mockClear();
       webview.setVisible(false);
       phases.set(activeSessionId, "running");
-      await tick(provider);
-      await tick(provider);
+      await tick(provider, 2_000);
       expect(mocks.list).toHaveBeenCalledTimes(2);
+      expect(mocks.history).not.toHaveBeenCalled();
       expect(scan).not.toHaveBeenCalled();
       expect(webview.postMessage).not.toHaveBeenCalled();
       markCompletion();
       webview.setVisible(true);
+      expect(mocks.list).toHaveBeenCalledTimes(3);
       await webview.receive({ type: "ready" });
       expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
+    });
+
+    it("starts the visible list immediately without waiting for pending history", async () => {
+      const { provider, webview, mocks, history } = await unreadFixture();
+      const heldHistory = deferred<PiMuxHistoryEntry[]>();
+      mocks.history.mockClear();
+      mocks.history.mockReturnValueOnce(heldHistory.promise);
+      const refresh = provider.refresh();
+      await vi.waitFor(() => expect(mocks.history).toHaveBeenCalledOnce());
+      webview.setVisible(false);
+      mocks.list.mockClear();
+      webview.setVisible(true);
+      const listCallsOnShow = mocks.list.mock.calls.length;
+      heldHistory.resolve([...history.values()]);
+      await refresh;
+      await finishRefresh(provider);
+
+      expect(listCallsOnShow).toBe(1);
+    });
+
+    it.each([
+      { trigger: "show", historyOutcome: "success", listOutcome: "success" },
+      { trigger: "show", historyOutcome: "failure", listOutcome: "success" },
+      { trigger: "operation", historyOutcome: "success", listOutcome: "failure" },
+    ])(
+      "keeps $trigger loading until list $listOutcome when earlier history reports $historyOutcome",
+      async ({ trigger, historyOutcome, listOutcome }) => {
+        const { provider, webview, mocks, history, sentState } = await unreadFixture();
+        const previousState = sentState();
+        const heldHistory = deferred<PiMuxHistoryEntry[]>();
+        const heldList = deferred<PiMuxWorkspace[]>();
+        const refreshedWorkspaces = await mocks.list();
+        mocks.history.mockClear();
+        mocks.history.mockReturnValueOnce(heldHistory.promise);
+        const oldRefresh = provider.refresh();
+        await vi.waitFor(() => expect(mocks.history).toHaveBeenCalledOnce());
+        mocks.list.mockClear();
+        mocks.list.mockReturnValueOnce(heldList.promise);
+        const earlierPosts = webview.postMessage.mock.calls.length;
+        if (trigger === "show") {
+          webview.setVisible(false);
+          webview.setVisible(true);
+        } else {
+          void provider.refresh(false);
+        }
+        expect(mocks.list).toHaveBeenCalledOnce();
+        if (historyOutcome === "failure") heldHistory.reject(new Error("history unavailable"));
+        else {
+          history.get(activeSessionId)!.title = "Refreshed history";
+          heldHistory.resolve([...history.values()]);
+        }
+        await oldRefresh;
+        const messagesBeforeListFinished = webview.postMessage.mock.calls
+          .slice(earlierPosts)
+          .map(([message]) => message.type);
+        if (listOutcome === "failure") heldList.reject(new Error("list unavailable"));
+        else heldList.resolve(refreshedWorkspaces);
+        await finishRefresh(provider);
+
+        expect(messagesBeforeListFinished).toEqual(["loading"]);
+        const completions = webview.postMessage.mock.calls
+          .slice(earlierPosts + 1)
+          .map(([message]) => message.type);
+        if (historyOutcome === "failure" || listOutcome === "failure") {
+          expect(completions).toEqual(["sessionsError"]);
+          expect(sentState()).toEqual(previousState);
+        } else {
+          expect(completions).toEqual(["sessions"]);
+          expect(sentState().groups.flatMap(({ sessions }) => sessions)).toContainEqual(
+            expect.objectContaining({
+              sessionId: activeSessionId,
+              displayName: "Refreshed history",
+            }),
+          );
+        }
+      },
+    );
+
+    it("does not publish earlier history while a visible view awaits a new list", async () => {
+      const { provider, webview, mocks, history, holdRuntimeQuery } = await unreadFixture();
+      const heldHistory = deferred<PiMuxHistoryEntry[]>();
+      mocks.history.mockClear();
+      mocks.history.mockReturnValueOnce(heldHistory.promise);
+      const previousRefresh = provider.refresh();
+      await vi.waitFor(() => expect(mocks.history).toHaveBeenCalledOnce());
+      const heldList = holdRuntimeQuery();
+      await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS);
+      await heldList.started;
+      webview.setVisible(false);
+      webview.setVisible(true);
+      webview.postMessage.mockClear();
+
+      history.get(activeSessionId)!.title = "Refreshed history";
+      heldHistory.resolve([...history.values()]);
+      await previousRefresh;
+      const earlyPosts = webview.postMessage.mock.calls.map(([message]) => message.type);
+      heldList.finish();
+      await finishRefresh(provider);
+
+      expect(earlyPosts).toEqual([]);
+      expect(webview.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
+        "loading",
+        "sessions",
+      ]);
+    });
+
+    it("only reports the fresh list outcome when a visible view awaits a new list", async () => {
+      const { provider, mocks } = await unreadFixture();
+      const heldList = deferred<PiMuxWorkspace[]>();
+      mocks.list.mockReturnValueOnce(heldList.promise);
+      const previousRefresh = provider.refreshManually();
+      const replacement = createView();
+      provider.resolveWebviewView(replacement.view as never);
+      heldList.reject(new Error("previous list unavailable"));
+      await previousRefresh;
+      await finishRefresh(provider);
+
+      expect(replacement.postMessage.mock.calls.map(([message]) => message.type)).toEqual([
+        "loading",
+        "sessions",
+      ]);
+    });
+
+    it("publishes the latest list after an older history projection completes", async () => {
+      const { provider, mocks, history, phases, row } = await unreadFixture();
+      const previous = await sessionStore.listSessionSnapshot(
+        [...history.values()],
+        await mocks.list(),
+      );
+      const heldProjection = deferred<typeof previous>();
+      const project = vi.spyOn(sessionStore, "listSessionSnapshot");
+      project.mockReturnValueOnce(heldProjection.promise);
+      const oldRefresh = provider.refresh();
+      await vi.waitFor(() => expect(project).toHaveBeenCalledOnce());
+      phases.set(activeSessionId, "running");
+      const newRefresh = provider.refresh(false);
+      await vi.advanceTimersByTimeAsync(0);
+
+      heldProjection.resolve(previous);
+      await Promise.all([oldRefresh, newRefresh]);
+      expect(row().state).toBe("running");
+    });
+
+    it("starts the visible list immediately while the prior workspace snapshot is being applied", async () => {
+      const { provider, webview, mocks } = await unreadFixture();
+      const heldWorkspaces = deferred<Set<string>>();
+      workspaceStorage.list.mockClear();
+      workspaceStorage.list.mockReturnValueOnce(heldWorkspaces.promise);
+      const refresh = provider.refresh();
+      await vi.waitFor(() => expect(workspaceStorage.list).toHaveBeenCalledOnce());
+      webview.setVisible(false);
+      mocks.list.mockClear();
+      webview.setVisible(true);
+      const listCallsOnShow = mocks.list.mock.calls.length;
+      heldWorkspaces.resolve(new Set([root]));
+      await refresh;
+      await finishRefresh(provider);
+
+      expect(listCallsOnShow).toBe(1);
     });
 
     it("retries after initial and later failures without replacing the last list", async () => {
@@ -1252,21 +1438,52 @@ describe("SessionWebviewProvider", () => {
       },
     );
 
-    it("publishes cwd snapshots even before a webview exists", async () => {
+    it("acquires the first list immediately and polls every second before a view exists", async () => {
       const runtime = providerRuntimes();
       const onWorkspaces = vi.fn();
       const { provider } = createProvider({
         registry: new TerminalRegistry(editorTerminals(), runtime.mux),
         onWorkspaces,
       });
-      await provider.refresh();
+      const initialRefresh = provider.refresh();
+      expect(runtime.mocks.list).toHaveBeenCalledOnce();
+      await initialRefresh;
       expect(onWorkspaces).toHaveBeenLastCalledWith([root]);
       runtime.workspaces.add("/added");
-      await tick(provider);
+      await tick(provider, 999);
+      expect(runtime.mocks.list).toHaveBeenCalledOnce();
+      await tick(provider, 1);
+      expect(runtime.mocks.list).toHaveBeenCalledTimes(2);
       expect(onWorkspaces).toHaveBeenLastCalledWith([root, "/added"]);
-      runtime.mocks.list.mockRejectedValueOnce(new Error("offline"));
-      await tick(provider);
-      expect(onWorkspaces).toHaveBeenCalledTimes(2);
+      expect(workspaceStorage.add).toHaveBeenCalledWith("/added");
+      expect(runtime.mocks.history).not.toHaveBeenCalled();
+    });
+
+    it("waits a second after a hidden failure and treats the next empty response as success", async () => {
+      const runtime = providerRuntimes();
+      const onWorkspaces = vi.fn();
+      const log = { error: vi.fn() };
+      const { provider } = createProvider({
+        registry: new TerminalRegistry(editorTerminals(), runtime.mux),
+        onWorkspaces,
+        log,
+      });
+      await provider.refresh();
+      runtime.mocks.list.mockClear();
+      const heldList = deferred<PiMuxWorkspace[]>();
+      runtime.mocks.list.mockReturnValueOnce(heldList.promise).mockResolvedValueOnce([]);
+      await tick(provider, 1_000);
+      await tick(provider, 2_000);
+      expect(runtime.mocks.list).toHaveBeenCalledOnce();
+      heldList.reject(new Error("offline"));
+
+      await tick(provider, 999);
+      expect(runtime.mocks.list).toHaveBeenCalledOnce();
+      expect(log.error).toHaveBeenCalledOnce();
+      expect(onWorkspaces.mock.calls).toEqual([[[root]]]);
+      await tick(provider, 1);
+      expect(runtime.mocks.list).toHaveBeenCalledTimes(2);
+      expect(onWorkspaces.mock.calls).toEqual([[[root]], [[]]]);
     });
 
     it("keeps published file directories on failure and releases them after a successful empty reply", async () => {
@@ -1360,13 +1577,133 @@ describe("SessionWebviewProvider", () => {
       webview.postMessage.mockClear();
       held.finish();
       await finishRefresh(provider);
-      await tick(provider);
+      await tick(provider, 999);
+      expect(mocks.list).toHaveBeenCalledOnce();
+      await tick(provider, 1);
       expect(webview.postMessage).not.toHaveBeenCalled();
       expect(mocks.list).toHaveBeenCalledTimes(target === "view" ? 2 : 1);
     });
 
-    it("rejects a pre-hide response and publishes a newly requested snapshot", async () => {
-      const { provider, webview, phases, row, holdRuntimeQuery } = await unreadFixture();
+    it.each(["hidden", "shown again", "hidden with a manual refresh"])(
+      "revalidates a queued visibility refresh when the view is %s",
+      async (viewState) => {
+        const { provider, webview, mocks, holdRuntimeQuery } = await unreadFixture();
+        const held = holdRuntimeQuery();
+        mocks.list.mockClear();
+        await tick(provider);
+        await held.started;
+        webview.setVisible(false);
+        webview.setVisible(true);
+        if (viewState === "hidden with a manual refresh") void provider.refreshManually();
+        webview.setVisible(false);
+        if (viewState === "shown again") webview.setVisible(true);
+        expect(mocks.list).toHaveBeenCalledOnce();
+
+        held.finish();
+        await finishRefresh(provider);
+        if (viewState === "hidden") {
+          await tick(provider, 999);
+          expect(mocks.list).toHaveBeenCalledOnce();
+          await tick(provider, 1);
+        }
+        expect(mocks.list).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    it.each(["hidden", "disposed", "visible"])(
+      "only refreshes a recreated view immediately if it stays visible (%s)",
+      async (viewState) => {
+        const { provider, mocks, holdRuntimeQuery } = await unreadFixture();
+        const held = holdRuntimeQuery();
+        mocks.list.mockClear();
+        await tick(provider);
+        await held.started;
+        const replacement = createView();
+        provider.resolveWebviewView(replacement.view as never);
+        if (viewState === "hidden") replacement.setVisible(false);
+        if (viewState === "disposed") replacement.dispose();
+        expect(mocks.list).toHaveBeenCalledOnce();
+
+        held.finish();
+        await finishRefresh(provider);
+        if (viewState === "visible") {
+          expect(mocks.list).toHaveBeenCalledTimes(2);
+          expect(replacement.postMessage.mock.lastCall?.[0].type).toBe("sessions");
+          return;
+        }
+        expect(mocks.list).toHaveBeenCalledOnce();
+        await tick(provider, 999);
+        expect(mocks.list).toHaveBeenCalledOnce();
+        await tick(provider, 1);
+        expect(mocks.list).toHaveBeenCalledTimes(2);
+        expect(replacement.postMessage).not.toHaveBeenCalled();
+      },
+    );
+
+    it("preserves background polling when a recreated view starts hidden", async () => {
+      const { provider, mocks } = await unreadFixture();
+      mocks.list.mockClear();
+      const elapsedBeforeResolveMs = 200;
+      await tick(provider, elapsedBeforeResolveMs);
+      const replacement = createView();
+      replacement.setVisible(false);
+      provider.resolveWebviewView(replacement.view as never);
+
+      await tick(provider, 999 - elapsedBeforeResolveMs);
+      expect(mocks.list).not.toHaveBeenCalled();
+      await tick(provider, 1);
+      expect(mocks.list).toHaveBeenCalledOnce();
+      expect(replacement.postMessage).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["startup", "hidden"],
+      ["manual", "hidden after showing"],
+      ["manual", "disposed after showing"],
+    ])(
+      "accepts an in-flight %s response when the replacement view is %s",
+      async (trigger, visibility) => {
+        const runtime = providerRuntimes();
+        const onWorkspaces = vi.fn();
+        const { provider } = createProvider({
+          registry: new TerminalRegistry(editorTerminals(), runtime.mux),
+          onWorkspaces,
+        });
+        const held = deferred<PiMuxWorkspace[]>();
+        runtime.mocks.list.mockReturnValueOnce(held.promise);
+        const refresh = trigger === "startup" ? provider.refresh() : provider.refreshManually();
+        const replacement = createView();
+        if (visibility === "hidden") replacement.setVisible(false);
+        provider.resolveWebviewView(replacement.view as never);
+        if (visibility === "hidden after showing") replacement.setVisible(false);
+        if (visibility === "disposed after showing") replacement.dispose();
+
+        held.resolve([{ cwd: root, sessions: [], empty: [] }]);
+        await refresh;
+        expect(runtime.mocks.list).toHaveBeenCalledOnce();
+        expect(onWorkspaces).toHaveBeenCalledExactlyOnceWith([root]);
+        expect(replacement.postMessage).not.toHaveBeenCalled();
+      },
+    );
+
+    it("does not start a refresh queued by showing the view after provider disposal", async () => {
+      const { provider, webview, mocks, holdRuntimeQuery } = await unreadFixture();
+      const held = holdRuntimeQuery();
+      mocks.list.mockClear();
+      await tick(provider);
+      await held.started;
+      webview.setVisible(false);
+      webview.setVisible(true);
+      provider.dispose();
+
+      held.finish();
+      await tick(provider, 2_000);
+      expect(mocks.list).toHaveBeenCalledOnce();
+    });
+
+    it("starts a new list as soon as an in-flight pre-hide list completes without publishing it", async () => {
+      const { provider, webview, mocks, phases, row, holdRuntimeQuery } = await unreadFixture();
+      mocks.list.mockClear();
       phases.set(activeSessionId, "running");
       const held = holdRuntimeQuery();
       await vi.advanceTimersByTimeAsync(LIST_REFRESH_INTERVAL_MS);
@@ -1375,9 +1712,11 @@ describe("SessionWebviewProvider", () => {
       phases.set(activeSessionId, "waiting-approval");
       webview.setVisible(true);
       const ready = webview.receive({ type: "ready" });
+      expect(mocks.list).toHaveBeenCalledOnce();
       held.finish();
       await ready;
       await finishRefresh(provider);
+      expect(mocks.list).toHaveBeenCalledTimes(2);
       expect(row().state).toBe("waiting-approval");
     });
   });
