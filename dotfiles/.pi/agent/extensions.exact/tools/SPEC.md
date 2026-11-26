@@ -46,6 +46,14 @@ Tools は pi の標準tool factory からツール定義（schema・説明文）
 
 read / write / edit / grep / find / ls / bash の実行を Guardrails公開APIへ直接依頼する。通常のSDK経路の引数検証・tool hooks・実行イベント・履歴はSDKのまま維持する。Guardrails初期化が失敗した場合は原因を通知し、7ツールを同じ初期化エラーで実行不可にする。
 
+### Windows ネイティブのシェル
+
+Windows ネイティブでは、Pi の `powershell` をモデルと他のツールから利用できない状態にする。Windows 本体の PowerShell は変更しない。
+
+登録 `bash` のシェル選択は Pi SDK の標準動作に従う。Windows では Git Bash が優先され、見つからない場合は SDK が `PATH` 上の Bash を選ぶことがある。
+
+`bash` から `powershell.exe` や `pwsh.exe` を呼ぶ場合も、外側の呼び出しを `guardrails.yaml` の `commands` に従って判定する。承認の選択肢と有効期間は他のコマンドと同じとする。PowerShell に渡す本文は Bash のコマンドルールでは個別に判定しない。
+
 ## BashのRTK書換え
 
 登録 `bash` は `tool_call` の後、認可・実行の前にRTKによるコマンド書換えを試みる。他の拡張の `tool_call` handler は書換え前のコマンドを見る。起動時のRTK実行・version確認・警告は行わない。
@@ -82,7 +90,7 @@ SDK応答の外側 `isError` と、元の `result` にある `content`・内側 
 
 CLIのliteral引数変換と結果回収に必要な内部処理は共用できる。その処理自身も同じ実行時contextの `ctx.executeTool("bash", ...)` を使う。
 
-Windows では Git Bash を使う登録Bashで実行する。実行ファイル・各引数・cwdのNULは起動前に拒否する。それぞれをshell用にquoteし、各引数をそのままCLIへ渡す。cwdを指定した場合は、空白や日本語を含むパスでもそのディレクトリで実行する。CLIの実行は1要求につき最大1回とする。stdout・stderr・終了コードを分離し、UTF-8 の両streamを空白・改行も含めてそのまま回収する。末尾改行の除去・JSON解釈・表示切詰めは利用者側の契約に従う。
+Windows の共通 CLI 経路は、登録 `bash` が Git Bash を選ぶ環境を前提とする。実行ファイル・各引数・cwdのNULは起動前に拒否する。それぞれをshell用にquoteし、各引数をそのままCLIへ渡す。cwdを指定した場合は、空白や日本語を含むパスでもそのディレクトリで実行する。CLIの実行は1要求につき最大1回とする。stdout・stderr・終了コードを分離し、UTF-8 の両streamを空白・改行も含めてそのまま回収する。末尾改行の除去・JSON解釈・表示切詰めは利用者側の契約に従う。
 
 Bashの `structuredContent` にある `output`・`truncated`・`exit_code` を検証し、出力フレームから両streamと0〜255の整数終了コードを検証・復元する。CLIの非0終了も分離した終了コードとして返す。Bashの外側・内側 `isError`、非0のBash終了コード、フレームや符号化の不正は回収失敗とし、不完全な出力を成功として返さない。
 

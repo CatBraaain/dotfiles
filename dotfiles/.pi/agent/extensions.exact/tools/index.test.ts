@@ -35,10 +35,12 @@ describe("tools with the guardrails public API", () => {
         "find",
         "grep",
         "ls",
+        ...(process.platform === "win32" ? ["powershell"] : []),
         "read",
         "write",
       ]);
       assert.equal(registered.length, new Set(registered).size);
+      if (process.platform === "win32") assert.equal(tools.get("powershell")?.exposure, "hidden");
     }),
   );
 
@@ -46,6 +48,7 @@ describe("tools with the guardrails public API", () => {
     "registers Japanese descriptions for the guarded tools",
     withFixture(async ({ tools }) => {
       for (const [name, tool] of tools) {
+        if (tool.exposure === "hidden") continue;
         assert.match(tool.description, /\p{Script=Hiragana}/u, name);
       }
     }),

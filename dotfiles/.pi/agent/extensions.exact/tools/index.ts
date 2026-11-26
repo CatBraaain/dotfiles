@@ -10,6 +10,7 @@ import {
   createFindTool,
   createGrepTool,
   createLsTool,
+  createPowerShellTool,
   createReadTool,
   createWriteTool,
   DEFAULT_MAX_BYTES,
@@ -42,6 +43,15 @@ export default function toolsExtension(pi: ExtensionAPI, configPath?: string): v
   for (const definition of definitions) {
     const execute = createGuardedExecutor(definition, guardrails);
     registerGuardedTool(pi, definition, execute);
+  }
+  if (process.platform === "win32") {
+    pi.registerTool({
+      ...createPowerShellTool(cwd),
+      exposure: "hidden",
+      async execute() {
+        throw new Error("The direct PowerShell tool is disabled. Use the guarded Bash tool.");
+      },
+    });
   }
 }
 
