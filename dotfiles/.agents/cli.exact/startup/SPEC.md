@@ -8,7 +8,7 @@
 | --- | --- |
 | 呼び出し元 | pi拡張 `startup`（detached で呼ぶ。OS を問わず直接実行する）。Windows の pi update では、スクリプト自身も `update` 引数付きで自身を detached に再実行する |
 | 複数回実行 | 許容する。各タスクが自身で冪等性を持つ |
-| 完了待ち | `update` 引数なしの実行ではしない。スクリプトは全タスクを fire-and-forget で起動して即座に終了する。`update` 引数付きの実行は「pi update」の表にある windows の場合に限る。この実行は pi update だけを行い、`pi update --all` の終了を待つ |
+| 完了待ち | `update` 引数なしの実行ではしない。スクリプトは全タスクを fire-and-forget で起動して即座に終了する。`update` 引数付きの実行は「pi update」の表にある windows の場合に限る。この実行は pi update だけを行い、更新プロセスの終了を待つ |
 | 失敗 | スクリプトの失敗が呼び出し元（harness の起動）に影響しない |
 | 終了コード | 常に 0 |
 
@@ -21,7 +21,7 @@
 | openserp | `GET ${OPENSERP_BASE_URL:-http://127.0.0.1:7000}/ready` が 2xx | `openserp serve -a <host> -p <port> --quiet` | ポート衝突で 2個目は終了（無害） |
 
 - camoufox server は health check が失敗したときだけ起動する。server は `browse` CLI に内蔵され、`browse server start` が Linux の Xvfb / x11vnc の維持を行い、出力は `<XDG_CACHE_HOME:-~/.cache>/pi/web-search/camoufox-server.log` へ追記する
-- pi update はスクリプトの起動ごとに実行対象となる。`pi` が PATH に無い場合はスキップする。`--all` により pi本体とパッケージの両方を更新対象にする
+- pi update はスクリプトの起動ごとに実行対象となる。環境に応じた起動先を解決できない場合はスキップする。`--all` により pi本体とパッケージの両方を更新対象にする
 - `~/.agents/cli/browse`（windows は `browse.exe`）が存在しない、`openserp` が PATH に無い場合は、そのタスクを黙ってスキップする
 - openserp の host / port は接続先URL の authority から取る（pi の web-search拡張と同じ解決）
 
@@ -29,9 +29,11 @@
 
 | 環境 | 起動コマンド（detached） | ロック |
 | --- | --- | --- |
-| Windows | `~/.agents/cli/startup.exe update` | 再実行されたプロセスが名前付きパイプ `\\.\pipe\pi-update` をロックとして取得できたときだけ `pi update --all` を実行し、終了を待つ。ロックはそのプロセスの終了とともに OS が解放する |
-| Windows 以外で `flock` が PATH にある | `flock -n <ロックファイル> pi update --all` | flock が更新プロセスの終了まで保持する |
-| Windows 以外で `flock` が PATH に無い | 起動しない | なし |
+| Windows | `~/.agents/cli/startup.exe update` | 再実行されたプロセスが名前付きパイプ `\\.\pipe\pi-update` をロックとして取得できたときだけ、PATH 上の `pi.exe` に `update --all` を渡して終了を待つ。ロックはそのプロセスの終了とともに OS が解放する |
+| Windows 以外で `flock` と `pi` が PATH にある | `flock -n <ロックファイル> pi update --all` | flock が更新プロセスの終了まで保持する |
+| Windows 以外で `flock` または `pi` が PATH に無い | 起動しない | なし |
+
+Windows で PATH 上に `pi.exe` がなければ更新をスキップする。`pi.cmd` と `pi.ps1` は起動しない。
 
 ## スコープ外
 

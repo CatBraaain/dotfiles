@@ -1,3 +1,4 @@
+import { spawn, type SpawnOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -22,6 +23,7 @@ import agentsExtension, {
   canDelegate,
   childAgent,
   childInvocationArgs,
+  getPiInvocation,
   resolveChildSession,
   subagentSessionDir,
   initialAgent,
@@ -43,6 +45,34 @@ import type { ModelCandidate } from "./routing.ts";
 function runUsageThroughMockExec(pi: Pick<ExtensionAPI, "exec">, signal?: AbortSignal) {
   return runUsage(pi, signal, { platform: "win32" });
 }
+
+describe("Windows Pi invocation", () => {
+  const runtime = { platform: "win32" as const, execPath: "C:\\parent\\pi.exe", argv: [] };
+
+  it("starts the first pi.exe on absolute PATH directories, not the parent or working directory", () => {
+    const command = "D:\\npm prefix\\pi.exe";
+    const env = { Path: ';.;relative;\\local;C:relative;C:\\before;"D:\\npm prefix";C:\\after' };
+    const args = ["two words", 'a"b', "", "C:\\path with space\\"];
+    const checked: string[] = [];
+
+    const invocation = getPiInvocation(args, { ...runtime, env }, (candidate) => {
+      checked.push(candidate);
+      return candidate === command || candidate === "C:\\after\\pi.exe";
+    });
+
+    assert.deepEqual(invocation, { command, args });
+    assert.deepEqual(checked, ["C:\\before\\pi.exe", command]);
+  });
+
+  it("reports a missing pi.exe without selecting npm shims", () => {
+    const env = { PATH: "C:\\npm" };
+    const npmShims = new Set(["C:\\npm\\pi.cmd", "C:\\npm\\pi.ps1"]);
+    assert.throws(
+      () => getPiInvocation([], { ...runtime, env }, (path) => npmShims.has(path)),
+      /pi\.exe not found/,
+    );
+  });
+});
 
 function usageFixture(
   rows: Array<{
@@ -224,7 +254,8 @@ function captureAgentsExtension(
   const titleManager = SessionManager.inMemory("/parent");
   const titleModels: Array<{ provider: string; id: string }> = [];
 
-  const originalSpawn = __spawn.current;
+  const originalSpawn = { ...__spawn };
+  __spawn.resolvePiInvocation = (args) => ({ command: "node", args: ["fake-pi.js", ...args] });
   __spawn.current = ((
     command: string,
     args: string[],
@@ -404,7 +435,7 @@ function captureAgentsExtension(
       return titleModels[before];
     },
     restore() {
-      __spawn.current = originalSpawn;
+      Object.assign(__spawn, originalSpawn);
       __resetRoutingState();
     },
     respondToChild(responder: (child: FakeChild) => void) {
@@ -4810,6 +4841,118 @@ describe("subagent", () => {
       extension.restore();
     }
   });
+
+  for (const reason of ["aborted", "stalled"] as const) {
+    it.skipIf(process.platform !== "win32")(
+      `stops the Windows launcher and its Node child when ${reason}`,
+      async () => {
+        const node = Bun.which("node.exe");
+        assert.ok(node, "Node.js is required for the Windows process-tree test");
+        const root = mkdtempSync(join(tmpdir(), "subagent-abort-"));
+        const pidFile = join(root, "child.pid");
+        const wrapper = join(root, "launcher.cjs");
+        const child = join(root, "pi.cjs");
+        writeFileSync(
+          wrapper,
+          `const child = require('node:child_process').spawn(process.execPath, process.argv.slice(2), { stdio: 'inherit' });
+child.once('exit', (status) => { process.exitCode = status; });`,
+        );
+        writeFileSync(
+          child,
+          `require('node:fs').writeFileSync(process.argv[2], String(process.pid));
+setTimeout(() => process.exit(0), 10_000);`,
+        );
+        const extension = captureAgentsExtension();
+        const controller = new AbortController();
+        let fireStall: (() => void) | undefined;
+        const originalSet = __abortTimer.set;
+        __abortTimer.set = (callback, delay) => {
+          if (delay !== 15 * 60_000) return originalSet(callback, delay);
+          fireStall = callback;
+          return originalSet(() => {}, 0);
+        };
+        __spawn.current = ((command: string, args: readonly string[], options: SpawnOptions) =>
+          command === "node"
+            ? spawn(node, [wrapper, child, pidFile], { ...options, cwd: root, windowsHide: true })
+            : spawn(command, args, options)) as unknown as typeof __spawn.current;
+        try {
+          await extension.sessionStart();
+          const execution = extension.executeSubagent(
+            { agent: "worker", task: "work" },
+            controller.signal,
+          );
+          const until = Date.now() + 5000;
+          while (!existsSync(pidFile) && Date.now() < until) await Bun.sleep(20);
+          const pid = Number(readFileSync(pidFile, "utf8"));
+          assert.ok(Number.isSafeInteger(pid) && pid > 0);
+          const stoppingAt = Date.now();
+          if (reason === "aborted") controller.abort();
+          else {
+            assert.ok(fireStall);
+            fireStall();
+          }
+          const result = await execution;
+          assert.ok(
+            Date.now() - stoppingAt < 5000,
+            "stopping must precede the child's natural exit",
+          );
+          assert.equal(result.details.results[0].stopReason, reason);
+          assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+        } finally {
+          controller.abort();
+          __abortTimer.set = originalSet;
+          extension.restore();
+          rmSync(root, { recursive: true, force: true });
+        }
+      },
+      15_000,
+    );
+  }
+
+  for (const launcherExited of [false, true]) {
+    it.skipIf(process.platform !== "win32")(
+      `reports a Windows tree-stop failure when the launcher is ${launcherExited ? "already stopped" : "still running"}`,
+      async () => {
+        const extension = captureAgentsExtension();
+        const controller = new AbortController();
+        const launch = __spawn.current;
+        __spawn.current = ((command: string, args: readonly string[], options: SpawnOptions) => {
+          if (command.endsWith("\\taskkill.exe")) {
+            assert.deepEqual(args, ["/F", "/T", "/PID", "1234"]);
+            assert.equal(options.timeout, 5000);
+            const taskkill = new FakeChild();
+            setImmediate(() => {
+              if (launcherExited) {
+                extension.children[0]?.emit("exit", 0);
+                extension.children[0]?.emit("close", 0);
+              }
+              setImmediate(() => taskkill.emit("close", 1));
+            });
+            return taskkill;
+          }
+          return Object.assign(launch(command, args, options), { pid: 1234 });
+        }) as unknown as typeof __spawn.current;
+        try {
+          await extension.sessionStart();
+          const execution = extension.executeSubagent(
+            { agent: "worker", task: "work" },
+            controller.signal,
+          );
+          await new Promise((resolve) => setImmediate(resolve));
+          controller.abort();
+          const result = await execution;
+          assert.equal(result.details.results[0].stopReason, "aborted");
+          assert.match(
+            result.content[0].text,
+            /Could not confirm that the Windows subagent process tree stopped/,
+          );
+          assert.deepEqual(extension.children[0]?.killHistory, launcherExited ? [] : ["SIGKILL"]);
+        } finally {
+          extension.restore();
+        }
+      },
+    );
+  }
 
   it("SIGTERM を無視する子へ 5 秒後に SIGKILL を送る", async () => {
     const extension = captureAgentsExtension();

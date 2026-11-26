@@ -19,6 +19,7 @@ Set-Alias -Name "docker-inspect" -Value "docker exec -it %* /bin/sh"
 Set-Alias -Name "j" -Value "just"
 Set-Alias -Name "mise-init" -Value "mise gen config -o mise.toml"
 Set-Alias -Name "mr" -Value "mise run"
+Set-Alias -Name "pi" -Value "pi.exe"
 Set-Alias -Name "uv-python-update" -Value "uv python install --reinstall 3.11 3.12 3.13"
 Set-Alias -Name "wslfit" -Value "Optimize-WslStorage"
 

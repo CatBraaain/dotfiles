@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { InstallProfile } from "./marking";
 import { installCamoufox, installWindows } from "./windows";
+import { PI_LAUNCHER_NAME } from "./windows-pi";
 
 const wingetSourceId = "Microsoft.Winget.Source_8wekyb3d8bbwe";
 const elevationCheck = ["gsudo", "status", "IsElevated"];
@@ -28,6 +29,17 @@ const refreshPath = [
 ];
 const npmInstall = ["cmd", "/c", "npm", "install", "-g", "--ignore-scripts"];
 const piInstall = [...npmInstall, "@earendil-works/pi-coding-agent"];
+const piPrefixQuery = ["cmd", "/c", "npm", "prefix", "--global"];
+const piBuild = [
+  process.execPath,
+  "build",
+  "--compile",
+  "--no-compile-autoload-dotenv",
+  "--no-compile-autoload-bunfig",
+  join(import.meta.dir, "windows-pi.ts"),
+  "--outfile",
+  "<staged pi.exe>",
+];
 const playwrightInstall = [...npmInstall, "@playwright/cli@0.1.22"];
 const chromiumInstall = [
   "cmd",
@@ -78,6 +90,8 @@ function windowsFixture(configText?: string) {
   mkdirSync(links, { recursive: true });
   const desktopShortcut = join(desktop, "App.lnk");
   writeFileSync(desktopShortcut, "desktop shortcut");
+  const npmPrefix = join(appData, "custom npm prefix");
+  mkdirSync(npmPrefix);
 
   function packageExe(folder: string, file: string) {
     const executable = join(packages, folder, file);
@@ -101,6 +115,7 @@ function windowsFixture(configText?: string) {
     ...failingCommands: (
       | "winget"
       | "pi"
+      | "pi-build"
       | "playwright"
       | "chromium"
       | "camoufox"
@@ -123,8 +138,16 @@ function windowsFixture(configText?: string) {
     const spawn = spyOn(Bun, "spawnSync").mockImplementation(
       (args, options?: { cwd?: string; env?: NodeJS.ProcessEnv }) => {
         assert.ok(Array.isArray(args), "expected an argument vector");
-        commands.push(args);
         const [command] = args;
+        const compilesLauncher = command === process.execPath && args[1] === "build";
+        if (compilesLauncher) {
+          const binary = args.at(-1);
+          assert.ok(binary);
+          writeFileSync(binary, PI_LAUNCHER_NAME);
+          commands.push([...args.slice(0, -1), "<staged pi.exe>"]);
+        } else {
+          commands.push(args);
+        }
         if (options?.cwd !== undefined) workingDirectoryOverrides.push({ args, cwd: options.cwd });
         if (command === "cmd" && args[2] === "npm") npmPaths.push(process.env.Path);
         if (options?.env) {
@@ -138,8 +161,10 @@ function windowsFixture(configText?: string) {
           browserEnvOverrides.push({ args, env, path: options.env.Path ?? options.env.PATH });
         }
         const refreshesPath = command === "powershell" && args[3]?.startsWith("[Environment]");
-        const stdout = refreshesPath ? "machine;user" : "1.0.0";
+        const queriesPrefix = command === "cmd" && args[2] === "npm" && args[3] === "prefix";
+        const stdout = refreshesPath ? "machine;user" : queriesPrefix ? npmPrefix : "1.0.0";
         const fails =
+          (failingCommands.includes("pi-build") && compilesLauncher) ||
           (failingCommands.includes("winget") && command === "winget") ||
           (failingCommands.includes("pi") && args.at(-1) === piInstall.at(-1)) ||
           (failingCommands.includes("playwright") && args.at(-1) === playwrightInstall.at(-1)) ||
@@ -191,6 +216,7 @@ function windowsFixture(configText?: string) {
   return {
     appData,
     desktopShortcut,
+    npmPrefix,
     commands,
     links,
     packageExe,
@@ -212,6 +238,8 @@ test("dev installs only its selected packages after the elevation check and refr
       wingetInstall(devAfterDocker),
       refreshPath,
       piInstall,
+      piPrefixQuery,
+      piBuild,
       playwrightInstall,
       chromiumInstall,
       vitePlusInstall,
@@ -220,7 +248,8 @@ test("dev installs only its selected packages after the elevation check and refr
       trafilaturaInstall,
       uvUpdateShell,
     ]);
-    assert.deepEqual(npmPaths, Array(5).fill("machine;user"));
+    assert.deepEqual(npmPaths, Array(6).fill("machine;user"));
+    assert.equal(readFileSync(join(fixture.npmPrefix, "pi.exe"), "utf8"), PI_LAUNCHER_NAME);
     assert.deepEqual(lookups, [
       { executable: "openserp", after: markdownTableInstall, path: "machine;user" },
     ]);
@@ -231,6 +260,76 @@ test("dev installs only its selected packages after the elevation check and refr
     fixture.dispose();
   }
 });
+
+test("installs and replaces only the managed pi.exe, leaving both npm shims intact", async () => {
+  const fixture = windowsFixture(`dev:
+  - custom: pi
+work: []
+personal: []`);
+  try {
+    const binary = join(fixture.npmPrefix, "pi.exe");
+    const cmd = join(fixture.npmPrefix, "pi.cmd");
+    const ps1 = join(fixture.npmPrefix, "pi.ps1");
+    writeFileSync(cmd, "npm cmd shim");
+    writeFileSync(ps1, "npm PowerShell shim");
+    await fixture.run("dev");
+    assert.equal(readFileSync(binary, "utf8"), PI_LAUNCHER_NAME);
+
+    writeFileSync(binary, "unrelated executable");
+    await assert.rejects(fixture.run("dev"), /Keeping existing .*pi\.exe/);
+    assert.equal(readFileSync(binary, "utf8"), "unrelated executable");
+
+    writeFileSync(binary, `old ${PI_LAUNCHER_NAME}`);
+    await assert.rejects(
+      fixture.run("dev", "pi-build"),
+      /command failed with exit code 1: .*build/,
+    );
+    assert.equal(readFileSync(binary, "utf8"), `old ${PI_LAUNCHER_NAME}`);
+
+    await fixture.run("dev");
+    assert.equal(readFileSync(binary, "utf8"), PI_LAUNCHER_NAME);
+    assert.equal(readFileSync(cmd, "utf8"), "npm cmd shim");
+    assert.equal(readFileSync(ps1, "utf8"), "npm PowerShell shim");
+    assert.deepEqual(readdirSync(fixture.npmPrefix).sort(), ["pi.cmd", "pi.exe", "pi.ps1"]);
+  } finally {
+    fixture.dispose();
+  }
+});
+
+test.each(["before", "after"] as const)(
+  "preserves a conflicting pi.exe placed %s moving the previous launcher",
+  async (when) => {
+    const fixture = windowsFixture(`dev:
+  - custom: pi
+work: []
+personal: []`);
+    const binary = join(fixture.npmPrefix, "pi.exe");
+    const previous = `old ${PI_LAUNCHER_NAME}`;
+    const conflicting = "unrelated executable";
+    writeFileSync(binary, previous);
+    const rename = fs.renameSync;
+    let backup: fs.PathLike | undefined;
+    const move = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (from === binary && when === "before") writeFileSync(binary, conflicting);
+      rename(from, to);
+      if (from === binary && when === "after") {
+        backup = to;
+        writeFileSync(binary, conflicting);
+      }
+    });
+    try {
+      await assert.rejects(fixture.run("dev"), when === "before" ? /Keeping existing/ : /backup:/);
+      assert.equal(readFileSync(binary, "utf8"), conflicting);
+      if (when === "after") {
+        assert.ok(backup);
+        assert.equal(readFileSync(backup, "utf8"), previous);
+      }
+    } finally {
+      move.mockRestore();
+      fixture.dispose();
+    }
+  },
+);
 
 test("uses the standard cache and disables browser GC only for the Chromium install process", async () => {
   const fixture = windowsFixture(`dev:
@@ -337,6 +436,28 @@ test("pi installation failure is still fatal", async () => {
   }
 });
 
+test("treats the Pi package as a normal npm entry when custom pi is not selected", async () => {
+  const fixture = windowsFixture(`dev:
+  - npm: "@earendil-works/pi-coding-agent"
+  - npm: next-tool
+work: []
+personal: []`);
+  try {
+    const { commands, errors } = await fixture.run("dev", "pi");
+    assert.deepEqual(commands, [
+      elevationCheck,
+      refreshPath,
+      piInstall,
+      [...npmInstall, "next-tool"],
+    ]);
+    assert.equal(errors.length, 1);
+    assert.match(errors[0]!, /command failed with exit code 1: .*pi-coding-agent/);
+    assert.deepEqual(readdirSync(fixture.npmPrefix), []);
+  } finally {
+    fixture.dispose();
+  }
+});
+
 test("dev leaves WinGet links unchanged", async () => {
   const fixture = windowsFixture();
   try {
@@ -403,6 +524,8 @@ test.each(["work", "personal"] as const)(
         ...wingetCommands,
         refreshPath,
         piInstall,
+        piPrefixQuery,
+        piBuild,
         playwrightInstall,
         chromiumInstall,
         vitePlusInstall,

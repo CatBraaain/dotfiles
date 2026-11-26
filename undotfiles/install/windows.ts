@@ -24,14 +24,16 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, isAbsolute, join, parse } from "node:path";
 import { markingPath, readInstallProfile, type InstallProfile } from "./marking.ts";
+import { PI_LAUNCHER_NAME, PI_PACKAGE } from "./windows-pi.ts";
 
 type WingetPackage = { key: "winget"; id: string; args: readonly string[] };
+type CustomInstaller = { install: () => void | Promise<void>; required?: true };
 type InstallEntry =
   | WingetPackage
   | { key: "npm"; name: string }
-  | { key: "custom"; name: string; install: () => Promise<void> };
+  | ({ key: "custom"; name: string } & CustomInstaller);
 
 const configPath = join(import.meta.dir, "windows.install.yaml");
 const profiles = ["dev", "work", "personal"] as const;
@@ -41,12 +43,13 @@ const npmPackageSpec =
   /^((?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*)(?:@(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){2})?$/;
 const npmArchiveSuffix = /\.(?:tgz|tar\.gz|tar)$/;
 const wingetVersionFlag = "--version";
-const customInstallers = new Map<string, () => Promise<void>>([
-  ["camoufox", installCamoufox],
-  ["openserp", installOpenSerp],
-  ["playwright-chromium", installPlaywrightChromium],
-  ["rustdesk", installRustDesk],
-  ["trafilatura", installTrafilatura],
+const customInstallers = new Map<string, CustomInstaller>([
+  ["camoufox", { install: installCamoufox }],
+  ["openserp", { install: installOpenSerp }],
+  ["pi", { install: installPi, required: true }],
+  ["playwright-chromium", { install: installPlaywrightChromium }],
+  ["rustdesk", { install: installRustDesk }],
+  ["trafilatura", { install: installTrafilatura }],
 ]);
 
 async function main(): Promise<void> {
@@ -66,11 +69,12 @@ export async function installWindows(
   for (const entry of entries) {
     if (entry.key === "npm") installNpmPackage(entry.name);
     if (entry.key === "custom") {
-      await entry
-        .install()
-        .catch((error: unknown) =>
-          console.error(`${entry.name} install failed: ${message(error)}`),
-        );
+      try {
+        await entry.install();
+      } catch (error) {
+        if (entry.required) throw error;
+        console.error(`${entry.name} install failed: ${message(error)}`);
+      }
     }
   }
 
@@ -124,9 +128,9 @@ function parseInstallEntry(rawEntry: unknown, label: string): InstallEntry {
       return { key, name: value };
     case "custom": {
       if (typeof value !== "string") throw new Error(`${label} custom name must be a string`);
-      const install = customInstallers.get(value);
-      if (!install) throw new Error(`${label} has an unknown custom installer: ${value}`);
-      return { key, name: value, install };
+      const installer = customInstallers.get(value);
+      if (!installer) throw new Error(`${label} has an unknown custom installer: ${value}`);
+      return { key, name: value, ...installer };
     }
     default:
       throw new Error(`${label} has an unknown key: ${key}`);
@@ -214,9 +218,84 @@ function installNpmPackage(name: string): void {
   try {
     runCmd(["npm", "install", "-g", "--ignore-scripts", name]);
   } catch (error) {
-    if (name === "@earendil-works/pi-coding-agent") throw error;
     console.error(message(error));
   }
+}
+
+function installPi(): void {
+  runCmd(["npm", "install", "-g", "--ignore-scripts", PI_PACKAGE]);
+  const prefix = output(["cmd", "/c", "npm", "prefix", "--global"], {
+    cwd: cmdWorkingDirectory(),
+  });
+  if (
+    !isAbsolute(prefix) ||
+    prefix.includes("\n") ||
+    (process.platform === "win32" && parse(prefix).root.length <= 1)
+  ) {
+    throw new Error(`Invalid npm global prefix: ${prefix}`);
+  }
+  const destination = join(prefix, "pi.exe");
+  const dist = join(import.meta.dir, "../../dist");
+  mkdirSync(dist, { recursive: true });
+  const buildDir = mkdtempSync(join(dist, "windows-pi-"));
+  try {
+    const binary = join(buildDir, "pi.exe");
+    run([
+      process.execPath,
+      "build",
+      "--compile",
+      "--no-compile-autoload-dotenv",
+      "--no-compile-autoload-bunfig",
+      join(import.meta.dir, "windows-pi.ts"),
+      "--outfile",
+      binary,
+    ]);
+    if (!readFileSync(binary).includes(PI_LAUNCHER_NAME)) {
+      throw new Error(`Build did not produce the ${PI_LAUNCHER_NAME}`);
+    }
+    publishPiLauncher(binary, destination);
+  } finally {
+    rmSync(buildDir, { recursive: true, force: true });
+  }
+}
+
+function publishPiLauncher(binary: string, destination: string): void {
+  if (!hasManagedPiLauncher(destination)) {
+    copyFileSync(binary, destination, constants.COPYFILE_EXCL);
+    return;
+  }
+  const backupDir = mkdtempSync(join(dirname(destination), ".pi-launcher-"));
+  const backup = join(backupDir, "pi.exe");
+  let keepBackup = false;
+  try {
+    renameSync(destination, backup);
+    try {
+      if (!hasManagedPiLauncher(backup)) throw new Error(`Cannot find ${backup}`);
+      copyFileSync(binary, destination, constants.COPYFILE_EXCL);
+    } catch (error) {
+      try {
+        if (!lstatSync(backup).isFile()) throw new Error(`Not a regular file: ${backup}`);
+        copyFileSync(backup, destination, constants.COPYFILE_EXCL);
+      } catch (restoreError) {
+        keepBackup = true;
+        throw new Error(
+          `Cannot install ${destination}: ${message(error)}; cannot restore the previous file (${message(restoreError)}); backup: ${backup}`,
+        );
+      }
+      throw error;
+    }
+  } finally {
+    if (!keepBackup) rmSync(backupDir, { recursive: true, force: true });
+  }
+}
+
+function hasManagedPiLauncher(path: string): boolean {
+  const existing = lstatSync(path, { throwIfNoEntry: false });
+  if (!existing) return false;
+  if (!existing.isFile() || !readFileSync(path).includes(PI_LAUNCHER_NAME)) {
+    throw new Error(`Keeping existing ${path}: not the ${PI_LAUNCHER_NAME}`);
+  }
+  return true;
 }
 
 async function installPlaywrightChromium(): Promise<void> {
@@ -233,9 +312,12 @@ async function installPlaywrightChromium(): Promise<void> {
   });
 }
 
+function cmdWorkingDirectory(): string | undefined {
+  return process.cwd().startsWith("\\\\") ? process.env.SystemRoot : undefined;
+}
+
 function runCmd(command: readonly string[], env?: NodeJS.ProcessEnv): void {
-  const cwd = process.cwd().startsWith("\\\\") ? process.env.SystemRoot : undefined;
-  run(["cmd", "/c", ...command], { cwd, env });
+  run(["cmd", "/c", ...command], { cwd: cmdWorkingDirectory(), env });
 }
 
 function refreshProcessPath(): void {
@@ -494,8 +576,8 @@ function localAppData(): string {
   return value;
 }
 
-function output(command: readonly string[]): string {
-  const result = Bun.spawnSync([...command], { stdout: "pipe", stderr: "pipe" });
+function output(command: readonly string[], options?: CommandOptions): string {
+  const result = Bun.spawnSync([...command], { ...options, stdout: "pipe", stderr: "pipe" });
   if (result.exitCode !== 0) throw new Error(result.stderr.toString().trim() || command.join(" "));
   return result.stdout.toString().trim();
 }

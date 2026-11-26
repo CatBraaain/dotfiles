@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, isAbsolute, join, resolve, sep, win32 } from "node:path";
 import type { AgentMessage, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { Api, AssistantMessage, ImageContent, Message, Model } from "@earendil-works/pi-ai";
 import {
@@ -378,7 +378,7 @@ export function childAgent(
   return canDelegate(fromAgent, toAgent, config) ? toAgent : undefined;
 }
 
-export const __spawn: { current: typeof spawn } = { current: spawn };
+export const __spawn = { current: spawn, resolvePiInvocation: getPiInvocation };
 
 export const __abortTimer: {
   set: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
@@ -650,16 +650,57 @@ function getResultOutput(result: ChildRun): string {
   return getFinalOutput(result.messages) || "(no output)";
 }
 
-function getPiInvocation(args: string[]): { command: string; args: string[] } {
-  const currentScript = process.argv[1];
-  const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
-  if (currentScript && !isBunVirtualScript && existsSync(currentScript)) {
-    return { command: process.execPath, args: [currentScript, ...args] };
+export function getPiInvocation(
+  args: string[],
+  runtime: Pick<NodeJS.Process, "argv" | "env" | "execPath" | "platform"> = process,
+  isFile = (candidate: string) => statSync(candidate, { throwIfNoEntry: false })?.isFile() ?? false,
+): { command: string; args: string[] } {
+  if (runtime.platform === "win32") {
+    const path = runtime.env.PATH ?? runtime.env.Path ?? "";
+    for (const entry of path.split(win32.delimiter)) {
+      const directory = entry.replace(/^"(.*)"$/, "$1");
+      if (!win32.isAbsolute(directory) || win32.parse(directory).root.length === 1) continue;
+      const command = win32.join(directory, "pi.exe");
+      if (isFile(command)) return { command, args };
+    }
+    throw new Error("pi.exe not found on absolute Windows PATH directories");
   }
 
-  const executableName = basename(process.execPath).toLowerCase();
-  if (!/^(node|bun)(\.exe)?$/.test(executableName)) return { command: process.execPath, args };
+  const currentScript = runtime.argv[1];
+  const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
+  if (currentScript && !isBunVirtualScript && existsSync(currentScript)) {
+    return { command: runtime.execPath, args: [currentScript, ...args] };
+  }
+
+  const executableName = basename(runtime.execPath).toLowerCase();
+  if (!/^(node|bun)(\.exe)?$/.test(executableName)) return { command: runtime.execPath, args };
   return { command: "pi", args };
+}
+
+function stopWindowsProcessTree(pid: number): Promise<string | undefined> {
+  return new Promise<string | undefined>((resolve) => {
+    const taskkill = win32.join(
+      process.env.SystemRoot || "C:\\Windows",
+      "System32",
+      "taskkill.exe",
+    );
+    const termination = __spawn.current(taskkill, ["/F", "/T", "/PID", String(pid)], {
+      stdio: "ignore",
+      timeout: 5000,
+      killSignal: "SIGKILL",
+      windowsHide: true,
+    });
+    termination.once("error", (error: Error) => resolve(error.message));
+    termination.once("close", (code) => {
+      if (code === 0) resolve(undefined);
+      else
+        resolve(
+          code === null
+            ? "taskkill was interrupted or timed out"
+            : `taskkill exited with code ${code}`,
+        );
+    });
+  }).catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
 }
 
 type OnUpdateCallback = (partialResult: AgentToolResult<AgentToolDetails>) => void;
@@ -799,6 +840,7 @@ async function runChild(
   };
   let wasAborted = false;
   let wasStalled = false;
+  let windowsTermination: Promise<string | undefined> | undefined;
   let activeToolExecutions = 0;
 
   const emitUpdate = () => {
@@ -813,7 +855,13 @@ async function runChild(
   emitUpdate();
 
   const exitCode = await new Promise<number>((resolve) => {
-    const invocation = getPiInvocation(args);
+    if (signal?.aborted) {
+      wasAborted = true;
+      resolve(1);
+      return;
+    }
+
+    const invocation = __spawn.resolvePiInvocation(args);
     const processHandle = __spawn.current(invocation.command, invocation.args, {
       cwd: childResult.cwd,
       shell: false,
@@ -964,6 +1012,21 @@ async function runChild(
     };
 
     const terminateChild = () => {
+      if (settled || processExitCode !== undefined) return;
+      if (process.platform === "win32" && processHandle.pid !== undefined) {
+        windowsTermination ??= stopWindowsProcessTree(processHandle.pid).then((failure) => {
+          if (
+            failure !== undefined &&
+            !settled &&
+            processExitCode === undefined &&
+            !processHandle.kill("SIGKILL")
+          ) {
+            finalize(1);
+          }
+          return failure;
+        });
+        return;
+      }
       processHandle.kill("SIGTERM");
       if (abortTimer === undefined) {
         abortTimer = __abortTimer.set(() => {
@@ -1012,11 +1075,20 @@ async function runChild(
     return 1;
   });
 
+  const windowsFailure = windowsTermination ? await windowsTermination : undefined;
   childResult.exitCode = exitCode;
   childResult.pending = false;
   if (wasAborted) {
     childResult.stopReason = "aborted";
     childResult.errorMessage = "Subagent was aborted";
+  }
+  if (windowsFailure !== undefined) {
+    childResult.errorMessage = [
+      childResult.errorMessage,
+      `Could not confirm that the Windows subagent process tree stopped: ${windowsFailure}`,
+    ]
+      .filter(Boolean)
+      .join(". ");
   }
   recordSession("end", {
     exitCode: childResult.exitCode,

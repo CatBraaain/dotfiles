@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, it } from "bun:test";
-import { npmPiEntry, piCommand, run } from "./main";
 
 const MAIN = join(import.meta.dir, "main.ts");
 const PI_PREFIX = ["-p", "--no-session", "--no-tools", "--agent", "junior", "--"];
@@ -32,10 +31,6 @@ function fakePiDirectory(): string {
   return directory;
 }
 
-function knownPaths(paths: Record<string, string>): (name: string) => string | undefined {
-  return (name) => paths[name];
-}
-
 async function shot(
   args: string[],
   environment: Record<string, string>,
@@ -43,7 +38,10 @@ async function shot(
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const child = Bun.spawn([process.execPath, MAIN, ...args], {
     cwd: dirname(MAIN),
-    env: environment,
+    env:
+      process.platform === "win32"
+        ? { SystemRoot: process.env.SystemRoot, ...environment }
+        : environment,
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -59,76 +57,76 @@ async function shot(
   return { exitCode, stdout, stderr };
 }
 
-describe("piCommand", () => {
-  it("starts pi from PATH outside Windows", () => {
-    const which = knownPaths({ pi: "/tools/pi" });
-
-    assert.deepEqual(piCommand("linux", which), ["/tools/pi"]);
-  });
-
-  it("prefers pi.exe from PATH on Windows", () => {
-    const which = knownPaths({
-      "pi.exe": "C:\\bin\\pi.exe",
-      "pi.cmd": "C:\\npm\\pi.cmd",
-      "node.exe": "C:\\node\\node.exe",
-    });
-
-    assert.deepEqual(piCommand("win32", which), ["C:\\bin\\pi.exe"]);
-  });
-
-  it("starts the npm-installed pi through node on Windows", () => {
-    const npmDirectory = join(temporaryDirectory("pi-shot-npm-"), "npm");
-    const packageDirectory = join(
-      npmDirectory,
-      "node_modules",
-      "@earendil-works",
-      "pi-coding-agent",
-    );
-    mkdirSync(join(packageDirectory, "dist", "bundle"), { recursive: true });
+describe.skipIf(process.platform !== "win32")("run on Windows", () => {
+  it("invokes pi.exe and passes the Pi exit code and original arguments", async () => {
+    const node = Bun.which("node.exe");
+    assert.ok(node, "Node.js is required for Windows launch tests");
+    const home = temporaryDirectory("pi-shot-windows-");
+    const bin = join(home, "npm install");
+    mkdirSync(bin);
+    installPiLauncher(bin);
+    const packageDirectory = join(bin, "node_modules", "@earendil-works", "pi-coding-agent");
+    const entry = join(packageDirectory, "nested", "pi entry.js");
+    mkdirSync(dirname(entry), { recursive: true });
     writeFileSync(
       join(packageDirectory, "package.json"),
-      JSON.stringify({ bin: { pi: "dist/bundle/cli.js" } }),
+      JSON.stringify({
+        name: "@earendil-works/pi-coding-agent",
+        bin: { pi: "nested/pi entry.js" },
+      }),
     );
-    const shim = join(npmDirectory, "pi.cmd");
-    writeFileSync(shim, "");
-    const which = knownPaths({ "pi.cmd": shim, "node.exe": "C:\\node\\node.exe" });
-
-    assert.deepEqual(piCommand("win32", which), [
-      "C:\\node\\node.exe",
-      join(packageDirectory, "dist", "bundle", "cli.js"),
-    ]);
-  });
-
-  it("rejects an npm package whose manifest has no bin.pi", () => {
-    const npmDirectory = temporaryDirectory("pi-shot-npm-");
-    const packageDirectory = join(
-      npmDirectory,
-      "node_modules",
-      "@earendil-works",
-      "pi-coding-agent",
+    writeFileSync(
+      entry,
+      "process.stdout.write(JSON.stringify(process.argv.slice(2))); process.exit(37);",
     );
-    mkdirSync(packageDirectory, { recursive: true });
-    writeFileSync(join(packageDirectory, "package.json"), JSON.stringify({ bin: {} }));
+    const args = ["two words", "日本語", "-leading", 'a"b', "", "C:\\path with space\\"];
 
-    assert.throws(() => npmPiEntry(join(npmDirectory, "pi.cmd")), /has no bin\.pi/);
+    const result = await shot(args, { PATH: `${bin};${dirname(node)}`, USERPROFILE: home });
+
+    assert.equal(result.stderr, "");
+    assert.equal(result.exitCode, 37);
+    assert.deepEqual(JSON.parse(result.stdout), [...PI_PREFIX, ...args]);
+  }, 30_000);
+
+  it("returns 127 when only the npm shims are on PATH", async () => {
+    const home = temporaryDirectory("pi-shot-no-exe-");
+    writeFileSync(join(home, "pi.cmd"), "@exit /b 23\r\n");
+    writeFileSync(join(home, "pi.ps1"), "exit 23\r\n");
+
+    const result = await shot(["prompt"], { PATH: home, USERPROFILE: home });
+
+    assert.equal(result.exitCode, 127);
+    assert.match(result.stderr, /pi\.exe is not on PATH/);
   });
 });
 
-describe("run", () => {
-  it("returns 127 when PATH has neither pi.exe nor the npm shim on Windows", async () => {
-    const stderr: string[] = [];
-
-    const exitCode = await run(["prompt"], {
-      platform: "win32",
-      which: () => undefined,
-      stderr: (text) => stderr.push(text),
-    });
-
-    assert.equal(exitCode, 127);
-    assert.equal(stderr.length, 1);
-    assert.match(stderr[0] ?? "", /pi is not on PATH/);
-  });
-});
+function installPiLauncher(bin: string): void {
+  const target = join(bin, "pi.exe");
+  const binary = process.env.WINDOWS_PI_BIN;
+  if (binary) {
+    copyFileSync(binary, target);
+    return;
+  }
+  const source = join(import.meta.dir, "../../../../../undotfiles/install/windows-pi.ts");
+  const result = Bun.spawnSync(
+    [
+      process.execPath,
+      "build",
+      "--compile",
+      "--no-compile-autoload-dotenv",
+      "--no-compile-autoload-bunfig",
+      source,
+      "--outfile",
+      target,
+    ],
+    {
+      stdout: "ignore",
+      stderr: "pipe",
+      timeout: 20_000,
+    },
+  );
+  assert.equal(result.exitCode, 0, result.stderr.toString());
+}
 
 describe.skipIf(process.platform === "win32")("run on POSIX", () => {
   it("passes the pi arguments and the user arguments after --", async () => {

@@ -2,8 +2,8 @@ import { afterAll, beforeAll, test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
-  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const isWindows = process.platform === "win32";
 const posixTest = test.skipIf(isWindows);
@@ -31,8 +31,13 @@ let windowsStubDir: string | undefined;
 if (isWindows) {
   beforeAll(async () => {
     windowsStubDir = mkdtempSync(join(tmpdir(), "startup-windows-stubs-"));
-    const source = join(windowsStubDir, "log-args.ts");
     mkdirSync(join(windowsStubDir, "dist"));
+    const provided = process.env.STARTUP_ARGV_STUB_BIN;
+    if (provided) {
+      copyFileSync(provided, windowsStubPath(windowsStubDir));
+      return;
+    }
+    const source = join(windowsStubDir, "log-args.ts");
     writeFileSync(
       source,
       'import { appendFileSync } from "node:fs";\n' +
@@ -271,7 +276,8 @@ windowsTest(
   async () => {
     const fixture = createPiUpdateFixture();
     try {
-      const flockPath = installArgvStub(join(fixture.env.PATH, "flock"));
+      installPiLauncher(fixture.bin);
+      const flockPath = installArgvStub(join(fixture.bin, "flock"));
       assert.equal(Bun.which("flock", { PATH: fixture.env.PATH }), flockPath);
       await waitForUpdateLockReleased();
 
@@ -299,6 +305,7 @@ windowsTest(
   async () => {
     const fixture = createPiUpdateFixture();
     try {
+      installPiLauncher(fixture.bin);
       await waitForUpdateLockReleased();
       assert.deepEqual(await runScript(fixture.env), CLEAN_EXIT);
       await waitForLogLines(fixture.spawnLog, 1);
@@ -353,7 +360,7 @@ function installArgvStub(path: string): string {
 
   assert.ok(windowsStubDir);
   const exePath = `${path}.exe`;
-  linkSync(windowsStubPath(windowsStubDir), exePath);
+  copyFileSync(windowsStubPath(windowsStubDir), exePath);
   return exePath;
 }
 
@@ -365,37 +372,75 @@ function removeTestDirectory(dir: string): void {
   rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
 }
 
+function installPiLauncher(bin: string): void {
+  assert.ok(windowsStubDir);
+  const providedBinary = process.env.WINDOWS_PI_BIN;
+  const binary = providedBinary ?? join(windowsStubDir, "pi.exe");
+  if (!providedBinary && !existsSync(binary)) {
+    const source = join(import.meta.dir, "../../../../../undotfiles/install/windows-pi.ts");
+    const result = Bun.spawnSync(
+      [
+        process.execPath,
+        "build",
+        "--compile",
+        "--no-compile-autoload-dotenv",
+        "--no-compile-autoload-bunfig",
+        source,
+        "--outfile",
+        binary,
+      ],
+      {
+        stdout: "ignore",
+        stderr: "pipe",
+        timeout: 20_000,
+      },
+    );
+    assert.equal(result.exitCode, 0, result.stderr.toString());
+  }
+
+  copyFileSync(binary, join(bin, "pi.exe"));
+}
+
 function createPiUpdateFixture(): {
   home: string;
+  bin: string;
   env: { HOME: string; PATH: string; PROBE_LOG: string; PROBE_RELEASE: string };
   spawnLog: string;
   releaseFile: string;
 } {
+  const node = Bun.which("node.exe");
+  assert.ok(node, "Node.js is required for Windows update tests");
   const home = mkdtempSync(join(tmpdir(), "startup-update-"));
   const bin = join(home, "bin");
   const spawnLog = join(home, "spawn.log");
   const releaseFile = join(home, "release");
-  mkdirSync(bin, { recursive: true });
+  const packageDirectory = join(bin, "node_modules", "@earendil-works", "pi-coding-agent");
+  mkdirSync(packageDirectory, { recursive: true });
   writeFileSync(
-    join(bin, "pi.cmd"),
-    [
-      "@echo off",
-      '>>"%PROBE_LOG%" echo %*',
-      "set /a waitedSeconds=0",
-      ":waiting",
-      'if exist "%PROBE_RELEASE%" goto released',
-      `if %waitedSeconds% GEQ ${STUB_MAX_WAIT_SECONDS} goto released`,
-      '"%SystemRoot%\\System32\\ping.exe" -n 2 127.0.0.1 >nul',
-      "set /a waitedSeconds+=1",
-      "goto waiting",
-      ":released",
-      "",
-    ].join("\r\n"),
+    join(packageDirectory, "package.json"),
+    JSON.stringify({
+      name: "@earendil-works/pi-coding-agent",
+      bin: { pi: "update.js" },
+    }),
   );
-
+  writeFileSync(
+    join(packageDirectory, "update.js"),
+    `const { appendFileSync, existsSync } = require("node:fs");
+appendFileSync(process.env.PROBE_LOG, process.argv.slice(2).join(" ") + "\\n");
+const deadline = Date.now() + ${STUB_MAX_WAIT_SECONDS} * 1000;
+const timer = setInterval(() => {
+  if (existsSync(process.env.PROBE_RELEASE) || Date.now() >= deadline) clearInterval(timer);
+}, 20);`,
+  );
   return {
     home,
-    env: { HOME: home, PATH: bin, PROBE_LOG: spawnLog, PROBE_RELEASE: releaseFile },
+    bin,
+    env: {
+      HOME: home,
+      PATH: `${bin};${dirname(node)}`,
+      PROBE_LOG: spawnLog,
+      PROBE_RELEASE: releaseFile,
+    },
     spawnLog,
     releaseFile,
   };

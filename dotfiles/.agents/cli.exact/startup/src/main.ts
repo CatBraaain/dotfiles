@@ -23,13 +23,15 @@ await Promise.allSettled(tasks);
 process.exit(0);
 
 async function updatePi() {
-  const pi = Bun.which("pi");
-  if (!pi) return;
   if (process.platform === "win32") {
-    startDetached(SELF_RUN_ARGV[0], [...SELF_RUN_ARGV.slice(1), UPDATE_TASK_ARG]);
+    if (Bun.which("pi.exe")) {
+      startDetached(SELF_RUN_ARGV[0], [...SELF_RUN_ARGV.slice(1), UPDATE_TASK_ARG]);
+    }
     return;
   }
 
+  const pi = Bun.which("pi");
+  if (!pi) return;
   const flock = Bun.which("flock");
   if (!flock) return;
   const lock = `${process.env.TMPDIR || "/tmp"}/pi-update.lock`;
@@ -38,7 +40,7 @@ async function updatePi() {
 
 async function updatePiUnderLock() {
   if (process.platform !== "win32") return;
-  const pi = Bun.which("pi");
+  const pi = Bun.which("pi.exe");
   if (!pi) return;
 
   const lock = createServer((socket) => socket.destroy());
@@ -48,7 +50,6 @@ async function updatePiUnderLock() {
   });
   if (!isAcquired) return;
 
-  // child_process.spawn() rejects .cmd shims such as npm's pi.cmd without a shell: https://nodejs.org/api/child_process.html#spawning-bat-and-cmd-files-on-windows
   const updateProcess = Bun.spawn([pi, ...PI_UPDATE_ARGS], {
     stdin: "ignore",
     stdout: "ignore",
