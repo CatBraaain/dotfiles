@@ -539,6 +539,7 @@ async function createSession(
     desired,
     removed,
   );
+  const paneIdentityFormat = "#{session_id}\t#{pane_id}\t#{pane_pid}";
   const result = await tmux(
     config,
     [
@@ -546,7 +547,7 @@ async function createSession(
       "-d",
       "-P",
       "-F",
-      "#{session_id}\t#{pane_id}\t#{pane_pid}",
+      paneIdentityFormat,
       "-s",
       name,
       "-n",
@@ -580,8 +581,20 @@ async function createSession(
       throw new Error("Cannot identify the created tmux session and pane");
     if (launch.transportKey)
       await tmux(config, ["set-environment", "-u", "-t", target, launch.transportKey]);
-    if (!platform.processIsAlive(Number(pid)))
+    if (handoff) {
+      const paneState = await tmux(config, [
+        "display-message",
+        "-p",
+        "-t",
+        pane,
+        `${paneIdentityFormat}\t#{pane_dead}`,
+      ]);
+      const expectedPaneState = `${target}\t${pane}\t${pid}\t0`;
+      if (paneState.stdout.trimEnd() !== expectedPaneState)
+        throw new Error(`Cannot confirm live tmux pane for launch: ${session.id}`);
+    } else if (!platform.processIsAlive(Number(pid))) {
       throw new Error(`pi exited before launch was recorded: ${session.id}`);
+    }
     await tmux(config, [
       "set-option",
       "-p",

@@ -15,6 +15,21 @@ import { sessionName } from "./pane-inventory";
 
 const realTmux = Bun.which("tmux");
 const node = Bun.which("node");
+const bwrap = Bun.which("bwrap");
+const pidNamespaceArgs = [
+  "--unshare-pid",
+  "--ro-bind",
+  "/",
+  "/",
+  "--proc",
+  "/proc",
+  "--dev",
+  "/dev",
+];
+const canIsolatePid =
+  process.platform === "linux" &&
+  bwrap !== null &&
+  Bun.spawnSync([bwrap, ...pidNamespaceArgs, "--", "/bin/true"]).exitCode === 0;
 const cli = join(import.meta.dir, "main.ts");
 const longRequest = `-long-body-sentinel "double" ‘curly’\r\n${"a'".repeat(12_000)}`.slice(
   0,
@@ -53,9 +68,11 @@ async function waitForFile(file: string) {
   throw new Error(`Timed out waiting for ${file}`);
 }
 
-for (const existing of [false, true]) {
-  test.skipIf(process.platform !== "linux" || !realTmux || !node)(
-    `public new preserves direct argv in ${existing ? "an existing tmux server (compiled CLI)" : "a fresh tmux server (source CLI)"}`,
+for (const scenario of ["fresh server", "existing server", "isolated client"] as const) {
+  const existing = scenario !== "fresh server";
+  const isolated = scenario === "isolated client";
+  test.skipIf(process.platform !== "linux" || !realTmux || !node || (isolated && !canIsolatePid))(
+    `public new preserves direct argv (${scenario})`,
     async () => {
       assert.ok(realTmux && node);
       const projects = "/tmp/work/dotfiles";
@@ -130,7 +147,26 @@ exec ${JSON.stringify(realTmux)} "$@"
           tmux("new-session", "-d", "-s", "seed", "sleep", "180");
           tmux("set-environment", "-g", "PI_MUX_TEST_STALE", "do not inherit");
         }
-        for (const request of [longRequest, shortRequest]) {
+        if (isolated) {
+          assert.ok(bwrap);
+          const sandbox = [bwrap, ...pidNamespaceArgs, "--bind", root, root, "--"];
+          const serverPid = tmux("display-message", "-p", "#{pid}").trim();
+          assert.match(serverPid, /^[1-9]\d*$/);
+          const visibility = Bun.spawnSync([
+            ...sandbox,
+            "/bin/test",
+            "!",
+            "-e",
+            `/proc/${serverPid}`,
+          ]);
+          assert.equal(
+            visibility.exitCode,
+            0,
+            "the tmux server must be outside the client namespace",
+          );
+          invocation = [...sandbox, ...invocation];
+        }
+        for (const request of isolated ? [shortRequest] : [longRequest, shortRequest]) {
           const result = Bun.spawnSync([...invocation, "new", "--detached", request], {
             cwd,
             env,
@@ -179,7 +215,7 @@ exec ${JSON.stringify(realTmux)} "$@"
           tmux("resize-window", "-t", pane, "-x", "91", "-y", "31");
           assert.equal(await waitForFile(`${capture}.resize`), "91");
         }
-        if (existing) {
+        if (scenario === "existing server") {
           const before = readdirSync(sessions);
           const rejected = Bun.spawnSync(
             [...invocation, "new", "--detached", "body must not start"],
