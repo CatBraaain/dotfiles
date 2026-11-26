@@ -211,6 +211,74 @@ function inlineLog(invocationId: string, events: unknown[], task = "unrelated ta
 }
 
 describe("searching inline child events", () => {
+  it.skipIf(process.platform === "win32" || Boolean(process.env.RIPGREP_CONFIG_PATH))(
+    "reuses one event search process across child logs",
+    async () => {
+      const root = createSessionTree();
+      const logs = Array.from({ length: 6 }, (_, index) =>
+        inlineLog(`call-${index}`, [
+          { type: "assistant.message", data: { content: "unrelated" } },
+          { type: "assistant.message", data: { content: `NEEDLE ${index}` } },
+        ]),
+      );
+      writeSession(root, "00000000-0000-0000-0000-000000000001", logs);
+      const rgCommand = join(root, "count-rg");
+      writeFileSync(rgCommand, '#!/bin/sh\nprintf x >> "$0.count"\nexec rg "$@"\n', {
+        mode: 0o755,
+      });
+
+      const hits = await runSearch(listSessionFiles(root), "(?i)needle [0-9]+", {
+        role: "assistant",
+        limit: 4,
+        rgCommand,
+      });
+
+      assert.deepEqual(
+        hits.map(({ line, invocationId, eventIndex }) => [line, invocationId, eventIndex]),
+        [
+          [1, "call-0", 2],
+          [2, "call-1", 2],
+          [3, "call-2", 2],
+          [4, "call-3", 2],
+        ],
+      );
+      assert.equal(readFileSync(`${rgCommand}.count`, "utf8"), "xx");
+    },
+  );
+
+  it("keeps a configured match limit scoped to each child log", () => {
+    const root = createSessionTree();
+    const events = [
+      { type: "assistant.message", data: { content: "needle first" } },
+      { type: "assistant.message", data: { content: "needle second" } },
+    ];
+    writeSession(root, "00000000-0000-0000-0000-000000000001", [inlineLog("call-first", events)]);
+    writeSession(root, "00000000-0000-0000-0000-000000000002", [inlineLog("call-second", events)]);
+    const configPath = join(root, "rg-config");
+    writeFileSync(configPath, "--max-count=1\n");
+
+    const result = Bun.spawnSync(
+      [
+        process.execPath,
+        "--eval",
+        `import { listSessionFiles } from "./sessions";
+import { runSearch } from "./search";
+const hits = await runSearch(listSessionFiles(process.env.FIXTURE_ROOT), "needle");
+console.log(JSON.stringify(hits.map(({ invocationId, eventIndex }) => [invocationId, eventIndex]).sort()));`,
+      ],
+      {
+        cwd: import.meta.dir,
+        env: { ...process.env, FIXTURE_ROOT: root, RIPGREP_CONFIG_PATH: configPath },
+      },
+    );
+
+    assert.equal(result.exitCode, 0, result.stderr.toString());
+    assert.deepEqual(JSON.parse(result.stdout.toString()), [
+      ["call-first", 1],
+      ["call-second", 1],
+    ]);
+  });
+
   it("reports child rg signal termination as a CLI search failure", () => {
     const root = createSessionTree();
     const homeDir = join(root, "home");
