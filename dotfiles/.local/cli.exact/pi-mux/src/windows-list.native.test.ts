@@ -8,12 +8,14 @@ import { dirname, join } from "node:path";
 const tmux = process.platform === "win32" ? Bun.which("tmux.exe") : null;
 const cli = join(import.meta.dir, "main.ts");
 
-function withPsmux(action: (fixture: ReturnType<typeof createPsmuxFixture>) => void) {
+async function withPsmux(
+  action: (fixture: ReturnType<typeof createPsmuxFixture>) => void | Promise<void>,
+) {
   const fixture = createPsmuxFixture();
   try {
-    action(fixture);
+    await action(fixture);
   } finally {
-    fixture.cleanup();
+    await fixture.cleanup();
   }
 }
 
@@ -97,32 +99,83 @@ function createPsmuxFixture() {
     return { id, file, state: state.state, title, publishPending };
   }
 
+  function startSession(name: string) {
+    query("new-session", "-d", "-s", name, "-c", root, ...paneCommand);
+    return publishConversation(`=${name}:0`, name).id;
+  }
+
+  function clientSessions() {
+    return query("list-clients", "-F", "#{client_pid}|#{client_session}")
+      .split("\n")
+      .filter(Boolean)
+      .sort();
+  }
+
+  const attached: { stop: () => Promise<unknown> }[] = [];
+  function attach(name: string) {
+    const client = Bun.spawn(tmuxArgs(["attach", "-t", `=${name}`]), {
+      cwd: root,
+      env: { ...env, PSMUX_PIPE_VT: "1", TERM: "xterm-256color" },
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      windowsHide: true,
+    });
+    const streams = Promise.all([
+      client.stdout.pipeTo(new WritableStream()),
+      new Response(client.stderr).text(),
+    ]);
+    attached.push({
+      stop: () => {
+        if (client.exitCode === null) client.kill();
+        return Promise.all([client.exited, streams]);
+      },
+    });
+    return client.pid;
+  }
+
+  async function waitForClients(...expected: string[]) {
+    const deadline = performance.now() + 5000;
+    expected.sort();
+    while (performance.now() < deadline) {
+      if (clientSessions().join("\n") === expected.join("\n")) return;
+      await Bun.sleep(30);
+    }
+    assert.deepEqual(clientSessions(), expected);
+  }
+
   return {
     root,
     query,
     paneCommand,
     publishConversation,
+    startSession,
+    clientSessions,
+    attach,
+    waitForClients,
     list: (...args: string[]) => run([process.execPath, cli, "list", ...args]),
-    cleanup() {
+    switchTo: (...args: string[]) => run([process.execPath, cli, "switch", ...args]),
+    async cleanup() {
+      await Promise.allSettled(attached.map((client) => client.stop()));
       run(tmuxArgs(["kill-server"]));
-      rmSync(root, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     },
   };
 }
 
-test.skipIf(!tmux)("list succeeds with no active or saved conversations", () => {
+test.skipIf(!tmux)("list succeeds with no active or saved conversations", () =>
   withPsmux(({ list }) => {
     const table = list();
     assert.equal(table.exitCode, 0, table.stderr);
     assert.equal(table.stderr, "");
     assert.match(table.stdout, /^WORKSPACE +SESSION ID +STATE +UPDATED \(UTC\) +TITLE\n$/);
     assert.deepEqual(list("--json"), { exitCode: 0, stdout: "[]\n", stderr: "" });
-  });
-});
+  }),
+);
 
 test.skipIf(!tmux)(
   "list reads pane options from the owning psmux session",
-  () => {
+  () =>
     withPsmux(({ root, query, paneCommand, publishConversation, list }) => {
       query("new-session", "-d", "-s", "first", "-c", root, ...paneCommand);
       query("new-window", "-d", "-t", "=first", "-c", root, ...paneCommand);
@@ -151,7 +204,101 @@ test.skipIf(!tmux)(
         },
       ]);
       assert.equal(firstActiveWindow(), "0");
-    });
-  },
+    }),
   30_000,
+);
+
+const switchTestTimeoutMs = 30_000;
+
+test.skipIf(!tmux)(
+  "switch moves only the specified client when clients display different sessions",
+  () =>
+    withPsmux(async ({ startSession, attach, waitForClients, switchTo }) => {
+      startSession("one");
+      startSession("two");
+      const destination = startSession("three");
+      const selected = attach("one");
+      await waitForClients(`${selected}|one`);
+      const other = attach("two");
+      await waitForClients(`${selected}|one`, `${other}|two`);
+
+      assert.deepEqual(switchTo(destination, "--client-pid", String(selected)), {
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+      });
+      await waitForClients(`${selected}|three`, `${other}|two`);
+    }),
+  switchTestTimeoutMs,
+);
+
+test.skipIf(!tmux)(
+  "switch rejects a shared source session even if the requested PID is unique",
+  () =>
+    withPsmux(async ({ startSession, attach, waitForClients, clientSessions, switchTo }) => {
+      startSession("one");
+      const destination = startSession("two");
+      const selected = attach("one");
+      await waitForClients(`${selected}|one`);
+      const other = attach("one");
+      await waitForClients(`${selected}|one`, `${other}|one`);
+      const before = clientSessions();
+
+      const result = switchTo(destination, "--client-pid", String(selected));
+      assert.deepEqual(clientSessions(), before);
+      assert.equal(result.exitCode, 1, result.stderr);
+      assert.equal(result.stdout, "");
+      assert.match(result.stderr, /Cannot verify a single client in the source psmux session/);
+    }),
+  switchTestTimeoutMs,
+);
+
+test.skipIf(!tmux)(
+  "switch rejects a destination whose name is a prefix of another psmux session",
+  () =>
+    withPsmux(async (fixture) => {
+      const { root, query, paneCommand, startSession, attach, waitForClients, switchTo } = fixture;
+      startSession("one");
+      const destination = startSession("three");
+      query("new-session", "-d", "-s", "three-shadow", "-c", root, ...paneCommand);
+      const selected = attach("one");
+      await waitForClients(`${selected}|one`);
+
+      const result = switchTo(destination, "--client-pid", String(selected));
+      assert.deepEqual(fixture.clientSessions(), [`${selected}|one`]);
+      assert.equal(result.exitCode, 1, result.stderr);
+      assert.equal(result.stdout, "");
+      assert.match(result.stderr, /Cannot safely switch to psmux session three: three-shadow/);
+    }),
+  switchTestTimeoutMs,
+);
+
+test.skipIf(!tmux)(
+  "switch rejects a missing destination and missing or ambiguous clients without moving them",
+  () =>
+    withPsmux(async ({ startSession, attach, waitForClients, clientSessions, switchTo }) => {
+      startSession("one");
+      startSession("two");
+      const destination = startSession("three");
+      const first = attach("one");
+      await waitForClients(`${first}|one`);
+      const second = attach("two");
+      await waitForClients(`${first}|one`, `${second}|two`);
+      const before = clientSessions();
+
+      const missingTarget = switchTo(randomUUID(), "--client-pid", String(first));
+      assert.equal(missingTarget.exitCode, 2, missingTarget.stderr);
+      assert.match(missingTarget.stderr, /Session not found/);
+      const missing = switchTo(destination, "--client-pid", String(0xffff_fffc));
+      assert.equal(missing.exitCode, 3, missing.stderr);
+      assert.match(missing.stderr, /Cannot identify the tmux client/);
+      const ambiguous = switchTo(destination, "--client-pid", String(process.pid));
+      assert.equal(ambiguous.exitCode, 1, ambiguous.stderr);
+      assert.match(ambiguous.stderr, /Cannot identify the tmux client/);
+      const noPid = switchTo(destination);
+      assert.equal(noPid.exitCode, 1, noPid.stderr);
+      assert.match(noPid.stderr, /Expected one attached tmux client, found 2/);
+      assert.deepEqual(clientSessions(), before);
+    }),
+  switchTestTimeoutMs,
 );
