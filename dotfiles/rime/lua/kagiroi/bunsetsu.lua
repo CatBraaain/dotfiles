@@ -409,6 +409,9 @@ local function right_boundary_term(env, context, right_id)
 end
 
 local function route_history_discount(state, active, choice)
+    local histories = state.histories
+    if not histories or #histories == 0 then return 0 end
+
     local words, starts, ends, position = {}, {}, {}, 1
     for index, clause in ipairs(state.clauses) do
         local selected = index == active and choice or clause.candidates[clause.selected]
@@ -427,7 +430,7 @@ local function route_history_discount(state, active, choice)
         end
     end
     local matches = {}
-    for _, history in ipairs(state.histories or {}) do
+    for _, history in ipairs(histories) do
         local first, last = starts[history.first], ends[history.last]
         if first and last and first <= last then
             local readings, texts, matches_route = {}, {}, true
@@ -613,29 +616,44 @@ local function dictionary_nodes(env, reading)
     return starting
 end
 
+local function best_completion(successors, right_id, remaining, completions, env)
+    local best_cost, best_successor
+    for _, successor in ipairs(successors) do
+        local connection = matrix_cost(env, right_id, successor.left_id)
+        local tail = remaining[successor]
+        if connection and tail then
+            local cost = connection + successor.wcost + tail
+            if not best_cost or cost < best_cost or (cost == best_cost
+                and word_route_precedes(chain_words(successor, completions),
+                    chain_words(best_successor, completions))) then
+                best_cost, best_successor = cost, successor
+            end
+        end
+    end
+    return best_cost, best_successor
+end
+
 local function completion_costs(starting, length, env, context)
     local remaining, completions = {}, {}
+    local searched_nodes_by_end = {}
     for position = length, 1, -1 do
         for _, node in ipairs(starting[position] or {}) do
             if node._end == length then
                 remaining[node] = right_boundary_term(env, context, node.right_id)
             else
-                local best, best_successor
-                for _, successor in ipairs(starting[node._end + 1] or {}) do
-                    local conn = matrix_cost(env, node.right_id, successor.left_id)
-                    local tail = remaining[successor]
-                    if conn and tail then
-                        local cost = conn + successor.wcost + tail
-                        if not best or cost <= best then
-                            if not best or cost < best
-                                or word_route_precedes(chain_words(successor, completions),
-                                    chain_words(best_successor, completions)) then
-                                best, best_successor = cost, successor
-                            end
-                        end
-                    end
+                local searched_nodes_by_right_id = searched_nodes_by_end[node._end]
+                if not searched_nodes_by_right_id then
+                    searched_nodes_by_right_id = {}
+                    searched_nodes_by_end[node._end] = searched_nodes_by_right_id
                 end
-                remaining[node], completions[node] = best, best_successor
+                local searched_node = searched_nodes_by_right_id[node.right_id]
+                if searched_node then
+                    remaining[node], completions[node] = remaining[searched_node], completions[searched_node]
+                else
+                    remaining[node], completions[node] = best_completion(starting[node._end + 1] or {},
+                        node.right_id, remaining, completions, env)
+                    searched_nodes_by_right_id[node.right_id] = node
+                end
             end
         end
     end

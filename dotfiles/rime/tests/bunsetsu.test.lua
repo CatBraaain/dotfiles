@@ -2040,5 +2040,56 @@ do
     check(completed and display == "赤鳥", "a missing connection is not treated as a zero-cost connection")
 end
 
+print("== 48. homophones that end at the same position share their continuation search")
+do
+    local homophone_count = 32
+    local dictionary = {
+        { surface = "い", candidate = "伊", left_id = 3, right_id = 3, cost = 100 },
+        { surface = "い", candidate = "井", left_id = 3, right_id = 3, cost = 100 },
+    }
+    for index = 1, homophone_count do
+        dictionary[#dictionary + 1] = {
+            surface = "あ", candidate = "亜" .. index, left_id = 2, right_id = 2, cost = index,
+        }
+    end
+    local bunsetsu, context, viterbi = pos_engine(dictionary, pos_matrix({ 2, 3 }), {},
+        function() return true end)
+    local get_matrix_cost = viterbi._get_matrix_cost
+    local continuation_lookups = 0
+    function viterbi:_get_matrix_cost(right_id, left_id)
+        if right_id == 2 and left_id == 3 then continuation_lookups = continuation_lookups + 1 end
+        return get_matrix_cost(self, right_id, left_id)
+    end
+    bunsetsu.start(context, "あい")
+    local clauses = bunsetsu.state(context).clauses
+    check(#clauses == 2 and bunsetsu.display(context) == "亜1伊",
+        "the lowest-cost prefix and the first tied continuation win at the same clause boundary")
+    check(continuation_lookups <= homophone_count * 3,
+        "continuation lookups avoid a second scan for every homophone (got " .. continuation_lookups .. ")")
+end
+
+print("== 49. a learned continuation keeps its tie-break priority")
+do
+    local dictionary = {
+        { surface = "あ", candidate = "亜", left_id = 1, right_id = 1, cost = 0 },
+        { surface = "あ", candidate = "阿", left_id = 2, right_id = 2, cost = 0 },
+        { surface = "あ", candidate = "安", left_id = 1, right_id = 1, cost = 0 },
+        { surface = "い", candidate = "伊", left_id = 3, right_id = 3, cost = 5000 },
+        { surface = "う", candidate = "宇", left_id = 5, right_id = 5, cost = 0 },
+        { surface = "いう", candidate = "言う", left_id = 6, right_id = 6, cost = 0 },
+    }
+    local matrix = pos_matrix({ 1, 2, 3, 5, 6 }, { ["2 3"] = 1 })
+    local histories = {
+        { surface = "いう", text = "伊宇|1851 1851\tp2:c い,伊,3,3;う,宇,5,5", commit_count = 1 },
+    }
+    local bunsetsu, context = pos_engine(dictionary, matrix, histories, function() return false end)
+    bunsetsu.start(context, "あいう")
+    local menu = clause_texts(bunsetsu.state(context).clauses[1])
+    local learned_position = menu:find("安伊宇", 1, true)
+    local whole_word_position = menu:find("阿言う", 1, true)
+    check(learned_position and whole_word_position and learned_position < whole_word_position,
+        "the learned route with shorter words precedes the tied whole-word continuation (menu: " .. menu .. ")")
+end
+
 print(string.format("bunsetsu: %d checks, %d failures", checks, failures))
 os.exit(failures == 0 and 0 or 1)
