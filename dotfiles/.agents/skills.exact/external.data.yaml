@@ -1,5 +1,6 @@
-# Destinations are relative to this folder. Remap removes it off Linux,
-# so external processing (including run_after) runs on Linux only.
+# Destinations are relative to this folder. The top-level remap.data.md removes
+# .agents on macOS only, so external processing (including run_after) runs on
+# Linux and Windows.
 repos:
   DreambigOu/ELI5:
     destination: .

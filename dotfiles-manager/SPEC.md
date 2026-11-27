@@ -220,7 +220,7 @@ Windows で実行するbuild と内部CLI は、外部取得と GitAlias のた�
 
 ## build: 外部取得
 
-buildデータのマシン固有マージの後、`external.data.yaml` をルートから親フォルダ優先で処理する。`dotfiles/` 以下の各フォルダに置ける。親の対応表で削除された設定は処理せず、移動された設定は移動後のフォルダから読み取る。取得先の `destination` は設定を置いたフォルダからの相対パス。したがって、Linux と Windows では移動後の Rimeフォルダへ辞書を取得し、macOS では Rime の設定が削除されるため取得しない。`.agents` が削除されるWindows と macOS では skills の外部取得および `run_after` を行わない。
+buildデータのマシン固有マージの後、`external.data.yaml` をルートから親フォルダ優先で処理する。`dotfiles/` 以下の各フォルダに置ける。親の対応表で削除された設定は処理せず、移動された設定は移動後のフォルダから読み取る。取得先の `destination` は設定を置いたフォルダからの相対パス。したがって、Linux と Windows では移動後の Rimeフォルダへ辞書を取得し、macOS では Rime の設定が削除されるため取得しない。skills の外部取得および `run_after` は Linux と Windows で行い、`.agents` が削除される macOS では行わない。
 
 `repos` の各リポジトリは GitHub mirror を使う。mirror の場所と更新方法は、Windows では WSL接続を解決できるかどうかで決まる（§Windows の WSL接続）。Linux/macOS と、WSL接続を解決できないWindows は、実行環境の home直下の `mirrors/github.com/<owner>/<repo>`（Windows は Windows側home）をローカルGit で使う。それ以外の Windows は選択済みWSLユーザーの `<HOME>/mirrors/github.com/<owner>/<repo>` を使い、Git を WSL内で実行し、その完了後に同じmirror を UNC経由で読み取ってWindows dist へコピーする。いずれの経路でも既存mirror の移動・削除は行わない。Windowsローカルmirror のGit は `core.longpaths=true` を渡して実行し、Windows の既定のパス長上限（260 文字）を超えるmirror 内パスの操作・削除を可能にする。
 
