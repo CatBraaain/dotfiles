@@ -24,7 +24,8 @@ usage: with-lock [-n] [-w <seconds>] [-E <code>] <name> <command> [args...]
 
 | 環境 | 排他の範囲 |
 | --- | --- |
-| Linux | 同じホストの同じユーザー（uid）のプロセス間 |
+| Linux | 同じホストの同じユーザーのプロセス間 |
+| macOS | 同じホストの同じユーザーのプロセス間 |
 | Windows | 同じホストのプロセス間 |
 | 上記以外 | ロックを取らずに `<command>` を実行する。`-n`・`-w` でも競合は起きない |
 
@@ -59,7 +60,7 @@ with-lock は SIGTERM と SIGINT を受け取ると `<command>` へ同じシグ�
 
 ## 実現方法として固定する
 
-- ロックは OS の排他で保持する。Linux は抽象 Unix ドメインソケット `\0with-lock-<hash>-<uid>`、Windows は名前付きパイプ `\\.\pipe\with-lock-<hash>` への1リスナーとして表す。`<hash>` は `<name>` の sha256 の先頭16桁（hex）、`<uid>` は実行ユーザーの uid である。
-- 保持プロセスが終了すると OS がロックを解放する。ロックファイルなどファイルシステム上の実体は持たず、異常終了の後も残骸は残らない。
+- ロックは OS の排他で保持する。Linux と macOS は lock file `${XDG_CACHE_HOME:-~/.cache}/with-lock/<hash>.lock` を開いて `flock(2)` の排他ロック（`LOCK_EX`）を非ブロッキング（`LOCK_NB`）で掛けること、Windows は名前付きパイプ `\\.\pipe\with-lock-<hash>` への1リスナーとして表す。`<hash>` は `<name>` の sha256 の先頭16桁（hex）である。lock file はユーザーごとの cache dir に置く。
+- 保持プロセスが終了すると OS がロックを解放する。Linux と macOS では lock file という 0 バイトの実体が残るが、ロックは kernel が持つため、異常終了の後に残った lock file がロックを掛け続けることはない。Windows はファイルシステム上の実体を持たない。
 - 待機は 200ms を超えない間隔での再試行で実現する。`-w <seconds>` では期限を過ぎてから再試行しない。
-- npm の依存は持たず、Node.js 組み込みモジュールだけを使う。
+- npm の依存は持たず、Bun 組み込みモジュール（`flock(2)` を呼ぶ `bun:ffi` を含む）だけを使う。

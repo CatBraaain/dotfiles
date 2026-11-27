@@ -1,6 +1,7 @@
-import { describe, it } from "bun:test";
+import { afterAll, describe, it } from "bun:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +12,8 @@ const DEFAULT_HOLDER_HOLD_SECONDS = 3;
 const MIN_WAIT_ONE_SECOND_MS = 990;
 const MAX_WAIT_ONE_SECOND_MS = 3000;
 const READY_MARKER_ENV = "READY_MARKER";
+const HASH_LENGTH = 16;
+const cacheDir = mkdtempSync(join(tmpdir(), "with-lock-cache-"));
 
 interface Fixture {
   dir: string;
@@ -26,7 +29,9 @@ interface CliResult {
 
 type Holder = ReturnType<typeof Bun.spawn>;
 
-describe.skipIf(process.platform !== "linux")("with-lock", () => {
+describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("with-lock", () => {
+  afterAll(() => rmSync(cacheDir, { recursive: true, force: true }));
+
   it(
     "-n exits with the default conflict code without running the command while the lock is held",
     async () => {
@@ -106,6 +111,28 @@ describe.skipIf(process.platform !== "linux")("with-lock", () => {
     TEST_TIMEOUT_MS,
   );
 
+  it(
+    "keeps an empty lock file under $XDG_CACHE_HOME/with-lock while holding the lock",
+    async () => {
+      const fixture = makeFixture();
+      const holder = await startHolder(fixture);
+      try {
+        const hash = createHash("sha256")
+          .update(fixture.lockName)
+          .digest("hex")
+          .slice(0, HASH_LENGTH);
+        const lockFile = join(cacheDir, "with-lock", `${hash}.lock`);
+
+        assert.ok(existsSync(lockFile), `missing ${lockFile}`);
+        assert.equal(statSync(lockFile).size, 0);
+      } finally {
+        await stopHolder(holder);
+        removeFixture(fixture);
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it("exits with 0 when the command succeeds", async () => {
     const fixture = makeFixture();
     try {
@@ -167,6 +194,7 @@ describe.skipIf(process.platform !== "linux")("with-lock", () => {
           stdin: "pipe",
           stdout: "ignore",
           stderr: "inherit",
+          env: { ...process.env, XDG_CACHE_HOME: cacheDir },
           timeout: TEST_TIMEOUT_MS,
         });
         try {
@@ -293,7 +321,7 @@ function runCli(args: string[], env: Record<string, string> = {}): Promise<CliRe
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, ...env },
+    env: { ...process.env, XDG_CACHE_HOME: cacheDir, ...env },
   });
   return Promise.all([
     child.exited,
@@ -315,7 +343,7 @@ function startHolder(fixture: Fixture, holdSeconds = DEFAULT_HOLDER_HOLD_SECONDS
     stdin: "ignore",
     stdout: "ignore",
     stderr: "ignore",
-    env: { ...process.env, [READY_MARKER_ENV]: fixture.marker },
+    env: { ...process.env, XDG_CACHE_HOME: cacheDir, [READY_MARKER_ENV]: fixture.marker },
   });
   return waitForFile(fixture.marker).then(() => holder);
 }
