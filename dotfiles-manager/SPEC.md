@@ -111,7 +111,9 @@ stage diff success (0.08s)
 command diff success (1.28s)
 ```
 
-`bun dotfiles-manager/src/diff.ts [--managed] [--json] [distRoot] [homeRoot]` は build を行わず、指定したdist と home を比較する。引数を省略したときは `dist` と `~` を使う。`--managed` は管理対象の home相対パスを 1行ずつ表示し、`--json` より優先する。`--json` は `changed`、`typeMismatches`、`added`、`removedExact`、`removedIgnored` の各分類についてhome相対パスの配列を 2スペースインデントの JSON と末尾改行で出力する。`unchanged` は JSON に含めない。通常の表示は §差分表示 に従う。
+`bun dotfiles-manager/src/diff.ts [--managed] [--json] [distRoot] [homeRoot]` は build を行わない。引数を省略したときは `dist` と `~` を使う。`--managed` は管理対象の一覧を表示し、`--json` より優先する。それ以外では dist と home を比較する。`--json` は `changed`、`typeMismatches`、`added`、`removedExact`、`removedIgnored` の各分類についてhome相対パスの配列を 2スペースインデントの JSON と末尾改行で出力する。`unchanged` は JSON に含めない。通常の表示は §差分表示 に従う。
+
+`managed` と `--managed` の一覧は、§差分検知 のパス対応と除外規則に従い、管理対象の home相対パスを UTF-16 コード単位の昇順で 1行ずつ表示する。home に対応する項目がなくても、dist の項目とその配下は一覧に含める。種別が異なる場合はその項目だけを表示し、配下は走査しない。一覧の取得ではファイルの内容やリンク先を読み取らず、実行権を比較しない。home 側だけにある項目は列挙しない。管理対象のパスや種別の判定に必要な走査に失敗した場合は、一覧を出力せずエラーにする。
 
 `bun dotfiles-manager/src/apply.ts [--dry-run] [--yes] <distRoot> <homeRoot> [--json]` は build を行わず、指定したdist と home の差分を検知して適用する。`--dry-run` は差分を表示するだけで、home の更新と applyスクリプトの実行を行わない。`--dry-run --json` は `src/diff.ts --json` と同じ分類を出力する。`--json` を単独で指定した通常適用の出力は変わらない。通常適用は差分検知に `diff: <内訳> (<秒>s)`、適用に `apply: <内訳> (<秒>s)`、applyスクリプトの実行に `apply scripts: <数> scripts (<秒>s)` を表示し、`<秒>s` は各処理の開始からの経過秒数である。通常適用は内部CLI の `apply --ask` と同じ確認を行う。`--yes` を指定すると確認せずに適用する。
 

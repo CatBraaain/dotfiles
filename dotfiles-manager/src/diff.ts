@@ -42,13 +42,7 @@ export async function collectDifferences(
   platform: string = process.platform,
   generatedLinks?: ReadonlySet<string>,
 ): Promise<DiffResult> {
-  for (const [label, path] of [
-    ["dist root", distRoot],
-    ["home root", homeRoot],
-  ] as const) {
-    const stat = await lstatOrNull(path);
-    if (!stat || !stat.isDirectory()) throw new Error(`${label} is not a directory: ${path}`);
-  }
+  await validateRoots(distRoot, homeRoot);
 
   const result: DiffResult = {
     unchanged: [],
@@ -62,20 +56,16 @@ export async function collectDifferences(
     platform === "win32" && process.platform === "win32" && generatedLinks?.size
       ? createGeneratedLinkComparison()
       : undefined;
-  await walk(
-    "",
-    "",
-    { isExactScope: false, scanForSurplus: false },
-    {
-      distRoot,
-      homeRoot,
-      platform,
-      result,
-      limiter: new IoLimiter(fileOperationConcurrency),
-      generatedLinks,
-      generatedLinkDiffers,
-    },
-  );
+  await walk("", "", rootScope, {
+    mode: "diff",
+    distRoot,
+    homeRoot,
+    platform,
+    result,
+    limiter: new IoLimiter(fileOperationConcurrency),
+    generatedLinks,
+    generatedLinkDiffers,
+  });
   for (const entries of Object.values(result))
     entries.sort((a, b) => compareCodeUnits(a.homePath, b.homePath));
   return result;
@@ -96,23 +86,8 @@ export async function main(
   generatedLinks?: ReadonlySet<string>,
 ): Promise<number> {
   const options = parseArgs(argv);
-  const result = await collectDifferences(
-    options.distRoot,
-    options.homeRoot,
-    undefined,
-    generatedLinks,
-  );
   if (options.managed) {
-    // Managed entries: every dist-mapped home entry regardless of difference,
-    // in tree order. Surplus removals (removedExact) are not listed.
-    const managedPaths = [
-      ...result.unchanged,
-      ...result.changed,
-      ...result.typeMismatches,
-      ...result.added,
-    ]
-      .map(paths)
-      .sort(compareCodeUnits);
+    const managedPaths = await collectManagedPaths(options.distRoot, options.homeRoot);
     for (const homePath of managedPaths) {
       // A closed pipe (e.g. `| head`) must not turn into a stack trace.
       try {
@@ -123,6 +98,12 @@ export async function main(
     }
     return 0;
   }
+  const result = await collectDifferences(
+    options.distRoot,
+    options.homeRoot,
+    undefined,
+    generatedLinks,
+  );
   if (options.json) {
     process.stdout.write(`${JSON.stringify(toDiffJson(result), null, 2)}\n`);
   } else {
@@ -155,14 +136,43 @@ export function parseArgs(argv: readonly string[]): {
 type WalkContext = {
   distRoot: string;
   homeRoot: string;
-  platform: string;
-  result: DiffResult;
   limiter: IoLimiter;
-  generatedLinks?: ReadonlySet<string>;
-  generatedLinkDiffers?: ReturnType<typeof createGeneratedLinkComparison>;
-};
+} & (
+  | { mode: "managed"; paths: string[] }
+  | {
+      mode: "diff";
+      platform: string;
+      result: DiffResult;
+      generatedLinks?: ReadonlySet<string>;
+      generatedLinkDiffers?: ReturnType<typeof createGeneratedLinkComparison>;
+    }
+);
 
 type WalkScope = { isExactScope: boolean; scanForSurplus: boolean };
+const rootScope: WalkScope = { isExactScope: false, scanForSurplus: false };
+
+async function validateRoots(distRoot: string, homeRoot: string): Promise<void> {
+  for (const [label, path] of [
+    ["dist root", distRoot],
+    ["home root", homeRoot],
+  ] as const) {
+    const stat = await lstatOrNull(path);
+    if (!stat || !stat.isDirectory()) throw new Error(`${label} is not a directory: ${path}`);
+  }
+}
+
+async function collectManagedPaths(distRoot: string, homeRoot: string): Promise<string[]> {
+  await validateRoots(distRoot, homeRoot);
+  const paths: string[] = [];
+  await walk("", "", rootScope, {
+    mode: "managed",
+    distRoot,
+    homeRoot,
+    paths,
+    limiter: new IoLimiter(fileOperationConcurrency),
+  });
+  return paths.sort(compareCodeUnits);
+}
 
 async function walk(
   distRel: string,
@@ -172,7 +182,13 @@ async function walk(
 ): Promise<void> {
   const distDir = join(ctx.distRoot, distRel);
   const homeDir = join(ctx.homeRoot, homeRel);
-  const knownHomeNames = new Set<string>();
+  const surplus =
+    ctx.mode === "diff" && scope.scanForSurplus
+      ? {
+          knownHomeNames: new Set<string>(),
+          entries: ctx.result[scope.isExactScope ? "removedExact" : "removedIgnored"],
+        }
+      : undefined;
   const entries = await ctx.limiter.run(() => readdir(distDir, { withFileTypes: true }));
   const tasks: Promise<void>[] = [];
 
@@ -180,31 +196,34 @@ async function walk(
     const mapping = mapSegment(entry.name, entry.isDirectory());
     // Track every dist entry's home name (excluded ones included) so the
     // surplus scan below never counts a mapped counterpart as surplus.
-    knownHomeNames.add(mapping.homeName);
+    surplus?.knownHomeNames.add(mapping.homeName);
     if (mapping.isExcluded) continue;
 
     const childDistRel = distRel === "" ? entry.name : `${distRel}/${entry.name}`;
     const childHomeRel = homeRel === "" ? mapping.homeName : `${homeRel}/${mapping.homeName}`;
-    const distAbs = join(distDir, entry.name);
     const homeAbs = join(homeDir, mapping.homeName);
     tasks.push(
       (async () => {
         const homeStat = await ctx.limiter.run(() => lstatOrNull(homeAbs));
+        if (ctx.mode === "managed") ctx.paths.push(childHomeRel);
 
         if (!homeStat) {
-          ctx.result.added.push({ homePath: childHomeRel, distPath: childDistRel });
+          if (ctx.mode === "diff")
+            ctx.result.added.push({ homePath: childHomeRel, distPath: childDistRel });
           if (entry.isDirectory()) await collectAddedTree(childDistRel, childHomeRel, ctx);
           return;
         }
 
         const homeKind = kindOfStat(homeStat);
         if (homeKind !== mapping.kind) {
-          ctx.result.typeMismatches.push({ homePath: childHomeRel, distPath: childDistRel });
+          if (ctx.mode === "diff")
+            ctx.result.typeMismatches.push({ homePath: childHomeRel, distPath: childDistRel });
           return;
         }
 
         if (mapping.kind === "directory") {
-          ctx.result.unchanged.push({ homePath: childHomeRel, distPath: childDistRel });
+          if (ctx.mode === "diff")
+            ctx.result.unchanged.push({ homePath: childHomeRel, distPath: childDistRel });
           // Exact scope covers only the direct children of a .exact directory
           // (spec §.exact の解釈); it does not propagate into child directories.
           const childIsExactScope = mapping.isExactManaged;
@@ -217,6 +236,9 @@ async function walk(
           return;
         }
 
+        if (ctx.mode === "managed") return;
+
+        const distAbs = join(distDir, entry.name);
         const differs = await ctx.limiter.run(() =>
           ctx.generatedLinkDiffers && ctx.generatedLinks?.has(childDistRel)
             ? ctx.generatedLinkDiffers(distAbs, homeAbs)
@@ -233,17 +255,14 @@ async function walk(
 
   // Surplus scan: only below dist-managed directories (never at the home
   // root). Unmanaged top-level home entries are ignored.
-  if (!scope.scanForSurplus) return;
+  if (!surplus) return;
   const homeEntries = await ctx.limiter.run(() => readdir(homeDir, { withFileTypes: true }));
   for (const homeEntry of homeEntries) {
-    if (knownHomeNames.has(homeEntry.name)) continue;
+    if (surplus.knownHomeNames.has(homeEntry.name)) continue;
     const surplusRel = homeRel === "" ? homeEntry.name : `${homeRel}/${homeEntry.name}`;
     // A surplus directory is reported as one entry (removed with its subtree
     // on apply), so its contents are not enumerated.
-    ctx.result[scope.isExactScope ? "removedExact" : "removedIgnored"].push({
-      homePath: surplusRel,
-      distPath: null,
-    });
+    surplus.entries.push({ homePath: surplusRel, distPath: null });
   }
 }
 
@@ -257,7 +276,8 @@ async function collectAddedTree(distRel: string, homeRel: string, ctx: WalkConte
     if (mapping.isExcluded) continue;
     const childDistRel = `${distRel}/${entry.name}`;
     const childHomeRel = `${homeRel}/${mapping.homeName}`;
-    ctx.result.added.push({ homePath: childHomeRel, distPath: childDistRel });
+    if (ctx.mode === "managed") ctx.paths.push(childHomeRel);
+    else ctx.result.added.push({ homePath: childHomeRel, distPath: childDistRel });
     if (entry.isDirectory()) tasks.push(collectAddedTree(childDistRel, childHomeRel, ctx));
   }
   await Promise.all(tasks);
