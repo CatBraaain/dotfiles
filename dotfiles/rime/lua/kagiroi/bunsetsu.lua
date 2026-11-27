@@ -11,6 +11,7 @@ local kKanjiCandidateId = 1920
 local kHistoryIds = "1851 1851"
 local kHistoryMarker = "\tp2"
 local kLearningScale = 10000
+local kPartialHistoryWeight = 0.25
 local kUnknownWordCost = 10000
 local kBoundaryMarker = "\tb1 "
 
@@ -119,8 +120,10 @@ end
 
 local function lexical_history_bonus(history, reading_length)
     local history_length = utf8.len(history.reading)
+    local bonus = history_bonus(history.commit_count)
+    if history_length == reading_length then return bonus end
     local coverage = history_length * (history_length + 1) / (reading_length * (reading_length + 1))
-    return math.floor(history_bonus(history.commit_count) * coverage)
+    return math.floor(bonus * coverage * kPartialHistoryWeight)
 end
 
 local function escape_history_field(value)

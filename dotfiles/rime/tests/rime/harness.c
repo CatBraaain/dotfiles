@@ -3939,6 +3939,52 @@ static void selected_text(char* buffer, size_t size) {
     }
 }
 
+static Bool select_expanded_candidate(const char* target) {
+    press(kSpace);
+    press(kTab);
+    if (!option("_kagiroi_expand_candidates")) return False;
+    char selected[256];
+    selected_text(selected, sizeof(selected));
+    int current = full_list_index_of(selected);
+    int desired = full_list_index_of(target);
+    if (current < 0 || desired < 0) return False;
+    int key = desired < current ? kUp : kDown;
+    for (int step = 0; step < abs(desired - current); ++step) press(key);
+    selected_text(selected, sizeof(selected));
+    return strcmp(selected, target) == 0;
+}
+
+static void test_partial_learning_keeps_meteor_first(void) {
+    static const struct {
+        const char* input;
+        const char* text;
+        int confirmations;
+    } training[] = {{"in", "員", 2}, {"seki", "席", 6}};
+    for (size_t i = 0; i < sizeof(training) / sizeof(training[0]); ++i) {
+        for (int round = 0; round < training[i].confirmations; ++round) {
+            fresh_session();
+            type_text(training[i].input);
+            press(kSpace);
+            if (!select_expanded_candidate(training[i].text)) {
+                check(False, "the short reading must offer its training candidate");
+                return;
+            }
+            press(kReturn);
+            char commit[256];
+            check(take_commit(commit, sizeof(commit)) && strcmp(commit, training[i].text) == 0,
+                  "short-reading training must commit the intended candidate");
+        }
+    }
+
+    fresh_session();
+    type_text("inseki");
+    press(kSpace);
+    check(menu_hidden() && preview_equals("隕石"),
+          "partial learning alone must keep meteor first for inseki");
+    check(select_expanded_candidate("員席"),
+          "the alternative composed of the learned words must stay selectable");
+}
+
 static Bool active_reading_equals(const char* expected) {
     RIME_STRUCT(RimeContext, context);
     Bool equal = False;
@@ -5548,6 +5594,7 @@ int main(int argc, char* argv[]) {
         {"bunsetsu_reopened_contextual_order", test_bunsetsu_reopened_contextual_order},
         {"learning_promotes_committed_candidate", test_learning_promotes_committed_candidate},
         {"learning_promotes_committed_sentences", test_learning_promotes_committed_sentences},
+        {"partial_learning_keeps_meteor_first", test_partial_learning_keeps_meteor_first},
         {"part_of_speech_kana_learning", test_part_of_speech_kana_learning},
         {"bunsetsu_hidden_resize_and_hiragana", test_bunsetsu_hidden_resize_and_hiragana},
         {"bunsetsu_contexts_keep_separate_choices", test_bunsetsu_contexts_keep_separate_choices},

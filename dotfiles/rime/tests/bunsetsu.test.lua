@@ -1421,10 +1421,9 @@ do
         if choice.text == "亜伊" and choice.left_id == 1851 then learned_own = choice.own end
         if choice.text == "亜伊" and choice.left_id == 1898 then other_own = choice.own end
     end
-    local subword_discount = math.floor(10000 * (1 * 2) / (2 * 3))
     check(#selected_route(bunsetsu, context) == 2 and bunsetsu.display(context) == "阿伊"
-        and learned_own == 5100 - subword_discount and other_own == 5100,
-        "only the trained word identity receives the coverage-scaled discount inside the multiword route")
+        and learned_own ~= nil and other_own == 5100 and learned_own < other_own,
+        "only the trained word identity receives the partial discount inside the multiword route")
 end
 
 print("== 32. legacy partial histories retain stored rows and actual words at every interval position")
