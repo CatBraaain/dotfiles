@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { camoufoxFailureKind, prepareCamoufoxRetry, type RetryPreparation } from "./backends";
 import {
   CAMOUFOX_HEALTH_SESSION_KEY,
@@ -144,7 +144,9 @@ function playwrightCliConfigPath(): string {
 // で続行）。login 経路（camoufoxRender を通らない）でも使うため export する。
 export function syncPlaywrightCliConfig(): void {
   try {
-    writeFileSync(playwrightCliConfigPath(), playwrightCliConfigJson(camoufoxBaseUrl()));
+    const configPath = playwrightCliConfigPath();
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, playwrightCliConfigJson(camoufoxBaseUrl()));
   } catch {
     // Keep going with the existing config (same content for the default URL).
   }

@@ -222,27 +222,26 @@ test(
   STARTUP_TEST_TIMEOUT_MS,
 );
 
-posixTest("runs flock -n <lock> pi update --all when flock is available", async () => {
-  const fixture = createShStubHome({ pi: LOG_ARGS, flock: LOG_ARGS });
+posixTest("runs with-lock -n <name> pi update --all when with-lock is installed", async () => {
+  const fixture = createShStubHome({ "bin/pi": LOG_ARGS, ".agents/cli/with-lock": LOG_ARGS });
   try {
     assert.deepEqual(await runScript(fixture.env), CLEAN_EXIT);
 
-    const [lockOption, lockPath, piPath, ...updateArgs] = await waitForLogLines(
-      fixture.spawnLog,
-      5,
-    );
-    assert.ok(lockPath, "flock receives a lock path");
-    assert.deepEqual(
-      [lockOption, piPath, ...updateArgs],
-      ["-n", join(fixture.bin, "pi"), "update", "--all"],
-    );
+    const expectedArgs = [
+      "-n",
+      `${fixture.env.TMPDIR}/pi-update.lock`,
+      join(fixture.bin, "pi"),
+      "update",
+      "--all",
+    ];
+    assert.deepEqual(await waitForLogLines(fixture.spawnLog, expectedArgs.length), expectedArgs);
   } finally {
     rmSync(fixture.home, { recursive: true, force: true });
   }
 });
 
-posixTest("skips pi update when flock is unavailable", async () => {
-  const fixture = createShStubHome({ pi: LOG_ARGS });
+posixTest("skips pi update when with-lock is not installed", async () => {
+  const fixture = createShStubHome({ "bin/pi": LOG_ARGS });
   try {
     assert.deepEqual(await runScript(fixture.env), CLEAN_EXIT);
     await assertNothingLogged(fixture.spawnLog);
@@ -252,7 +251,7 @@ posixTest("skips pi update when flock is unavailable", async () => {
 });
 
 posixTest("skips pi update when pi is unavailable", async () => {
-  const fixture = createShStubHome({ flock: LOG_ARGS });
+  const fixture = createShStubHome({ ".agents/cli/with-lock": LOG_ARGS });
   try {
     assert.deepEqual(await runScript(fixture.env), CLEAN_EXIT);
     await assertNothingLogged(fixture.spawnLog);
@@ -262,7 +261,7 @@ posixTest("skips pi update when pi is unavailable", async () => {
 });
 
 posixTest("does not run pi update for the update argument outside windows", async () => {
-  const fixture = createShStubHome({ pi: LOG_ARGS, flock: LOG_ARGS });
+  const fixture = createShStubHome({ "bin/pi": LOG_ARGS, ".agents/cli/with-lock": LOG_ARGS });
   try {
     assert.deepEqual(await runScript(fixture.env, [UPDATE_TASK_ARG]), CLEAN_EXIT);
     await assertNothingLogged(fixture.spawnLog);
@@ -272,13 +271,14 @@ posixTest("does not run pi update for the update argument outside windows", asyn
 });
 
 windowsTest(
-  "runs only one pi update while the pipe is held even with flock.exe on PATH",
+  "runs only one pi update while the pipe is held even with with-lock.exe installed",
   async () => {
     const fixture = createPiUpdateFixture();
     try {
       installPiLauncher(fixture.bin);
-      const flockPath = installArgvStub(join(fixture.bin, "flock"));
-      assert.equal(Bun.which("flock", { PATH: fixture.env.PATH }), flockPath);
+      const cliDir = join(fixture.home, ".agents", "cli");
+      mkdirSync(cliDir, { recursive: true });
+      installArgvStub(join(cliDir, "with-lock"));
       await waitForUpdateLockReleased();
 
       assert.deepEqual(await runScript(fixture.env), CLEAN_EXIT);
@@ -336,8 +336,10 @@ function createShStubHome(stubs: Record<string, string>): {
   const bin = join(home, "bin");
   const spawnLog = join(home, "spawn.log");
   mkdirSync(bin, { recursive: true });
-  for (const [name, body] of Object.entries(stubs)) {
-    writeShStub(join(bin, name), body);
+  for (const [relativePath, body] of Object.entries(stubs)) {
+    const path = join(home, relativePath);
+    mkdirSync(dirname(path), { recursive: true });
+    writeShStub(path, body);
   }
   return {
     home,

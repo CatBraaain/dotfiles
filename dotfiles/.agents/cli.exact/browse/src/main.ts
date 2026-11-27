@@ -1,9 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { lockedBrowseArgs } from "./backends";
 import {
-  FLOCK_CONFLICT_EXIT_CODE,
+  LOCK_CONFLICT_EXIT_CODE,
   LOCKED_SUBCOMMAND,
   RESTART_LOCK_FILE,
   SLOT_COUNT,
@@ -11,6 +10,7 @@ import {
   SERVER_SUBCOMMAND,
   slotLockFile,
   stateDir,
+  withLockCli,
 } from "./config";
 import { runX11vncRequest } from "./display";
 import { fetchOne, fetchRoute } from "./fetch";
@@ -30,53 +30,54 @@ import { emitJson, fail, selfRunArgv, usageFail } from "./util";
 
 // Cross-process coordination protects the shared Camoufox server. Render
 // capacity is a 4-slot semaphore: a camoufox search/fetch re-executes itself
-// as a child of `flock` holding one slot lock, so the kernel releases the lock
-// even when the holder crashes; the lock file is only an anchor and may stay
-// behind. Reddit / StackOverflow fetches and `server start` need no slot;
+// as a child of the with-lock CLI holding one slot lock, so the OS releases the
+// lock even when the holder crashes. Reddit / StackOverflow fetches and
+// `server start` need no slot;
 async function runInSlot(run: () => Promise<void>): Promise<void> {
   if (process.platform === "win32") return run();
   if (process.argv[2] === LOCKED_SUBCOMMAND) {
     // Spec: 獲得の直後にも restart ロックの保持を探知し、進行していれば让位する。
     // Exiting with the conflict code makes the parent treat the slot as busy;
-    // the flock wrapper releases it as this process exits.
-    if (restartInFlight()) process.exit(FLOCK_CONFLICT_EXIT_CODE);
+    // the with-lock process releases it as this process exits.
+    if (restartInFlight()) process.exit(LOCK_CONFLICT_EXIT_CODE);
     return run();
   }
+  const lock = withLockCli();
+  if (lock === undefined) return run();
   const stateDirPath = stateDir();
-  // flock(1) does not create the lock file's parent directory.
-  mkdirSync(stateDirPath, { recursive: true });
   while (true) {
     for (let slot = 0; slot < SLOT_COUNT; slot++) {
-      const outcome = runUnderSlotFlock(stateDirPath, slot, "probe");
-      if (outcome === "flock-unavailable") return run();
+      const outcome = runUnderSlotLock(lock, stateDirPath, slot, "probe");
+      if (outcome === "lock-unavailable") return run();
       if (outcome === "busy") continue;
     }
     // All slots busy (or their winners just yielded): if a restart is in
     // flight, wait it out before retrying; otherwise wait for a slot briefly
-    // (kernel sleep, no busy loop) and re-probe. A freed slot is picked up on
+    // (with-lock -w, no busy loop) and re-probe. A freed slot is picked up on
     // the next pass.
     if (restartInFlight()) {
       waitForRestartToFinish();
       continue;
     }
-    const outcome = runUnderSlotFlock(stateDirPath, 0, "wait");
-    if (outcome === "flock-unavailable") return run();
+    const outcome = runUnderSlotLock(lock, stateDirPath, 0, "wait");
+    if (outcome === "lock-unavailable") return run();
   }
 }
 
-type FlockOutcome = "ran" | "busy" | "flock-unavailable";
+type LockOutcome = "ran" | "busy" | "lock-unavailable";
 
-function runUnderSlotFlock(
+function runUnderSlotLock(
+  lock: string,
   stateDirPath: string,
   slot: number,
   mode: "probe" | "wait",
-): FlockOutcome {
+): LockOutcome {
   const options =
     mode === "probe"
-      ? ["-n", "-E", String(FLOCK_CONFLICT_EXIT_CODE)]
-      : ["-w", String(SLOT_WAIT_POLL_SECONDS), "-E", String(FLOCK_CONFLICT_EXIT_CODE)];
+      ? ["-n", "-E", String(LOCK_CONFLICT_EXIT_CODE)]
+      : ["-w", String(SLOT_WAIT_POLL_SECONDS), "-E", String(LOCK_CONFLICT_EXIT_CODE)];
   const result = spawnSync(
-    "flock",
+    lock,
     [
       ...options,
       join(stateDirPath, slotLockFile(slot)),
@@ -88,8 +89,8 @@ function runUnderSlotFlock(
       env: { ...process.env, BROWSE_SLOT: String(slot) },
     },
   );
-  if (result.error) return "flock-unavailable";
-  if (result.status === FLOCK_CONFLICT_EXIT_CODE) return "busy";
+  if (result.error) return "lock-unavailable";
+  if (result.status === LOCK_CONFLICT_EXIT_CODE) return "busy";
   process.exit(result.status ?? 1);
 }
 
@@ -259,14 +260,15 @@ function serverCommand(argv: string[]): Promise<void> {
 async function runAfterDrainingRenderSlots(action: "stop" | "restart"): Promise<void> {
   const run = action === "stop" ? stopCamoufoxServer : restartCamoufoxServer;
   if (process.platform === "win32" || process.argv[2] === LOCKED_SUBCOMMAND) return run();
+  const lock = withLockCli();
+  if (lock === undefined) return run();
   const stateDirPath = stateDir();
-  mkdirSync(stateDirPath, { recursive: true });
   const chain = [join(stateDirPath, RESTART_LOCK_FILE)];
   for (let slot = 0; slot < SLOT_COUNT; slot++) {
-    chain.push("flock", join(stateDirPath, slotLockFile(slot)));
+    chain.push(lock, join(stateDirPath, slotLockFile(slot)));
   }
   const result = spawnSync(
-    "flock",
+    lock,
     [...chain, ...selfRunArgv, ...lockedBrowseArgs(LOCKED_SUBCOMMAND, process.argv.slice(2))],
     { stdio: "inherit", env: process.env },
   );

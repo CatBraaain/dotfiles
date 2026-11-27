@@ -37,8 +37,8 @@ const root = resolve(__dirname, "../..");
 const dotfiles = process.env.PI_REVIEW_DOTFILES ?? join(homedir(), "projects/dotfiles/dotfiles");
 const realPi = execFileSync("which", ["pi"], { encoding: "utf8" }).trim();
 const realTmux = execFileSync("which", ["tmux"], { encoding: "utf8" }).trim();
-const realFlock = execFileSync("which", ["flock"], { encoding: "utf8" }).trim();
 let compiledPiMux: string | undefined;
+let compiledWithLock: string | undefined;
 const executablePath =
   process.env.PI_REVIEW_VSCODE ??
   join(homedir(), ".cache/agent-kit-screenshots/vscode-1.138.0/VSCode-linux-x64/code");
@@ -548,8 +548,8 @@ export class VSCodeFixture {
 
   tmux(args: string[]): string {
     const stopping = args[0] === "kill-server";
-    const command = stopping ? realFlock : join(this.directory, "bin/tmux");
-    const prefix = stopping ? ["--exclusive", "--close", this.tmuxLock, realTmux, "-N"] : [];
+    const command = stopping ? prepareWithLock() : join(this.directory, "bin/tmux");
+    const prefix = stopping ? [this.tmuxLock, realTmux, "-N"] : [];
     const result = spawnSync(
       command,
       [...prefix, "-S", this.tmuxSocket, "-f", "/dev/null", ...args],
@@ -682,6 +682,7 @@ export class VSCodeFixture {
     }
     symlinkSync(compiledPiMux, join(this.directory, "bin/pi-mux"));
     symlinkSync(realPi, join(this.directory, "bin/pi"));
+    const withLock = prepareWithLock();
     write(
       join(this.directory, "bin/tmux"),
       `#!/bin/sh
@@ -692,7 +693,7 @@ fi
 for arg do
   case "$arg" in
     start-server|start|new-session|new)
-      exec '${realFlock}' --exclusive --close '${this.tmuxLock}' /bin/sh -c '
+      exec '${withLock}' '${this.tmuxLock}' /bin/sh -c '
         if [ -e "$1" ]; then
           echo "Fixture tmux environment is closed" >&2
           exit 64
@@ -817,6 +818,15 @@ exec '${realTmux}' -N "$@"
       },
     }).trim();
   }
+}
+
+function prepareWithLock(): string {
+  if (compiledWithLock !== undefined) return compiledWithLock;
+  const source = join(dotfiles, ".agents/cli.exact/with-lock/src/main.ts");
+  const executable = join(fixtureDirectory(), "with-lock");
+  execFileSync("bun", ["build", "--compile", source, "--outfile", executable]);
+  compiledWithLock = executable;
+  return executable;
 }
 
 function fixtureDirectory(): string {

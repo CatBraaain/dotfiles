@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { RenderClock, startLocalHttpProbe } from "./camoufox";
 import { CAMOUFOX_DEFAULT_BASE_URL, SLOT_COUNT, slotLockFile } from "./config";
+import { withLockMainPath } from "./fixtures/with-lock";
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -69,7 +70,11 @@ function launchRender(root: string, scenario: string, slot?: number, gated = fal
   const child =
     slot === undefined
       ? spawn(fixtureArgs[0]!, fixtureArgs.slice(1), { env })
-      : spawn("flock", [join(root, slotLockFile(slot)), ...fixtureArgs], { env });
+      : spawn(
+          process.execPath,
+          [withLockMainPath, join(root, slotLockFile(slot)), ...fixtureArgs],
+          { env },
+        );
   let stdout = "";
   let stderr = "";
   let complete!: (message: Completion) => void;
@@ -103,6 +108,28 @@ function launchRender(root: string, scenario: string, slot?: number, gated = fal
 }
 
 describe("Playwright render paths", () => {
+  it.skipIf(process.platform !== "linux")(
+    "writes the Playwright CLI config in a fresh cache when Camoufox is already healthy",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "browse-fresh-cache-"));
+      try {
+        const cache = join(root, "new-cache");
+        const { code, messages } = await launchRender(cache, "fresh-cache").exited;
+        assert.equal(code, 0, messages[0]?.error ?? "Fixture did not render");
+        assert.deepEqual(messages[0]?.commands, ["close", "open", "run-code", "close"]);
+        const config = JSON.parse(
+          readFileSync(join(cache, "pi", "web-search", "playwright-cli.config.json"), "utf8"),
+        );
+        assert.equal(
+          config.browser.remoteEndpoint,
+          process.env.CAMOUFOX_BASE_URL ?? CAMOUFOX_DEFAULT_BASE_URL,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   for (const platform of ["windows", "linux"]) {
     it(`uses the installed Playwright core without launching the CLI on ${platform}`, async () => {
       const root = mkdtempSync(join(tmpdir(), `browse-${platform}-direct-`));
@@ -203,7 +230,7 @@ describe("camoufoxRender deadline lifecycle", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(process.platform !== "linux")(
     "hands a completed child's slot to a queued render without waiting for its deadline",
     async () => {
       const root = mkdtempSync(join(tmpdir(), "browse-slots-"));

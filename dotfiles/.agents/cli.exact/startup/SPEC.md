@@ -30,10 +30,12 @@
 | 環境 | 起動コマンド（detached） | ロック |
 | --- | --- | --- |
 | Windows | `~/.agents/cli/startup.exe update` | 再実行されたプロセスが名前付きパイプ `\\.\pipe\pi-update` をロックとして取得できたときだけ、PATH 上の `pi.exe` に `update --all` を渡して終了を待つ。ロックはそのプロセスの終了とともに OS が解放する |
-| Windows 以外で `flock` と `pi` が PATH にある | `flock -n <ロックファイル> pi update --all` | flock が更新プロセスの終了まで保持する |
-| Windows 以外で `flock` または `pi` が PATH に無い | 起動しない | なし |
+| Windows 以外で `~/.agents/cli/with-lock` があり、`pi` が PATH にある | `~/.agents/cli/with-lock -n <ロック名> pi update --all` | Linux では `with-lock` が更新プロセスの終了までロックを保持し、保持プロセスの終了時に OS が解放する。その他の環境ではロックせずに実行する |
+| Windows 以外で `~/.agents/cli/with-lock` が無い、または `pi` が PATH に無い | 起動しない | なし |
 
 Windows で PATH 上に `pi.exe` がなければ更新をスキップする。`pi.cmd` と `pi.ps1` は起動しない。
+
+ロック名は `${TMPDIR:-/tmp}/pi-update.lock` とする。
 
 ## スコープ外
 

@@ -2,6 +2,7 @@ import { mock, spyOn } from "bun:test";
 import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as nodeModule from "node:module";
+import { homedir } from "node:os";
 import * as display from "../display";
 import { openLinuxProcess } from "../linux-process";
 import { delimiter, join } from "node:path";
@@ -9,6 +10,7 @@ import * as util from "../util";
 import { writeNpmPlaywrightFixture } from "./npm-playwright";
 
 const scenario = process.argv[2]!;
+const withLockPath = join(homedir(), ".agents", "cli", "with-lock");
 const isNativeWindows = process.platform === "win32";
 const isInternal = scenario.startsWith("internal") || scenario.startsWith("windows-internal");
 if (scenario.startsWith("windows-") || scenario === "openserp-windows-missing") {
@@ -38,6 +40,7 @@ if (scenario === "stop-duplicate" || scenario === "start-duplicate") {
 const nativeRead = fs.readFileSync;
 const nativeReadlink = fs.readlinkSync;
 const nativeStat = fs.statSync;
+const nativeExistsSync = fs.existsSync;
 const nativeSetTimeout = setTimeout;
 if (scenario === "websocket-timeout") {
   globalThis.setTimeout = ((callback: () => void, ms: number) => {
@@ -133,6 +136,8 @@ mock.module("../util", () => ({
 }));
 mock.module("node:fs", () => ({
   ...fs,
+  existsSync: (path: fs.PathLike) =>
+    path === withLockPath ? scenario !== "recover-no-lock" : nativeExistsSync(path),
   statSync: (path: string, options?: fs.StatOptions) =>
     path.startsWith("/proc/") ? { uid: process.geteuid?.() } : nativeStat(path, options),
   readlinkSync: (path: string) => {
@@ -189,10 +194,11 @@ mock.module("node:child_process", () => ({
   },
   spawnSync: (command: string, args: string[]) => {
     events.push(["spawnSync", command, args]);
-    if (command === "flock" && scenario === "recover-lost") return { status: 192 };
-    if (command === "flock" && scenario === "recover-failed") return { status: 1 };
-    if (command === "flock" && scenario === "recover-no-flock")
-      return { error: Object.assign(new Error("ENOENT"), { code: "ENOENT" }) };
+    if (command === withLockPath && scenario === "recover-lost") return { status: 192 };
+    if (command === withLockPath && scenario === "recover-failed") return { status: 1 };
+    if (command === withLockPath && scenario === "recover-lock-enoent") {
+      return { error: Object.assign(new Error("spawn with-lock ENOENT"), { code: "ENOENT" }) };
+    }
     if (command === "pgrep" && scenario === "stop-pgrep-error") {
       return { status: 2, stderr: "invalid pattern" };
     }

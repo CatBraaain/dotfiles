@@ -1,0 +1,5 @@
+{
+  "name": "with-lock-cli",
+  "private": true,
+  "main": "./src/main.ts"
+}

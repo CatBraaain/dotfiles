@@ -7,6 +7,7 @@ import { RENDER_TIMEOUT_MS, stateDir } from "../config";
 import { writeNpmPlaywrightFixture } from "./npm-playwright";
 
 const scenario = process.argv[2] ?? "success";
+const isFreshCacheScenario = scenario === "fresh-cache";
 const isWindowsNpmScenario = scenario === "windows-npm";
 const isLinuxWrapperScenario = scenario === "linux-wrapper";
 const isLinuxScenario = scenario === "linux-direct" || isLinuxWrapperScenario;
@@ -161,14 +162,25 @@ globalThis.clearTimeout = ((timer: ReturnType<typeof setTimeout>) => {
   nativeClearTimeout(timer);
 }) as typeof clearTimeout;
 
-mock.module(join(import.meta.dir, "../server.ts"), () => ({
-  ensureCamoufoxServer: async () => {},
-  camoufoxServerHealthy: async (_url: string, signal: AbortSignal) => {
-    if (virtualHealth) return consumeHealthStage("websocket", signal, 1000);
-    return scenario !== "health-websocket-down";
-  },
-  recoverCamoufoxServer: async () => {},
-}));
+if (isFreshCacheScenario) {
+  globalThis.WebSocket = class extends EventTarget {
+    constructor() {
+      super();
+      queueMicrotask(() => this.dispatchEvent(new Event("open")));
+    }
+
+    close() {}
+  } as unknown as typeof WebSocket;
+} else {
+  mock.module(join(import.meta.dir, "../server.ts"), () => ({
+    ensureCamoufoxServer: async () => {},
+    camoufoxServerHealthy: async (_url: string, signal: AbortSignal) => {
+      if (virtualHealth) return consumeHealthStage("websocket", signal, 1000);
+      return scenario !== "health-websocket-down";
+    },
+    recoverCamoufoxServer: async () => {},
+  }));
+}
 mock.module("node:child_process", () => ({
   ...childProcess,
   execFile: (
@@ -304,7 +316,7 @@ if (process.env.BROWSE_FIXTURE_GATE === "1") {
   );
 }
 
-mkdirSync(stateDir(), { recursive: true });
+if (!isFreshCacheScenario) mkdirSync(stateDir(), { recursive: true });
 const {
   camoufoxRender,
   camoufoxServerResponsive,

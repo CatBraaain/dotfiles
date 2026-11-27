@@ -1,11 +1,16 @@
-import { describe, it } from "bun:test";
+import { afterAll, describe, it } from "bun:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
+import { LOCK_CONFLICT_EXIT_CODE, RESTART_LOCK_FILE } from "./config";
+import { createWithLockHome, withLockMainPath } from "./fixtures/with-lock";
 
 const project = join(import.meta.dir, "..");
 const preload = join(import.meta.dir, "fixtures/cli-environment.ts");
+const lockHome = createWithLockHome(mkdtempSync(join(tmpdir(), "browse-cli-home-")));
+const noLockHome = mkdtempSync(join(tmpdir(), "browse-cli-no-lock-"));
+const withLockPath = join(lockHome, ".agents", "cli", "with-lock");
 const searchUsage = 'usage: browse search "<query>" [--lang <code>] [--json]\n';
 const fetchUsage = "usage: browse fetch <url> [--json]\n";
 const loginUsage = "usage: browse login twitter\n";
@@ -19,6 +24,10 @@ const topLevelUsage = `${searchUsage}       browse fetch <url> [--json]
        browse display show
        browse display hide
 `;
+
+afterAll(() => {
+  for (const home of [lockHome, noLockHome]) rmSync(home, { recursive: true, force: true });
+});
 
 interface CliFixtureOutput {
   backend?: string;
@@ -38,6 +47,7 @@ function runCli(args: string[], extraEnv: Record<string, string> = {}, existingC
     const child = Bun.spawnSync([process.execPath, "--preload", preload, project, ...args], {
       env: {
         ...process.env,
+        HOME: lockHome,
         XDG_CACHE_HOME: root,
         CAMOUFOX_HEADLESS: "1",
         BROWSE_FIXTURE_TRACE: trace,
@@ -208,24 +218,67 @@ describe("CLI output and failure contract", () => {
     assert.equal(result.stderr, "camoufox server not ready at fixture\n");
   });
 
-  it("runs without flock when that executable is unavailable", () => {
-    const result = runCli(["search", "query", "--json"], { BROWSE_FIXTURE_SCENARIO: "no-flock" });
+  it("runs without exclusion when with-lock is not installed", () => {
+    const result = runCli(["search", "query", "--json"], { HOME: noLockHome });
     assert.equal(result.code, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).engine, "google");
+    assert.ok(!result.events.some((event) => event.command === withLockPath));
   });
 
-  it.skipIf(process.platform === "win32")(
-    "restarts once through the public command when flock is unavailable",
+  it.skipIf(process.platform !== "linux")(
+    "restarts once through the public command without with-lock",
     () => {
-      const result = runCli(["server", "restart"], { BROWSE_FIXTURE_SCENARIO: "no-flock" });
+      const result = runCli(["server", "restart"], { HOME: noLockHome });
       assert.equal(result.code, 0, result.stderr);
       assert.equal(result.stdout, "");
       assert.equal(result.stderr, "");
+      assert.deepEqual(
+        result.events.map(({ command, event }) => command ?? event),
+        ["restart"],
+      );
+    },
+  );
+
+  for (const [action, directCall] of [
+    ["stop", "pgrep"],
+    ["restart", "restart"],
+  ] as const) {
+    it.skipIf(process.platform !== "linux")(
+      `runs server ${action} directly when starting with-lock returns ENOENT`,
+      () => {
+        const result = runCli(["server", action], { BROWSE_FIXTURE_SCENARIO: "lock-spawn-enoent" });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.stderr, "");
+        assert.deepEqual(
+          result.events.map(({ command, event }) => command ?? event),
+          [withLockPath, directCall],
+        );
+      },
+    );
+  }
+
+  it.skipIf(process.platform !== "linux")(
+    "drains the restart lock and every render slot through with-lock before restarting",
+    () => {
+      const result = runCli(["server", "restart"]);
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.stdout, "");
+      assert.equal(result.stderr, "");
+      const lockCalls = result.events.filter((event) => event.command === withLockPath);
+      assert.equal(lockCalls.length, 1);
+      const lockArgs: string[] = lockCalls[0].args;
+      assert.deepEqual(
+        lockArgs.filter((arg) => arg.endsWith(".lock")).map((arg) => basename(arg)),
+        [
+          "browse-restart.lock",
+          "browse-slot-0.lock",
+          "browse-slot-1.lock",
+          "browse-slot-2.lock",
+          "browse-slot-3.lock",
+        ],
+      );
+      assert.deepEqual(lockCalls[0].args.slice(-3), ["__locked", "server", "restart"]);
       assert.equal(result.events.filter((event) => event.event === "restart").length, 1);
-      const flockCalls = result.events.filter((event) => event.command === "flock");
-      assert.equal(flockCalls.length, 1);
-      assert.ok(flockCalls[0].args[0].endsWith("browse-restart.lock"));
-      assert.deepEqual(flockCalls[0].args.slice(-3), ["__locked", "server", "restart"]);
     },
   );
 
@@ -233,7 +286,7 @@ describe("CLI output and failure contract", () => {
     const result = runCli(["fetch", "https://www.reddit.com/r/bun/comments/abc123/", "--json"]);
     assert.equal(result.code, 0, result.stderr);
     assert.equal(JSON.parse(result.stdout).backend, "Reddit");
-    assert.equal(result.events.filter((event) => event.command === "flock").length, 0);
+    assert.equal(result.events.filter((event) => event.command === withLockPath).length, 0);
   });
 });
 
@@ -281,7 +334,7 @@ describe("Windows CLI contract", () => {
     ["fetch", "https://example.com/article", "--json"],
     ["__locked", "search", "query", "--json"],
   ]) {
-    it(`renders with a per-process session and no flock: ${args.join(" ")}`, () => {
+    it(`renders with a per-process session and no lock: ${args.join(" ")}`, () => {
       const result = runCli(args, { ...windowsPlatform, BROWSE_SLOT: "0" });
       assert.equal(result.code, 0, result.stderr);
       assert.equal(result.stderr, "");
@@ -289,11 +342,11 @@ describe("Windows CLI contract", () => {
       assert.ok(render);
       const operation = args.includes("search") ? "search" : "fetch";
       assert.equal(render.session, `web-${operation}-${render.pid}`);
-      assert.ok(!result.events.some(({ command }) => command === "flock"));
+      assert.ok(!result.events.some(({ command }) => command === withLockPath));
     });
   }
 
-  it("restarts once without flock", () => {
+  it("restarts once without with-lock", () => {
     const result = runCli(["server", "restart"], windowsPlatform);
     assert.equal(result.code, 0, result.stderr);
     assert.equal(result.stdout, "");
@@ -303,6 +356,22 @@ describe("Windows CLI contract", () => {
       ["restart"],
     );
   });
+});
+
+describe("Non-Linux lock handling", () => {
+  for (const args of [
+    ["search", "query", "--json"],
+    ["__locked", "search", "query", "--json"],
+  ]) {
+    it(`uses a PID-based render session without launching with-lock on macOS: ${args.join(" ")}`, () => {
+      const result = runCli(args, { BROWSE_FIXTURE_PLATFORM: "darwin", BROWSE_SLOT: "0" });
+      assert.equal(result.code, 0, result.stderr);
+      const render = result.events.find(({ event }) => event === "begin");
+      assert.ok(render);
+      assert.equal(render.session, `web-search-${render.pid}`);
+      assert.ok(!result.events.some(({ event }) => event === "spawnSync"));
+    });
+  }
 });
 
 describe("CLI server stop contract", () => {
@@ -341,7 +410,7 @@ describe("CLI server stop contract", () => {
     });
     assert.equal(result.code, 1);
     assert.equal(result.stderr, "Could not confirm the Windows Camoufox server exited\n");
-    assert.ok(!result.events.some(({ command }) => command === "flock"));
+    assert.ok(!result.events.some(({ command }) => command === withLockPath));
   });
 
   it("reports the shared process discovery error outside Linux and Windows", () => {
@@ -354,10 +423,7 @@ describe("CLI server stop contract", () => {
       result.stderr,
       "Camoufox process discovery is only supported on Linux and Windows\n",
     );
-    assert.deepEqual(
-      result.events.map(({ command }) => command),
-      ["flock"],
-    );
+    assert.deepEqual(result.events, []);
   });
 });
 
@@ -369,7 +435,34 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
   }
 }
 
-describe.skipIf(process.platform === "win32")("CLI four-slot coordination", () => {
+describe.skipIf(process.platform !== "linux")("CLI four-slot coordination", () => {
+  it("yields a just-acquired slot when the restart lock is held", () => {
+    const result = runCli(["__locked", "search", "query", "--json"], {
+      BROWSE_SLOT: "0",
+      BROWSE_FIXTURE_SCENARIO: "restart-lock-held",
+    });
+    assert.equal(result.code, LOCK_CONFLICT_EXIT_CODE, result.stderr);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "");
+    assert.equal(result.events.length, 1);
+    const [probe] = result.events;
+    assert.equal(probe.command, withLockPath);
+    const probeArgs: string[] = probe.args;
+    assert.deepEqual(probeArgs.slice(0, 3), ["-n", "-E", String(LOCK_CONFLICT_EXIT_CODE)]);
+    assert.equal(basename(probeArgs[3]!), RESTART_LOCK_FILE);
+    assert.equal(probeArgs[4], "true");
+  });
+
+  it("renders when the restart-lock probe cannot be spawned", () => {
+    const result = runCli(["__locked", "search", "query", "--json"], {
+      BROWSE_SLOT: "0",
+      BROWSE_FIXTURE_SCENARIO: "lock-spawn-enoent",
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.events[0].command, withLockPath);
+    assert.ok(result.events.some(({ event }) => event === "begin"));
+  });
+
   it("shares four slots between public search and fetch commands and drains both before restart", async () => {
     const root = mkdtempSync(join(tmpdir(), "browse-cli-slots-"));
     const trace = join(root, "trace");
@@ -387,6 +480,7 @@ describe.skipIf(process.platform === "win32")("CLI four-slot coordination", () =
       const child = Bun.spawn([process.execPath, "--preload", preload, project, ...args], {
         env: {
           ...process.env,
+          HOME: lockHome,
           XDG_CACHE_HOME: root,
           CAMOUFOX_HEADLESS: "1",
           BROWSE_FIXTURE_TRACE: trace,
@@ -412,7 +506,7 @@ describe.skipIf(process.platform === "win32")("CLI four-slot coordination", () =
       await waitUntil(() =>
         events().some(
           (event) =>
-            event.command === "flock" &&
+            event.command === withLockPath &&
             event.args[0] === "-w" &&
             event.args.includes("https://example.com/fifth"),
         ),
@@ -420,19 +514,29 @@ describe.skipIf(process.platform === "win32")("CLI four-slot coordination", () =
       launch(["server", "restart"]);
       await waitUntil(() =>
         events().some(
-          (event) => event.command === "flock" && event.args[0]?.endsWith("browse-restart.lock"),
+          (event) =>
+            event.command === withLockPath && event.args[0]?.endsWith("browse-restart.lock"),
         ),
       );
       await waitUntil(
         () =>
           Bun.spawnSync([
-            "flock",
+            process.execPath,
+            withLockMainPath,
             "-n",
             "-E",
             "192",
             join(root, "pi/web-search/browse-restart.lock"),
             "true",
           ]).exitCode === 192,
+      );
+      await waitUntil(() =>
+        events().some(
+          (event) =>
+            event.command === withLockPath &&
+            event.args[0] === "-w" &&
+            event.args[2]?.endsWith("browse-restart.lock"),
+        ),
       );
       assert.equal(events().filter((event) => event.event === "begin").length, 4);
       assert.equal(events().filter((event) => event.event === "restart").length, 0);

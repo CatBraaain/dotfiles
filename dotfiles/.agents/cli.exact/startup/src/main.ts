@@ -32,10 +32,10 @@ async function updatePi() {
 
   const pi = Bun.which("pi");
   if (!pi) return;
-  const flock = Bun.which("flock");
-  if (!flock) return;
-  const lock = `${process.env.TMPDIR || "/tmp"}/pi-update.lock`;
-  startDetached(flock, ["-n", lock, pi, ...PI_UPDATE_ARGS]);
+  const withLock = withLockCliPath();
+  if (!(await Bun.file(withLock).exists())) return;
+  const lockName = `${process.env.TMPDIR || "/tmp"}/pi-update.lock`;
+  startDetached(withLock, ["-n", lockName, pi, ...PI_UPDATE_ARGS]);
 }
 
 async function updatePiUnderLock() {
@@ -56,6 +56,11 @@ async function updatePiUnderLock() {
     stderr: "ignore",
   });
   await updateProcess.exited;
+}
+
+function withLockCliPath(): string {
+  const suffix = process.platform === "win32" ? ".exe" : "";
+  return join(homedir(), ".agents", "cli", `with-lock${suffix}`);
 }
 
 function browseCliPath(): string {

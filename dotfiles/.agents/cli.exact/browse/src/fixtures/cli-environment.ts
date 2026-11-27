@@ -2,6 +2,7 @@ import { mock } from "bun:test";
 import * as childProcess from "node:child_process";
 import { appendFileSync, existsSync } from "node:fs";
 import * as camoufox from "../camoufox";
+import { withLockCli } from "../config";
 import * as server from "../server";
 import * as util from "../util";
 
@@ -25,15 +26,15 @@ mock.module("node:child_process", () => ({
   ...childProcess,
   spawnSync: (command: string, args: string[], options: childProcess.SpawnSyncOptions = {}) => {
     trace({ event: "spawnSync", command, args });
-    if (scenario === "no-flock") return { error: new Error("ENOENT"), status: null };
-    if (process.platform === "win32" || command !== "flock") {
+    if (scenario === "lock-spawn-enoent" && command === "pgrep") return { status: 1 };
+    if (process.platform !== "linux" || command !== withLockCli()) {
       throw new Error(`unexpected process: ${command}`);
     }
-    if (fixturePlatform) {
-      return {
-        error: Object.assign(new Error("flock not found"), { code: "ENOENT" }),
-        status: null,
-      };
+    if (scenario === "lock-spawn-enoent") {
+      return { error: Object.assign(new Error("spawn with-lock ENOENT"), { code: "ENOENT" }) };
+    }
+    if (scenario === "restart-lock-held" && args.at(-1) === "true") {
+      return { status: Number(args[2]) };
     }
     const executableIndex = args.indexOf(process.execPath);
     const childArgs =

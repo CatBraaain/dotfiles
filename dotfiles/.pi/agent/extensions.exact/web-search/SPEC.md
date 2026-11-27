@@ -49,7 +49,7 @@ details は `{ engine, tookMs }`。
 
 ## 検索・フェッチの振る舞いの委譲
 
-backend の順序とフォールバック、challenge / captcha再試行、タイムアウト、openserp / camoufox常駐サーバーの起動待ち、同一種類コマンドの直列化（flock による再spawn を含む）、Reddit / StackOverflow の専用取得経路は、すべてCLI spec に従いCLI が行う。この拡張側では実装しない。
+backend の順序とフォールバック、challenge / captcha再試行、タイムアウト、openserp / camoufox常駐サーバーの起動待ち、同一種類コマンドの直列化（`with-lock` による再spawn を含む）、Reddit / StackOverflow の専用取得経路は、すべてCLI spec に従いCLI が行う。この拡張側では実装しない。
 
 環境変数 `OPENSERP_BASE_URL` / `CAMOUFOX_BASE_URL` は子プロセスへ継承され、CLI側の規則（CLI spec「前提と依存」）で解釈される。
 

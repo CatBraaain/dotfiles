@@ -31,11 +31,12 @@ usage: browse search "<query>" [--lang <code>] [--json]
 - `search` と `fetch` が Camoufox で描画するときは、Playwright CLI の動作に上書きがなく、PATH 上の Playwright CLI と同じインストール先から `playwright-core` の接続 API を読み込める場合は、その JS API で稼働中のサーバーに直接接続する。試行ごとに新しいブラウザコンテキストを使い、cookie とページ状態を分離する。試行の成否にかかわらず、そのコンテキストを解放して接続を閉じる。接続の終了ではサーバーを停止しない。
 - サーバーの機能ヘルスチェックと、Windows 以外で行う `login twitter` は、Camoufox を firefox の remote endpoint に指定した `playwright-cli` を使う。描画でも、環境変数やユーザー全体の設定で Playwright CLI の動作を上書きする場合、作業ディレクトリに `.playwright/cli.config.json` がある場合、または `playwright-core` の接続 API を利用できない場合は、同じ経路を使う。ユーザー全体または環境変数の出力先設定だけでは Playwright CLI の動作を上書きしたとはみなさない。Windows では PATH 上の `playwright-cli.cmd` に対応する `@playwright/cli` を Node.js で直接起動し、それ以外では PATH 上の `playwright-cli` を起動する。
 - Camoufox を使う描画の前に、対話用 Playwright CLI の接続先を `<XDG_CACHE_HOME または ~/.cache>/pi/web-search/playwright-cli.config.json` に書き出す。
-- playwright-cli を使う描画と機能ヘルスチェックは、検索が `web-search-<n>`、フェッチが `web-fetch-<n>`、機能ヘルスチェックが `web-health-<n>`（`<n>` は renderスロット番号。Windows または `flock(1)` が無い環境ではプロセスの PID）をセッションキーに使い、各実行の冒頭と終了時に対象セッションを閉じる。
+- playwright-cli を使う描画と機能ヘルスチェックは、検索が `web-search-<n>`、フェッチが `web-fetch-<n>`、機能ヘルスチェックが `web-health-<n>`（`<n>` は renderスロット番号。Linux 以外、または `~/.agents/cli/with-lock` が無い環境ではプロセスの PID）をセッションキーに使い、各実行の冒頭と終了時に対象セッションを閉じる。
 - server の機能ヘルスチェックは、websocket接続と、ローカルHTTP（127.0.0.1）へのページopen の完了で判定する。ページopen がタイムアウトまでに完了しなければ応答不能とする（websocket応答だけでは、ページopen は成功するが HTTPナビゲーションが一切完了しないbrowser のハングを検知できない）
-- camoufox を使う `search` と `fetch` は、renderスロットセマフォ（既定4スロット）で並列実行する。スロットは `flock(1)` に依存し、Windows または `flock(1)` が無い環境では待ち合わせずに実行する。Windows では server の停止・再起動・自動復旧も `flock(1)` を呼ばずに実行する。スロットの獲得は、コマンド自身を内部サブコマンド `__locked`（usage には出ない）付きで空いているスロットの `flock(1)` の下へ再実行することで行う。4スロットすべてが埋まっていれば待つ。待機中と獲得の直後には restartロックの保持を探知し、server停止・再起動が進行していれば、まだrender を開始していない分はその完了まで待機し、完了後にスロットを取り直す。`__locked` が直接渡された実行はスロットを取得せずにコマンド本体を実行する。この再入は、スロット保持中の search / fetch が detached で server起動を依頼するときにも使う
-- `browse server stop` と `browse server restart` は Windows 以外で `flock(1)` を利用できるとき、restartロックと 4つすべての renderスロットを `flock(1)` で獲得してから実行する。実行中の render は完了まで、新規の render は停止・再起動操作の完了まで待つ
-- Windows 以外で `flock(1)` を利用できるとき、render復旧に伴うserver再起動は restartロックで仲裁する。restartロックを獲得した側は、自分の renderスロット以外を獲得してから再起動する（自身のスロットは呼び出し元が保持中のため、4スロットすべてが再起動中に排除される）。獲得できなかった側は再起動を申請せず、server の healthy を 15秒まで待つ
+- Linux の renderスロットと restartロックの排他は `~/.agents/cli/with-lock` に依存する。ロックは保持プロセスが終了した時点で OS が解放し、ファイルは作らない
+- camoufox を使う `search` と `fetch` は、renderスロットセマフォ（既定4スロット）で並列実行する。スロットは `~/.agents/cli/with-lock` に依存し、Linux 以外、または `~/.agents/cli/with-lock` が無い環境では待ち合わせずに実行する。Linux 以外では server の停止・再起動・自動復旧でもロックを取得しない。スロットの獲得は、コマンド自身を内部サブコマンド `__locked`（usage には出ない）付きで空いているスロットの `~/.agents/cli/with-lock` の下へ再実行することで行う。4スロットすべてが埋まっていれば待つ。待機中と獲得の直後には restartロックの保持を探知し、server停止・再起動が進行していれば、まだrender を開始していない分はその完了まで待機し、完了後にスロットを取り直す。`__locked` が直接渡された実行はスロットを取得せずにコマンド本体を実行する。この再入は、スロット保持中の search / fetch が detached で server起動を依頼するときにも使う
+- `browse server stop` と `browse server restart` は Linux で `~/.agents/cli/with-lock` があるとき、restartロックと 4つすべての renderスロットを `~/.agents/cli/with-lock` で獲得してから実行する。実行中の render は完了まで、新規の render は停止・再起動操作の完了まで待つ
+- Linux で `~/.agents/cli/with-lock` があるとき、render復旧に伴うserver再起動は restartロックで仲裁する。restartロックを獲得した側は、自分の renderスロット以外を獲得してから再起動する（自身のスロットは呼び出し元が保持中のため、4スロットすべてが再起動中に排除される）。獲得できなかった側は再起動を申請せず、server の healthy を 15秒まで待つ
 - server が起動してから 30秒以内の render復旧による再起動申請は、再起動せずserver の healthy を 15秒まで待つ。起動時刻は OS が報告するプロセスの開始時刻とする。対象がいない、または時刻を取得できない場合はクールダウンを適用しない
 - Reddit / StackOverflow / YouTube / Twitter / Hacker News / Wikipedia / arXiv の専用経路と `server start` は renderスロットを取得しない。GitHub は camoufox へのフォールバックを持つため、排他が有効な環境では取得する
 
@@ -68,7 +69,7 @@ usage: browse search "<query>" [--lang <code>] [--json]
 | `browse server stop` / `browse server restart` の最初の終了要求後の待機 | 10秒 |
 | ページopen・ナビゲーション・DOM取得 | 30秒 |
 | 直接接続による描画で、ナビゲーションが `DOMContentLoaded` に到達した後 | `load` を最大5秒待ち、完了または待ち時間の満了後に challenge 検出待ちへ進む。描画全体の上限の内側で待つ |
-| Windows 以外で `flock(1)` を使っており、render中に他の実行の server再起動が始まったとき | 実行中の render は再起動を待たず実行を継続する（再起動側が renderスロットの解放を待つため、実行中render が再起動の完了を待つ循環待ちは起きない） |
+| Linux で `~/.agents/cli/with-lock` を使っており、render中に他の実行の server再起動が始まったとき | 実行中の render は再起動を待たず実行を継続する（再起動側が renderスロットの解放を待つため、実行中render が再起動の完了を待つ循環待ちは起きない） |
 | openserpパース・trafilatura変換・Reddit の各要求・StackOverflow の各要求・GitHub API の各要求・Hacker News / Wikipedia / arXiv / RSS / fxtwitter の各要求 | 15秒 |
 | yt-dlp によるYouTubeメタデータ・字幕の取得 | 60秒 |
 | `twikit_client.py` の実行（login・ツイート・タイムライン・検索） | 120秒 |
@@ -144,7 +145,7 @@ hangしたcamoufox server の復旧用に、[`browse server stop`](#browse-serve
 
 | 条件・状態 | 操作 | 結果 |
 | --- | --- | --- |
-| 実行 | 準備 | `flock(1)` を利用できるときは renderスロットを取得する。camoufox server を確保し、session `twitter-login` で `https://x.com/login` を開く。x11vnc が利用可能なら VNC接続受付を開く（`display show` と同じ要求。失敗時は無視して続行する） |
+| 実行 | 準備 | Linux で `~/.agents/cli/with-lock` があるときは renderスロットを取得する。camoufox server を確保し、session `twitter-login` で `https://x.com/login` を開く。x11vnc が利用可能なら VNC接続受付を開く（`display show` と同じ要求。失敗時は無視して続行する） |
 | 準備後 | 待ち合わせ | 「ログイン待ち」である旨と `browse display show` の案内を stderr へ出力し、x.com / twitter.com の cookie に `auth_token` が現れるまで pollする。poll間隔5秒、上限10分 |
 | `auth_token` を確認したら | 保存 | x.com / twitter.com の cookie を `twifork` の `load_cookies` が受け付ける `{name: value}` の flat JSON に変換し、`<XDG_CACHE_HOME または ~/.cache>/pi/web-search/twitter-cookies.json` に保存する |
 | 保存成功 | 終了 | `Logged in. Cookies saved to <path>` を1行stdout へ出力し、終了コード0 で終わる |

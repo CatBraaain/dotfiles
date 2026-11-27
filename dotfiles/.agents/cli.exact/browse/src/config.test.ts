@@ -22,7 +22,7 @@ function withSlotEnv(value: string | undefined, run: () => void): void {
 }
 
 describe("camoufoxSessionKey", () => {
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(process.platform !== "linux")(
     "names the session after the acquired render slot",
     () => {
       withSlotEnv("1", () => {
@@ -33,7 +33,7 @@ describe("camoufoxSessionKey", () => {
     },
   );
 
-  it("falls back to the pid so concurrent runs never share a session without flock(1)", () => {
+  it("falls back to the pid so concurrent runs never share a session without with-lock", () => {
     withSlotEnv(undefined, () => {
       assert.equal(camoufoxSessionKey("web-fetch"), `web-fetch-${process.pid}`);
       assert.equal(camoufoxSessionKey(CAMOUFOX_HEALTH_SESSION_KEY), `web-health-${process.pid}`);

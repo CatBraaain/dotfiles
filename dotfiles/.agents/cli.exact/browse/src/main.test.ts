@@ -1,4 +1,4 @@
-import { describe, it } from "bun:test";
+import { afterAll, beforeAll, describe, it, spyOn, type Mock } from "bun:test";
 import { strict as assert } from "node:assert";
 import {
   chmodSync,
@@ -11,9 +11,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { tmpdir } from "node:os";
+import * as os from "node:os";
 import { join } from "node:path";
 import { RESTART_LOCK_FILE } from "./config";
+import { createWithLockHome, withLockMainPath } from "./fixtures/with-lock";
 import { restartInFlight, waitForRestartToFinish } from "./server";
 
 // The CLI project directory: spawned as `bun <projectDir>` so bun resolves
@@ -153,7 +154,7 @@ function runBrowseAsync(
 
 describe("browse server", () => {
   it("rejects missing, unknown, and extra server actions", () => {
-    const root = mkdtempSync(join(tmpdir(), "browse-server-"));
+    const root = mkdtempSync(join(os.tmpdir(), "browse-server-"));
     try {
       for (const args of [["server"], ["server", "toggle"], ["server", "stop", "extra"]]) {
         const result = runBrowse(args, root, join(root, "requests"));
@@ -176,7 +177,7 @@ describe("browse server", () => {
         message() {},
       },
     });
-    const root = mkdtempSync(join(tmpdir(), "browse-server-start-"));
+    const root = mkdtempSync(join(os.tmpdir(), "browse-server-start-"));
     try {
       const result = await runBrowseAsync(["server", "start"], root, join(root, "requests"), {
         CAMOUFOX_BASE_URL: `ws://127.0.0.1:${server.port}/camoufox`,
@@ -196,7 +197,7 @@ describe("browse server stop", () => {
   it.skipIf(process.platform !== "linux")(
     "stops the configured port without a PID file, regardless of host and path",
     async () => {
-      const root = mkdtempSync(join(tmpdir(), "browse-server-stop-"));
+      const root = mkdtempSync(join(os.tmpdir(), "browse-server-stop-"));
       const projectDir = join(root, "browse[1]");
       const camoufoxModule = join(root, ".pi", "agent", "node_modules", "camoufox-js", "dist");
       const playwrightModule = join(root, "playwright.cjs");
@@ -272,7 +273,7 @@ describe("browse server stop", () => {
   );
 
   it.skipIf(process.platform !== "linux")("fails with a diagnostic if pgrep cannot search", () => {
-    const root = mkdtempSync(join(tmpdir(), "browse-server-stop-error-"));
+    const root = mkdtempSync(join(os.tmpdir(), "browse-server-stop-error-"));
     try {
       const pgrep = join(root, "pgrep");
       writeFileSync(pgrep, "#!/bin/sh\necho 'search failed' >&2\nexit 2\n", { mode: 0o755 });
@@ -295,7 +296,7 @@ describe("browse display", () => {
   }
 
   it("rejects missing, unknown, and extra display actions", () => {
-    const root = mkdtempSync(join(tmpdir(), "browse-display-"));
+    const root = mkdtempSync(join(os.tmpdir(), "browse-display-"));
     try {
       createFakeX11vnc(root);
       for (const args of [["display"], ["display", "toggle"], ["display", "show", "extra"]]) {
@@ -309,7 +310,7 @@ describe("browse display", () => {
   });
 
   it("opens VNC access without restarting the browser", async () => {
-    const root = mkdtempSync(join(tmpdir(), "browse-display-"));
+    const root = mkdtempSync(join(os.tmpdir(), "browse-display-"));
     const logPath = join(root, "requests");
     const statePath = join(root, "vnc-state");
     const browser = startBrowserProcess();
@@ -333,7 +334,7 @@ describe("browse display", () => {
   });
 
   it("denies and disconnects VNC access without restarting the browser", async () => {
-    const root = mkdtempSync(join(tmpdir(), "browse-display-"));
+    const root = mkdtempSync(join(os.tmpdir(), "browse-display-"));
     const logPath = join(root, "requests");
     const statePath = join(root, "vnc-state");
     const browser = startBrowserProcess();
@@ -357,7 +358,7 @@ describe("browse display", () => {
   });
 
   it("reports show and hide failures as one stderr line", () => {
-    const root = mkdtempSync(join(tmpdir(), "browse-display-"));
+    const root = mkdtempSync(join(os.tmpdir(), "browse-display-"));
     const logPath = join(root, "requests");
     const statePath = join(root, "vnc-state");
     try {
@@ -386,18 +387,29 @@ describe("browse display", () => {
 // restart ロックの保持を探知し…让位する). The probe must report exactly the
 // restart lock's holder state: held → yield, free → proceed.
 describe("restart yield probing", () => {
-  if (process.platform === "win32") {
-    it.skip("requires flock(1)", () => {});
+  if (process.platform !== "linux") {
+    it.skip("requires Linux lock support", () => {});
     return;
   }
 
+  const lockHome = createWithLockHome(mkdtempSync(join(os.tmpdir(), "browse-yield-home-")));
+  let homedirSpy: Mock<typeof os.homedir> | undefined;
+  beforeAll(() => {
+    homedirSpy = spyOn(os, "homedir").mockReturnValue(lockHome);
+  });
+  afterAll(() => {
+    homedirSpy?.mockRestore();
+    rmSync(lockHome, { recursive: true, force: true });
+  });
+
   it("reports an in-flight restart while the restart lock is held", async () => {
-    const root = mkdtempSync(join(tmpdir(), "browse-yield-"));
+    const root = mkdtempSync(join(os.tmpdir(), "browse-yield-"));
     const stateDir = join(root, "pi", "web-search");
-    mkdirSync(stateDir, { recursive: true });
-    const holder = spawn("flock", [join(stateDir, RESTART_LOCK_FILE), "sleep", "5"], {
-      stdio: "ignore",
-    });
+    const holder = spawn(
+      process.execPath,
+      [withLockMainPath, join(stateDir, RESTART_LOCK_FILE), "sleep", "5"],
+      { stdio: "ignore" },
+    );
     const savedCacheHome = process.env.XDG_CACHE_HOME;
     process.env.XDG_CACHE_HOME = root;
     try {
@@ -415,8 +427,7 @@ describe("restart yield probing", () => {
   });
 
   it("reports no restart when the restart lock is free", () => {
-    const root = mkdtempSync(join(tmpdir(), "browse-yield-"));
-    mkdirSync(join(root, "pi", "web-search"), { recursive: true });
+    const root = mkdtempSync(join(os.tmpdir(), "browse-yield-"));
     const savedCacheHome = process.env.XDG_CACHE_HOME;
     process.env.XDG_CACHE_HOME = root;
     try {
@@ -429,15 +440,16 @@ describe("restart yield probing", () => {
   });
 
   it("returns from the lock wait after the timeout while a restart holds the lock", async () => {
-    const root = mkdtempSync(join(tmpdir(), "browse-yield-"));
+    const root = mkdtempSync(join(os.tmpdir(), "browse-yield-"));
     const stateDir = join(root, "pi", "web-search");
-    mkdirSync(stateDir, { recursive: true });
     // Keep the lock longer than the wait timeout below: a timed-out return
-    // must come before the holder releases. The old unbounded wait (flock
-    // without -w) would block until the holder exits and break the assertion.
-    const holder = spawn("flock", [join(stateDir, RESTART_LOCK_FILE), "sleep", "1.5"], {
-      stdio: "ignore",
-    });
+    // must come before the holder releases. The old unbounded wait (no -w)
+    // would block until the holder exits and break the assertion.
+    const holder = spawn(
+      process.execPath,
+      [withLockMainPath, join(stateDir, RESTART_LOCK_FILE), "sleep", "1.5"],
+      { stdio: "ignore" },
+    );
     const savedCacheHome = process.env.XDG_CACHE_HOME;
     process.env.XDG_CACHE_HOME = root;
     try {
@@ -458,8 +470,7 @@ describe("restart yield probing", () => {
   });
 
   it("runs the no-op immediately when the restart lock is free", () => {
-    const root = mkdtempSync(join(tmpdir(), "browse-yield-"));
-    mkdirSync(join(root, "pi", "web-search"), { recursive: true });
+    const root = mkdtempSync(join(os.tmpdir(), "browse-yield-"));
     const savedCacheHome = process.env.XDG_CACHE_HOME;
     process.env.XDG_CACHE_HOME = root;
     try {

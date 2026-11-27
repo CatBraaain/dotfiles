@@ -4,6 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
+const withLockPath = join(homedir(), ".agents", "cli", "with-lock");
+
 interface Report {
   events: any[][];
   error?: string;
@@ -522,13 +524,13 @@ describe("bootstrap and recovery timing", () => {
     });
   }
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(process.platform !== "linux")(
     "arbitrates recovery with the restart lock and drains every slot except its own",
     () => {
       const report = runServer("recover-won", { BROWSE_SLOT: "2" });
       assert.equal(report.error, undefined);
       const lock = report.events.find(
-        ([name, command]) => name === "spawnSync" && command === "flock",
+        ([name, command]) => name === "spawnSync" && command === withLockPath,
       )!;
       assert.deepEqual(lock[2].slice(0, 3), ["-n", "-E", "192"]);
       assert.ok(lock[2][3].endsWith("browse-restart.lock"));
@@ -546,17 +548,17 @@ describe("bootstrap and recovery timing", () => {
   );
 
   for (const scenario of ["recover-lost", "recover-cooldown"]) {
-    it.skipIf(process.platform === "win32")(
+    it.skipIf(process.platform !== "linux")(
       `waits for healthy without submitting another restart: ${scenario}`,
       () => {
         const report = runServer(scenario, {}, "absolute");
         assert.equal(report.error, undefined);
         assert.equal(report.probes, 3);
         assert.equal(report.events.filter(([name]) => name === "spawn").length, 0);
-        const flockCalls = report.events.filter(
-          ([name, command]) => name === "spawnSync" && command === "flock",
+        const lockCalls = report.events.filter(
+          ([name, command]) => name === "spawnSync" && command === withLockPath,
         );
-        assert.equal(flockCalls.length, scenario === "recover-lost" ? 1 : 0);
+        assert.equal(lockCalls.length, scenario === "recover-lost" ? 1 : 0);
         assert.deepEqual(
           report.events.filter(([name]) => name === "timeout"),
           [["timeout", 15000]],
@@ -565,7 +567,7 @@ describe("bootstrap and recovery timing", () => {
     );
   }
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(process.platform !== "linux")(
     "reports a failed restart instead of treating it as a lock win",
     () => {
       const report = runServer("recover-failed");
@@ -577,30 +579,36 @@ describe("bootstrap and recovery timing", () => {
     },
   );
 
-  it("recovers on Windows by restarting directly without flock", () => {
+  it("recovers on Windows by restarting directly without with-lock", () => {
     const report = runServer("windows-recover-direct");
     assert.equal(report.error, undefined);
     assert.equal(report.events.filter(([name]) => name === "spawn").length, 1);
     assert.equal(report.probes, 3);
     assert.ok(
-      !report.events.some(([name, command]) => name === "spawnSync" && command === "flock"),
+      !report.events.some(([name, command]) => name === "spawnSync" && command === withLockPath),
     );
   });
 
-  it("keeps the Windows recovery cooldown without flock", () => {
+  it("keeps the Windows recovery cooldown without with-lock", () => {
     const report = runServer("windows-recover-cooldown");
     assert.equal(report.error, undefined);
     assert.equal(report.probes, 3);
     assert.ok(!report.events.some(([name]) => name === "spawn" || name === "spawnSync"));
   });
 
-  it.skipIf(process.platform === "win32")(
-    "performs the restart directly when flock is unavailable",
-    () => {
-      const report = runServer("recover-no-flock");
-      assert.equal(report.error, undefined);
-      assert.equal(report.events.filter(([name]) => name === "spawn").length, 1);
-      assert.equal(report.probes, 3);
-    },
-  );
+  for (const scenario of ["recover-no-lock", "recover-lock-enoent"]) {
+    it.skipIf(process.platform !== "linux")(
+      `restarts directly when with-lock is unavailable: ${scenario}`,
+      () => {
+        const report = runServer(scenario);
+        assert.equal(report.error, undefined);
+        assert.equal(report.events.filter(([name]) => name === "spawn").length, 1);
+        assert.equal(report.probes, 3);
+        const lockCalls = report.events.filter(
+          ([name, command]) => name === "spawnSync" && command === withLockPath,
+        );
+        assert.equal(lockCalls.length, scenario === "recover-lock-enoent" ? 1 : 0);
+      },
+    );
+  }
 });

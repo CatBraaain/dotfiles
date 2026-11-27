@@ -16,7 +16,7 @@ import {
   CAMOUFOX_DEFAULT_BASE_URL,
   camoufoxBaseUrl,
   currentSlotNumber,
-  FLOCK_CONFLICT_EXIT_CODE,
+  LOCK_CONFLICT_EXIT_CODE,
   LOCKED_SUBCOMMAND,
   openserpBaseUrl,
   RESTART_COOLDOWN_MS,
@@ -29,6 +29,7 @@ import {
   SLOT_COUNT,
   stateDir,
   WEBSOCKET_HEALTH_TIMEOUT_MS,
+  withLockCli,
 } from "./config";
 import { ensureDisplay, ensureX11vnc, DISPLAY_NUMBER, resolveHeadless } from "./display";
 import { openLinuxProcess } from "./linux-process";
@@ -117,28 +118,23 @@ export async function stopCamoufoxServer(): Promise<void> {
 // 獲得できなかった側は再起動を申請せず、healthy を待つ。restart ロックは
 // 非ブロッキングでしか取らないため、複数の復旧や drain restart と循環待ちに
 // ならない。
-type RecoveryRestartOutcome = "won" | "lost" | "no-flock";
+type RecoveryRestartOutcome = "won" | "lost" | "no-lock";
 
 function tryRunRecoveryRestart(): RecoveryRestartOutcome {
+  const lock = withLockCli();
+  if (lock === undefined) return "no-lock";
   const stateDirPath = stateDir();
-  // flock(1) does not create the lock file's parent directory.
-  mkdirSync(stateDirPath, { recursive: true });
   const mySlot = currentSlotNumber();
-  const args = [
-    "-n",
-    "-E",
-    String(FLOCK_CONFLICT_EXIT_CODE),
-    join(stateDirPath, RESTART_LOCK_FILE),
-  ];
+  const args = ["-n", "-E", String(LOCK_CONFLICT_EXIT_CODE), join(stateDirPath, RESTART_LOCK_FILE)];
   for (let slot = 0; slot < SLOT_COUNT; slot++) {
     if (slot === mySlot) continue;
-    args.push("flock", join(stateDirPath, slotLockFile(slot)));
+    args.push(lock, join(stateDirPath, slotLockFile(slot)));
   }
   // The re-entered `__locked server restart` runs the restart body directly.
   args.push(...selfRunArgv, LOCKED_SUBCOMMAND, "server", "restart");
-  const result = spawnSync("flock", args, { stdio: "inherit", env: process.env });
-  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return "no-flock";
-  if (result.status === FLOCK_CONFLICT_EXIT_CODE) return "lost";
+  const result = spawnSync(lock, args, { stdio: "inherit", env: process.env });
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return "no-lock";
+  if (result.status === LOCK_CONFLICT_EXIT_CODE) return "lost";
   if (result.status === 0) return "won";
   const reason = result.error?.message ?? result.signal ?? result.status;
   throw new Error("Camoufox recovery restart failed: " + reason);
@@ -155,7 +151,7 @@ export async function recoverCamoufoxServer(): Promise<void> {
   if (process.platform === "win32") return restartCamoufoxServer();
   const outcome = tryRunRecoveryRestart();
   if (outcome === "won") return;
-  if (outcome === "no-flock") return restartCamoufoxServer();
+  if (outcome === "no-lock") return restartCamoufoxServer();
   // Another restart holds the lock: wait for the restarted server instead of
   // queueing a second restart (spec: healthy を 15 秒まで待つ).
   await waitForServerHealthy(camoufoxBaseUrl(), AbortSignal.timeout(SERVER_WAIT_TIMEOUT_MS));
@@ -186,17 +182,19 @@ export function restartInCooldown(startedAtMs: number | undefined, nowMs: number
 // Spec: restart ロックの保持を探知する。Acquiring it for a no-op (and letting
 // go right away) means no restart is in flight; a lost probe means `browse
 // server restart` or a render-recovery restart holds the lock. Crashes cannot
-// wedge this: the kernel releases the flock, unlike a flag file.
+// wedge this: the OS releases the lock with the holder process, unlike a flag
+// file.
 export function restartInFlight(): boolean {
-  const probe = spawnSync("flock", [
+  const lock = withLockCli();
+  if (lock === undefined) return false;
+  const probe = spawnSync(lock, [
     "-n",
     "-E",
-    String(FLOCK_CONFLICT_EXIT_CODE),
+    String(LOCK_CONFLICT_EXIT_CODE),
     join(stateDir(), RESTART_LOCK_FILE),
     "true",
   ]);
-  if (probe.error) return false; // no flock(1): no restart queue to yield to
-  return probe.status === FLOCK_CONFLICT_EXIT_CODE;
+  return !probe.error && probe.status === LOCK_CONFLICT_EXIT_CODE;
 }
 
 // Wait up to the timeout for the in-flight restart to release the restart lock
@@ -204,13 +202,14 @@ export function restartInFlight(): boolean {
 // lock on timeout is fine: the caller re-probes restartInFlight() and yields
 // again while a restart is still in flight.
 export function waitForRestartToFinish(timeoutMs = SERVER_WAIT_TIMEOUT_MS): void {
-  const result = spawnSync("flock", [
+  const lock = withLockCli();
+  if (lock === undefined) return;
+  spawnSync(lock, [
     "-w",
     String(Math.ceil(timeoutMs / 1000)),
     join(stateDir(), RESTART_LOCK_FILE),
     "true",
   ]);
-  if (result.error) return; // no flock(1): nothing to wait for
 }
 
 // --- server bootstrap (health check -> spawn -> wait) ---
