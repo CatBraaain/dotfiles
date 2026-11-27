@@ -1,5 +1,13 @@
 import { parseArgs } from "node:util";
-import { readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
+import {
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
@@ -12,7 +20,13 @@ import {
   type SessionEntry,
 } from "./stats";
 import { SESSIONS_ROOT, indexSessionFile, listSessionFiles } from "./scan";
-import { StatsDb, defaultDbPath, type UsageEventRecord } from "./db";
+import {
+  StatsDb,
+  defaultDbPath,
+  type EventTimeRange,
+  type IndexedSession,
+  type UsageEventRecord,
+} from "./db";
 import {
   buildSummary,
   renderSummary,
@@ -24,6 +38,8 @@ import {
 
 const DEFAULT_TOP = 20;
 const DEFAULT_DAYS = 14;
+const MAX_INDEX_BATCH_FILES = 64;
+const MAX_INDEX_BATCH_SOURCE_BYTES = 8 * 1024 * 1024;
 
 const CSV_FIELDNAMES = [
   "provider",
@@ -143,8 +159,8 @@ function runStats(
     db.eachSession((record) => {
       projectByPath.set(record.path, record.project);
     });
-    const source = buildFilteredSource(db, options, projectByPath);
     const summaryOptions = buildSummaryOptions(options, timeZone, projectByPath);
+    const source = buildFilteredSource(db, options, projectByPath, summaryOptions);
     const data = buildSummary(source, summaryOptions);
     stdout(renderSummary(data));
     return 0;
@@ -163,20 +179,30 @@ export function syncStatsDb(db: StatsDb, root: string = SESSIONS_ROOT): SyncRepo
   const files = listSessionFiles(root);
   const tracked = db.getTracked();
   const livePaths = new Set<string>();
+  const batch: IndexedSession[] = [];
+  let batchSourceBytes = 0;
   let indexed = 0;
-  let indexedEvents = 0;
   for (const file of files) {
     livePaths.add(file.path);
     const cached = tracked.get(file.path);
     if (cached !== undefined && cached.mtimeMs === file.mtimeMs && cached.size === file.size) {
       continue;
     }
+    const wouldExceedBatchLimit =
+      batch.length >= MAX_INDEX_BATCH_FILES ||
+      batchSourceBytes + file.size > MAX_INDEX_BATCH_SOURCE_BYTES;
+    if (batch.length > 0 && wouldExceedBatchLimit) {
+      db.replaceSessions(batch);
+      batch.length = 0;
+      batchSourceBytes = 0;
+    }
     const session = indexSessionFile(file);
     if (session === null) continue;
-    db.replaceSession(session.record, session.events);
+    batch.push(session);
+    batchSourceBytes += file.size;
     indexed += 1;
-    indexedEvents += session.events.length;
   }
+  db.replaceSessions(batch);
   const removed = [...tracked.keys()].filter((path) => !livePaths.has(path));
   db.removeSessions(removed);
   return { indexed, removed: removed.length, total: files.length };
@@ -186,6 +212,7 @@ function buildFilteredSource(
   db: StatsDb,
   options: StatsOptions,
   projectByPath: ReadonlyMap<string, string>,
+  eventTimeRange: EventTimeRange,
 ): SummarySource {
   function matchesProject(sessionPath: string): boolean {
     return (
@@ -205,7 +232,7 @@ function buildFilteredSource(
         if (!matchesProject(event.sessionPath)) return;
         if (!matchesModel(event)) return;
         callback(event);
-      });
+      }, eventTimeRange);
     },
     eachSession(callback) {
       db.eachSession((record) => {

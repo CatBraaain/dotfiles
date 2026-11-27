@@ -32,6 +32,16 @@ export interface UsageEventRecord {
   cost: number;
 }
 
+export interface IndexedSession {
+  record: SessionRecord;
+  events: readonly UsageEventRecord[];
+}
+
+export interface EventTimeRange {
+  fromMs: number | null;
+  untilMs: number | null;
+}
+
 export function defaultDbPath(): string {
   const cacheHome = process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache");
   return join(cacheHome, "pi-stats", "stats.db");
@@ -91,22 +101,30 @@ export class StatsDb {
     return tracked;
   }
 
-  replaceSession(record: SessionRecord, events: readonly UsageEventRecord[]): void {
+  replaceSessions(sessions: readonly IndexedSession[]): void {
+    if (sessions.length === 0) return;
+    const upsertSession = this.db.query(
+      `INSERT INTO sessions (path, mtime_ms, size, project, session_id, cwd, started_ms, is_subagent)
+       VALUES ($path, $mtimeMs, $size, $project, $sessionId, $cwd, $startedMs, $isSubagent)
+       ON CONFLICT(path) DO UPDATE SET
+         mtime_ms = excluded.mtime_ms,
+         size = excluded.size,
+         project = excluded.project,
+         session_id = excluded.session_id,
+         cwd = excluded.cwd,
+         started_ms = excluded.started_ms,
+         is_subagent = excluded.is_subagent`,
+    );
+    const removeEvents = this.db.query("DELETE FROM usage_events WHERE session_path = $path");
+    const insertEvent = this.db.query(
+      `INSERT INTO usage_events
+         (session_path, ts_ms, kind, provider, model, input, output, cache_read, cache_write, total_tokens, cost)
+       VALUES
+         ($sessionPath, $tsMs, $kind, $provider, $model, $input, $output, $cacheRead, $cacheWrite, $totalTokens, $cost)`,
+    );
     this.db.transaction(() => {
-      this.db
-        .query(
-          `INSERT INTO sessions (path, mtime_ms, size, project, session_id, cwd, started_ms, is_subagent)
-           VALUES ($path, $mtimeMs, $size, $project, $sessionId, $cwd, $startedMs, $isSubagent)
-           ON CONFLICT(path) DO UPDATE SET
-             mtime_ms = excluded.mtime_ms,
-             size = excluded.size,
-             project = excluded.project,
-             session_id = excluded.session_id,
-             cwd = excluded.cwd,
-             started_ms = excluded.started_ms,
-             is_subagent = excluded.is_subagent`,
-        )
-        .run({
+      for (const { record, events } of sessions) {
+        upsertSession.run({
           $path: record.path,
           $mtimeMs: Math.round(record.mtimeMs),
           $size: record.size,
@@ -116,26 +134,17 @@ export class StatsDb {
           $startedMs: record.startedMs,
           $isSubagent: record.isSubagent ? 1 : 0,
         });
-      this.db.query("DELETE FROM usage_events WHERE session_path = $path").run({ $path: record.path });
-      const insert = this.db.query(
-        `INSERT INTO usage_events
-           (session_path, ts_ms, kind, provider, model, input, output, cache_read, cache_write, total_tokens, cost)
-         VALUES
-           ($sessionPath, $tsMs, $kind, $provider, $model, $input, $output, $cacheRead, $cacheWrite, $totalTokens, $cost)`,
-      );
-      for (const event of events) insert.run(eventToParams(event));
+        removeEvents.run({ $path: record.path });
+        for (const event of events) insertEvent.run(eventToParams(event));
+      }
     })();
   }
 
   removeSessions(paths: readonly string[]): void {
     if (paths.length === 0) return;
     this.db.transaction(() => {
-      const remove = this.db.query(
-        "DELETE FROM sessions WHERE path = $path",
-      );
-      const removeEvents = this.db.query(
-        "DELETE FROM usage_events WHERE session_path = $path",
-      );
+      const remove = this.db.query("DELETE FROM sessions WHERE path = $path");
+      const removeEvents = this.db.query("DELETE FROM usage_events WHERE session_path = $path");
       for (const path of paths) {
         remove.run({ $path: path });
         removeEvents.run({ $path: path });
@@ -143,11 +152,25 @@ export class StatsDb {
     })();
   }
 
-  eachEvent(callback: (event: UsageEventRecord) => void): void {
-    const rows = this.db.query<Record<string, unknown>, []>(
-      "SELECT * FROM usage_events ORDER BY ts_ms",
+  eachEvent(
+    callback: (event: UsageEventRecord) => void,
+    { fromMs, untilMs }: EventTimeRange = { fromMs: null, untilMs: null },
+  ): void {
+    const predicates: string[] = [];
+    const bounds: number[] = [];
+    if (fromMs !== null) {
+      predicates.push("ts_ms >= ?");
+      bounds.push(fromMs);
+    }
+    if (untilMs !== null) {
+      predicates.push("ts_ms < ?");
+      bounds.push(untilMs);
+    }
+    const where = predicates.length === 0 ? "" : ` WHERE ${predicates.join(" AND ")}`;
+    const rows = this.db.query<Record<string, unknown>, number[]>(
+      `SELECT * FROM usage_events${where} ORDER BY ts_ms`,
     );
-    for (const row of rows.iterate()) callback(rowToEvent(row));
+    for (const row of rows.iterate(...bounds)) callback(rowToEvent(row));
   }
 
   eachSession(callback: (record: SessionRecord) => void): void {

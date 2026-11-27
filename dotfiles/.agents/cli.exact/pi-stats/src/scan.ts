@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import type { SessionRecord, UsageEventRecord } from "./db";
+import type { IndexedSession, SessionRecord, UsageEventRecord } from "./db";
 import { activeChain, entryEpochMs, type SessionEntry } from "./stats";
 
 export const SESSIONS_ROOT = join(homedir(), ".pi", "agent", "sessions");
@@ -14,11 +14,6 @@ export interface ScannedFile {
   isSubagent: boolean;
 }
 
-export interface IndexedSession {
-  record: SessionRecord;
-  events: UsageEventRecord[];
-}
-
 export function listSessionFiles(root: string = SESSIONS_ROOT): ScannedFile[] {
   const files: ScannedFile[] = [];
   for (const dirEntry of readdirSync(root, { withFileTypes: true })) {
@@ -28,7 +23,12 @@ export function listSessionFiles(root: string = SESSIONS_ROOT): ScannedFile[] {
   return files;
 }
 
-function walkProjectDir(dir: string, project: string, underSubagents: boolean, out: ScannedFile[]): void {
+function walkProjectDir(
+  dir: string,
+  project: string,
+  underSubagents: boolean,
+  out: ScannedFile[],
+): void {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) {
@@ -56,9 +56,7 @@ export function indexSessionFile(file: ScannedFile): IndexedSession | null {
   const headerTs = header === undefined ? null : entryEpochMs(header);
   const startedMs =
     headerTs ??
-    entries
-      .map((entry) => entryEpochMs(entry))
-      .find((value): value is number => value !== null) ??
+    entries.map((entry) => entryEpochMs(entry)).find((value): value is number => value !== null) ??
     null;
   const record: SessionRecord = {
     path: file.path,

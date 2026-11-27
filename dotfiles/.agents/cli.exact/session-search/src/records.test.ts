@@ -291,6 +291,33 @@ describe("selectReadingPage", () => {
 });
 
 describe("loadReadingPage", () => {
+  it("counts the union of role-filtered context windows after filling the page", async () => {
+    const root = mkdtempSync(join(tmpdir(), "session-search-records-"));
+    roots.push(root);
+    const path = join(root, "session.jsonl");
+    const entries = Array.from({ length: 30 }, (_, offset) => {
+      const index = offset + 1;
+      const role = index % 2 === 0 ? "assistant" : "user";
+      return JSON.stringify(
+        parentEntry(role, [6, 12, 19, 26].includes(index) ? "needle" : "other"),
+      );
+    });
+    writeFileSync(path, entries.join("\n"));
+
+    const page = await loadReadingPage(path, "session", {
+      role: "assistant",
+      query: "needle",
+      offset: 6,
+      limit: 5,
+    });
+    assert.deepEqual(
+      page.records.map((record) => record.index),
+      [12, 14, 16, 22, 24],
+    );
+    assert.equal(page.total, 13);
+    assert.equal(page.nextOffset, 11);
+  });
+
   it("keeps parent and repeated agent invocations at their saved positions", async () => {
     const root = mkdtempSync(join(tmpdir(), "session-search-records-"));
     roots.push(root);

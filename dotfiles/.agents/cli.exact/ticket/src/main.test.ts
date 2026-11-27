@@ -23,6 +23,7 @@ function runAt(home: string, cwd: string, args: string[], extraEnv: Record<strin
     env: { ...process.env, HOME: home, ...extraEnv },
     stdout: "pipe",
     stderr: "pipe",
+    timeout: 3_000,
   });
   return {
     code: result.exitCode,
@@ -650,6 +651,78 @@ describe("ticket CLI", () => {
     assert.equal(clean.code, 0);
     assert.equal(clean.stdout.trim(), "ok");
   });
+
+  it("validates unrelated tickets in filename order before filtering, selecting, or writing", async () => {
+    const home = await ticketHome();
+    const project = "demo";
+    const target = "000-target";
+    const targetPath = ticketPath(home, project, target);
+    const targetContent = "---\nstatus: open\n---\n\n# Target\n";
+    const store = join(home, ".agents", "tickets", project);
+    await mkdir(store, { recursive: true });
+    await writeFile(targetPath, targetContent);
+    for (let index = 39; index > 0; index--) {
+      const id = `0${String(index).padStart(2, "0")}-closed`;
+      await writeFile(ticketPath(home, project, id), "---\nstatus: closed\n---\n# Closed\n");
+    }
+    const firstBroken = "038-closed";
+    const secondBroken = "039-closed";
+    await writeFile(ticketPath(home, project, secondBroken), "---\nstatus: wrong\n---\n# Broken\n");
+    await writeFile(
+      ticketPath(home, project, firstBroken),
+      "---\nstatus: closed\nstatus: open\n---\n# Duplicate\n",
+    );
+    const before = (await readdir(store)).sort();
+    const error = `demo/${firstBroken}.md: duplicate status field`;
+    for (const args of [
+      ["list"],
+      ["show", target],
+      ["edit", target, "Target", "Replaced"],
+      ["create", '{"title":"New ticket"}'],
+    ]) {
+      const result = run(home, [...args, "-p", project, "--json"]);
+      assert.deepEqual(
+        result,
+        {
+          code: 1,
+          stdout: JSON.stringify({ error }, null, 2) + "\n",
+          stderr: error + "\n",
+        },
+        args.join(" "),
+      );
+    }
+    assert.equal(await readFile(targetPath, "utf8"), targetContent);
+    assert.deepEqual((await readdir(store)).sort(), before);
+
+    const check = run(home, ["check", "-p", project, "--json"]);
+    assert.equal(check.code, 1);
+    assert.deepEqual(
+      (JSON.parse(check.stdout) as Array<{ file: string; kind: string }>).map(({ file, kind }) => [
+        file,
+        kind,
+      ]),
+      [
+        [`demo/${firstBroken}.md`, "invalid-frontmatter"],
+        [`demo/${secondBroken}.md`, "invalid-status"],
+      ],
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "reports an earlier validation error without reading a later named pipe",
+    async () => {
+      const home = await ticketHome();
+      const store = join(home, ".agents", "tickets", "demo");
+      await mkdir(store, { recursive: true });
+      await writeFile(join(store, "a.md"), "---\nstatus: broken\n---\n");
+      const fifo = Bun.spawnSync(["mkfifo", join(store, "b.md")]);
+      assert.equal(fifo.exitCode, 0, fifo.stderr.toString());
+
+      const result = run(home, ["list", "--project", "demo"]);
+      assert.equal(result.code, 1, result.stderr);
+      assert.match(result.stderr, /^invalid status "broken"/);
+    },
+  );
 
   it.each(["$&", "$`", "$'", "$$", "first line\nsecond line\t  "])(
     "saves replacement text %j literally",

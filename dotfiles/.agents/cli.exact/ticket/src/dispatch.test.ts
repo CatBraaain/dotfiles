@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -123,6 +124,61 @@ function lockedDeps(
 }
 
 describe("locked dispatch", () => {
+  it.skipIf(process.platform === "win32")(
+    "reuses a same-owner probe within a tick but rechecks each launch independently",
+    async () => {
+      const ids = ["20261123-010001", "20261123-010002"];
+      const events: string[] = [];
+      const locked = lockedDeps(Object.fromEntries(ids.map((id) => [id, "old"])), () => {
+        events.push("inspect");
+        return "absent";
+      });
+      await run({
+        options: { max: 2, statuses: ["locked"] },
+        project: "demo",
+        loadSnapshot: async () => ids.map((id) => ({ id, status: "locked", actionable: false })),
+        readPiSessions() {
+          events.push("inventory");
+          return new Map();
+        },
+        locked: {
+          ...locked,
+          async findOwners(targets) {
+            events.push("history");
+            const lookup = await locked.findOwners(targets);
+            return {
+              ...lookup,
+              async isOwnerFileCurrent() {
+                events.push("owner file");
+                return true;
+              },
+            };
+          },
+          async readRevision({ ticketId }) {
+            events.push(`ticket ${ticketId}`);
+            return "revision";
+          },
+        },
+        log() {},
+        launch(id) {
+          events.push(`atomic launch ${id}`);
+          return false;
+        },
+        async sleepMs() {},
+      });
+      assert.deepEqual(events, [
+        "inventory",
+        ...ids.map((id) => `ticket ${id}`),
+        "history",
+        "inspect",
+        "history",
+        "inventory",
+        ...ids.flatMap((id) => [`ticket ${id}`, "owner file", `atomic launch ${id}`]),
+        "inventory",
+      ]);
+    },
+  );
+
   it("launches only known absent owners and shares one slot with open tickets", async () => {
     const launches: string[] = [];
     const logs: string[] = [];
@@ -957,13 +1013,18 @@ function fixture() {
   return { home, store, options, socket };
 }
 
-function invoke(home: string, args: string[], socket = join(home, "isolated.sock")) {
+function invoke(
+  home: string,
+  args: string[],
+  socket = join(home, "isolated.sock"),
+  extraEnv: Record<string, string> = {},
+) {
   const command = process.env.TICKET_DISPATCH_BIN
     ? [process.env.TICKET_DISPATCH_BIN]
     : [process.execPath, CLI];
   const result = Bun.spawnSync([...command, "dispatch", ...args], {
     cwd: home,
-    env: { ...process.env, HOME: home, TICKET_TEST_TMUX_SOCKET: socket },
+    env: { ...process.env, HOME: home, TICKET_TEST_TMUX_SOCKET: socket, ...extraEnv },
     stdout: "pipe",
     stderr: "pipe",
     timeout: 5000,
@@ -1122,6 +1183,61 @@ describe("dispatch execution", () => {
 });
 
 describe("dispatch CLI", () => {
+  it.skipIf(process.platform === "win32").each(["complete", "malformed"])(
+    "rejects duplicate launches with %s bulk inventory",
+    (inventory) => {
+      const { home, socket, store } = fixture();
+      const project = basename(home);
+      const log = join(home, "tmux-calls");
+      const id = "existing";
+      mkdirSync(join(home, "projects", project), { recursive: true });
+      writeFileSync(join(store, `${id}.md`), "---\nstatus: open\n---\n# Existing\n");
+      const rows = Array.from(
+        { length: 50 },
+        (_, index) =>
+          `$${index}|v1|TICKET_DISPATCH_ID=${index === 0 ? id : index}|TICKET_DISPATCH_PROJECT=${project}|TICKET_DISPATCH_ROLE=pi\n`,
+      ).join("");
+      const malformed = inventory === "malformed";
+      const stdout = malformed ? "unexpected row\n" : rows;
+      writeFileSync(
+        join(home, "tmux"),
+        `#!/bin/sh
+[ "$1" = "-S" ] && [ "$2" = ${shQuote(socket)} ] || exit 99
+printf '%s\\n' "$3" >> ${shQuote(log)}
+case "$3:$5" in
+  list-sessions:*'#{V/s:'*) printf %s ${shQuote(stdout)} ;;
+  list-sessions:'#{session_id}') printf '%s\\n' '$0' ;;
+  show-environment:'$0')
+    case "$6" in
+      TICKET_DISPATCH_ROLE) printf '%s\\n' TICKET_DISPATCH_ROLE=pi ;;
+      TICKET_DISPATCH_PROJECT) printf '%s\\n' ${shQuote(`TICKET_DISPATCH_PROJECT=${project}`)} ;;
+      TICKET_DISPATCH_ID) printf '%s\\n' ${shQuote(`TICKET_DISPATCH_ID=${id}`)} ;;
+      *) exit 97 ;;
+    esac ;;
+  *) exit 98 ;;
+esac
+`,
+        { mode: 0o755 },
+      );
+      const result = invoke(home, ["one", "--project", project, id], socket, { PATH: home });
+      assert.equal(result.code, 1);
+      assert.match(result.stderr, /ticket already running/);
+      const calls = readFileSync(log, "utf8").trimEnd().split("\n");
+      assert.deepEqual(
+        calls,
+        malformed
+          ? [
+              "list-sessions",
+              "list-sessions",
+              "show-environment",
+              "show-environment",
+              "show-environment",
+            ]
+          : ["list-sessions"],
+      );
+    },
+  );
+
   it("returns usage error 2 for invalid dispatch inputs", () => {
     const { home } = fixture();
     const invalid = [

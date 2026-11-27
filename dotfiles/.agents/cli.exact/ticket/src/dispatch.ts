@@ -513,27 +513,78 @@ export async function stopDispatcher(project: string | null): Promise<void> {
   });
 }
 
-function readPiSessions(socket: string, project: string | null): Map<string, string> {
-  const result = tmux(socket, ["list-sessions", "-F", "#{session_id}"]);
-  if (!result.ok) {
-    if (
-      /^no server running on |^error connecting to .*\(No such file or directory\)/.test(
-        result.stderr,
-      )
-    )
-      return new Map();
-    throw new Error(`cannot list dispatch sessions: ${result.stderr.trim()}`);
-  }
+const DISPATCH_METADATA_KEYS = new Set([ROLE_ENV, PROJECT_ENV, ID_ENV]);
+const VISIBLE_ENV_ENTRY = "#{&&:#{==:#{environ_hidden},0},#{==:#{environ_removed},0}}";
+const DISPATCH_ENV_ENTRY = `#{m/r:^(${[...DISPATCH_METADATA_KEYS].join("|")})$,#{environ_name}}`;
+const INVENTORY_VERSION = "v1";
+const ENV_LOOP_MARKER = `#{V/c:#{?#{==:#{environ_name},HOME},${INVENTORY_VERSION},}}`;
+const INVENTORY_SEPARATOR = "|";
+const UNFRAMED_FIELD = "!";
+const DISPATCH_ENV_FIELD = `#{?#{m/r:[${INVENTORY_SEPARATOR}[:cntrl:]],#{environ_value}},${UNFRAMED_FIELD},#{environ_name}=#{environ_value}}`;
+const PI_SESSIONS_FORMAT = `#{session_id}${INVENTORY_SEPARATOR}${ENV_LOOP_MARKER}#{V/s:#{?#{&&:${VISIBLE_ENV_ENTRY},${DISPATCH_ENV_ENTRY}},${INVENTORY_SEPARATOR}${DISPATCH_ENV_FIELD},}}`;
 
+function readPiSessions(socket: string, project: string | null): Map<string, string> {
+  const result = tmux(socket, ["list-sessions", "-F", PI_SESSIONS_FORMAT]);
+  if (!result.ok && isMissingTmuxServer(result.stderr)) return new Map();
+  const inventory = result.ok ? parsePiSessionInventory(result.stdout) : undefined;
   const sessions = new Map<string, string>();
-  for (const session of result.stdout.trimEnd().split("\n")) {
-    if (sessionEnv(socket, session, ROLE_ENV) !== "pi") continue;
-    const owner = sessionEnv(socket, session, PROJECT_ENV);
+  for (const [session, metadata] of inventory ?? readPiSessionIds(socket)) {
+    function readMetadata(key: string): string | undefined {
+      return metadata ? metadata.get(key) : sessionEnv(socket, session, key);
+    }
+    if (readMetadata(ROLE_ENV) !== "pi") continue;
+    const owner = readMetadata(PROJECT_ENV);
     if (!owner || (project !== null && owner !== project)) continue;
-    const id = sessionEnv(socket, session, ID_ENV);
+    const id = readMetadata(ID_ENV);
     if (id) sessions.set(session, project === null ? `${owner}/${id}` : id);
   }
   return sessions;
+}
+
+function isMissingTmuxServer(stderr: string): boolean {
+  return /^no server running on |^error connecting to .*\(No such file or directory\)/.test(stderr);
+}
+
+type PiSessionInventory = Map<string, Map<string, string> | undefined>;
+
+function parsePiSessionInventory(stdout: string): PiSessionInventory | undefined {
+  const lines = stdout.split("\n");
+  if (lines.pop() !== "") return undefined;
+  const inventory: PiSessionInventory = new Map();
+  for (const line of lines) {
+    const [session, version, ...fields] = line.split(INVENTORY_SEPARATOR);
+    if (
+      !session ||
+      !/^\$\d+$/.test(session) ||
+      version !== INVENTORY_VERSION ||
+      inventory.has(session)
+    )
+      return undefined;
+    const metadata = new Map<string, string>();
+    for (const field of fields) {
+      if (field === UNFRAMED_FIELD) continue;
+      const equals = field.indexOf("=");
+      const key = field.slice(0, equals);
+      if (equals < 0 || !DISPATCH_METADATA_KEYS.has(key) || metadata.has(key)) return undefined;
+      metadata.set(key, field.slice(equals + 1));
+    }
+    inventory.set(session, fields.includes(UNFRAMED_FIELD) ? undefined : metadata);
+  }
+  return inventory;
+}
+
+function readPiSessionIds(socket: string): PiSessionInventory {
+  const result = tmux(socket, ["list-sessions", "-F", "#{session_id}"]);
+  if (!result.ok) {
+    if (isMissingTmuxServer(result.stderr)) return new Map();
+    throw new Error(`cannot list dispatch sessions: ${result.stderr.trim()}`);
+  }
+  return new Map(
+    result.stdout
+      .trimEnd()
+      .split("\n")
+      .map((session) => [session, undefined]),
+  );
 }
 
 type DispatchSession = { name: string; project: string; ticketId: string; created: number };
@@ -851,6 +902,8 @@ export async function run(deps: RunDeps): Promise<void> {
     if (!locked || !initial) return probes;
     const { lookup, revisions } = initial;
     const inspected = new Map<string, Omit<PreparedLock, "isOwnerFileCurrent">>();
+    const ownerInspections =
+      process.platform === "win32" ? undefined : new Map<string, OwnerInspection>();
     for (const [key, { target, revision }] of revisions) {
       const owner = lookup.owners.get(`${target.project}/${target.ticketId}`);
       if (
@@ -867,12 +920,11 @@ export async function run(deps: RunDeps): Promise<void> {
         probes.set(key, { skip: "lock owner lookup busy" });
         continue;
       }
-      inspected.set(key, {
-        target,
-        revision,
-        owner,
-        inspection: locked.inspect(owner.ownerId, target.cwd),
-      });
+      const inspectionKey = ownerInspections && JSON.stringify([owner.ownerId, target.cwd]);
+      const previousInspection = inspectionKey && ownerInspections?.get(inspectionKey);
+      const inspection = previousInspection || locked.inspect(owner.ownerId, target.cwd);
+      if (inspectionKey) ownerInspections?.set(inspectionKey, inspection);
+      inspected.set(key, { target, revision, owner, inspection });
     }
     if (inspected.size === 0) return probes;
 

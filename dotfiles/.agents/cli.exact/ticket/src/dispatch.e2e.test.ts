@@ -1798,6 +1798,71 @@ function tmuxSessionId(fixture: Fixture, name: string): string {
 }
 
 describe("manual ticket dispatch", () => {
+  it.each([" quoted 'project', #{literal} ", "pipe |", "tab\tand\nnewline"])(
+    "recognizes session-local metadata for a project with delimiters: %j",
+    (project) => {
+      const fixture = setupGlobal();
+      const store = globalStore(fixture, project);
+      mkdirSync(store, { recursive: true });
+      mkdirSync(join(fixture.home, "projects", project), { recursive: true });
+      writeTicket(store, "same", "open");
+      startServer(fixture);
+      const existing = isolatedTmux(fixture.socket, [
+        "new-session",
+        "-d",
+        "-s",
+        "prior",
+        "-e",
+        "TICKET_DISPATCH_ROLE=pi",
+        "-e",
+        `TICKET_DISPATCH_PROJECT=${project}`,
+        "-e",
+        "TICKET_DISPATCH_ID=same",
+        "sleep 60",
+      ]);
+      assert.equal(existing.status, 0, existing.stderr);
+      const duplicate = cli(fixture, oneArgs(project, "same"));
+      assert.equal(duplicate.status, 1);
+      assert.equal(duplicate.stderr, `I/O error: ticket already running: ${project}/same\n`);
+      assert.deepEqual(recordedLaunches(fixture), []);
+    },
+  );
+
+  it("does not treat global, hidden, or user-option metadata as a session's ticket ownership", async () => {
+    const fixture = setupGlobal();
+    writeTicket(fixture.store, "b", "open");
+    startServer(fixture);
+    const keys = [
+      ["TICKET_DISPATCH_ROLE", "pi"],
+      ["TICKET_DISPATCH_PROJECT", fixture.project],
+      ["TICKET_DISPATCH_ID", "b"],
+    ];
+    for (const [key, value] of keys) {
+      const globalEnv = isolatedTmux(fixture.socket, ["set-environment", "-g", key!, value!]);
+      assert.equal(globalEnv.status, 0, globalEnv.stderr);
+      const hiddenEnv = isolatedTmux(fixture.socket, [
+        "set-environment",
+        "-h",
+        "-t",
+        "handle_a_v1_extra",
+        key!,
+        value!,
+      ]);
+      assert.equal(hiddenEnv.status, 0, hiddenEnv.stderr);
+    }
+    const userOption = isolatedTmux(fixture.socket, [
+      "set-option",
+      "-t",
+      "handle_a_v1_extra",
+      "@ticket-dispatch-role",
+      "pi",
+    ]);
+    assert.equal(userOption.status, 0, userOption.stderr);
+    const result = cli(fixture, oneArgs(fixture.project, "b"));
+    assert.equal(result.status, 0, result.stderr);
+    await waitRecorded(fixture, `${fixture.project}/b`);
+  });
+
   it.each([false, true])(
     "exceeds max manually and waits for two releases before auto refill (global=%s)",
     async (all) => {

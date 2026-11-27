@@ -46,46 +46,59 @@ export async function loadReadingPage(
   sessionId: string,
   options: PageOptions = {},
 ): Promise<ReadingPage> {
-  const records: ReadingRecord[] = [];
+  const page = new ReadingPageSelection(options);
   const stream = createReadStream(path, { encoding: "utf8" });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   let lineNumber = 0;
+  let nextRecordIndex = 1;
   try {
     for await (const line of lines) {
       lineNumber++;
       const entry = parseEntryLine(line);
       if (entry === null) continue;
-      const additions = entryRecords(entry, lineNumber, records.length + 1);
-      for (const record of additions) records.push(record);
+      for (const record of iterateEntryRecords(entry, lineNumber, nextRecordIndex)) {
+        page.add(record);
+        nextRecordIndex++;
+      }
     }
   } finally {
     lines.close();
     stream.destroy();
   }
-  return selectReadingPage(sessionId, records, options);
+  return page.finish(sessionId);
 }
 
 export function entryRecords(entry: SessionEntry, line: number, firstIndex = 1): ReadingRecord[] {
+  return [...iterateEntryRecords(entry, line, firstIndex)];
+}
+
+function* iterateEntryRecords(
+  entry: SessionEntry,
+  line: number,
+  firstIndex: number,
+): Generator<ReadingRecord> {
   const parent = parentRecord(entry, line, firstIndex);
-  if (parent !== null) return [parent];
-  if (entry.type !== "custom" || entry.customType !== SUBAGENT_LOG_TYPE) return [];
+  if (parent !== null) {
+    yield parent;
+    return;
+  }
+  if (entry.type !== "custom" || entry.customType !== SUBAGENT_LOG_TYPE) return;
 
   const log = asSubagentLog(entry.data);
-  const records: ReadingRecord[] = [];
+  let index = firstIndex;
   for (const [eventOffset, event] of (log.events ?? []).entries()) {
     const body = eventBody(event);
     if (body === null) continue;
-    records.push({
+    yield {
       ...body,
-      index: firstIndex + records.length,
+      index: index++,
       line,
       source: "subagent",
       agent: log.agent ?? null,
       invocationId: log.invocationId ?? null,
       eventIndex: eventOffset + 1,
-    });
+    };
   }
-  return records;
 }
 
 export function selectReadingPage(
@@ -93,34 +106,60 @@ export function selectReadingPage(
   records: ReadingRecord[],
   options: PageOptions = {},
 ): ReadingPage {
-  const roleRecords = records.filter(
-    (record) => options.role === undefined || record.role === options.role,
-  );
-  const selected =
-    options.query === undefined ? roleRecords : queryContext(roleRecords, options.query);
-  const offset = options.offset ?? 1;
-  const limit = options.limit ?? DEFAULT_PAGE_LIMIT;
-  const pageRecords = selected.slice(offset - 1, offset - 1 + limit);
-  const nextOffset = offset + pageRecords.length;
-  return {
-    sessionId,
-    records: pageRecords,
-    total: selected.length,
-    offset,
-    returned: pageRecords.length,
-    nextOffset: nextOffset <= selected.length ? nextOffset : null,
-  };
+  const page = new ReadingPageSelection(options);
+  for (const record of records) page.add(record);
+  return page.finish(sessionId);
 }
 
-function queryContext(records: ReadingRecord[], query: string): ReadingRecord[] {
-  const selected = new Set<number>();
-  records.forEach((record, position) => {
-    if (!record.text.includes(query)) return;
-    const first = Math.max(0, position - QUERY_CONTEXT_RECORDS);
-    const last = Math.min(records.length - 1, position + QUERY_CONTEXT_RECORDS);
-    for (let neighbor = first; neighbor <= last; neighbor++) selected.add(neighbor);
-  });
-  return records.filter((_, position) => selected.has(position));
+class ReadingPageSelection {
+  private readonly records: ReadingRecord[] = [];
+  private readonly pendingBeforeHit: ReadingRecord[] = [];
+  private readonly offset: number;
+  private readonly limit: number;
+  private remainingAfterHit = 0;
+  private total = 0;
+
+  constructor(private readonly options: PageOptions) {
+    this.offset = options.offset ?? 1;
+    this.limit = options.limit ?? DEFAULT_PAGE_LIMIT;
+  }
+
+  add(record: ReadingRecord): void {
+    const { role, query } = this.options;
+    if (role !== undefined && record.role !== role) return;
+    if (query === undefined) {
+      this.select(record);
+    } else if (record.text.includes(query)) {
+      for (const previous of this.pendingBeforeHit) this.select(previous);
+      this.pendingBeforeHit.length = 0;
+      this.select(record);
+      this.remainingAfterHit = QUERY_CONTEXT_RECORDS;
+    } else if (this.remainingAfterHit > 0) {
+      this.select(record);
+      this.remainingAfterHit--;
+    } else {
+      if (this.pendingBeforeHit.length === QUERY_CONTEXT_RECORDS) this.pendingBeforeHit.shift();
+      this.pendingBeforeHit.push(record);
+    }
+  }
+
+  finish(sessionId: string): ReadingPage {
+    const returned = this.records.length;
+    const nextOffset = this.offset + returned;
+    return {
+      sessionId,
+      records: this.records,
+      total: this.total,
+      offset: this.offset,
+      returned,
+      nextOffset: nextOffset <= this.total ? nextOffset : null,
+    };
+  }
+
+  private select(record: ReadingRecord): void {
+    this.total++;
+    if (this.total >= this.offset && this.records.length < this.limit) this.records.push(record);
+  }
 }
 
 function parentRecord(entry: SessionEntry, line: number, index: number): ReadingRecord | null {

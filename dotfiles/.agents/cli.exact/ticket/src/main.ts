@@ -22,6 +22,7 @@ import {
 } from "./dispatch";
 
 const MAX_PROJECT_LOOKUP_BYTES = 1_048_576;
+const MAX_CONCURRENT_TICKET_READS = 16;
 const STATUSES = ["draft", "open", "blocked", "locked", "closed", "cancelled"] as const;
 type Status = (typeof STATUSES)[number];
 
@@ -213,32 +214,59 @@ function parseTicket(path: string, project: string, id: string, content: string)
   };
 }
 
+const ticketReadLanes = Array.from({ length: MAX_CONCURRENT_TICKET_READS }, () =>
+  Promise.resolve(),
+);
+let nextTicketReadLane = 0;
+
+function readTicketContent(path: string): Promise<string> {
+  const lane = nextTicketReadLane;
+  nextTicketReadLane = (lane + 1) % ticketReadLanes.length;
+  const content = ticketReadLanes[lane]!.then(() => readFile(path, "utf8"));
+  ticketReadLanes[lane] = content.then(
+    () => {},
+    () => {},
+  );
+  return content;
+}
+
 async function loadTickets(project: string, collect?: Issue[]): Promise<Ticket[]> {
   const dir = projectDir(project);
-  let names: string[];
-  try {
-    names = (await readdir(dir)).filter((name) => name.endsWith(".md")).sort();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") fail(`project not found: ${dir}`);
-    throw error;
-  }
+  const directory = await readdir(dir, { withFileTypes: true }).catch(
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") fail(`project not found: ${dir}`);
+      throw error;
+    },
+  );
+  const entries = directory
+    .filter(({ name }) => name.endsWith(".md"))
+    .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
   const tickets: Ticket[] = [];
-  for (const name of names) {
-    const id = name.slice(0, -3);
-    const path = join(dir, name);
-    try {
-      tickets.push(parseTicket(path, project, id, await readFile(path, "utf8")));
-    } catch (error) {
-      if (collect && error instanceof TicketError) {
+  for (let first = 0; first < entries.length;) {
+    let nextBatchStart = first + 1;
+    if (entries[first]!.isFile()) {
+      const limit = first + MAX_CONCURRENT_TICKET_READS;
+      while (nextBatchStart < limit && entries[nextBatchStart]?.isFile()) nextBatchStart++;
+    }
+    const batch = entries.slice(first, nextBatchStart);
+    const paths = batch.map(({ name }) => join(dir, name));
+    const reads = await Promise.allSettled(paths.map(readTicketContent));
+    for (const [index, read] of reads.entries()) {
+      if (read.status === "rejected") throw read.reason;
+      const id = batch[index]!.name.slice(0, -3);
+      const path = paths[index]!;
+      try {
+        tickets.push(parseTicket(path, project, id, read.value));
+      } catch (error) {
+        if (!collect || !(error instanceof TicketError)) throw error;
         collect.push({
           file: relative(storeRoot(), path),
           kind: error.message.includes("invalid status") ? "invalid-status" : "invalid-frontmatter",
           detail: error.message.split(": ").at(-1)!,
         });
-        continue;
       }
-      throw error;
     }
+    first = nextBatchStart;
   }
   return tickets;
 }
