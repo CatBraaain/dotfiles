@@ -24,8 +24,8 @@ import {
 import { createRoot } from "react-dom/client";
 import { initDocumentScrollbar } from "./document-scrollbar";
 
-/** Per-workspace display mode: unarchived sessions only, or all sessions. */
-export type ViewMode = "unarchived" | "all";
+/** Per-workspace display mode: active sessions only, or all sessions. */
+export type ViewMode = "active" | "all";
 
 type SessionLoadStatus = "loading" | "loaded" | "error";
 
@@ -37,7 +37,7 @@ export interface ClientSession {
   sessionId: string;
   displayName: string;
   updatedAtMs: number | null;
-  isArchived: boolean;
+  isInactive: boolean;
   isLive?: boolean;
   /** Live execution phase; undefined when the phase is unknown. */
   state?: SessionPhase;
@@ -93,7 +93,7 @@ export function visibleSessions(
   collapsedCwds: ReadonlySet<string> = new Set(),
 ): ClientSession[] {
   return state.groups.flatMap((group) =>
-    visibleGroupSessions(group, modes.get(group.cwd) ?? "unarchived", collapsedCwds),
+    visibleGroupSessions(group, modes.get(group.cwd) ?? "active", collapsedCwds),
   );
 }
 
@@ -103,8 +103,8 @@ function visibleGroupSessions(
   collapsedCwds: ReadonlySet<string>,
 ): ClientSession[] {
   if (collapsedCwds.has(group.cwd)) return [];
-  return mode === "unarchived"
-    ? group.sessions.filter((session) => !session.isArchived)
+  return mode === "active"
+    ? group.sessions.filter((session) => !session.isInactive)
     : group.sessions;
 }
 
@@ -115,18 +115,18 @@ export function sessionListView(
   collapsedCwds: ReadonlySet<string> = new Set(),
   loadStatus: SessionLoadStatus = "loaded",
   pendingNewSessionCwds: ReadonlySet<string> = new Set(),
-  pendingArchiveIds: ReadonlySet<string> = new Set(),
-  pendingUnarchiveIds: ReadonlySet<string> = new Set(),
+  pendingDeactivationIds: ReadonlySet<string> = new Set(),
+  pendingActivationIds: ReadonlySet<string> = new Set(),
 ): SessionListView {
   const groups = state.groups.map((group) =>
     groupDescriptor(
       group,
-      modes.get(group.cwd) ?? "unarchived",
+      modes.get(group.cwd) ?? "active",
       displayedSessionId,
       collapsedCwds,
       pendingNewSessionCwds.has(group.cwd),
-      pendingArchiveIds,
-      pendingUnarchiveIds,
+      pendingDeactivationIds,
+      pendingActivationIds,
     ),
   );
   if (groups.length > 0) return { sessions: groups };
@@ -143,8 +143,8 @@ function groupDescriptor(
   displayedSessionId: string | undefined,
   collapsedCwds: ReadonlySet<string>,
   isStartingSession: boolean,
-  pendingArchiveIds: ReadonlySet<string> = new Set(),
-  pendingUnarchiveIds: ReadonlySet<string> = new Set(),
+  pendingDeactivationIds: ReadonlySet<string> = new Set(),
+  pendingActivationIds: ReadonlySet<string> = new Set(),
 ): ElementDescriptor {
   const isExpanded = !collapsedCwds.has(group.cwd);
   const sessions = visibleGroupSessions(group, mode, collapsedCwds);
@@ -197,8 +197,8 @@ function groupDescriptor(
         sessionDescriptor(
           session,
           displayedSessionId,
-          pendingArchiveIds.has(session.sessionId),
-          pendingUnarchiveIds.has(session.sessionId),
+          pendingDeactivationIds.has(session.sessionId),
+          pendingActivationIds.has(session.sessionId),
         ),
       ),
     ],
@@ -206,7 +206,7 @@ function groupDescriptor(
 }
 
 function modeToggleDescriptor(cwd: string, mode: ViewMode): ElementDescriptor {
-  const label = mode === "unarchived" ? "Show all sessions" : "Show unarchived sessions";
+  const label = mode === "active" ? "Show all sessions" : "Show active sessions";
   return {
     tag: "button",
     attrs: {
@@ -223,7 +223,7 @@ function modeToggleDescriptor(cwd: string, mode: ViewMode): ElementDescriptor {
 
 function visibilityIcon(mode: ViewMode): ElementDescriptor {
   const paths: Record<ViewMode, string> = {
-    unarchived:
+    active:
       "M10.1196 10.8267L14.1464 14.8536C14.3417 15.0488 14.6583 15.0488 14.8536 14.8536C15.0488 14.6583 15.0488 14.3417 14.8536 14.1464L1.85355 1.14645C1.65829 0.951184 1.34171 0.951184 1.14645 1.14645C0.951184 1.34171 0.951184 1.65829 1.14645 1.85355L4.37624 5.08334C3.90117 5.4183 3.5126 5.80026 3.19877 6.18295C2.75443 6.72477 2.46154 7.26493 2.27931 7.66977C2.18795 7.87274 2.12369 8.04329 2.08166 8.1653C2.06063 8.22636 2.03453 8.31047 2.03453 8.31047L2.01687 8.37186C2.01687 8.37186 1.94098 8.86907 2.37202 8.9833C2.63879 9.05404 2.91251 8.8948 2.98346 8.62815L2.98444 8.62471L2.99179 8.5997C2.9989 8.57616 3.01051 8.53927 3.02715 8.49095C3.06047 8.39421 3.11375 8.25227 3.19119 8.08023C3.34655 7.73507 3.59627 7.27523 3.97201 6.81706C4.26363 6.46146 4.63213 6.10494 5.09595 5.80306L6.67356 7.38067C5.9688 7.82277 5.50024 8.60667 5.50024 9.5C5.50024 10.8807 6.61953 12 8.00024 12C8.89358 12 9.67747 11.5314 10.1196 10.8267ZM9.3807 10.0878C9.15205 10.6241 8.62005 11 8.00024 11C7.17182 11 6.50024 10.3284 6.50024 9.5C6.50024 8.88019 6.87616 8.34819 7.41244 8.11955L9.3807 10.0878ZM6.31962 4.19853L7.174 5.05291C7.43366 5.01852 7.70875 5 8.00017 5C10.0445 5 11.2857 5.9115 12.0283 6.81706C12.4041 7.27523 12.6538 7.73507 12.8091 8.08023C12.8866 8.25227 12.9399 8.39421 12.9732 8.49095C12.9898 8.53927 13.0014 8.57616 13.0085 8.5997L13.0159 8.62471L13.0169 8.62815L13.0172 8.62937C13.0885 8.89555 13.3618 9.05397 13.6283 8.9833C13.8952 8.91253 14.0542 8.63878 13.9835 8.37186L13.9832 8.37069L13.9827 8.36916L13.9816 8.365L13.9781 8.35236C13.9752 8.34204 13.9711 8.328 13.9658 8.31047C13.9552 8.27541 13.9397 8.22636 13.9187 8.1653C13.8766 8.04329 13.8124 7.87274 13.721 7.66977C13.5388 7.26493 13.2459 6.72477 12.8016 6.18295C11.904 5.0885 10.3952 4 8.00017 4C7.38264 4 6.82403 4.07236 6.31962 4.19853Z",
     all: "M2.98444 8.62471L2.98346 8.62815C2.91251 8.8948 2.63879 9.05404 2.37202 8.9833C1.94098 8.86907 2.01687 8.37186 2.01687 8.37186L2.03453 8.31047C2.03453 8.31047 2.06063 8.22636 2.08166 8.1653C2.12369 8.04329 2.18795 7.87274 2.27931 7.66977C2.46154 7.26493 2.75443 6.72477 3.19877 6.18295C4.09629 5.08851 5.60509 4 8.00017 4C10.3952 4 11.904 5.08851 12.8016 6.18295C13.2459 6.72477 13.5388 7.26493 13.721 7.66977C13.8124 7.87274 13.8766 8.04329 13.9187 8.1653C13.9397 8.22636 13.9552 8.27541 13.9658 8.31047C13.9711 8.328 13.9752 8.34204 13.9781 8.35236L13.9816 8.365L13.9827 8.36916L13.9832 8.37069L13.9835 8.37186C14.0542 8.63878 13.8952 8.91253 13.6283 8.9833C13.3618 9.05397 13.0885 8.89556 13.0172 8.62937L13.0169 8.62815L13.0159 8.62471L13.0085 8.5997C13.0014 8.57616 12.9898 8.53927 12.9732 8.49095C12.9399 8.39422 12.8866 8.25227 12.8091 8.08023C12.6538 7.73508 12.4041 7.27523 12.0283 6.81706C11.2857 5.9115 10.0445 5 8.00017 5C5.95584 5 4.71464 5.9115 3.97201 6.81706C3.59627 7.27523 3.34655 7.73508 3.19119 8.08023C3.11375 8.25227 3.06047 8.39422 3.02715 8.49095C3.01051 8.53927 2.9989 8.57616 2.99179 8.5997L2.98444 8.62471ZM8.00024 7C6.61953 7 5.50024 8.11929 5.50024 9.5C5.50024 10.8807 6.61953 12 8.00024 12C9.38096 12 10.5002 10.8807 10.5002 9.5C10.5002 8.11929 9.38096 7 8.00024 7ZM6.50024 9.5C6.50024 8.67157 7.17182 8 8.00024 8C8.82867 8 9.50024 8.67157 9.50024 9.5C9.50024 10.3284 8.82867 11 8.00024 11C7.17182 11 6.50024 10.3284 6.50024 9.5Z",
   };
@@ -245,23 +245,23 @@ function visibilityIcon(mode: ViewMode): ElementDescriptor {
 function sessionDescriptor(
   session: ClientSession,
   displayedSessionId: string | undefined,
-  isArchiving = false,
-  isUnarchiving = false,
+  isDeactivating = false,
+  isActivating = false,
 ): ElementDescriptor {
   const rowClass = [
     "session-row",
     session.sessionId === displayedSessionId ? "selected" : "",
-    session.isArchived ? "archived" : "",
+    session.isInactive ? "inactive" : "",
   ]
     .filter((className) => className !== "")
     .join(" ");
   const title = [
     session.displayName,
     session.sessionId,
-    phaseLabel(session.isArchived ? undefined : session.state),
+    phaseLabel(session.isInactive ? undefined : session.state),
     session.publishDelayed ? PUBLISH_DELAYED_HINT : undefined,
     session.reloadPending ? "Reload pending" : undefined,
-    session.state === "waiting-user" && session.hasUnread && !session.isArchived
+    session.state === "waiting-user" && session.hasUnread && !session.isInactive
       ? "Unread"
       : undefined,
   ]
@@ -285,8 +285,8 @@ function sessionDescriptor(
             tag: "span",
             attrs: {
               class: "session-status",
-              "data-archived": String(session.isArchived),
-              "data-unread": String(session.hasUnread === true && !session.isArchived),
+              "data-inactive": String(session.isInactive),
+              "data-unread": String(session.hasUnread === true && !session.isInactive),
               ...(session.state === undefined ? {} : { "data-state": session.state }),
               ...(session.publishDelayed ? { "data-delayed": "true" } : {}),
               "aria-hidden": "true",
@@ -305,15 +305,15 @@ function sessionDescriptor(
         attrs: { class: "session-timestamp" },
         children: [formatSessionTimestamp(session.updatedAtMs)],
       },
-      session.isArchived
-        ? unarchiveDescriptor(session.sessionId, isUnarchiving)
-        : archiveDescriptor(session.sessionId, isArchiving),
+      session.isInactive
+        ? activateDescriptor(session.sessionId, isActivating)
+        : deactivateDescriptor(session.sessionId, isDeactivating),
     ],
   };
 }
 
 function sessionStatusIcons(session: ClientSession): ElementDescriptor[] {
-  if (session.isArchived) return [];
+  if (session.isInactive) return [];
   if (session.state === "running") {
     return [spinnerIcon()];
   }
@@ -380,36 +380,36 @@ export function formatSessionTimestamp(updatedAtMs: number | null, now = new Dat
   return parts.map((part) => String(part).padStart(2, "0")).join(isToday ? ":" : "/");
 }
 
-/** Overlay button at the row's right edge that archives the session. */
-function archiveDescriptor(sessionId: string, isPending = false): ElementDescriptor {
+/** Overlay button at the row's right edge that deactivates the session. */
+function deactivateDescriptor(sessionId: string, isPending = false): ElementDescriptor {
   return {
     tag: "button",
     attrs: {
-      class: "archive",
+      class: "deactivate",
       type: "button",
-      "data-archive": sessionId,
-      title: "Archive",
-      "aria-label": "Archive",
+      "data-deactivate": sessionId,
+      title: "Deactivate",
+      "aria-label": "Deactivate",
       "aria-busy": String(isPending),
     },
-    children: [isPending ? spinnerIcon() : archiveIcon()],
+    children: [isPending ? spinnerIcon() : deactivateIcon()],
   };
 }
 
-/** Overlay button at the row's right edge that restores the archived session to the default list. */
-function unarchiveDescriptor(sessionId: string, isPending = false): ElementDescriptor {
+/** Overlay button at the row's right edge that restores the inactive session to the default list. */
+function activateDescriptor(sessionId: string, isPending = false): ElementDescriptor {
   return {
     tag: "button",
     attrs: {
-      class: "unarchive",
+      class: "activate",
       type: "button",
-      "data-unarchive": sessionId,
-      title: "Unarchive",
-      "aria-label": "Unarchive",
+      "data-activate": sessionId,
+      title: "Activate",
+      "aria-label": "Activate",
       "aria-busy": String(isPending),
       "aria-disabled": String(isPending),
     },
-    children: [isPending ? spinnerIcon() : unarchiveIcon()],
+    children: [isPending ? spinnerIcon() : activateIcon()],
   };
 }
 
@@ -429,7 +429,7 @@ function plusIcon(): ElementDescriptor {
   ]);
 }
 
-function archiveIcon(): ElementDescriptor {
+function deactivateIcon(): ElementDescriptor {
   return strokeIcon([
     { tag: "rect", attrs: { width: "20", height: "5", x: "2", y: "3", rx: "1" } },
     { tag: "path", attrs: { d: "M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" } },
@@ -437,7 +437,7 @@ function archiveIcon(): ElementDescriptor {
   ]);
 }
 
-function unarchiveIcon(): ElementDescriptor {
+function activateIcon(): ElementDescriptor {
   return strokeIcon([
     { tag: "rect", attrs: { width: "20", height: "5", x: "2", y: "3", rx: "1" } },
     { tag: "path", attrs: { d: "M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" } },
@@ -473,8 +473,8 @@ interface DescriptorActions {
   onWorkspaceMenuOpen(menu: WorkspaceMenuState): void;
   onSessionMenuOpen(menu: SessionMenuState): void;
   onSessionClick(sessionId: string): void;
-  onArchiveClick(sessionId: string): void;
-  onUnarchiveClick(sessionId: string): void;
+  onDeactivateClick(sessionId: string): void;
+  onActivateClick(sessionId: string): void;
 }
 
 /** Map descriptor attribute names to React prop names (class -> className). */
@@ -504,10 +504,10 @@ function descriptorOnClick(
   if (groupCwd !== undefined) return () => actions.onGroupToggle(groupCwd);
   const newSessionCwd = attrs["data-new-session"];
   if (newSessionCwd !== undefined) return () => actions.onNewSessionClick(newSessionCwd);
-  const sessionId = attrs["data-archive"] ?? attrs["data-unarchive"] ?? attrs["data-session"];
+  const sessionId = attrs["data-deactivate"] ?? attrs["data-activate"] ?? attrs["data-session"];
   if (sessionId === undefined) return undefined;
-  if (attrs["data-archive"] !== undefined) return () => actions.onArchiveClick(sessionId);
-  if (attrs["data-unarchive"] !== undefined) return () => actions.onUnarchiveClick(sessionId);
+  if (attrs["data-deactivate"] !== undefined) return () => actions.onDeactivateClick(sessionId);
+  if (attrs["data-activate"] !== undefined) return () => actions.onActivateClick(sessionId);
   return () => actions.onSessionClick(sessionId);
 }
 
@@ -599,7 +599,7 @@ function SessionStatus({
 }): ReactElement {
   const canFade =
     descriptor.attrs?.["data-state"] === "waiting-user" &&
-    descriptor.attrs?.["data-archived"] === "false";
+    descriptor.attrs?.["data-inactive"] === "false";
   const isUnread = canFade && descriptor.attrs?.["data-unread"] === "true";
   const [visibility, setVisibility] = useState({ unread: isUnread, fading: false });
   if (visibility.unread !== isUnread || (visibility.fading && !canFade)) {
@@ -771,11 +771,11 @@ interface ClientSnapshot {
   errorMessage: string;
   connectionError: boolean;
   pendingNewSessions: ReadonlyMap<string, string>;
-  /** Archive requests in flight, keyed by request id (value: session id). */
-  pendingArchives: ReadonlyMap<string, string>;
-  /** Unarchive requests in flight, keyed by request id (value: session id). */
-  pendingUnarchives: ReadonlyMap<string, string>;
-  /** Whether the latest sessions update came from an in-flight archive/unarchive,
+  /** Deactivate requests in flight, keyed by request id (value: session id). */
+  pendingDeactivations: ReadonlyMap<string, string>;
+  /** Activate requests in flight, keyed by request id (value: session id). */
+  pendingActivations: ReadonlyMap<string, string>;
+  /** Whether the latest sessions update came from an in-flight activation or deactivation,
    * so the row movement slides instead of snapping. */
   animated: boolean;
 }
@@ -792,10 +792,10 @@ function createClientStore(): {
   setSessionsError(): void;
   startNewSession(cwd: string): string;
   finishNewSession(requestId: string): void;
-  startArchive(sessionId: string): string;
-  finishArchive(requestId: string): void;
-  startUnarchive(sessionId: string): string | undefined;
-  finishUnarchive(requestId: string): void;
+  startDeactivation(sessionId: string): string;
+  finishDeactivation(requestId: string): void;
+  startActivation(sessionId: string): string | undefined;
+  finishActivation(requestId: string): void;
 } {
   let snapshot: ClientSnapshot = {
     state: { groups: [] },
@@ -804,8 +804,8 @@ function createClientStore(): {
     errorMessage: "",
     connectionError: false,
     pendingNewSessions: new Map(),
-    pendingArchives: new Map(),
-    pendingUnarchives: new Map(),
+    pendingDeactivations: new Map(),
+    pendingActivations: new Map(),
     animated: false,
   };
   const listeners = new Set<() => void>();
@@ -854,34 +854,34 @@ function createClientStore(): {
       pendingNewSessions.delete(requestId);
       publish({ ...snapshot, pendingNewSessions });
     },
-    startArchive: (sessionId) => {
+    startDeactivation: (sessionId) => {
       const requestId = crypto.randomUUID();
-      const pendingArchives = new Map(snapshot.pendingArchives);
-      pendingArchives.set(requestId, sessionId);
-      publish({ ...snapshot, pendingArchives });
+      const pendingDeactivations = new Map(snapshot.pendingDeactivations);
+      pendingDeactivations.set(requestId, sessionId);
+      publish({ ...snapshot, pendingDeactivations });
       return requestId;
     },
-    finishArchive: (requestId) => {
-      if (!snapshot.pendingArchives.has(requestId)) return;
-      const pendingArchives = new Map(snapshot.pendingArchives);
-      pendingArchives.delete(requestId);
-      publish({ ...snapshot, pendingArchives });
+    finishDeactivation: (requestId) => {
+      if (!snapshot.pendingDeactivations.has(requestId)) return;
+      const pendingDeactivations = new Map(snapshot.pendingDeactivations);
+      pendingDeactivations.delete(requestId);
+      publish({ ...snapshot, pendingDeactivations });
     },
-    startUnarchive: (sessionId) => {
-      for (const pendingSessionId of snapshot.pendingUnarchives.values()) {
+    startActivation: (sessionId) => {
+      for (const pendingSessionId of snapshot.pendingActivations.values()) {
         if (pendingSessionId === sessionId) return undefined;
       }
       const requestId = crypto.randomUUID();
-      const pendingUnarchives = new Map(snapshot.pendingUnarchives);
-      pendingUnarchives.set(requestId, sessionId);
-      publish({ ...snapshot, pendingUnarchives });
+      const pendingActivations = new Map(snapshot.pendingActivations);
+      pendingActivations.set(requestId, sessionId);
+      publish({ ...snapshot, pendingActivations });
       return requestId;
     },
-    finishUnarchive: (requestId) => {
-      if (!snapshot.pendingUnarchives.has(requestId)) return;
-      const pendingUnarchives = new Map(snapshot.pendingUnarchives);
-      pendingUnarchives.delete(requestId);
-      publish({ ...snapshot, pendingUnarchives });
+    finishActivation: (requestId) => {
+      if (!snapshot.pendingActivations.has(requestId)) return;
+      const pendingActivations = new Map(snapshot.pendingActivations);
+      pendingActivations.delete(requestId);
+      publish({ ...snapshot, pendingActivations });
     },
   };
 }
@@ -889,8 +889,8 @@ function createClientStore(): {
 const SessionRow = memo(function SessionRow(
   props: ClientSession & {
     isDisplayed: boolean;
-    isArchiving: boolean;
-    isUnarchiving: boolean;
+    isDeactivating: boolean;
+    isActivating: boolean;
     currentDay: string;
     actions: DescriptorActions;
   },
@@ -899,8 +899,8 @@ const SessionRow = memo(function SessionRow(
     sessionDescriptor(
       props,
       props.isDisplayed ? props.sessionId : undefined,
-      props.isArchiving,
-      props.isUnarchiving,
+      props.isDeactivating,
+      props.isActivating,
     ),
     props.actions,
   );
@@ -942,7 +942,7 @@ interface SessionListMotionProps {
   container: HTMLElement;
   stateGroups: readonly ClientSessionGroup[];
   visibleGroups: readonly ClientSessionGroup[];
-  animateArchive: boolean;
+  animateSessionTransition: boolean;
   children: ReactNode;
 }
 
@@ -964,7 +964,7 @@ class SessionListMotion extends Component<SessionListMotionProps, object, ListSl
   private readonly slides = new Map<HTMLElement, Animation>();
 
   override getSnapshotBeforeUpdate(previous: SessionListMotionProps): ListSlideSnapshot {
-    const { container, stateGroups, visibleGroups, animateArchive } = this.props;
+    const { container, stateGroups, visibleGroups, animateSessionTransition } = this.props;
     if (hasSameListLayout(previous.visibleGroups, visibleGroups)) return null;
     if (
       previous.stateGroups === stateGroups ||
@@ -975,7 +975,7 @@ class SessionListMotion extends Component<SessionListMotionProps, object, ListSl
       return "snap";
     }
 
-    if (!animateArchive) {
+    if (!animateSessionTransition) {
       const previousIds = new Set(
         previous.visibleGroups.flatMap((group) =>
           group.sessions.map((session) => session.sessionId),
@@ -1078,7 +1078,7 @@ function SessionsApp({
     () =>
       snapshot.state.groups.map((group) => ({
         ...group,
-        sessions: visibleGroupSessions(group, modes.get(group.cwd) ?? "unarchived", collapsedCwds),
+        sessions: visibleGroupSessions(group, modes.get(group.cwd) ?? "active", collapsedCwds),
       })),
     [snapshot.state.groups, modes, collapsedCwds],
   );
@@ -1117,7 +1117,7 @@ function SessionsApp({
       onModeToggle: (cwd) =>
         setModes((previous) => {
           const next = new Map(previous);
-          next.set(cwd, previous.get(cwd) === "all" ? "unarchived" : "all");
+          next.set(cwd, previous.get(cwd) === "all" ? "active" : "all");
           return next;
         }),
       onGroupToggle: (cwd) =>
@@ -1134,20 +1134,20 @@ function SessionsApp({
       onWorkspaceMenuOpen: setContextMenu,
       onSessionMenuOpen: setContextMenu,
       onSessionClick: (sessionId) => bridge.postMessage({ type: "openSession", sessionId }),
-      onArchiveClick: (sessionId) => {
-        const requestId = store.startArchive(sessionId);
-        bridge.postMessage({ type: "archiveSession", sessionId, requestId });
+      onDeactivateClick: (sessionId) => {
+        const requestId = store.startDeactivation(sessionId);
+        bridge.postMessage({ type: "deactivateSession", sessionId, requestId });
       },
-      onUnarchiveClick: (sessionId) => {
-        const requestId = store.startUnarchive(sessionId);
+      onActivateClick: (sessionId) => {
+        const requestId = store.startActivation(sessionId);
         if (requestId === undefined) return;
-        bridge.postMessage({ type: "unarchiveSession", sessionId, requestId });
+        bridge.postMessage({ type: "activateSession", sessionId, requestId });
       },
     }),
     [bridge, store],
   );
 
-  const pendingUnarchiveIds = new Set(snapshot.pendingUnarchives.values());
+  const pendingActivationIds = new Set(snapshot.pendingActivations.values());
   const menuItems: ContextMenuItem[] = [];
   if (contextMenu?.kind === "workspace") {
     const { cwd } = contextMenu;
@@ -1162,7 +1162,7 @@ function SessionsApp({
       },
     );
   } else if (menuSession !== undefined) {
-    const { sessionId, isArchived, isLive } = menuSession;
+    const { sessionId, isInactive, isLive } = menuSession;
     if (isLive) {
       menuItems.push({
         label: "Reload Pi Session",
@@ -1171,10 +1171,10 @@ function SessionsApp({
     }
     menuItems.push(
       {
-        label: isArchived ? "Unarchive" : "Archive",
-        isDisabled: isArchived && pendingUnarchiveIds.has(sessionId),
+        label: isInactive ? "Activate" : "Deactivate",
+        isDisabled: isInactive && pendingActivationIds.has(sessionId),
         run: () =>
-          isArchived ? actions.onUnarchiveClick(sessionId) : actions.onArchiveClick(sessionId),
+          isInactive ? actions.onActivateClick(sessionId) : actions.onDeactivateClick(sessionId),
       },
       {
         label: "Copy Session ID",
@@ -1184,20 +1184,20 @@ function SessionsApp({
   }
 
   const pendingNewSessionCwds = new Set(snapshot.pendingNewSessions.values());
-  const pendingArchiveIds = new Set(snapshot.pendingArchives.values());
+  const pendingDeactivationIds = new Set(snapshot.pendingDeactivations.values());
   const currentDay = new Date().toDateString();
   return (
     <SessionListMotion
       container={sessionsElement}
       stateGroups={snapshot.state.groups}
       visibleGroups={visibleGroups}
-      animateArchive={snapshot.animated}
+      animateSessionTransition={snapshot.animated}
     >
       {visibleGroups.length === 0 && (
         <p className="empty">{EMPTY_LIST_MESSAGES[snapshot.loadStatus]}</p>
       )}
       {visibleGroups.map((group) => {
-        const mode = modes.get(group.cwd) ?? "unarchived";
+        const mode = modes.get(group.cwd) ?? "active";
         const header = groupDescriptor(
           { ...group, sessions: [] },
           mode,
@@ -1220,8 +1220,8 @@ function SessionsApp({
               key={session.sessionId}
               {...session}
               isDisplayed={session.sessionId === snapshot.state.displayedSessionId}
-              isArchiving={pendingArchiveIds.has(session.sessionId)}
-              isUnarchiving={pendingUnarchiveIds.has(session.sessionId)}
+              isDeactivating={pendingDeactivationIds.has(session.sessionId)}
+              isActivating={pendingActivationIds.has(session.sessionId)}
               currentDay={currentDay}
               actions={actions}
             />
@@ -1331,19 +1331,22 @@ export function initClient(bridge: ClientBridge): () => void {
       );
     }
     if (message.type === "sessions" && isClientState(message.state)) {
-      const { pendingArchives, pendingUnarchives } = store.getSnapshot();
-      // Animate while an archive or unarchive is in flight; added rows are
+      const { pendingDeactivations, pendingActivations } = store.getSnapshot();
+      // Animate while an activation or deactivation is in flight; added rows are
       // detected on the applied list in the view (SPEC "一覧更新のアニメーション").
-      store.setSessions(message.state, pendingArchives.size > 0 || pendingUnarchives.size > 0);
+      store.setSessions(
+        message.state,
+        pendingDeactivations.size > 0 || pendingActivations.size > 0,
+      );
     }
     if (message.type === "newSessionFinished" && typeof message.requestId === "string") {
       store.finishNewSession(message.requestId);
     }
-    if (message.type === "archiveFinished" && typeof message.requestId === "string") {
-      store.finishArchive(message.requestId);
+    if (message.type === "deactivateFinished" && typeof message.requestId === "string") {
+      store.finishDeactivation(message.requestId);
     }
-    if (message.type === "unarchiveFinished" && typeof message.requestId === "string") {
-      store.finishUnarchive(message.requestId);
+    if (message.type === "activateFinished" && typeof message.requestId === "string") {
+      store.finishActivation(message.requestId);
     }
     if (message.type === "workspaceAdded" && pendingAddWorkspace) {
       closeWorkspaceForm();

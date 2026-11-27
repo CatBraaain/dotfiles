@@ -24,7 +24,7 @@ const mime: Record<string, string> = {
 
 // Sample session ids from stories/demo-bridge.ts.
 const atlasCurrentId = "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10";
-const atlasArchivedId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
+const atlasInactiveId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
 const piToolsPlainId = "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72";
 const piToolsOtherId = "4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83";
 const worktreeId = "5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94";
@@ -304,7 +304,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       expect(nameWidths.current).toBe(nameWidths.withLargerIndent + 8);
       expect(await page.evaluate(() => document.scrollingElement!.scrollHeight)).toBe(384);
       await page.click(projectModeSelector);
-      await page.waitForSelector(".session-row.archived");
+      await page.waitForSelector(".session-row.inactive");
       expect(await page.evaluate(() => document.scrollingElement!.scrollHeight)).toBeGreaterThan(
         384,
       );
@@ -426,7 +426,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
 
   it("pins each workspace heading only within its group and keeps keyboard focus visible", async () => {
     const page = await openStory("sessions-sidebar--all-mode", { width: 320, height: 180 });
-    await page.locator(".session-row.archived").waitFor();
+    await page.locator(".session-row.inactive").waitFor();
     const group = page.locator('[data-group-cwd="~/projects/pi-tools"]');
     const heading = group.locator(".group-header");
     const nextHeading = group.locator("+ .group").locator(".group-header");
@@ -554,9 +554,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       );
 
       await clearBridgeMessages(page);
-      await page.click(`[data-archive="${worktreeId}"]`);
+      await page.click(`[data-deactivate="${worktreeId}"]`);
       await page.click(worktreeModeSelector);
-      await page.locator(`[data-unarchive="${worktreeId}"]`).click();
+      await page.locator(`[data-activate="${worktreeId}"]`).click();
       expect(await openSessionMessages(page)).toEqual([]);
       expect(
         await page.locator(".session-row.selected [data-session]").getAttribute("data-session"),
@@ -574,7 +574,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     "keeps row text and enabled controls readable in $theme at $width px",
     async ({ theme, width }) => {
       const page = await openStory("sessions-sidebar--all-mode", { width, height: 640 });
-      await page.waitForSelector(".session-row.archived");
+      await page.waitForSelector(".session-row.inactive");
       if (theme === "light") {
         await page.addStyleTag({
           content: `:root {
@@ -627,7 +627,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
                 ? getComputedStyle(document.body).backgroundColor
                 : buttonBackground;
             return Array.from(
-              row.querySelectorAll(".session-name, .session-timestamp, .archive, .unarchive"),
+              row.querySelectorAll(".session-name, .session-timestamp, .deactivate, .activate"),
             ).map((element) => {
               const style = getComputedStyle(element);
               const paintedBackground =
@@ -670,7 +670,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     }
   });
 
-  it("renders the publish-delay dot beside the phase icon and on archived rows", async () => {
+  it("renders the publish-delay dot beside the phase icon and on inactive rows", async () => {
     const page = await openStory("sessions-sidebar--publish-delay");
     await page.waitForSelector(".session-row");
 
@@ -684,33 +684,33 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       await page.locator(`[data-session="${atlasCurrentId}"]`).getAttribute("title"),
     ).toContain("\nRunning\nState update delayed");
 
-    // All mode: the archived row shows the dot without a phase icon.
+    // All mode: the inactive row shows the dot without a phase icon.
     await page.click(projectModeSelector);
     await page.waitForFunction(
       () => document.querySelectorAll('.session-status[data-delayed="true"]').length === 2,
     );
     expect(await page.locator(".session-delay-dot").count()).toBe(2);
     expect(
-      await page.locator('.session-row.archived .session-status[data-delayed="true"]').count(),
+      await page.locator('.session-row.inactive .session-status[data-delayed="true"]').count(),
     ).toBe(1);
     expect(
-      await page.locator(`[data-session="${atlasArchivedId}"]`).getAttribute("title"),
+      await page.locator(`[data-session="${atlasInactiveId}"]`).getAttribute("title"),
     ).toContain("\nState update delayed");
     await page.close();
   });
 
-  it("renders the sample story and operates the workspace mode toggle and archive", async () => {
+  it("renders the sample story and operates the workspace mode toggle and deactivate", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     expect(await page.locator(".session-row").count()).toBe(4);
 
     await page.click(projectModeSelector);
     await page.waitForFunction(() => document.querySelectorAll(".session-row").length === 5);
     expect(
-      await page.locator(`.session-row.archived [data-session="${atlasArchivedId}"]`).count(),
+      await page.locator(`.session-row.inactive [data-session="${atlasInactiveId}"]`).count(),
     ).toBe(1);
     expect(await page.locator(projectModeSelector).getAttribute("data-mode")).toBe("all");
-    expect(await page.locator(worktreeModeSelector).getAttribute("data-mode")).toBe("unarchived");
-    expect(await page.locator(piToolsModeSelector).getAttribute("data-mode")).toBe("unarchived");
+    expect(await page.locator(worktreeModeSelector).getAttribute("data-mode")).toBe("active");
+    expect(await page.locator(piToolsModeSelector).getAttribute("data-mode")).toBe("active");
     const groupByTitle = (title: string) =>
       page.locator(".group").filter({ has: page.locator(`.group-header[title="${title}"]`) });
     expect(await groupByTitle("~/projects/pi-tools").locator(".session-row").count()).toBe(2);
@@ -721,24 +721,24 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       2,
     );
 
-    await page.click(`[data-archive="${atlasCurrentId}"]`);
+    await page.click(`[data-deactivate="${atlasCurrentId}"]`);
     await page.waitForFunction(
-      (id) => document.querySelector(`.session-row.archived [data-session="${id}"]`) !== null,
+      (id) => document.querySelector(`.session-row.inactive [data-session="${id}"]`) !== null,
       atlasCurrentId,
     );
-    // The archived row stays visible in All mode; it disappears from the default view.
+    // The inactive row stays visible in All mode; it disappears from the default view.
     expect(await page.locator(".session-row").count()).toBe(5);
 
-    // Archived rows carry an Unarchive overlay; clicking it is the only way back.
-    expect(await page.locator(".session-row.archived [data-unarchive]").count()).toBe(2);
-    await page.click(`[data-unarchive="${atlasArchivedId}"]`);
+    // Inactive rows carry an Activate overlay; clicking it is the only way back.
+    expect(await page.locator(".session-row.inactive [data-activate]").count()).toBe(2);
+    await page.click(`[data-activate="${atlasInactiveId}"]`);
     await page.waitForFunction(
-      (id) => document.querySelector(`.session-row:not(.archived) [data-session="${id}"]`) !== null,
-      atlasArchivedId,
+      (id) => document.querySelector(`.session-row:not(.inactive) [data-session="${id}"]`) !== null,
+      atlasInactiveId,
     );
-    expect(await page.locator(".session-row.archived").count()).toBe(1);
+    expect(await page.locator(".session-row.inactive").count()).toBe(1);
 
-    // Modes are not persisted: a fresh client starts every workspace in Unarchived.
+    // Modes are not persisted: a fresh client starts every workspace in Active.
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForSelector(".session-row");
     expect(await page.locator(".session-row").count()).toBe(4);
@@ -760,7 +760,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(await page.locator("#app header [data-mode-toggle]").count()).toBe(0);
     for (const toggle of await toggles.all()) {
       expect(await toggle.isVisible()).toBe(true);
-      expect(await toggle.getAttribute("data-mode")).toBe("unarchived");
+      expect(await toggle.getAttribute("data-mode")).toBe("active");
       expect(await toggle.getAttribute("aria-label")).toBe("Show all sessions");
     }
     const toggle = page.locator(projectModeSelector);
@@ -770,11 +770,11 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     if (activation === "click") await toggle.click();
     else await toggle.press(activation);
     await expect.poll(() => toggle.getAttribute("data-mode")).toBe("all");
-    expect(await toggle.getAttribute("aria-label")).toBe("Show unarchived sessions");
+    expect(await toggle.getAttribute("aria-label")).toBe("Show active sessions");
     expect(await toggle.locator("svg").getAttribute("data-mode-icon")).toBe("all");
     expect(await toggle.boundingBox()).toEqual(before);
-    expect(await page.locator(worktreeModeSelector).getAttribute("data-mode")).toBe("unarchived");
-    expect(await page.locator(piToolsModeSelector).getAttribute("data-mode")).toBe("unarchived");
+    expect(await page.locator(worktreeModeSelector).getAttribute("data-mode")).toBe("active");
+    expect(await page.locator(piToolsModeSelector).getAttribute("data-mode")).toBe("active");
     expect(await page.locator('.group-toggle[aria-expanded="true"]').count()).toBe(4);
     expect(await page.locator(".session-row.selected").count()).toBe(1);
     expect(
@@ -790,18 +790,18 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await installBridgeMessageRecorder(page);
     const projectMode = page.locator(projectModeSelector);
     const worktreeMode = page.locator(worktreeModeSelector);
-    await page.locator(`[data-archive="${worktreeId}"]`).click();
+    await page.locator(`[data-deactivate="${worktreeId}"]`).click();
     await expect.poll(() => page.locator(`[data-session="${worktreeId}"]`).count()).toBe(0);
     await projectMode.click();
-    await expect.poll(() => page.locator(`[data-session="${atlasArchivedId}"]`).count()).toBe(1);
+    await expect.poll(() => page.locator(`[data-session="${atlasInactiveId}"]`).count()).toBe(1);
     expect(await page.locator(`[data-session="${worktreeId}"]`).count()).toBe(0);
     await worktreeMode.press("Enter");
     await expect.poll(() => page.locator(`[data-session="${worktreeId}"]`).count()).toBe(1);
     await projectMode.press("Space");
-    await expect.poll(() => page.locator(`[data-session="${atlasArchivedId}"]`).count()).toBe(0);
+    await expect.poll(() => page.locator(`[data-session="${atlasInactiveId}"]`).count()).toBe(0);
     expect(await page.locator(`[data-session="${worktreeId}"]`).count()).toBe(1);
     await refreshSessions(page);
-    expect(await projectMode.getAttribute("data-mode")).toBe("unarchived");
+    expect(await projectMode.getAttribute("data-mode")).toBe("active");
     expect(await worktreeMode.getAttribute("data-mode")).toBe("all");
     await page.locator(".new-workspace").click();
     await page.locator("#workspace-path").fill("/workspace/another");
@@ -809,13 +809,13 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await expect.poll(() => page.locator(".group-header").count()).toBe(5);
     expect(
       await page.locator('[data-mode-toggle="/workspace/another"]').getAttribute("data-mode"),
-    ).toBe("unarchived");
-    expect(await projectMode.getAttribute("data-mode")).toBe("unarchived");
+    ).toBe("active");
+    expect(await projectMode.getAttribute("data-mode")).toBe("active");
     expect(await worktreeMode.getAttribute("data-mode")).toBe("all");
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForSelector(".session-row");
-    expect(await projectMode.getAttribute("data-mode")).toBe("unarchived");
-    expect(await worktreeMode.getAttribute("data-mode")).toBe("unarchived");
+    expect(await projectMode.getAttribute("data-mode")).toBe("active");
+    expect(await worktreeMode.getAttribute("data-mode")).toBe("active");
     await page.close();
   });
 
@@ -825,13 +825,13 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     ["click", 720],
     ["Enter", 720],
   ] as const)(
-    "archives directly once with %s at %ipx without confirmation",
+    "deactivates directly once with %s at %ipx without confirmation",
     async (activation, width) => {
       const page = await openStory("sessions-sidebar--sample-sessions", { width, height: 640 });
       await installBridgeMessageRecorder(page);
-      const archive = page.locator(`[data-archive="${atlasCurrentId}"]`);
-      if (activation === "click") await archive.click();
-      else await archive.press(activation);
+      const deactivate = page.locator(`[data-deactivate="${atlasCurrentId}"]`);
+      if (activation === "click") await deactivate.click();
+      else await deactivate.press(activation);
 
       expect(await page.locator("#confirmation-dialog").isHidden()).toBe(true);
       await expect.poll(() => page.locator(`[data-session="${atlasCurrentId}"]`).count()).toBe(0);
@@ -840,7 +840,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
           () => (window as Window & { __bridgeMessages?: unknown[] }).__bridgeMessages,
         ),
       ).toEqual([
-        { type: "archiveSession", sessionId: atlasCurrentId, requestId: expect.any(String) },
+        { type: "deactivateSession", sessionId: atlasCurrentId, requestId: expect.any(String) },
       ]);
       expect(await page.locator(".session-row.selected").count()).toBe(0);
       expect(await openSessionMessages(page)).toEqual([]);
@@ -850,29 +850,29 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
 
   it("offers one enabled row action and keeps IDs in the row hints", async () => {
     const page = await openStory("sessions-sidebar--all-mode");
-    await page.waitForSelector(".session-row.archived");
+    await page.waitForSelector(".session-row.inactive");
     expect(await page.locator("[data-copy], [data-lock], [data-locked]").count()).toBe(0);
     const rows = page.locator(".session-row");
     for (const row of await rows.all()) {
       const button = row.locator(".session-button");
       const id = await button.getAttribute("data-session");
       expect(await button.getAttribute("title")).toContain(id);
-      const action = row.locator("[data-archive], [data-unarchive]");
+      const action = row.locator("[data-deactivate], [data-activate]");
       expect(await action.count()).toBe(1);
       expect(await action.isEnabled()).toBe(true);
     }
     await installBridgeMessageRecorder(page);
     await page.locator(piToolsModeSelector).click();
-    const archive = page.locator('[data-archive="4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83"]');
-    await archive.focus();
+    const deactivate = page.locator('[data-deactivate="4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83"]');
+    await deactivate.focus();
     await page.keyboard.press("Enter");
-    await page.locator('[data-unarchive="4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83"]').waitFor();
+    await page.locator('[data-activate="4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83"]').waitFor();
     expect(await openSessionMessages(page)).toEqual([]);
     expect(await page.locator(".session-row.selected").count()).toBe(1);
     await page.close();
   });
 
-  it("treats modifier clicks like plain clicks and archives a single row", async () => {
+  it("treats modifier clicks like plain clicks and deactivates a single row", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
 
@@ -899,7 +899,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       await page.locator(".session-row.selected [data-session]").getAttribute("data-session"),
     ).toBe(atlasCurrentId);
 
-    await page.click(`[data-archive="${worktreeId}"]`);
+    await page.click(`[data-deactivate="${worktreeId}"]`);
     await page.waitForFunction(() => document.querySelectorAll(".session-row").length === 3);
     expect(await page.locator(`[data-session="${piToolsOtherId}"]`).count()).toBe(1);
     expect(await page.locator(`[data-session="${worktreeId}"]`).count()).toBe(0);
@@ -915,14 +915,14 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(await page.locator(".session-row.selected").count()).toBe(1);
 
     await page.click(projectModeSelector, { modifiers: ["Control"] });
-    expect(await page.locator(".session-row.archived.selected").count()).toBe(0);
+    expect(await page.locator(".session-row.inactive.selected").count()).toBe(0);
     await page.close();
   });
 
-  it("archives a single row through its own Archive regardless of the displayed session", async () => {
+  it("deactivates a single row through its own Deactivate regardless of the displayed session", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
 
-    await page.click(`[data-archive="${worktreeId}"]`);
+    await page.click(`[data-deactivate="${worktreeId}"]`);
 
     await page.waitForFunction(
       (gone) => !document.querySelector(`[data-session="${gone}"]`),
@@ -945,7 +945,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
           const timestamp = row.querySelector(".session-timestamp")!;
           return {
             phase: slot.getAttribute("data-state"),
-            archived: slot.getAttribute("data-archived"),
+            inactive: slot.getAttribute("data-inactive"),
             childCount: slot.childElementCount,
             slotWidth: slot.getBoundingClientRect().width,
             slotHeight: slot.getBoundingClientRect().height,
@@ -973,26 +973,26 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       const waitingUser = statuses.find((status) => status.phase === "waiting-user")!;
       expect(waitingUser.childCount).toBe(0);
       expect(waitingUser.title).toContain("Waiting for user");
-      const archived = statuses.find((status) => status.archived === "true")!;
-      expect(archived.childCount).toBe(0);
-      expect(archived.nameColor).toBe("rgb(157, 157, 157)");
-      expect(archived.timestampColor).toBe(archived.nameColor);
+      const inactive = statuses.find((status) => status.inactive === "true")!;
+      expect(inactive.childCount).toBe(0);
+      expect(inactive.nameColor).toBe("rgb(157, 157, 157)");
+      expect(inactive.timestampColor).toBe(inactive.nameColor);
       const phaseAbsent = statuses.find(
-        (status) => status.phase === null && status.archived === "false",
+        (status) => status.phase === null && status.inactive === "false",
       )!;
       expect(phaseAbsent.childCount).toBe(0);
-      await page.locator(`[data-unarchive="${atlasArchivedId}"]`).click();
-      await page.locator(`[data-archive="${atlasArchivedId}"]`).waitFor();
+      await page.locator(`[data-activate="${atlasInactiveId}"]`).click();
+      await page.locator(`[data-deactivate="${atlasInactiveId}"]`).waitFor();
       const restoredStatus = await page
-        .locator(`[data-session="${atlasArchivedId}"] .session-status`)
+        .locator(`[data-session="${atlasInactiveId}"] .session-status`)
         .evaluate((slot) => ({
-          archived: slot.getAttribute("data-archived"),
+          inactive: slot.getAttribute("data-inactive"),
           phase: slot.getAttribute("data-state"),
           childCount: slot.childElementCount,
           slotWidth: slot.getBoundingClientRect().width,
         }));
       expect(restoredStatus).toEqual({
-        archived: "false",
+        inactive: "false",
         phase: null,
         childCount: 0,
         slotWidth: 12,
@@ -1055,7 +1055,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--all-mode`, {
           waitUntil: "networkidle",
         });
-        await page.waitForSelector(".session-row.archived");
+        await page.waitForSelector(".session-row.inactive");
         await installBridgeMessageRecorder(page);
         const longName = "LongSessionName".repeat(8);
         await page.evaluate((displayName) => {
@@ -1094,7 +1094,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
             const button = row.querySelector<HTMLButtonElement>(".session-button")!;
             const name = row.querySelector<HTMLElement>(".session-name")!;
             const timestamp = row.querySelector<HTMLElement>(".session-timestamp")!;
-            const control = row.querySelector<HTMLElement>(".archive, .unarchive")!;
+            const control = row.querySelector<HTMLElement>(".deactivate, .activate")!;
             const rowBox = row.getBoundingClientRect();
             const timestampBox = timestamp.getBoundingClientRect();
             const controlBox = control.getBoundingClientRect();
@@ -1148,12 +1148,12 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
           { type: "openSession", sessionId: atlasCurrentId },
         ]);
         await clearBridgeMessages(page);
-        await page.locator(`[data-archive="${piToolsOtherId}"]`).click();
+        await page.locator(`[data-deactivate="${piToolsOtherId}"]`).click();
         await expect.poll(() => page.locator(`[data-session="${piToolsOtherId}"]`).count()).toBe(0);
         expect(await openSessionMessages(page)).toEqual([]);
-        await page.locator(`[data-unarchive="${atlasArchivedId}"]`).click();
+        await page.locator(`[data-activate="${atlasInactiveId}"]`).click();
         await expect
-          .poll(() => page.locator(`[data-archive="${atlasArchivedId}"]`).count())
+          .poll(() => page.locator(`[data-deactivate="${atlasInactiveId}"]`).count())
           .toBe(1);
         expect(await openSessionMessages(page)).toEqual([]);
         console.log(
@@ -1181,7 +1181,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       const timestampElement = rowElement.querySelector(".session-timestamp")!;
       const timestamp = timestampElement.getBoundingClientRect();
       const dot = rowElement.querySelector(".session-status")!.getBoundingClientRect();
-      const archive = rowElement.querySelector(".archive")!.getBoundingClientRect();
+      const deactivate = rowElement.querySelector(".deactivate")!.getBoundingClientRect();
       return {
         rowHeight: row.height,
         rowWidth: row.width,
@@ -1197,10 +1197,10 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         timestampSize: getComputedStyle(timestampElement).fontSize,
         dotWidth: dot.width,
         dotHeight: dot.height,
-        archiveRight: archive.right,
-        archiveTop: archive.top,
-        archiveBottom: archive.bottom,
-        controls: Array.from(rowElement.querySelectorAll(".archive")).map((control) => {
+        deactivateRight: deactivate.right,
+        deactivateTop: deactivate.top,
+        deactivateBottom: deactivate.bottom,
+        controls: Array.from(rowElement.querySelectorAll(".deactivate")).map((control) => {
           const box = control.getBoundingClientRect();
           const icon = control.querySelector("svg")!.getBoundingClientRect();
           return {
@@ -1220,20 +1220,20 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(boxes.controls).toEqual([{ width: 24, height: 24, iconWidth: 12, iconHeight: 12 }]);
     expect(boxes.buttonWidth).toBeCloseTo(boxes.rowWidth, 1);
     expect(boxes.buttonRight).toBeCloseTo(boxes.rowRight, 1);
-    expect(boxes.timestampRight).toBeLessThan(boxes.archiveRight);
+    expect(boxes.timestampRight).toBeLessThan(boxes.deactivateRight);
     expect(boxes.rowRight - boxes.timestampRight).toBeCloseTo(36, 1);
     for (const overlay of [
       [boxes.timestampTop, boxes.timestampBottom],
-      [boxes.archiveTop, boxes.archiveBottom],
+      [boxes.deactivateTop, boxes.deactivateBottom],
     ]) {
       expect(overlay[0]).toBeGreaterThanOrEqual(boxes.rowTop);
       expect(overlay[1]).toBeLessThanOrEqual(boxes.rowBottom);
     }
-    expect(boxes.rowRight - boxes.archiveRight).toBeLessThanOrEqual(8);
+    expect(boxes.rowRight - boxes.deactivateRight).toBeLessThanOrEqual(8);
     await page.locator(".session-button").first().focus();
     await page.keyboard.press("Tab");
-    const focusedArchive = await page
-      .locator(".archive")
+    const focusedDeactivate = await page
+      .locator(".deactivate")
       .first()
       .evaluate((control) => ({
         focused: control === document.activeElement,
@@ -1241,7 +1241,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         outlineWidth: getComputedStyle(control).outlineWidth,
         radius: getComputedStyle(control).borderRadius,
       }));
-    expect(focusedArchive).toEqual({
+    expect(focusedDeactivate).toEqual({
       focused: true,
       focusVisible: true,
       outlineWidth: "2px",
@@ -1403,7 +1403,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForSelector(".session-row");
     expect(await disclosure.getAttribute("aria-expanded")).toBe("true");
-    expect(await page.locator(projectModeSelector).getAttribute("data-mode")).toBe("unarchived");
+    expect(await page.locator(projectModeSelector).getAttribute("data-mode")).toBe("active");
     expect(await group.locator(".session-row").count()).toBe(1);
     await page.close();
   });
@@ -1891,9 +1891,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         await page.evaluate(() => window.dispatchEvent(new Event("blur")));
       await expect.poll(() => page.getByRole("menu").count()).toBe(0);
       expect(await header.locator(".group-toggle").getAttribute("aria-expanded")).toBe("true");
-      expect(await header.locator(".group-mode-toggle").getAttribute("data-mode")).toBe(
-        "unarchived",
-      );
+      expect(await header.locator(".group-mode-toggle").getAttribute("data-mode")).toBe("active");
       expect(
         await page.locator(".session-row.selected [data-session]").getAttribute("data-session"),
       ).toBe(atlasCurrentId);
@@ -2001,9 +1999,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         expect(await page.getByRole("menu").count()).toBe(0);
         expect(await trigger.evaluate((item) => item === document.activeElement)).toBe(true);
         expect(await header.locator(".group-toggle").getAttribute("aria-expanded")).toBe("true");
-        expect(await header.locator(".group-mode-toggle").getAttribute("data-mode")).toBe(
-          "unarchived",
-        );
+        expect(await header.locator(".group-mode-toggle").getAttribute("data-mode")).toBe("active");
       }
       expect(
         await page.evaluate(
@@ -2014,7 +2010,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     },
   );
 
-  it("keeps the displayed session's mark across collapsing and archiving other rows", async () => {
+  it("keeps the displayed session's mark across collapsing and deactivating other rows", async () => {
     const page = await openStory("sessions-sidebar--sample-sessions");
     await installBridgeMessageRecorder(page);
     const group = page
@@ -2033,7 +2029,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await expect.poll(() => page.locator(".session-row.selected").count()).toBe(1);
     await disclosure.click();
     await expect.poll(() => disclosure.getAttribute("aria-expanded")).toBe("false");
-    await page.locator(`[data-archive="${worktreeId}"]`).click();
+    await page.locator(`[data-deactivate="${worktreeId}"]`).click();
     await expect.poll(() => page.locator(`[data-session="${worktreeId}"]`).count()).toBe(0);
     expect(await disclosure.getAttribute("aria-expanded")).toBe("false");
     await disclosure.click();
@@ -2050,7 +2046,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it("keeps empty Unarchived group headings and modes without guidance text", async () => {
+  it("keeps empty Active group headings and modes without guidance text", async () => {
     const page = await browser!.newPage();
     await page.goto(`${baseUrl}/iframe.html?path=/story/sessions-sidebar--empty-sessions`, {
       waitUntil: "networkidle",
@@ -2067,15 +2063,15 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await historyToggle.press("Enter");
     await page.waitForSelector(".session-row");
     expect(await page.locator(".session-row").count()).toBe(2);
-    expect(await page.locator(".session-row.archived").count()).toBe(2);
-    expect(await page.locator(worktreeModeSelector).getAttribute("data-mode")).toBe("unarchived");
-    expect(await page.locator(piToolsModeSelector).getAttribute("data-mode")).toBe("unarchived");
+    expect(await page.locator(".session-row.inactive").count()).toBe(2);
+    expect(await page.locator(worktreeModeSelector).getAttribute("data-mode")).toBe("active");
+    expect(await page.locator(piToolsModeSelector).getAttribute("data-mode")).toBe("active");
     await page.locator(piToolsModeSelector).click();
-    expect(await page.locator(".session-row.archived").count()).toBe(4);
+    expect(await page.locator(".session-row.inactive").count()).toBe(4);
     await page.locator(worktreeModeSelector).press("Space");
-    expect(await page.locator(".session-row.archived").count()).toBe(5);
-    const archivedHints = await page
-      .locator(".session-row.archived .session-button")
+    expect(await page.locator(".session-row.inactive").count()).toBe(5);
+    const inactiveHints = await page
+      .locator(".session-row.inactive .session-button")
       .evaluateAll((buttons) =>
         buttons.map((button) => ({
           hint: button.getAttribute("title"),
@@ -2083,7 +2079,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
           id: button.getAttribute("data-session"),
         })),
       );
-    for (const { hint, name, id } of archivedHints) {
+    for (const { hint, name, id } of inactiveHints) {
       expect(hint).toBe(`${name}\n${id}`);
     }
     const emptyMode = page.locator('[data-mode-toggle="~/projects/agenda"]');

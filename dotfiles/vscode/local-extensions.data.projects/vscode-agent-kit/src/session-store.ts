@@ -24,7 +24,7 @@ export async function sessionFileExists(filePath: string): Promise<boolean> {
 /**
  * Snapshot of the session list: live sessions from `pi-mux list` merged over
  * saved conversations from `pi-mux history`. Live entries win on conflicts.
- * A session counts as archived when no normal live Pi carries its ID.
+ * A session counts as inactive when no normal live Pi carries its ID.
  */
 export async function listSessionSnapshot(
   history: readonly PiMuxHistoryEntry[],
@@ -67,7 +67,7 @@ export async function listSessionSnapshot(
   return {
     sessions,
     registeredCwds,
-    archivedIds: new Set(
+    inactiveIds: new Set(
       sessions
         .filter(({ sessionId }) => !normalIds.has(sessionId))
         .map(({ sessionId }) => sessionId),

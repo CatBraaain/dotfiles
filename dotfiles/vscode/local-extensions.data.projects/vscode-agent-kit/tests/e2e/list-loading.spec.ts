@@ -109,7 +109,7 @@ test(
         .flatMap((group) => group.sessions)
         .find((session) => session.sessionId === host.sessions.A.id);
       if (!selected) throw new Error("Missing controlled saved session");
-      selected.isArchived = false;
+      selected.isInactive = false;
       await receive({ type: "sessions", state });
       await expect(
         content.locator(".group-header").describe("Registered work folders"),

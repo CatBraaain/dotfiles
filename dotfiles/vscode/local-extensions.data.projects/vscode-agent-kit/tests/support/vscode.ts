@@ -241,7 +241,7 @@ export class VSCodeFixture {
     const modeToggle = frame
       .locator(`[data-mode-toggle="${session.cwd}"]`)
       .describe(`${key} workspace All toggle`);
-    if ((await modeToggle.getAttribute("data-mode")) === "unarchived")
+    if ((await modeToggle.getAttribute("data-mode")) === "active")
       await modeToggle.click({ steps: 15 });
     await row.locator(".session-name").describe(`${key} session name`).click({ steps: 15 });
   }
@@ -269,17 +269,17 @@ export class VSCodeFixture {
     const mode = frame
       .locator(`[data-mode-toggle="${session.cwd}"]`)
       .describe(`${key} workspace All toggle`);
-    if ((await mode.getAttribute("data-mode")) === "unarchived") await mode.click();
+    if ((await mode.getAttribute("data-mode")) === "active") await mode.click();
     const row = frame
       .locator(".session-row")
       .filter({ has: frame.locator(`[data-session="${session.id}"]`) })
       .describe(`${key} conversation`);
     await expect(row).toBeVisible();
-    const unarchive = row
-      .locator(`[data-unarchive="${session.id}"]`)
+    const activate = row
+      .locator(`[data-activate="${session.id}"]`)
       .describe(`${key} explicit normal open`);
-    if (await unarchive.count()) await unarchive.click({ steps: 15 });
-    await expect(row).not.toHaveClass(/archived/);
+    if (await activate.count()) await activate.click({ steps: 15 });
+    await expect(row).not.toHaveClass(/inactive/);
   }
 
   async expectPiVisible(cwd?: string): Promise<void> {

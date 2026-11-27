@@ -54,13 +54,13 @@ test(
         const toggle = heading.locator("[data-mode-toggle]").describe(`${key} workspace mode`);
         await expect(toggle).toBeVisible();
         await expect(toggle).toHaveAttribute("data-mode-toggle", host.sessions[key].cwd);
-        await expect(toggle).toHaveAttribute("data-mode", "unarchived");
+        await expect(toggle).toHaveAttribute("data-mode", "active");
         await expect(frame.getByText(host.sessions[key].cwd, { exact: true })).toHaveCount(0);
       }
       const emptyGroup = frame
         .locator("section.group")
         .filter({ has: frame.getByTitle(host.sessions.B.cwd, { exact: true }) })
-        .describe("Empty B Unarchived group");
+        .describe("Empty B Active group");
       await expect(emptyGroup.locator(".session-row")).toHaveCount(0);
       await expect(emptyGroup.locator(`[data-session="${host.sessions.B.id}"]`)).toHaveCount(0);
       await expect(emptyGroup.locator(".empty")).toHaveCount(0);
@@ -113,12 +113,12 @@ test(
         host.page.getByRole("button", { name: "Reload All Pi Sessions", exact: true }),
       ).toHaveCount(1);
       await expect(frame.locator(".session-scrollbar")).toHaveCSS("width", "12px");
-      await testInfo.attach("Unarchived（切替前）", {
-        body: await host.page.screenshot({ path: testInfo.outputPath("unarchived.png") }),
+      await testInfo.attach("Active（切替前）", {
+        body: await host.page.screenshot({ path: testInfo.outputPath("active.png") }),
         contentType: "image/png",
       });
     });
-    await test.step("Choose All for B while A stays Unarchived", async () => {
+    await test.step("Choose All for B while A stays Active", async () => {
       const frame = await host.sessionFrame();
       const group = frame
         .locator("section.group")
@@ -129,7 +129,7 @@ test(
         .click({ steps: 15 });
       await expect(frame.locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`)).toHaveAttribute(
         "data-mode",
-        "unarchived",
+        "active",
       );
       await expect(group.locator("[data-mode-toggle]")).toHaveAttribute("data-mode", "all");
       await expect(
@@ -148,7 +148,7 @@ test(
         .locator("section.group")
         .filter({ has: frame.getByTitle(host.sessions.B.cwd, { exact: true }) });
       const disclosure = group.getByRole("button", { name: "project-b", exact: true });
-      const mode = group.getByRole("button", { name: "Show unarchived sessions" });
+      const mode = group.getByRole("button", { name: "Show active sessions" });
       const newSession = group.getByRole("button", { name: "New session in project-b" });
       const row = group.locator(`[data-session="${host.sessions.B.id}"]`);
 
@@ -605,7 +605,7 @@ test(
     await test.step("Delete only the dummy saved session and observe its automatic removal", async () => {
       const frame = await host.sessionFrame();
       const mode = frame.locator(`[data-mode-toggle="${host.sessions.Deleted.cwd}"]`);
-      if ((await mode.getAttribute("data-mode")) === "unarchived") await mode.click();
+      if ((await mode.getAttribute("data-mode")) === "active") await mode.click();
       const row = frame
         .locator(`[data-session="${host.sessions.Deleted.id}"]`)
         .describe("Deleted saved conversation");
@@ -743,7 +743,7 @@ test.describe("First assistant response through a loopback fixture provider", ()
         ).toContainText(FIXTURE_REPLY);
       });
 
-      await test.step("Find the unarchived selected row without Refresh and match its public Terminal session", async () => {
+      await test.step("Find the active selected row without Refresh and match its public Terminal session", async () => {
         const frame = await host.sessionFrame();
         const row = frame
           .locator(".session-row")
@@ -751,10 +751,10 @@ test.describe("First assistant response through a loopback fixture provider", ()
           .describe("Automatically detected new conversation");
         await expect(frame.locator(`[data-mode-toggle="${folder}"]`)).toHaveAttribute(
           "data-mode",
-          "unarchived",
+          "active",
         );
         await expect(row).toBeVisible();
-        await expect(row).not.toHaveClass(/archived/);
+        await expect(row).not.toHaveClass(/inactive/);
         await expect(row).toHaveClass(/selected/);
         await expect(frame.locator(".session-row.selected")).toHaveCount(1);
         await expect
@@ -1239,7 +1239,7 @@ test(
 );
 
 test(
-  "Archives directly, stops only its Pi and reopens the saved conversation after Unarchive",
+  "Deactivates directly, stops only its Pi and reopens the saved conversation after Activate",
   { annotation: { type: "spec", description: "E2E-13" } },
   async ({ host }, testInfo) => {
     testInfo.setTimeout(150_000);
@@ -1262,7 +1262,7 @@ test(
         .describe("Session row");
     let initialA!: ReturnType<VSCodeFixture["piProcesses"]>[number];
     let initialB!: ReturnType<VSCodeFixture["piProcesses"]>[number];
-    let unarchivedA!: ReturnType<VSCodeFixture["piProcesses"]>[number];
+    let activeA!: ReturnType<VSCodeFixture["piProcesses"]>[number];
     let temporaryA!: ReturnType<VSCodeFixture["piProcesses"]>[number];
     let sourceA = "";
     let sourceB = "";
@@ -1289,7 +1289,7 @@ test(
             };
             return viewedAt === null ? 0 : Date.parse(viewedAt);
           },
-          { message: "A's latest selection is recorded before taking the Archive baseline" },
+          { message: "A's latest selection is recorded before taking the Deactivate baseline" },
         )
         .toBeGreaterThanOrEqual(selectingAAtMs);
       sourceA = readFileSync(host.sessions.A.session, "utf8");
@@ -1308,13 +1308,13 @@ test(
         rowIn(frame, host.sessions.Deleted.id).describe("Other running row in A's workspace"),
       ).toBeVisible();
     });
-    await test.step("Archive directly, close the displayed tab without switching and view the saved row in All", async () => {
+    await test.step("Deactivate directly, close the displayed tab without switching and view the saved row in All", async () => {
       const frame = await host.sessionFrame();
       await rowIn(frame, aId)
-        .locator(`[data-archive="${aId}"]`)
-        .describe("A row Archive button")
+        .getByRole("button", { name: "Deactivate", exact: true })
+        .describe("A row Deactivate button")
         .click({ steps: 15 });
-      await expect(frame.getByRole("dialog").describe("No Archive confirmation")).toBeHidden();
+      await expect(frame.getByRole("dialog").describe("No Deactivate confirmation")).toBeHidden();
       await expect(rowIn(frame, aId)).toHaveCount(0);
       await expect.poll(() => existsSync(`/proc/${initialA.pid}`)).toBe(false);
       host.piMux(["restore"]);
@@ -1340,12 +1340,12 @@ test(
         .describe("A workspace All toggle")
         .click({ steps: 15 });
       const row = rowIn(frame, aId);
-      await expect(row).toHaveClass(/archived/);
+      await expect(row).toHaveClass(/inactive/);
       await expect(
         frame.locator(".session-row.selected").describe("Selected session rows in All"),
       ).toHaveCount(0);
-      await expect(row.locator(`[data-unarchive="${aId}"]`)).toBeVisible();
-      const status = row.locator(".session-status").describe("Archived A empty status slot");
+      await expect(row.locator(`[data-activate="${aId}"]`)).toBeVisible();
+      const status = row.locator(".session-status").describe("Inactive A empty status slot");
       await expect(status.locator("*")).toHaveCount(0);
       await expect(status).not.toHaveAttribute("data-state");
       await expect(status).toHaveCSS("width", "12px");
@@ -1358,17 +1358,17 @@ test(
         .locator(".part.sidebar .title-label")
         .describe("Native Sessions title")
         .hover();
-      await testInfo.attach("Archive 後（アーカイブ済み行）", {
-        body: await host.page.screenshot({ path: testInfo.outputPath("archived.png") }),
+      await testInfo.attach("After Deactivate (Inactive row)", {
+        body: await host.page.screenshot({ path: testInfo.outputPath("inactive.png") }),
         contentType: "image/png",
       });
     });
-    await test.step("Browse archived A temporarily without adding it to the restore snapshot", async () => {
+    await test.step("Browse inactive A temporarily without adding it to the restore snapshot", async () => {
       await host.selectSession("A");
       await host.expectNativeDisplay("A");
       temporaryA = host.sessionRuntime("A")!;
       const frame = await host.sessionFrame();
-      await expect(rowIn(frame, aId)).toHaveClass(/archived/);
+      await expect(rowIn(frame, aId)).toHaveClass(/inactive/);
       const workspaces = JSON.parse(
         execFileSync(join(host.directory, "bin/pi-mux"), ["list", "--active", "--json"], {
           env: host.env,
@@ -1386,15 +1386,15 @@ test(
       expect(host.sessionRuntime("A")?.pid).toBe(temporaryA.pid);
       expect(aIsListed()).toBe(false);
     });
-    await test.step("Unarchive the existing temporary Pi through normal open", async () => {
+    await test.step("Activate the existing temporary Pi through normal open", async () => {
       const frame = await host.sessionFrame();
       await rowIn(frame, aId)
-        .locator(`[data-unarchive="${aId}"]`)
-        .describe("Archived A row Unarchive button")
+        .getByRole("button", { name: "Activate", exact: true })
+        .describe("Inactive A row Activate button")
         .click({ steps: 15 });
       const row = rowIn(frame, aId);
-      await expect(row).not.toHaveClass(/archived/);
-      await expect(row.locator(`[data-archive="${aId}"]`)).toBeVisible();
+      await expect(row).not.toHaveClass(/inactive/);
+      await expect(row.locator(`[data-deactivate="${aId}"]`)).toBeVisible();
       const status = row
         .locator(".session-status")
         .describe("Restored A waiting-for-user status slot");
@@ -1409,25 +1409,25 @@ test(
       await expect(
         host.page
           .getByRole("textbox", { name: /^Terminal [0-9]+/ })
-          .describe("Unarchived Pi command input"),
+          .describe("Active Pi command input"),
       ).toBeFocused();
-      unarchivedA = host.piProcesses().find((entry) => entry.target === initialA.target)!;
-      expect(unarchivedA.pid).toBe(temporaryA.pid);
-      expect(unarchivedA.pid).not.toBe(initialA.pid);
+      activeA = host.piProcesses().find((entry) => entry.target === initialA.target)!;
+      expect(activeA.pid).toBe(temporaryA.pid);
+      expect(activeA.pid).not.toBe(initialA.pid);
       expect(existsSync(`/proc/${initialA.pid}`)).toBe(false);
       expect(
-        host.tmux(["display-message", "-p", "-t", unarchivedA.target, "#{pane_start_command}"]),
+        host.tmux(["display-message", "-p", "-t", activeA.target, "#{pane_start_command}"]),
       ).toContain(host.sessions.A.session);
       expect(readFileSync(host.sessions.A.session, "utf8").startsWith(sourceA)).toBe(true);
       expect(readFileSync(host.sessions.B.session, "utf8")).toBe(sourceB);
       expect(host.listWorkspaces().some(({ cwd }) => cwd === host.sessions.A.cwd)).toBe(true);
-      await testInfo.attach("Unarchive 後（未アーカイブ・再開表示）", {
-        body: await host.page.screenshot({ path: testInfo.outputPath("unarchived.png") }),
+      await testInfo.attach("After Activate (Active row and resumed conversation)", {
+        body: await host.page.screenshot({ path: testInfo.outputPath("active.png") }),
         contentType: "image/png",
       });
       await frame
         .locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`)
-        .describe("A workspace Unarchived toggle")
+        .describe("A workspace Active toggle")
         .click({ steps: 15 });
       await expect(
         frame.locator(`[data-session="${aId}"]`).describe("A session back in the default view"),
@@ -1437,8 +1437,8 @@ test(
       await host.selectSession("A");
       await host.expectNativeDisplay("A");
       const resumed = host.piProcesses().find((entry) => entry.target === initialA.target)!;
-      // the Unarchive already started this Pi: the selection must not start it again
-      expect(resumed.pid).toBe(unarchivedA.pid);
+      // the Activate already started this Pi: the selection must not start it again
+      expect(resumed.pid).toBe(activeA.pid);
       expect(resumed.pid).not.toBe(initialA.pid);
       expect(
         host.tmux(["display-message", "-p", "-t", resumed.target, "#{pane_start_command}"]),
@@ -1450,7 +1450,7 @@ test(
       expect(readFileSync(host.sessions.B.session, "utf8")).toBe(sourceB);
       for (const [cwd, before] of Object.entries(host.gitBefore))
         expect(host.gitState(cwd)).toBe(before);
-      await testInfo.attach("Archive runtime and resume evidence", {
+      await testInfo.attach("Deactivate runtime and resume evidence", {
         body: JSON.stringify({
           initialA,
           initialB,
@@ -1461,12 +1461,10 @@ test(
         contentType: "application/json",
       });
     });
-    await test.step("Archive background A while keeping B and a shell in the same tmux session", async () => {
+    await test.step("Deactivate background A while keeping B and a shell in the same tmux session", async () => {
       await host.selectSession("B");
       await host.expectNativeDisplay("B");
-      const aPane = host
-        .tmux(["display-message", "-p", "-t", unarchivedA.target, "#{pane_id}"])
-        .trim();
+      const aPane = host.tmux(["display-message", "-p", "-t", activeA.target, "#{pane_id}"]).trim();
       const bPane = host
         .tmux(["display-message", "-p", "-t", initialB.target, "#{pane_id}"])
         .trim();
@@ -1487,19 +1485,19 @@ test(
         ])
         .trim()
         .split("\t");
-      expect(host.piProcesses().find((entry) => entry.pid === unarchivedA.pid)?.target).toBe(
+      expect(host.piProcesses().find((entry) => entry.pid === activeA.pid)?.target).toBe(
         initialB.target,
       );
       const frame = await host.sessionFrame();
       const displayPid = host.snapshot().terminals.find((terminal) => terminal.owned)!.pid;
       await rowIn(frame, aId)
-        .locator(`[data-archive="${aId}"]`)
-        .describe("Background A Archive")
+        .locator(`[data-deactivate="${aId}"]`)
+        .describe("Background A Deactivate")
         .click();
       await expect(
-        frame.getByRole("dialog").describe("No background Archive confirmation"),
+        frame.getByRole("dialog").describe("No background Deactivate confirmation"),
       ).toBeHidden();
-      await expect(rowIn(frame, aId)).toHaveClass(/archived/);
+      await expect(rowIn(frame, aId)).toHaveClass(/inactive/);
       await expect(
         frame
           .locator(`.session-row.selected [data-session="${host.sessions.B.id}"]`)
@@ -1507,8 +1505,8 @@ test(
       ).toBeVisible();
       expect(host.snapshot().terminals.find((terminal) => terminal.owned)?.pid).toBe(displayPid);
       expect(host.piProcesses().some((entry) => entry.pid === initialB.pid)).toBe(true);
-      await expect.poll(() => existsSync(`/proc/${unarchivedA.pid}`)).toBe(false);
-      expect(host.piProcesses().some((entry) => entry.pid === unarchivedA.pid)).toBe(false);
+      await expect.poll(() => existsSync(`/proc/${activeA.pid}`)).toBe(false);
+      expect(host.piProcesses().some((entry) => entry.pid === activeA.pid)).toBe(false);
       expect(host.tmux(["list-panes", "-a", "-F", "#{pane_id}"]).trim().split("\n")).toContain(
         shellPane,
       );
@@ -1529,7 +1527,7 @@ test(
 );
 
 test(
-  "Shows execution phase changes for live unarchived sessions",
+  "Shows execution phase changes for live active sessions",
   {
     annotation: [
       { type: "spec", description: "E2E-14" },
@@ -1595,7 +1593,7 @@ test(
           .describe("Shared workspace group"),
       ).toHaveCount(1);
       const mode = frame.locator(`[data-mode-toggle="${workspaceCwd}"]`);
-      if ((await mode.getAttribute("data-mode")) === "unarchived") await mode.click();
+      if ((await mode.getAttribute("data-mode")) === "active") await mode.click();
       await expect(
         frame.locator(".session-row").describe("Four prepared conversations"),
       ).toHaveCount(4);
@@ -1609,7 +1607,7 @@ test(
       const frame = await host.sessionFrame();
       for (const toggle of await frame.locator(".group-header [data-mode-toggle]").all()) {
         if ((await toggle.getAttribute("data-mode")) === "all") {
-          await toggle.describe("Workspace Unarchived toggle").click({ steps: 15 });
+          await toggle.describe("Workspace Active toggle").click({ steps: 15 });
         }
       }
     });
@@ -1626,7 +1624,7 @@ test(
         .describe(`Live ${key} session row`);
       const status = row.locator(".session-status").describe(`${key} ${state} status slot`);
       await expect(row).toBeVisible();
-      await expect(row).not.toHaveClass(/archived/);
+      await expect(row).not.toHaveClass(/inactive/);
       await expect(status).toHaveAttribute("data-state", state);
       await expect(status).toHaveAttribute("data-unread", String(hasUnread));
       await expect(status).toHaveCSS("width", "12px");
@@ -1738,7 +1736,7 @@ test(
         .describe("Shared workspace with all four states");
       await expect(group).toHaveCount(1);
       await expect(group.locator(".group-header")).toHaveAttribute("title", workspaceCwd);
-      await expect(group.locator("[data-mode-toggle]")).toHaveAttribute("data-mode", "unarchived");
+      await expect(group.locator("[data-mode-toggle]")).toHaveAttribute("data-mode", "active");
       await expect(group.locator(".session-name").describe("States in update order")).toHaveText(
         phases.map((phase) => phase.name),
       );
@@ -1785,7 +1783,7 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
           theme.includes("Light") ? /vscode-light/ : /vscode-dark/,
         );
         const mode = frame.locator(`[data-mode-toggle="${host.sessions.A.cwd}"]`);
-        if ((await mode.getAttribute("data-mode")) === "unarchived") await mode.click();
+        if ((await mode.getAttribute("data-mode")) === "active") await mode.click();
         await expect(
           frame.locator(".session-row").describe("Saved A and Deleted conversation rows"),
         ).toHaveCount(2);
@@ -1826,7 +1824,7 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
               name: rect(row.querySelector(".session-name")!),
               status: rect(row.querySelector(".session-status")!),
               timestamp: rect(row.querySelector(".session-timestamp")!),
-              archive: rect(row.querySelector(".archive, .unarchive")!),
+              deactivate: rect(row.querySelector(".deactivate, .activate")!),
               buttonBackground: style.backgroundColor,
               buttonOutline: style.outlineStyle,
               background: paint.backgroundColor,
@@ -1866,7 +1864,7 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
         expect(idle.zIndex).toBe("-1");
         expect(idle.button.right).toBe(idle.viewportWidth - 12);
         expect(idle.timestamp.right).toBe(idle.button.right - 36);
-        expect(idle.archive.right).toBe(idle.button.right - 4);
+        expect(idle.deactivate.right).toBe(idle.button.right - 4);
         await button.hover();
         await expect.poll(async () => (await appearance()).background).toBe(idle.hoverColor);
         const hover = await appearance();
@@ -1895,7 +1893,7 @@ for (const theme of ["Dark Modern", "Light Modern"]) {
           expect(state.name).toEqual(idle.name);
           expect(state.status).toEqual(idle.status);
           expect(state.timestamp).toEqual(idle.timestamp);
-          expect(state.archive).toEqual(idle.archive);
+          expect(state.deactivate).toEqual(idle.deactivate);
         }
         await testInfo.attach(`${theme} session states`, {
           body: JSON.stringify({ idle, hover, focus, selected, selectedFocus }, null, 2),

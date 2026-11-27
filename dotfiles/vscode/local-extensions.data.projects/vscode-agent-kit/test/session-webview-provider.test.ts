@@ -269,7 +269,7 @@ function createProvider(
   return { provider, statePath };
 }
 
-async function archiveFixture(
+async function deactivateFixture(
   options: { log?: ConstructorParameters<typeof SessionWebviewProvider>[0]["log"] } = {},
 ) {
   const runtimes = providerRuntimes();
@@ -298,7 +298,7 @@ async function archiveFixture(
 async function unreadFixture(
   options: { log?: ConstructorParameters<typeof SessionWebviewProvider>[0]["log"] } = {},
 ) {
-  const fixture = await archiveFixture(options);
+  const fixture = await deactivateFixture(options);
   for (const sessionId of [activeSessionId, inactiveSessionId]) {
     fixture.live.set(sessionId, { sessionId, cwd: root, target: `pi-${sessionId}` });
   }
@@ -387,9 +387,9 @@ async function loadingFixture() {
 }
 
 describe("SessionWebviewProvider", () => {
-  /** Fixture for archived-display switching: both sessions listed, the
-   * inactive one archived, and a reusable display terminal for the cwd. */
-  async function archivedDisplayFixture(deps: Parameters<typeof createProvider>[0] = {}) {
+  /** Fixture for inactive-display switching: both sessions listed, the
+   * inactive one inactive, and a reusable display terminal for the cwd. */
+  async function inactiveDisplayFixture(deps: Parameters<typeof createProvider>[0] = {}) {
     const runtimes = providerRuntimes();
     await seedSavedSession(activeSessionId, root, { runtimes });
     await seedSavedSession(inactiveSessionId, root, { runtimes });
@@ -413,7 +413,7 @@ describe("SessionWebviewProvider", () => {
     return { runtimes, registry, terminal, provider, statePath, webview };
   }
   async function selectionFixture() {
-    const fixture = await archiveFixture();
+    const fixture = await deactivateFixture();
     await seedSavedSession(unknownSessionId, root, { runtimes: fixture });
     await fixture.provider.refresh();
     const shown: (string | undefined)[] = [];
@@ -453,7 +453,7 @@ describe("SessionWebviewProvider", () => {
     return { started, finish };
   }
 
-  it("sends unregistered sessions as unarchived and archived ones from metadata, then archives on request", async () => {
+  it("sends unregistered sessions as active and inactive ones from metadata, then deactivates on request", async () => {
     const runtimes = providerRuntimes();
     const filePath = await seedSavedSession(activeSessionId, root, { runtimes });
     await seedSavedSession(inactiveSessionId, root, { runtimes });
@@ -474,26 +474,26 @@ describe("SessionWebviewProvider", () => {
     const sentSessions = () =>
       webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions as {
         sessionId: string;
-        isArchived: boolean;
+        isInactive: boolean;
       }[];
     expect(
       sentSessions()
-        .map((session) => [session.sessionId, session.isArchived])
+        .map((session) => [session.sessionId, session.isInactive])
         .sort(([a], [b]) => (a < b ? -1 : 1)),
     ).toEqual([
       [activeSessionId, false],
       [inactiveSessionId, true],
     ]);
 
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
 
     expect(
-      sentSessions().find((session) => session.sessionId === activeSessionId)?.isArchived,
+      sentSessions().find((session) => session.sessionId === activeSessionId)?.isInactive,
     ).toBe(true);
   });
 
   it("keeps the temporary collection and current Pi when list acquisition fails", async () => {
-    const { runtimes, webview, provider, registry } = await archivedDisplayFixture();
+    const { runtimes, webview, provider, registry } = await inactiveDisplayFixture();
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
     const before = webview.postMessage.mock.calls
       .filter(([message]) => message.type === "sessions")
@@ -896,7 +896,7 @@ describe("SessionWebviewProvider", () => {
       expect(mocks.history).toHaveBeenCalledOnce();
     });
 
-    it("reads all registered history on manual Refresh but not on Archive", async () => {
+    it("reads all registered history on manual Refresh but not on Deactivate", async () => {
       const { provider, mocks, workspaces, webview } = await unreadFixture();
       workspaces.add("/other");
       await tick(provider);
@@ -904,7 +904,7 @@ describe("SessionWebviewProvider", () => {
       await webview.receive({ type: "refresh" });
       expect(mocks.history.mock.calls).toEqual([[]]);
       mocks.history.mockClear();
-      await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+      await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
       expect(mocks.history).not.toHaveBeenCalled();
     });
 
@@ -1167,7 +1167,7 @@ describe("SessionWebviewProvider", () => {
       expect(row()).toMatchObject({ state: "waiting-user", hasUnread: true });
       live.delete(activeSessionId);
       await tick(provider);
-      expect(row()).toMatchObject({ isArchived: true, state: undefined, hasUnread: false });
+      expect(row()).toMatchObject({ isInactive: true, state: undefined, hasUnread: false });
       expect(await readFile(statePath, "utf8")).toBe(original);
     });
 
@@ -1751,12 +1751,12 @@ describe("SessionWebviewProvider", () => {
   });
 
   describe("selection follows the new session display", () => {
-    let fixture: Awaited<ReturnType<typeof archivedDisplayFixture>>;
+    let fixture: Awaited<ReturnType<typeof inactiveDisplayFixture>>;
     let launcher: SessionLauncher;
     let onSessionStarted: Mock<(sessionId: string) => Promise<void>>;
 
     beforeEach(async () => {
-      fixture = await archivedDisplayFixture({
+      fixture = await inactiveDisplayFixture({
         startNewSession: (cwd, onPresented) => launcher.start(cwd, onPresented),
       });
       onSessionStarted = vi.fn((_sessionId: string) => fixture.provider.refresh());
@@ -1878,7 +1878,7 @@ describe("SessionWebviewProvider", () => {
       const newRow = sentState()
         .groups.flatMap((group) => group.sessions)
         .find((session) => session.sessionId === displayedId);
-      expect(newRow?.isArchived).toBe(false);
+      expect(newRow?.isInactive).toBe(false);
     });
 
     it("keeps the current display selected when an earlier new session is saved and refreshed", async () => {
@@ -2264,15 +2264,15 @@ describe("SessionWebviewProvider", () => {
 
       temporary.add(activeSessionId);
       await provider.refresh(false);
-      expect(row()).toMatchObject({ isArchived: true, state: undefined, hasUnread: false });
+      expect(row()).toMatchObject({ isInactive: true, state: undefined, hasUnread: false });
       live.delete(activeSessionId);
       await provider.refresh(false);
-      expect(row()).toMatchObject({ isArchived: true, state: undefined, hasUnread: false });
+      expect(row()).toMatchObject({ isInactive: true, state: undefined, hasUnread: false });
       expect(sessionOpenState.update).not.toHaveBeenCalled();
 
       vi.setSystemTime(completedAtMs + 1);
-      await webview.receive({ type: "unarchiveSession", sessionId: activeSessionId });
-      expect(row()).toMatchObject({ isArchived: false, state: "waiting-user", hasUnread: false });
+      await webview.receive({ type: "activateSession", sessionId: activeSessionId });
+      expect(row()).toMatchObject({ isInactive: false, state: "waiting-user", hasUnread: false });
     });
 
     it("discards a stale list query before projecting a newer settlement", async () => {
@@ -2752,7 +2752,7 @@ describe("SessionWebviewProvider", () => {
   );
 
   it("reloads the requested live session without changing the display or blocking other requests", async () => {
-    const { webview, registry, terminal, mocks } = await archiveFixture();
+    const { webview, registry, terminal, mocks } = await deactivateFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     terminal.show.mockClear();
     const pending = deferred<void>();
@@ -2772,7 +2772,7 @@ describe("SessionWebviewProvider", () => {
   });
 
   it("does not reload saved-only sessions and reports reload and clipboard errors", async () => {
-    const { webview, provider, mocks, live } = await archiveFixture();
+    const { webview, provider, mocks, live } = await deactivateFixture();
     live.delete(inactiveSessionId);
     await provider.refresh();
     await webview.receive({ type: "reloadSession", sessionId: inactiveSessionId });
@@ -2796,13 +2796,13 @@ describe("SessionWebviewProvider", () => {
     );
   });
 
-  it("hides reload as soon as Archive stops the session, before the list refresh", async () => {
-    const { webview, mocks } = await archiveFixture();
+  it("hides reload as soon as Deactivate stops the session, before the list refresh", async () => {
+    const { webview, mocks } = await deactivateFixture();
     const held = deferred<PiMuxWorkspace[]>();
     mocks.list.mockReturnValueOnce(held.promise);
     webview.postMessage.mockClear();
 
-    const archive = webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    const deactivate = webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
     try {
       await vi.waitFor(() => expect(mocks.closeSession).toHaveBeenCalledWith(activeSessionId));
       const state: WebviewState = webview.postMessage.mock.calls.find(
@@ -2818,12 +2818,12 @@ describe("SessionWebviewProvider", () => {
       expect(mocks.reloadSession).not.toHaveBeenCalled();
     } finally {
       held.resolve(await mocks.list());
-      await archive;
+      await deactivate;
     }
   });
 
-  it("archives the displayed conversation without switching to a live same-cwd session", async () => {
-    const { webview, registry, terminal, live, mocks, filePath } = await archiveFixture();
+  it("deactivates the displayed conversation without switching to a live same-cwd session", async () => {
+    const { webview, registry, terminal, live, mocks, filePath } = await deactivateFixture();
     const source = await readFile(filePath, "utf8");
     const otherRuntime = live.get(inactiveSessionId);
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
@@ -2831,7 +2831,7 @@ describe("SessionWebviewProvider", () => {
     webview.postMessage.mockClear();
 
     await webview.receive({
-      type: "archiveSession",
+      type: "deactivateSession",
       sessionId: activeSessionId,
       target: "arbitrary",
       pid: 1,
@@ -2854,36 +2854,36 @@ describe("SessionWebviewProvider", () => {
     expect(state.displayedSessionId).toBeUndefined();
     expect(state.groups[0].sessions).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ sessionId: activeSessionId, isArchived: true }),
-        expect.objectContaining({ sessionId: inactiveSessionId, isArchived: false }),
+        expect.objectContaining({ sessionId: activeSessionId, isInactive: true }),
+        expect.objectContaining({ sessionId: inactiveSessionId, isInactive: false }),
       ]),
     );
     expect(await readFile(filePath, "utf8")).toBe(source);
 
-    await webview.receive({ type: "unarchiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "activateSession", sessionId: activeSessionId });
     expect(mocks.open).toHaveBeenCalledTimes(startsBefore + 1);
     expect(mocks.open).toHaveBeenLastCalledWith({ sessionId: activeSessionId, cwd: root });
   });
 
-  it("does not reopen a tab the user closed before archiving", async () => {
-    const { webview, registry, terminal, live } = await archiveFixture();
+  it("does not reopen a tab the user closed before deactivating", async () => {
+    const { webview, registry, terminal, live } = await deactivateFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     registry.onTerminalClosed(terminal as never);
     const created = vscodeMocks.createTerminal.mock.calls.length;
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
     expect(vscodeMocks.createTerminal).toHaveBeenCalledTimes(created);
     expect(registry.displayedSessionId).toBeUndefined();
     expect(live.has(activeSessionId)).toBe(false);
     expect(live.has(inactiveSessionId)).toBe(true);
   });
 
-  it("archives a background conversation while preserving another display and selection", async () => {
-    const { webview, terminal, registry, live, mocks } = await archiveFixture();
+  it("deactivates a background conversation while preserving another display and selection", async () => {
+    const { webview, terminal, registry, live, mocks } = await deactivateFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     mocks.open({ sessionId: inactiveSessionId, cwd: root });
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
     const otherRuntime = live.get(inactiveSessionId);
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
     expect(live.has(activeSessionId)).toBe(false);
     expect(live.get(inactiveSessionId)).toBe(otherRuntime);
     expect(terminal.dispose).not.toHaveBeenCalled();
@@ -2894,9 +2894,9 @@ describe("SessionWebviewProvider", () => {
   });
 
   it.each(["confirmed", "lookup retried"] as const)(
-    "closes an archived session's restored tab without switching: %s",
+    "closes an inactive session's restored tab without switching: %s",
     async (lookup) => {
-      const { webview, registry, terminal, mocks, client, live } = await archiveFixture();
+      const { webview, registry, terminal, mocks, client, live } = await deactivateFixture();
       Object.assign(terminal.creationOptions, {
         env: { PI_SESSIONS_DISPLAY: "1" },
       });
@@ -2907,7 +2907,7 @@ describe("SessionWebviewProvider", () => {
       }
 
       try {
-        await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+        await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
         expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith(activeSessionId);
         expect(live.has(activeSessionId)).toBe(false);
         expect(live.has(inactiveSessionId)).toBe(true);
@@ -2923,7 +2923,7 @@ describe("SessionWebviewProvider", () => {
   );
 
   it("keeps an unrelated restored tab when display lookup fails", async () => {
-    const { webview, terminal, mocks, client, live } = await archiveFixture();
+    const { webview, terminal, mocks, client, live } = await deactivateFixture();
     const restored = terminal;
     Object.assign(restored.creationOptions, {
       env: { PI_SESSIONS_DISPLAY: "1" },
@@ -2931,7 +2931,7 @@ describe("SessionWebviewProvider", () => {
     Object.assign(vscodeMocks.terminals, [restored]);
     client.attachedId = inactiveSessionId;
     mocks.current.mockRejectedValue(new Error("client lookup denied"));
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
     expect(live.has(activeSessionId)).toBe(false);
     expect(live.has(inactiveSessionId)).toBe(true);
 
@@ -2940,16 +2940,16 @@ describe("SessionWebviewProvider", () => {
     vscodeMocks.terminals.length = 0;
   });
 
-  it("still calls close before archiving a stopped session absent from list", async () => {
-    const { webview, mocks, live, registry } = await archiveFixture();
+  it("still calls close before deactivating a stopped session absent from list", async () => {
+    const { webview, mocks, live, registry } = await deactivateFixture();
     live.delete(activeSessionId);
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
     expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith(activeSessionId);
 
     expect(registry.displayedSessionId).toBeUndefined();
   });
 
-  it("rejects an archive request for an unknown session id without writing", async () => {
+  it("rejects a deactivation request for an unknown session id without writing", async () => {
     await seedSavedSession(activeSessionId);
     const { provider } = createProvider();
 
@@ -2957,14 +2957,14 @@ describe("SessionWebviewProvider", () => {
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
 
-    await webview.receive({ type: "archiveSession", sessionId: unknownSessionId });
+    await webview.receive({ type: "deactivateSession", sessionId: unknownSessionId });
 
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
       `Session not found: ${unknownSessionId}`,
     );
   });
 
-  it.each(["openSession", "unarchiveSession"] as const)(
+  it.each(["openSession", "activateSession"] as const)(
     "rejects an unknown live session id on %s without writing or creating a session",
     async (type) => {
       await seedSavedSession(activeSessionId);
@@ -2990,11 +2990,11 @@ describe("SessionWebviewProvider", () => {
   );
 
   it("leaves membership and display unchanged when close fails", async () => {
-    const { webview, statePath, mocks, terminal, registry } = await archiveFixture();
+    const { webview, statePath, mocks, terminal, registry } = await deactivateFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     const before = await readFile(statePath, "utf8");
     mocks.closeSession.mockRejectedValueOnce(new Error("stop denied"));
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
     expect(await readFile(statePath, "utf8")).toBe(before);
     expect(terminal.dispose).not.toHaveBeenCalled();
     expect(registry.displayedSessionId).toBe(activeSessionId);
@@ -3005,94 +3005,94 @@ describe("SessionWebviewProvider", () => {
     );
   });
 
-  it("sends the archive finish message with the request id after the archive completes", async () => {
-    const { webview } = await archiveFixture();
+  it("sends the deactivate finish message with the request id after the deactivate completes", async () => {
+    const { webview } = await deactivateFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     webview.postMessage.mockClear();
     await webview.receive({
-      type: "archiveSession",
+      type: "deactivateSession",
       sessionId: activeSessionId,
-      requestId: "archive-1",
+      requestId: "deactivate-1",
     });
     const completions = webview.postMessage.mock.calls.filter(
-      ([message]) => message.type === "archiveFinished",
+      ([message]) => message.type === "deactivateFinished",
     );
     expect(completions.map(([message]) => message)).toEqual([
-      { type: "archiveFinished", requestId: "archive-1" },
+      { type: "deactivateFinished", requestId: "deactivate-1" },
     ]);
   });
 
-  it("sends the archive finish message when the close fails", async () => {
-    const { webview, mocks } = await archiveFixture();
+  it("sends the deactivate finish message when the close fails", async () => {
+    const { webview, mocks } = await deactivateFixture();
     mocks.closeSession.mockRejectedValueOnce(new Error("stop denied"));
     await webview.receive({
-      type: "archiveSession",
+      type: "deactivateSession",
       sessionId: activeSessionId,
-      requestId: "failed-archive",
+      requestId: "failed-deactivate",
     });
     const completions = webview.postMessage.mock.calls.filter(
-      ([message]) => message.type === "archiveFinished",
+      ([message]) => message.type === "deactivateFinished",
     );
     expect(completions.map(([message]) => message)).toEqual([
-      { type: "archiveFinished", requestId: "failed-archive" },
+      { type: "deactivateFinished", requestId: "failed-deactivate" },
     ]);
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalled();
   });
 
-  it("sends the archive finish message when the session is unknown", async () => {
+  it("sends the deactivate finish message when the session is unknown", async () => {
     await seedSavedSession(activeSessionId);
     const { provider } = createProvider();
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
     await webview.receive({
-      type: "archiveSession",
+      type: "deactivateSession",
       sessionId: unknownSessionId,
-      requestId: "unknown-archive",
+      requestId: "unknown-deactivate",
     });
     const completions = webview.postMessage.mock.calls.filter(
-      ([message]) => message.type === "archiveFinished",
+      ([message]) => message.type === "deactivateFinished",
     );
     expect(completions.map(([message]) => message)).toEqual([
-      { type: "archiveFinished", requestId: "unknown-archive" },
+      { type: "deactivateFinished", requestId: "unknown-deactivate" },
     ]);
   });
 
-  it("sends the unarchive finish message with the request id after the display opens", async () => {
-    const { webview, mocks } = await archiveFixture();
+  it("sends the activate finish message with the request id after the display opens", async () => {
+    const { webview, mocks } = await deactivateFixture();
     const starts = mocks.open.mock.calls.length;
     await webview.receive({
-      type: "unarchiveSession",
+      type: "activateSession",
       sessionId: activeSessionId,
-      requestId: "unarchive-1",
+      requestId: "activate-1",
     });
     expect(mocks.open).toHaveBeenCalledTimes(starts + 1);
     const completions = webview.postMessage.mock.calls.filter(
-      ([message]) => message.type === "unarchiveFinished",
+      ([message]) => message.type === "activateFinished",
     );
     expect(completions.map(([message]) => message)).toEqual([
-      { type: "unarchiveFinished", requestId: "unarchive-1" },
+      { type: "activateFinished", requestId: "activate-1" },
     ]);
   });
 
-  it("sends the unarchive finish message when the open fails", async () => {
-    const { webview, mocks } = await archiveFixture();
+  it("sends the activate finish message when the open fails", async () => {
+    const { webview, mocks } = await deactivateFixture();
     mocks.list.mockRejectedValueOnce(new Error("list failed"));
     await webview.receive({
-      type: "unarchiveSession",
+      type: "activateSession",
       sessionId: activeSessionId,
-      requestId: "failed-unarchive",
+      requestId: "failed-activate",
     });
     const completions = webview.postMessage.mock.calls.filter(
-      ([message]) => message.type === "unarchiveFinished",
+      ([message]) => message.type === "activateFinished",
     );
     expect(completions.map(([message]) => message)).toEqual([
-      { type: "unarchiveFinished", requestId: "failed-unarchive" },
+      { type: "activateFinished", requestId: "failed-activate" },
     ]);
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalled();
   });
 
-  it("sends the unarchive finish message when the session is unknown", async () => {
+  it("sends the activate finish message when the session is unknown", async () => {
     await seedSavedSession(activeSessionId);
     const { registry } = createRuntimeRegistry();
     const { provider } = createProvider({ registry });
@@ -3100,20 +3100,20 @@ describe("SessionWebviewProvider", () => {
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
     await webview.receive({
-      type: "unarchiveSession",
+      type: "activateSession",
       sessionId: unknownSessionId,
-      requestId: "unknown-unarchive",
+      requestId: "unknown-activate",
     });
     const completions = webview.postMessage.mock.calls.filter(
-      ([message]) => message.type === "unarchiveFinished",
+      ([message]) => message.type === "activateFinished",
     );
     expect(completions.map(([message]) => message)).toEqual([
-      { type: "unarchiveFinished", requestId: "unknown-unarchive" },
+      { type: "activateFinished", requestId: "unknown-activate" },
     ]);
   });
 
   it("does not restart Pi or change membership and selection when close fails after Pi exits", async () => {
-    const { webview, statePath, mocks, live, terminal, registry } = await archiveFixture();
+    const { webview, statePath, mocks, live, terminal, registry } = await deactivateFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     const before = await readFile(statePath, "utf8");
     const starts = mocks.open.mock.calls.length;
@@ -3121,7 +3121,7 @@ describe("SessionWebviewProvider", () => {
       live.delete(sessionId);
       throw new Error("restore candidate removal failed");
     });
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
     expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith(activeSessionId);
     expect(await readFile(statePath, "utf8")).toBe(before);
     expect(terminal.dispose).not.toHaveBeenCalled();
@@ -3135,8 +3135,8 @@ describe("SessionWebviewProvider", () => {
   });
 
   it.each([
-    { type: "unarchiveSession", previousTemporary: false },
-    { type: "unarchiveSession", previousTemporary: true },
+    { type: "activateSession", previousTemporary: false },
+    { type: "activateSession", previousTemporary: true },
     { type: "openSession", previousTemporary: false },
     { type: "openSession", previousTemporary: true },
   ])(
@@ -3180,12 +3180,12 @@ describe("SessionWebviewProvider", () => {
       await provider.refresh();
       expect(sentState().displayedSessionId).toBe(activeSessionId);
       expect(row().hasUnread).toBe(!previousTemporary);
-      expect(row(inactiveSessionId).isArchived).toBe(true);
+      expect(row(inactiveSessionId).isInactive).toBe(true);
     },
   );
 
   it("reports both reconnect and restoration failures through the existing error paths", async () => {
-    const { webview, registry } = await archiveFixture();
+    const { webview, registry } = await deactivateFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     vscodeMocks.createTerminal.mockImplementationOnce(() => {
       throw new Error("creation denied");
@@ -3193,7 +3193,7 @@ describe("SessionWebviewProvider", () => {
     vscodeMocks.createTerminal.mockImplementationOnce(() => {
       throw new Error("restoration denied");
     });
-    await webview.receive({ type: "unarchiveSession", sessionId: inactiveSessionId });
+    await webview.receive({ type: "activateSession", sessionId: inactiveSessionId });
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining("creation denied; failed to restore display: restoration denied"),
     );
@@ -3211,7 +3211,7 @@ describe("SessionWebviewProvider", () => {
   it.each(["previous", "requested"] as const)(
     "cancels restoration quietly when the %s workspace is unregistered",
     async (workspace) => {
-      const fixture = await archiveFixture();
+      const fixture = await deactivateFixture();
       const { webview, registry, mocks, live, workspaces, provider } = fixture;
       const other = join(root, "other");
       await mkdir(other);
@@ -3230,7 +3230,7 @@ describe("SessionWebviewProvider", () => {
         });
         throw new Error("creation denied");
       });
-      const opening = webview.receive({ type: "unarchiveSession", sessionId: inactiveSessionId });
+      const opening = webview.receive({ type: "activateSession", sessionId: inactiveSessionId });
       await vi.waitFor(() => expect(started).toHaveBeenCalledOnce());
       const removing = webview.receive({
         type: "unregisterWorkspace",
@@ -3250,7 +3250,7 @@ describe("SessionWebviewProvider", () => {
     },
   );
 
-  it("unarchives a requested archived session, opens it, and refreshes the list", async () => {
+  it("activates a requested inactive session, opens it, and refreshes the list", async () => {
     const runtimes = providerRuntimes();
     await seedSavedSession(activeSessionId, root, { runtimes });
     const terminal = { processId: Promise.resolve(123), show: vi.fn() };
@@ -3261,17 +3261,17 @@ describe("SessionWebviewProvider", () => {
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isArchived).toBe(
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isInactive).toBe(
       true,
     );
 
-    await webview.receive({ type: "unarchiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "activateSession", sessionId: activeSessionId });
 
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0]).toMatchObject({
       sessionId: activeSessionId,
-      isArchived: false,
+      isInactive: false,
     });
-    // the session that just came back from the archive opens in the shared terminal
+    // the session that just came back from the deactivate opens in the shared terminal
     expect(vscodeMocks.createTerminal).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: { fsPath: homedir() } }),
     );
@@ -3281,12 +3281,12 @@ describe("SessionWebviewProvider", () => {
     );
   });
 
-  it("unarchives the displayed temporary Pi through normal open without old membership writes", async () => {
-    const { runtimes, webview, statePath, registry, terminal } = await archivedDisplayFixture();
+  it("activates the displayed temporary Pi through normal open without old membership writes", async () => {
+    const { runtimes, webview, statePath, registry, terminal } = await inactiveDisplayFixture();
     const before = await readFile(statePath, "utf8");
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
     expect(runtimes.temporary.has(inactiveSessionId)).toBe(true);
-    await webview.receive({ type: "unarchiveSession", sessionId: inactiveSessionId });
+    await webview.receive({ type: "activateSession", sessionId: inactiveSessionId });
     expect(vscodeMocks.createTerminal).toHaveBeenLastCalledWith(
       expect.objectContaining({ shellArgs: ["open", inactiveSessionId] }),
     );
@@ -3300,23 +3300,24 @@ describe("SessionWebviewProvider", () => {
         .at(-1)?.[0]
         .state.groups[0].sessions.find(
           (row: { sessionId: string }) => row.sessionId === inactiveSessionId,
-        ).isArchived,
+        ).isInactive,
     ).toBe(false);
   });
 
-  it("unarchives and reconnects a live session after its saved file disappeared", async () => {
-    const { provider, webview, filePath, live, mocks, terminal, registry } = await archiveFixture();
+  it("activates and reconnects a live session after its saved file disappeared", async () => {
+    const { provider, webview, filePath, live, mocks, terminal, registry } =
+      await deactivateFixture();
 
     await provider.refresh();
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0]).toMatchObject({
       sessionId: activeSessionId,
-      isArchived: false,
+      isInactive: false,
     });
     const runtime = { sessionId: activeSessionId, cwd: root, target: `pi-${activeSessionId}` };
     live.set(activeSessionId, runtime);
     await rm(filePath);
 
-    await webview.receive({ type: "unarchiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "activateSession", sessionId: activeSessionId });
 
     expect(mocks.aliveSessionIds).toHaveBeenCalledWith([activeSessionId]);
     expect(registry.displayedSessionId).toBe(activeSessionId);
@@ -3339,7 +3340,7 @@ describe("SessionWebviewProvider", () => {
   it.each(["absent", "unavailable", "error", "lookup-error"] as const)(
     "keeps old membership unchanged without opening when its saved file disappeared and liveness is %s",
     async (liveness) => {
-      const { provider, webview, filePath, mocks, registry } = await archiveFixture();
+      const { provider, webview, filePath, mocks, registry } = await deactivateFixture();
 
       await provider.refresh();
       await rm(filePath);
@@ -3354,7 +3355,7 @@ describe("SessionWebviewProvider", () => {
         );
       }
 
-      await webview.receive({ type: "unarchiveSession", sessionId: activeSessionId });
+      await webview.receive({ type: "activateSession", sessionId: activeSessionId });
 
       if (liveness === "lookup-error") {
         expect(mocks.aliveSessionIds).not.toHaveBeenCalled();
@@ -3375,11 +3376,11 @@ describe("SessionWebviewProvider", () => {
     },
   );
 
-  it("does not change archive display or close the previous Pi when explicit Unarchive fails", async () => {
-    const { runtimes, webview, registry } = await archivedDisplayFixture();
+  it("does not change deactivate display or close the previous Pi when explicit Activate fails", async () => {
+    const { runtimes, webview, registry } = await inactiveDisplayFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     runtimes.mocks.list.mockRejectedValueOnce(new Error("lookup failed"));
-    await webview.receive({ type: "unarchiveSession", sessionId: inactiveSessionId });
+    await webview.receive({ type: "activateSession", sessionId: inactiveSessionId });
     expect(registry.displayedSessionId).toBe(activeSessionId);
     expect(runtimes.temporary.has(inactiveSessionId)).toBe(true);
     expect(runtimes.mocks.closeTemporarySession).not.toHaveBeenCalled();
@@ -3389,11 +3390,11 @@ describe("SessionWebviewProvider", () => {
         .at(-1)?.[0]
         .state.groups[0].sessions.find(
           (row: { sessionId: string }) => row.sessionId === inactiveSessionId,
-        ).isArchived,
+        ).isInactive,
     ).toBe(true);
   });
 
-  it.each(["archiveSession", "unarchiveSession", "newSession"] as const)(
+  it.each(["deactivateSession", "activateSession", "newSession"] as const)(
     "preserves FIFO around %s when an earlier pending selection is superseded",
     async (type) => {
       const { registry, mocks } = await selectionFixture();
@@ -3434,9 +3435,9 @@ describe("SessionWebviewProvider", () => {
       opening.finish();
       await Promise.all([first, superseded, operation, latest]);
       const expectedOperation =
-        type === "archiveSession"
+        type === "deactivateSession"
           ? `stop:${inactiveSessionId}`
-          : type === "unarchiveSession"
+          : type === "activateSession"
             ? `open:${inactiveSessionId}`
             : "newSession";
       expect(events).toEqual([
@@ -3447,8 +3448,8 @@ describe("SessionWebviewProvider", () => {
     },
   );
 
-  it("serializes archive and a later All open without forbidding archived runtimes", async () => {
-    const { webview, mocks, live } = await archiveFixture();
+  it("serializes deactivate and a later All open without forbidding inactive runtimes", async () => {
+    const { webview, mocks, live } = await deactivateFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     let release!: () => void;
     const pendingStop = new Promise<void>((resolve) => {
@@ -3459,12 +3460,12 @@ describe("SessionWebviewProvider", () => {
       await pendingStop;
       return stop(sessionId);
     });
-    const archived = webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    const inactive = webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
     const opened = webview.receive({ type: "openSession", sessionId: activeSessionId });
     await vi.waitFor(() => expect(mocks.closeSession).toHaveBeenCalledTimes(1));
     expect(mocks.open).toHaveBeenCalledTimes(1);
     release();
-    await Promise.all([archived, opened]);
+    await Promise.all([inactive, opened]);
 
     expect(live.has(activeSessionId)).toBe(true);
     expect(mocks.open).toHaveBeenCalledTimes(2);
@@ -3720,7 +3721,7 @@ describe("SessionWebviewProvider", () => {
       expect(webview.postMessage.mock.lastCall?.[0].state.groups).toContainEqual(
         expect.objectContaining({
           cwd: folder,
-          sessions: [expect.objectContaining({ sessionId: activeSessionId, isArchived: true })],
+          sessions: [expect.objectContaining({ sessionId: activeSessionId, isInactive: true })],
         }),
       );
     });
@@ -3841,7 +3842,7 @@ describe("SessionWebviewProvider", () => {
 
     it("delegates same-cwd stopping and unregister to CLI then refreshes without changing saved files", async () => {
       const { provider, webview, mocks, live, workspaces, filePath, statePath } =
-        await archiveFixture();
+        await deactivateFixture();
       const other = join(root, "other");
       workspaces.add(other);
       live.set("other", { sessionId: "other", cwd: other, target: "other-target" });
@@ -3861,18 +3862,18 @@ describe("SessionWebviewProvider", () => {
       provider.dispose();
     });
 
-    it.each(["openSession", "unarchiveSession"])(
+    it.each(["openSession", "activateSession"])(
       "cancels a pending %s quietly when its workspace is unregistered",
       async (type) => {
-        const { webview, mocks, terminal, registry } = await archiveFixture();
+        const { webview, mocks, terminal, registry } = await deactivateFixture();
         const held = deferred<Awaited<ReturnType<PiMux["list"]>>>();
         mocks.list.mockReturnValueOnce(held.promise);
         const opening = webview.receive({ type, sessionId: activeSessionId });
         await vi.waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(2));
         const queued = webview.receive({
-          type: "unarchiveSession",
+          type: "activateSession",
           sessionId: inactiveSessionId,
-          requestId: "cancelled-unarchive",
+          requestId: "cancelled-activate",
         });
         const removing = webview.receive({ type: "unregisterWorkspace", cwd: root });
         held.resolve([]);
@@ -3883,10 +3884,10 @@ describe("SessionWebviewProvider", () => {
           false,
         );
         const completions = webview.postMessage.mock.calls.filter(
-          ([message]) => message.type === "unarchiveFinished",
+          ([message]) => message.type === "activateFinished",
         );
         expect(completions.map(([message]) => message)).toEqual([
-          { type: "unarchiveFinished", requestId: "cancelled-unarchive" },
+          { type: "activateFinished", requestId: "cancelled-activate" },
         ]);
         expect(terminal.show).not.toHaveBeenCalled();
         expect(registry.displayedSessionId).toBeUndefined();
@@ -3895,7 +3896,7 @@ describe("SessionWebviewProvider", () => {
     );
 
     it("finishes unregister before a late attachment reply without restoring the display", async () => {
-      const { webview, mocks, terminal, registry } = await archiveFixture();
+      const { webview, mocks, terminal, registry } = await deactivateFixture();
       await registry.open({ sessionId: inactiveSessionId, cwd: root });
       const held = deferred<Awaited<ReturnType<PiMux["current"]>>>();
       mocks.current.mockReturnValueOnce(held.promise);
@@ -3916,7 +3917,7 @@ describe("SessionWebviewProvider", () => {
     });
 
     it("keeps an attaching open when another workspace is unregistered", async () => {
-      const { webview, mocks, terminal, registry, workspaces } = await archiveFixture();
+      const { webview, mocks, terminal, registry, workspaces } = await deactivateFixture();
       await registry.open({ sessionId: inactiveSessionId, cwd: root });
       const other = join(root, "other");
       workspaces.add(other);
@@ -3933,7 +3934,7 @@ describe("SessionWebviewProvider", () => {
     });
 
     it("reports a terminal closing during attachment without an unregister request", async () => {
-      const { webview, mocks, terminal, registry } = await archiveFixture();
+      const { webview, mocks, terminal, registry } = await deactivateFixture();
       await registry.open({ sessionId: inactiveSessionId, cwd: root });
       const held = deferred<Awaited<ReturnType<PiMux["current"]>>>();
       mocks.current.mockReturnValueOnce(held.promise);
@@ -3951,7 +3952,7 @@ describe("SessionWebviewProvider", () => {
     });
 
     it("cancels a queued open before it creates a display", async () => {
-      const { webview, registry } = await archiveFixture();
+      const { webview, registry } = await deactivateFixture();
       const held = deferred<void>();
       const blocking = registry.run(() => held.promise);
       const opening = webview.receive({ type: "openSession", sessionId: activeSessionId });
@@ -3963,7 +3964,7 @@ describe("SessionWebviewProvider", () => {
     });
 
     it("reports unregister failure after cancelling the attaching open", async () => {
-      const { webview, mocks, registry } = await archiveFixture();
+      const { webview, mocks, registry } = await deactivateFixture();
       await registry.open({ sessionId: inactiveSessionId, cwd: root });
       const held = deferred<Awaited<ReturnType<PiMux["current"]>>>();
       mocks.current.mockReturnValueOnce(held.promise);
@@ -3983,7 +3984,7 @@ describe("SessionWebviewProvider", () => {
     });
 
     it("retains the registered group without restart or refresh after unregister fails", async () => {
-      const { webview, mocks, live, workspaces } = await archiveFixture();
+      const { webview, mocks, live, workspaces } = await deactivateFixture();
       const groups = webview.postMessage.mock.lastCall?.[0].state.groups;
       mocks.list.mockClear();
       mocks.unregisterWorkspace.mockImplementationOnce(async () => {
@@ -4160,9 +4161,9 @@ describe("SessionWebviewProvider", () => {
         expect.objectContaining({
           sessionId: activeSessionId,
           displayName: "Saved fixture conversation",
-          isArchived: false,
+          isInactive: false,
         }),
-        expect.objectContaining({ sessionId: inactiveSessionId, isArchived: true }),
+        expect.objectContaining({ sessionId: inactiveSessionId, isInactive: true }),
       ]),
     );
     const rows = renderedRows(refreshed);
@@ -4202,12 +4203,12 @@ describe("SessionWebviewProvider", () => {
   });
 
   it.each([false, true])(
-    "opens only the latest pending row without interrupting the running selection (archived=%s)",
-    async (archived) => {
+    "opens only the latest pending row without interrupting the running selection (inactive=%s)",
+    async (inactive) => {
       const fixture = await selectionFixture();
       const { webview, mocks, registry, statePath, provider, shown, filePath } = fixture;
 
-      if (archived) fixture.live.clear();
+      if (inactive) fixture.live.clear();
       else {
         fixture.live.set(unknownSessionId, {
           sessionId: unknownSessionId,
@@ -4234,7 +4235,7 @@ describe("SessionWebviewProvider", () => {
         unknownSessionId,
       ]);
       expect(mocks.open.mock.calls.map(([session]) => session.sessionId)).toEqual(
-        archived ? [activeSessionId, unknownSessionId] : [activeSessionId],
+        inactive ? [activeSessionId, unknownSessionId] : [activeSessionId],
       );
       expect(shown).toEqual([activeSessionId, unknownSessionId]);
       expect(validateFile.mock.calls.map(([path]) => path)).toEqual([
@@ -4503,7 +4504,7 @@ describe("SessionWebviewProvider", () => {
     const { webview, provider, registry, terminal, live, mocks, sentState, row } =
       await unreadFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    expect(row(inactiveSessionId).isArchived).toBe(false);
+    expect(row(inactiveSessionId).isInactive).toBe(false);
     mocks.history.mockClear();
     mocks.switch.mockImplementationOnce(async () => {
       live.delete(inactiveSessionId);
@@ -4522,7 +4523,7 @@ describe("SessionWebviewProvider", () => {
     expect(terminal.dispose).not.toHaveBeenCalled();
     expect(registry.displayedSessionId).toBe(activeSessionId);
     expect(sentState().displayedSessionId).toBe(activeSessionId);
-    expect(row(inactiveSessionId).isArchived).toBe(true);
+    expect(row(inactiveSessionId).isInactive).toBe(true);
   });
 
   it("opens a live session when its saved session file disappeared", async () => {
@@ -4561,7 +4562,7 @@ describe("SessionWebviewProvider", () => {
   it.each(["absent", "unavailable", "error", "lookup-error"] as const)(
     "does not open or create a session when its saved file disappeared and liveness is %s",
     async (liveness) => {
-      const { webview, statePath, filePath, mocks, registry } = await archiveFixture();
+      const { webview, statePath, filePath, mocks, registry } = await deactivateFixture();
       const before = await readFile(statePath, "utf8");
       await rm(filePath);
       if (liveness === "absent") mocks.aliveSessionIds.mockResolvedValue(new Set());
@@ -4618,7 +4619,7 @@ describe("SessionWebviewProvider", () => {
     expect(await readFile(statePath, "utf8")).toBe("invalid legacy JSON sentinel");
   });
 
-  it("opens a saved conversation temporarily without changing old membership or archive display", async () => {
+  it("keeps the row inactive when opening a saved conversation temporarily", async () => {
     const runtimes = providerRuntimes();
     await seedSavedSession(activeSessionId, root, { runtimes });
     const terminal = {
@@ -4634,13 +4635,13 @@ describe("SessionWebviewProvider", () => {
     const webview = createView();
     provider.resolveWebviewView(webview.view as never);
     await provider.refresh();
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isArchived).toBe(
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isInactive).toBe(
       true,
     );
 
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
 
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isArchived).toBe(
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isInactive).toBe(
       true,
     );
     expect(vscodeMocks.createTerminal).toHaveBeenCalledWith(
@@ -4688,7 +4689,7 @@ describe("SessionWebviewProvider", () => {
   });
 
   it.each(["list", "switch"] as const)(
-    "keeps archived metadata unchanged when the pi-mux %s command fails",
+    "keeps inactive metadata unchanged when the pi-mux %s command fails",
     async (method) => {
       const runtimes = providerRuntimes();
       await seedSavedSession(inactiveSessionId, root, { runtimes });
@@ -4737,7 +4738,7 @@ describe("SessionWebviewProvider", () => {
   );
 
   it("reflects list promotion without sending state or updating old membership", async () => {
-    const { runtimes, webview, provider, statePath } = await archivedDisplayFixture();
+    const { runtimes, webview, provider, statePath } = await inactiveDisplayFixture();
     const before = await readFile(statePath, "utf8");
     runtimes.temporary.delete(inactiveSessionId);
     runtimes.phases.set(inactiveSessionId, "running");
@@ -4747,21 +4748,21 @@ describe("SessionWebviewProvider", () => {
       .state.groups[0].sessions.find(
         (row: { sessionId: string }) => row.sessionId === inactiveSessionId,
       );
-    expect(row).toMatchObject({ isArchived: false, state: "running" });
+    expect(row).toMatchObject({ isInactive: false, state: "running" });
     expect(await readFile(statePath, "utf8")).toBe(before);
     expect(runtimes.mocks.open).not.toHaveBeenCalled();
     expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();
   });
 
-  it("stops an archived previous display when the shared display moves away", async () => {
-    const { runtimes, webview } = await archivedDisplayFixture();
+  it("stops an inactive previous display when the shared display moves away", async () => {
+    const { runtimes, webview } = await inactiveDisplayFixture();
 
-    // opening the archived session keeps its tmux session alive while displayed
+    // opening the inactive session keeps its tmux session alive while displayed
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
     expect(runtimes.mocks.closeTemporarySession).not.toHaveBeenCalled();
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
 
-    // switching to the unarchived session stops the archived one
+    // switching to the active session stops the inactive one
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     expect(runtimes.mocks.closeTemporarySession).toHaveBeenCalledWith(inactiveSessionId);
     expect(runtimes.live.has(inactiveSessionId)).toBe(false);
@@ -4772,9 +4773,9 @@ describe("SessionWebviewProvider", () => {
     );
   });
 
-  it("stops an archived previous display when a new session replaces it", async () => {
+  it("stops an inactive previous display when a new session replaces it", async () => {
     const newSessionId = "00000000-0000-4000-8000-000000000003";
-    const { registry, runtimes, webview } = await archivedDisplayFixture({
+    const { registry, runtimes, webview } = await inactiveDisplayFixture({
       startNewSession: async () =>
         registry.run(async () => {
           const previous = registry.displayedSessionId;
@@ -4793,7 +4794,7 @@ describe("SessionWebviewProvider", () => {
   });
 
   it("preserves a promoted previous Pi when conditional close skips it after a switch", async () => {
-    const { runtimes, webview, registry } = await archivedDisplayFixture();
+    const { runtimes, webview, registry } = await inactiveDisplayFixture();
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
     const open = registry.open.bind(registry);
     vi.spyOn(registry, "open").mockImplementationOnce(async (session, intent) => {
@@ -4812,9 +4813,9 @@ describe("SessionWebviewProvider", () => {
   });
 
   it("keeps normal Pi and unrelated temporary Pi when selecting another normal Pi", async () => {
-    const { runtimes, webview, registry } = await archivedDisplayFixture();
+    const { runtimes, webview, registry } = await inactiveDisplayFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
-    await webview.receive({ type: "unarchiveSession", sessionId: inactiveSessionId });
+    await webview.receive({ type: "activateSession", sessionId: inactiveSessionId });
     const external = "external-temporary";
     runtimes.live.set(external, { sessionId: external, cwd: root, target: "external" });
     runtimes.temporary.add(external);
@@ -4825,10 +4826,10 @@ describe("SessionWebviewProvider", () => {
     expect(registry.displayedSessionId).toBe(activeSessionId);
   });
 
-  it("keeps a session that came back from the archive alive when the display moves away", async () => {
-    const { runtimes, webview } = await archivedDisplayFixture();
+  it("keeps a session that came back from the deactivate alive when the display moves away", async () => {
+    const { runtimes, webview } = await inactiveDisplayFixture();
 
-    await webview.receive({ type: "unarchiveSession", sessionId: inactiveSessionId });
+    await webview.receive({ type: "activateSession", sessionId: inactiveSessionId });
 
     expect(runtimes.temporary.has(inactiveSessionId)).toBe(false);
 
@@ -4837,8 +4838,8 @@ describe("SessionWebviewProvider", () => {
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
   });
 
-  it("does not stop the archived display when it is selected again", async () => {
-    const { runtimes, webview } = await archivedDisplayFixture();
+  it("does not stop the inactive display when it is selected again", async () => {
+    const { runtimes, webview } = await inactiveDisplayFixture();
 
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
@@ -4848,14 +4849,14 @@ describe("SessionWebviewProvider", () => {
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
   });
 
-  it("keeps the archived display when switching to the other session fails", async () => {
-    const { runtimes, webview } = await archivedDisplayFixture();
+  it("keeps the inactive display when switching to the other session fails", async () => {
+    const { runtimes, webview } = await inactiveDisplayFixture();
 
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
 
     // the switch target lost its session file: the open fails and the
-    // display stays on the archived session, which must stay alive
+    // display stays on the inactive session, which must stay alive
     await rm(join(root, "sessions", `${activeSessionId}.jsonl`));
     runtimes.live.delete(activeSessionId);
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
@@ -4863,8 +4864,8 @@ describe("SessionWebviewProvider", () => {
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
   });
 
-  it("keeps the archived display when starting a new session fails", async () => {
-    const { runtimes, webview } = await archivedDisplayFixture({
+  it("keeps the inactive display when starting a new session fails", async () => {
+    const { runtimes, webview } = await inactiveDisplayFixture({
       startNewSession: async () => {
         throw new Error("Work folder missing");
       },
@@ -4881,8 +4882,8 @@ describe("SessionWebviewProvider", () => {
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
   });
 
-  it("keeps the archived display when a failed launch closed the shared display", async () => {
-    const { registry, runtimes, terminal, webview } = await archivedDisplayFixture({
+  it("keeps the inactive display when a failed launch closed the shared display", async () => {
+    const { registry, runtimes, terminal, webview } = await inactiveDisplayFixture({
       startNewSession: async () => {
         // a failed launch closed the old display tab before its attach failed
         registry.onTerminalClosed(terminal as never);
@@ -4898,8 +4899,8 @@ describe("SessionWebviewProvider", () => {
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
   });
 
-  it("reports the failure but keeps the new display when stopping the archived display fails", async () => {
-    const { runtimes, webview } = await archivedDisplayFixture();
+  it("reports the failure but keeps the new display when stopping the inactive display fails", async () => {
+    const { runtimes, webview } = await inactiveDisplayFixture();
 
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
     runtimes.mocks.closeTemporarySession.mockRejectedValueOnce(new Error("pi-mux close failed"));
@@ -4913,7 +4914,7 @@ describe("SessionWebviewProvider", () => {
     );
   });
 
-  it("restores saved history as archived despite old active membership after workspace reload", async () => {
+  it("restores saved history as inactive despite old active membership after workspace reload", async () => {
     await seedSavedSession(activeSessionId);
     const original = createProvider();
 
@@ -4936,7 +4937,7 @@ describe("SessionWebviewProvider", () => {
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
 
     expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions).toEqual([
-      expect.objectContaining({ sessionId: activeSessionId, isArchived: true }),
+      expect.objectContaining({ sessionId: activeSessionId, isInactive: true }),
     ]);
     expect(terminal.show).toHaveBeenCalledTimes(1);
   });
@@ -4997,7 +4998,7 @@ describe("SessionWebviewProvider", () => {
     expect(html).toContain(`src="vscode-webview://test${root}/dist-webview/webview/client.js"`);
   });
 
-  it("archives without rewriting legacy locks or unrelated attributes", async () => {
+  it("deactivates without rewriting legacy locks or unrelated attributes", async () => {
     await seedSavedSession(activeSessionId);
     const { provider, statePath } = createProvider();
     await writeFile(
@@ -5019,27 +5020,27 @@ describe("SessionWebviewProvider", () => {
     await provider.refresh();
     const before = await readFile(statePath, "utf8");
     const row = webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0];
-    expect(row.isArchived).toBe(true);
+    expect(row.isInactive).toBe(true);
     expect(row).not.toHaveProperty("isLocked");
 
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
     expect(await readFile(statePath, "utf8")).toBe(before);
 
-    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isArchived).toBe(
+    expect(webview.postMessage.mock.calls.at(-1)?.[0].state.groups[0].sessions[0].isInactive).toBe(
       true,
     );
   });
 
   it.each(["missing", "invalid"] as const)(
-    "performs Unarchive and Archive with %s old JSON",
+    "performs Activate and Deactivate with %s old JSON",
     async (kind) => {
-      const { runtimes, webview, statePath, registry } = await archivedDisplayFixture();
+      const { runtimes, webview, statePath, registry } = await inactiveDisplayFixture();
       if (kind === "missing") await rm(statePath);
       else await writeFile(statePath, "invalid JSON");
-      await webview.receive({ type: "unarchiveSession", sessionId: inactiveSessionId });
+      await webview.receive({ type: "activateSession", sessionId: inactiveSessionId });
       expect(registry.displayedSessionId).toBe(inactiveSessionId);
       expect(runtimes.temporary.has(inactiveSessionId)).toBe(false);
-      await webview.receive({ type: "archiveSession", sessionId: inactiveSessionId });
+      await webview.receive({ type: "deactivateSession", sessionId: inactiveSessionId });
       expect(runtimes.mocks.closeSession).toHaveBeenCalledExactlyOnceWith(inactiveSessionId);
       expect(runtimes.mocks.closeTemporarySession).not.toHaveBeenCalled();
       expect(runtimes.live.has(inactiveSessionId)).toBe(false);
@@ -5050,12 +5051,12 @@ describe("SessionWebviewProvider", () => {
     },
   );
 
-  it("unarchives a live Pi even when the old store directory is read-only", async () => {
-    const { webview, statePath, registry, mocks } = await archiveFixture();
+  it("activates a live Pi even when the old store directory is read-only", async () => {
+    const { webview, statePath, registry, mocks } = await deactivateFixture();
     const before = await readFile(statePath, "utf8");
     await chmod(root, 0o500);
     try {
-      await webview.receive({ type: "unarchiveSession", sessionId: activeSessionId });
+      await webview.receive({ type: "activateSession", sessionId: activeSessionId });
       expect(registry.displayedSessionId).toBe(activeSessionId);
       expect(vscodeMocks.createTerminal).toHaveBeenCalledWith(
         expect.objectContaining({ shellArgs: ["open", activeSessionId] }),
@@ -5068,23 +5069,23 @@ describe("SessionWebviewProvider", () => {
     }
   });
 
-  it("archives without consulting invalid old membership", async () => {
-    const { webview, statePath, mocks, live } = await archiveFixture();
+  it("deactivates without consulting invalid old membership", async () => {
+    const { webview, statePath, mocks, live } = await deactivateFixture();
     await writeFile(statePath, "{ invalid", "utf8");
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
     expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith(activeSessionId);
     expect(live.has(activeSessionId)).toBe(false);
     expect(await readFile(statePath, "utf8")).toBe("{ invalid");
     expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
   });
 
-  it("archives successfully without writing into a read-only old-store directory", async () => {
-    const { webview, statePath, mocks, live, registry } = await archiveFixture();
+  it("deactivates successfully without writing into a read-only old-store directory", async () => {
+    const { webview, statePath, mocks, live, registry } = await deactivateFixture();
     await webview.receive({ type: "openSession", sessionId: activeSessionId });
     const before = await readFile(statePath, "utf8");
     await chmod(root, 0o500);
     try {
-      await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+      await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
       expect(await readFile(statePath, "utf8")).toBe(before);
       expect(live.has(activeSessionId)).toBe(false);
       expect(registry.displayedSessionId).toBeUndefined();
@@ -5097,18 +5098,18 @@ describe("SessionWebviewProvider", () => {
   });
 
   it("rejects an unknown session but does not gate close on invalid old membership", async () => {
-    const { webview, statePath, mocks } = await archiveFixture();
+    const { webview, statePath, mocks } = await deactivateFixture();
     const before = await readFile(statePath, "utf8");
-    await webview.receive({ type: "archiveSession", sessionId: unknownSessionId });
+    await webview.receive({ type: "deactivateSession", sessionId: unknownSessionId });
     expect(await readFile(statePath, "utf8")).toBe(before);
     await writeFile(statePath, "{ invalid", "utf8");
-    await webview.receive({ type: "archiveSession", sessionId: activeSessionId });
+    await webview.receive({ type: "deactivateSession", sessionId: activeSessionId });
     expect(mocks.closeSession).toHaveBeenCalledExactlyOnceWith(activeSessionId);
     expect(vscodeMocks.showErrorMessage).toHaveBeenCalledTimes(1);
   });
 
   it("closes the previous temporary Pi even when old membership is invalid", async () => {
-    const { statePath, runtimes, webview } = await archivedDisplayFixture();
+    const { statePath, runtimes, webview } = await inactiveDisplayFixture();
 
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
@@ -5120,8 +5121,8 @@ describe("SessionWebviewProvider", () => {
     expect(await readFile(statePath, "utf8")).toBe("not json");
   });
 
-  it("stops the archived display when the store file is missing", async () => {
-    const { statePath, runtimes, webview } = await archivedDisplayFixture();
+  it("stops the inactive display when the store file is missing", async () => {
+    const { statePath, runtimes, webview } = await inactiveDisplayFixture();
 
     await webview.receive({ type: "openSession", sessionId: inactiveSessionId });
     expect(runtimes.live.has(inactiveSessionId)).toBe(true);
@@ -5238,7 +5239,7 @@ describe("session status indicators", () => {
   }
 
   it("shows a row as delayed while publishPending is fresh and clears it when it resolves", async () => {
-    const fixture = await archiveFixture();
+    const fixture = await deactivateFixture();
     overlayPublishPending(fixture, () => Date.now() - 1_000);
     await fixture.provider.refresh();
     expect(row(fixture.webview)).toMatchObject({ publishDelayed: true });
@@ -5249,25 +5250,25 @@ describe("session status indicators", () => {
   });
 
   it("hides the mark for an attempt older than the freshness window", async () => {
-    const fixture = await archiveFixture();
+    const fixture = await deactivateFixture();
     overlayPublishPending(fixture, () => Date.now() - 11_000);
     await fixture.provider.refresh();
     expect(row(fixture.webview)).toMatchObject({ publishDelayed: false });
   });
 
-  it("keeps an archived row delayed like an unarchived row", async () => {
-    const fixture = await archiveFixture();
+  it("keeps an inactive row delayed like an active row", async () => {
+    const fixture = await deactivateFixture();
     fixture.temporary.add(activeSessionId);
     overlayPublishPending(fixture, () => Date.now() - 1_000);
     await fixture.provider.refresh();
-    expect(row(fixture.webview)).toMatchObject({ isArchived: true, publishDelayed: true });
+    expect(row(fixture.webview)).toMatchObject({ isInactive: true, publishDelayed: true });
   });
 
   it.each([false, true])(
-    "updates reload waiting through the list poll and keeps it on failure (archived: %s)",
-    async (isArchived) => {
-      const fixture = await archiveFixture();
-      if (isArchived) fixture.temporary.add(activeSessionId);
+    "updates reload waiting through the list poll and keeps it on failure (inactive: %s)",
+    async (isInactive) => {
+      const fixture = await deactivateFixture();
+      if (isInactive) fixture.temporary.add(activeSessionId);
       fixture.phases.set(activeSessionId, "running");
       overlayPublishPending(fixture, () => Date.now());
       const { mocks, provider, webview } = fixture;
@@ -5299,10 +5300,10 @@ describe("session status indicators", () => {
       isReloadPending = true;
       await tick(provider);
       expect(row(webview)).toMatchObject({
-        isArchived,
+        isInactive,
         publishDelayed: true,
         reloadPending: true,
-        state: isArchived ? undefined : "running",
+        state: isInactive ? undefined : "running",
       });
       expect(row(webview, inactiveSessionId)).not.toHaveProperty("reloadPending");
       expect(
@@ -5327,7 +5328,7 @@ describe("session status indicators", () => {
   );
 
   it("re-evaluates a stale attempt without any list change", async () => {
-    const fixture = await archiveFixture();
+    const fixture = await deactivateFixture();
     const attemptAt = Date.now() - 500;
     overlayPublishPending(fixture, () => attemptAt);
     await fixture.provider.refresh();

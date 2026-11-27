@@ -54,21 +54,21 @@ export const webviewStyles = `
     .session-status { position: relative; display: inline-flex; flex: none; align-items: center; justify-content: center; width: 12px; height: 12px; color: var(--vscode-descriptionForeground); }
     .session-status[data-state="running"] { color: var(--vscode-testing-iconPassed, var(--vscode-descriptionForeground)); }
     .session-status[data-state="waiting-approval"], .session-status[data-unread="true"], .session-status[data-fading="true"] { color: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)); }
-    .session-status[data-state="running"] > svg, .group-new-session[aria-busy="true"] svg, .archive[aria-busy="true"] svg, .unarchive[aria-busy="true"] svg { animation: session-spin 1s linear infinite; }
+    .session-status[data-state="running"] > svg, .group-new-session[aria-busy="true"] svg, .deactivate[aria-busy="true"] svg, .activate[aria-busy="true"] svg { animation: session-spin 1s linear infinite; }
     .session-status[data-fading="true"] > svg { animation: session-unread-fade 200ms ease-out forwards; }
     .session-delay-dot { position: absolute; right: 0; bottom: 0; width: 6px; height: 6px; border-radius: 3px; background: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)); }
     .session-reload-mark { position: absolute; top: 0; left: 100%; width: 8px; height: 8px; color: var(--vscode-foreground); pointer-events: none; }
     .session-reload-mark > svg { display: block; width: 100%; height: 100%; }
     @keyframes session-unread-fade { from { opacity: 1; } to { opacity: 0; } }
     @keyframes session-spin { to { transform: rotate(360deg); } }
-    @media (prefers-reduced-motion: reduce) { .session-status[data-state="running"] > svg, .group-new-session[aria-busy="true"] svg, .archive[aria-busy="true"] svg, .unarchive[aria-busy="true"] svg { animation: none; } .session-status[data-fading="true"] > svg { display: none; } }
+    @media (prefers-reduced-motion: reduce) { .session-status[data-state="running"] > svg, .group-new-session[aria-busy="true"] svg, .deactivate[aria-busy="true"] svg, .activate[aria-busy="true"] svg { animation: none; } .session-status[data-fading="true"] > svg { display: none; } }
     .session-name { display: block; flex: 1; overflow: hidden; min-width: 0; font-size: 13px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
     .session-timestamp { pointer-events: none; position: absolute; top: 50%; right: 36px; overflow: hidden; transform: translateY(-50%); color: var(--vscode-descriptionForeground); font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 20px; text-align: right; white-space: nowrap; }
-    .archive, .unarchive { position: absolute; top: 50%; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
-    .archive svg, .unarchive svg, .group-chevron svg, .group-new-session svg { width: 12px; height: 12px; }
-    .archive, .unarchive { right: 4px; }
-    .archive:hover, .unarchive:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
-    .session-row.archived .session-name, .session-row.archived .session-timestamp { color: var(--vscode-descriptionForeground); }
+    .deactivate, .activate { position: absolute; top: 50%; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; transform: translateY(-50%); color: var(--vscode-descriptionForeground); background: transparent; }
+    .deactivate svg, .activate svg, .group-chevron svg, .group-new-session svg { width: 12px; height: 12px; }
+    .deactivate, .activate { right: 4px; }
+    .deactivate:hover, .activate:hover { color: var(--vscode-foreground); background: var(--vscode-list-hoverBackground); }
+    .session-row.inactive .session-name, .session-row.inactive .session-timestamp { color: var(--vscode-descriptionForeground); }
     .session-row.selected .session-name, .session-row.selected .session-timestamp { color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); }
     .session-row.selected:focus-within .session-name, .session-row.selected:focus-within .session-timestamp { color: var(--vscode-list-activeSelectionForeground, var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground))); }
     .empty, #status, #connection-status { color: var(--vscode-descriptionForeground); font-size: 12px; }

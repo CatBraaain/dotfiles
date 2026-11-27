@@ -43,7 +43,7 @@ describe("listSessionSnapshot", () => {
         displayName: "Published title",
       }),
     ]);
-    expect(snapshot.archivedIds.size).toBe(0);
+    expect(snapshot.inactiveIds.size).toBe(0);
   });
 
   it("retains an unsaved live row without history metadata", async () => {
@@ -61,7 +61,7 @@ describe("listSessionSnapshot", () => {
         updatedAtMs: null,
       },
     ]);
-    expect(snapshot.archivedIds.size).toBe(0);
+    expect(snapshot.inactiveIds.size).toBe(0);
   });
 
   it("prefers the list title and falls back to the history title", async () => {
@@ -95,7 +95,7 @@ describe("listSessionSnapshot", () => {
 
   it("forms a registered-cwd union and gives list entries priority over saved duplicates", async () => {
     const history = [
-      historyEntry("archived", ROOT),
+      historyEntry("inactive", ROOT),
       historyEntry("A", ROOT),
       historyEntry("outside", "/outside"),
     ];
@@ -104,11 +104,11 @@ describe("listSessionSnapshot", () => {
       workspace("/empty", []),
     ]);
     expect(snapshot.registeredCwds).toEqual([ROOT, "/empty"]);
-    expect(snapshot.sessions.map(({ sessionId }) => sessionId).sort()).toEqual(["A", "archived"]);
+    expect(snapshot.sessions.map(({ sessionId }) => sessionId).sort()).toEqual(["A", "inactive"]);
     expect(snapshot.sessions.find(({ sessionId }) => sessionId === "A")?.filePath).toBe(
       "/planned.jsonl",
     );
-    expect(snapshot.archivedIds).toEqual(new Set(["archived"]));
+    expect(snapshot.inactiveIds).toEqual(new Set(["inactive"]));
   });
 
   it("merges temporary Pi with history without hiding unsaved rows or duplicating IDs", async () => {
@@ -127,7 +127,7 @@ describe("listSessionSnapshot", () => {
       "temporary",
       "unsaved",
     ]);
-    expect(snapshot.archivedIds).toEqual(new Set(["history", "temporary", "unsaved"]));
+    expect(snapshot.inactiveIds).toEqual(new Set(["history", "temporary", "unsaved"]));
     expect(snapshot.sessions.find(({ sessionId }) => sessionId === "temporary")?.displayName).toBe(
       "Live temporary title",
     );
@@ -145,8 +145,8 @@ describe("listSessionSnapshot", () => {
       workspace(ROOT, [{ ...session, temporary: true }]),
     ]);
     const normal = await listSessionSnapshot(history, [workspace(ROOT, [session])]);
-    expect(temporary.archivedIds).toEqual(new Set(["A"]));
-    expect(normal.archivedIds).toEqual(new Set());
+    expect(temporary.inactiveIds).toEqual(new Set(["A"]));
+    expect(normal.inactiveIds).toEqual(new Set());
     expect(normal.sessions).toEqual(temporary.sessions);
   });
 
@@ -170,7 +170,7 @@ describe("listSessionSnapshot", () => {
     expect(await listSessionSnapshot([], [])).toEqual({
       sessions: [],
       registeredCwds: [],
-      archivedIds: new Set(),
+      inactiveIds: new Set(),
     });
   });
 });

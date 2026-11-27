@@ -9,36 +9,36 @@ import {
   type ViewMode,
 } from "../src/webview/client";
 
-const atlasUnarchived: ClientSession = {
+const atlasActive: ClientSession = {
   sessionId: "00000000-0000-4000-8000-000000000001",
   displayName: "Atlas current",
   updatedAtMs: new Date(1970, 0, 1, 0, 0, 4).getTime(),
-  isArchived: false,
+  isInactive: false,
 };
-const atlasArchived: ClientSession = {
+const atlasInactive: ClientSession = {
   sessionId: "00000000-0000-4000-8000-000000000002",
-  displayName: "Atlas archived",
+  displayName: "Atlas inactive",
   updatedAtMs: new Date(1970, 0, 1, 0, 0, 3).getTime(),
-  isArchived: true,
+  isInactive: true,
 };
 const betaOther: ClientSession = {
   sessionId: "00000000-0000-4000-8000-000000000003",
   displayName: "Beta other",
   updatedAtMs: new Date(1970, 0, 1, 0, 0, 2).getTime(),
-  isArchived: false,
+  isInactive: false,
 };
 const betaPlain: ClientSession = {
   sessionId: "00000000-0000-4000-8000-000000000004",
   displayName: "Beta plain",
   updatedAtMs: new Date(1970, 0, 1, 0, 0, 1).getTime(),
-  isArchived: false,
+  isInactive: false,
 };
 
 const groups = [
   {
     cwd: "/workspace/atlas",
     label: "atlas",
-    sessions: [atlasUnarchived, atlasArchived],
+    sessions: [atlasActive, atlasInactive],
   },
   {
     cwd: "/workspace/beta",
@@ -142,24 +142,24 @@ describe("formatSessionTimestamp", () => {
 
 describe("sessionListView", () => {
   it("renders the empty state when no workspace is visible", () => {
-    const empty = viewFor("unarchived", []);
-    const allArchived = viewFor("unarchived", [
+    const empty = viewFor("active", []);
+    const allInactive = viewFor("active", [
       {
         cwd: "/workspace/beta",
         label: "beta",
-        sessions: [atlasArchived],
+        sessions: [atlasInactive],
       },
     ]);
 
     expect(empty.sessions).toHaveLength(1);
     expect(empty.sessions[0].tag).toBe("p");
     expect(text(empty.sessions[0])).toBe("No sessions yet");
-    expect(sectionsIn(allArchived)).toHaveLength(1);
-    expect(allArchived.sessions[0].children).toHaveLength(1);
-    expect(byClass(elementsIn(allArchived), "group-header")).toHaveLength(1);
-    expect(byClass(elementsIn(allArchived), "group-mode-toggle")).toHaveLength(1);
-    expect(byClass(elementsIn(allArchived), "session-row")).toHaveLength(0);
-    expect(byClass(elementsIn(allArchived), "empty")).toHaveLength(0);
+    expect(sectionsIn(allInactive)).toHaveLength(1);
+    expect(allInactive.sessions[0].children).toHaveLength(1);
+    expect(byClass(elementsIn(allInactive), "group-header")).toHaveLength(1);
+    expect(byClass(elementsIn(allInactive), "group-mode-toggle")).toHaveLength(1);
+    expect(byClass(elementsIn(allInactive), "session-row")).toHaveLength(0);
+    expect(byClass(elementsIn(allInactive), "empty")).toHaveLength(0);
   });
 
   it("renders group headers with the basename and the cwd hint only", () => {
@@ -207,16 +207,16 @@ describe("sessionListView", () => {
     }
   });
 
-  it("renders a mode button with its cwd and mode on empty, archived, and collapsed groups", () => {
+  it("renders a mode button with its cwd and mode on empty, inactive, and collapsed groups", () => {
     const stateGroups = [
       { cwd: "/workspace/empty", label: "empty", sessions: [] },
-      { cwd: "/workspace/archived", label: "archived", sessions: [atlasArchived] },
+      { cwd: "/workspace/inactive", label: "inactive", sessions: [atlasInactive] },
     ];
     const view = sessionListView(
       { groups: stateGroups },
-      new Map([["/workspace/archived", "all"]]),
+      new Map([["/workspace/inactive", "all"]]),
       undefined,
-      new Set(["/workspace/archived"]),
+      new Set(["/workspace/inactive"]),
     );
     const buttons = byClass(elementsIn(view), "group-mode-toggle");
 
@@ -225,17 +225,17 @@ describe("sessionListView", () => {
         class: "group-mode-toggle",
         type: "button",
         "data-mode-toggle": "/workspace/empty",
-        "data-mode": "unarchived",
+        "data-mode": "active",
         title: "Show all sessions",
         "aria-label": "Show all sessions",
       },
       {
         class: "group-mode-toggle",
         type: "button",
-        "data-mode-toggle": "/workspace/archived",
+        "data-mode-toggle": "/workspace/inactive",
         "data-mode": "all",
-        title: "Show unarchived sessions",
-        "aria-label": "Show unarchived sessions",
+        title: "Show active sessions",
+        "aria-label": "Show active sessions",
       },
     ]);
     expect(buttons.map((button) => collectElements(button)[1].attrs)).toEqual([
@@ -243,7 +243,7 @@ describe("sessionListView", () => {
         width: "16",
         height: "16",
         fill: "currentColor",
-        "data-mode-icon": "unarchived",
+        "data-mode-icon": "active",
       }),
       expect.objectContaining({
         width: "16",
@@ -257,8 +257,8 @@ describe("sessionListView", () => {
 
   it("filters modes by cwd rather than the shared basename or group position", () => {
     const stateGroups = [
-      { cwd: "/workspace/atlas", label: "atlas", sessions: [atlasArchived] },
-      { cwd: "/worktrees/atlas", label: "atlas", sessions: [{ ...betaOther, isArchived: true }] },
+      { cwd: "/workspace/atlas", label: "atlas", sessions: [atlasInactive] },
+      { cwd: "/worktrees/atlas", label: "atlas", sessions: [{ ...betaOther, isInactive: true }] },
     ];
     const modes = new Map<string, ViewMode>([["/worktrees/atlas", "all"]]);
     const initial = sessionListView({ groups: stateGroups });
@@ -270,7 +270,7 @@ describe("sessionListView", () => {
     expect(byClass(elementsIn(reordered), "session-name").map(text)).toEqual(["Beta other"]);
     expect(
       byClass(elementsIn(view), "group-mode-toggle").map((button) => button.attrs?.["data-mode"]),
-    ).toEqual(["unarchived", "all"]);
+    ).toEqual(["active", "all"]);
   });
 
   it("keys same-named workspace groups by cwd across removal and reordering", () => {
@@ -346,8 +346,8 @@ describe("sessionListView", () => {
   });
 
   it("hides the displayed session's selected mark only while its group is collapsed", () => {
-    const closed = viewFor("all", groups, atlasUnarchived.sessionId, new Set(["/workspace/atlas"]));
-    const opened = viewFor("all", groups, atlasUnarchived.sessionId);
+    const closed = viewFor("all", groups, atlasActive.sessionId, new Set(["/workspace/atlas"]));
+    const opened = viewFor("all", groups, atlasActive.sessionId);
 
     expect(byClass(elementsIn(closed), "selected")).toHaveLength(0);
     const selectedRows = byClass(elementsIn(opened), "selected");
@@ -358,13 +358,13 @@ describe("sessionListView", () => {
   it("distinguishes same-named project and worktree groups by heading hints", () => {
     const paths = ["/workspace/atlas", "/worktrees/atlas"];
     const view = viewFor(
-      "unarchived",
+      "active",
       paths.map((cwd) => ({
         cwd,
         label: "atlas",
         registered: false,
         workspaceActive: true,
-        sessions: [atlasUnarchived],
+        sessions: [atlasActive],
       })),
     );
 
@@ -377,9 +377,9 @@ describe("sessionListView", () => {
       expect(text(view.sessions[index])).not.toContain(path);
   });
 
-  it("shows unarchived sessions by default and archived ones in All mode", () => {
-    expect(sectionsIn(viewFor("unarchived"))).toHaveLength(2);
-    expect(byClass(elementsIn(viewFor("unarchived")), "session-name").map(text)).toEqual([
+  it("shows active sessions by default and inactive ones in All mode", () => {
+    expect(sectionsIn(viewFor("active"))).toHaveLength(2);
+    expect(byClass(elementsIn(viewFor("active")), "session-name").map(text)).toEqual([
       "Atlas current",
       "Beta other",
       "Beta plain",
@@ -387,7 +387,7 @@ describe("sessionListView", () => {
 
     expect(byClass(elementsIn(viewFor("all")), "session-name").map(text)).toEqual([
       "Atlas current",
-      "Atlas archived",
+      "Atlas inactive",
       "Beta other",
       "Beta plain",
     ]);
@@ -400,12 +400,7 @@ describe("sessionListView", () => {
 
     const buttons = byClass(elements, "session-button");
     const timestamps = byClass(elements, "session-timestamp").map(text);
-    for (const [index, session] of [
-      atlasUnarchived,
-      atlasArchived,
-      betaOther,
-      betaPlain,
-    ].entries()) {
+    for (const [index, session] of [atlasActive, atlasInactive, betaOther, betaPlain].entries()) {
       expect(buttons[index].attrs?.title).toContain(session.sessionId);
       expect(timestamps[index]).toBe("01/01");
     }
@@ -415,8 +410,8 @@ describe("sessionListView", () => {
     const elements = elementsIn(viewFor("all"));
     const rows = byClass(elements, "session-row");
     expect(rows.map((row) => row.attrs?.["data-row-session"])).toEqual([
-      atlasUnarchived.sessionId,
-      atlasArchived.sessionId,
+      atlasActive.sessionId,
+      atlasInactive.sessionId,
       betaOther.sessionId,
       betaPlain.sessionId,
     ]);
@@ -427,7 +422,7 @@ describe("sessionListView", () => {
       {
         cwd: "/workspace/atlas",
         label: "atlas",
-        sessions: [{ ...atlasUnarchived, updatedAtMs: null }],
+        sessions: [{ ...atlasActive, updatedAtMs: null }],
       },
     ]);
     const elements = elementsIn(view);
@@ -436,11 +431,11 @@ describe("sessionListView", () => {
     expect(byClass(elements, "session-timestamp").map(text)).toEqual([""]);
   });
 
-  it("keeps phase-absent status slots empty regardless of archive without changing row names", () => {
+  it("keeps phase-absent status slots empty regardless of deactivate without changing row names", () => {
     const elements = elementsIn(viewFor("all"));
     const slots = byClass(elements, "session-status");
 
-    expect(slots.map((slot) => slot.attrs?.["data-archived"])).toEqual([
+    expect(slots.map((slot) => slot.attrs?.["data-inactive"])).toEqual([
       "false",
       "true",
       "false",
@@ -453,7 +448,7 @@ describe("sessionListView", () => {
     }
     expect(byClass(elements, "session-button").map(text)).toEqual([
       "Atlas current",
-      "Atlas archived",
+      "Atlas inactive",
       "Beta other",
       "Beta plain",
     ]);
@@ -483,7 +478,7 @@ describe("sessionListView", () => {
     "maps $state with unread=$hasUnread to its icon and tooltip",
     ({ state, hasUnread, label, paths }) => {
       const elements = elementsIn(
-        viewFor("all", [{ ...groups[0], sessions: [{ ...atlasUnarchived, state, hasUnread }] }]),
+        viewFor("all", [{ ...groups[0], sessions: [{ ...atlasActive, state, hasUnread }] }]),
       );
       const slot = byClass(elements, "session-status")[0];
       const statusElements = collectElements(slot);
@@ -495,9 +490,9 @@ describe("sessionListView", () => {
       expect(statusPaths.map((path) => path.attrs?.d)).toEqual(paths);
       expect(slot.children).toHaveLength(paths.length === 0 ? 0 : 1);
       expect(byClass(elements, "session-button")[0].attrs?.title).toBe(
-        `${atlasUnarchived.displayName}\n${atlasUnarchived.sessionId}\n${label}${hasUnread ? "\nUnread" : ""}`,
+        `${atlasActive.displayName}\n${atlasActive.sessionId}\n${label}${hasUnread ? "\nUnread" : ""}`,
       );
-      expect(byClass(elements, "archive")[0].attrs?.disabled).toBeUndefined();
+      expect(byClass(elements, "deactivate")[0].attrs?.disabled).toBeUndefined();
       for (const icon of statusElements.filter((element) => element.tag === "svg")) {
         expect(icon.attrs).toMatchObject({
           width: "12",
@@ -513,30 +508,30 @@ describe("sessionListView", () => {
 
   it("hides unread icons and hints while the execution phase is unknown", () => {
     const elements = elementsIn(
-      viewFor("all", [{ ...groups[0], sessions: [{ ...atlasUnarchived, hasUnread: true }] }]),
+      viewFor("all", [{ ...groups[0], sessions: [{ ...atlasActive, hasUnread: true }] }]),
     );
     expect(byClass(elements, "session-status")[0].children).toEqual([]);
     expect(byClass(elements, "session-button")[0].attrs?.title).toBe(
-      `${atlasUnarchived.displayName}\n${atlasUnarchived.sessionId}`,
+      `${atlasActive.displayName}\n${atlasActive.sessionId}`,
     );
   });
 
   it.each([undefined, "running", "waiting-approval", "waiting-user"] as const)(
-    "keeps archived status slots empty with phase %s",
+    "keeps inactive status slots empty with phase %s",
     (state) => {
       const elements = elementsIn(
         viewFor("all", [
-          { ...groups[0], sessions: [{ ...atlasArchived, state, hasUnread: true }] },
+          { ...groups[0], sessions: [{ ...atlasInactive, state, hasUnread: true }] },
         ]),
       );
       expect(byClass(elements, "session-status")[0].children).toEqual([]);
-      expect(byClass(elements, "unarchive")).toHaveLength(1);
+      expect(byClass(elements, "activate")).toHaveLength(1);
     },
   );
 
   it("marks a delayed publication with a dot in the slot and a tooltip line", () => {
     const elements = elementsIn(
-      viewFor("all", [{ ...groups[0], sessions: [{ ...atlasUnarchived, publishDelayed: true }] }]),
+      viewFor("all", [{ ...groups[0], sessions: [{ ...atlasActive, publishDelayed: true }] }]),
     );
     const slot = byClass(elements, "session-status")[0];
 
@@ -545,7 +540,7 @@ describe("sessionListView", () => {
       expect.objectContaining({ attrs: { class: "session-delay-dot" } }),
     ]);
     expect(byClass(elements, "session-button")[0].attrs?.title).toBe(
-      `${atlasUnarchived.displayName}\n${atlasUnarchived.sessionId}\nState update delayed`,
+      `${atlasActive.displayName}\n${atlasActive.sessionId}\nState update delayed`,
     );
   });
 
@@ -554,7 +549,7 @@ describe("sessionListView", () => {
       viewFor("all", [
         {
           ...groups[0],
-          sessions: [{ ...atlasUnarchived, state: "running", publishDelayed: true }],
+          sessions: [{ ...atlasActive, state: "running", publishDelayed: true }],
         },
       ]),
     );
@@ -565,13 +560,13 @@ describe("sessionListView", () => {
     expect(slot.children).toHaveLength(2);
     expect(byClass(elements, "session-delay-dot")).toHaveLength(1);
     expect(byClass(elements, "session-button")[0].attrs?.title).toBe(
-      `${atlasUnarchived.displayName}\n${atlasUnarchived.sessionId}\nRunning\nState update delayed`,
+      `${atlasActive.displayName}\n${atlasActive.sessionId}\nRunning\nState update delayed`,
     );
   });
 
   it("describes reload after the delay and before unread without replacing either icon", () => {
     const session = {
-      ...atlasUnarchived,
+      ...atlasActive,
       state: "waiting-user" as const,
       hasUnread: true,
       publishDelayed: true,
@@ -592,9 +587,9 @@ describe("sessionListView", () => {
     );
   });
 
-  it("keeps delay and reload hints on archived rows without the phase or unread hint", () => {
+  it("keeps delay and reload hints on inactive rows without the phase or unread hint", () => {
     const session = {
-      ...atlasArchived,
+      ...atlasInactive,
       state: "waiting-user" as const,
       hasUnread: true,
       publishDelayed: true,
@@ -610,16 +605,16 @@ describe("sessionListView", () => {
   it("omits the publish-delay mark for rows without a fresh delay", () => {
     const elements = elementsIn(
       viewFor("all", [
-        { ...groups[0], sessions: [{ ...atlasUnarchived, publishDelayed: false }] },
-        { ...groups[0], sessions: [{ ...atlasArchived, publishDelayed: true }] },
+        { ...groups[0], sessions: [{ ...atlasActive, publishDelayed: false }] },
+        { ...groups[0], sessions: [{ ...atlasInactive, publishDelayed: true }] },
       ]),
     );
-    const [notDelayed, archivedDelayed] = byClass(elements, "session-status");
+    const [notDelayed, inactiveDelayed] = byClass(elements, "session-status");
 
     expect(notDelayed.attrs?.["data-delayed"]).toBeUndefined();
     expect(notDelayed.children).toEqual([]);
-    expect(archivedDelayed.attrs?.["data-delayed"]).toBe("true");
-    expect(archivedDelayed.children).toEqual([
+    expect(inactiveDelayed.attrs?.["data-delayed"]).toBe("true");
+    expect(inactiveDelayed.children).toEqual([
       expect.objectContaining({ attrs: { class: "session-delay-dot" } }),
     ]);
     expect(
@@ -647,15 +642,15 @@ describe("sessionListView", () => {
     }
   });
 
-  it("orders each row as button, timestamp, and the archive or unarchive overlay last", () => {
+  it("orders each row as button, timestamp, and the deactivate or activate overlay last", () => {
     const rowClasses = (row: ElementDescriptor): (string | undefined)[] =>
       (row.children ?? [])
         .filter((child): child is ElementDescriptor => typeof child !== "string")
         .map((child) => child.attrs?.class ?? "");
 
     const rows = byClass(elementsIn(viewFor("all")), "session-row");
-    expect(rowClasses(rows[0])).toEqual(["session-button", "session-timestamp", "archive"]);
-    expect(rowClasses(rows[1])).toEqual(["session-button", "session-timestamp", "unarchive"]);
+    expect(rowClasses(rows[0])).toEqual(["session-button", "session-timestamp", "deactivate"]);
+    expect(rowClasses(rows[1])).toEqual(["session-button", "session-timestamp", "activate"]);
   });
 
   it("omits copy and lock controls from every row", () => {
@@ -665,32 +660,34 @@ describe("sessionListView", () => {
     expect(elements.some((element) => element.attrs?.["data-lock"] !== undefined)).toBe(false);
   });
 
-  it("renders an enabled Archive overlay on every unarchived row", () => {
+  it("renders an enabled Deactivate overlay on every active row", () => {
     const elements = elementsIn(viewFor("all"));
-    const archives = byClass(elements, "archive");
+    const deactivateButtons = byClass(elements, "deactivate");
 
-    expect(archives.map((archive) => archive.attrs?.["data-archive"])).toEqual([
-      atlasUnarchived.sessionId,
+    expect(deactivateButtons.map((deactivate) => deactivate.attrs?.["data-deactivate"])).toEqual([
+      atlasActive.sessionId,
       betaOther.sessionId,
       betaPlain.sessionId,
     ]);
-    expect(archives.map((archive) => [archive.attrs?.disabled, archive.attrs?.title])).toEqual([
-      [undefined, "Archive"],
-      [undefined, "Archive"],
-      [undefined, "Archive"],
+    expect(
+      deactivateButtons.map((deactivate) => [deactivate.attrs?.disabled, deactivate.attrs?.title]),
+    ).toEqual([
+      [undefined, "Deactivate"],
+      [undefined, "Deactivate"],
+      [undefined, "Deactivate"],
     ]);
   });
 
-  it("renders the Unarchive overlay on archived rows instead of Archive", () => {
+  it("renders the Activate overlay on inactive rows instead of Deactivate", () => {
     const elements = elementsIn(viewFor("all"));
-    const unarchives = byClass(elements, "unarchive");
+    const activateButtons = byClass(elements, "activate");
 
-    expect(unarchives.map((unarchive) => unarchive.attrs?.["data-unarchive"])).toEqual([
-      atlasArchived.sessionId,
+    expect(activateButtons.map((activate) => activate.attrs?.["data-activate"])).toEqual([
+      atlasInactive.sessionId,
     ]);
     expect(
-      unarchives.map((unarchive) => [unarchive.attrs?.disabled, unarchive.attrs?.title]),
-    ).toEqual([[undefined, "Unarchive"]]);
+      activateButtons.map((activate) => [activate.attrs?.disabled, activate.attrs?.title]),
+    ).toEqual([[undefined, "Activate"]]);
   });
 
   it("marks the displayed session's row with the selected class", () => {
@@ -698,7 +695,7 @@ describe("sessionListView", () => {
 
     expect(rows.map((row) => row.attrs?.class)).toEqual([
       "session-row",
-      "session-row archived",
+      "session-row inactive",
       "session-row",
       "session-row selected",
     ]);
@@ -707,7 +704,7 @@ describe("sessionListView", () => {
   it("marks no row when the terminal shows no session", () => {
     expect(byClass(elementsIn(viewFor("all")), "selected")).toHaveLength(0);
     expect(
-      byClass(elementsIn(viewFor("unarchived", groups, atlasArchived.sessionId)), "selected"),
+      byClass(elementsIn(viewFor("active", groups, atlasInactive.sessionId)), "selected"),
     ).toHaveLength(0);
   });
 
@@ -718,8 +715,8 @@ describe("sessionListView", () => {
         "data-mode",
         "data-toggle-group",
         "data-session",
-        "data-archive",
-        "data-unarchive",
+        "data-deactivate",
+        "data-activate",
       ].some((name) => element.attrs?.[name] !== undefined),
     );
     expect(interactive.length).toBeGreaterThan(0);
@@ -743,14 +740,14 @@ describe("visibleSessions", () => {
         new Map([["/workspace/atlas", "all"]]),
         new Set(["/workspace/beta"]),
       ).map((session) => session.sessionId),
-    ).toEqual([atlasUnarchived.sessionId, atlasArchived.sessionId]);
+    ).toEqual([atlasActive.sessionId, atlasInactive.sessionId]);
   });
 
   it("flattens the display order across groups with the mode filter applied", () => {
     const state = { groups } as ClientState;
 
     expect(visibleSessions(state).map((session) => session.sessionId)).toEqual([
-      atlasUnarchived.sessionId,
+      atlasActive.sessionId,
       betaOther.sessionId,
       betaPlain.sessionId,
     ]);
@@ -759,8 +756,8 @@ describe("visibleSessions", () => {
         (session) => session.sessionId,
       ),
     ).toEqual([
-      atlasUnarchived.sessionId,
-      atlasArchived.sessionId,
+      atlasActive.sessionId,
+      atlasInactive.sessionId,
       betaOther.sessionId,
       betaPlain.sessionId,
     ]);

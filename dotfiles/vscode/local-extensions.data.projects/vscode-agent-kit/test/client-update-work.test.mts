@@ -15,7 +15,7 @@ type ListMessage = Extract<ExtensionMessage, { type: "sessions" | "sessionsError
 interface UpdateCase {
   field: ChangedField;
   workspaceCount: number;
-  mode: "all" | "unarchived";
+  mode: "all" | "active";
   location: RowLocation;
 }
 
@@ -30,7 +30,7 @@ const updateCases: UpdateCase[] = [
   ...[1, 10].flatMap((workspaceCount) =>
     changedFields.flatMap((field): UpdateCase[] => [
       { field, workspaceCount, mode: "all", location: "offscreen" },
-      { field, workspaceCount, mode: "unarchived", location: "offscreen" },
+      { field, workspaceCount, mode: "active", location: "offscreen" },
       { field, workspaceCount, mode: "all", location: "collapsed" },
     ]),
   ),
@@ -38,14 +38,14 @@ const updateCases: UpdateCase[] = [
     (["displayName", "updatedAtMs", "reloadPending"] as const).map((field): UpdateCase => ({
       field,
       workspaceCount,
-      mode: "unarchived",
+      mode: "active",
       location: "excluded",
     })),
   ),
   ...changedFields.map((field): UpdateCase => ({
     field,
     workspaceCount: 1,
-    mode: "unarchived",
+    mode: "active",
     location: "onscreen",
   })),
 ];
@@ -59,7 +59,7 @@ function createState(workspaceCount: number): WebviewState {
         sessionId: `session-${workspace}-${index}`,
         displayName: `Session ${workspace}-${index}`,
         updatedAtMs: Date.UTC(2026, 0, 1, 1, 0),
-        isArchived: index % 5 !== 0,
+        isInactive: index % 5 !== 0,
         ...(index % 5 === 0 ? { state: "waiting-user" as const, hasUnread: false } : {}),
       })),
     })),
@@ -198,7 +198,7 @@ describe("single-row display work", () => {
       const initial = createState(workspaceCount);
       const initialBuilds = await receive(initial);
       const initialSessionIds = initial.groups.flatMap((group) =>
-        group.sessions.filter((session) => !session.isArchived).map((session) => session.sessionId),
+        group.sessions.filter((session) => !session.isInactive).map((session) => session.sessionId),
       );
       expect(new Set(initialBuilds)).toEqual(new Set(initialSessionIds));
       if (mode === "all") {

@@ -9,7 +9,7 @@ Webview の色は VS Code のテーマ変数だけを使い、固定色の palet
 | 用途 | 値 |
 | --- | --- |
 | 背景・本文 | `sideBar-background`・`foreground` |
-| 補助文字（日時・行の操作・アーカイブ済みの表示名） | `descriptionForeground` |
+| 補助文字（日時・行の操作・Inactive の表示名） | `descriptionForeground` |
 | 状態アイコン | spinner は `testing-iconPassed`、ベル・一時停止マーク・公開遅延ドットは `editorWarning-foreground`（いずれも代替 `descriptionForeground`）。リロードマークは本文色 |
 | hover 面 | `list-hoverBackground` |
 | 選択面・選択文字（表示中セッションの行） | `list-inactiveSelectionBackground` / `Foreground`（行へのキーボードフォーカス中は `list-activeSelectionBackground` / `Foreground`） |
@@ -56,7 +56,7 @@ Layout: ワークスペースのメニュー — 一覧を押し下げず起動�
 
 New workspace フッターの主操作はワークスペースの登録。情報の優先順は一覧、取得状態・操作エラー、登録操作。New workspace とフルパス入力欄は同じ領域を使い、左側の folder-plus アイコン、状態・エラー表示と入力のヒントを保持する。操作とキー入力は SPEC「New Workspace アクション」に従う。
 
-セッション一覧の主操作は会話の選択・再開。情報の優先順は表示名、状態、更新日時。表示名・日時・状態のヒント・選択表示・右端の Archive / Unarchive を保持する。左端の状態アイコンと補助マークの表示条件は SPEC「実行フェーズの表示」に従う。状態の違いは左端のアイコンとヒントで示し、行内に独立したラベルは置かない。
+セッション一覧の主操作は会話の選択・再開。情報の優先順は表示名、状態、更新日時。表示名・日時・状態のヒント・選択表示・右端の Activate / Deactivate を保持する。左端の状態アイコンと補助マークの表示条件は SPEC「実行フェーズの表示」に従う。状態の違いは左端のアイコンとヒントで示し、行内に独立したラベルは置かない。
 
 | 部品 | 定義 |
 | --- | --- |
@@ -68,14 +68,14 @@ New workspace フッターの主操作はワークスペースの登録。情報
 | フッターの New workspace | フル幅・高さ32px・角丸9.6pxの ghost 操作。13px・500 ラベル、本文色、hover は hover 面。開くとアイコンの位置を保ったまま文字部分が入力へ切り替わる。構造の参照元は agent-open-ui の `SidebarFooter` |
 | フッターの folder-plus | ボタンと入力に共通する16pxの装飾SVG、本文色。操作領域の左端から11px・上端から8pxに配置する。文字先頭は操作領域の左端から33pxで、アイコンの右端との間隔は6px。入力中は入力面の左内側に置く |
 | ワークスペース フォーム | New workspace の文字部分を置き換える入力欄1つ。入力は境界を含め高さ32px・角丸9.6px・入力トークン・13px 文字、左内側余白32px・右内側余白8px、placeholder は `/absolute/path`、focus は `focusBorder` の 2px ring。構造の参照元は agent-open-ui の `SidebarWorkspaceForm` |
-| グループ見出しのモード切替 | 見出し名の右、New session の左に常時表示する。New session と同じ24px 四方の ghost 操作。16px の既存の目の SVG、補助文字色、hover は本文色と hover 面。未アーカイブ表示では斜線付きの目、All 表示では目を示す。focus は focus トークンの ring。ヒントと操作は SPEC「表示モード」に従う |
+| グループ見出しのモード切替 | 見出し名の右、New session の左に常時表示する。New session と同じ24px 四方の ghost 操作。16px の既存の目の SVG、補助文字色、hover は本文色と hover 面。Active 表示では斜線付きの目、All 表示では目を示す。focus は focus トークンの ring。ヒントと操作は SPEC「表示モード」に従う |
 | 状態アイコンのスロット | 全行で12px 四方の固定領域。アイコンを中央に置き、表示名との間隔は8px。空の場合も幅を保持する |
 | 公開遅延ドット | スロットの12px 四方の内側の右下へ重ねる6px の塗り円（角丸は直径の半分）。フェーズアイコンの有無によらず同じ位置に置き、スロット・表示名の開始位置と寸法は変えない。色は状態アイコントークンの `editorWarning-foreground`。点滅などの動きは加えない。表示条件は SPEC「実行フェーズの表示」に従う |
 | リロードマーク | 円弧と矢印で示す8px 四方の静止した線画アイコン。線端と線結合は既存の線画アイコンと同じ丸型とし、円弧と矢印の形状は実装に委ねる。状態アイコンのスロット右上に隣接させ、表示名までの既存の間隔内に収める。スロット内のフェーズアイコンと公開遅延ドットを覆わない。スロット・表示名の開始位置と行の寸法は保つ。独立した操作やフォーカス先にはしない |
 | spinner・ベル・一時停止マーク | 既存の行内操作と同じ12px SVG、`viewBox="0 0 24 24"`、塗りなし・`currentColor` の線幅2・丸い線端と線結合。spinner は開いた円弧（`M21 12a9 9 0 1 1-6.219-8.56`）。ベルは本体（`M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9`）と下端（`M10 21a2 2 0 0 0 4 0`）の輪郭線。一時停止マークは2本の縦線（`M9 4v16`・`M15 4v16`）。色は状態アイコントークンに従う |
 | 表示名 | 13px・20px 行・省略表示 |
 | 日時 | 等幅（`editor-font-family` 代替 `ui-monospace`）、10px・tabular-nums、右端から36pxの位置に右寄せし、文字間隔を広げても全文を収める自然幅とする。行内では右側に `36px + 5ch + 8px` を予約する |
-| 行の操作（Archive・Unarchive） | 24px 四方の ghost 操作。12px の `currentColor` SVG、補助文字色、hover は本文色と hover 面。右端から4pxの位置に重ねる。Archive と Unarchive は同じ位置を占有率で切り替え、アーカイブ済みの行では Archive の代わりに Unarchive（アーカイブから取り出す矢印付きの SVG）を出す。SPEC「アーカイブ・未アーカイブアクション」の待機表示中は同じ位置・寸法・色で既存の spinner SVG に置き換え、操作領域と周囲の配置は保つ |
+| 行の操作（Activate・Deactivate） | 24px 四方の ghost 操作。12px の `currentColor` SVG、補助文字色、hover は本文色と hover 面。右端から4pxの位置に重ねる。Deactivate と Activate は同じ位置を切り替えて使い、Inactive の行では Activate（上向き矢印付きの箱の SVG）を出す。SPEC「Activate と Deactivate」の待機表示中は同じ位置・寸法・色で既存の spinner SVG に置き換え、操作領域と周囲の配置は保つ |
 
 セッション一覧の主操作はセッションを開くこと。情報の優先順はグループ、セッション名と状態、更新日時と行操作。標準ビュータイトルの Sessions・操作アイコンと、Webview のグループ見出し・モード切替・行操作・New workspace・フォームを保持する。スクロール位置の操作は補助操作とし、装飾や追加のツールバーは設けない。
 
@@ -97,7 +97,7 @@ spinner は中心を軸に1秒・linear・無限反復で1回転する。回転�
 | --- | --- |
 | 行の hover | hover 面 |
 | 行の選択 | 選択面。選択中の表示名・日時は選択文字色 |
-| アーカイブ済みの行 | 表示名・日時を補助文字色にする |
+| Inactive の行 | 表示名・日時を補助文字色にする |
 | 空の一覧・状態表示 | 補助文字色・12px。空の案内と取得失敗の案内は余白24px の中央寄せ |
 | スクロールバーの表示 | document に縦 overflow があるとき、Webview へのホバー・スクロール中・つまみのドラッグ中・バーのキーボードフォーカス中だけ表示する。キーボードフォーカスには focus トークンの ring を出す |
 

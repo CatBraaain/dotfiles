@@ -27,20 +27,20 @@ describe("sessionViewGroups", () => {
   const registered = ["/workspace/alpha", "/workspace/beta"];
   const view = (overrides: Partial<Parameters<typeof sessionViewGroups>[1]> = {}) => ({
     registeredCwds: registered,
-    archivedIds: new Set<string>(),
+    inactiveIds: new Set<string>(),
     phases: new Map<string, "running" | "waiting-approval" | "waiting-user">(),
     ...overrides,
   });
 
-  it("sends every session of every registered group with archive marks", () => {
-    const groups = sessionViewGroups(sessions, view({ archivedIds: new Set(["older"]) }));
+  it("sends every session of every registered group with deactivate marks", () => {
+    const groups = sessionViewGroups(sessions, view({ inactiveIds: new Set(["older"]) }));
 
     expect(groups.map((group) => group.cwd)).toEqual(["/workspace/alpha", "/workspace/beta"]);
-    expect(groups[0].sessions.map((item) => [item.sessionId, item.isArchived])).toEqual([
+    expect(groups[0].sessions.map((item) => [item.sessionId, item.isInactive])).toEqual([
       ["active", false],
       ["older", true],
     ]);
-    expect(groups[1].sessions.map((item) => [item.sessionId, item.isArchived])).toEqual([
+    expect(groups[1].sessions.map((item) => [item.sessionId, item.isInactive])).toEqual([
       ["newest", false],
     ]);
   });
@@ -64,10 +64,10 @@ describe("sessionViewGroups", () => {
     ]);
   });
 
-  it("treats sessions without metadata as unarchived", () => {
+  it("treats sessions without metadata as active", () => {
     const groups = sessionViewGroups(sessions, view());
 
-    expect(groups.every((group) => group.sessions.every((item) => item.isArchived === false))).toBe(
+    expect(groups.every((group) => group.sessions.every((item) => item.isInactive === false))).toBe(
       true,
     );
   });
@@ -105,10 +105,10 @@ describe("sessionViewGroups", () => {
     expect(groups.map((group) => group.cwd)).toEqual(["/workspace/alpha"]);
   });
 
-  it("marks live sessions independently from the archived state and phase", () => {
+  it("marks live sessions independently from the inactive state and phase", () => {
     const groups = sessionViewGroups(
       sessions,
-      view({ archivedIds: new Set(["older", "newest"]), liveIds: new Set(["older", "active"]) }),
+      view({ inactiveIds: new Set(["older", "newest"]), liveIds: new Set(["older", "active"]) }),
     );
 
     expect(
@@ -177,11 +177,11 @@ describe("sessionViewGroups", () => {
 
     const groups = sessionViewGroups(
       synthetic,
-      view({ registeredCwds: syntheticCwds, archivedIds: new Set(["s-0"]) }),
+      view({ registeredCwds: syntheticCwds, inactiveIds: new Set(["s-0"]) }),
     );
 
     expect(groups).toHaveLength(10);
     expect(groups.flatMap((group) => group.sessions)).toHaveLength(1000);
-    expect(groups.at(-1)?.sessions.every((item) => item.isArchived === false)).toBe(true);
+    expect(groups.at(-1)?.sessions.every((item) => item.isInactive === false)).toBe(true);
   });
 });

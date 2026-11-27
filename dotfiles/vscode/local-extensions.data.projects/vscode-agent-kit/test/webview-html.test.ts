@@ -20,7 +20,7 @@ describe("webviewHtml", () => {
     const html = webviewHtml({ scriptUri: "https://vscode-host/webview/client.js", nonce: "n" });
 
     expect(html).toContain(".group-mode-toggle svg { width: 16px; height: 16px; }");
-    expect(html).toContain(".archive, .unarchive {");
+    expect(html).toContain(".deactivate, .activate {");
     expect(html).not.toContain(".copy");
     expect(html).not.toContain(".lock");
     expect(html).not.toContain("data-locked");
@@ -45,10 +45,10 @@ describe("webviewHtml", () => {
       ".session-row.selected .session-name, .session-row.selected .session-timestamp { color: var(--vscode-list-inactiveSelectionForeground, var(--vscode-foreground)); }",
     );
     expect(html).toContain(
-      ".session-row.archived .session-name, .session-row.archived .session-timestamp { color: var(--vscode-descriptionForeground); }",
+      ".session-row.inactive .session-name, .session-row.inactive .session-timestamp { color: var(--vscode-descriptionForeground); }",
     );
     expect(html).toContain(".session-timestamp { pointer-events: none;");
-    expect(html).not.toContain(".archive:disabled");
+    expect(html).not.toContain(".deactivate:disabled");
     expect(html).toContain("padding: 0 calc(36px + 5ch + 8px) 0 4px;");
     expect(html).toContain("right: 36px;");
   });

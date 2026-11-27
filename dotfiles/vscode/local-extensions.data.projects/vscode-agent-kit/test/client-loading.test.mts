@@ -13,12 +13,12 @@ const state: WebviewState = {
       cwd: "/workspace/atlas",
       label: "atlas",
       sessions: [
-        { sessionId, displayName: "Atlas current", updatedAtMs: null, isArchived: false },
+        { sessionId, displayName: "Atlas current", updatedAtMs: null, isInactive: false },
         {
-          sessionId: "archived-1",
-          displayName: "Atlas archived",
+          sessionId: "inactive-1",
+          displayName: "Atlas inactive",
           updatedAtMs: null,
-          isArchived: true,
+          isInactive: true,
         },
       ],
     },
@@ -125,7 +125,7 @@ describe("session list loading in the mounted client", () => {
     );
   }
 
-  async function archiveRequests(): Promise<
+  async function sessionActivationRequests(): Promise<
     { type: string; sessionId: string; requestId: string }[]
   > {
     return page.evaluate(() =>
@@ -136,7 +136,7 @@ describe("session list loading in the mounted client", () => {
           requestId: string;
         }[]
       ).filter(
-        (request) => request.type === "archiveSession" || request.type === "unarchiveSession",
+        (request) => request.type === "deactivateSession" || request.type === "activateSession",
       ),
     );
   }
@@ -149,12 +149,12 @@ describe("session list loading in the mounted client", () => {
   }
 
   it("routes session menu items to the clicked row without selecting it", async () => {
-    const [current, archived] = state.groups[0].sessions;
+    const [current, inactive] = state.groups[0].sessions;
     const temporary = {
       sessionId: "temporary-1",
       displayName: "Temporary",
       updatedAtMs: null,
-      isArchived: true,
+      isInactive: true,
       isLive: true,
     };
     await receive({
@@ -162,7 +162,7 @@ describe("session list loading in the mounted client", () => {
       state: {
         ...state,
         groups: [
-          { ...state.groups[0], sessions: [{ ...current, isLive: true }, archived, temporary] },
+          { ...state.groups[0], sessions: [{ ...current, isLive: true }, inactive, temporary] },
         ],
       },
     });
@@ -174,19 +174,19 @@ describe("session list loading in the mounted client", () => {
       await expect.poll(() => items.allTextContents()).toEqual(labels);
     };
 
-    await openMenu(temporary.sessionId, ["Reload Pi Session", "Unarchive", "Copy Session ID"]);
+    await openMenu(temporary.sessionId, ["Reload Pi Session", "Activate", "Copy Session ID"]);
     await menu.getByRole("menuitem", { name: "Reload Pi Session" }).click();
     await expect.poll(() => menu.isVisible()).toBe(false);
     expect(await page.locator(".session-row.selected").getAttribute("data-row-session")).toBe(
       sessionId,
     );
 
-    await openMenu("archived-1", ["Unarchive", "Copy Session ID"]);
+    await openMenu("inactive-1", ["Activate", "Copy Session ID"]);
     await menu.getByRole("menuitem", { name: "Copy Session ID" }).click();
-    await openMenu("archived-1", ["Unarchive", "Copy Session ID"]);
-    await menu.getByRole("menuitem", { name: "Unarchive" }).click();
-    await openMenu(sessionId, ["Reload Pi Session", "Archive", "Copy Session ID"]);
-    await menu.getByRole("menuitem", { name: "Archive", exact: true }).click();
+    await openMenu("inactive-1", ["Activate", "Copy Session ID"]);
+    await menu.getByRole("menuitem", { name: "Activate" }).click();
+    await openMenu(sessionId, ["Reload Pi Session", "Deactivate", "Copy Session ID"]);
+    await menu.getByRole("menuitem", { name: "Deactivate", exact: true }).click();
 
     const requests = await page.evaluate(() => {
       const requests = Reflect.get(window, "__requests") as { type: string; sessionId?: string }[];
@@ -196,9 +196,9 @@ describe("session list loading in the mounted client", () => {
     });
     expect(requests).toEqual([
       { type: "reloadSession", sessionId: temporary.sessionId },
-      { type: "copySessionId", sessionId: "archived-1" },
-      { type: "unarchiveSession", sessionId: "archived-1" },
-      { type: "archiveSession", sessionId },
+      { type: "copySessionId", sessionId: "inactive-1" },
+      { type: "activateSession", sessionId: "inactive-1" },
+      { type: "deactivateSession", sessionId },
     ]);
   });
 
@@ -556,22 +556,22 @@ describe("session list loading in the mounted client", () => {
   });
 
   it.each([
-    { action: "archive", rowSessionId: sessionId, done: "archiveFinished" },
-    { action: "unarchive", rowSessionId: "archived-1", done: "unarchiveFinished" },
+    { action: "deactivate", rowSessionId: sessionId, done: "deactivateFinished" },
+    { action: "activate", rowSessionId: "inactive-1", done: "activateFinished" },
   ] as const)(
     "shows the $action spinner immediately on click and clears only on completion",
     async ({ action, rowSessionId, done }) => {
       await receive({ type: "sessions", state });
       await expectLoaded();
-      if (action === "unarchive") {
+      if (action === "activate") {
         await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
-        await expect.poll(() => page.locator(".session-row.archived").count()).toBe(1);
+        await expect.poll(() => page.locator(".session-row.inactive").count()).toBe(1);
       }
       const button = page.locator(`[data-${action}="${rowSessionId}"]`);
       const before = await button.boundingBox();
       await button.click();
       await expect.poll(() => button.getAttribute("aria-busy")).toBe("true");
-      expect(await button.isEnabled()).toBe(action === "archive");
+      expect(await button.isEnabled()).toBe(action === "deactivate");
       expect(await button.locator("path").getAttribute("d")).toBe("M21 12a9 9 0 1 1-6.219-8.56");
       expect(await button.boundingBox()).toEqual(before);
       const animation = await button.locator("svg").evaluate((svg) => {
@@ -587,95 +587,95 @@ describe("session list loading in the mounted client", () => {
       await receive({ type: "sessions", state });
       await receive({ type: "error", message: "Unrelated operation failed" });
       expect(await button.getAttribute("aria-busy")).toBe("true");
-      const [request] = await archiveRequests();
+      const [request] = await sessionActivationRequests();
       await receive({ type: done, requestId: request.requestId });
       await expect.poll(() => button.getAttribute("aria-busy")).toBe("false");
       expect(await button.boundingBox()).toEqual(before);
     },
   );
 
-  it("ignores repeated Unarchive activation only for the pending row", async () => {
+  it("ignores repeated Activate activation only for the pending row", async () => {
     const group = state.groups[0];
-    const archived = group.sessions[1];
-    const otherArchived = { ...archived, sessionId: "archived-2", displayName: "Other archived" };
+    const inactive = group.sessions[1];
+    const otherInactive = { ...inactive, sessionId: "inactive-2", displayName: "Other inactive" };
     await receive({
       type: "sessions",
-      state: { ...state, groups: [{ ...group, sessions: [...group.sessions, otherArchived] }] },
+      state: { ...state, groups: [{ ...group, sessions: [...group.sessions, otherInactive] }] },
     });
     await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
-    const button = page.locator('[data-unarchive="archived-1"]');
+    const button = page.locator('[data-activate="inactive-1"]');
     await button.dblclick();
     await expect.poll(() => button.isEnabled()).toBe(false);
     await button.click({ force: true });
     await button.press("Enter");
-    await page.locator('[data-row-session="archived-1"]').click({ button: "right" });
-    const menuItem = page.getByRole("menuitem", { name: "Unarchive", exact: true });
+    await page.locator('[data-row-session="inactive-1"]').click({ button: "right" });
+    const menuItem = page.getByRole("menuitem", { name: "Activate", exact: true });
     await expect.poll(() => menuItem.isEnabled()).toBe(false);
     await menuItem.press("Enter");
     expect(await menuItem.isVisible()).toBe(true);
-    await page.locator('[data-unarchive="archived-2"]').click();
+    await page.locator('[data-activate="inactive-2"]').click();
 
-    const requests = await archiveRequests();
+    const requests = await sessionActivationRequests();
     expect(requests.map(({ type, sessionId }) => ({ type, sessionId }))).toEqual([
-      { type: "unarchiveSession", sessionId: archived.sessionId },
-      { type: "unarchiveSession", sessionId: otherArchived.sessionId },
+      { type: "activateSession", sessionId: inactive.sessionId },
+      { type: "activateSession", sessionId: otherInactive.sessionId },
     ]);
   });
 
-  it("allows Unarchive to be retried after a failed request finishes", async () => {
+  it("allows Activate to be retried after a failed request finishes", async () => {
     await receive({ type: "sessions", state });
     await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
-    const button = page.locator('[data-unarchive="archived-1"]');
+    const button = page.locator('[data-activate="inactive-1"]');
     await button.click();
-    const [failedRequest] = await archiveRequests();
+    const [failedRequest] = await sessionActivationRequests();
 
     await receive({ type: "error", message: "Could not restore session" });
-    await receive({ type: "unarchiveFinished", requestId: failedRequest.requestId });
+    await receive({ type: "activateFinished", requestId: failedRequest.requestId });
     await expect.poll(() => button.isEnabled()).toBe(true);
     await button.press("Enter");
 
-    const requests = await archiveRequests();
+    const requests = await sessionActivationRequests();
     expect(requests).toHaveLength(2);
     expect(requests[1].sessionId).toBe(failedRequest.sessionId);
     expect(requests[1].requestId).not.toBe(failedRequest.requestId);
   });
 
-  it("keeps all same-row archive requests pending and treats other rows independently", async () => {
+  it("keeps all same-row deactivate requests pending and treats other rows independently", async () => {
     await receive({ type: "sessions", state });
     await expectLoaded();
     await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
-    await expect.poll(() => page.locator(".session-row.archived").count()).toBe(1);
-    const archive = page.locator(`[data-archive="${sessionId}"]`);
-    const unarchive = page.locator('[data-unarchive="archived-1"]');
-    await archive.click();
-    await archive.click();
-    await unarchive.click();
-    const requests = await archiveRequests();
+    await expect.poll(() => page.locator(".session-row.inactive").count()).toBe(1);
+    const deactivate = page.locator(`[data-deactivate="${sessionId}"]`);
+    const activate = page.locator('[data-activate="inactive-1"]');
+    await deactivate.click();
+    await deactivate.click();
+    await activate.click();
+    const requests = await sessionActivationRequests();
     expect(
       requests.map(({ type, sessionId: rowSessionId }) => ({ type, sessionId: rowSessionId })),
     ).toEqual([
-      { type: "archiveSession", sessionId },
-      { type: "archiveSession", sessionId },
-      { type: "unarchiveSession", sessionId: "archived-1" },
+      { type: "deactivateSession", sessionId },
+      { type: "deactivateSession", sessionId },
+      { type: "activateSession", sessionId: "inactive-1" },
     ]);
     expect(new Set(requests.map(({ requestId }) => requestId)).size).toBe(3);
-    await receive({ type: "archiveFinished", requestId: requests[0].requestId });
-    expect(await archive.getAttribute("aria-busy")).toBe("true");
-    await receive({ type: "unarchiveFinished", requestId: requests[2].requestId });
-    await expect.poll(() => unarchive.getAttribute("aria-busy")).toBe("false");
-    expect(await archive.getAttribute("aria-busy")).toBe("true");
-    await receive({ type: "archiveFinished", requestId: requests[0].requestId });
-    await receive({ type: "unarchiveFinished", requestId: "old-view-request" });
-    expect(await archive.getAttribute("aria-busy")).toBe("true");
-    await receive({ type: "archiveFinished", requestId: requests[1].requestId });
-    await expect.poll(() => archive.getAttribute("aria-busy")).toBe("false");
+    await receive({ type: "deactivateFinished", requestId: requests[0].requestId });
+    expect(await deactivate.getAttribute("aria-busy")).toBe("true");
+    await receive({ type: "activateFinished", requestId: requests[2].requestId });
+    await expect.poll(() => activate.getAttribute("aria-busy")).toBe("false");
+    expect(await deactivate.getAttribute("aria-busy")).toBe("true");
+    await receive({ type: "deactivateFinished", requestId: requests[0].requestId });
+    await receive({ type: "activateFinished", requestId: "old-view-request" });
+    expect(await deactivate.getAttribute("aria-busy")).toBe("true");
+    await receive({ type: "deactivateFinished", requestId: requests[1].requestId });
+    await expect.poll(() => deactivate.getAttribute("aria-busy")).toBe("false");
   });
 
-  it("keeps the archive spinner static under reduced motion", async () => {
+  it("keeps the deactivate spinner static under reduced motion", async () => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await receive({ type: "sessions", state });
     await expectLoaded();
-    const button = page.locator(`[data-archive="${sessionId}"]`);
+    const button = page.locator(`[data-deactivate="${sessionId}"]`);
     await button.click();
     await expect.poll(() => button.getAttribute("aria-busy")).toBe("true");
     const animation = await button
@@ -691,18 +691,18 @@ describe("session list loading in the mounted client", () => {
         cwd: "/workspace/atlas",
         label: "atlas",
         sessions: [
-          { sessionId, displayName: "Atlas current", updatedAtMs: null, isArchived: false },
+          { sessionId, displayName: "Atlas current", updatedAtMs: null, isInactive: false },
           {
             sessionId: "slide-2",
             displayName: "Atlas second",
             updatedAtMs: null,
-            isArchived: false,
+            isInactive: false,
           },
           {
-            sessionId: "archived-1",
-            displayName: "Atlas archived",
+            sessionId: "inactive-1",
+            displayName: "Atlas inactive",
             updatedAtMs: null,
-            isArchived: true,
+            isInactive: true,
           },
         ],
       },
@@ -720,13 +720,13 @@ describe("session list loading in the mounted client", () => {
             sessionId: "slide-2",
             displayName: "Atlas second",
             updatedAtMs: null,
-            isArchived: false,
+            isInactive: false,
           },
           {
-            sessionId: "archived-1",
-            displayName: "Atlas archived",
+            sessionId: "inactive-1",
+            displayName: "Atlas inactive",
             updatedAtMs: null,
-            isArchived: true,
+            isInactive: true,
           },
         ],
       },
@@ -734,24 +734,24 @@ describe("session list loading in the mounted client", () => {
     displayedSessionId: sessionId,
   };
 
-  it("slides the moved rows of a pending archive update and snaps otherwise", async () => {
+  it("slides the moved rows of a pending deactivate update and snaps otherwise", async () => {
     await receive({ type: "sessions", state: slideState });
     await expect.poll(() => page.locator(".session-row").count()).toBe(2);
-    await page.locator(`[data-archive="${sessionId}"]`).click();
-    const [request] = await archiveRequests();
+    await page.locator(`[data-deactivate="${sessionId}"]`).click();
+    const [request] = await sessionActivationRequests();
     await receive({ type: "sessions", state: afterSlideState });
     const moving = page.locator('[data-row-session="slide-2"]');
     await expect.poll(() => animationCount(moving)).toBe(1);
-    await receive({ type: "archiveFinished", requestId: request.requestId });
+    await receive({ type: "deactivateFinished", requestId: request.requestId });
     await receive({ type: "sessions", state: afterSlideState });
     await expect.poll(() => animationCount(moving)).toBe(0);
   });
 
-  it("skips the pending-archive slide under reduced motion", async () => {
+  it("skips the pending-deactivate slide under reduced motion", async () => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await receive({ type: "sessions", state: slideState });
     await expect.poll(() => page.locator(".session-row").count()).toBe(2);
-    await page.locator(`[data-archive="${sessionId}"]`).click();
+    await page.locator(`[data-deactivate="${sessionId}"]`).click();
     await receive({ type: "sessions", state: afterSlideState });
     await expect.poll(() => page.locator(".session-row").count()).toBe(1);
     const moving = page.locator('[data-row-session="slide-2"]');
@@ -762,7 +762,7 @@ describe("session list loading in the mounted client", () => {
     sessionId: "added-1",
     displayName: "Atlas added",
     updatedAtMs: null,
-    isArchived: false,
+    isInactive: false,
   };
   const atlas = slideState.groups[0];
   const afterAddState: WebviewState = {
@@ -851,13 +851,13 @@ describe("session list loading in the mounted client", () => {
   it("snaps a list update that only adds a hidden session row", async () => {
     await receive({ type: "sessions", state: slideState });
     await expect.poll(() => page.locator(".session-row").count()).toBe(2);
-    const [first, second, archived] = atlas.sessions;
+    const [first, second, inactive] = atlas.sessions;
     const reorderedState: WebviewState = {
       ...slideState,
       groups: [
         {
           ...atlas,
-          sessions: [second, first, archived, { ...addedSession, isArchived: true }],
+          sessions: [second, first, inactive, { ...addedSession, isInactive: true }],
         },
       ],
     };
@@ -945,14 +945,14 @@ describe("session list loading in the mounted client", () => {
     await expect.poll(() => animationCount(moved)).toBe(1);
   });
 
-  it("does not slide a collapse-only change after an animated archive update", async () => {
+  it("does not slide a collapse-only change after an animated deactivate update", async () => {
     await receive({
       type: "sessions",
       state: { ...slideState, groups: [...slideState.groups, betaGroup] },
     });
     await expect.poll(() => page.locator(".session-row").count()).toBe(3);
-    await page.locator(`[data-archive="${sessionId}"]`).click();
-    const [request] = await archiveRequests();
+    await page.locator(`[data-deactivate="${sessionId}"]`).click();
+    const [request] = await sessionActivationRequests();
     await receive({
       type: "sessions",
       state: { ...afterSlideState, groups: [...afterSlideState.groups, betaGroup] },
@@ -960,7 +960,7 @@ describe("session list loading in the mounted client", () => {
     const moving = page.locator('[data-group-cwd="/workspace/beta"] .group-header');
     await expect.poll(() => animationCount(moving)).toBe(1);
     await expect.poll(() => animationCount(moving)).toBe(0);
-    await receive({ type: "archiveFinished", requestId: request.requestId });
+    await receive({ type: "deactivateFinished", requestId: request.requestId });
     await page.getByRole("button", { name: "atlas", exact: true }).click();
     await expect.poll(() => page.locator(".session-row").count()).toBe(1);
     expect(await animationCount(moving)).toBe(0);
@@ -1169,11 +1169,11 @@ describe("session list loading in the mounted client", () => {
   });
 
   it.each([
-    { state: "running", hasUnread: false, isArchived: false, icons: 1 },
-    { state: "waiting-approval", hasUnread: false, isArchived: false, icons: 1 },
-    { state: undefined, hasUnread: false, isArchived: false, icons: 0 },
-    { state: "waiting-user", hasUnread: false, isArchived: true, icons: 0 },
-    { state: "waiting-user", hasUnread: true, isArchived: false, icons: 1 },
+    { state: "running", hasUnread: false, isInactive: false, icons: 1 },
+    { state: "waiting-approval", hasUnread: false, isInactive: false, icons: 1 },
+    { state: undefined, hasUnread: false, isInactive: false, icons: 0 },
+    { state: "waiting-user", hasUnread: false, isInactive: true, icons: 0 },
+    { state: "waiting-user", hasUnread: true, isInactive: false, icons: 1 },
   ] as const)("prioritizes the latest state over a fading bell: %j", async (update) => {
     await showUnread();
     await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
@@ -1188,16 +1188,16 @@ describe("session list loading in the mounted client", () => {
     expect(await status.getAttribute("data-state")).toBe(update.state ?? null);
   });
 
-  it.each(["running", "waiting-approval", undefined, "archived"] as const)(
+  it.each(["running", "waiting-approval", undefined, "inactive"] as const)(
     "replaces an unread bell immediately for %s rather than fading",
     async (phase) => {
       await showUnread();
       await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
       const next = unreadState();
       Object.assign(next.groups[0].sessions[0], {
-        state: phase === "archived" ? "waiting-user" : phase,
+        state: phase === "inactive" ? "waiting-user" : phase,
         hasUnread: false,
-        isArchived: phase === "archived",
+        isInactive: phase === "inactive",
       });
       await receive({ type: "sessions", state: next });
       const status = page.locator(`[data-session="${sessionId}"] .session-status`);
@@ -1209,7 +1209,7 @@ describe("session list loading in the mounted client", () => {
     },
   );
 
-  it("updates archived row fields after a cloned snapshot and retains current action targets", async () => {
+  it("updates inactive row fields after a cloned snapshot and retains current action targets", async () => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await receive({ type: "sessions", state });
     await expectLoaded();
@@ -1221,25 +1221,25 @@ describe("session list loading in the mounted client", () => {
       updatedAtMs: Date.UTC(2026, 0, 1, 12),
       state: undefined,
       hasUnread: false,
-      isArchived: true,
+      isInactive: true,
     });
     updated.displayedSessionId = updated.groups[0].sessions[1].sessionId;
     await receive({ type: "sessions", state: updated });
     const row = page.locator(".session-row").first();
     await expect.poll(() => row.locator(".session-name").textContent()).toBe(session.displayName);
-    expect(await row.getAttribute("class")).toBe("session-row archived");
+    expect(await row.getAttribute("class")).toBe("session-row inactive");
     expect(await row.locator(".session-timestamp").textContent()).not.toBe("");
     expect(await row.locator(".session-status").getAttribute("data-state")).toBeNull();
     expect(await row.locator(".session-status").getAttribute("data-unread")).toBe("false");
     expect(await row.locator(".session-button").getAttribute("title")).toBe(
       `${session.displayName}\n${session.sessionId}`,
     );
-    expect(await page.locator(".selected .session-name").textContent()).toBe("Atlas archived");
-    await row.locator(".unarchive").click();
+    expect(await page.locator(".selected .session-name").textContent()).toBe("Atlas inactive");
+    await row.locator(".activate").click();
     expect(
       await page.evaluate(() => (Reflect.get(window, "__requests") as unknown[]).at(-1)),
     ).toEqual({
-      type: "unarchiveSession",
+      type: "activateSession",
       sessionId: session.sessionId,
       requestId: expect.any(String),
     });

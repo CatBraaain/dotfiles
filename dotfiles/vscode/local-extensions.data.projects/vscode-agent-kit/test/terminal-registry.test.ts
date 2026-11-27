@@ -300,7 +300,7 @@ describe("TerminalRegistry", () => {
     const original = live.get("A");
     const first = await registry.open({ ...session("A"), temporary: true });
     expect(temporary.has("A")).toBe(true);
-    const next = await registry.open(session("A"), "unarchive");
+    const next = await registry.open(session("A"), "activate");
     expect(next.terminal).not.toBe(first.terminal);
     expect(first.terminal.dispose).toHaveBeenCalledOnce();
     expect(displays.create).toHaveBeenLastCalledWith(session("A"));
@@ -322,7 +322,7 @@ describe("TerminalRegistry", () => {
     expect(live.get("A")).toBe(original);
   });
 
-  it("keeps a normal Pi normal when opened temporarily from a stale archived row", async () => {
+  it("keeps a normal Pi normal when opened temporarily from a stale inactive row", async () => {
     const { registry, temporary, live } = setup();
     const original = live.get("A");
     await registry.open({ ...session("A"), temporary: true });
@@ -475,7 +475,7 @@ describe("TerminalRegistry", () => {
     expect(mocks.switch).toHaveBeenCalledExactlyOnceWith("B", 123);
   });
 
-  it("closes a restored pi-mux parent Terminal when archiving its child client target", async () => {
+  it("closes a restored pi-mux parent Terminal when deactivating its child client target", async () => {
     const existing = displayTerminal();
     const { registry, client } = setup(existing);
     Object.assign(client, { pid: 456, parentPid: 123, attachedId: "A" });
@@ -688,8 +688,8 @@ describe("TerminalRegistry", () => {
   });
 
   it.each([
-    { intent: "unarchive" as const, previousTemporary: false },
-    { intent: "unarchive" as const, previousTemporary: true },
+    { intent: "activate" as const, previousTemporary: false },
+    { intent: "activate" as const, previousTemporary: true },
     { intent: "select" as const, previousTemporary: false },
     { intent: "select" as const, previousTemporary: true },
   ])(
@@ -757,7 +757,7 @@ describe("TerminalRegistry", () => {
       live.delete("A");
       throw new Error("creation failed");
     });
-    await expect(registry.open(session("B"), "unarchive")).rejects.toThrow("creation failed");
+    await expect(registry.open(session("B"), "activate")).rejects.toThrow("creation failed");
     expect(displays.create).toHaveBeenCalledTimes(2);
     expect(await registry.displayForSession("A")).toBeUndefined();
     expect(live.has("A")).toBe(false);
@@ -776,7 +776,7 @@ describe("TerminalRegistry", () => {
         displays.create.mockImplementationOnce(() => {
           throw new Error("recovery denied");
         });
-      await expect(registry.open(session("B"), "unarchive")).rejects.toThrow(
+      await expect(registry.open(session("B"), "activate")).rejects.toThrow(
         "creation failed; failed to restore display: recovery denied",
       );
       expect(displays.create).toHaveBeenCalledTimes(failure === "list" ? 2 : 3);
@@ -792,7 +792,7 @@ describe("TerminalRegistry", () => {
       temporary.add("A");
       throw new Error("creation failed");
     });
-    await expect(registry.open(session("B"), "unarchive")).rejects.toThrow(
+    await expect(registry.open(session("B"), "activate")).rejects.toThrow(
       "showing previous Pi session A",
     );
     expect(displays.create).toHaveBeenLastCalledWith({ ...session("A"), temporary: true });
@@ -810,7 +810,7 @@ describe("TerminalRegistry", () => {
       throw new Error("creation failed");
     });
     displays.create.mockReturnValueOnce(terminal);
-    await expect(registry.open(session("B"), "unarchive")).rejects.toThrow(
+    await expect(registry.open(session("B"), "activate")).rejects.toThrow(
       "showing previous Pi session A",
     );
     expect(terminal.show).toHaveBeenCalledOnce();
@@ -834,7 +834,7 @@ describe("TerminalRegistry", () => {
         throw new Error("creation failed");
       });
       const opening = registry
-        .open(session("B", "/other"), "unarchive", controller.signal)
+        .open(session("B", "/other"), "activate", controller.signal)
         .catch((error: unknown) => error);
       await vi.waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(3));
       if (cancellation === "request") controller.abort(new Error("request cancelled"));
@@ -862,7 +862,7 @@ describe("TerminalRegistry", () => {
       throw new Error("creation failed");
     });
     const opening = registry
-      .open(session("B", "/other"), "unarchive")
+      .open(session("B", "/other"), "activate")
       .catch((error: unknown) => error);
     registry.cancelDisplayRecovery("/project");
     release();
@@ -892,7 +892,7 @@ describe("TerminalRegistry", () => {
         return recovered;
       });
       await expect(
-        registry.open(session("B"), "unarchive", controller.signal),
+        registry.open(session("B"), "activate", controller.signal),
       ).rejects.toBeInstanceOf(Error);
       expect(recovered.show).not.toHaveBeenCalled();
       expect(recovered.dispose).toHaveBeenCalledOnce();
@@ -963,7 +963,7 @@ describe("TerminalRegistry", () => {
     expect(live.has("B")).toBe(true);
   });
 
-  it("closes the archived display without switching to a live same-cwd Pi", async () => {
+  it("closes the inactive display without switching to a live same-cwd Pi", async () => {
     const { registry, live, mocks, displays } = setup();
     const sibling = live.get("B");
     const { terminal } = await registry.open(session("A"));
@@ -980,7 +980,7 @@ describe("TerminalRegistry", () => {
     expect(displays.create).toHaveBeenCalledOnce();
   });
 
-  it("closes a restored display of the archived Pi without switching or rechecking its identity", async () => {
+  it("closes a restored display of the inactive Pi without switching or rechecking its identity", async () => {
     const existing = displayTerminal();
     const { registry, client, mocks, displays, live } = setup(existing);
     const dispose = vi.spyOn(existing, "dispose");
@@ -1008,7 +1008,7 @@ describe("TerminalRegistry", () => {
     expect(existing.dispose).not.toHaveBeenCalled();
   });
 
-  it("clears the archived selection even if the user already closed its tab", async () => {
+  it("clears the inactive selection even if the user already closed its tab", async () => {
     const { registry } = setup();
     const { terminal } = await registry.open(session("A"));
     registry.onTerminalClosed(terminal);
@@ -1025,7 +1025,7 @@ describe("TerminalRegistry", () => {
   });
 
   it.each(["A", "B"])(
-    "closes a restored display only if it showed the archived session: pi-%s",
+    "closes a restored display only if it showed the inactive session: pi-%s",
     async (attached) => {
       const existing = displayTerminal();
       const { registry, client } = setup(existing);
@@ -1076,7 +1076,7 @@ describe("TerminalRegistry", () => {
     expect(mocks.newSession).not.toHaveBeenCalled();
   });
 
-  it("does not close an unrelated restored display when no archive target exists", async () => {
+  it("does not close an unrelated restored display when no deactivate target exists", async () => {
     const existing = displayTerminal();
     const { registry } = setup(existing);
     await registry.stop("unknown");

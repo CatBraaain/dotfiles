@@ -88,7 +88,7 @@ export const AllMode: SessionsStory = storyFromDemoState("Sample — workspace A
 });
 
 export const EmptySessions: SessionsStory = storyFromDemoState(
-  "Sample — no unarchived sessions",
+  "Sample — no active sessions",
   "empty",
 );
 

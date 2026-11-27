@@ -56,7 +56,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private addedCwds = new Set<string>();
   private workspaceUpdates: Promise<void> = Promise.resolve();
   private sessionsById = new Map<string, SessionSummary>();
-  private archivedSessionIds = new Set<string>();
+  private inactiveSessionIds = new Set<string>();
   private temporarySessionIds = new Set<string>();
   private state: WebviewState | undefined;
   private postedStateJson: string | undefined;
@@ -461,7 +461,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     const version = this.refreshVersion;
     const addedCwds = this.addedCwds;
-    const { sessions, archivedIds } = await listSessionSnapshot(history, workspaces);
+    const { sessions, inactiveIds } = await listSessionSnapshot(history, workspaces);
     if (
       this.disposed ||
       this.view !== view ||
@@ -477,13 +477,13 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     )
       return;
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
-    this.archivedSessionIds = archivedIds;
+    this.inactiveSessionIds = inactiveIds;
     const currentUnreadIds = this.unreadIdsFor(workspaces);
     const live = flattenPiMuxSessions(workspaces);
     const state: WebviewState = {
       groups: sessionViewGroups(sessions, {
         registeredCwds: [...addedCwds],
-        archivedIds,
+        inactiveIds,
         liveIds: new Set(live.map(({ id }) => id)),
         phases: phasesFromWorkspaces(workspaces),
         unreadIds: currentUnreadIds,
@@ -689,27 +689,27 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       }
       return;
     }
-    if (request.type === "archiveSession") {
+    if (request.type === "deactivateSession") {
       try {
-        await this.deps.registry.run(() => this.archiveSession(request.sessionId));
+        await this.deps.registry.run(() => this.deactivateSession(request.sessionId));
       } finally {
         if (request.requestId !== undefined)
-          this.post({ type: "archiveFinished", requestId: request.requestId });
+          this.post({ type: "deactivateFinished", requestId: request.requestId });
       }
       return;
     }
-    if (request.type === "unarchiveSession") {
+    if (request.type === "activateSession") {
       try {
-        await this.queueOpenSession(request.sessionId, "unarchive");
+        await this.queueOpenSession(request.sessionId, "activate");
       } finally {
         if (request.requestId !== undefined)
-          this.post({ type: "unarchiveFinished", requestId: request.requestId });
+          this.post({ type: "activateFinished", requestId: request.requestId });
       }
       return;
     }
   }
 
-  private async archiveSession(sessionId: string): Promise<void> {
+  private async deactivateSession(sessionId: string): Promise<void> {
     const session = this.sessionsById.get(sessionId);
     if (session === undefined) {
       this.postError(`Session not found: ${sessionId}`);
@@ -824,7 +824,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
 
   private async queueOpenSession(
     sessionId: string,
-    intent: "select" | "unarchive",
+    intent: "select" | "activate",
     selection?: symbol,
   ): Promise<void> {
     const controller = new AbortController();
@@ -849,13 +849,13 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
 
   private async openKnownSession(
     session: SessionSummary,
-    intent: "select" | "unarchive",
+    intent: "select" | "activate",
     signal: AbortSignal,
     present: (terminal: vscode.Terminal) => boolean,
   ): Promise<void> {
     const previousSessionId = this.deps.registry.displayedSessionId;
     const { sessionId } = session;
-    const temporary = intent === "select" && this.archivedSessionIds.has(sessionId);
+    const temporary = intent === "select" && this.inactiveSessionIds.has(sessionId);
     let hasSavedFile: boolean;
     try {
       hasSavedFile = await sessionFileExists(session.filePath);
@@ -1032,7 +1032,7 @@ function phasesFromWorkspaces(workspaces: readonly PiMuxWorkspace[]): Map<string
 }
 
 /** Sessions whose `publishPending` marks an unresolved publication attempt at `nowMs`.
- * Unlike phases, delayed rows include archived (temporary) sessions. */
+ * Unlike phases, delayed rows include inactive (temporary) sessions. */
 function delayedSessionIdsFromWorkspaces(
   workspaces: readonly PiMuxWorkspace[],
   nowMs: number,

@@ -5,8 +5,8 @@ export type WebviewRequest =
   | { type: "addWorkspace"; path: string }
   | { type: "openWorkspaceTerminal" | "unregisterWorkspace"; cwd: string }
   | { type: "openSession" | "reloadSession" | "copySessionId"; sessionId: string }
-  | { type: "archiveSession"; sessionId: string; requestId?: string }
-  | { type: "unarchiveSession"; sessionId: string; requestId?: string };
+  | { type: "deactivateSession"; sessionId: string; requestId?: string }
+  | { type: "activateSession"; sessionId: string; requestId?: string };
 
 /** Live execution phase of a session, mirrored from the session state store. */
 export type SessionPhase = "running" | "waiting-approval" | "waiting-user";
@@ -15,7 +15,7 @@ export interface WebviewSession {
   sessionId: string;
   displayName: string;
   updatedAtMs: number | null;
-  isArchived: boolean;
+  isInactive: boolean;
   isLive?: boolean;
   /** Live execution phase; undefined when the phase is unknown. */
   state?: SessionPhase;
@@ -42,8 +42,8 @@ export type ExtensionMessage =
   | { type: "sessions"; state: WebviewState; requestId?: string }
   | { type: "workspaceAdded" }
   | { type: "newSessionFinished"; requestId: string }
-  | { type: "archiveFinished"; requestId: string }
-  | { type: "unarchiveFinished"; requestId: string }
+  | { type: "deactivateFinished"; requestId: string }
+  | { type: "activateFinished"; requestId: string }
   | { type: "sessionsError"; requestId?: string }
   | { type: "error"; message: string };
 
@@ -82,7 +82,7 @@ export function parseWebviewRequest(value: unknown): WebviewRequest | undefined 
   ) {
     return { type: value.type, sessionId: value.sessionId };
   }
-  if (value.type === "archiveSession" || value.type === "unarchiveSession") {
+  if (value.type === "deactivateSession" || value.type === "activateSession") {
     if (value.requestId !== undefined && !isNonEmptyPath(value.requestId)) return undefined;
     return {
       type: value.type,

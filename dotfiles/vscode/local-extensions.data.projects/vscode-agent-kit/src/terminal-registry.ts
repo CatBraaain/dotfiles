@@ -132,7 +132,7 @@ export class TerminalRegistry implements vscode.Disposable {
 
   async open(
     session: PiSession,
-    intent: "select" | "unarchive" = "select",
+    intent: "select" | "activate" = "select",
     signal?: AbortSignal,
   ): Promise<{ terminal: vscode.Terminal }> {
     const recovery: DisplayRecovery | undefined =

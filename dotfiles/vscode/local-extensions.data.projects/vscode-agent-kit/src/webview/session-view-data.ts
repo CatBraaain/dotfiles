@@ -7,7 +7,7 @@ import type { SessionPhase, WebviewSessionGroup } from "./protocol";
  * and the live phases of running sessions. */
 export interface SessionViewInput {
   registeredCwds: readonly string[];
-  archivedIds: ReadonlySet<string>;
+  inactiveIds: ReadonlySet<string>;
   liveIds?: ReadonlySet<string>;
   phases: ReadonlyMap<string, SessionPhase>;
   unreadIds?: ReadonlySet<string>;
@@ -33,7 +33,7 @@ export function sessionViewGroups(
         sessionId: session.sessionId,
         displayName: session.displayName,
         updatedAtMs: session.updatedAtMs,
-        isArchived: view.archivedIds.has(session.sessionId),
+        isInactive: view.inactiveIds.has(session.sessionId),
         ...(view.liveIds?.has(session.sessionId) ? { isLive: true } : {}),
         state: view.phases.get(session.sessionId),
         hasUnread: view.unreadIds?.has(session.sessionId) ?? false,

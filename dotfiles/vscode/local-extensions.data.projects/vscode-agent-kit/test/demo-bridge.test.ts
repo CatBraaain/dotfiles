@@ -4,7 +4,7 @@ import { createDemoBridge, type DemoBridgeRequest, type DemoState } from "../sto
 interface DemoSession {
   sessionId: string;
   displayName: string;
-  isArchived: boolean;
+  isInactive: boolean;
   state?: string;
 }
 
@@ -49,7 +49,7 @@ function sessionIds(state: CapturedState): string[] {
 }
 
 const projectCurrentId = "1f0e6f9a-3b1d-4c8e-9a2f-6d5b4c3a2e10";
-const projectArchivedId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
+const projectInactiveId = "2c9d7e1b-5a4f-4b3a-8e7d-1f2a3b4c5d61";
 const piToolsCurrentId = "3a8b6d2c-7f5e-4a9b-8d1c-0e3f4a5b6c72";
 const piToolsOtherId = "4d7a5e3f-8b9c-4d2a-9e1b-2c3d4e5f6a83";
 const worktreeId = "5b6c4a2d-9e1f-4c3b-af2a-4d5e6f7a8b94";
@@ -69,59 +69,59 @@ describe("createDemoBridge", () => {
     demo.postSessions();
     expect(listener).toHaveBeenLastCalledWith({ type: "sessions", state });
   });
-  it("sends every session with archive marks and the displayed session", () => {
+  it("sends every session with deactivate marks and the displayed session", () => {
     const { postSessions, last } = setup();
 
     postSessions();
 
     expect(sessionIds(last())).toHaveLength(5);
-    expect(sessions(last()).map((session) => [session.sessionId, session.isArchived])).toEqual([
+    expect(sessions(last()).map((session) => [session.sessionId, session.isInactive])).toEqual([
       [piToolsCurrentId, false],
       [piToolsOtherId, false],
       [worktreeId, false],
       [projectCurrentId, false],
-      [projectArchivedId, true],
+      [projectInactiveId, true],
     ]);
     expect(last().displayedSessionId).toBe(projectCurrentId);
   });
 
-  it("archives the requested session", () => {
+  it("deactivates the requested session", () => {
     const { bridge, last } = setup();
 
-    bridge.postMessage({ type: "archiveSession", sessionId: projectCurrentId });
+    bridge.postMessage({ type: "deactivateSession", sessionId: projectCurrentId });
     const state = last();
     expect(sessionIds(state)).toContain(projectCurrentId);
-    const archived = sessions(state).find((session) => session.sessionId === projectCurrentId);
-    expect(archived?.isArchived).toBe(true);
-    expect(archived?.state).toBeUndefined();
+    const inactive = sessions(state).find((session) => session.sessionId === projectCurrentId);
+    expect(inactive?.isInactive).toBe(true);
+    expect(inactive?.state).toBeUndefined();
     expect(state.displayedSessionId).toBeUndefined();
     const untouched = sessions(state).find((session) => session.sessionId === piToolsCurrentId);
-    expect(untouched?.isArchived).toBe(false);
+    expect(untouched?.isInactive).toBe(false);
   });
 
-  it("finishes archive and unarchive requests with their request ids", () => {
+  it("finishes deactivate and activate requests with their request ids", () => {
     const demo = createDemoBridge();
     const finished: { type?: string; requestId?: string }[] = [];
     demo.bridge.onMessage((message) => {
       const completion = message as { type?: string; requestId?: string };
-      if (completion.type === "archiveFinished" || completion.type === "unarchiveFinished")
+      if (completion.type === "deactivateFinished" || completion.type === "activateFinished")
         finished.push(completion);
     });
     demo.bridge.postMessage({
-      type: "archiveSession",
+      type: "deactivateSession",
       sessionId: projectCurrentId,
-      requestId: "archive-request",
+      requestId: "deactivate-request",
     });
     demo.bridge.postMessage({
-      type: "unarchiveSession",
-      sessionId: projectArchivedId,
-      requestId: "unarchive-request",
+      type: "activateSession",
+      sessionId: projectInactiveId,
+      requestId: "activate-request",
     });
     expect(finished).toEqual([
-      { type: "archiveFinished", requestId: "archive-request" },
-      { type: "unarchiveFinished", requestId: "unarchive-request" },
+      { type: "deactivateFinished", requestId: "deactivate-request" },
+      { type: "activateFinished", requestId: "activate-request" },
     ]);
-    demo.bridge.postMessage({ type: "archiveSession", sessionId: piToolsCurrentId });
+    demo.bridge.postMessage({ type: "deactivateSession", sessionId: piToolsCurrentId });
     expect(finished).toHaveLength(2);
   });
 
@@ -130,60 +130,60 @@ describe("createDemoBridge", () => {
     const types: string[] = [];
     demo.bridge.onMessage((message) => {
       const { type } = message as { type: string };
-      if (type === "archiveSession" || type === "unarchiveSession") return;
+      if (type === "deactivateSession" || type === "activateSession") return;
       types.push(type);
     });
     demo.bridge.postMessage({
-      type: "archiveSession",
+      type: "deactivateSession",
       sessionId: projectCurrentId,
-      requestId: "archive-request",
+      requestId: "deactivate-request",
     });
     demo.bridge.postMessage({
-      type: "unarchiveSession",
-      sessionId: projectArchivedId,
-      requestId: "unarchive-request",
+      type: "activateSession",
+      sessionId: projectInactiveId,
+      requestId: "activate-request",
     });
-    expect(types).toEqual(["sessions", "archiveFinished", "sessions", "unarchiveFinished"]);
+    expect(types).toEqual(["sessions", "deactivateFinished", "sessions", "activateFinished"]);
   });
 
-  it("clears selection when archiving the displayed session even with an unarchived same-cwd row", () => {
+  it("clears selection when deactivating the displayed session even with an active same-cwd row", () => {
     const { bridge, last } = setup();
-    bridge.postMessage({ type: "unarchiveSession", sessionId: projectArchivedId });
-    bridge.postMessage({ type: "archiveSession", sessionId: projectCurrentId });
+    bridge.postMessage({ type: "activateSession", sessionId: projectInactiveId });
+    bridge.postMessage({ type: "deactivateSession", sessionId: projectCurrentId });
     expect(last().displayedSessionId).toBeUndefined();
     expect(
-      sessions(last()).find((session) => session.sessionId === projectCurrentId)?.isArchived,
+      sessions(last()).find((session) => session.sessionId === projectCurrentId)?.isInactive,
     ).toBe(true);
     expect(
-      sessions(last()).find((session) => session.sessionId === projectArchivedId)?.isArchived,
+      sessions(last()).find((session) => session.sessionId === projectInactiveId)?.isInactive,
     ).toBe(false);
   });
 
-  it("keeps another displayed session when archiving and never restores a stopped phase", () => {
+  it("keeps another displayed session when deactivating and never restores a stopped phase", () => {
     const { bridge, last } = setup();
-    bridge.postMessage({ type: "archiveSession", sessionId: piToolsCurrentId });
+    bridge.postMessage({ type: "deactivateSession", sessionId: piToolsCurrentId });
     expect(last().displayedSessionId).toBe(projectCurrentId);
-    bridge.postMessage({ type: "unarchiveSession", sessionId: piToolsCurrentId });
+    bridge.postMessage({ type: "activateSession", sessionId: piToolsCurrentId });
     const restored = sessions(last()).find((session) => session.sessionId === piToolsCurrentId);
-    expect(restored?.isArchived).toBe(false);
+    expect(restored?.isInactive).toBe(false);
     expect(restored?.state).toBeUndefined();
     expect(last().displayedSessionId).toBe(projectCurrentId);
   });
 
-  it("unarchives the requested archived session", () => {
+  it("activates the requested inactive session", () => {
     const { bridge, last } = setup();
 
-    bridge.postMessage({ type: "unarchiveSession", sessionId: projectArchivedId });
+    bridge.postMessage({ type: "activateSession", sessionId: projectInactiveId });
 
     const state = last();
-    const unarchived = sessions(state).find((session) => session.sessionId === projectArchivedId);
-    expect(unarchived?.isArchived).toBe(false);
+    const active = sessions(state).find((session) => session.sessionId === projectInactiveId);
+    expect(active?.isInactive).toBe(false);
     const alreadyOpen = sessions(state).find((session) => session.sessionId === projectCurrentId);
-    expect(alreadyOpen?.isArchived).toBe(false);
+    expect(alreadyOpen?.isInactive).toBe(false);
   });
 
   it.each([
-    { type: "openSession", sessionId: projectArchivedId },
+    { type: "openSession", sessionId: projectInactiveId },
     { type: "setSessionLock", sessionId: projectCurrentId, locked: true },
   ])("ignores unsupported $type requests", (request) => {
     const { bridge, postSessions, states } = setup();
@@ -214,12 +214,12 @@ describe("createDemoBridge", () => {
     reset("sample");
     expect(
       sessions(last())
-        .filter((session) => session.isArchived)
+        .filter((session) => session.isInactive)
         .map((session) => session.sessionId),
-    ).toEqual([projectArchivedId]);
+    ).toEqual([projectInactiveId]);
 
     reset("empty");
-    expect(sessions(last()).every((session) => session.isArchived)).toBe(true);
+    expect(sessions(last()).every((session) => session.isInactive)).toBe(true);
     expect(sessionIds(last())).toHaveLength(5);
   });
 
@@ -232,17 +232,17 @@ describe("createDemoBridge", () => {
 
     expect(states.length).toBe(before + 1);
     expect(
-      sessions(states.at(-1) as CapturedState).filter((session) => session.isArchived),
+      sessions(states.at(-1) as CapturedState).filter((session) => session.isInactive),
     ).toHaveLength(1);
   });
 
-  it("adds an unarchived row to the requested group on newSession", () => {
+  it("adds an active row to the requested group on newSession", () => {
     const { bridge, last } = setup();
 
     bridge.postMessage({ type: "newSession", cwd: "~/projects/pi-tools" });
 
     const added = sessions(last()).find((session) => session.displayName === "New Pi session");
-    expect(added?.isArchived).toBe(false);
+    expect(added?.isInactive).toBe(false);
     const piToolsGroup = last().groups.find((group) => group.cwd === "~/projects/pi-tools");
     expect(piToolsGroup?.sessions.some((session) => session.displayName === "New Pi session")).toBe(
       true,
