@@ -207,6 +207,98 @@ describe("run", () => {
     assert.equal(existsSync(join(distRoot, "remap.data.md")), true);
   });
 
+  it.each(["trigger.txt", "trigger.linux.txt"])(
+    "moves %s from a nested path map to the dist root directory",
+    async (fileName) => {
+      await put(root, `dotfiles/nested/${fileName}`, "trigger\n");
+      await put(
+        root,
+        "dotfiles/nested/remap.data.md",
+        "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| trigger.txt | ../inside.txt |  |  |\n",
+      );
+
+      await main(root, "linux", homeRoot);
+
+      assert.equal(await readFile(join(distRoot, "inside.txt"), "utf8"), "trigger\n");
+      assert.equal(existsSync(join(distRoot, "nested/trigger.txt")), false);
+    },
+  );
+
+  it("continues remap reapplication when a file replaces an unvisited sibling directory", async () => {
+    await put(root, "dotfiles/nested/trigger.linux.txt", "trigger\n");
+    await put(root, "dotfiles/z-last/previous.txt", "previous\n");
+    await put(
+      root,
+      "dotfiles/nested/remap.data.md",
+      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| trigger.txt | ../z-last |  |  |\n",
+    );
+
+    await main(root, "linux", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, "z-last"), "utf8"), "trigger\n");
+  });
+
+  it.each([
+    ["earlier", true],
+    ["relocated", false],
+  ] as const)("reapplies a moved directory's map at %s", async (destination, hasExistingMap) => {
+    const header = "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n";
+    if (hasExistingMap) await put(root, `dotfiles/${destination}/remap.data.md`, header);
+    await put(root, "dotfiles/remap.data.md", header + "| seed | holder/renamed |  |  |\n");
+    await put(
+      root,
+      "dotfiles/holder/remap.data.md",
+      header + `| renamed | ../${destination} |  |  |\n`,
+    );
+    await put(root, "dotfiles/seed/remap.data.md", header + "| entry.txt | moved.txt |  |  |\n");
+    await put(root, "dotfiles/seed/entry.linux.txt", "entry\n");
+
+    await main(root, "linux", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, destination, "moved.txt"), "utf8"), "entry\n");
+  });
+
+  it("does not reapply an earlier map after a cross-directory remap", async () => {
+    const header = "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n";
+    await put(
+      root,
+      "dotfiles/earlier/remap.data.md",
+      header + "| stage.txt | finished.txt |  |  |\n| start.txt | stage.txt |  |  |\n",
+    );
+    await put(root, "dotfiles/earlier/start.linux.txt", "start\n");
+    await put(
+      root,
+      "dotfiles/nested/remap.data.md",
+      header + "| trigger.txt | ../inside.txt |  |  |\n",
+    );
+    await put(root, "dotfiles/nested/trigger.linux.txt", "trigger\n");
+
+    await main(root, "linux", homeRoot);
+
+    assert.equal(await readFile(join(distRoot, "earlier/stage.txt"), "utf8"), "start\n");
+  });
+
+  it("does not reapply a map when its processed directory is moved", async () => {
+    const header = "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n";
+    await put(
+      distRoot,
+      "earlier/remap.data.md",
+      header + "| stage.txt | finished.txt |  |  |\n| start.txt | stage.txt |  |  |\n",
+    );
+    await put(distRoot, "earlier/start.txt", "start\n");
+    await mkdir(join(distRoot, "target"));
+    const targetName = existsSync(join(distRoot, "TARGET")) ? "TARGET" : "target";
+    await put(
+      distRoot,
+      "mover/remap.data.md",
+      header + `| ../earlier | ../${targetName}/moved |  |  |\n`,
+    );
+
+    await applyPathMap(distRoot, "linux");
+
+    assert.equal(await readFile(join(distRoot, "target/moved/stage.txt"), "utf8"), "start\n");
+  });
+
   it("rejects a copy-time remap destination that leaves dist", async () => {
     await put(root, "dotfiles/plain.txt", "plain\n");
     await put(
@@ -239,13 +331,13 @@ describe("run", () => {
     assert.equal(existsSync(join(root, "escaped.txt")), false);
   });
 
-  it("rejects a remap destination that reaches outside dist through a symlink", async () => {
+  it("rejects a nested remap destination that reaches outside dist through a symlink", async () => {
     await put(
       distRoot,
-      "remap.data.md",
-      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| plain.txt | escape-link/plain.txt |  |  |\n",
+      "nested/remap.data.md",
+      "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| plain.txt | ../escape-link/plain.txt |  |  |\n",
     );
-    await put(distRoot, "plain.txt", "plain\n");
+    await put(distRoot, "nested/plain.txt", "plain\n");
     await mkdir(join(root, "outside-dir"));
     await symlink(join(root, "outside-dir"), join(distRoot, "escape-link"), "dir");
 
@@ -254,6 +346,37 @@ describe("run", () => {
       /remap\.data\.md has a destination reaching outside dist via a symlink for plain\.txt:/,
     );
     assert.equal(existsSync(join(root, "outside-dir", "plain.txt")), false);
+  });
+
+  it.each(["trigger.txt", "trigger.linux.txt"])(
+    "rejects using the dist root itself as the remap destination for %s",
+    async (fileName) => {
+      await put(root, `dotfiles/nested/${fileName}`, "trigger\n");
+      await put(
+        root,
+        "dotfiles/nested/remap.data.md",
+        "| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| trigger.txt | .. |  |  |\n",
+      );
+
+      await assert.rejects(main(root, "linux", homeRoot), /cannot replace the dist root/);
+      assert.equal(existsSync(distRoot), true);
+    },
+  );
+
+  it("rejects replacing an ancestor of the source during remap reapplication", async () => {
+    await put(root, "dotfiles/parent/nested/trigger.linux.txt", "trigger\n");
+    const ancestor = existsSync(join(root, "dotfiles/PARENT")) ? "../../PARENT" : "..";
+    await put(
+      root,
+      "dotfiles/parent/nested/remap.data.md",
+      `| key | linux | windows | macos |\n| --- | --- | --- | --- |\n| trigger.txt | ${ancestor} |  |  |\n`,
+    );
+
+    await assert.rejects(
+      main(root, "linux", homeRoot),
+      /cannot replace the source or its ancestor/,
+    );
+    assert.equal(await readFile(join(distRoot, "parent/nested/trigger.txt"), "utf8"), "trigger\n");
   });
 
   it("merges a sidecar at its mapped Windows destination", async () => {

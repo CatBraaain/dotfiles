@@ -1,6 +1,6 @@
 // Build runtime path map: apply remap tables at copy time and again before
 // collecting local hooks.
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import { lstat, mkdir, readdir, readFile, rename, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import type { Platform } from "./build.ts";
@@ -86,23 +86,36 @@ async function loadPathMap(mapFilePath: string, platform: Platform): Promise<Pat
   return { removals, moves };
 }
 
-export async function applyPathMap(distDir: string, platform: Platform): Promise<void> {
-  async function walk(directory: string): Promise<void> {
+export async function applyPathMap(distRoot: string, platform: Platform): Promise<void> {
+  const appliedMapIds = new Set<string>();
+
+  async function walkUntilLayoutChanges(directory: string): Promise<boolean> {
     const mapFilePath = join(directory, mapFileName);
-    if (existsSync(mapFilePath)) {
+    const mapId = existsSync(mapFilePath) ? await identifyPathMap(mapFilePath) : undefined;
+    if (mapId !== undefined && !appliedMapIds.has(mapId)) {
       const { removals, moves } = await loadPathMap(mapFilePath, platform);
+      appliedMapIds.add(mapId);
       await removeMappedEntries(directory, "", removals);
-      await moveMappedEntries(directory, moves);
+      const hasCrossDirectoryMove = await moveMappedEntries(distRoot, directory, moves);
+      if (hasCrossDirectoryMove) return true;
     }
     const entries = (await readdir(directory, { withFileTypes: true })).sort((a, b) =>
       a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
     );
     for (const entry of entries) {
-      if (entry.isDirectory() && entry.name !== "node_modules")
-        await walk(join(directory, entry.name));
+      if (!entry.isDirectory() || entry.name === "node_modules") continue;
+      if (await walkUntilLayoutChanges(join(directory, entry.name))) return true;
     }
+    return false;
   }
-  await walk(distDir);
+
+  let layoutChanged = true;
+  while (layoutChanged) layoutChanged = await walkUntilLayoutChanges(distRoot);
+}
+
+async function identifyPathMap(mapFilePath: string): Promise<string> {
+  const { dev, ino } = await lstat(mapFilePath, { bigint: true });
+  return ino === 0n ? `path:${mapFilePath}` : `file:${dev}:${ino}`;
 }
 
 async function removeMappedEntries(
@@ -127,16 +140,18 @@ async function removeMappedEntries(
 // lstat walk catches destinations that resolve inside dist but traverse an
 // in-dist symlink whose target sits outside dist.
 async function assertDestinationInsideDist(
-  distDir: string,
+  distRoot: string,
   destinationPath: string,
   key: string,
   destination: string,
 ): Promise<void> {
-  const relativePath = relative(distDir, destinationPath);
-  if (isAbsolute(relativePath) || relativePath === ".." || relativePath.startsWith(`..${sep}`))
+  const relativePath = relative(distRoot, destinationPath);
+  if (relativePath === "")
+    throw new Error(`${mapFileName} cannot replace the dist root for ${key}: ${destination}`);
+  if (isOutsideDirectory(relativePath))
     throw new Error(`${mapFileName} has a destination outside dist for ${key}: ${destination}`);
   const parentSegments = relativePath.split(sep).slice(0, -1);
-  let current = distDir;
+  let current = distRoot;
   for (const segment of parentSegments) {
     current = join(current, segment);
     const info = await lstat(current).catch(() => undefined);
@@ -148,20 +163,56 @@ async function assertDestinationInsideDist(
   }
 }
 
+function isOutsideDirectory(relativePath: string): boolean {
+  return isAbsolute(relativePath) || relativePath === ".." || relativePath.startsWith(`..${sep}`);
+}
+
+async function replacingDestinationWouldRemoveSource(
+  sourcePath: string,
+  destinationPath: string,
+): Promise<boolean> {
+  if (!isOutsideDirectory(relative(destinationPath, sourcePath))) return true;
+
+  const destination = lstatSync(destinationPath, { bigint: true, throwIfNoEntry: false });
+  if (!destination || destination.ino === 0n) return false;
+
+  let candidatePath = sourcePath;
+  while (true) {
+    const candidate = await lstat(candidatePath, { bigint: true });
+    if (destination.ino === candidate.ino && destination.dev === candidate.dev) return true;
+    const parentPath = dirname(candidatePath);
+    if (!destination.isDirectory() || parentPath === candidatePath) return false;
+    candidatePath = parentPath;
+  }
+}
+
 async function moveMappedEntries(
-  distDir: string,
-  moves: Array<{ source: string; destination: string }>,
-): Promise<void> {
+  distRoot: string,
+  mapDirectory: string,
+  moves: PathMap["moves"],
+): Promise<boolean> {
+  let hasCrossDirectoryMove = false;
   for (const { source, destination } of moves) {
-    const sourcePath = join(distDir, source);
+    const sourcePath = join(mapDirectory, source);
     if (!existsSync(sourcePath)) continue;
 
-    const destinationPath = join(distDir, destination);
-    await assertDestinationInsideDist(distDir, destinationPath, source, destination);
+    const destinationPath = join(mapDirectory, destination);
+    await assertDestinationInsideDist(distRoot, destinationPath, source, destination);
+    if (await replacingDestinationWouldRemoveSource(sourcePath, destinationPath))
+      throw new Error(
+        `${mapFileName} cannot replace the source or its ancestor for ${source}: ${destination}`,
+      );
     await mkdir(dirname(destinationPath), { recursive: true });
     await rm(destinationPath, { recursive: true, force: true });
     await rename(sourcePath, destinationPath);
+    if (
+      isOutsideDirectory(relative(mapDirectory, sourcePath)) ||
+      isOutsideDirectory(relative(mapDirectory, destinationPath))
+    ) {
+      hasCrossDirectoryMove = true;
+    }
   }
+  return hasCrossDirectoryMove;
 }
 
 // Copy-time application of the remap tables (spec: SPEC.md §build: パス対応表):
