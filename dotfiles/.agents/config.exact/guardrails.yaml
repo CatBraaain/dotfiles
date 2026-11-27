@@ -192,5 +192,10 @@ commands:
 
   - pi:
       - ask: []
-      - allow: ["--help|--version|-h|-v"]
+      - allow: ["--version|-v"]
       - allow: ["--list-models|list"]
+      - allow: [[auth, check, "--provider", "--no-refresh"]]
+      - ask:
+          - [auth, check, "--provider", "--no-refresh"]
+          - '[\s\S]*'
+      - allow: ["--help|-h"]
