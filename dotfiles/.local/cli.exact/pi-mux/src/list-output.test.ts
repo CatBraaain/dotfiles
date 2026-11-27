@@ -214,6 +214,7 @@ describe("mergeSessionLists", () => {
             btime: 100,
             mtime: 200,
             size: 300,
+            history: { cwd, title: "Saved title", source: "normal" },
           },
         ],
       },

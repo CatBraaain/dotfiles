@@ -7,7 +7,7 @@ const SAVED_HISTORY_TIMEOUT_MS = 180_000;
 const VIEW_TARGET_TIMEOUT_MS = 2_000;
 const SWITCH_TARGET_MISSING_EXIT_CODE = 2;
 const SWITCH_CLIENT_MISSING_EXIT_CODE = 3;
-const QUERY_COMMANDS = new Set(["list", "history", "switch", "metadata", "record-view"]);
+const QUERY_COMMANDS = new Set(["list", "switch", "metadata", "record-view"]);
 
 export interface PiMuxViewTarget {
   file: string;
@@ -67,8 +67,8 @@ export interface PiMuxCurrentSession {
   target: string;
 }
 
-/** `pi-mux history` entry: one saved conversation file. */
 export interface PiMuxHistoryEntry {
+  source: "normal" | "live-archive";
   id: string;
   cwd: string;
   file: string;
@@ -238,19 +238,9 @@ export class PiMux {
     await this.command(["record-view", sessionId, JSON.stringify(receipt)]);
   }
 
-  /** List saved conversations, newest first. Throws when the CLI fails. */
-  async history(cwd?: string): Promise<PiMuxHistoryEntry[]> {
-    const output = await this.command([
-      "list",
-      "--saved",
-      "--json",
-      ...(cwd === undefined ? [] : ["--cwd", cwd]),
-    ]);
-    const entries: unknown = parseJsonOutput(output, "history");
-    if (!Array.isArray(entries) || !entries.every(isPiMuxHistoryEntry)) {
-      throw new Error("Invalid pi-mux history response");
-    }
-    return entries;
+  async history(): Promise<PiMuxHistoryEntry[]> {
+    const output = await this.command(["list", "--json"]);
+    return parseHistoryEntries(parseJsonOutput(output, "list --json"));
   }
 
   private async command(args: string[], cwd?: string): Promise<string> {
@@ -353,25 +343,62 @@ function isWorktreePaths(paths: unknown): paths is string[] {
   );
 }
 
-function isPiMuxHistoryEntry(entry: unknown): entry is PiMuxHistoryEntry {
-  return (
-    isRecord(entry) &&
-    typeof entry.id === "string" &&
-    entry.id.length > 0 &&
-    typeof entry.cwd === "string" &&
-    isAbsolute(entry.cwd) &&
-    typeof entry.file === "string" &&
-    isAbsolute(entry.file) &&
-    (entry.title === null || typeof entry.title === "string") &&
-    (entry.btime === null || (typeof entry.btime === "number" && Number.isFinite(entry.btime))) &&
-    (entry.mtime === null || (typeof entry.mtime === "number" && Number.isFinite(entry.mtime))) &&
-    typeof entry.size === "number" &&
-    Number.isFinite(entry.size)
-  );
+function parseHistoryEntries(workspaces: unknown): PiMuxHistoryEntry[] {
+  const invalidResponse = "Invalid pi-mux list --json response";
+  if (!Array.isArray(workspaces)) throw new Error(invalidResponse);
+  const entries: PiMuxHistoryEntry[] = [];
+  for (const workspace of workspaces) {
+    if (
+      !isRecord(workspace) ||
+      !isAbsoluteHistoryPath(workspace.cwd) ||
+      !Array.isArray(workspace.sessions)
+    )
+      throw new Error(invalidResponse);
+    for (const session of workspace.sessions) {
+      if (!isRecord(session)) throw new Error(invalidResponse);
+      const { id, file, btime, mtime, size, history } = session;
+      if (typeof id !== "string" || id.length === 0 || !isAbsoluteHistoryPath(file))
+        throw new Error(invalidResponse);
+      if (!Object.hasOwn(session, "history")) {
+        if (session.active !== true) throw new Error(invalidResponse);
+        continue;
+      }
+      if (
+        !isRecord(history) ||
+        (history.source !== "normal" && history.source !== "live-archive") ||
+        !isAbsoluteHistoryPath(history.cwd) ||
+        (history.title !== null && typeof history.title !== "string") ||
+        !isHistoryTime(btime) ||
+        !isHistoryTime(mtime) ||
+        typeof size !== "number" ||
+        !Number.isFinite(size)
+      )
+        throw new Error(invalidResponse);
+      entries.push({
+        id,
+        file,
+        btime,
+        mtime,
+        size,
+        cwd: history.cwd,
+        title: history.title,
+        source: history.source,
+      });
+    }
+  }
+  return entries;
+}
+
+function isAbsoluteHistoryPath(value: unknown): value is string {
+  return typeof value === "string" && isAbsolute(value) && !value.includes("\0");
+}
+
+function isHistoryTime(value: unknown): value is number | null {
+  return value === null || (typeof value === "number" && Number.isFinite(value));
 }
 
 function commandTimeoutMs([command, mode]: string[]): number {
-  if (command === "list" && mode === "--saved") return SAVED_HISTORY_TIMEOUT_MS;
+  if (command === "list" && mode === "--json") return SAVED_HISTORY_TIMEOUT_MS;
   if (command === "metadata" && mode === "--view-target") return VIEW_TARGET_TIMEOUT_MS;
   return QUERY_COMMANDS.has(command) ? QUERY_TIMEOUT_MS : 0;
 }

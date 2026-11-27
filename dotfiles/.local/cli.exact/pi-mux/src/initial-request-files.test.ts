@@ -164,6 +164,98 @@ test.skipIf(isNotLinux)(
   },
 );
 
+test.skipIf(isNotLinux)(
+  "a reload claim matches each route binding and consumes the JSON once",
+  () => {
+    const { config, directory, identity, launch, cleanup } = fixture();
+    try {
+      const files = InitialRequestFiles.open(config, true);
+      const env = {
+        EMPTY: "",
+        MULTILINE: "'\" $HOME ; #{pid}\r\n次の行",
+        "UNUSUAL KEY": "literal",
+      };
+      const { serverPid, ...base } = identity;
+      const routes = [
+        { ...base, serverPid, pane: "%12" },
+        {
+          ...base,
+          pane: "%12",
+          generation: "aaaaaaaaaaaaaaaa",
+          peer: "102:204",
+          right: randomUUID(),
+        },
+      ];
+      for (const route of routes) {
+        const record = { ...route, command: launch.command, environment: env };
+        const file = join(directory, `${route.launchToken}.json`);
+        files.publishReload(record);
+        assert.deepEqual(readdirSync(directory), [`${route.launchToken}.json`]);
+        assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+        for (const mismatched of [
+          { pane: "%13" },
+          { session: "$99" },
+          { generation: "different-generation" },
+          { launchToken: "../anything" },
+          { cwd: "/other" },
+          "peer" in route ? { peer: "102:205" } : { serverPid: 203 },
+          ...("right" in route ? [{ right: randomUUID() }] : []),
+        ]) {
+          assert.throws(
+            () => files.takeReload({ ...route, ...mismatched }),
+            /Cannot claim the reload environment/,
+          );
+          assert.ok(existsSync(file));
+        }
+        assert.throws(
+          () => files.take(route.launchToken, identity),
+          /Cannot claim the initial-request arguments/,
+        );
+        assert.deepEqual(files.takeReload(route), record);
+        assert.throws(() => files.takeReload(route), /Cannot claim the reload environment/);
+        assert.deepEqual(readdirSync(directory), []);
+      }
+    } finally {
+      cleanup();
+    }
+  },
+);
+
+test.skipIf(isNotLinux)("cannot claim a malformed, insecure, or expired reload environment", () => {
+  const { config, directory, identity, launch, cleanup } = fixture();
+  try {
+    const files = InitialRequestFiles.open(config, true);
+    const route = { ...identity, pane: "%12" };
+    const record = { ...route, command: launch.command, environment: { EMPTY: "" } };
+    const file = join(directory, `${route.launchToken}.json`);
+    files.publishReload(record);
+    chmodSync(file, 0o644);
+    assert.throws(() => files.takeReload(route), /Cannot claim the reload environment/);
+    chmodSync(file, 0o600);
+    assert.throws(
+      () => files.takeReload(route, Date.now() + INITIAL_REQUEST_TTL_MS + 1_000),
+      /Cannot claim the reload environment/,
+    );
+    for (const environment of [
+      null,
+      ["secret"],
+      { "": "secret" },
+      { "a=b": "secret" },
+      { bad: 1 },
+      { nul: "\0secret" },
+    ]) {
+      writeFileSync(file, JSON.stringify({ ...record, environment }));
+      assert.throws(() => files.takeReload(route), {
+        message: "Cannot claim the reload environment for this launch",
+      });
+    }
+    files.cancel(route.launchToken);
+    assert.deepEqual(readdirSync(directory), []);
+  } finally {
+    cleanup();
+  }
+});
+
 test.skipIf(isNotLinux)("sweeps only expired plain launch files in the private directory", () => {
   const { config, directory, runtime, launch, cleanup } = fixture();
   try {

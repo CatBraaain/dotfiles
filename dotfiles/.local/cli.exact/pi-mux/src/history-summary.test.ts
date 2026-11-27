@@ -452,6 +452,18 @@ describe("history reverse line boundaries", () => {
       mtime: "2026-01-01T00:00:01.000Z",
     },
     {
+      name: "an escaped title entry type and key split across the reverse chunk boundary",
+      contents: (() => {
+        const escapedTitleLine = titleLine
+          .replace('"type"', String.raw`"typ\u0065"`)
+          .replace("session_info", String.raw`session\u005Finf\u006F`);
+        const splitAfter = escapedTitleLine.indexOf(String.raw`\u005F`) + 2;
+        const padding = chunkBytes - bytesBeforeTitle - splitAfter - 1;
+        return [messageLine, "x".repeat(padding), escapedTitleLine, laterMessageLine].join("\n");
+      })(),
+      mtime: "2026-01-01T00:00:01.000Z",
+    },
+    {
       name: "a title entry type split across the reverse chunk boundary",
       contents: [
         messageLine,
@@ -495,6 +507,31 @@ describe("history reverse line boundaries", () => {
       }
     });
   }
+});
+
+describe("history title candidates", () => {
+  it("does not JSON-parse a long unrelated line with Unicode escapes after resolving activity time", () => {
+    const { file, cacheHome } = writeSummaryFixture([
+      userMessage("First message"),
+      sessionInfo("Saved title"),
+    ]);
+    const unrelated = String.raw`{"type":"custom","data":"\u0073ession_inform","padding":"${"x".repeat(1024 * 1024)}"}`;
+    fs.appendFileSync(
+      file,
+      `${unrelated}\n${JSON.stringify(assistantMessage("Latest activity"))}\n`,
+    );
+    const parse = spyOn(JSON, "parse");
+    try {
+      assert.equal(resolveTitleIsolated(cacheHome, file), "Saved title");
+      assert.equal(
+        parse.mock.calls.some(([text]) => text === unrelated),
+        false,
+      );
+    } finally {
+      parse.mockRestore();
+      fs.rmSync(dirname(file), { recursive: true, force: true });
+    }
+  });
 });
 
 describe("history first user message fallback", () => {

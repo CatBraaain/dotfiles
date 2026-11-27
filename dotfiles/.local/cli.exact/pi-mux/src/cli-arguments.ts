@@ -1,5 +1,4 @@
 import { isAbsolute, resolve } from "node:path";
-import { PSMUX_ROUTING } from "./configuration";
 import {
   isSessionState,
   parseSource,
@@ -26,13 +25,9 @@ export type Operation =
   | { kind: "inspect-dispatch-inventory"; socket: string }
   | WindowsCreateDispatchWorker
   | { kind: "claim-initial-request"; token: string }
-  | {
-      kind: "windows-claim-launch";
-      token: string;
-      command: string[];
-      cwd: string;
-      reload?: WindowsReloadRoute;
-    }
+  | { kind: "claim-reload"; token: string }
+  | { kind: "windows-claim-launch"; token: string; command: string[]; cwd: string }
+  | { kind: "windows-claim-launch"; token: string; reload: WindowsReloadRoute }
   | { kind: "metadata"; id: string; viewFile?: string }
   | { kind: "worktree-snapshot"; request: WorktreeSnapshotRequest }
   | { kind: "record-view"; id: string; receipt: ViewReceipt }
@@ -43,7 +38,6 @@ export type Operation =
   | { kind: "close"; id: string; ifTemporary: boolean }
   | ListOperation
   | { kind: "switch"; id: string; clientPid: number | undefined }
-  | { kind: "history"; cwd: string | undefined; json: boolean }
   | { kind: "workspace"; action: "register" | "unregister"; cwd: string }
   | { kind: "snapshot"; generation?: string }
   | { kind: "restore" }
@@ -203,7 +197,20 @@ export function parseOperation(argv: string[]): Operation {
     UUID.test(argv[1])
   )
     return { kind: "claim-initial-request", token: argv[1] };
-  if (argv[0] === "windows-claim-launch" && argv.length === 4 && UUID.test(argv[1]!)) {
+  if (
+    argv[0] === "claim-reload" &&
+    argv.length === 2 &&
+    argv[1]?.length === 36 &&
+    UUID.test(argv[1])
+  )
+    return { kind: "claim-reload", token: argv[1] };
+  if (argv[0] === "windows-claim-launch" && argv[1]?.length === 36 && UUID.test(argv[1])) {
+    const token = argv[1];
+    if (argv.length === 3) {
+      const route: unknown = JSON.parse(Buffer.from(argv[2]!, "base64").toString("utf8"));
+      return { kind: "windows-claim-launch", token, reload: parseWindowsReloadRoute(route) };
+    }
+    if (argv.length !== 4) throw new Error("Invalid Windows pi launch arguments");
     const command: unknown = JSON.parse(Buffer.from(argv[2]!, "base64").toString("utf8"));
     if (
       !Array.isArray(command) ||
@@ -212,13 +219,9 @@ export function parseOperation(argv: string[]): Operation {
     )
       throw new Error("Invalid Windows pi launch command");
     const destination: unknown = JSON.parse(Buffer.from(argv[3]!, "base64").toString("utf8"));
-    if (typeof destination === "string") {
-      if (!isAbsolute(destination) || destination.includes("\0"))
-        throw new Error("Invalid Windows pi launch directory");
-      return { kind: "windows-claim-launch", token: argv[1]!, command, cwd: destination };
-    }
-    const reload = parseWindowsReloadRoute(destination);
-    return { kind: "windows-claim-launch", token: argv[1]!, command, cwd: reload.cwd, reload };
+    if (typeof destination !== "string" || !isAbsolute(destination) || destination.includes("\0"))
+      throw new Error("Invalid Windows pi launch directory");
+    return { kind: "windows-claim-launch", token, command, cwd: destination };
   }
   if (argv[0] === "worktree") {
     const [, action, encoded] = argv;
@@ -264,8 +267,10 @@ export function parseOperation(argv: string[]): Operation {
     !argv[2].includes("\0")
   )
     return { kind: "workspace", action: argv[1], cwd: resolve(argv[2]) };
-  const listing = parseListingOperation(argv);
-  if (listing) return listing;
+  if (argv[0] === "list") {
+    const listing = parseListOperation(argv.slice(1));
+    if (listing) return listing;
+  }
   if (argv[0] === "switch") {
     const id = argv[1];
     const pid = argv[2] === "--client-pid" ? argv[3] : undefined;
@@ -292,7 +297,7 @@ export function parseOperation(argv: string[]): Operation {
   if ((argv.length === 1 || argv.length === 2) && argv[0] === "snapshot")
     return { kind: "snapshot", generation: argv[1] };
   throw new Error(
-    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] [--detached] <session-id> | open --detached --expect-file <absolute-jsonl-path> <session-id> | inspect <session-id> | metadata <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | list --active [--json] | list --saved [--cwd <absolute-cwd>] [--json] | list --displayed [--client-pid <pid>] [--json] | switch <session-id> [--client-pid <pid>] | history [--cwd <absolute-cwd>] [--json] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | stop [--force] | reload [<session-id>] | restart [--force]]",
+    "usage: pi-mux [new [--detached] [--client-pid <pid>] [--cwd <absolute-cwd>] [initial-request] | open [--temporary] [--detached] <session-id> | open --detached --expect-file <absolute-jsonl-path> <session-id> | inspect <session-id> | metadata <session-id> | state <session-id> <state> --source <JSON> --title <JSON> | state <session-id> --clear --source <JSON> | send [--wait <seconds>] <session-id> <text...> | close [--if-temporary] <session-id> | list [--json] | list --active [--json] | list --all [--cwd <absolute-cwd>] [--json] | list --displayed [--client-pid <pid>] [--json] | switch <session-id> [--client-pid <pid>] | workspace register|unregister <cwd> | snapshot [server-generation] | restore | stop [--force] | reload [<session-id>] | restart [--force]]",
   );
 }
 
@@ -307,10 +312,10 @@ function parseListOperation(args: string[]): ListOperation | undefined {
       json = true;
     } else if (
       scope === "all" &&
-      (flag === "--active" || flag === "--saved" || flag === "--displayed")
+      (flag === "--active" || flag === "--all" || flag === "--displayed")
     ) {
       if (flag === "--active") scope = "active";
-      else if (flag === "--saved") scope = "saved";
+      else if (flag === "--all") scope = "saved";
       else scope = "displayed";
     } else if (flag === "--cwd" && cwd === undefined) {
       const value = args[++index];
@@ -328,21 +333,6 @@ function parseListOperation(args: string[]): ListOperation | undefined {
   if (clientPid !== undefined) return;
   if (scope === "saved") return { kind: "list", scope, cwd, json };
   if (scope !== "displayed" && cwd === undefined) return { kind: "list", scope, json };
-}
-
-function parseListingOperation(argv: string[]): Operation | undefined {
-  const kind = argv[0];
-  if (kind === "list") return parseListOperation(argv.slice(1));
-  if (kind !== "history") return;
-
-  const jsonFirst = argv[1] === "--json";
-  const jsonLast = argv.at(-1) === "--json";
-  const json = jsonFirst || jsonLast;
-  const args = jsonFirst ? argv.slice(2) : argv.slice(1, jsonLast ? -1 : undefined);
-
-  if (args.length === 0) return { kind, cwd: undefined, json };
-  const [flag, cwd] = args;
-  if (args.length === 2 && flag === "--cwd" && cwd && isAbsolute(cwd)) return { kind, cwd, json };
 }
 
 function parseStateOperation(argv: string[]): Operation {
@@ -425,7 +415,6 @@ export type WindowsReloadRoute = {
   cwd: string;
   launchToken: string;
   launcher: WindowsProcessIdentity;
-  inheritedOverrides: [string, string | null][];
 };
 
 function parseWindowsReloadRoute(route: unknown): WindowsReloadRoute {
@@ -447,18 +436,9 @@ function parseWindowsReloadRoute(route: unknown): WindowsReloadRoute {
     !isAbsolute(route.cwd) ||
     route.cwd.includes("\0") ||
     typeof route.launchToken !== "string" ||
+    route.launchToken.length !== 36 ||
     !UUID.test(route.launchToken) ||
-    !isWindowsProcessIdentity(route.launcher) ||
-    !Array.isArray(route.inheritedOverrides) ||
-    !route.inheritedOverrides.every(
-      (entry) =>
-        Array.isArray(entry) &&
-        entry.length === 2 &&
-        typeof entry[0] === "string" &&
-        /^[^=\0\r\n]+$/.test(entry[0]) &&
-        !PSMUX_ROUTING.has(entry[0].toUpperCase()) &&
-        (entry[1] === null || (typeof entry[1] === "string" && !entry[1].includes("\0"))),
-    )
+    !isWindowsProcessIdentity(route.launcher)
   )
     throw new Error("Invalid Windows reload launch route");
   return route as WindowsReloadRoute;

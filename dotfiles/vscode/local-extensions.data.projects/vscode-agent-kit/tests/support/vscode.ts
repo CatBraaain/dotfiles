@@ -650,9 +650,6 @@ export class VSCodeFixture {
       const session = join(
         this.directory,
         "agent/sessions",
-        // With PI_CODING_AGENT_SESSION_DIR set, pi-mux history lists only the
-        // *.jsonl files directly inside the session directory. Fixture files
-        // must therefore sit directly in it, not in group subdirectories.
         `${timestamp.replace(/[:.]/g, "-")}_${id}.jsonl`,
       );
       write(session, original);

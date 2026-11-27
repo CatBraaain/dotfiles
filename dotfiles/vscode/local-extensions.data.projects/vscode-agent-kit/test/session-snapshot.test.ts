@@ -18,6 +18,7 @@ function historyEntry(
     btime: options.btime ?? 500,
     mtime: options.mtime ?? 1_000,
     size: 10,
+    source: "normal",
   };
 }
 
@@ -148,6 +149,43 @@ describe("listSessionSnapshot", () => {
     expect(temporary.inactiveIds).toEqual(new Set(["A"]));
     expect(normal.inactiveIds).toEqual(new Set());
     expect(normal.sessions).toEqual(temporary.sessions);
+  });
+
+  it("uses archive metadata only for the same saved live file in a registered workspace", async () => {
+    const archive = {
+      ...historyEntry("A", ROOT, { title: "Archived title" }),
+      source: "live-archive",
+    } as const;
+    const active = workspace(ROOT, [live(archive.id, archive.file)]);
+    const matching = await listSessionSnapshot([archive], [active]);
+    expect(matching.sessions[0]).toMatchObject({
+      displayName: "Archived title",
+      createdAtMs: archive.btime,
+      updatedAtMs: archive.mtime,
+    });
+
+    const otherFile = workspace(ROOT, [live(archive.id, "/saved/other.jsonl")]);
+    const otherHistoryCwd = { ...archive, cwd: "/unregistered" };
+    for (const [history, workspaces] of [
+      [[archive], [otherFile]],
+      [[otherHistoryCwd], [active]],
+    ] as const) {
+      const snapshot = await listSessionSnapshot(history, workspaces);
+      expect(snapshot.sessions[0]).toMatchObject({ displayName: "Untitled", updatedAtMs: null });
+    }
+  });
+
+  it("does not add a row from archive history for a stopped or empty Pi", async () => {
+    const archive = { ...historyEntry("A", ROOT), source: "live-archive" } as const;
+    const ordinary = historyEntry("B", ROOT, { title: "Ordinary history" });
+    const empty = { id: archive.id, file: archive.file };
+    for (const workspaces of [
+      [workspace(ROOT, [])],
+      [{ cwd: ROOT, sessions: [], empty: [empty] }],
+    ]) {
+      const { sessions } = await listSessionSnapshot([archive, ordinary], workspaces);
+      expect(sessions.map(({ sessionId }) => sessionId)).toEqual([ordinary.id]);
+    }
   });
 
   it("keeps start-time sorting with unknown start times last", async () => {

@@ -21,20 +21,27 @@ export async function sessionFileExists(filePath: string): Promise<boolean> {
   }
 }
 
-/**
- * Snapshot of the session list: live sessions from `pi-mux list` merged over
- * saved conversations from `pi-mux history`. Live entries win on conflicts.
- * A session counts as inactive when no normal live Pi carries its ID.
- */
 export async function listSessionSnapshot(
+  history: readonly PiMuxHistoryEntry[],
+  workspaces: readonly PiMuxWorkspace[],
+) {
+  return projectSessionSnapshot(history, workspaces);
+}
+
+export function projectSessionSnapshot(
   history: readonly PiMuxHistoryEntry[],
   workspaces: readonly PiMuxWorkspace[],
 ) {
   const registeredCwds = workspaces.map(({ cwd }) => cwd);
   const registered = new Set(registeredCwds);
-  const savedEntries = history.filter((entry) => registered.has(entry.cwd));
+  const archiveHistory = new Map<string, PiMuxHistoryEntry>();
   const summaries = new Map<string, SessionSummary>();
-  for (const entry of savedEntries) {
+  for (const entry of history) {
+    if (!registered.has(entry.cwd)) continue;
+    if (entry.source === "live-archive") {
+      archiveHistory.set(entry.id, entry);
+      continue;
+    }
     summaries.set(entry.id, {
       sessionId: entry.id,
       filePath: entry.file,
@@ -44,25 +51,21 @@ export async function listSessionSnapshot(
       updatedAtMs: entry.mtime,
     });
   }
-  for (const session of flattenPiMuxSessions(workspaces)) {
+  const live = flattenPiMuxSessions(workspaces);
+  for (const session of live) {
+    const archived = archiveHistory.get(session.id);
+    const matchingArchive = archived?.file === session.file ? archived : undefined;
     const saved = summaries.get(session.id);
     summaries.set(session.id, {
       sessionId: session.id,
       cwd: session.cwd,
       filePath: session.file,
-      displayName:
-        session.title !== null && session.title !== ""
-          ? session.title
-          : (saved?.displayName ?? "Untitled"),
-      createdAtMs: saved?.createdAtMs ?? null,
-      updatedAtMs: saved?.updatedAtMs ?? null,
+      displayName: session.title || (saved?.displayName ?? matchingArchive?.title ?? "Untitled"),
+      createdAtMs: saved?.createdAtMs ?? matchingArchive?.btime ?? null,
+      updatedAtMs: saved?.updatedAtMs ?? matchingArchive?.mtime ?? null,
     });
   }
-  const normalIds = new Set(
-    flattenPiMuxSessions(workspaces)
-      .filter((session) => !session.temporary)
-      .map(({ id }) => id),
-  );
+  const normalIds = new Set(live.filter((session) => !session.temporary).map(({ id }) => id));
   const sessions = [...summaries.values()];
   return {
     sessions,

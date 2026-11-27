@@ -9,8 +9,8 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 - セッションファイル: Pi が会話を保存する JSONL ファイル。場所と形式は Pi のドキュメント（[sessions](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/docs/sessions.md) / [session format](https://github.com/earendil-works/pi-mono/blob/main/packages/coding-agent/docs/session-format.md)）に従う。
 - セッション ID: 稼働セッションでは `pi-mux list --active --json`、保存済み会話ではセッションファイルのヘッダーが持つ ID。既定は UUID で、Pi の SDK や `--session-id` によるカスタム ID もある（Pi のドキュメントに従う）。ファイル名は `<timestamp>_<session-id>.jsonl` で、ファイル名の末尾セグメントと一致する。
 - 一時 Pi（temporary）: pi-mux により一時再開され、通常の保持・復元対象になっていない稼働 Pi。`pi-mux list --active --json` のセッション要素に `temporary: true` があることで識別する。
-- Active セッション: 通常の作業セッションとして開いているセッション。既定の表示対象になる。
-- Inactive セッション: 一時 Pi で開いているセッション、または通常 Pi の一覧に無い保存済み会話。`All` 表示で現れる。
+- Active セッション: 「データソース」で定める通常 Pi の集合。既定の表示対象になる。
+- Inactive セッション: 「データソース」の Inactive 一覧に含まれるセッション。`All` 表示で現れる。Pi の既定の保存先にある物理的な `archive/` とは別の区分である。
 - 実行フェーズ: agent ターン実行中（`running`）・承認待ち（`waiting-approval`）・user のターン待ち（`waiting-user`）の区別。取得元と表示は「実行フェーズの表示」節に従う。
 - 登録済みワークスペース: `pi-mux list --active --json` が返す workspace の `cwd`。セッションが0件でもグループとして表示する。
 - 追加済みワークスペース: Session List に追加された cwd。「workspace 登録と永続情報」に従って保持する。
@@ -38,7 +38,7 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 | E2E-10 | 登録済みワークスペースの `New session` で対象 cwd の空会話を開ける | 対象 cwd に再利用できる空会話がなければ新規起動し、あれば同じ会話 ID・Pi を共有 Terminal に表示する。別 cwd を開いてから戻る場合も再利用する | 登録 cwd で起動 | 保存 E2E |
 | E2E-11 | ワークスペース登録を解除する | ワークスペース登録解除どおりの対象 cwd の Pi 終了・登録と復元候補の除去・一覧更新 | Unregister menu／Workspace unregistered | 保存 E2E |
 | E2E-12 | New Workspace のキャンセルと無効なパスを安全に扱える | New Workspace アクションどおりの安全処理 | なし | 保存 E2E |
-| E2E-13 | 表示中の Pi を Deactivate し、Activate と再選択で再開できる（同じ cwd に別の稼働中 Pi がある） | 「Activate と Deactivate」の規則どおりの直接実行、対象だけの終了、タブの閉鎖と選択解除、原本保持、復帰と再開表示、Activate 後の Terminal へのフォーカス移動 | Deactivate 後（Inactive 行）／Activate 後（Active・再開表示） | 保存 E2E |
+| E2E-13 | 通常の保存領域にある会話を表示中、Pi を Deactivate し、Activate と再選択で再開できる（同じ cwd に別の稼働中 Pi がある） | 「Activate と Deactivate」の規則どおりの直接実行、対象だけの終了、タブの閉鎖と選択解除、原本保持、復帰と再開表示、Activate 後の Terminal へのフォーカス移動 | Deactivate 後（Inactive 行）／Activate 後（Active・再開表示） | 保存 E2E |
 | E2E-14 | Pi が生存する Active セッションで実行フェーズの変化を表示できる | [実行フェーズの表示](#実行フェーズの表示)どおりのアイコン・ヒント・スロットと reduced-motion 表示 | running / waiting-approval / waiting-user | 保存 E2E |
 | E2E-15 | 一覧の取得状態に応じて、取得中・既存一覧・成功空・取得エラーを区別できる | [一覧の取得状態](#一覧の取得状態)どおりの案内・一覧保持・エラー表示 | 初回loading／自動更新中の一覧保持／成功空／取得error | 保存 E2E（実Webviewへの入力制御） |
 | E2E-16 | 稼働 Pi の list.title と非表示中の workspace 追加を自動反映する | [データソース](#データソース)・[実行フェーズの表示](#実行フェーズの表示)どおりの一覧反映 | なし | 保存 E2E（隔離環境の公開 CLI） |
@@ -69,31 +69,39 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 
 ## データソース
 
-拡張機能は `pi-mux list --active --json` を pi-mux の workspace 登録と稼働 Pi の正本とする。応答は `[{cwd,sessions:[{id,file,state,title,publishPending?:{attemptAt:number}|null,lastRun?:{atMs:number,aborted:boolean},temporary?:true,reloadStatus?:"waiting-reload"}],empty:[{id,file,temporary?:true,reloadStatus?:"waiting-reload"}]}]` の JSON 配列であり、cwd と file は絶対パス、state と title は文字列または null である。`publishPending` は実行フェーズ公開の未完了を示す pi-mux の中継値であり、`{attemptAt}`（最後の公開試行の Unix epoch ミリ秒）または null を取る。省略と null は遅延なしとして扱い、`attemptAt` が正の整数でないオブジェクトやその他の値は不正応答として扱う。値の利用は「実行フェーズの表示」に従う。`lastRun` は最後の確定終了の時刻（正の安全な整数、Unix epoch ミリ秒）と中断の有無（真偽値）を表す。省略・型不正は確定終了記録なしとして扱う。`temporary` は一時 Pi にだけ `true` で存在し、省略は通常 Pi を表す。`false` やその他の値は不正応答として扱う。`reloadStatus` は `waiting-reload` だけを有効とし、省略やその他の値は待機なしとして扱う。`sessions` には会話ファイルが存在する pane だけが載り、未作成分は `empty` に載る。空 workspace は `sessions: []`・`empty: []` として含まれる。独自のセッション所属集合や復元集合を保存しない。
+拡張機能は `pi-mux list --active --json` の応答（以下 list）を、workspace 登録、稼働中の Pi（`sessions`・`empty`）、一時状態、実行フェーズ、リロード待ち、未読判定に使う稼働情報の正とする。応答は `[{cwd,sessions:[{id,file,state,title,publishPending?:{attemptAt:number}|null,lastRun?:{atMs:number,aborted:boolean},temporary?:true,reloadStatus?:"waiting-reload"}],empty:[{id,file,temporary?:true,reloadStatus?:"waiting-reload"}]}]` の JSON 配列であり、cwd と file は絶対パス、state と title は文字列または null である。`publishPending` は実行フェーズ公開の未完了を示す pi-mux の中継値であり、`{attemptAt}`（最後の公開試行の Unix epoch ミリ秒）または null を取る。省略と null は遅延なしとして扱い、`attemptAt` が正の整数でないオブジェクトやその他の値は不正応答として扱う。値の利用は「実行フェーズの表示」に従う。`lastRun` は最後の確定終了の時刻（正の安全な整数、Unix epoch ミリ秒）と中断の有無（真偽値）を表す。省略・型不正は確定終了記録なしとして扱う。`temporary` は一時 Pi にだけ `true` で存在し、省略は通常 Pi を表す。`false` やその他の値は不正応答として扱う。`reloadStatus` は `waiting-reload` だけを有効とし、省略やその他の値は待機なしとして扱う。`sessions` には会話ファイルが存在する pane だけが載り、未作成分は `empty` に載る。空 workspace は `sessions: []`・`empty: []` として含まれる。独自のセッション所属集合や復元集合を保存しない。
 
-保存済み会話は `pi-mux list --saved --json` から得る。応答は `[{id,cwd,file,title,btime,mtime,size}]` の JSON 配列（`mtime` 降順、`mtime` が `null` の要素は後方、同値は `file` 昇順）であり、pi-mux が登録済み workspace の保存会話の `*.jsonl` を列挙し（既定の保存先では group ディレクトリとその `archive/` の各直下、`PI_CODING_AGENT_SESSION_DIR` 指定時はその直下）、各ファイルのヘッダー id・cwd を正とする。`btime` は初回 user メッセージの送信日時（Unix epoch ミリ秒）で、初回 user メッセージが未保存なら `null` になる。有限の `number` と `null` のみを受け入れ、それ以外は不正応答として扱う。`mtime` はファイル内で物理的に最後の `message`/`compaction` エントリの `timestamp`（ミリ秒、該当エントリが無いとき `null`）である。title はセッション名（最後の `session_info` の `name`）で解決し、解決できないとき最初の user メッセージ（80 code points で丸め）を使い、いずれも無いとき `null` になる。
+保存履歴（以下 history）は、[pi-mux の統合一覧](../../../.local/cli.exact/pi-mux/SPEC.md#統合一覧)を `pi-mux list --json` で取得し、`history` を持つセッションから得る。各履歴には、セッションの外側の `id`・`file`・`btime`・`mtime`・`size` と、`history` 内の `cwd`・`title`・`source` を使う。`btime` は有限の `number` と `null` のみを受け入れ、それ以外は不正応答として扱う。所属を判断する保存時の cwd は、統合一覧の workspace の `cwd` ではなく `history.cwd` とする。統合一覧の稼働情報は list の代わりに使わない。
 
 | 項目 | 値 |
 | --- | --- |
 | エージェントディレクトリ | `PI_CODING_AGENT_DIR`（未設定・空文字なら `~/.pi/agent`） |
 | セッションディレクトリ | `PI_CODING_AGENT_SESSION_DIR`（未設定・空文字なら、呼び出し時の cwd の `.pi/settings.json` と `<エージェントディレクトリ>/settings.json` の `sessionDir` 設定を順に参照し、いずれも無ければ `<エージェントディレクトリ>/sessions`） |
-| Active 一覧 | list の通常 Pi（`temporary` が省略されたセッション） |
-| Inactive 一覧 | list の一時 Pi と、下記の保存済み会話のうち通常 Pi の一覧に同じ ID が無いもの |
+| Active 一覧 | list の `sessions` にある通常 Pi（`temporary` が省略されたセッション） |
+| Inactive 一覧 | list の `sessions` にある一時 Pi と、同じ ID の稼働行がない `normal` の保存済み会話 |
 | All 一覧 | Active 一覧と Inactive 一覧の和集合。同じ ID は1行にまとめる |
 | 稼働 Pi の保持 | `sessions` の行を state/title が null でも残す。`empty`（会話ファイル未作成分）は一覧に表示せず、生存判定と保存履歴の更新に使う |
-| 保存済み会話 | `pi-mux list --saved --json` のエントリのうち、cwd が list の登録済み workspace に含まれるもの |
-| セッション ID・cwd・file | 稼働 Pi は list の id・workspace.cwd・file を正とする。保存済み会話は history の id・cwd・file を使う。同じ ID は list を優先する |
+| セッション ID・cwd・file | 稼働行は list の id・workspace.cwd・file を使う。保存履歴だけの行は history の id・ヘッダーの cwd・file を使う |
 | 開始日時・更新日時 | 下記「開始日時・更新日時」の規則に従う |
+
+history の各項目は、ヘッダーの cwd が最新の正常な list に登録されている場合に使う。
+
+| `history.source` | 一覧への反映 |
+| --- | --- |
+| `normal` | 通常の保存領域（カスタム保存先を含む）の履歴。同じ ID の稼働行の表示情報を補完する |
+| `live-archive` | 最新の正常な list の `sessions` に同じ ID・file がある場合だけ、その稼働行の保存時タイトルと日時を補完する。履歴だけで行を追加したり、ファイルを監視対象に加えたり、行の操作を有効にしたりしない |
+
+物理的な `archive/` にある会話は、そのファイルの稼働行としてだけ表示する。後続の正常な list が同じ ID・file の稼働を `sessions` に示さなくなれば、そのファイルの行と操作対象を外す。history の取得が進行中・失敗・遅延応答の場合も同じで、応答が後から届いても稼働が確認できないファイルを一覧・監視・操作の対象に戻さない。別ファイルの `normal` の履歴は通常の規則に従う。
 
 エージェントディレクトリは、`~` をホームディレクトリへ、`~/` で始まるパスをホームディレクトリ配下へ展開する。絶対パスはその場所を使い、相対パスは拡張 host の `process.cwd()` を基準に絶対化する。この cwd は拡張機能から呼び出す pi-mux CLI の cwd と揃える。解決後のエージェントディレクトリを、`settings.json` の読み取りと既定のセッションディレクトリの解決に共通して使う。
 
 保存先設定から解決するセッションディレクトリの監視先は、拡張機能の起動時に決定する。保存先の設定を変更した後は、拡張機能を再起動して監視先と一覧を更新する。
 
-登録済み workspace が無い正常応答 `[]` はセッション行を空にし、このとき history は問い合わせない。list・history の失敗・不正応答は取得エラーとし、既存の一覧・未読を保持する。
+登録済み workspace が無い正常応答 `[]` はセッション行を空にし、このとき history は問い合わせない。list・history の失敗・不正応答は取得エラーとし、既存の一覧・未読を保持する。正常な list に基づく物理的な `archive/` の稼働行の除去は、history の成否を待たずに反映する。
 
 ### 保存履歴の更新
 
-保存履歴は次の契機で `pi-mux list --saved --json` から全登録 workspace 分を一括取得し、成功応答の全体を一覧へ反映する。次の更新までは、表示用の最後の正常取得結果を使う。稼働 Pi の集合・title・実行フェーズ・未読の自動更新は「実行フェーズの表示」に従う。
+保存履歴は次の契機で統合一覧から一括取得し、成功応答を「データソース」の規則に従って反映する。次の成功までは、最後の正常取得結果を使う。表示モードの切替や、稼働状態だけが変わる定期取得では history を再取得しない。稼働 Pi の自動更新は「実行フェーズの表示」に従う。
 
 | 条件・変化 | 保存履歴の取得と一覧への反映 |
 | --- | --- |
@@ -102,10 +110,11 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 | cwd の登録有無にかかわらず、監視対象の保存会話ファイルの作成・追記・セッション名変更・削除・改名の通知を受ける | 全登録 workspace の保存履歴を再取得し、作成・更新・削除を自動反映する。同じセッション ID は1行にまとめ、稼働 Pi の行は「データソース」の優先規則に従って保持する |
 | 履歴取得中に変更通知を受ける | 更新要求を保持し、進行中の取得完了後に追加通知をまとめて次の1回の取得へ反映する。同時に履歴を重複取得せず、変更を取りこぼさず反映する |
 | list に workspace が追加される | 全登録 workspace の保存履歴を取得する |
+| 稼働 Pi の `sessions` で、前回の `sessions` と取得済みの履歴のどちらにも無い会話ファイルを検出する | ファイルを新たに検出した場合の更新として、保存履歴を再取得する。稼働状態だけの変化では取得しない |
 | list から workspace が除かれる | その workspace の保存履歴を一覧から外す。除かれた workspace の取得結果が後から届いても一覧へ戻さない |
 | 一覧が非表示になる | 新たな保存履歴の取得と UI 配信を停止し、その間の変更は再表示時の更新対象とする |
 | 一覧を再表示・再生成する | 保存履歴の未取得または保留中の更新があれば全登録 workspace の保存履歴を取得し、それ以外は表示用の最後の正常取得結果を使う |
-| 保存履歴の取得が失敗する | 最後の正常な一覧・未読を保持する。表示中は list の定期取得とは別に自動再試行を行い、失敗が続く間は再試行間隔を延ばす |
+| 保存履歴の取得が失敗する | 最後の正常な一覧・未読を保持する（物理的な `archive/` の稼働行の除去は「データソース」に従う）。表示中は list の定期取得とは別に自動再試行を行い、失敗が続く間は再試行間隔を延ばす |
 
 変更通知による更新では、上表の表示状態・取得中の追加通知・再試行の規則に従い、通知後の待機タイマーを設けず、直ちに次の取得経路へ進む。
 
@@ -129,10 +138,10 @@ Pi（pi-coding-agent）のセッションを VS Code のサイドバーで一覧
 セッション項目の表示名は次の順で決める。
 
 1. 稼働 Pi は list.title が非空文字列ならその値
-2. history.title（pi-mux が解決したタイトル。セッション名（`/name` や `pi --name` で設定される値）、解決できないとき最初の user メッセージ）
+2. 「データソース」の規則で対応した保存履歴の `history.title`
 3. いずれも無い場合 `Untitled`
 
-一時 Pi も稼働 Pi として上記の規則に従う。history に無い稼働 Pi は `Untitled` とする。
+一時 Pi も稼働 Pi として上記の規則に従う。
 
 ### workspace 登録と永続情報
 
@@ -208,7 +217,7 @@ Webview 全体を document の標準スクロールで移動する。スクロ�
 | Webview を表示中 | 一覧データが更新される | 各 cwd のモードを保つ。新しく現れた cwd は Active で表示する |
 | Webview を初期表示・再生成する（VS Code 再起動を含む） | 一覧を表示する | すべての cwd を Active で表示する |
 
-モードの切替はセッション行（アイテム）の表示を切り替えるだけで、表示するグループ自体はモードによらず追加済みワークスペースだけである。登録済みワークスペースなら `All` で Inactive のセッションを選択・再開できる。一時 Pi は Inactive の表示と `Activate` 操作を維持する。list の同じ ID から `temporary` が無くなると、次の取得で Active として表示する。稼働終了で list から外れた保存済み会話は All の Inactive 行になる。
+モードの切替はセッション行（アイテム）の表示を切り替えるだけで、表示するグループ自体はモードによらず追加済みワークスペースだけである。登録済みワークスペースなら `All` で Inactive のセッションを選択・再開できる。一時 Pi は Inactive の表示と `Activate` 操作を維持する。list の同じ ID から `temporary` が無くなると、次の取得で Active として表示する。通常の保存領域にある会話は、`Deactivate` 操作で稼働が終わっても All の Inactive 行に残る。
 
 ### 実行フェーズの表示
 
@@ -315,7 +324,7 @@ Webview に一覧を描画済みで、グループ・行の集合と順序、表
 | 初回取得中、または直前の一覧が0グループで再取得中 | 一覧領域に `Loading sessions…` を表示する |
 | 直前の一覧にグループがあり再取得中 | 既存の一覧・表示モード・開閉状態を保ち、再取得中の表示は出さない |
 | 取得成功 | 最新の一覧を表示し、取得中や取得エラーの表示を解除する。0グループなら一覧領域に `No sessions yet` を表示する。セッションが0件の追加済みワークスペースは空グループとして表示する |
-| 取得失敗（直前の一覧にグループあり） | 既存の一覧・表示モード・開閉状態を保ち、取得中の表示を解除する |
+| 取得失敗（直前の一覧にグループあり） | 「データソース」の規則に従って既存の一覧・表示モード・開閉状態を保ち、取得中の表示を解除する |
 | 取得失敗（直前の一覧が0グループ） | 一覧領域に `Failed to load sessions. Retrying…` を表示し、取得中の表示を解除する。状態欄には表示しない |
 | 一覧取得以外の操作の失敗 | 一覧の取得状態と表示を保ち、操作のエラーメッセージを受信から2秒間、状態欄に表示する |
 | 操作エラーの表示中に新しい操作エラーを受信する | 新しいエラーメッセージへ更新し、その受信から2秒間表示する。同じメッセージを再受信した場合も同じとする |
@@ -612,7 +621,7 @@ SCM の表示選択は複数選択モードのときだけ、同じウィンド�
 
 Terminal のタイトルは、Pi TUI が通知するタイトルをそのまま表示する。拡張は通知されたタイトルを変更せず、独自のタイトルを付けない。`terminal.integrated.tabs.title` 設定が通知タイトルを採用しない環境（既定の `${process}` など）では、代わりにプロセス名 `tmux` が表示される。表示用 Terminal の起動 cwd は利用者のホームディレクトリとし、セッションの cwd に依存しない。タブの cwd 補助ラベルは起動 cwd のみを示し、セッションの切り替えで変化しない。
 
-Pi は pi-mux が管理する専用 tmux 内でセッションごとに保持し、表示用 Terminal の開閉と稼働を切り離す。実行環境には、切替先の不在とクライアントの未接続を終了コードで区別し、`list --active --json`・`list --saved --json`・`list --displayed --json --client-pid <pid>` に対応する版の `pi-mux` が必要である。tmux 側の一覧は表示せず、セッションの選択は拡張の一覧から行う。pi-mux の専用環境は利用者の通常の tmux 環境と分離し、拡張は利用者の他のターミナル・tmux セッション・設定を変更しない。
+Pi は pi-mux が管理する専用 tmux 内でセッションごとに保持し、表示用 Terminal の開閉と稼働を切り離す。実行環境には、切替先の不在とクライアントの未接続を終了コードで区別し、`list --active --json`・`history` を返す `list --json`・`list --displayed --json --client-pid <pid>` に対応する版の `pi-mux` が必要である。tmux 側の一覧は表示せず、セッションの選択は拡張の一覧から行う。pi-mux の専用環境は利用者の通常の tmux 環境と分離し、拡張は利用者の他のターミナル・tmux セッション・設定を変更しない。
 
 表示用 Terminal は、セッションの選択または Activate では `pi-mux open` を、新規セッションでは `pi-mux new --cwd <セッションの cwd>` を起動する設定で作成し、作成後すぐに前面表示を要求する。選択または Activate では、拡張はプロセス ID の取得や接続確認を待たず、作成・表示要求をもって正常に開いたものとして表示先・選択表示・既読化を更新する。新規セッションでは、表示先・選択表示は接続先セッション ID の確定後に更新する。Terminal 内の tmux への接続とその失敗処理は pi-mux CLI が担う。
 
@@ -620,7 +629,7 @@ Pi は pi-mux が管理する専用 tmux 内でセッションごとに保持し
 
 保存済み会話の選択または Activate では、切替や作成の前に履歴上の閲覧対象を取得する。前面表示を要求し、同じクライアントに対象の会話が表示されたと確認した場合だけ、その閲覧対象を pi-mux に通知する。この通知処理は、一覧の既読化や Terminal の前面表示を待たせない。取得・確認・通知に失敗しても一覧の既読判定は変わらない。
 
-切替コマンドが対象 Pi の不在を返したときは切替を打ち切る。セッション選択でこの失敗が起きた場合はサイドバーの一覧を更新し、保存履歴が残っていれば All に表示する。対象 Pi が見つかり、接続クライアントがまだ見つからない場合は、追加の一覧取得をせず切替を一定間隔で再試行する。その他のエラーは再試行せず切替を終える。切替コマンドが成功した後は、同じ PID での一覧取得で切替先の ID を確認するだけで、切替は再実行しない。既存 Terminal の PID を取得してから60秒が経過し、切替先の ID を確認できなければ失敗として終える。
+切替コマンドが対象 Pi の不在を返したときは切替を打ち切る。セッション選択でこの失敗が起きた場合はサイドバーの一覧を更新し、「データソース」の規則に従って All の表示を更新する。対象 Pi が見つかり、接続クライアントがまだ見つからない場合は、追加の一覧取得をせず切替を一定間隔で再試行する。その他のエラーは再試行せず切替を終える。切替コマンドが成功した後は、同じ PID での一覧取得で切替先の ID を確認するだけで、切替は再実行しない。既存 Terminal の PID を取得してから60秒が経過し、切替先の ID を確認できなければ失敗として終える。
 
 専用 tmux のステータスバー・prefix・タイトル転送・修飾キーの報告形式・マウス割り当ては、pi-mux が管理する設定であり、拡張はそれを変更しない。pi-mux の専用 tmux は、Pi が修飾キー付きキー（Shift+Enter など）を区別できるよう報告形式を設定し、Ctrl+左ドラッグによる floating pane 作成だけを無効にする。
 
@@ -641,7 +650,7 @@ Agent Kit の表示用 Terminal にキーボードフォーカスがある間だ
 | 表示用 Terminal が開いている状態で、選択先の保持中 Pi が無い | 旧表示タブの閉鎖完了後、表示用 Terminal を作り直して選択先の Pi へ接続する。保持中の Pi とセッションとの対応は維持する |
 | 表示用 Terminal のタブを閉じる | 表示用の接続だけを閉じ、保持中の Pi とセッションとの対応を維持する |
 | 表示タブが閉じた状態でセッションを再選択する | Editor Area に表示用 Terminal を1個作り、生存している同じ Pi へ再接続する |
-| Pi が終了する | 自動で再起動せず、次回選択時に保存されたセッションを再開する |
+| Pi が終了する | 自動で再起動せず、保存履歴で All に残る会話は、次回選択時に再開する |
 | Terminal 作成前の処理、または既存 Terminal の切替に失敗する | 対象と失敗内容を示すエラーを表示する。同じセッションの Pi を重複起動せず、先行して一覧の表示区分を変えない。従前の表示先と Pi を保持する |
 
 表示用 Terminal の作り直しで、旧タブの閉鎖後に拡張が新しい Terminal の作成失敗を検出した場合は、次の規則で表示を復旧する。復旧の試行は1回とし、生存中の同じ Pi への表示接続だけを作り直す。Pi の再起動や一時状態から通常状態への昇格は行わない。復旧用 Terminal にも新規 Terminal の即表示の規則を適用する。

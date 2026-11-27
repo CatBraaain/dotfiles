@@ -19,6 +19,7 @@ import {
 import { LockBusyError, withLock } from "./locks";
 import { platform } from "./platform";
 import { reloadPanes } from "./reload";
+import { claimLinuxReload } from "./reload-environment";
 import { snapshotSessions } from "./restoration";
 import { registerWorkspaces } from "./restore-state";
 import { historySessions, readSessionMetadata } from "./saved-sessions";
@@ -63,10 +64,9 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   pi-mux close [--if-temporary] <session-id>
   pi-mux list [--json]
   pi-mux list --active [--json]
-  pi-mux list --saved [--cwd <absolute-cwd>] [--json]
+  pi-mux list --all [--cwd <absolute-cwd>] [--json]
   pi-mux list --displayed [--client-pid <pid>] [--json]
   pi-mux switch <session-id> [--client-pid <pid>]
-  pi-mux history [--cwd <absolute-cwd>] [--json]
   pi-mux workspace register <cwd>
   pi-mux workspace unregister <cwd>
   pi-mux snapshot [server-generation]
@@ -128,10 +128,11 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       return platform.windows
         ? await claimWindowsInitialRequest(operation.token)
         : await claimWslInitialRequest(operation.token);
+    if (operation.kind === "claim-reload") return await claimLinuxReload(operation.token);
     if (operation.kind === "windows-claim-launch") {
       if (!platform.windows) throw new Error("This launch operation requires Windows");
-      return operation.reload
-        ? await claimWindowsReload(operation.token, operation.command, operation.reload)
+      return "reload" in operation
+        ? await claimWindowsReload(operation.token, operation.reload)
         : await claimWindowsLaunch(operation.token, operation.command, operation.cwd);
     }
     if (operation.kind === "worktree-snapshot") {
@@ -214,10 +215,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         operation.waitSeconds,
       );
     }
-    if (
-      operation.kind === "history" ||
-      (operation.kind === "list" && operation.scope === "saved")
-    ) {
+    if (operation.kind === "list" && operation.scope === "saved") {
       const summaries = new HistorySummaryCache();
       const { entries } = await historySessions(tmuxConfiguration(), summaries, {
         scope: "history",

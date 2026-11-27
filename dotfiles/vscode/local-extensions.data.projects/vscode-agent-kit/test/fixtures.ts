@@ -1,6 +1,20 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { PiMuxHistoryEntry } from "../src/pi-mux";
+
+export function combinedHistoryOutput(cwd: string, entries: readonly PiMuxHistoryEntry[]): string {
+  const sessions = entries.map(({ source, cwd, title, ...file }) => ({
+    ...file,
+    active: source === "live-archive",
+    saved: true,
+    state: null,
+    publishPending: null,
+    title,
+    history: { cwd, title, source },
+  }));
+  return JSON.stringify([{ cwd, sessions }]);
+}
 
 /** Create a unique temp directory for a test. */
 export async function tempDir(prefix: string): Promise<string> {

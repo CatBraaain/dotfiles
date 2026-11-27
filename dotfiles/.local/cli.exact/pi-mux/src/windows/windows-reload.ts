@@ -16,10 +16,12 @@ import {
   tmuxConfiguration,
   type TmuxConfig,
 } from "../configuration";
+import { InitialRequestFiles } from "../initial-request-files";
 import { type ReleaseLock, tryAcquireLock, windowsClaimLock, withLock } from "../locks";
 import { findFirstInput, launchRecordToken, matchesLaunch } from "../pane-inventory";
 import { clearStateOptions } from "../pane-state";
 import { platform } from "../platform";
+import { reloadProcessEnvironment } from "../reload-environment";
 import {
   announceReloaded,
   formatReloadProcess,
@@ -146,7 +148,6 @@ function findWindowsReloadPeer(
 
 export async function claimWindowsReload(
   token: string,
-  command: string[],
   route: WindowsReloadRoute,
 ): Promise<number> {
   const config = tmuxConfiguration();
@@ -168,19 +169,17 @@ export async function claimWindowsReload(
       const started = await rights.claimAndStart(
         token,
         randomUUID(),
-        () => {
-          const env = { ...process.env };
-          for (const [key, value] of route.inheritedOverrides) {
-            for (const inherited of Object.keys(env))
-              if (inherited.toUpperCase() === key.toUpperCase()) delete env[inherited];
-            if (value !== null) env[key] = value;
-          }
+        (basis) => {
+          if (basis.instance !== route.instance || !basis.witnesses.includes(route.identity))
+            throw new SpawnDidNotStartError("Windows reload launch right does not match its peer");
+          const { command, cwd, environment } = takeWindowsReloadEnvironment(config, token, route);
+          const env = reloadProcessEnvironment(environment, process.env);
           configureWindowsPiEnvironment(env, `${config.socket},${port},${index}`);
           if (observeWindowsIdentity(route.launcher, inspectWindowsProcess) !== "present")
             throw new SpawnDidNotStartError("Windows reload launcher exited before the claim");
           try {
             return Bun.spawn(command, {
-              cwd: route.cwd,
+              cwd,
               env,
               stdin: "inherit",
               stdout: "inherit",
@@ -247,6 +246,38 @@ export async function claimWindowsReload(
     await Bun.sleep(POLL_INTERVAL_MS);
   }
   throw new Error("Windows reload launch was not permitted");
+}
+
+function takeWindowsReloadEnvironment(
+  config: TmuxConfig,
+  right: string,
+  route: WindowsReloadRoute,
+) {
+  try {
+    return InitialRequestFiles.open(config).takeReload(
+      windowsReloadFileIdentity(config, route, right),
+    );
+  } catch {
+    throw new SpawnDidNotStartError("Cannot start Pi: the reload environment was not claimed");
+  }
+}
+
+function windowsReloadFileIdentity(
+  { socket }: TmuxConfig,
+  { instance, session, pane, id, launchToken, cwd, identity }: WindowsReloadRoute,
+  right: string,
+) {
+  return {
+    socket,
+    generation: instance,
+    session,
+    pane,
+    id,
+    launchToken,
+    cwd,
+    peer: identity,
+    right,
+  };
 }
 
 export function startingConversationId(entry: WindowsLifecycleEntry): string | undefined {
@@ -674,14 +705,6 @@ export function verifyWindowsReloadGroup(
     }
     chain.push(piPid);
   }
-  const piChildren = children(piPid);
-  if (piChildren.length)
-    throw windowsReloadChildFailure(
-      "Cannot replace pi without affecting its Windows child processes",
-      "Pi has direct child processes",
-      piChildren,
-      piPid,
-    );
   return chain;
 }
 
@@ -927,22 +950,27 @@ async function respawnWindowsReloadTarget(
   const launchToken = randomUUID();
   const right = randomUUID();
   const startup = `pi-mux-startup-${randomUUID()}`;
-  const environment = Object.fromEntries(
-    Object.entries(config.env).filter(
-      ([key]) => !DISPATCH_FIELDS.some((field) => field === key.toUpperCase()),
-    ),
+  const callerEnvironment = Object.fromEntries(
+    Object.entries(config.env).filter(([key]) => {
+      const name = key.toUpperCase();
+      return !PARENT_ENV_KEYS.has(name) && name !== "PI_CODING_AGENT_DIR";
+    }),
   );
-  const desired: Record<string, string> = {
-    ...environment,
-    PI_CODING_AGENT_DIR: config.agentDir,
-    PI_TMUX_SESSION_ID: pane.id,
-    PI_TMUX_LAUNCH_TOKEN: launchToken,
-    PI_TMUX_STARTUP_COMMAND: startup,
-    [WINDOWS_RIGHT_ENV]: right,
-    ...(temporary ? { PI_TMUX_TEMPORARY: pane.id } : {}),
-    ...(preserveWarm ? { PI_TMUX_STARTUP_MODE: "warm" } : {}),
-  };
-  const { commands, inheritedOverrides } = await windowsReloadEnvironment(
+  const desired = reloadProcessEnvironment(
+    {
+      ...callerEnvironment,
+      PI_CODING_AGENT_DIR: config.agentDir,
+      PI_TMUX_SESSION_ID: pane.id,
+      PI_TMUX_LAUNCH_TOKEN: launchToken,
+      PI_TMUX_STARTUP_COMMAND: startup,
+      [WINDOWS_RIGHT_ENV]: right,
+      ...(temporary ? { PI_TMUX_TEMPORARY: pane.id } : {}),
+      ...(preserveWarm ? { PI_TMUX_STARTUP_MODE: "warm" } : {}),
+    },
+    {},
+    true,
+  );
+  const commands = await windowsReloadSessionCommands(
     run,
     desired,
     Object.keys(dispatchEnvironment),
@@ -961,13 +989,6 @@ async function respawnWindowsReloadTarget(
     cwd: pane.cwd,
     launchToken,
     launcher: launcher.identity,
-    inheritedOverrides: [
-      ...inheritedOverrides,
-      ...DISPATCH_FIELDS.map((field): [string, string | null] => [
-        field,
-        dispatchEnvironment[field] ?? null,
-      ]),
-    ],
   };
   const invocation = cliInvocation();
   const command = [
@@ -978,7 +999,7 @@ async function respawnWindowsReloadTarget(
     "--",
     `/${startup}`,
   ];
-  const encode = (value: unknown) => Buffer.from(JSON.stringify(value), "utf8").toString("base64");
+  const routeArgument = Buffer.from(JSON.stringify(route), "utf8").toString("base64");
   const respawn = [
     "respawn-pane",
     "-k",
@@ -990,13 +1011,15 @@ async function respawnWindowsReloadTarget(
     ...invocation,
     "windows-claim-launch",
     right,
-    encode(command),
-    encode(route),
+    routeArgument,
   ];
+  const files = InitialRequestFiles.open(config, true);
   const markerAdded =
     !temporary && !management.startupState(basis)?.restoring.includes(pane.id.toLowerCase());
   if (markerAdded) await management.keepRestoring(basis, pane.id, windowsClaimLock(management));
   let replacementAttempted = false;
+  let reservationAttempted = false;
+  let cancelled = false;
   try {
     const replaced = await replaceVerifiedWindowsReloadPane(config, target, {
       dispatchRouting,
@@ -1006,6 +1029,11 @@ async function respawnWindowsReloadTarget(
       readPane,
       isPresent: (process) => observeWindowsIdentity(process, inspectWindowsProcess) === "present",
       async replace() {
+        files.publishReload({
+          ...windowsReloadFileIdentity(config, route, right),
+          command,
+          environment: { ...desired, ...dispatchEnvironment },
+        });
         replacementAttempted = true;
         await run([
           ...commands,
@@ -1040,6 +1068,7 @@ async function respawnWindowsReloadTarget(
       JSON.stringify(nextDispatchRouting) !== JSON.stringify(dispatchRouting)
     )
       throw new Error("Cannot verify the Windows reload replacement pane");
+    reservationAttempted = true;
     const reserved = await rights.reserveAfterLifecycleAudit(keys, basis, { token: right });
     if (reserved.state !== "reserved") throw new Error("A Windows pi launch is still active");
     const claimDeadlineMs = Date.now() + STARTUP_TIMEOUT_MS;
@@ -1053,8 +1082,8 @@ async function respawnWindowsReloadTarget(
       if (status.state !== "reserved")
         throw new Error("Cannot confirm the Windows reload launch was claimed");
       if (Date.now() >= claimDeadlineMs) {
-        if (await rights.cancelUnclaimed(right))
-          throw new Error("Timed out waiting for the Windows reload launch claim");
+        cancelled = await rights.cancelUnclaimed(right);
+        if (cancelled) throw new Error("Timed out waiting for the Windows reload launch claim");
         if ((await rights.status(right)).state === "live") continue;
         throw new Error("Cannot confirm the Windows reload launch after the claim timeout");
       }
@@ -1069,7 +1098,14 @@ async function respawnWindowsReloadTarget(
       deadlineMs: Date.now() + STARTUP_TIMEOUT_MS,
     };
   } catch (error) {
-    await rights.cancelUnclaimed(right);
+    if (!cancelled) cancelled = await rights.cancelUnclaimed(right);
+    if (
+      replacementAttempted &&
+      (!reservationAttempted ||
+        cancelled ||
+        (await rights.status(right).catch(() => undefined))?.state === "missing")
+    )
+      files.cancel(launchToken);
     throw error;
   } finally {
     if (
@@ -1174,11 +1210,11 @@ export function windowsReloadSnapshotCandidates(
   ]);
 }
 
-async function windowsReloadEnvironment(
+async function windowsReloadSessionCommands(
   run: (commands: string[][]) => Promise<string>,
   desired: Record<string, string>,
   retained: readonly string[],
-): Promise<{ commands: string[][]; inheritedOverrides: WindowsReloadRoute["inheritedOverrides"] }> {
+): Promise<string[][]> {
   const current = await run([["show-environment", "-s"]]);
   const global = await run([["show-environment", "-gs"]]);
   const exported = (text: string) =>
@@ -1196,23 +1232,18 @@ async function windowsReloadEnvironment(
       !GENERATED_ENV_KEYS.has(key.toUpperCase()) &&
       !PSMUX_ROUTING.has(key.toUpperCase()),
   );
-  const commands: string[][] = [];
-  const inheritedOverrides: WindowsReloadRoute["inheritedOverrides"] = [];
-  for (const key of stale) {
-    if (platform.acceptsTmuxEnvironmentKey(key)) commands.push(["set-environment", "-r", key]);
-    else if (/^[^=\0\r\n]+$/.test(key)) inheritedOverrides.push([key, null]);
-  }
+  const commands = stale
+    .filter((key) => platform.acceptsTmuxEnvironmentKey(key))
+    .map((key) => ["set-environment", "-r", key]);
   for (const [key, value] of Object.entries(desired)) {
-    if (GENERATED_ENV_KEYS.has(key.toUpperCase()) || PSMUX_ROUTING.has(key.toUpperCase())) continue;
-    const supported = platform.acceptsTmuxEnvironmentKey(key);
-    if (!supported || /[\r\n]/.test(value) || value === "-t") {
-      if (supported) commands.push(["set-environment", "-r", key]);
-      inheritedOverrides.push([key, value]);
-    } else {
-      commands.push(["set-environment", key, value]);
-    }
+    if (!platform.acceptsTmuxEnvironmentKey(key)) continue;
+    commands.push(
+      /[\r\n]/.test(value) || value === "-t"
+        ? ["set-environment", "-r", key]
+        : ["set-environment", key, value],
+    );
   }
-  return { commands, inheritedOverrides };
+  return commands;
 }
 
 async function confirmWindowsReloadPublications(context: WindowsReloadContext): Promise<void> {

@@ -137,7 +137,7 @@ class HistoryCacheFixture {
   }
 
   history(cwd = this.cwd) {
-    return this.run(["history", "--cwd", cwd, "--json"]);
+    return this.run(["list", "--all", "--cwd", cwd, "--json"]);
   }
 
   mockTmux(id: string, file: string, running = false): void {
@@ -311,12 +311,15 @@ spyOn(promises, "readdir").mockImplementation((...args) => {
   }
 
   async historyAsync(cwd = this.cwd) {
-    const child = Bun.spawn([bunExecutable, "run", source, "history", "--cwd", cwd, "--json"], {
-      cwd: this.cwd,
-      env: this.env,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    const child = Bun.spawn(
+      [bunExecutable, "run", source, "list", "--all", "--cwd", cwd, "--json"],
+      {
+        cwd: this.cwd,
+        env: this.env,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
     const [stdout, stderr, status] = await Promise.all([
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
@@ -1810,15 +1813,24 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
       fixture.mockTmux(mineId, mine);
       const unified = fixture.run(["list", "--json"]);
       assert.equal(unified.status, 0, unified.stderr);
-      const workspaces: { cwd: string; sessions: { file: string }[] }[] = JSON.parse(
-        unified.stdout,
-      );
       assert.deepEqual(
-        workspaces.map(({ cwd, sessions }) => [cwd, sessions.map(({ file }) => file)]),
+        JSON.parse(unified.stdout),
         [
-          [fixture.cwd, [mine]],
-          [fixture.otherCwd, [other]],
-        ],
+          fixture.expected(mine, mineId, fixture.cwd, null),
+          fixture.expected(other, otherId, fixture.otherCwd, null),
+        ].map(({ cwd, ...metadata }) => ({
+          cwd,
+          sessions: [
+            {
+              ...metadata,
+              active: false,
+              saved: true,
+              state: null,
+              publishPending: null,
+              history: { cwd, title: metadata.title, source: "normal" },
+            },
+          ],
+        })),
       );
     } finally {
       fixture.cleanup();
@@ -1948,7 +1960,7 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
         writeFileSync(join(fixture.agentDir, "settings.json"), settings);
         fixture.mockTmux(randomUUID(), join(fixture.directory, "inactive.jsonl"));
         for (const args of [
-          ["history", "--cwd", fixture.cwd, "--json"],
+          ["list", "--all", "--cwd", fixture.cwd, "--json"],
           ["list", "--json"],
         ]) {
           const result = fixture.run(args);
@@ -1985,6 +1997,101 @@ spyOn(fs, "openSync").mockImplementation((...args) => {
 });
 
 describe("default list archive scope", () => {
+  it("keeps stored cwd and title separate from the active workspace and published title", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const archive = join(dirname(fixture.sessionFile(fixture.cwd, id)), "archive");
+      const file = fixture.writeSession(
+        fixture.cwd,
+        id,
+        [fixture.header(id, fixture.otherCwd), fixture.sessionInfo("Archived title")],
+        { file: join(archive, "active.jsonl") },
+      );
+      fixture.mockTmux(id, file, true);
+      writeFileSync(
+        join(fixture.directory, "published.json"),
+        JSON.stringify({ version: 1, sessionId: id, title: "Published title" }),
+      );
+      fixture.traceReads({ forbidArchive: true });
+
+      const result = fixture.run(["list", "--json"]);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), [
+        {
+          cwd: fixture.cwd,
+          sessions: [
+            {
+              id,
+              file,
+              active: true,
+              saved: true,
+              state: null,
+              title: "Published title",
+              publishPending: null,
+              btime: null,
+              mtime: null,
+              size: statSync(file).size,
+              history: { cwd: fixture.otherCwd, title: "Archived title", source: "live-archive" },
+            },
+          ],
+        },
+        { cwd: fixture.otherCwd, sessions: [] },
+      ]);
+      assert.deepEqual([...new Set(fixture.reads().map(({ file }) => file))], [file]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("uses normal history without reading a same-ID live archive file", () => {
+    const fixture = new HistoryCacheFixture();
+    try {
+      const id = randomUUID();
+      const archive = join(dirname(fixture.sessionFile(fixture.cwd, id)), "archive");
+      const live = fixture.writeSession(
+        fixture.cwd,
+        id,
+        [fixture.header(id), fixture.sessionInfo("Archived title")],
+        { file: join(archive, "active.jsonl") },
+      );
+      const normal = fixture.writeSession(fixture.otherCwd, id, [
+        fixture.header(id, fixture.otherCwd),
+        fixture.userMessage(),
+      ]);
+      fixture.mockTmux(id, live, true);
+      writeFileSync(
+        join(fixture.directory, "published.json"),
+        JSON.stringify({ version: 1, sessionId: id, title: "Published title" }),
+      );
+      fixture.traceReads({ forbidArchive: true });
+
+      const result = fixture.run(["list", "--json"]);
+      assert.equal(result.status, 0, result.stderr);
+      const { cwd, ...metadata } = fixture.expected(normal, id, fixture.otherCwd, null);
+      assert.deepEqual(JSON.parse(result.stdout), [
+        {
+          cwd: fixture.cwd,
+          sessions: [
+            {
+              ...metadata,
+              active: true,
+              saved: true,
+              state: null,
+              title: "Published title",
+              publishPending: null,
+              history: { cwd, title: null, source: "normal" },
+            },
+          ],
+        },
+        { cwd: fixture.otherCwd, sessions: [] },
+      ]);
+      assert.deepEqual([...new Set(fixture.reads().map(({ file }) => file))], [normal]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("resolves the active archive file without enumerating or reading its neighbors", () => {
     const fixture = new HistoryCacheFixture();
     try {
@@ -2005,8 +2112,8 @@ describe("default list archive scope", () => {
       );
       fixture.mockTmux(id, active, true);
       for (const args of [
-        ["history", "--json"],
-        ["list", "--saved", "--json"],
+        ["list", "--all", "--json"],
+        ["list", "--all", "--json"],
       ]) {
         const listed = fixture.run(args);
         assert.equal(listed.status, 0, listed.stderr);
@@ -2028,7 +2135,16 @@ describe("default list archive scope", () => {
       assert.deepEqual(JSON.parse(listed.stdout), [
         {
           cwd,
-          sessions: [{ ...metadata, active: true, saved: true, state: null, publishPending: null }],
+          sessions: [
+            {
+              ...metadata,
+              active: true,
+              saved: true,
+              state: null,
+              publishPending: null,
+              history: { cwd, title: metadata.title, source: "live-archive" },
+            },
+          ],
         },
         { cwd: fixture.otherCwd, sessions: [] },
       ]);
@@ -2080,7 +2196,14 @@ describe("default list archive scope", () => {
             {
               cwd,
               sessions: [
-                { ...metadata, active: true, saved: true, state: null, publishPending: null },
+                {
+                  ...metadata,
+                  active: true,
+                  saved: true,
+                  state: null,
+                  publishPending: null,
+                  history: { cwd, title: metadata.title, source: "live-archive" },
+                },
               ],
             },
             { cwd: fixture.otherCwd, sessions: [] },
@@ -2182,7 +2305,13 @@ function mismatch(stat) {
     });
   }
 
-  for (const kind of ["out-of-scope", "mismatched", "symlinked", "relocated"] as const) {
+  for (const kind of [
+    "out-of-scope",
+    "invalid-header",
+    "mismatched",
+    "symlinked",
+    "relocated",
+  ] as const) {
     it(`retains the active row without history metadata when its archive path is ${kind}`, () => {
       const fixture = new HistoryCacheFixture();
       try {
@@ -2197,15 +2326,20 @@ function mismatch(stat) {
               ? join(archive, "moved.jsonl")
               : file;
         const headerId = kind === "mismatched" ? randomUUID() : id;
-        fixture.writeSession(
-          fixture.cwd,
+        const header = fixture.header(
           headerId,
-          [fixture.header(headerId), fixture.userMessage()],
-          { file: original },
+          kind === "invalid-header" ? "relative" : fixture.cwd,
         );
+        fixture.writeSession(fixture.cwd, headerId, [header, fixture.userMessage()], {
+          file: original,
+        });
         if (kind === "symlinked") {
           mkdirSync(archive, { recursive: true });
           symlinkSync(original, file);
+          writeFileSync(
+            join(fixture.directory, "published.json"),
+            JSON.stringify({ version: 1, sessionId: id, title: "Published title" }),
+          );
         }
         fixture.mockTmux(id, file, true);
         fixture.traceReads({ forbidArchive: true });
@@ -2222,7 +2356,7 @@ function mismatch(stat) {
                 active: true,
                 saved: kind !== "relocated",
                 state: null,
-                title: null,
+                title: kind === "symlinked" ? "Published title" : null,
                 publishPending: null,
                 btime: null,
                 mtime: null,
@@ -2232,6 +2366,7 @@ function mismatch(stat) {
           },
           { cwd: fixture.otherCwd, sessions: [] },
         ]);
+        if (kind === "symlinked") assert.deepEqual(fixture.reads(), []);
       } finally {
         fixture.cleanup();
       }
@@ -2240,9 +2375,9 @@ function mismatch(stat) {
 });
 
 describe("shared active list and history cache", () => {
-  for (const initial of ["history", "list --active"] as const) {
-    const isHistoryFirst = initial === "history";
-    const historyArgs = ["history", "--json"];
+  for (const initial of ["list --all", "list --active"] as const) {
+    const isHistoryFirst = initial === "list --all";
+    const historyArgs = ["list", "--all", "--json"];
     const activeArgs = ["list", "--active", "--json"];
     it(`reuses a title cached by ${initial} in the other command without reading the title again`, () => {
       const fixture = new HistoryCacheFixture();
@@ -2378,7 +2513,7 @@ describe("shared active list and history cache", () => {
       assert.deepEqual(fixture.reads(), []);
       assert.deepEqual(fixture.cacheFiles(), []);
 
-      const history = fixture.run(["history", "--json"]);
+      const history = fixture.run(["list", "--all", "--json"]);
       assert.equal(history.status, 1);
       assert.match(history.stderr, /History inspection forbidden/);
     } finally {

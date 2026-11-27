@@ -785,11 +785,11 @@ interface ClientSnapshot {
 function createClientStore(): {
   subscribe(listener: () => void): () => void;
   getSnapshot(): ClientSnapshot;
-  setLoading(manualRefresh: boolean, displayedSessionId?: string | null): void;
+  setLoading(manualRefresh: boolean, displayedSessionId?: string | null, state?: ClientState): void;
   setSessions(state: ClientState, animate?: boolean): void;
   setConnectionError(connectionError: boolean): void;
   setError(message: string): void;
-  setSessionsError(): void;
+  setSessionsError(state?: ClientState): void;
   startNewSession(cwd: string): string;
   finishNewSession(requestId: string): void;
   startDeactivation(sessionId: string): string;
@@ -819,13 +819,13 @@ function createClientStore(): {
       return () => listeners.delete(listener);
     },
     getSnapshot: () => snapshot,
-    setLoading: (manualRefresh, displayedSessionId) =>
+    setLoading: (manualRefresh, displayedSessionId, state = snapshot.state) =>
       publish({
         ...snapshot,
         state:
           displayedSessionId === undefined
-            ? snapshot.state
-            : { ...snapshot.state, displayedSessionId: displayedSessionId ?? undefined },
+            ? state
+            : { ...state, displayedSessionId: displayedSessionId ?? undefined },
         animated: false,
         loadStatus: "loading",
         manualRefresh,
@@ -840,7 +840,8 @@ function createClientStore(): {
       }),
     setConnectionError: (connectionError) => publish({ ...snapshot, connectionError }),
     setError: (message) => publish({ ...snapshot, errorMessage: message }),
-    setSessionsError: () => publish({ ...snapshot, loadStatus: "error", manualRefresh: false }),
+    setSessionsError: (state = snapshot.state) =>
+      publish({ ...snapshot, state, loadStatus: "error", manualRefresh: false }),
     startNewSession: (cwd) => {
       const requestId = crypto.randomUUID();
       const pendingNewSessions = new Map(snapshot.pendingNewSessions);
@@ -1328,6 +1329,7 @@ export function initClient(bridge: ClientBridge): () => void {
         typeof displayedSessionId === "string" || displayedSessionId === null
           ? displayedSessionId
           : undefined,
+        isClientState(message.state) ? message.state : undefined,
       );
     }
     if (message.type === "sessions" && isClientState(message.state)) {
@@ -1360,7 +1362,7 @@ export function initClient(bridge: ClientBridge): () => void {
       }, OPERATION_ERROR_DISPLAY_MS);
     }
     if (message.type === "sessionsError") {
-      store.setSessionsError();
+      store.setSessionsError(isClientState(message.state) ? message.state : undefined);
     }
   });
 

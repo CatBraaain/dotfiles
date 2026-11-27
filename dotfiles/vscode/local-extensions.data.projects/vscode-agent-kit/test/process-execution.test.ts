@@ -135,7 +135,7 @@ describe("external command environment", () => {
   it("allows extra time to rebuild the saved history cache", async () => {
     succeedWithStdout("[]\n");
     expect(await new PiMux().history()).toEqual([]);
-    expect(spawnMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["list", "--saved", "--json"], {
+    expect(spawnMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["list", "--json"], {
       cwd: undefined,
       timeout: 180_000,
       env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
@@ -144,9 +144,10 @@ describe("external command environment", () => {
 
   it("collects a history response larger than the old one-MiB execFile stdout cap", async () => {
     await withPiMuxProcess(
-      "const entry = { id: '', cwd: '/p', file: '/p/x.jsonl', title: 'x'.repeat(200), btime: 1, mtime: null, size: 1 };" +
-        " const entries = Array.from({ length: 5000 }, (_, i) => Object.assign({}, entry, { id: 'x' + i }));" +
-        " process.stdout.write(JSON.stringify(entries));",
+      "const { resolve } = require('node:path'); const cwd = resolve('project');" +
+        " const history = { cwd, title: 'x'.repeat(200), source: 'normal' };" +
+        " const sessions = Array.from({ length: 5000 }, (_, i) => ({ id: 'x' + i, file: resolve('x.jsonl'), active: false, saved: true, btime: 1, mtime: null, size: 1, history }));" +
+        " process.stdout.write(JSON.stringify([{ cwd, sessions }]));",
       async () => {
         expect(await new PiMux().history()).toHaveLength(5000);
       },

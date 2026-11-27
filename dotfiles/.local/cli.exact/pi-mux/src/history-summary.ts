@@ -26,15 +26,19 @@ const SESSION_HEADER_PREFIX_BYTES = 1024;
 const SESSION_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?$/i;
 const FIRST_MESSAGE_MAX_CODE_POINTS = 80;
 const JSON_UNICODE_ESCAPE_BYTES = Buffer.from("\\u");
-const SESSION_INFO_TYPE_BYTES = Buffer.from('"session_info"');
+const ASCII_UNICODE_ESCAPE_PREFIX = Buffer.from("\\u00");
+const SESSION_INFO_TYPE = "session_info";
+const SESSION_INFO_TYPE_BYTES = Buffer.from(`"${SESSION_INFO_TYPE}"`);
+const MAX_SESSION_INFO_TOKEN_BYTES = 2 + SESSION_INFO_TYPE.length * "\\u0000".length;
 const USER_ROLE_BYTES = Buffer.from('"user"');
+const QUOTE_BYTE = '"'.charCodeAt(0);
 const UNDERSCORE_BYTE = "_".charCodeAt(0);
 const LOWERCASE_U_BYTE = "u".charCodeAt(0);
 const SUMMARY_MARKER_OVERLAP_BYTES =
   Math.max(
     SESSION_INFO_TYPE_BYTES.length,
     USER_ROLE_BYTES.length,
-    JSON_UNICODE_ESCAPE_BYTES.length,
+    ASCII_UNICODE_ESCAPE_PREFIX.length,
   ) - 1;
 const LAST_RUN_SCAN_BYTES = 16 * 1024 * 1024;
 const LAST_RUN_CUSTOM_TYPE = "pi-mux-last-run";
@@ -480,7 +484,7 @@ function readSavedSessionSummary(
     let namedTitle: string | null | undefined;
     const scan: SummaryScan = { mtime: null, mayHaveUserMessage: false };
     for (const line of reverseSummaryLines(fd, size, scan)) {
-      if (line.length === 0 || !mayContainSummaryLine(line, scan.mtime)) continue;
+      if (line.length === 0 || (scan.mtime !== null && !hasSessionInfoValue(line))) continue;
       let entry: unknown;
       try {
         entry = JSON.parse(line.toString("utf8"));
@@ -488,7 +492,7 @@ function readSavedSessionSummary(
         continue;
       }
       if (!isJsonObject(entry)) continue;
-      if (namedTitle === undefined && entry.type === "session_info") {
+      if (namedTitle === undefined && entry.type === SESSION_INFO_TYPE) {
         namedTitle = typeof entry.name === "string" ? entry.name.trim() || null : null;
       }
       if (scan.mtime === null && (entry.type === "message" || entry.type === "compaction")) {
@@ -598,9 +602,39 @@ function containsSessionInfoMarker(bytes: Buffer): boolean {
   return bytes.includes(UNDERSCORE_BYTE) && bytes.includes(SESSION_INFO_TYPE_BYTES);
 }
 
+function hasSessionInfoValue(line: Buffer): boolean {
+  if (containsSessionInfoMarker(line)) return true;
+  for (
+    let escape = line.indexOf(ASCII_UNICODE_ESCAPE_PREFIX);
+    escape >= 0;
+    escape = line.indexOf(ASCII_UNICODE_ESCAPE_PREFIX, escape + 1)
+  ) {
+    if (hasEscapedSessionInfoToken(line, escape)) return true;
+  }
+  return false;
+}
+
+function hasEscapedSessionInfoToken(line: Buffer, escape: number): boolean {
+  const earliestQuote = Math.max(0, escape - SESSION_INFO_TYPE.length);
+  const openingQuote = line.subarray(earliestQuote, escape).lastIndexOf(QUOTE_BYTE);
+  if (openingQuote < 0) return false;
+
+  const tokenStart = earliestQuote + openingQuote;
+  const token = line.subarray(tokenStart, tokenStart + MAX_SESSION_INFO_TOKEN_BYTES);
+  const closingQuote = token.indexOf(QUOTE_BYTE, 1);
+  if (closingQuote < 0) return false;
+  try {
+    return JSON.parse(token.toString("utf8", 0, closingQuote + 1)) === SESSION_INFO_TYPE;
+  } catch {
+    return false;
+  }
+}
+
 function mayContainSummaryLine(bytes: Buffer, mtime: number | null): boolean {
   return (
-    mtime === null || containsSessionInfoMarker(bytes) || bytes.includes(JSON_UNICODE_ESCAPE_BYTES)
+    mtime === null ||
+    containsSessionInfoMarker(bytes) ||
+    bytes.includes(ASCII_UNICODE_ESCAPE_PREFIX)
   );
 }
 
@@ -618,13 +652,13 @@ function* reverseSummaryLines(fd: number, size: number, scan: SummaryScan): Gene
     const chunk = buffer.subarray(0, endWithOverlap - position);
     readSummaryBytes(fd, chunk, position);
     const hasLowercaseU = chunk.includes(LOWERCASE_U_BYTE);
-    const hasUnicodeEscape = hasLowercaseU && chunk.includes(JSON_UNICODE_ESCAPE_BYTES);
+    const hasAsciiEscape = hasLowercaseU && chunk.includes(ASCII_UNICODE_ESCAPE_PREFIX);
     scan.mayHaveUserMessage ||=
-      hasUnicodeEscape || (hasLowercaseU && chunk.includes(USER_ROLE_BYTES));
+      hasAsciiEscape || (hasLowercaseU && chunk.includes(USER_ROLE_BYTES));
     if (
       scan.mtime !== null &&
       !pendingCandidate &&
-      !hasUnicodeEscape &&
+      !hasAsciiEscape &&
       !containsSessionInfoMarker(chunk)
     ) {
       lineEnd = undefined;

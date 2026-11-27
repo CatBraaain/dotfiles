@@ -1,9 +1,10 @@
 import { it } from "bun:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { INITIAL_REQUEST_DIRECTORY } from "../initial-request-files";
 import type { ListedWorkspace } from "../session-list";
 import { writeWindowsNpmPiFixture } from "./windows-npm-fixture";
 import {
@@ -52,6 +53,8 @@ const record = {
   panePid: pid, cwd: process.cwd(), file: process.argv[3],
   oldProcessesExited: previous.flatMap(({ source, panePid }) => [source.pid, panePid]).map(processHasExited),
   replacement: process.env.RELOAD_NEW_ENV,
+  fileOnly: process.env["RELOAD FILE ONLY"],
+  empty: process.env["RELOAD EMPTY"],
   stale: process.env.RELOAD_OLD_ENV,
   hardwareCursor: process.env.PI_HARDWARE_CURSOR,
 };
@@ -76,6 +79,8 @@ type RecordFromPi = {
   source: { socket: string; pane: string; serverPid: number; pid: number; token: string };
   oldProcessesExited: boolean[];
   replacement?: string;
+  fileOnly?: string;
+  empty?: string;
   stale?: string;
   hardwareCursor?: string;
   cwd: string;
@@ -109,6 +114,7 @@ it.skipIf(!tmux || !node)(
       ...process.env,
       HOME: profile,
       USERPROFILE: profile,
+      LOCALAPPDATA: root,
       PI_CODING_AGENT_DIR: agent,
       PI_CODING_AGENT_SESSION_DIR: sessions,
       PSMUX_DATA_DIR: registry,
@@ -120,7 +126,7 @@ it.skipIf(!tmux || !node)(
     };
     for (const key of Object.keys(env))
       if (
-        (key.toUpperCase() === "PATH" && key !== "PATH") ||
+        (["PATH", "LOCALAPPDATA"].includes(key.toUpperCase()) && key !== key.toUpperCase()) ||
         /^(TMUX(?:_PANE)?|PSMUX_TARGET_SESSION|PSMUX_TARGET_FULL|PSMUX_ROUTE_WARM)$/i.test(key)
       )
         delete env[key];
@@ -262,8 +268,11 @@ it.skipIf(!tmux || !node)(
       ]);
 
       let completed = false;
+      const fileOnly = "'quoted' \\path; $literal\r\n次の行";
       const reload = run([mux, "reload", target], {
         RELOAD_NEW_ENV: "'quoted' \\path; $literal",
+        "RELOAD FILE ONLY": fileOnly,
+        "RELOAD EMPTY": "",
         RELOAD_DEFER_PUBLICATION: "1",
       }).finally(() => {
         completed = true;
@@ -318,6 +327,9 @@ it.skipIf(!tmux || !node)(
       assert.equal(replacement.stale, undefined);
       assert.equal(replacement.hardwareCursor, "1");
       assert.equal(replacement.replacement, "'quoted' \\path; $literal");
+      assert.equal(replacement.fileOnly, fileOnly);
+      assert.equal(replacement.empty, "");
+      assert.deepEqual(readdirSync(join(root, INITIAL_REQUEST_DIRECTORY)), []);
       assert.deepEqual(log(sibling), [other]);
       assert.equal(observeWindowsIdentity(siblingProcess, inspectWindowsProcess), "present");
       assert.equal(completed, false);

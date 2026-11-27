@@ -19,7 +19,14 @@ import * as sessionStore from "../src/session-store";
 import * as workDirectory from "../src/work-directory";
 import type { SessionPhase, WebviewState } from "../src/webview/protocol";
 import { sessionListView, type ElementDescriptor } from "../src/webview/client";
-import { cleanup, header, messageEntry, tempDir, writeJsonl } from "./fixtures";
+import {
+  cleanup,
+  combinedHistoryOutput,
+  header,
+  messageEntry,
+  tempDir,
+  writeJsonl,
+} from "./fixtures";
 const vscodeMocks = vi.hoisted(() => ({
   terminals: [],
   state: { focused: false },
@@ -192,8 +199,6 @@ function createRegistry() {
   return createRuntimeRegistry().registry;
 }
 
-/** Saved-session fixture: write the conversation file and register it as a
- * `pi-mux history` entry so the list and file-existence checks see it. */
 let historySeedCount = 0;
 
 async function seedSavedSession(
@@ -216,6 +221,7 @@ async function seedSavedSession(
     btime: 900_000,
     mtime: 1_000_000 - historySeedCount++,
     size: contents.length,
+    source: "normal",
   });
   return filePath;
 }
@@ -590,6 +596,235 @@ describe("SessionWebviewProvider", () => {
       expect(project).not.toHaveBeenCalled();
     });
 
+    it.each(["idle", "pending", "failed", "hidden"] as const)(
+      "drops a stopped physical archive while history is %s without restoring it from stale history",
+      async (historyStatus) => {
+        const ordinaryFile = join(root, "normal.jsonl");
+        const archiveFile = await writeJsonl(join(root, "archive"), "archived.jsonl", [
+          header({ id: activeSessionId, cwd: root }),
+        ]);
+        const original = await readFile(archiveFile, "utf8");
+        const entries: PiMuxHistoryEntry[] = [
+          {
+            id: inactiveSessionId,
+            file: ordinaryFile,
+            cwd: root,
+            title: "Offline",
+            btime: 50,
+            mtime: 150,
+            size: 10,
+            source: "normal",
+          },
+          {
+            id: activeSessionId,
+            file: archiveFile,
+            cwd: root,
+            title: "Physical archive",
+            btime: 100,
+            mtime: 200,
+            size: 20,
+            source: "live-archive",
+          },
+        ];
+        const combined = combinedHistoryOutput(root, entries);
+        const held = deferred<string>();
+        let isRunning = true;
+        let shouldHoldHistory = false;
+        let shouldFailActive = false;
+        const execute = vi.fn(async (_executable: string, args: string[]) => {
+          if (args.join(" ") === "list --json") return shouldHoldHistory ? held.promise : combined;
+          if (args.join(" ") !== "list --active --json")
+            throw new Error(`Unexpected command: ${args.join(" ")}`);
+          if (shouldFailActive) throw new Error("Active unavailable");
+          const sessions = isRunning
+            ? [
+                {
+                  id: activeSessionId,
+                  file: archiveFile,
+                  state: null,
+                  title: "",
+                  temporary: true,
+                  reloadStatus: "waiting-reload",
+                },
+              ]
+            : [];
+          return JSON.stringify([{ cwd: root, sessions, empty: [] }]);
+        });
+        const onSessionFiles = vi.fn();
+        const { provider } = createProvider({
+          registry: new TerminalRegistry(editorTerminals(), new PiMux(execute)),
+          onSessionFiles,
+        });
+        const webview = createView();
+        provider.resolveWebviewView(webview.view as never);
+        await webview.receive({ type: "ready" });
+        function lastRows() {
+          const state: WebviewState = webview.postMessage.mock.calls
+            .map(([message]) => message.state)
+            .filter(Boolean)
+            .at(-1);
+          return state.groups.flatMap(({ sessions }) => sessions);
+        }
+        expect(lastRows()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              sessionId: inactiveSessionId,
+              displayName: "Offline",
+              isInactive: true,
+            }),
+            expect.objectContaining({
+              sessionId: activeSessionId,
+              displayName: "Physical archive",
+              updatedAtMs: 200,
+              isInactive: true,
+              isLive: true,
+              reloadPending: true,
+            }),
+          ]),
+        );
+        expect(onSessionFiles.mock.lastCall?.[0]).toEqual([
+          { id: inactiveSessionId, file: ordinaryFile, isSaved: true },
+          { id: activeSessionId, file: archiveFile, isSaved: true },
+        ]);
+        execute.mockClear();
+        if (historyStatus !== "idle") {
+          shouldHoldHistory = true;
+          await provider.onSessionFileChanged();
+        }
+        if (historyStatus === "failed") {
+          held.reject(new Error("History unavailable"));
+          await finishHistoryRefresh(provider);
+        }
+
+        isRunning = false;
+        if (historyStatus === "hidden") {
+          webview.setVisible(false);
+          await tick(provider, 1_000);
+          expect(lastRows().map(({ sessionId }) => sessionId)).toContain(activeSessionId);
+          webview.setVisible(true);
+          await vi.advanceTimersByTimeAsync(0);
+        } else {
+          shouldFailActive = true;
+          await tick(provider);
+          expect(lastRows().map(({ sessionId }) => sessionId)).toContain(activeSessionId);
+          shouldFailActive = false;
+          await tick(provider);
+        }
+        expect(lastRows().map(({ sessionId }) => sessionId)).toEqual([inactiveSessionId]);
+        expect(onSessionFiles.mock.lastCall?.[0]).toEqual([
+          { id: inactiveSessionId, file: ordinaryFile, isSaved: true },
+        ]);
+        if (historyStatus === "failed") {
+          expect(webview.postMessage.mock.lastCall?.[0]).toMatchObject({ type: "sessionsError" });
+        }
+        await webview.receive({ type: "copySessionId", sessionId: activeSessionId });
+        expect(vscodeMocks.clipboardWriteText).not.toHaveBeenCalled();
+        expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+          `Session not found: ${activeSessionId}`,
+        );
+
+        if (historyStatus === "pending" || historyStatus === "hidden") {
+          held.resolve(combined);
+          await finishHistoryRefresh(provider);
+          expect(lastRows().map(({ sessionId }) => sessionId)).toEqual([inactiveSessionId]);
+          expect(onSessionFiles.mock.lastCall?.[0]).toEqual([
+            { id: inactiveSessionId, file: ordinaryFile, isSaved: true },
+          ]);
+        }
+        expect(
+          execute.mock.calls.filter(([, args]) => args.join(" ") === "list --json"),
+        ).toHaveLength(historyStatus === "idle" ? 0 : 1);
+        expect(await readFile(archiveFile, "utf8")).toBe(original);
+      },
+    );
+
+    it.each(["offline", "replacement", "absent"] as const)(
+      "reprojects a departed live file without archive metadata: %s",
+      async (outcome) => {
+        const runtimes = providerRuntimes();
+        const ordinary = await seedSavedSession(activeSessionId, root, {
+          title: "Ordinary",
+          runtimes,
+        });
+        if (outcome === "absent") runtimes.history.delete(activeSessionId);
+        await seedSavedSession(inactiveSessionId, root, { runtimes });
+        const formerFile = join(root, "archive", "former.jsonl");
+        for (const id of [activeSessionId, inactiveSessionId])
+          runtimes.live.set(id, { sessionId: id, cwd: root, target: `pi-${id}` });
+        runtimes.files.set(activeSessionId, formerFile);
+        runtimes.titles.set(activeSessionId, "Departing live file");
+        runtimes.phases.set(inactiveSessionId, "waiting-user");
+        const registry = new TerminalRegistry(editorTerminals(), runtimes.mux);
+        let displayedSessionId = activeSessionId;
+        vi.spyOn(registry, "displayedSessionId", "get").mockImplementation(
+          () => displayedSessionId,
+        );
+        const onSessionFiles = vi.fn();
+        const { provider } = createProvider({ registry, onSessionFiles });
+        const webview = createView();
+        provider.resolveWebviewView(webview.view as never);
+        await webview.receive({ type: "ready" });
+
+        runtimes.mocks.history.mockRejectedValueOnce(new Error("Unavailable"));
+        await provider.onSessionFileChanged();
+        await finishHistoryRefresh(provider);
+        runtimes.phases.set(inactiveSessionId, "running");
+        const nextFile = join(root, "replacement.jsonl");
+        if (outcome === "replacement") {
+          runtimes.files.set(activeSessionId, nextFile);
+          runtimes.titles.set(activeSessionId, "Replacement");
+          runtimes.phases.set(activeSessionId, "waiting-approval");
+        } else runtimes.live.delete(activeSessionId);
+        await tick(provider);
+
+        const correction = webview.postMessage.mock.lastCall?.[0];
+        expect(correction.type).toBe("sessionsError");
+        const rows = (correction.state as WebviewState).groups.flatMap(({ sessions }) => sessions);
+        expect(rows.find(({ sessionId }) => sessionId === inactiveSessionId)).toMatchObject({
+          state: "waiting-user",
+        });
+        const corrected = rows.find(({ sessionId }) => sessionId === activeSessionId);
+        if (outcome === "offline") {
+          expect(corrected).toMatchObject({ displayName: "Ordinary", isInactive: true });
+          expect(corrected).not.toHaveProperty("isLive");
+          expect(onSessionFiles.mock.lastCall?.[0]).toContainEqual({
+            id: activeSessionId,
+            file: ordinary,
+            isSaved: true,
+          });
+        } else if (outcome === "replacement") {
+          expect(corrected).toMatchObject({
+            displayName: "Replacement",
+            isLive: true,
+            state: "waiting-approval",
+          });
+          expect(onSessionFiles.mock.lastCall?.[0]).toContainEqual({
+            id: activeSessionId,
+            file: nextFile,
+            isSaved: true,
+          });
+        } else expect(corrected).toBeUndefined();
+        expect(onSessionFiles.mock.lastCall?.[0]).not.toContainEqual({
+          id: activeSessionId,
+          file: formerFile,
+          isSaved: true,
+        });
+
+        displayedSessionId = inactiveSessionId;
+        await webview.receive({ type: "ready", requestId: "after-selection" });
+        expect(webview.postMessage.mock.lastCall?.[0]).toMatchObject({
+          type: "sessionsError",
+          requestId: "after-selection",
+          state: { displayedSessionId },
+        });
+        await provider.onSessionFileChanged();
+        expect(loadingMessages(webview).at(-1)).toMatchObject({
+          displayedSessionId,
+          state: { displayedSessionId },
+        });
+      },
+    );
+
     it("does not requery unchanged history across list polling intervals", async () => {
       const { provider, mocks, phases, markCompletion, row } = await unreadFixture();
       mocks.history.mockClear();
@@ -648,6 +883,7 @@ describe("SessionWebviewProvider", () => {
         btime: 123,
         mtime: 456,
         size: 100,
+        source: "normal",
       });
       live.set(unknownSessionId, { sessionId: unknownSessionId, cwd: root, target: "pi-new" });
       files.set(unknownSessionId, customFile);
@@ -1024,6 +1260,7 @@ describe("SessionWebviewProvider", () => {
           btime: 100,
           mtime: 50,
           size: 10,
+          source: "normal",
         },
         ...["empty-b", "empty-a"].map((id) => ({
           id,
@@ -1033,10 +1270,11 @@ describe("SessionWebviewProvider", () => {
           btime: null,
           mtime: null,
           size: 1,
+          source: "normal" as const,
         })),
       ];
       const execute = vi.fn(async (_executable: string, args: string[]) => {
-        if (args[0] === "list" && args[1] === "--saved") return JSON.stringify(entries);
+        if (args.join(" ") === "list --json") return combinedHistoryOutput(root, entries);
         return JSON.stringify([
           {
             cwd: root,
@@ -1090,7 +1328,7 @@ describe("SessionWebviewProvider", () => {
         "empty-b",
       ]);
       expect(sentState().groups[0].sessions[1].updatedAtMs).toBe(400);
-      expect(execute).toHaveBeenCalledWith("pi-mux", ["list", "--saved", "--json"], undefined);
+      expect(execute).toHaveBeenCalledWith("pi-mux", ["list", "--json"], undefined);
     });
 
     it.each([
@@ -1496,6 +1734,7 @@ describe("SessionWebviewProvider", () => {
         btime: 1,
         mtime: 2,
         size: 10,
+        source: "normal" as const,
       };
       const planned = { id: "planned", file: "/custom/planned/session.jsonl", isSaved: false };
       runtime.history.set(entry.id, entry);
@@ -2029,8 +2268,8 @@ describe("SessionWebviewProvider", () => {
     const filePath = await seedSavedSession(activeSessionId);
     let phase: SessionPhase = "running";
     const execute = vi.fn(async (_executable: string, args: string[]) => {
-      if (args[0] === "list" && args[1] === "--saved")
-        return JSON.stringify([sharedRuntimes.history.get(activeSessionId)]);
+      if (args.join(" ") === "list --json")
+        return combinedHistoryOutput(root, [sharedRuntimes.history.get(activeSessionId)!]);
       return JSON.stringify([
         {
           cwd: root,
@@ -4034,6 +4273,7 @@ describe("SessionWebviewProvider", () => {
         btime: 1,
         mtime: 1,
         size: 1,
+        source: "normal",
       },
     ];
     const fakePiMuxCommand = vi.fn(async (executable: string, args: string[], cwd?: string) => {
@@ -4064,7 +4304,7 @@ describe("SessionWebviewProvider", () => {
           },
         ]);
       }
-      if (args[0] === "list" && args[1] === "--saved") return JSON.stringify(historyEntries);
+      if (args.join(" ") === "list --json") return combinedHistoryOutput(root, historyEntries);
       if (args.join(" ") === "list --displayed --json --client-pid 123") {
         const runtime = client.attachedId === undefined ? undefined : live.get(client.attachedId);
         if (runtime === undefined) return "[]";
@@ -4151,6 +4391,7 @@ describe("SessionWebviewProvider", () => {
       btime: 1,
       mtime: 2,
       size: savedContents.length,
+      source: "normal",
     });
     await webview.receive({ type: "refresh" });
 
@@ -4249,6 +4490,76 @@ describe("SessionWebviewProvider", () => {
       expect(displayed).not.toContain(inactiveSessionId);
       expect(vscodeMocks.showErrorMessage).not.toHaveBeenCalled();
       expect(await readFile(statePath, "utf8")).toBe(before);
+    },
+  );
+
+  it.each([
+    ["openSession", "empty"],
+    ["openSession", "different file"],
+    ["activateSession", "missing"],
+    ["activateSession", "different file"],
+  ] as const)(
+    "does not reopen a delayed live-only %s if the open-time Active shows %s",
+    async (type, replacement) => {
+      const runtimes = providerRuntimes();
+      await seedSavedSession(activeSessionId, root, { runtimes });
+      const selectedFile = await writeJsonl(join(root, "archive"), "selected.jsonl", [
+        header({ id: activeSessionId, cwd: root }),
+      ]);
+      runtimes.live.set(activeSessionId, {
+        sessionId: activeSessionId,
+        cwd: root,
+        target: "pi-selected",
+      });
+      runtimes.files.set(activeSessionId, selectedFile);
+      if (type === "activateSession") runtimes.temporary.add(activeSessionId);
+      const registry = new TerminalRegistry(editorTerminals(), runtimes.mux);
+      const terminal = {
+        processId: Promise.resolve(123),
+        creationOptions: {},
+        show: vi.fn(),
+        dispose: vi.fn(),
+      };
+      mockTerminal(runtimes, terminal, registry, root);
+      await registry.open({ sessionId: inactiveSessionId, cwd: root });
+      vscodeMocks.createTerminal.mockClear();
+      const { provider } = createProvider({ registry });
+      const webview = createView();
+      provider.resolveWebviewView(webview.view as never);
+      await webview.receive({ type: "ready" });
+      const state: WebviewState | undefined = webview.postMessage.mock.lastCall?.[0].state;
+      const rows = state?.groups.flatMap(({ sessions }) => sessions);
+      expect(rows?.find(({ sessionId }) => sessionId === activeSessionId)).toMatchObject({
+        isInactive: type === "activateSession",
+        isLive: true,
+      });
+
+      const requested = deferred<string>();
+      const continueOpen = deferred<undefined>();
+      runtimes.mocks.viewTarget.mockImplementationOnce(async (_id, file) => {
+        requested.resolve(file);
+        return continueOpen.promise;
+      });
+      runtimes.mocks.list.mockClear();
+      const selection = webview.receive({ type, sessionId: activeSessionId });
+      expect(await requested.promise).toBe(selectedFile);
+      expect(runtimes.mocks.list).not.toHaveBeenCalled();
+      if (replacement === "empty") runtimes.emptyIds.add(activeSessionId);
+      else if (replacement === "missing") runtimes.live.delete(activeSessionId);
+      else runtimes.files.set(activeSessionId, join(root, "replacement.jsonl"));
+      continueOpen.resolve(undefined);
+      await selection;
+      await finishRefresh(provider);
+
+      expect(runtimes.mocks.list).toHaveBeenCalled();
+      expect(vscodeMocks.createTerminal).not.toHaveBeenCalled();
+      expect(runtimes.mocks.switch).not.toHaveBeenCalled();
+      expect(terminal.dispose).not.toHaveBeenCalled();
+      expect(terminal.show).not.toHaveBeenCalled();
+      expect(registry.displayedSessionId).toBe(inactiveSessionId);
+      expect(vscodeMocks.showErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining("no longer running that file"),
+      );
     },
   );
 

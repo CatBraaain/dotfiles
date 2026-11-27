@@ -446,7 +446,7 @@ renameSync(capture + ".tmp", capture);
         assert.equal(serverEnv.status, 0, serverEnv.stderr);
         assert.equal(serverEnv.stdout.trimEnd(), `${sessionDirKey}=${staleRoot}`);
 
-        const history = spawnSync(muxCommand, ["history", "--cwd", workspace, "--json"], {
+        const history = spawnSync(muxCommand, ["list", "--all", "--cwd", workspace, "--json"], {
           cwd: workspace,
           env,
           encoding: "utf8",

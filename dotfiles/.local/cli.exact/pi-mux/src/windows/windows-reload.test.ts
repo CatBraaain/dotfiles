@@ -4,8 +4,10 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseOperation } from "../cli-arguments";
 import { firstInputDirectory } from "../pane-inventory";
 import { platformFor } from "../platform";
+import { reloadProcessEnvironment } from "../reload-environment";
 import {
   auditWindowsLifecycle,
   windowsPaneIsWaiting,
@@ -20,6 +22,7 @@ import {
   windowsReloadIsWaiting,
   windowsReloadSnapshotCandidates,
 } from "./windows-reload";
+import { configureWindowsPiEnvironment, WINDOWS_RIGHT_ENV } from "./windows-launch";
 import { conversationLaunchKey, ticketLaunchKey } from "./windows-launch-rights";
 import { WindowsManagement, type WindowsManagementScope } from "./windows-management";
 import type { PsmuxQuery } from "./windows-psmux";
@@ -29,6 +32,84 @@ const instance = "aaaaaaaaaaaaaaaa";
 const socket = "/runtime/pi-tmux/server.sock";
 const cwd = "/tmp/workspace";
 const directories: string[] = [];
+
+it("parses reload launch arguments as a route and right, not a command or environment payload", () => {
+  const right = randomUUID();
+  const route = {
+    name: "active-peer",
+    identity: "102:204",
+    instance,
+    pane: "%7",
+    session: "$2",
+    id: randomUUID(),
+    cwd,
+    launchToken: randomUUID(),
+    launcher: { pid: 102, creationTime: "204" },
+  };
+  const argv = [
+    "windows-claim-launch",
+    right,
+    Buffer.from(JSON.stringify(route)).toString("base64"),
+  ];
+  assert.deepEqual(parseOperation(argv), {
+    kind: "windows-claim-launch",
+    token: right,
+    reload: route,
+  });
+  const inlineCommand = Buffer.from(JSON.stringify([join(cwd, "node.exe"), "/pi/cli.js"])).toString(
+    "base64",
+  );
+  assert.throws(
+    () => parseOperation([...argv.slice(0, 2), inlineCommand, argv[2]!]),
+    /Invalid Windows pi launch directory/,
+  );
+});
+
+it("builds the Windows Pi environment with case-insensitive keys and only generated mux values inherited", () => {
+  const literal = "'\" $HOME ; #{pid}\r\n次の行";
+  const env = reloadProcessEnvironment(
+    {
+      PATH: "superseded",
+      Path: "new",
+      EMPTY: "",
+      "NAME WITH SPACE": literal,
+      tmux: "caller route",
+      PSMUX_TARGET_SESSION: "untrusted caller peer",
+      [WINDOWS_RIGHT_ENV]: "should not reach Pi",
+      TICKET_DISPATCH_ROLE: "pi",
+      TICKET_DISPATCH_PROJECT: "test-project",
+      TICKET_DISPATCH_ID: "20260101-000001",
+    },
+    {
+      path: "old",
+      OLD_ONLY: "unused",
+      ticket_dispatch_id: "wrong-ticket",
+      tmux: "old socket,42000,1",
+      Tmux_Pane: "%1",
+      psmux_target_session: "verified-peer",
+      PSMUX_TARGET_FULL: "verified-full-peer",
+      psmux_route_warm: "1",
+      Term: "xterm-256color",
+    },
+    true,
+  );
+  configureWindowsPiEnvironment(env, `${socket},42000,1`);
+  assert.deepEqual(env, {
+    Path: "new",
+    EMPTY: "",
+    "NAME WITH SPACE": literal,
+    TMUX: `${socket},42000,1`,
+    TMUX_PANE: "%1",
+    PSMUX_TARGET_SESSION: "verified-peer",
+    PSMUX_TARGET_FULL: "verified-full-peer",
+    PSMUX_ROUTE_WARM: "1",
+    TERM: "xterm-256color",
+    PI_HARDWARE_CURSOR: "1",
+    TICKET_DISPATCH_ROLE: "pi",
+    TICKET_DISPATCH_PROJECT: "test-project",
+    TICKET_DISPATCH_ID: "20260101-000001",
+  });
+});
 
 type PaneSpec = {
   panePid?: number;
@@ -491,7 +572,7 @@ const piProcess = {
 const peerProcess = { pid: 11, parent: 1, executable: "C:\\Tools\\tmux.exe", command: null };
 const directGroup = { peerPid: 11, panePid: 57, piPid: 57 };
 
-it("reports Windows Pi children by PID and safe executable name", () => {
+it("replaces Windows Pi regardless of its direct children", () => {
   const children = [
     {
       pid: 58,
@@ -501,12 +582,9 @@ it("reports Windows Pi children by PID and safe executable name", () => {
     },
     { pid: 59, parent: piProcess.pid, executable: null, command: "unknown.exe --private-argument" },
   ];
-  assert.throws(
-    () => verifyWindowsReloadGroup([peerProcess, piProcess, ...children], directGroup, paths),
-    {
-      message:
-        'Cannot replace pi without affecting its Windows child processes (Pi has direct child processes; observed non-Pi children: PID 58, process "shell\\u009b.exe"; PID 59, process unknown)',
-    },
+  assert.deepEqual(
+    verifyWindowsReloadGroup([peerProcess, piProcess, ...children], directGroup, paths),
+    [57],
   );
 });
 

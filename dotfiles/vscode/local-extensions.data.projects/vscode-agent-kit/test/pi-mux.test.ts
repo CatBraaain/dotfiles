@@ -1,5 +1,7 @@
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { PiMux } from "../src/pi-mux";
+import { PiMux, type PiMuxHistoryEntry } from "../src/pi-mux";
+import { combinedHistoryOutput } from "./fixtures";
 
 const liveSession = { id: "A", file: "/saved/A.jsonl", state: "running", title: "Title" };
 const emptySession = { id: "empty", file: "/saved/empty.jsonl" };
@@ -439,91 +441,108 @@ describe("PiMux", () => {
     });
   });
 
-  it("parses the history list with numeric btime, mtime and size", async () => {
-    const entries = [
-      {
-        id: "newer",
-        cwd: "/project",
-        file: "/saved/newer.jsonl",
-        title: "Newer",
-        btime: 100,
-        mtime: 2,
-        size: 20,
-      },
-      {
-        id: "older",
-        cwd: "/project",
-        file: "/saved/older.jsonl",
-        title: null,
-        btime: 50,
-        mtime: 1,
-        size: 10,
-      },
-    ];
-    const execute = vi.fn().mockResolvedValue(JSON.stringify(entries));
-    const mux = new PiMux(execute);
-    expect(await mux.history()).toEqual(entries);
-    expect(await mux.history("/project")).toEqual(entries);
-    expect(execute).toHaveBeenNthCalledWith(1, "pi-mux", ["list", "--saved", "--json"], undefined);
-    expect(execute).toHaveBeenNthCalledWith(
-      2,
-      "pi-mux",
-      ["list", "--saved", "--json", "--cwd", "/project"],
-      undefined,
+  const historyCwd = resolve("saved-project");
+  const historyFile = resolve("saved-project", "saved.jsonl");
+  const wireHistory = { cwd: historyCwd, title: "Saved title", source: "normal" };
+  const wireSession = {
+    id: "saved",
+    file: historyFile,
+    active: false,
+    saved: true,
+    btime: 100,
+    mtime: 200,
+    size: 20,
+    history: wireHistory,
+  };
+
+  it("extracts only history provenance and file metadata from the combined list", async () => {
+    const liveCwd = resolve("live-project");
+    const archive: PiMuxHistoryEntry = {
+      id: "archive",
+      cwd: historyCwd,
+      file: resolve("saved-project", "archive", "archive.jsonl"),
+      title: null,
+      btime: null,
+      mtime: null,
+      size: 0,
+      source: "live-archive",
+    };
+    const output = combinedHistoryOutput(liveCwd, [archive]);
+    const [workspace] = JSON.parse(output);
+    workspace.sessions.push(
+      { ...wireSession, active: true, saved: true, title: "Live title", state: "running" },
+      { id: "live-only", file: resolve("live-project", "live.jsonl"), active: true, saved: true },
+      { id: "empty", file: resolve("live-project", "empty.jsonl"), active: true, saved: false },
+    );
+    const execute = vi.fn().mockResolvedValue(JSON.stringify([workspace]));
+    expect(await new PiMux(execute).history()).toEqual([
+      archive,
+      { ...wireHistory, id: "saved", file: historyFile, btime: 100, mtime: 200, size: 20 },
+    ]);
+    expect(execute).toHaveBeenCalledExactlyOnceWith("pi-mux", ["list", "--json"], undefined);
+  });
+
+  it.each(["not json", "null", "{}", '[{"id":"A"}]'])(
+    "rejects an invalid combined list container: %s",
+    async (output) => {
+      const mux = new PiMux(vi.fn().mockResolvedValue(output));
+      await expect(mux.history()).rejects.toThrow("Invalid pi-mux list --json response");
+    },
+  );
+
+  it.each([
+    { cwd: "relative", sessions: [wireSession] },
+    {
+      cwd: historyCwd,
+      sessions: [wireSession, { id: "", file: historyFile, active: true, saved: true }],
+    },
+    {
+      cwd: historyCwd,
+      sessions: [wireSession, { id: "live", file: "relative", active: true, saved: true }],
+    },
+    {
+      cwd: historyCwd,
+      sessions: [wireSession, { id: "live", file: `${historyFile}\0`, active: true, saved: true }],
+    },
+    {
+      cwd: historyCwd,
+      sessions: [wireSession, { id: "stopped", file: historyFile, active: false, saved: true }],
+    },
+  ])("rejects malformed outer fields even without history: %j", async (workspace) => {
+    const execute = vi.fn().mockResolvedValue(JSON.stringify([workspace]));
+    await expect(new PiMux(execute).history()).rejects.toThrow(
+      "Invalid pi-mux list --json response",
     );
   });
 
-  it("parses mixed numeric and null btime histories including empty conversations", async () => {
-    const entries = [
-      {
-        id: "newer",
-        cwd: "/project",
-        file: "/saved/newer.jsonl",
-        title: "Newer",
-        btime: 100,
-        mtime: 2,
-        size: 20,
-      },
-      {
-        id: "empty",
-        cwd: "/project",
-        file: "/saved/empty.jsonl",
-        title: null,
-        btime: null,
-        mtime: null,
-        size: 0,
-      },
-    ];
-    const execute = vi.fn().mockResolvedValue(JSON.stringify(entries));
-    expect(await new PiMux(execute).history()).toEqual(entries);
-  });
-
   it.each([
-    "not json",
-    "null",
-    "{}",
-    '[{"id":"A"}]',
-    '[{"id":"A","cwd":"/c","file":"/f","title":null,"mtime":1,"size":1}]',
-    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":true,"mtime":1,"size":1}]',
-    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":{},"mtime":1,"size":1}]',
-    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":[],"mtime":1,"size":1}]',
-    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":1e400,"mtime":1,"size":1}]',
-    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":-1e400,"mtime":1,"size":1}]',
-    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":NaN,"mtime":1,"size":1}]',
-    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":Infinity,"mtime":1,"size":1}]',
-    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":"1","mtime":1,"size":1}]',
-    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":1,"mtime":"1","size":1}]',
-    '[{"id":"A","cwd":"/c","file":"/f","title":null,"btime":1,"mtime":1,"size":"1"}]',
-    '[{"id":"A","cwd":"/c","file":"relative","title":null,"btime":1,"mtime":1,"size":1}]',
-  ])("rejects an invalid history response: %s", async (output) => {
+    { history: null },
+    { history: { ...wireHistory, source: "archive" } },
+    { history: { ...wireHistory, cwd: "relative" } },
+    { history: { ...wireHistory, title: 1 } },
+    { id: "" },
+    { file: "relative" },
+    { btime: undefined },
+    { btime: true },
+    { btime: {} },
+    { btime: [] },
+    { btime: "1e400" },
+    { btime: "-1e400" },
+    { btime: "1" },
+    { mtime: "1" },
+    { size: "1" },
+  ])("rejects a combined list with invalid history: %j", async (fields) => {
+    const output = JSON.stringify([
+      { cwd: historyCwd, sessions: [wireSession, { ...wireSession, id: "other", ...fields }] },
+    ]).replace(/("btime":)"(-?1e400)"/g, "$1$2");
     const mux = new PiMux(vi.fn().mockResolvedValue(output));
-    await expect(mux.history()).rejects.toThrow("Invalid pi-mux history response");
+    await expect(mux.history()).rejects.toThrow("Invalid pi-mux list --json response");
   });
 
   it("propagates history failures instead of returning an empty list", async () => {
     const execute = vi.fn().mockRejectedValue(new Error("history denied"));
     await expect(new PiMux(execute).history()).rejects.toThrow(
-      "pi-mux list --saved --json: history denied",
+      "pi-mux list --json: history denied",
     );
   });
 

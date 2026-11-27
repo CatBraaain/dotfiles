@@ -7,12 +7,9 @@ import {
   readlinkSync,
   statSync,
 } from "node:fs";
-import {
-  type Config,
-  GENERATED_ENV_KEYS,
-  prepareDirectory,
-  type TmuxConfig,
-} from "./configuration";
+import { resolve } from "node:path";
+import { cliInvocation, type Config, prepareDirectory, type TmuxConfig } from "./configuration";
+import { InitialRequestFiles } from "./initial-request-files";
 import { lockAddress, tryAcquireLock, withLock } from "./locks";
 import {
   findFirstInput,
@@ -72,6 +69,7 @@ type ReloadInventory = {
 };
 
 export async function reloadPanes(config: Config, onlyId?: string): Promise<number> {
+  InitialRequestFiles.sweep(config);
   if (platform.windows) return await reloadWindowsPanes(config, onlyId);
   const original = await withLock(config, () => serverLifetime(config));
   if (!original) {
@@ -420,9 +418,13 @@ async function respawnReloadTarget(
     ...(temporary ? { PI_TMUX_TEMPORARY: pane.id } : {}),
     ...(preserveWarm ? { PI_TMUX_STARTUP_MODE: "warm" } : {}),
   };
+  if (process.platform !== "linux" || typeof process.execve !== "function")
+    throw new Error("This reload launcher requires Linux and Bun process.execve");
   const selection = hasSavedFile ? ["--session", pane.file] : ["--session-id", pane.id];
+  const [pi, ...piArguments] = config.piCommand();
   const command = [
-    ...config.piCommand(),
+    resolve(pi!),
+    ...piArguments,
     ...selection,
     "-e",
     config.extension,
@@ -442,74 +444,135 @@ async function respawnReloadTarget(
     formatEquals("@pi_session_state", waitingState),
     formatEquals("PI_TMUX_TEMPORARY", temporaryId ?? ""),
   ]);
-  const changes = [
-    ...(temporary ? [] : [["set-option", "-g", `@pi-mux-restoring-${pane.id}`, "1"]]),
-    respawnCommand(pane, desired, command),
-    ["set-option", "-pu", "-t", pane.pane, "@pi-tmux-session"],
-    ["set-option", "-pu", "-t", pane.pane, "@pi_session_state"],
-    ["set-option", "-pu", "-t", pane.pane, "@pi-mux-state-source"],
-    [
-      "set-option",
-      "-pF",
+  const files = InitialRequestFiles.open(config, true);
+  files.publishReload({
+    socket: config.socket,
+    session: pane.session,
+    pane: pane.pane,
+    generation: original.generation,
+    id: pane.id,
+    launchToken,
+    cwd: pane.cwd,
+    serverPid: original.pid,
+    command,
+    environment: desired,
+  });
+  let mayHaveRespawned = false;
+  try {
+    const changes = [
+      ...(temporary ? [] : [["set-option", "-g", `@pi-mux-restoring-${pane.id}`, "1"]]),
+      respawnCommand(config.directory, pane, launchToken),
+      ["set-option", "-pu", "-t", pane.pane, "@pi-tmux-session"],
+      ["set-option", "-pu", "-t", pane.pane, "@pi_session_state"],
+      ["set-option", "-pu", "-t", pane.pane, "@pi-mux-state-source"],
+      [
+        "set-option",
+        "-pF",
+        "-t",
+        pane.pane,
+        "@pi-mux-launch",
+        `{"id":"${pane.id}","pid":#{pane_pid},"token":"${launchToken}"}`,
+      ],
+      ["set-option", "-p", "-t", pane.pane, RELOAD_MANAGED_OPTION, pane.id],
+      ["set-option", "-g", RELOAD_MANAGED_FLAG, "1"],
+      ...sessionEnvironmentUpdate(pane, owner ?? "", environment.stdout, desired),
+    ];
+    const reloadBranch = tmuxArguments([
+      "if-shell",
       "-t",
       pane.pane,
-      "@pi-mux-launch",
-      `{"id":"${pane.id}","pid":#{pane_pid},"token":"${launchToken}"}`,
-    ],
-    ["set-option", "-p", "-t", pane.pane, RELOAD_MANAGED_OPTION, pane.id],
-    ["set-option", "-g", RELOAD_MANAGED_FLAG, "1"],
-    ...sessionEnvironmentUpdate(pane, owner ?? "", environment.stdout, desired),
-  ];
-  const reloadBranch = tmuxArguments([
-    "if-shell",
-    "-t",
-    pane.pane,
-    "-F",
-    canRespawn,
-    changes.map(tmuxArguments).join(" ; "),
-    "display-message -p PI_MUX_RELOAD_WAIT",
-  ]);
-  const current = await readReloadInventory(config);
-  const matches = current.panes.filter(({ id }) => id === pane.id);
-  const [next] = matches;
-  if (
-    current.starting.has(pane.id) ||
-    matches.length !== 1 ||
-    next?.session !== pane.session ||
-    next.pane !== pane.pane ||
-    next.metadata !== pane.metadata ||
-    findFirstInput(config, pane.id)
-  )
-    return;
-  const finalTerminalFailure = terminalReplacementRisk(pane, tty);
-  if (finalTerminalFailure) {
-    if (platform.processIsAlive(pane.pid))
-      reportReloadFailure(progress, pane.id, finalTerminalFailure);
-    return;
+      "-F",
+      canRespawn,
+      changes.map(tmuxArguments).join(" ; "),
+      "display-message -p PI_MUX_RELOAD_WAIT",
+    ]);
+    const current = await readReloadInventory(config);
+    const matches = current.panes.filter(({ id }) => id === pane.id);
+    const [next] = matches;
+    if (
+      current.starting.has(pane.id) ||
+      matches.length !== 1 ||
+      next?.session !== pane.session ||
+      next.pane !== pane.pane ||
+      next.metadata !== pane.metadata ||
+      findFirstInput(config, pane.id)
+    )
+      return;
+    const finalTerminalFailure = terminalReplacementRisk(pane, tty);
+    if (finalTerminalFailure) {
+      if (platform.processIsAlive(pane.pid))
+        reportReloadFailure(progress, pane.id, finalTerminalFailure);
+      return;
+    }
+    mayHaveRespawned = true;
+    const respawned = await tmux(
+      config,
+      ["source-file", "-"],
+      true,
+      `${tmuxArguments([
+        "if-shell",
+        "-F",
+        allFormats([
+          formatEquals("pid", String(original.pid)),
+          formatEquals("@pi-mux-generation", original.generation),
+        ]),
+        reloadBranch,
+        "display-message -p PI_MUX_RELOAD_SERVER_CHANGED",
+      ])}\n`,
+    );
+    const response = respawned.stdout.split("\n");
+    const serverChanged = response.includes("PI_MUX_RELOAD_SERVER_CHANGED");
+    mayHaveRespawned = !response.includes("PI_MUX_RELOAD_WAIT") && !serverChanged;
+    if (serverChanged) throw new Error("Dedicated server changed during reload");
+    if (respawned.exitCode !== 0) {
+      await verifyServerLifetime(config, original, "reload");
+      if (
+        mayHaveRespawned &&
+        (await cannotClaimReloadEnvironment(config, original, pane, launchToken))
+      )
+        mayHaveRespawned = false;
+      reportReloadFailure(progress, pane.id, `tmux if-shell failed: ${respawned.stderr.trim()}`);
+      return;
+    }
+    if (!mayHaveRespawned) return;
+    return { pane, launchToken, preserveWarm, deadlineMs: Date.now() + STARTUP_TIMEOUT_MS };
+  } finally {
+    if (!mayHaveRespawned) files.cancel(launchToken);
   }
-  const respawned = await tmux(
+}
+
+async function cannotClaimReloadEnvironment(
+  config: TmuxConfig,
+  original: ServerLifetime,
+  pane: Pane,
+  launchToken: string,
+): Promise<boolean> {
+  const result = await tmux(
     config,
     [
-      "if-shell",
-      "-F",
-      allFormats([
-        formatEquals("pid", String(original.pid)),
-        formatEquals("@pi-mux-generation", original.generation),
-      ]),
-      reloadBranch,
-      "display-message -p PI_MUX_RELOAD_SERVER_CHANGED",
+      "display-message",
+      "-p",
+      "-t",
+      pane.pane,
+      "#{pid}\t#{@pi-mux-generation}\t#{session_id}\t#{pane_id}\t#{pane_pid}\t#{pane_dead}\t#{@pi-tmux-session}\t#{@pi-mux-launch}",
     ],
     true,
+  ).catch(() => undefined);
+  if (result?.exitCode !== 0) return false;
+  const [serverPid, generation, session, paneId, pid, dead, metadata, launch] = removeTmuxNewline(
+    result.stdout,
+  ).split("\t");
+  if (
+    serverPid !== String(original.pid) ||
+    generation !== original.generation ||
+    session !== pane.session ||
+    paneId !== pane.pane
+  )
+    return false;
+  return (
+    (dead === "0" && pid === String(pane.panePid) && metadata === pane.metadata) ||
+    (dead === "1" && launchRecordToken(launch) === launchToken)
   );
-  if (respawned.stdout.includes("PI_MUX_RELOAD_SERVER_CHANGED"))
-    throw new Error("Dedicated server changed during reload");
-  if (respawned.exitCode !== 0) {
-    await verifyServerLifetime(config, original, "reload");
-    reportReloadFailure(progress, pane.id, `tmux if-shell failed: ${respawned.stderr.trim()}`);
-    return;
-  }
-  if (respawned.stdout.includes("PI_MUX_RELOAD_WAIT")) return;
-  return { pane, launchToken, preserveWarm, deadlineMs: Date.now() + STARTUP_TIMEOUT_MS };
 }
 
 async function confirmReloadPublications(
@@ -536,15 +599,25 @@ async function confirmReloadPublications(
       throw new Error(`tmux list-panes failed: ${list.stderr.trim()}`);
   }
   const rows = new Map<string, string[]>();
+  const paneIds = new Set<string>();
+  let completePaneInventory =
+    list.exitCode === 0 || (!list.stdout.trim() && list.stderr.trim() === "no sessions");
   for (const line of list.stdout.trimEnd().split("\n").filter(Boolean)) {
     const [session, paneId, serverPid, generation, ...publication] = line.split("\t");
     if (Number(serverPid) !== original.pid || generation !== original.generation)
       throw new Error("Dedicated server changed during reload");
+    if (paneId && /^%\d+$/.test(paneId) && /^\$\d+$/.test(session ?? "")) paneIds.add(paneId);
+    else completePaneInventory = false;
     rows.set(`${session}:${paneId}`, publication);
   }
   for (const [id, { pane, launchToken, preserveWarm, deadlineMs, release }] of progress.inFlight) {
     const [pid, dead, metadata, launch] = rows.get(`${pane.session}:${pane.pane}`) ?? [];
     if (!pid || dead === "1") {
+      if (
+        (dead === "1" && launchRecordToken(launch) === launchToken) ||
+        (completePaneInventory && !paneIds.has(pane.pane))
+      )
+        cancelEndedReloadEnvironment(config, launchToken);
       reportReloadFailure(progress, id, "pi exited before reload was recorded");
     } else if (
       matchesReloadPublication(pane, Number(pid), launchToken, preserveWarm, metadata, launch) &&
@@ -558,6 +631,14 @@ async function confirmReloadPublications(
     }
     progress.inFlight.delete(id);
     await release();
+  }
+}
+
+function cancelEndedReloadEnvironment(config: TmuxConfig, launchToken: string): void {
+  try {
+    InitialRequestFiles.open(config).cancel(launchToken);
+  } catch {
+    return;
   }
 }
 
@@ -582,36 +663,51 @@ function terminalReplacementRisk(pane: Pane, tty?: string): string | undefined {
   if (process.platform !== "linux" || !tty?.startsWith("/dev/")) return unknown;
   const deadlineMs = performance.now() + TERMINAL_CHECK_TIMEOUT_MS;
   try {
-    const processes = Bun.spawnSync(["/usr/bin/ps", "-e", "-o", "pid=,sid=,tty=,stat="], {
-      env: { LC_ALL: "C" },
-      timeout: TERMINAL_CHECK_TIMEOUT_MS,
-      maxBuffer: MAX_PROCESS_INVENTORY_BYTES,
-    });
-    if (processes.exitCode !== 0 || !processes.stdout) return unknown;
-    const rows = processes.stdout
+    const listing = Bun.spawnSync(
+      ["/usr/bin/ps", "-e", "-o", "pid=,ppid=,sid=,tty=,stat=,etimes="],
+      {
+        env: { LC_ALL: "C" },
+        timeout: TERMINAL_CHECK_TIMEOUT_MS,
+        maxBuffer: MAX_PROCESS_INVENTORY_BYTES,
+      },
+    );
+    if (listing.exitCode !== 0 || !listing.stdout) return unknown;
+    const rows = listing.stdout
       .toString()
       .trim()
       .split("\n")
       .map((line) => line.trim().split(/\s+/));
     if (
       rows.some((row) => {
-        const [pid, sid] = row;
-        return row.length !== 4 || !/^[1-9]\d*$/.test(pid ?? "") || !/^\d+$/.test(sid ?? "");
+        const [pid, ppid, sid, , , elapsed] = row;
+        return (
+          row.length !== 6 ||
+          !/^[1-9]\d*$/.test(pid ?? "") ||
+          !/^\d+$/.test(ppid ?? "") ||
+          !/^\d+$/.test(sid ?? "") ||
+          !/^\d+$/.test(elapsed ?? "")
+        );
       })
     )
       return unknown;
-    const live = rows.filter(([, , , state]) => !state!.startsWith("Z"));
+    const live = rows.filter(([, , , , state]) => !state!.startsWith("Z"));
+    const processes = new Map(
+      live.map(([pid, ppid, , , , elapsed]) => [
+        Number(pid),
+        { parent: Number(ppid), elapsed: Number(elapsed) },
+      ]),
+    );
     const target = live.find(([pid]) => Number(pid) === pane.pid);
-    if (!target || Number(target[1]) !== pane.pid || `/dev/${target[2]}` !== tty) return unknown;
+    if (!target || Number(target[2]) !== pane.pid || `/dev/${target[3]}` !== tty) return unknown;
     const device = statSync(tty, { bigint: true });
     if (
       !device.isCharacterDevice() ||
       findTerminalDescriptor(pane.pid, tty, device, deadlineMs, "target") !== "pane"
     )
       return unknown;
-    for (const [pid, sid, controllingTty] of live) {
+    for (const [pid, , sid, controllingTty] of live) {
       const processId = Number(pid);
-      if (processId === pane.pid) continue;
+      if (processId === pane.pid || isDescendantOf(pane.pid, processId, processes)) continue;
       if (Number(sid) === pane.pid)
         return sharedTerminalFailure(processId, "same OS session as Pi");
       if (`/dev/${controllingTty}` === tty) {
@@ -633,6 +729,25 @@ function terminalReplacementRisk(pane: Pane, tty?: string): string | undefined {
   } catch {
     return unknown;
   }
+}
+
+function isDescendantOf(
+  ancestor: number,
+  pid: number,
+  processes: ReadonlyMap<number, { parent: number; elapsed: number }>,
+): boolean {
+  const visited = new Set<number>();
+  for (
+    let current = processes.get(pid);
+    current && current.parent > 0 && !visited.has(current.parent);
+    current = processes.get(current.parent)
+  ) {
+    const parent = processes.get(current.parent);
+    if (!parent || parent.elapsed < current.elapsed) return false;
+    if (current.parent === ancestor) return true;
+    visited.add(current.parent);
+  }
+  return false;
 }
 
 function sharedTerminalFailure(pid: number, reason: string): string {
@@ -717,19 +832,25 @@ function targetIdentifyingEnvironment(pane: Pane): Record<string, string> | unde
   }
 }
 
-function respawnCommand(pane: Pane, desired: Record<string, string>, command: string[]): string[] {
-  const args = ["respawn-pane", "-k", "-t", pane.pane, "-c", pane.cwd.replaceAll("#", "##")];
-  const assignments = [...GENERATED_ENV_KEYS].map((key) => `\${${key}+"${key}=$${key}"}`);
-  for (const [index, [key, value]] of Object.entries(desired).entries()) {
-    if (GENERATED_ENV_KEYS.has(key)) continue;
-    const transport = `PI_MUX_RELOAD_ENV_${index}`;
-    args.push("-e", `${transport}=${key}=${value}`);
-    assignments.push(`"$${transport}"`);
-  }
-  args.push("-e", `PI_TMUX_SESSION_ID=${desired.PI_TMUX_SESSION_ID}`);
-  args.push("-e", `PI_TMUX_LAUNCH_TOKEN=${desired.PI_TMUX_LAUNCH_TOKEN}`);
-  const exec = `exec /usr/bin/env -i ${assignments.join(" ")} "$@"`;
-  return [...args, "--", "/bin/sh", "-c", exec, "pi-mux-reload", ...command];
+function respawnCommand(runtimeDirectory: string, pane: Pane, launchToken: string): string[] {
+  const invocation = cliInvocation();
+  if (invocation.length > 1) invocation.splice(1, 0, "--config=/dev/null", "--no-env-file");
+  return [
+    "respawn-pane",
+    "-k",
+    "-t",
+    pane.pane,
+    "-c",
+    runtimeDirectory.replaceAll("#", "##"),
+    "-e",
+    `PI_TMUX_SESSION_ID=${pane.id}`,
+    "-e",
+    `PI_TMUX_LAUNCH_TOKEN=${launchToken}`,
+    "--",
+    ...invocation,
+    "claim-reload",
+    launchToken,
+  ];
 }
 
 function sessionEnvironmentUpdate(

@@ -443,6 +443,20 @@ describe("session list loading in the mounted client", () => {
     },
   );
 
+  it.each([
+    { message: { type: "loading", manual: false }, guidance: "Loading sessions…" },
+    { message: { type: "sessionsError" }, guidance: "Failed to load sessions. Retrying…" },
+  ] satisfies { message: ExtensionMessage; guidance: string }[])(
+    "applies pruned rows without converting $message.type into a successful fetch",
+    async ({ message, guidance }) => {
+      await receive({ type: "sessions", state });
+      await expectLoaded();
+      await receive({ ...message, state: { groups: [] } });
+      await expect.poll(() => page.locator("#sessions").textContent()).toBe(guidance);
+      expect(await page.locator(".session-row").count()).toBe(0);
+    },
+  );
+
   it("ignores stale connection replies after a normal push", async () => {
     const requestId = await connectionRequest();
     await receive({ type: "sessions", state });
@@ -1208,6 +1222,21 @@ describe("session list loading in the mounted client", () => {
       );
     },
   );
+
+  it("toggles All using the acquired rows without requesting more data", async () => {
+    await receive({ type: "sessions", state });
+    await expectLoaded();
+    await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
+    await expect.poll(() => page.locator(".session-row").count()).toBe(2);
+    await page.locator('[data-mode-toggle="/workspace/atlas"]').click();
+    await expectLoaded();
+    const requests = await page.evaluate(() =>
+      (Reflect.get(window, "__requests") as { type: string }[]).filter(
+        ({ type }) => type !== "ready",
+      ),
+    );
+    expect(requests).toEqual([]);
+  });
 
   it("updates inactive row fields after a cloned snapshot and retains current action targets", async () => {
     await page.emulateMedia({ reducedMotion: "reduce" });

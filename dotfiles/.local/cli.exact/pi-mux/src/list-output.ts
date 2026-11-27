@@ -7,6 +7,7 @@ type UnifiedSession = ListedSession & {
   btime: number | null;
   mtime: number | null;
   size: number | null;
+  history?: Pick<HistoryEntry, "cwd" | "title"> & { source: "normal" | "live-archive" };
 };
 
 type UnifiedWorkspace = { cwd: string; sessions: UnifiedSession[] };
@@ -32,8 +33,8 @@ export function mergeSessionLists(
       if (seenActive.has(entry.id)) continue;
       seenActive.add(entry.id);
       const hasLiveFile = "state" in entry;
-      const saved =
-        savedById.get(entry.id) ?? (hasLiveFile ? resolveLiveArchive?.(entry) : undefined);
+      const normal = savedById.get(entry.id);
+      const saved = normal ?? (hasLiveFile ? resolveLiveArchive?.(entry) : undefined);
       workspace.sessions.push({
         id: entry.id,
         file: saved?.file ?? entry.file,
@@ -47,6 +48,15 @@ export function mergeSessionLists(
         mtime: saved?.mtime ?? null,
         size: saved?.size ?? null,
         ...(entry.temporary ? { temporary: true } : {}),
+        ...(saved
+          ? {
+              history: {
+                cwd: saved.cwd,
+                title: saved.title,
+                source: normal ? "normal" : "live-archive",
+              },
+            }
+          : {}),
       });
       savedById.delete(entry.id);
     }
@@ -64,6 +74,7 @@ export function mergeSessionLists(
       saved: true,
       state: null,
       publishPending: null,
+      history: { cwd, title: entry.title, source: "normal" },
     });
   }
 

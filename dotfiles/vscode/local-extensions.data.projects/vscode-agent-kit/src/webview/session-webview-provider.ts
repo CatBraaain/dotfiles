@@ -2,7 +2,12 @@ import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { WorkspaceStore } from "../workspace-store";
-import { listSessionSnapshot, sessionFileExists, type SessionSummary } from "../session-store";
+import {
+  listSessionSnapshot,
+  projectSessionSnapshot,
+  sessionFileExists,
+  type SessionSummary,
+} from "../session-store";
 import {
   expandWorkDirectoryInput,
   requireWorkDirectory,
@@ -58,6 +63,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private sessionsById = new Map<string, SessionSummary>();
   private inactiveSessionIds = new Set<string>();
   private temporarySessionIds = new Set<string>();
+  private publishedLiveFiles = new Map<string, string>();
+  private hasCorrectedLiveRows = false;
   private state: WebviewState | undefined;
   private postedStateJson: string | undefined;
   private publishedSessions:
@@ -340,13 +347,82 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       this.historyRetryTimer = undefined;
       this.historyRetryMs = INITIAL_HISTORY_RETRY_MS;
     }
-    this.publishSessionFiles();
-    this.deps.onWorkspaces?.([...this.registeredCwds]);
     const live = flattenPiMuxSessions(workspaces);
     this.temporarySessionIds = new Set(
       live.filter(({ temporary }) => temporary).map(({ id }) => id),
     );
+    this.correctDepartedLiveRows(workspaces, live);
+    this.publishSessionFiles();
+    this.deps.onWorkspaces?.([...this.registeredCwds]);
     return true;
+  }
+
+  private correctDepartedLiveRows(
+    workspaces: PiMuxWorkspace[],
+    live: ReturnType<typeof flattenPiMuxSessions>,
+  ): void {
+    if (this.state === undefined || this.publishedLiveFiles.size === 0) return;
+    const affectedIds = new Set(this.publishedLiveFiles.keys());
+    for (const { id, file } of live) {
+      if (this.publishedLiveFiles.get(id) === file) affectedIds.delete(id);
+    }
+    if (affectedIds.size === 0) return;
+
+    const affectedWorkspaces = workspaces.map(({ cwd, sessions }) => ({
+      cwd,
+      sessions: sessions.filter(({ id }) => affectedIds.has(id)),
+      empty: [],
+    }));
+    const ordinaryHistory = (this.historySnapshot ?? []).filter(
+      ({ id, source }) => affectedIds.has(id) && source === "normal",
+    );
+    const replacements = projectSessionSnapshot(ordinaryHistory, affectedWorkspaces);
+    for (const id of affectedIds) {
+      this.publishedLiveFiles.delete(id);
+      this.sessionsById.delete(id);
+      this.inactiveSessionIds.delete(id);
+    }
+    for (const session of replacements.sessions) this.sessionsById.set(session.sessionId, session);
+    for (const id of replacements.inactiveIds) this.inactiveSessionIds.add(id);
+    for (const { id, file } of flattenPiMuxSessions(affectedWorkspaces))
+      this.publishedLiveFiles.set(id, file);
+
+    const previousGroups = this.state.groups;
+    const previousRows = new Map(
+      previousGroups.flatMap(({ sessions }) =>
+        sessions.map((row) => [row.sessionId, row] as const),
+      ),
+    );
+    const groups = this.projectGroups(
+      [...this.sessionsById.values()],
+      this.inactiveSessionIds,
+      affectedWorkspaces,
+      [...previousGroups.map(({ cwd }) => cwd), ...replacements.sessions.map(({ cwd }) => cwd)],
+    );
+    const state = {
+      groups: groups.map((group) => ({
+        ...group,
+        sessions: group.sessions.map((row) =>
+          affectedIds.has(row.sessionId) ? row : (previousRows.get(row.sessionId) ?? row),
+        ),
+      })),
+      displayedSessionId: this.deps.registry.displayedSessionId,
+    };
+    this.state = state;
+    this.hasCorrectedLiveRows = true;
+    const latest = this.latestListMessage;
+    const message: NonNullable<typeof latest> = this.historyFailed
+      ? { type: "sessionsError", state }
+      : latest?.type === "loading"
+        ? { ...latest, state, displayedSessionId: state.displayedSessionId ?? null }
+        : { type: "sessions", state };
+    if (this.view?.visible) {
+      if (message.type === "sessions") this.postState(state);
+      else this.post(message);
+    } else {
+      this.postedStateJson = undefined;
+      this.latestListMessage = message;
+    }
   }
 
   private async pollList(): Promise<void> {
@@ -421,7 +497,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   private publishSessionFiles(): void {
     this.deps.onSessionFiles?.([
       ...(this.historySnapshot ?? [])
-        .filter(({ cwd }) => this.registeredCwds.has(cwd))
+        .filter(({ cwd, source }) => source === "normal" && this.registeredCwds.has(cwd))
         .map(({ id, file }) => ({ id, file, isSaved: true })),
       ...this.latestWorkspaces.flatMap(({ sessions, empty }) => [
         ...sessions.map(({ id, file }) => ({ id, file, isSaved: true })),
@@ -478,22 +554,18 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       return;
     this.sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
     this.inactiveSessionIds = inactiveIds;
+    this.publishedLiveFiles = new Map(
+      flattenPiMuxSessions(workspaces).map(({ id, file }) => [id, file]),
+    );
     const currentUnreadIds = this.unreadIdsFor(workspaces);
-    const live = flattenPiMuxSessions(workspaces);
     const state: WebviewState = {
-      groups: sessionViewGroups(sessions, {
-        registeredCwds: [...addedCwds],
-        inactiveIds,
-        liveIds: new Set(live.map(({ id }) => id)),
-        phases: phasesFromWorkspaces(workspaces),
+      groups: this.projectGroups(sessions, inactiveIds, workspaces, [...addedCwds], {
         unreadIds: currentUnreadIds,
         delayedIds,
-        reloadPendingIds: new Set(
-          live.filter(({ reloadStatus }) => reloadStatus === "waiting-reload").map(({ id }) => id),
-        ),
       }),
       displayedSessionId: this.deps.registry.displayedSessionId,
     };
+    this.hasCorrectedLiveRows = false;
     this.postState(state);
     this.publishedSessions = {
       workspaces,
@@ -503,6 +575,29 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       delayedIds,
       state,
     };
+  }
+
+  private projectGroups(
+    sessions: SessionSummary[],
+    inactiveIds: ReadonlySet<string>,
+    workspaces: PiMuxWorkspace[],
+    groupCwds: string[],
+    indicators = {
+      unreadIds: this.unreadIdsFor(workspaces),
+      delayedIds: delayedSessionIdsFromWorkspaces(workspaces, Date.now()),
+    },
+  ) {
+    const live = flattenPiMuxSessions(workspaces);
+    return sessionViewGroups(sessions, {
+      registeredCwds: groupCwds,
+      inactiveIds,
+      liveIds: new Set(live.map(({ id }) => id)),
+      phases: phasesFromWorkspaces(workspaces),
+      ...indicators,
+      reloadPendingIds: new Set(
+        live.filter(({ reloadStatus }) => reloadStatus === "waiting-reload").map(({ id }) => id),
+      ),
+    });
   }
 
   private reportAcquisitionError(error: unknown, source: "list" | "history"): void {
@@ -520,6 +615,14 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       !this.isAwaitingListSnapshot &&
       !this.listFailed
     ) {
+      const latest = this.latestListMessage;
+      if (
+        latest?.type === "sessionsError" &&
+        latest.state !== undefined &&
+        latest.state === this.state &&
+        latest.state.displayedSessionId === this.deps.registry.displayedSessionId
+      )
+        return;
       this.post({ type: "sessionsError" });
     }
   }
@@ -829,22 +932,38 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
   ): Promise<void> {
     const controller = new AbortController();
     const present = this.deps.registry.preparePresentation("focus");
-    const cwd = this.sessionsById.get(sessionId)?.cwd;
-    if (cwd !== undefined) this.pendingOpens.set(controller, cwd);
+    const requested = this.sessionsById.get(sessionId);
+    const requiredLiveFile = requested === undefined ? undefined : this.liveOnlyFile(requested);
+    if (requested !== undefined) this.pendingOpens.set(controller, requested.cwd);
     try {
       await this.deps.registry.run(async () => {
         if (controller.signal.aborted) return;
         if (selection !== undefined && selection !== this.latestSelection) return;
         const session = this.sessionsById.get(sessionId);
-        if (session === undefined) {
+        if (
+          session === undefined ||
+          (requiredLiveFile !== undefined && session.filePath !== requiredLiveFile)
+        ) {
           this.postError(`Session not found: ${sessionId}`);
           return;
         }
-        await this.openKnownSession(session, intent, controller.signal, present);
+        await this.openKnownSession(session, intent, controller.signal, present, requiredLiveFile);
       });
     } finally {
       this.pendingOpens.delete(controller);
     }
+  }
+
+  private liveOnlyFile({ sessionId, filePath }: SessionSummary): string | undefined {
+    if (this.publishedLiveFiles.get(sessionId) !== filePath) return;
+    const hasOrdinaryFile = this.historySnapshot?.some(
+      ({ id, file, cwd, source }) =>
+        source === "normal" &&
+        id === sessionId &&
+        file === filePath &&
+        this.registeredCwds.has(cwd),
+    );
+    return hasOrdinaryFile ? undefined : filePath;
   }
 
   private async openKnownSession(
@@ -852,6 +971,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     intent: "select" | "activate",
     signal: AbortSignal,
     present: (terminal: vscode.Terminal) => boolean,
+    requiredLiveFile?: string,
   ): Promise<void> {
     const previousSessionId = this.deps.registry.displayedSessionId;
     const { sessionId } = session;
@@ -861,6 +981,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
       hasSavedFile = await sessionFileExists(session.filePath);
       if (
         !hasSavedFile &&
+        requiredLiveFile === undefined &&
         !(await this.deps.registry.mux.aliveSessionIds([sessionId]))?.has(sessionId)
       ) {
         if (signal.aborted) return;
@@ -890,6 +1011,7 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         },
         intent,
         signal,
+        requiredLiveFile,
       ));
       if (this.disposed || signal.aborted || !present(terminal)) return;
     } catch (error) {
@@ -978,7 +1100,8 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
     }
   }
 
-  private post(message: ExtensionMessage): void {
+  private post(outgoing: ExtensionMessage): void {
+    const message = this.withCurrentPartialState(outgoing);
     const isListMessage =
       message.type === "loading" || message.type === "sessions" || message.type === "sessionsError";
     const isReplay = isListMessage && message.requestId !== undefined;
@@ -1007,6 +1130,21 @@ export class SessionWebviewProvider implements vscode.WebviewViewProvider, vscod
         reportDeliveryFailure();
       },
     );
+  }
+
+  private withCurrentPartialState(message: ExtensionMessage): ExtensionMessage {
+    if (
+      !this.hasCorrectedLiveRows ||
+      this.state === undefined ||
+      (message.type !== "loading" && message.type !== "sessionsError")
+    )
+      return message;
+    const displayedSessionId = this.deps.registry.displayedSessionId;
+    if (this.state.displayedSessionId !== displayedSessionId)
+      this.state = { ...this.state, displayedSessionId };
+    return message.type === "loading"
+      ? { ...message, state: this.state, displayedSessionId: displayedSessionId ?? null }
+      : { ...message, state: this.state };
   }
 
   private postError(message: string): void {

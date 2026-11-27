@@ -24,7 +24,7 @@ import {
 
 export const INITIAL_REQUEST_DIRECTORY = "pi-mux-launch-argv";
 export const INITIAL_REQUEST_TTL_MS = 2 * STARTUP_TIMEOUT_MS;
-const ARGUMENT_FILE_SUFFIXES = [".json", ".part"] as const;
+const LAUNCH_FILE_SUFFIXES = [".json", ".part", ".sh"] as const;
 
 type LaunchIdentity = {
   socket: string;
@@ -35,8 +35,11 @@ type LaunchIdentity = {
   serverPid?: number;
 };
 
-type InitialRequestLaunch = LaunchIdentity & { cwd: string; command: string[] };
+type LaunchCommand = { cwd: string; command: string[] };
+type InitialRequestLaunch = LaunchIdentity & LaunchCommand;
 type ExpectedLaunch = LaunchIdentity & { cwd?: string };
+type ReloadIdentity = ExpectedLaunch & { pane: string; peer?: string; right?: string };
+type ReloadLaunch = ReloadIdentity & LaunchCommand & { environment: Record<string, string> };
 
 function initialRequestDirectory(config: Pick<TmuxConfig, "directory">): string {
   const parent = platform.windows ? process.env.LOCALAPPDATA : config.directory;
@@ -79,7 +82,7 @@ function plainOwnedFile(path: string) {
   if (entry.uid === process.getuid!() && (entry.mode & 0o777) === 0o600) return entry;
 }
 
-function launchFileName(token: string, suffix: (typeof ARGUMENT_FILE_SUFFIXES)[number]) {
+function launchFileName(token: string, suffix: (typeof LAUNCH_FILE_SUFFIXES)[number]) {
   if (token.length !== 36 || !UUID.test(token)) throw new Error("Invalid initial-request token");
   return token + suffix;
 }
@@ -92,10 +95,10 @@ function unlinkIfPresent(path: string) {
   }
 }
 
-function matchesInitialRequest(
+function matchesLaunchCommand<Expected extends ExpectedLaunch>(
   launch: unknown,
-  expected: ExpectedLaunch,
-): launch is InitialRequestLaunch {
+  expected: Expected,
+): launch is Expected & LaunchCommand {
   if (!isRecord(launch)) return false;
   const { cwd, command, ...identity } = launch;
   const { cwd: expectedCwd, ...expectedIdentity } = expected;
@@ -114,6 +117,22 @@ function matchesInitialRequest(
     isAbsolute(command[0]) &&
     command.every((argument: unknown) => typeof argument === "string" && !argument.includes("\0"))
   );
+}
+
+function isLaunchEnvironment(environment: unknown): environment is Record<string, string> {
+  return (
+    isRecord(environment) &&
+    Object.entries(environment).every(
+      ([name, value]) =>
+        /^[^=\0]+$/.test(name) && typeof value === "string" && !value.includes("\0"),
+    )
+  );
+}
+
+function matchesReloadLaunch(launch: unknown, expected: ReloadIdentity): launch is ReloadLaunch {
+  if (!isRecord(launch) || !Object.hasOwn(launch, "environment")) return false;
+  const { environment, ...command } = launch;
+  return isLaunchEnvironment(environment) && matchesLaunchCommand(command, expected);
 }
 
 export class InitialRequestFiles {
@@ -136,7 +155,7 @@ export class InitialRequestFiles {
       ensurePrivateDirectory(directory, false);
       const candidates = readdirSync(directory).filter((name) => {
         const token = name.slice(0, 36);
-        return UUID.test(token) && ARGUMENT_FILE_SUFFIXES.some((suffix) => name === token + suffix);
+        return UUID.test(token) && LAUNCH_FILE_SUFFIXES.some((suffix) => name === token + suffix);
       });
       for (const name of candidates) {
         const file = join(directory, name);
@@ -153,6 +172,17 @@ export class InitialRequestFiles {
   }
 
   publish(token: string, launch: InitialRequestLaunch): void {
+    this.publishJson(token, launch, "initial-request arguments");
+  }
+
+  publishReload(launch: ReloadLaunch): void {
+    const { command: _command, environment: _environment, ...identity } = launch;
+    if (!matchesReloadLaunch(launch, identity))
+      throw new Error("Invalid reload launch environment or command");
+    this.publishJson(launch.launchToken, launch, "reload environment");
+  }
+
+  private publishJson(token: string, launch: InitialRequestLaunch | ReloadLaunch, label: string) {
     const pending = join(this.directory, launchFileName(token, ".part"));
     const file = join(this.directory, launchFileName(token, ".json"));
     const descriptor = openSync(pending, "wx", 0o600);
@@ -165,11 +195,34 @@ export class InitialRequestFiles {
       renameSync(pending, file);
     } catch {
       unlinkIfPresent(pending);
-      throw new Error("Cannot store the initial-request arguments");
+      throw new Error(`Cannot store the ${label}`);
     }
   }
 
   take(token: string, expected: ExpectedLaunch, now = Date.now()): InitialRequestLaunch {
+    return this.takeJson(
+      token,
+      (launch): launch is InitialRequestLaunch => matchesLaunchCommand(launch, expected),
+      "initial-request arguments",
+      now,
+    );
+  }
+
+  takeReload(expected: ReloadIdentity, now = Date.now()): ReloadLaunch {
+    return this.takeJson(
+      expected.launchToken,
+      (launch): launch is ReloadLaunch => matchesReloadLaunch(launch, expected),
+      "reload environment",
+      now,
+    );
+  }
+
+  private takeJson<Launch>(
+    token: string,
+    matches: (launch: unknown) => launch is Launch,
+    label: string,
+    now: number,
+  ): Launch {
     try {
       const file = join(this.directory, launchFileName(token, ".json"));
       const entry = plainOwnedFile(file);
@@ -187,11 +240,11 @@ export class InitialRequestFiles {
       } finally {
         closeSync(descriptor);
       }
-      if (!matchesInitialRequest(launch, expected)) throw new Error();
+      if (!matches(launch)) throw new Error();
       unlinkSync(file);
       return launch;
     } catch {
-      throw new Error("Cannot claim the initial-request arguments for this launch");
+      throw new Error(`Cannot claim the ${label} for this launch`);
     }
   }
 

@@ -38,13 +38,19 @@ export interface WebviewState {
 }
 
 export type ExtensionMessage =
-  | { type: "loading"; displayedSessionId?: string | null; manual: boolean; requestId?: string }
+  | {
+      type: "loading";
+      displayedSessionId?: string | null;
+      manual: boolean;
+      state?: WebviewState;
+      requestId?: string;
+    }
   | { type: "sessions"; state: WebviewState; requestId?: string }
   | { type: "workspaceAdded" }
   | { type: "newSessionFinished"; requestId: string }
   | { type: "deactivateFinished"; requestId: string }
   | { type: "activateFinished"; requestId: string }
-  | { type: "sessionsError"; requestId?: string }
+  | { type: "sessionsError"; state?: WebviewState; requestId?: string }
   | { type: "error"; message: string };
 
 export function parseWebviewRequest(value: unknown): WebviewRequest | undefined {

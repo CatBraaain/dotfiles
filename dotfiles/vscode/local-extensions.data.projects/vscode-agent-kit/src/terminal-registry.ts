@@ -134,6 +134,7 @@ export class TerminalRegistry implements vscode.Disposable {
     session: PiSession,
     intent: "select" | "activate" = "select",
     signal?: AbortSignal,
+    requiredLiveFile?: string,
   ): Promise<{ terminal: vscode.Terminal }> {
     const recovery: DisplayRecovery | undefined =
       this.displayedSession !== undefined && this.displayedSessionCwd !== undefined
@@ -148,6 +149,16 @@ export class TerminalRegistry implements vscode.Disposable {
       signal?.throwIfAborted();
       const workspaces = await this.mux.list();
       signal?.throwIfAborted();
+      if (
+        requiredLiveFile !== undefined &&
+        !workspaces.some(({ sessions }) =>
+          sessions.some(({ id, file }) => id === session.sessionId && file === requiredLiveFile),
+        )
+      ) {
+        throw new SwitchTargetExitedError(
+          `Pi session ${session.sessionId} is no longer running that file`,
+        );
+      }
       const reuseDisplay = intent === "select" && hasLiveSession(workspaces, session.sessionId);
       const display = await this.connect(session, reuseDisplay, signal, recovery);
       if (this.disposed || this.closed.has(display.terminal)) return display;
