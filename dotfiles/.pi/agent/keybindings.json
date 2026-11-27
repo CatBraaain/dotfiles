@@ -2,11 +2,14 @@
   "app.exit": [],
   "app.suspend": [],
   "app.editor.external": [],
+  "app.message.copy": [],
   "app.model.cycleForward": [],
   "app.model.cycleBackward": [],
+  "app.models.clearAll": [],
   "app.thinking.cycle": [],
   "tui.altScreen.top": [],
   "tui.altScreen.bottom": [],
   "tui.altScreen.previousPrompt": ["alt+up", "ctrl+shift+up"],
-  "tui.altScreen.nextPrompt": ["alt+down", "ctrl+shift+down"]
+  "tui.altScreen.nextPrompt": ["alt+down", "ctrl+shift+down"],
+  "tui.editor.undo": ["alt+z", "ctrl+-"]
 }
