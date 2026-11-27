@@ -2070,11 +2070,12 @@ end
 
 print("== 49. a learned continuation keeps its tie-break priority")
 do
+    local partial_history_discount = 1250
     local dictionary = {
         { surface = "あ", candidate = "亜", left_id = 1, right_id = 1, cost = 0 },
         { surface = "あ", candidate = "阿", left_id = 2, right_id = 2, cost = 0 },
         { surface = "あ", candidate = "安", left_id = 1, right_id = 1, cost = 0 },
-        { surface = "い", candidate = "伊", left_id = 3, right_id = 3, cost = 5000 },
+        { surface = "い", candidate = "伊", left_id = 3, right_id = 3, cost = partial_history_discount },
         { surface = "う", candidate = "宇", left_id = 5, right_id = 5, cost = 0 },
         { surface = "いう", candidate = "言う", left_id = 6, right_id = 6, cost = 0 },
     }
