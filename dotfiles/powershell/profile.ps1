@@ -39,10 +39,19 @@ function eza-tree {
     eza --git-ignore --group-directories-first --tree $args
 }
 
+function prompt {
+    $path = $PWD.Path
+    $homePrefix = $HOME + [IO.Path]::DirectorySeparatorChar
+    if ($path -eq $HOME -or $path.StartsWith($homePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        $path = '~' + $path.Substring($HOME.Length)
+    }
+    "$path$('>' * ($nestedPromptLevel + 1)) "
+}
+
 function restart-ime {
     Get-CimInstance Win32_Process |
-        Where-Object { $_.Name -match 'IME|InputApp' } |
-        Select-Object ProcessId, Name, ExecutablePath
+    Where-Object { $_.Name -match 'IME|InputApp' } |
+    Select-Object ProcessId, Name, ExecutablePath
 }
 
 function Optimize-WslStorage {
