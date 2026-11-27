@@ -18,19 +18,8 @@ repos:
   anthropics/skills:
     destination: .
     entries:
-      - skills/doc-coauthoring
       - skills/skill-creator
     edit_markdown:
-      skills/doc-coauthoring/SKILL.md:
-        frontmatter:
-          description: 文書・提案書・意思決定文書・PRD・設計文書・RFC・技術文書の共同執筆を支援する。構造化された文書を一緒に起草・推敲し、読者に伝わるか確認したいときに使う。SPEC.md・REQUIREMENTS.md などの正本となる仕様書では、specs と csdd に先に従う。
-        sections:
-          Local document workflow: |
-            ツール選択・文書の配置・正本となる仕様書については、上記の特定ツールや作業ディレクトリを前提とした手順ではなく、この節に従う。
-
-            - `SPEC.md`・`REQUIREMENTS.md` などの正本となる仕様書では、specs と csdd に先に従う。上記の「仕様書を作成する」例は、それらのワークフローを上書きしない。3段階の説明と、形式を決めずに進めるユーザーの選択肢は維持する。
-            - 利用可能なファイル作成・編集ツールを使う。`create_file`・`str_replace` などの名前は操作を示すものであり、必須のツール名ではない。文書全体を再出力せず、対象箇所に絞って編集する。
-            - ユーザーが指定した出力先と、プロジェクトの配置・worktree規則に従う。作業中の草稿は指定された作業ファイル領域に置き、納品文書と分ける。出力先が未確定だからといって、作業ディレクトリのルートと決めつけない。
       skills/skill-creator/SKILL.md:
         sections:
           Local authoring and evaluation: |

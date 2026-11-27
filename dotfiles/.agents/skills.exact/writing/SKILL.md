@@ -1,7 +1,7 @@
 ---
 name: writing
 description: >-
-  自然言語のテキストファイル（markdown・AI への指示テキスト等）の編集時に読み込む。対象に応じて references/ の技法カタログを読み、適用する。
+  自然言語のテキストファイル（markdown・AI への指示テキスト等）の作成・編集時に読み込む。対象に応じて references/ の技法カタログを読み、適用する。
 ---
 
 # Writing
