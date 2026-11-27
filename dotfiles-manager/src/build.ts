@@ -1,7 +1,8 @@
 // Build stage of the dotfiles manager (spec: SPEC.md
 // §ライフサイクル): regenerates dist from dotfiles/ — path maps,
 // externals, merge composition, replace sidecars, local hooks.
-import { cp, mkdir, open, readdir, readFile, realpath, rm, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { copyFile, cp, mkdir, open, readdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep, win32 } from "node:path";
 import type { ApplyHookLog } from "./apply-log.ts";
@@ -153,6 +154,8 @@ async function copyDir(
         (await hasDistParent(context.distRoot, destinationPath))
       ) {
         await copySymlinkDeclaration(sourcePath, destinationPath, context.platform);
+      } else if (entry.isFile()) {
+        await copyRegularFile(sourcePath, destinationPath);
       } else {
         await cp(sourcePath, destinationPath);
       }
@@ -161,6 +164,16 @@ async function copyDir(
     else if (!entry.isDirectory()) context.remappedPaths.delete(destinationPath);
   }
   router.exit();
+}
+
+async function copyRegularFile(source: string, destination: string): Promise<void> {
+  try {
+    await copyFile(source, destination, constants.COPYFILE_EXCL);
+    return;
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
+  }
+  await cp(source, destination);
 }
 
 function isSymlinkDeclaration(root: string, path: string): boolean {
