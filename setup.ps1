@@ -10,11 +10,12 @@ $env:Path = ($pathSources -split ';' | Where-Object { $_ } | Select-Object -Uniq
 & pwsh -c {
     winget install Git.Git gerardog.gsudo Casey.Just Oven-sh.Bun --source winget
     Set-ExecutionPolicy -Scope CurrentUser Bypass -Force
-    if (-not (Test-Path C:/Projects/dotfiles)) {
-        git clone https://github.com/CatBraaain/dotfiles.git C:\Projects\dotfiles
+    $dotfilesDir = Join-Path $HOME 'projects\dotfiles'
+    if (-not (Test-Path $dotfilesDir)) {
+        git clone https://github.com/CatBraaain/dotfiles.git $dotfilesDir
     }
     gsudo {
-        cd C:/Projects/dotfiles
+        cd (Join-Path $HOME 'projects\dotfiles')
         just install
         just winconfig
         just msime
