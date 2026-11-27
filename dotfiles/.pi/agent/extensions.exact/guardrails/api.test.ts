@@ -983,7 +983,7 @@ describe("§3.a パス文字列の解決", () => {
   });
 
   it(
-    "shipped config allows worktrees and work notes by repository name",
+    "shipped config allows worktrees and research by repository name",
     withLinkedWorktree((mainWorktreePath, linkedWorktreePath, workspacePath) => {
       const config = parseGuardrailConfig(
         readFileSync(
@@ -998,13 +998,21 @@ describe("§3.a パス文字列の解決", () => {
       runGit(workspacePath, ["init", otherMain]);
       const worktreesRoot = join(homedir(), ".agents", "worktrees");
       const worktreeParent = join(worktreesRoot, name);
+      const researchRoot = join(homedir(), ".agents", "research");
+      const legacyWorkPath = join(homedir(), ".agents", "work", name);
       for (const cwd of [mainWorktreePath, linkedWorktreePath, otherMain]) {
         const writeSection = expandPathSection(config.write, cwd);
         assert.equal(resolvePathAction(writeSection, join(worktreeParent, "topic")), "allow");
         assert.equal(
-          resolvePathAction(writeSection, join(homedir(), ".agents", "work", name)),
+          resolvePathAction(writeSection, join(researchRoot, name, "report.md")),
           "allow",
         );
+        assert.notEqual(
+          resolvePathAction(writeSection, join(researchRoot, `${name}-other`)),
+          "allow",
+        );
+        assert.notEqual(resolvePathAction(writeSection, researchRoot), "allow");
+        assert.notEqual(resolvePathAction(writeSection, legacyWorkPath), "allow");
         assert.notEqual(
           resolvePathAction(writeSection, join(worktreesRoot, `${name}-other`)),
           "allow",

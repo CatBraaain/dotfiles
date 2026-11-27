@@ -147,7 +147,7 @@ fs系ツール（`read` `write` `edit` `grep` `find` `ls`）と `ask_permission`
 
 `write.allow` 以外で参照できる環境変数は `XDG_RUNTIME_DIR` のみ。未設定または空文字列なら、その変数を含むパスエントリを丸ごとスキップする。
 
-`${REPOSITORY_NAME}` はパスエントリ内の任意の位置に記述できる。`~/.agents/work/${REPOSITORY_NAME}` と `~/.agents/worktrees/${REPOSITORY_NAME}` は、Git repository内の main・linked worktree から同じ main worktree名の作業フォルダへ解決し、Git repository外では開始ディレクトリ名の作業フォルダへ解決する。名前はリテラルのパス成分として扱い、名前内の `*`・`[...]`・`{a,b}` や変数表記を再展開しない。設定へ直接記述したglob・ブレースは展開する。例えば、開始cwd が `/tmp/{alpha,beta}` の場合、作業フォルダは `~/.agents/work/{alpha,beta}` の1件となる。正規化後のbasename が空のルートディレクトリでは、この変数を含むエントリは許可・bind・作成しない。展開後のパス配下だけが許可・bind対象となる。起動時の作成は §6.1 に従う。
+`${REPOSITORY_NAME}` はパスエントリ内の任意の位置に記述できる。`~/.agents/research/${REPOSITORY_NAME}` と `~/.agents/worktrees/${REPOSITORY_NAME}` は、Git repository内の main・linked worktree からmain worktree名のフォルダへ解決し、Git repository外では開始ディレクトリ名のフォルダへ解決する。名前はリテラルのパス成分として扱い、名前内の `*`・`[...]`・`{a,b}` や変数表記を再展開しない。設定へ直接記述したglob・ブレースは展開する。例えば、開始cwd が `/tmp/{alpha,beta}` の場合、調査資料のフォルダは `~/.agents/research/{alpha,beta}` の1件となる。正規化後のbasename が空のルートディレクトリでは、この変数を含むエントリは許可・bind・作成しない。展開後のパス配下だけが許可・bind対象となる。起動時の作成は §6.1 に従う。
 
 ### globパターン
 

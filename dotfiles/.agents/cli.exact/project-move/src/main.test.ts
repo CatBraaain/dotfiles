@@ -76,8 +76,8 @@ function session(
   return path;
 }
 
-function workDir(f: Fixture, cwd = f.oldCwd): string {
-  return join(f.home, ".agents", "work", basename(cwd));
+function researchDir(f: Fixture, cwd = f.oldCwd): string {
+  return join(f.home, ".agents", "research", basename(cwd));
 }
 
 function ticketsDir(f: Fixture, cwd = f.oldCwd): string {
@@ -143,14 +143,14 @@ describe("arguments and preview", () => {
     });
     assert.equal(exit, 0);
     assert.match(output.join("\n"), /Preview is the default/);
-    assert.match(output.join("\n"), /sessions, work files, tickets and their paths/);
+    assert.match(output.join("\n"), /sessions, research files, tickets and their paths/);
   });
 
-  it("previews sessions and complete work trees and tickets without writing", () => {
+  it("previews sessions and research files and tickets without writing", () => {
     const f = fixture();
     const source = session(f);
-    write(join(workDir(f), ".hidden", "plan.bin"), Buffer.from([0, 255, 1]));
-    fs.mkdirSync(join(workDir(f), "empty"));
+    write(join(researchDir(f), ".hidden", "plan.bin"), Buffer.from([0, 255, 1]));
+    fs.mkdirSync(join(researchDir(f), "empty"));
     write(join(ticketsDir(f), "TICKET-001.md"), "---\nstatus: open\n---\n\n# todo\n");
     const original = fs.readFileSync(source);
     const mtime = fs.statSync(source, { bigint: true }).mtimeNs;
@@ -159,21 +159,24 @@ describe("arguments and preview", () => {
     assert.equal(fs.statSync(source, { bigint: true }).mtimeNs, mtime);
     assert.equal(fs.existsSync(sessionDir(f, f.newCwd)), false);
     assert.equal(fs.existsSync(join(f.agent, "project-move-backups")), false);
-    assert.equal(fs.existsSync(workDir(f, f.newCwd)), false);
+    assert.equal(fs.existsSync(researchDir(f, f.newCwd)), false);
     assert.equal(fs.existsSync(ticketsDir(f, f.newCwd)), false);
-    assert.equal(record(f, "work").files, 1);
-    assert.equal(record(f, "work").directories, 2);
+    assert.equal(record(f, "research").files, 1);
+    assert.equal(record(f, "research").directories, 2);
     assert.equal(record(f, "tickets").files, 1);
     assert.equal(record(f, "tickets").status, "move");
     assert.equal(record(f, "plan").mode, "preview");
-    assert.match(record(f, "plan").precondition, /sessions, work files, tickets and their paths/);
+    assert.match(
+      record(f, "plan").precondition,
+      /sessions, research files, tickets and their paths/,
+    );
   });
 
   it("returns target zero without creating backup or destination directories", () => {
     const f = fixture();
     assert.equal(invoke(f), 0);
     assert.equal(record(f, "result").targets, 0);
-    assert.equal(record(f, "result").work, "absent");
+    assert.equal(record(f, "result").research, "absent");
     assert.equal(record(f, "result").tickets, "absent");
     assert.equal(fs.existsSync(f.home), false);
   });
@@ -208,7 +211,7 @@ describe("arguments and preview", () => {
 });
 
 describe("migration and preservation", () => {
-  it("moves normal/archive sessions and a complete work tree while preserving exact session bytes and nanosecond mtime", () => {
+  it("moves normal/archive sessions and a complete research directory while preserving exact session bytes and nanosecond mtime", () => {
     const f = fixture();
     const parent = session(f, "parent");
     const child = session(f, "child", true, { parentSession: parent });
@@ -232,10 +235,10 @@ describe("migration and preservation", () => {
     );
     const ignored = join(sessionDir(f), "subagents", "ignored.jsonl");
     write(ignored, "not a session");
-    const workBytes = Buffer.from([0, 255, 42]);
-    write(join(workDir(f), ".hidden", "notes.bin"), workBytes);
-    write(join(workDir(f), "plan.md"), `old path ${f.oldCwd}`);
-    fs.mkdirSync(join(workDir(f), "empty"));
+    const researchBytes = Buffer.from([0, 255, 42]);
+    write(join(researchDir(f), ".hidden", "notes.bin"), researchBytes);
+    write(join(researchDir(f), "plan.md"), `old path ${f.oldCwd}`);
+    fs.mkdirSync(join(researchDir(f), "empty"));
     const ticketText = `---\nstatus: open\n---\n\n# ticket\n\nrefs ${f.oldCwd}\n`;
     write(join(ticketsDir(f), "TICKET-001.md"), ticketText);
     assert.equal(invoke(f), 0, f.stderr.join("\n"));
@@ -273,15 +276,20 @@ describe("migration and preservation", () => {
       parentSession: join(sessionDir(f, f.newCwd), "parent.jsonl"),
     };
     assert.deepEqual(childHeader, expectedChildHeader);
-    const work = targets(f).find((item) => item.kind === "work")!;
-    assert.deepEqual(fs.readFileSync(join(work.destination, ".hidden", "notes.bin")), workBytes);
+    const research = targets(f).find((item) => item.kind === "research")!;
+    assert.deepEqual(
+      fs.readFileSync(join(research.destination, ".hidden", "notes.bin")),
+      researchBytes,
+    );
     assert.equal(
-      fs.readFileSync(join(work.destination, "plan.md"), "utf8"),
+      fs.readFileSync(join(research.destination, "plan.md"), "utf8"),
       `old path ${f.oldCwd}`,
     );
-    assert.ok(fs.statSync(join(work.destination, "empty")).isDirectory());
-    assert.equal(fs.existsSync(work.source), false);
-    assert.deepEqual(fs.readFileSync(join(work.backup, ".hidden", "notes.bin")), workBytes);
+    assert.ok(fs.statSync(join(research.destination, "empty")).isDirectory());
+    assert.equal(fs.existsSync(research.source), false);
+    assert.equal(basename(dirname(research.backup)), "research");
+    assert.equal(basename(research.backup), basename(f.oldCwd));
+    assert.deepEqual(fs.readFileSync(join(research.backup, ".hidden", "notes.bin")), researchBytes);
     const tickets = targets(f).find((item) => item.kind === "tickets")!;
     assert.equal(fs.readFileSync(join(tickets.destination, "TICKET-001.md"), "utf8"), ticketText);
     assert.equal(fs.readFileSync(join(tickets.backup, "TICKET-001.md"), "utf8"), ticketText);
@@ -289,11 +297,11 @@ describe("migration and preservation", () => {
     assert.equal(fs.readFileSync(ignored, "utf8"), "not a session");
     assert.ok(fs.statSync(join(sessionDir(f), "archive")).isDirectory());
     if (process.platform !== "win32")
-      assert.equal(Number(fs.statSync(dirname(dirname(work.backup))).mode) & 0o077, 0);
+      assert.equal(Number(fs.statSync(dirname(dirname(research.backup))).mode) & 0o077, 0);
     assert.deepEqual(record(f, "result"), {
       sessionsCompleted: 2,
       sessionsPending: 0,
-      work: "complete",
+      research: "complete",
       tickets: "complete",
       targets: 4,
     });
@@ -351,12 +359,25 @@ describe("migration and preservation", () => {
     assert.equal(fs.existsSync(source), false);
   });
 
-  it("moves an empty work directory even with no sessions", () => {
+  it("leaves legacy work files alone when no research files exist", () => {
     const f = fixture();
-    fs.mkdirSync(workDir(f), { recursive: true });
+    const legacyFile = join(f.home, ".agents", "work", basename(f.oldCwd), "keep.md");
+    const legacyDestination = join(f.home, ".agents", "work", basename(f.newCwd));
+    write(legacyFile, "keep in place");
+
+    assert.equal(invoke(f), 0, f.stderr.join("\n"));
+    assert.equal(record(f, "result").research, "absent");
+    assert.equal(fs.readFileSync(legacyFile, "utf8"), "keep in place");
+    assert.equal(fs.existsSync(legacyDestination), false);
+    assert.equal(fs.existsSync(researchDir(f, f.newCwd)), false);
+  });
+
+  it("moves an empty research directory even with no sessions", () => {
+    const f = fixture();
+    fs.mkdirSync(researchDir(f), { recursive: true });
     assert.equal(invoke(f), 0);
-    assert.ok(fs.statSync(workDir(f, f.newCwd)).isDirectory());
-    assert.equal(fs.existsSync(workDir(f)), false);
+    assert.ok(fs.statSync(researchDir(f, f.newCwd)).isDirectory());
+    assert.equal(fs.existsSync(researchDir(f)), false);
     assert.equal(record(f, "result").targets, 1);
   });
 
@@ -369,7 +390,7 @@ describe("migration and preservation", () => {
     assert.equal(record(f, "result").targets, 1);
   });
 
-  it("does not inspect same-basename work storage while still moving sessions", () => {
+  it("does not inspect same-basename research storage while still moving sessions", () => {
     const f = fixture();
     f.oldCwd = join(f.root, "before", "project");
     f.newCwd = join(f.root, "after", "project");
@@ -377,30 +398,30 @@ describe("migration and preservation", () => {
     const source = session(f);
     const untouched = join(f.root, "untouched");
     write(untouched, "unchanged");
-    fs.mkdirSync(dirname(workDir(f)), { recursive: true });
-    fs.symlinkSync(untouched, workDir(f));
+    fs.mkdirSync(dirname(researchDir(f)), { recursive: true });
+    fs.symlinkSync(untouched, researchDir(f));
     fs.mkdirSync(dirname(ticketsDir(f)), { recursive: true });
     fs.symlinkSync(untouched, ticketsDir(f));
     assert.equal(invoke(f), 0, f.stderr.join("\n"));
-    assert.equal(record(f, "work").scanned, false);
-    assert.equal(record(f, "work").status, "unchanged");
+    assert.equal(record(f, "research").scanned, false);
+    assert.equal(record(f, "research").status, "unchanged");
     assert.equal(record(f, "tickets").scanned, false);
     assert.equal(record(f, "tickets").status, "unchanged");
-    assert.equal(record(f, "result").work, "unchanged");
+    assert.equal(record(f, "result").research, "unchanged");
     assert.equal(record(f, "result").tickets, "unchanged");
-    assert.equal(fs.readlinkSync(workDir(f)), untouched);
+    assert.equal(fs.readlinkSync(researchDir(f)), untouched);
     assert.equal(fs.readlinkSync(ticketsDir(f)), untouched);
     assert.ok(fs.existsSync(destination(f, source)));
   });
 
-  it("leaves existing destination work data untouched when the old work folder is absent", () => {
+  it("leaves existing destination research data untouched when the old research folder is absent", () => {
     const f = fixture();
     session(f);
-    const keep = join(workDir(f, f.newCwd), "keep");
+    const keep = join(researchDir(f, f.newCwd), "keep");
     write(keep, "existing");
     assert.equal(invoke(f), 0);
     assert.equal(fs.readFileSync(keep, "utf8"), "existing");
-    assert.equal(record(f, "result").work, "absent");
+    assert.equal(record(f, "result").research, "absent");
   });
 
   it("accepts existing destination sessions with future versions and unrelated parent formats", () => {
@@ -471,9 +492,9 @@ describe("preflight safety", () => {
   for (const collision of [
     "filename",
     "id",
-    "work-directory",
-    "work-file",
-    "work-symlink",
+    "research-directory",
+    "research-file",
+    "research-symlink",
     "tickets-directory",
   ]) {
     it(`stops before any writes on ${collision} collision`, () => {
@@ -486,12 +507,12 @@ describe("preflight safety", () => {
           join(sessionDir(f, f.newCwd), "other.jsonl"),
           JSON.stringify({ type: "session", id: "session-a", cwd: f.newCwd }),
         );
-      if (collision.startsWith("work-")) {
-        write(join(workDir(f), "source.txt"), "source");
-        if (collision === "work-directory") fs.mkdirSync(workDir(f, f.newCwd));
-        if (collision === "work-file") write(workDir(f, f.newCwd), "existing");
-        if (collision === "work-symlink")
-          fs.symlinkSync(join(f.root, "missing"), workDir(f, f.newCwd));
+      if (collision.startsWith("research-")) {
+        write(join(researchDir(f), "source.txt"), "source");
+        if (collision === "research-directory") fs.mkdirSync(researchDir(f, f.newCwd));
+        if (collision === "research-file") write(researchDir(f, f.newCwd), "existing");
+        if (collision === "research-symlink")
+          fs.symlinkSync(join(f.root, "missing"), researchDir(f, f.newCwd));
       }
       if (collision === "tickets-directory") {
         write(join(ticketsDir(f), "TICKET-001.md"), "ticket");
@@ -567,8 +588,8 @@ describe("preflight safety", () => {
   for (const kind of [
     "session-file",
     "session-parent",
-    "work-file",
-    "work-root",
+    "research-file",
+    "research-root",
     "tickets-file",
     "tickets-root",
   ]) {
@@ -585,7 +606,7 @@ describe("preflight safety", () => {
         fs.symlinkSync(outside, sessionDir(f));
       } else {
         session(f);
-        const root = kind.startsWith("work-") ? workDir(f) : ticketsDir(f);
+        const root = kind.startsWith("research-") ? researchDir(f) : ticketsDir(f);
         fs.mkdirSync(dirname(root), { recursive: true });
         if (kind.endsWith("-root")) fs.symlinkSync(outside, root);
         else {
@@ -599,13 +620,10 @@ describe("preflight safety", () => {
     });
   }
 
-  for (const overlap of ["work", "tickets"]) {
+  for (const overlap of ["research", "tickets"]) {
     it(`rejects overlap between the ${overlap} folder and session storage`, () => {
       const f = fixture();
-      f.agent = join(
-        overlap === "work" ? workDir(f) : ticketsDir(f),
-        "pi-data",
-      );
+      f.agent = join(overlap === "research" ? researchDir(f) : ticketsDir(f), "pi-data");
       session(f);
       assert.equal(invoke(f), 1);
       assert.match(f.stderr.join("\n"), /Overlapping migration paths/);
@@ -615,12 +633,12 @@ describe("preflight safety", () => {
 });
 
 describe("changes and partial failures", () => {
-  for (const change of ["content", "identity", "session-set", "work-set"]) {
+  for (const change of ["content", "identity", "session-set", "research-set"]) {
     it(`stops safely when original ${change} changes after preflight`, () => {
       const f = fixture();
       const source = session(f);
       const original = fs.readFileSync(source);
-      if (change === "work-set") write(join(workDir(f), "plan"), "plan");
+      if (change === "research-set") write(join(researchDir(f), "plan"), "plan");
       let changed = false;
       const exit = invoke(f, true, (line) => {
         if (!line.startsWith("backup: ") || changed) return;
@@ -631,7 +649,7 @@ describe("changes and partial failures", () => {
           fs.writeFileSync(source, original);
         }
         if (change === "session-set") session(f, "added");
-        if (change === "work-set") write(join(workDir(f), "added"), "added");
+        if (change === "research-set") write(join(researchDir(f), "added"), "added");
       });
       assert.equal(exit, 1);
       assert.ok(fs.existsSync(source));
@@ -751,11 +769,11 @@ describe("changes and partial failures", () => {
     assert.match(f.stderr.join("\n"), /Unsafe directory path/);
   });
 
-  it("reports completed sessions and partially deleted work originals separately", () => {
+  it("reports completed sessions and partially deleted research originals separately", () => {
     const f = fixture();
     const source = session(f);
-    const a = join(workDir(f), "a");
-    const b = join(workDir(f), "b");
+    const a = join(researchDir(f), "a");
+    const b = join(researchDir(f), "b");
     write(a, "a");
     write(b, "b");
     const originalUnlink = fs.unlinkSync;
@@ -768,13 +786,13 @@ describe("changes and partial failures", () => {
     assert.equal(fs.existsSync(a), false);
     assert.equal(fs.readFileSync(b, "utf8"), "b");
     assert.equal(record(f, "result").sessionsCompleted, 1);
-    assert.equal(record(f, "result").work, "partially-deleted");
-    const work = targets(f).find((target) => target.kind === "work")!;
-    assert.ok(work.remaining.includes(b));
-    assert.equal(work.backupState, "verified");
-    assert.equal(work.destinationState, "verified");
-    assert.equal(fs.readFileSync(join(work.backup, "a"), "utf8"), "a");
-    assert.equal(fs.readFileSync(join(work.destination, "b"), "utf8"), "b");
+    assert.equal(record(f, "result").research, "partially-deleted");
+    const research = targets(f).find((target) => target.kind === "research")!;
+    assert.ok(research.remaining.includes(b));
+    assert.equal(research.backupState, "verified");
+    assert.equal(research.destinationState, "verified");
+    assert.equal(fs.readFileSync(join(research.backup, "a"), "utf8"), "a");
+    assert.equal(fs.readFileSync(join(research.destination, "b"), "utf8"), "b");
   });
 });
 
@@ -821,15 +839,15 @@ describe.skipIf(process.platform !== "win32")("Windows timestamps and attributes
   it("keeps the read-only directory attribute in the backup and destination", () => {
     const f = fixture();
     session(f);
-    const locked = join(workDir(f), "locked");
+    const locked = join(researchDir(f), "locked");
     write(join(locked, "plan.md"), "plan");
     fs.chmodSync(locked, 0o444);
     assert.equal(invoke(f), 0, f.stderr.join("\n"));
-    const work = targets(f).find((item) => item.kind === "work")!;
-    for (const location of [work.backup, work.destination]) {
+    const research = targets(f).find((item) => item.kind === "research")!;
+    for (const location of [research.backup, research.destination]) {
       assert.equal(Number(fs.statSync(join(location, "locked")).mode) & 0o777, 0o444);
       assert.equal(fs.readFileSync(join(location, "locked", "plan.md"), "utf8"), "plan");
     }
-    assert.equal(fs.existsSync(work.source), false);
+    assert.equal(fs.existsSync(research.source), false);
   });
 });

@@ -10,8 +10,8 @@ const USAGE = `Usage: project-move <old-cwd> <new-cwd>
        project-move --help
 
 Preview is the default and never writes files.
-Stop pi and all writers of affected sessions, work files, tickets and their paths until completion.
-Moves standard normal/archive sessions and ~/.agents/work/<cwd-basename> and ~/.agents/tickets/<cwd-basename>.
+Stop pi and all writers of affected sessions, research files, tickets and their paths until completion.
+Moves standard normal/archive sessions and ~/.agents/research/<cwd-basename> and ~/.agents/tickets/<cwd-basename>.
 Subagents and custom session directories are not scanned.`;
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const PERMISSIONS_MASK = 0o777;
@@ -49,7 +49,7 @@ interface Artifact {
   verified: boolean;
 }
 interface Unit {
-  kind: "session" | "work" | "tickets";
+  kind: "session" | "research" | "tickets";
   source: string;
   destination: string;
   backup: string;
@@ -66,10 +66,10 @@ interface Plan {
   sessionsRoot: string;
   sourceSessions: string;
   destinationSessions: string;
-  workRoot: string;
-  sourceWork: string;
-  destinationWork: string;
-  workStatus: "move" | "unchanged" | "absent";
+  researchRoot: string;
+  sourceResearch: string;
+  destinationResearch: string;
+  researchStatus: "move" | "unchanged" | "absent";
   ticketsRoot: string;
   sourceTickets: string;
   destinationTickets: string;
@@ -246,19 +246,18 @@ function createPlan(args: Extract<Arguments, { kind: "move" }>, runtime: Runtime
       if (ids.has(header.id)) fail("Session id already exists at destination", path);
     }
   }
-  const workRoot = join(runtime.home, ".agents", "work");
-  const work = planDirectory("work", workRoot, oldCwd, newCwd, backupRoot);
+  const researchRoot = join(runtime.home, ".agents", "research");
+  const research = planDirectory("research", researchRoot, oldCwd, newCwd, backupRoot);
   const ticketsRoot = join(runtime.home, ".agents", "tickets");
   const tickets = planDirectory("tickets", ticketsRoot, oldCwd, newCwd, backupRoot);
-  for (const planned of [work, tickets]) {
+  for (const planned of [research, tickets]) {
     if (planned.unit) units.push(planned.unit);
   }
   const locationSets = units.map((unit) => [unit.source, unit.destination, unit.backup]);
   for (let left = 0; left < locationSets.length; left++) {
     for (const path of locationSets[left]!) {
       const others = locationSets.slice(left + 1).flat();
-      if (others.some((other) => overlaps(path, other)))
-        fail("Overlapping migration paths", path);
+      if (others.some((other) => overlaps(path, other))) fail("Overlapping migration paths", path);
     }
   }
   if (units.length > 0) guardDirectoryChain(dirname(backupRoot));
@@ -268,10 +267,10 @@ function createPlan(args: Extract<Arguments, { kind: "move" }>, runtime: Runtime
     sessionsRoot,
     sourceSessions,
     destinationSessions,
-    workRoot,
-    sourceWork: work.source,
-    destinationWork: work.destination,
-    workStatus: work.status,
+    researchRoot,
+    sourceResearch: research.source,
+    destinationResearch: research.destination,
+    researchStatus: research.status,
     ticketsRoot,
     sourceTickets: tickets.source,
     destinationTickets: tickets.destination,
@@ -282,17 +281,16 @@ function createPlan(args: Extract<Arguments, { kind: "move" }>, runtime: Runtime
 }
 
 function planDirectory(
-  kind: "work" | "tickets",
+  kind: "research" | "tickets",
   root: string,
   oldCwd: string,
   newCwd: string,
   backupRoot: string,
 ): { source: string; destination: string; status: "move" | "unchanged" | "absent"; unit?: Unit } {
-  const label = kind === "work" ? "Work" : "Tickets";
+  const label = kind === "research" ? "Research" : "Tickets";
   const source = join(root, basename(oldCwd));
   const destination = join(root, basename(newCwd));
-  if (pathKey(source) === pathKey(destination))
-    return { source, destination, status: "unchanged" };
+  if (pathKey(source) === pathKey(destination)) return { source, destination, status: "unchanged" };
   guardDirectoryChain(dirname(source));
   if (!lstat(source)) return { source, destination, status: "absent" };
   guardDirectoryChain(dirname(destination));
@@ -303,7 +301,7 @@ function planDirectory(
     kind,
     source,
     destination,
-    join(backupRoot, kind === "work" ? "work-files" : "tickets", basename(oldCwd)),
+    join(backupRoot, kind, basename(oldCwd)),
     entries,
   );
   return { source, destination, status: "move", unit };
@@ -535,7 +533,7 @@ function printPlan(plan: Plan, execute: boolean, stdout: Runtime["stdout"]): voi
       normal: sessions.length - archived,
       archive: archived,
       precondition:
-        "pi and all writers of affected sessions, work files, tickets and their paths stopped",
+        "pi and all writers of affected sessions, research files, tickets and their paths stopped",
     })}`,
   );
   for (const unit of sessions) {
@@ -551,12 +549,12 @@ function printPlan(plan: Plan, execute: boolean, stdout: Runtime["stdout"]): voi
     );
   }
   printDirectoryPlan(
-    "work",
-    plan.workRoot,
-    plan.sourceWork,
-    plan.destinationWork,
-    plan.workStatus,
-    plan.units.find((unit) => unit.kind === "work"),
+    "research",
+    plan.researchRoot,
+    plan.sourceResearch,
+    plan.destinationResearch,
+    plan.researchStatus,
+    plan.units.find((unit) => unit.kind === "research"),
     plan.oldCwd,
     plan.newCwd,
     stdout,
@@ -575,7 +573,7 @@ function printPlan(plan: Plan, execute: boolean, stdout: Runtime["stdout"]): voi
 }
 
 function printDirectoryPlan(
-  kind: "work" | "tickets",
+  kind: "research" | "tickets",
   root: string,
   source: string,
   destination: string,
@@ -604,13 +602,13 @@ function printDirectoryPlan(
 function printResults(plan: Plan, stdout: Runtime["stdout"]): void {
   const sessions = plan.units.filter((unit) => unit.kind === "session");
   const completed = sessions.filter((unit) => unit.removed.has("")).length;
-  const work = plan.units.find((unit) => unit.kind === "work");
+  const research = plan.units.find((unit) => unit.kind === "research");
   const tickets = plan.units.find((unit) => unit.kind === "tickets");
   stdout(
     `result: ${JSON.stringify({
       sessionsCompleted: completed,
       sessionsPending: sessions.length - completed,
-      work: work ? unitStatus(work) : plan.workStatus,
+      research: research ? unitStatus(research) : plan.researchStatus,
       tickets: tickets ? unitStatus(tickets) : plan.ticketsStatus,
       targets: plan.units.length,
     })}`,
@@ -639,8 +637,10 @@ function printResults(plan: Plan, stdout: Runtime["stdout"]): void {
       })}`,
     );
   }
-  if (!work)
-    stdout(`work-result: ${JSON.stringify({ status: plan.workStatus, backup: "not-created" })}`);
+  if (!research)
+    stdout(
+      `research-result: ${JSON.stringify({ status: plan.researchStatus, backup: "not-created" })}`,
+    );
   if (!tickets)
     stdout(
       `tickets-result: ${JSON.stringify({ status: plan.ticketsStatus, backup: "not-created" })}`,
