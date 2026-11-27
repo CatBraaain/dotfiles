@@ -10,7 +10,7 @@ local viterbi_module = require("kagiroi/kagiroi_viterbi")
 local rime_mocks = require("rime_mocks")
 rime_mocks.install_globals()
 
-local function new_engine(dictionary, matrix, readings, expand_emoji, boundary, userdict)
+local function new_engine(dictionary, matrix, readings, expand_emoji, boundary, userdict, config)
     local synth_env = synth.new_env(dictionary, userdict, matrix)
     local viterbi = viterbi_module.new(synth_env)
     package.loaded["kagiroi/segmenter"] = nil
@@ -38,7 +38,7 @@ local function new_engine(dictionary, matrix, readings, expand_emoji, boundary, 
             func = function(input, seg, env)
                 if type(readings[input]) == "function" then return readings[input](seg, env) end
                 for _, offered in ipairs(readings[input] or {}) do
-                    local candidate = Candidate("kagiroi", seg.start, seg._end, offered.text, "")
+                    local candidate = Candidate("kagiroi", seg.start, seg._end, offered.text, offered.comment or "")
                     candidate.phrase = offered.phrase
                     yield(candidate)
                 end
@@ -47,7 +47,7 @@ local function new_engine(dictionary, matrix, readings, expand_emoji, boundary, 
     end
     local bunsetsu = dofile(bunsetsu_path)
     local segment = { selected_index = 0 }
-    local context = { options = {}, properties = {} }
+    local context = { options = {}, properties = {}, filter_collections = 0 }
     function context:get_property(name) return self.properties[name] or "" end
     function context:set_property(name, value) self.properties[name] = value end
     local option_listener
@@ -83,6 +83,7 @@ local function new_engine(dictionary, matrix, readings, expand_emoji, boundary, 
                 rawset(table, "_input", value)
                 local state = bunsetsu.state(table)
                 if value ~= "" and state then
+                    if state.collecting then table.filter_collections = table.filter_collections + 1 end
                     local seg = Segment(state.active_start, state.active_end)
                     local translation = Translation(function()
                         for candidate in coroutine.wrap(function()
@@ -113,7 +114,7 @@ local function new_engine(dictionary, matrix, readings, expand_emoji, boundary, 
         end,
     })
     context.input = ""
-    local env = { engine = { context = context }, mem = synth_env.mem }
+    local env = { engine = { context = context, schema = config and { config = config } }, mem = synth_env.mem }
     bunsetsu.init(env)
     context.translator_env = env
     return bunsetsu, context, viterbi
@@ -2088,6 +2089,92 @@ do
     local whole_word_position = menu:find("阿言う", 1, true)
     check(learned_position and whole_word_position and learned_position < whole_word_position,
         "the learned route with shorter words precedes the tied whole-word continuation (menu: " .. menu .. ")")
+end
+
+local function collection_config(overrides)
+    local values = {
+        ["emoji/option_name"] = "emoji",
+        ["engine/segmentors"] = { "lua_segmentor@*kagiroi/bunsetsu_segmentor", "abc_segmentor" },
+        ["engine/translators"] = { "punct_translator", "table_translator@custom_phrase",
+            "lua_translator@*kagiroi/bunsetsu", "lua_translator@*kagiroi/char_variants" },
+        ["engine/filters"] = { "simplifier@emoji", "uniquifier", "lua_filter@*kagiroi/bunsetsu*filter",
+            "lua_filter@*kagiroi/candidate_gate" },
+    }
+    for path, value in pairs(overrides or {}) do values[path] = value end
+    return {
+        get_string = function(_, path)
+            local value = values[path]
+            if type(value) == "string" then return value end
+        end,
+        get_list = function(_, path)
+            local list = values[path]
+            if type(list) ~= "table" then return nil end
+            return { size = #list, get_value_at = function(_, index)
+                local value = list[index + 1]
+                return value and { value = value }
+            end }
+        end,
+    }
+end
+
+local function red_candidate_engine(config)
+    local dictionary = {
+        { surface = "あか", candidate = "朱", left_id = 1, right_id = 1, cost = 10 },
+        { surface = "あか", candidate = "朱", left_id = 2, right_id = 2, cost = 20 },
+        { surface = "あか", candidate = "赤", left_id = 1, right_id = 1, cost = 30 },
+    }
+    local readings = { ["あか"] = {
+        { text = "朱", phrase = { text = "朱|1 1", custom_code = "あか ", comment = "dictionary comment" } },
+        { text = "朱", phrase = { text = "朱|2 2", custom_code = "あか ", comment = "duplicate comment" } },
+        { text = "赤", comment = "candidate comment",
+            phrase = { text = "赤|1 1", custom_code = "あか ", comment = "dictionary comment" } },
+    } }
+    local bunsetsu, context
+    bunsetsu, context = new_engine(dictionary, pos_matrix({ 1, 2 }), readings, function(candidate)
+        if context:get_option("emoji") and candidate.text == "朱" then
+            yield(ShadowCandidate(candidate, "simplified", "🔴", ""))
+        end
+    end, nil, {}, config)
+    bunsetsu.start(context, "あか")
+    return bunsetsu, context
+end
+
+print("== 50. an unchanged candidate stream does not need filter collection")
+do
+    local bunsetsu, context = red_candidate_engine(collection_config())
+    local clause = bunsetsu.state(context).clauses[1]
+    check(context.filter_collections == 0, "the known pipeline with emoji off skips filter collection")
+    check(clause_texts(clause) == "朱/赤" and clause.candidates[1].source_text == "朱|1 1"
+        and clause.candidates[1].route_words[1].right_id == 1,
+        "direct collection keeps the first display text and its route and dictionary entry")
+
+    local legacy, legacy_context = red_candidate_engine(nil)
+    local legacy_candidates = legacy.state(legacy_context).clauses[1].candidates
+    check(legacy_candidates[1].comment == "dictionary comment" and legacy_candidates[2].comment == "candidate comment"
+        and clause.candidates[1].comment == legacy_candidates[1].comment
+        and clause.candidates[2].comment == legacy_candidates[2].comment,
+        "direct collection matches the filtered stream's inherited and explicit comments")
+
+    context:set_option("emoji", true)
+    check(context.filter_collections > 0 and clause_texts(clause) == "朱/🔴/赤",
+        "enabling emoji recollects through the filter and keeps the transformed candidate")
+end
+
+print("== 51. an unrecognized candidate pipeline still uses filter collection")
+do
+    local configs = {
+        { ["engine/filters"] = { "simplifier@emoji", "uniquifier", "lua_filter@*kagiroi/bunsetsu*filter",
+            "lua_filter@*kagiroi/candidate_gate", "lua_filter@custom" } },
+        { ["emoji/option_name"] = "custom_emoji" },
+        { ["engine/segmentors"] = { "abc_segmentor", "lua_segmentor@*kagiroi/bunsetsu_segmentor" } },
+        { ["engine/translators"] = { "lua_translator@*kagiroi/bunsetsu", "lua_translator@custom" } },
+        { ["custom_phrase/tags"] = { "bunsetsu_active" } },
+        { ["custom_phrase/tag"] = "bunsetsu_active" },
+    }
+    for _, overrides in ipairs(configs) do
+        local _, context = red_candidate_engine(collection_config(overrides))
+        check(context.filter_collections > 0, "fallback collects candidates for " .. next(overrides))
+    end
 end
 
 print(string.format("bunsetsu: %d checks, %d failures", checks, failures))

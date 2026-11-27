@@ -16,19 +16,20 @@ function M.install_globals()
         return candidate
     end
     _G.ShadowCandidate = function(candidate, kind, text, comment)
-        local shadow = { type = kind, text = text, comment = comment, start = candidate.start, _end = candidate._end }
+        local shadow = { type = kind, text = text == "" and candidate.text or text,
+            comment = comment == "" and candidate.comment or comment, start = candidate.start, _end = candidate._end }
         function shadow:get_genuine() return candidate end
         function shadow:to_phrase() return candidate:to_phrase() end
         return shadow
     end
     _G.DictEntry = function(copy)
-        return copy and { text = copy.text, custom_code = copy.custom_code }
-            or { text = "", custom_code = "" }
+        return copy and { text = copy.text, custom_code = copy.custom_code, comment = copy.comment or "" }
+            or { text = "", custom_code = "", comment = "" }
     end
     _G.Phrase = function(mem, tag, start, finish, entry)
         return {
             toCandidate = function()
-                local candidate = Candidate("kagiroi", start, finish, entry.text, "")
+                local candidate = Candidate("kagiroi", start, finish, entry.text, entry.comment or "")
                 candidate.phrase = entry
                 return candidate
             end,

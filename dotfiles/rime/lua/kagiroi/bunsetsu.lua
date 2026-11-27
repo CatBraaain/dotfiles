@@ -261,10 +261,38 @@ local function heap_pop(heap, completions)
     return top
 end
 
+local function component_list_matches(config, path, expected)
+    local list = config:get_list(path)
+    if not list or list.size ~= #expected then return false end
+    for index, name in ipairs(expected) do
+        local item = list:get_value_at(index - 1)
+        if not item or item.value ~= name then return false end
+    end
+    return true
+end
+
+local function supports_direct_collection(config)
+    if not config or config:get_string("emoji/option_name") ~= "emoji" then return false end
+    local segmentors = config:get_list("engine/segmentors")
+    local first_segmentor = segmentors and segmentors:get_value_at(0)
+    return first_segmentor and first_segmentor.value == "lua_segmentor@*kagiroi/bunsetsu_segmentor"
+        and not config:get_string("custom_phrase/tag") and not config:get_list("custom_phrase/tags")
+        and component_list_matches(config, "engine/translators", {
+            "punct_translator", "table_translator@custom_phrase", "lua_translator@*kagiroi/bunsetsu",
+            "lua_translator@*kagiroi/char_variants",
+        })
+        and component_list_matches(config, "engine/filters", {
+            "simplifier@emoji", "uniquifier", "lua_filter@*kagiroi/bunsetsu*filter",
+            "lua_filter@*kagiroi/candidate_gate",
+        })
+end
+
 function Top.init(env)
     stock = stock or require("kagiroi/kagiroi_translator")
     stock.init(env)
     install_userdict_reader(env)
+    local schema = env.engine.schema
+    env.supports_direct_collection = supports_direct_collection(schema and schema.config)
     next_session = next_session + 1
     env.session_id = tostring(next_session)
     env.engine.context:set_property("_kagiroi_bunsetsu_session", env.session_id)
@@ -310,30 +338,8 @@ local function choice_candidate(choice, seg, env)
     return ShadowCandidate(candidate, "kagiroi", choice.text, choice.comment or "")
 end
 
-local function save_filtered(clause, translation)
+local function restore_filtered_selection(clause, candidates)
     local previous = clause.candidates[clause.selected]
-    local sources = {}
-    for _, choice in ipairs(clause.unfiltered) do
-        if choice.entry and not sources[choice.entry.text] then sources[choice.entry.text] = choice end
-    end
-    local candidates, seen = {}, {}
-    for candidate in translation:iter() do
-        if not seen[candidate.text] then
-            seen[candidate.text] = true
-            local genuine = candidate:get_genuine()
-            local phrase = genuine:to_phrase()
-            local source = phrase and sources[phrase.entry.text]
-            candidates[#candidates + 1] = {
-                text = candidate.text,
-                comment = candidate.comment,
-                source_text = genuine.text,
-                entry = phrase and DictEntry(phrase.entry),
-                left_id = source and source.left_id,
-                right_id = source and source.right_id,
-                route_words = source and source.text == candidate.text and source.route_words or nil,
-            }
-        end
-    end
     clause.candidates, clause.selected, clause.filtered = candidates, 1, true
     if previous then
         for index, choice in ipairs(candidates) do
@@ -355,6 +361,55 @@ local function save_filtered(clause, translation)
             end
         end
     end
+end
+
+local function append_filtered_choice(candidates, choice, source)
+    if choice.entry then choice.entry = DictEntry(choice.entry) end
+    if source then
+        choice.left_id, choice.right_id = source.left_id, source.right_id
+        if source.text == choice.text then choice.route_words = source.route_words end
+    end
+    candidates[#candidates + 1] = choice
+end
+
+local function save_filtered(clause, translation)
+    local sources = {}
+    for _, choice in ipairs(clause.unfiltered) do
+        local entry_text = choice.entry and choice.entry.text
+        if entry_text and not sources[entry_text] then sources[entry_text] = choice end
+    end
+    local candidates, seen = {}, {}
+    for candidate in translation:iter() do
+        local text = candidate.text
+        if not seen[text] then
+            seen[text] = true
+            local genuine = candidate:get_genuine()
+            local phrase = genuine:to_phrase()
+            local entry = phrase and phrase.entry
+            append_filtered_choice(candidates, { text = text, comment = candidate.comment,
+                source_text = genuine.text, entry = entry }, entry and sources[entry.text])
+        end
+    end
+    restore_filtered_selection(clause, candidates)
+end
+
+local function collect_without_transforms(clause)
+    local candidates, seen, sources = {}, {}, {}
+    for _, choice in ipairs(clause.unfiltered) do
+        local entry = choice.entry
+        local entry_text = entry and entry.text
+        if entry_text and not sources[entry_text] then sources[entry_text] = choice end
+        local text = choice.text
+        if text == "" and entry then text = entry_text end
+        if not seen[text] then
+            seen[text] = true
+            local comment = choice.comment or ""
+            if comment == "" and entry then comment = entry.comment or "" end
+            append_filtered_choice(candidates, { text = text, comment = comment,
+                source_text = entry_text or text, entry = entry }, entry_text and sources[entry_text])
+        end
+    end
+    restore_filtered_selection(clause, candidates)
 end
 
 local function entry_ids(entry)
@@ -1732,7 +1787,7 @@ local function selected_ids(clause)
     return entry_ids(clause.candidates[clause.selected].entry)
 end
 
-local function collect_filtered(context, state, index, retained_order)
+local function collect_through_filters(context, state, index)
     local clause = state.clauses[index]
     state.active = index
     state.active_start, state.active_end = 0, #clause.reading
@@ -1743,21 +1798,23 @@ local function collect_filtered(context, state, index, retained_order)
     local segment = context.composition:back()
     if segment then segment:get_candidate_at(0) end
     state.collecting = false
-    if retained_order then
-        local positions = {}
-        for position, choice in ipairs(retained_order) do positions[choice.text] = position end
-        for position, choice in ipairs(clause.candidates) do
-            positions[choice.text] = positions[choice.text] or #retained_order + position
-        end
-        local selected = clause.candidates[clause.selected]
-        table.sort(clause.candidates, function(a, b) return positions[a.text] < positions[b.text] end)
-        for position, choice in ipairs(clause.candidates) do
-            if choice == selected then clause.selected = position break end
-        end
+end
+
+local function retain_candidate_order(clause, retained_order)
+    local positions = {}
+    for position, choice in ipairs(retained_order) do positions[choice.text] = position end
+    for position, choice in ipairs(clause.candidates) do
+        positions[choice.text] = positions[choice.text] or #retained_order + position
+    end
+    local selected = clause.candidates[clause.selected]
+    table.sort(clause.candidates, function(a, b) return positions[a.text] < positions[b.text] end)
+    for position, choice in ipairs(clause.candidates) do
+        if choice == selected then clause.selected = position break end
     end
 end
 
 local function settle_contextual(context, state, env, retained_clause)
+    local collect_directly = env.supports_direct_collection and not context:get_option("emoji")
     local queue, queued = {}, {}
     local function enqueue(index)
         if state.clauses[index] and not queued[index] then
@@ -1781,7 +1838,9 @@ local function settle_contextual(context, state, env, retained_clause)
         if not clause.filtered or clause.ranked_context ~= key then
             local retained_order = clause == retained_clause and clause.candidates
             if state.contextual and clause.own_attached then reorder_contextual(clause, env, score_context) end
-            collect_filtered(context, state, index, retained_order)
+            if collect_directly then collect_without_transforms(clause)
+            else collect_through_filters(context, state, index) end
+            if retained_order then retain_candidate_order(clause, retained_order) end
             clause.ranked_context = key
         end
         if select_first then
