@@ -57,9 +57,17 @@ export async function entryDiffers(
   );
 }
 
+const binaryProbeBytes = 64;
+const nulByte = 0;
+
 export async function compareFiles(firstPath: string, secondPath: string): Promise<boolean> {
   const [first, second] = await Promise.all([readFile(firstPath), readFile(secondPath)]);
   if (first.equals(second)) return false;
+  if (
+    first.subarray(0, binaryProbeBytes).includes(nulByte) ||
+    second.subarray(0, binaryProbeBytes).includes(nulByte)
+  )
+    return true;
   const firstText = decodeText(first);
   const secondText = decodeText(second);
   if (firstText !== null && secondText !== null)

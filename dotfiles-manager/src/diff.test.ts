@@ -493,9 +493,10 @@ describe("binary content", () => {
     assertOnly(await diff(), "changed", ["asset.bin"]);
   });
 
-  it("does not strip trailing LF from NUL-containing content", async () => {
-    await put(distRoot, "asset.bin", new Uint8Array([0x00, 0x0a]));
-    await put(homeRoot, "asset.bin", new Uint8Array([0x00]));
+  it("does not strip trailing LF when NUL appears late", async () => {
+    const content = `${"a".repeat(128)}\0`;
+    await put(distRoot, "asset.bin", `${content}\n`);
+    await put(homeRoot, "asset.bin", content);
 
     assertOnly(await diff(), "changed", ["asset.bin"]);
   });
