@@ -772,7 +772,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(await toggle.boundingBox()).toEqual(before);
     expect(await page.locator(worktreeModeSelector).getAttribute("data-mode")).toBe("unarchived");
     expect(await page.locator(piToolsModeSelector).getAttribute("data-mode")).toBe("unarchived");
-    expect(await page.locator('.group-chevron[aria-expanded="true"]').count()).toBe(4);
+    expect(await page.locator('.group-toggle[aria-expanded="true"]').count()).toBe(4);
     expect(await page.locator(".session-row.selected").count()).toBe(1);
     expect(
       await page.evaluate(
@@ -1265,20 +1265,22 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       const surface = header.locator(".group-toggle").describe("Shared disclosure background");
       const title = header.locator(".group-title").describe("Workspace name");
       const controls = header.locator("button").describe("Workspace header controls");
+      const layout = header.locator("button, .group-chevron, .group-title");
       const hoverBackground = theme === "light" ? "rgb(232, 232, 232)" : "rgb(42, 45, 46)";
       const transparent = "rgba(0, 0, 0, 0)";
-      const idleBounds = await controls.evaluateAll((buttons) =>
-        buttons.map((button) => button.getBoundingClientRect().toJSON()),
+      const idleBounds = await layout.evaluateAll((elements) =>
+        elements.map((element) => element.getBoundingClientRect().toJSON()),
       );
-      expect(idleBounds[0]).toMatchObject({ x: 4, width: 24, height: 24 });
-      expect(idleBounds[1].x).toBe(28);
-      expect(await surface.evaluate((element) => getComputedStyle(element).gap)).toBe("0px");
+      expect(idleBounds[0]).toMatchObject({ x: 4, height: 24 });
+      expect(idleBounds[1]).toMatchObject({ x: 4, width: 24, height: 24 });
+      expect(idleBounds[2].x).toBe(28);
       expect(await surface.evaluate((element) => getComputedStyle(element).borderRadius)).toBe(
         "9.6px",
       );
       expect(
         await surface.evaluate((element) => getComputedStyle(element).transitionDuration),
       ).toBe("0s");
+      expect(await controls.count()).toBe(3);
       expect(await surface.locator(".group-mode-toggle, .group-new-session").count()).toBe(0);
 
       for (const label of ["agenda", "workspace-with-a-long-unbroken-name-".repeat(5)]) {
@@ -1303,12 +1305,11 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
           );
         }
 
-        const labelBounds = await controls.evaluateAll((buttons) =>
-          buttons.map((button) => button.getBoundingClientRect().toJSON()),
+        const labelBounds = await layout.evaluateAll((elements) =>
+          elements.map((element) => element.getBoundingClientRect().toJSON()),
         );
-        expect(labelBounds).toHaveLength(4);
-        expect(labelBounds.slice(2)).toEqual(idleBounds.slice(2));
-        expect(labelBounds[1].right + 4).toBeLessThanOrEqual(labelBounds[2].left);
+        expect(labelBounds.slice(3)).toEqual(idleBounds.slice(3));
+        expect(labelBounds[0].right + 4).toBeLessThanOrEqual(labelBounds[3].left);
         for (const selector of [
           ".group-chevron",
           ".group-title",
@@ -1319,21 +1320,17 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
           await control.hover();
           const isDisclosure = selector === ".group-chevron" || selector === ".group-title";
           expect(
-            await surface.evaluate((element) => getComputedStyle(element).backgroundColor),
-          ).toBe(isDisclosure ? hoverBackground : transparent);
-          expect(
             await controls.evaluateAll((buttons) =>
               buttons.map((button) => getComputedStyle(button).backgroundColor),
             ),
           ).toEqual([
-            transparent,
-            transparent,
+            isDisclosure ? hoverBackground : transparent,
             selector === ".group-mode-toggle" ? hoverBackground : transparent,
             selector === ".group-new-session" ? hoverBackground : transparent,
           ]);
           expect(
-            await controls.evaluateAll((buttons) =>
-              buttons.map((button) => button.getBoundingClientRect().toJSON()),
+            await layout.evaluateAll((elements) =>
+              elements.map((element) => element.getBoundingClientRect().toJSON()),
             ),
           ).toEqual(labelBounds);
         }
@@ -1343,14 +1340,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         element.textContent = "agenda";
       });
       await page.mouse.move(1, 1);
-      await header.locator(".group-chevron").focus();
+      await surface.focus();
       await page.keyboard.press("Shift+Tab");
-      for (const selector of [
-        ".group-chevron",
-        ".group-title",
-        ".group-mode-toggle",
-        ".group-new-session",
-      ]) {
+      for (const selector of [".group-toggle", ".group-mode-toggle", ".group-new-session"]) {
         await page.keyboard.press("Tab");
         expect(
           await header.locator(selector).evaluate((element) => ({
@@ -1362,8 +1354,8 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         ).toEqual({ focused: true, visible: true, outlineWidth: "2px", height: 24 });
       }
       expect(
-        await controls.evaluateAll((buttons) =>
-          buttons.map((button) => button.getBoundingClientRect().toJSON()),
+        await layout.evaluateAll((elements) =>
+          elements.map((element) => element.getBoundingClientRect().toJSON()),
         ),
       ).toEqual(idleBounds);
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
@@ -1377,38 +1369,37 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     const group = page
       .locator(".group")
       .filter({ has: page.locator('.group-header[title="~/projects/vscode-agent-kit"]') });
-    const chevron = group.locator(".group-chevron").describe("Project group chevron");
+    const disclosure = group.locator(".group-toggle").describe("Project group disclosure");
+    const chevron = disclosure.locator(".group-chevron").describe("Project group chevron");
     const name = group.locator(".group-title").describe("Project group name");
-    expect(await chevron.getAttribute("aria-expanded")).toBe("true");
+    expect(await disclosure.getAttribute("aria-expanded")).toBe("true");
 
-    await chevron.focus();
-    await page.keyboard.press("Enter");
-    await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
+    await disclosure.press("Enter");
+    await expect.poll(() => disclosure.getAttribute("aria-expanded")).toBe("false");
     expect(await group.locator(".session-row").count()).toBe(0);
     expect(await chevron.locator("path").getAttribute("d")).toBe("m9 18 6-6-6-6");
     await name.click();
     await expect.poll(() => group.locator(".session-row").count()).toBe(1);
-    expect(await chevron.getAttribute("aria-expanded")).toBe("true");
+    expect(await disclosure.getAttribute("aria-expanded")).toBe("true");
 
-    await name.focus();
-    await page.keyboard.press("Space");
-    await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
+    await disclosure.press("Space");
+    await expect.poll(() => disclosure.getAttribute("aria-expanded")).toBe("false");
     await page.click(projectModeSelector);
     await expect
       .poll(() => page.locator(projectModeSelector).getAttribute("data-mode"))
       .toBe("all");
-    expect(await chevron.getAttribute("aria-expanded")).toBe("false");
+    expect(await disclosure.getAttribute("aria-expanded")).toBe("false");
     expect(await group.locator(".session-row").count()).toBe(0);
     for (let index = 0; index < 2; index++) await refreshSessions(page);
-    expect(await chevron.getAttribute("aria-expanded")).toBe("false");
+    expect(await disclosure.getAttribute("aria-expanded")).toBe("false");
     expect(await page.locator(projectModeSelector).getAttribute("data-mode")).toBe("all");
-    await name.click();
+    await chevron.click();
     await expect.poll(() => group.locator(".session-row").count()).toBe(2);
     expect(await openSessionMessages(page)).toEqual([]);
 
     await page.reload({ waitUntil: "networkidle" });
     await page.waitForSelector(".session-row");
-    expect(await chevron.getAttribute("aria-expanded")).toBe("true");
+    expect(await disclosure.getAttribute("aria-expanded")).toBe("true");
     expect(await page.locator(projectModeSelector).getAttribute("data-mode")).toBe("unarchived");
     expect(await group.locator(".session-row").count()).toBe(1);
     await page.close();
@@ -1579,10 +1570,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       const button = page.locator(".new-workspace").describe("New workspace footer button");
       const form = page.locator("#workspace-form").describe("Workspace path form");
       const input = page.locator("#workspace-path").describe("Workspace path input");
-      const heading = page
-        .locator(".group-title")
-        .first()
-        .describe("Workspace heading focus target");
+      const heading = page.locator(".group-toggle").first().describe("Workspace disclosure");
       const groupCountBefore = await page.locator(".group").count();
       const headingExpanded = await heading.getAttribute("aria-expanded");
       await button.click();
@@ -1737,8 +1725,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       expect(await groups.locator(".group-new-session").count()).toBe(await groups.count());
 
       for (const header of await groups.locator(".group-header").all()) {
-        await header.locator(".group-title").press("Enter");
-        expect(await header.locator(".group-title").getAttribute("aria-expanded")).toBe("false");
+        const disclosure = header.locator(".group-toggle");
+        await disclosure.press("Enter");
+        expect(await disclosure.getAttribute("aria-expanded")).toBe("false");
         await header.click({ button: "right" });
         const items = page.getByRole("menuitem");
         await expect
@@ -1749,8 +1738,8 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         ).toBe(false);
         await page.mouse.click(0, 0);
         expect(await page.getByRole("menu").count()).toBe(0);
-        await header.locator(".group-title").press("Space");
-        expect(await header.locator(".group-title").getAttribute("aria-expanded")).toBe("true");
+        await disclosure.press("Space");
+        expect(await disclosure.getAttribute("aria-expanded")).toBe("true");
       }
 
       for (const point of [
@@ -1898,7 +1887,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
       else if (dismissal === "blur")
         await page.evaluate(() => window.dispatchEvent(new Event("blur")));
       await expect.poll(() => page.getByRole("menu").count()).toBe(0);
-      expect(await header.locator(".group-title").getAttribute("aria-expanded")).toBe("true");
+      expect(await header.locator(".group-toggle").getAttribute("aria-expanded")).toBe("true");
       expect(await header.locator(".group-mode-toggle").getAttribute("data-mode")).toBe(
         "unarchived",
       );
@@ -1997,7 +1986,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     await page.close();
   });
 
-  it.each([".group-chevron", ".group-title", ".group-mode-toggle", ".group-new-session"])(
+  it.each([".group-toggle", ".group-mode-toggle", ".group-new-session"])(
     "ignores workspace menu shortcuts on %s without activating the header control",
     async (selector) => {
       const page = await openStory("sessions-sidebar--sample-sessions");
@@ -2008,7 +1997,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
         await trigger.press(shortcut);
         expect(await page.getByRole("menu").count()).toBe(0);
         expect(await trigger.evaluate((item) => item === document.activeElement)).toBe(true);
-        expect(await header.locator(".group-title").getAttribute("aria-expanded")).toBe("true");
+        expect(await header.locator(".group-toggle").getAttribute("aria-expanded")).toBe("true");
         expect(await header.locator(".group-mode-toggle").getAttribute("data-mode")).toBe(
           "unarchived",
         );
@@ -2028,23 +2017,23 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     const group = page
       .locator(".group")
       .filter({ has: page.locator('.group-header[title="~/projects/vscode-agent-kit"]') });
-    const chevron = group.locator(".group-chevron");
-    expect(await chevron.getAttribute("aria-expanded")).toBe("true");
+    const disclosure = group.locator(".group-toggle");
+    expect(await disclosure.getAttribute("aria-expanded")).toBe("true");
     // The displayed session's row is the only selected row.
     expect(await page.locator(".session-row.selected").count()).toBe(1);
 
-    await chevron.click();
-    await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
+    await disclosure.click();
+    await expect.poll(() => disclosure.getAttribute("aria-expanded")).toBe("false");
     // Collapsing the displayed session's group hides the only selected row.
     expect(await page.locator(".session-row.selected").count()).toBe(0);
-    await group.locator(".group-title").click();
+    await disclosure.click();
     await expect.poll(() => page.locator(".session-row.selected").count()).toBe(1);
-    await chevron.click();
-    await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
+    await disclosure.click();
+    await expect.poll(() => disclosure.getAttribute("aria-expanded")).toBe("false");
     await page.locator(`[data-archive="${worktreeId}"]`).click();
     await expect.poll(() => page.locator(`[data-session="${worktreeId}"]`).count()).toBe(0);
-    expect(await chevron.getAttribute("aria-expanded")).toBe("false");
-    await group.locator(".group-title").click();
+    expect(await disclosure.getAttribute("aria-expanded")).toBe("false");
+    await disclosure.click();
     await expect
       .poll(() => page.locator(`.session-row.selected [data-session="${atlasCurrentId}"]`).count())
       .toBe(1);

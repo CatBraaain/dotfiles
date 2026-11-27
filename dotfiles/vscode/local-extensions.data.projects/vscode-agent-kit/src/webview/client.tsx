@@ -158,28 +158,22 @@ function groupDescriptor(
         attrs: { class: "group-header", title: group.cwd, "data-workspace-menu": group.cwd },
         children: [
           {
-            tag: "div",
-            attrs: { class: "group-toggle" },
+            tag: "button",
+            attrs: {
+              class: "group-toggle",
+              type: "button",
+              "data-toggle-group": group.cwd,
+              "aria-expanded": String(isExpanded),
+            },
             children: [
               {
-                tag: "button",
-                attrs: {
-                  class: "group-chevron",
-                  type: "button",
-                  "data-toggle-group": group.cwd,
-                  "aria-expanded": String(isExpanded),
-                  "aria-label": `${isExpanded ? "Collapse" : "Expand"} ${group.label}`,
-                },
+                tag: "span",
+                attrs: { class: "group-chevron" },
                 children: [chevronIcon(isExpanded ? "down" : "right")],
               },
               {
-                tag: "button",
-                attrs: {
-                  class: "group-title",
-                  type: "button",
-                  "data-toggle-group": group.cwd,
-                  "aria-expanded": String(isExpanded),
-                },
+                tag: "span",
+                attrs: { class: "group-title" },
                 children: [group.label],
               },
             ],

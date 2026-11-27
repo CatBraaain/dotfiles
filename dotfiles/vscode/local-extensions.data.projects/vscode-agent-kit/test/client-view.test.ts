@@ -177,7 +177,7 @@ describe("sessionListView", () => {
     expect(byClass(elementsIn(view), "group-mode-toggle")).toHaveLength(2);
   });
 
-  it("groups the two disclosure buttons outside the independent workspace actions", () => {
+  it("renders one workspace disclosure button beside the independent workspace actions", () => {
     const headers = byClass(elementsIn(viewFor("all")), "group-header");
 
     for (const header of headers) {
@@ -190,17 +190,20 @@ describe("sessionListView", () => {
         "group-new-session",
       ]);
       const disclosure = children[0];
-      expect(disclosure.tag).toBe("div");
-      expect(disclosure.attrs).toEqual({ class: "group-toggle" });
-      const buttons = collectElements(disclosure).filter((element) => element.tag === "button");
-      expect(buttons.map((button) => button.attrs?.class)).toEqual([
-        "group-chevron",
-        "group-title",
+      expect(disclosure.tag).toBe("button");
+      expect(disclosure.attrs).toMatchObject({
+        type: "button",
+        "data-toggle-group": header.attrs?.title,
+        "aria-expanded": "true",
+      });
+      expect(collectElements(disclosure).filter((element) => element.tag === "button")).toEqual([
+        disclosure,
       ]);
-      expect(buttons.map((button) => button.attrs?.["data-toggle-group"])).toEqual([
-        header.attrs?.title,
-        header.attrs?.title,
-      ]);
+      expect(byClass(collectElements(disclosure), "group-chevron")[0].children?.[0]).toMatchObject({
+        tag: "svg",
+        attrs: { "aria-hidden": "true", focusable: "false" },
+      });
+      expect(text(disclosure)).toBe(header.attrs?.title?.split("/").at(-1));
     }
   });
 
@@ -325,24 +328,6 @@ describe("sessionListView", () => {
     }
   });
 
-  it("opens groups by default with keyboard-operable chevron and name buttons", () => {
-    const elements = elementsIn(viewFor("all"));
-    const paths = ["/workspace/atlas", "/workspace/beta"];
-    for (const className of ["group-chevron", "group-title"]) {
-      const controls = byClass(elements, className);
-      expect(controls).toHaveLength(2);
-      for (const [index, control] of controls.entries()) {
-        expect(control.tag).toBe("button");
-        expect(control.attrs).toMatchObject({
-          type: "button",
-          "data-toggle-group": paths[index],
-          "aria-expanded": "true",
-        });
-        expect(control.attrs?.["aria-hidden"]).toBeUndefined();
-      }
-    }
-  });
-
   it("keeps headings but omits rows in collapsed groups", () => {
     const view = viewFor("all", groups, undefined, new Set(["/workspace/atlas"]));
     const elements = elementsIn(view);
@@ -350,7 +335,9 @@ describe("sessionListView", () => {
     expect(sectionsIn(view)).toHaveLength(2);
     expect(byClass(elements, "session-name").map(text)).toEqual(["Beta other", "Beta plain"]);
     const chevrons = byClass(elements, "group-chevron");
-    expect(chevrons.map((chevron) => chevron.attrs?.["aria-expanded"])).toEqual(["false", "true"]);
+    expect(
+      byClass(elements, "group-toggle").map((button) => button.attrs?.["aria-expanded"]),
+    ).toEqual(["false", "true"]);
     expect(
       chevrons.map(
         (chevron) => collectElements(chevron).find((element) => element.tag === "path")?.attrs?.d,

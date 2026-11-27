@@ -961,7 +961,7 @@ describe("session list loading in the mounted client", () => {
     await expect.poll(() => animationCount(moving)).toBe(1);
     await expect.poll(() => animationCount(moving)).toBe(0);
     await receive({ type: "archiveFinished", requestId: request.requestId });
-    await page.getByRole("button", { name: "Collapse atlas" }).click();
+    await page.getByRole("button", { name: "atlas", exact: true }).click();
     await expect.poll(() => page.locator(".session-row").count()).toBe(1);
     expect(await animationCount(moving)).toBe(0);
   });

@@ -142,6 +142,40 @@ test(
         contentType: "image/png",
       });
     });
+    await test.step("Use one disclosure for the workspace name and chevron", async () => {
+      const frame = await host.sessionFrame();
+      const group = frame
+        .locator("section.group")
+        .filter({ has: frame.getByTitle(host.sessions.B.cwd, { exact: true }) });
+      const disclosure = group.getByRole("button", { name: "project-b", exact: true });
+      const mode = group.getByRole("button", { name: "Show unarchived sessions" });
+      const newSession = group.getByRole("button", { name: "New session in project-b" });
+      const row = group.locator(`[data-session="${host.sessions.B.id}"]`);
+
+      await disclosure.locator(".group-title").click();
+      await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+      await expect(row).toBeHidden();
+      await disclosure.locator(".group-chevron").click();
+      await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+      await expect(row).toBeVisible();
+
+      await mode.focus();
+      await mode.press("Shift+Tab");
+      await expect(disclosure).toBeFocused();
+      await expect(disclosure).toHaveCSS("outline-style", "solid");
+      await expect(disclosure).toHaveCSS("outline-width", "2px");
+      await disclosure.press("Enter");
+      await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+      await expect(row).toBeHidden();
+      await expect(disclosure).toBeFocused();
+      await disclosure.press("Space");
+      await expect(disclosure).toHaveAttribute("aria-expanded", "true");
+      await expect(row).toBeVisible();
+      await disclosure.press("Tab");
+      await expect(mode).toBeFocused();
+      await mode.press("Tab");
+      await expect(newSession).toBeFocused();
+    });
   },
 );
 

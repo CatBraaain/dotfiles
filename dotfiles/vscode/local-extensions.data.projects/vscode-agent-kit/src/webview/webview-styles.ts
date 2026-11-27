@@ -30,11 +30,9 @@ export const webviewStyles = `
     .group { min-width: 0; }
     .group + .group { margin-top: 12px; }
     .group-header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 4px; min-width: 0; min-height: var(--group-header-height); margin-left: -8px; background: var(--vscode-sideBar-background); }
-    .group-toggle { display: flex; flex: 0 1 auto; align-items: center; gap: 0; min-width: 0; border-radius: var(--session-radius); }
-    .group-toggle:hover { background: var(--vscode-list-hoverBackground); }
-    .group-toggle > button:hover { background: transparent; }
+    .group-toggle { display: flex; align-items: center; min-width: 0; padding: 0; border: 0; }
     .group-chevron, .group-new-session, .group-mode-toggle { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; color: var(--vscode-foreground); }
-    .group-title { flex: 1; overflow: hidden; min-width: 0; height: 24px; padding: 0 6px 0 0; font-size: 14px; font-weight: 600; line-height: 20px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+    .group-title { flex: 1; overflow: hidden; min-width: 0; padding: 2px 6px 2px 0; border-inline: 1px solid transparent; font-size: 14px; font-weight: 600; line-height: 20px; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
     .group-mode-toggle { margin-left: auto; color: var(--vscode-descriptionForeground); }
     .group-mode-toggle:hover { color: var(--vscode-foreground); }
     .group-mode-toggle svg { width: 16px; height: 16px; }
