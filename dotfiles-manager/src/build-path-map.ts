@@ -8,10 +8,15 @@ import type { Platform } from "./build.ts";
 // remap.data.md lists one source path per row and a destination or removal per platform.
 const mapFileName = "remap.data.md";
 const removeDestination = "-";
+const exactDirectorySuffix = /\.exact$/;
 const mapColumns = ["key", "linux", "windows", "macos"] as const;
 // The map targets macOS while the build refers to the platform as darwin.
 const platformColumns = { linux: "linux", windows: "windows", darwin: "macos" } as const;
-type PathMap = { removals: string[]; moves: Array<{ source: string; destination: string }> };
+type RemovalPattern = string | Bun.Glob;
+type PathMap = {
+  removals: RemovalPattern[];
+  moves: Array<{ source: string; destination: string }>;
+};
 type PathMapRow = [key: string, linux: string, windows: string, macos: string];
 
 function parsePathMap(content: string, mapFilePath: string): PathMapRow[] {
@@ -74,14 +79,16 @@ function sameCells(actual: string[], expected: readonly string[]): boolean {
 async function loadPathMap(mapFilePath: string, platform: Platform): Promise<PathMap> {
   const rows = parsePathMap(await readFile(mapFilePath, "utf-8"), mapFilePath);
   const columnIndex = mapColumns.indexOf(platformColumns[platform]);
-  const removals: string[] = [];
+  const removals: RemovalPattern[] = [];
   const moves: Array<{ source: string; destination: string }> = [];
 
   for (const row of rows) {
     const destination = row[columnIndex] ?? "";
     if (destination === "") continue;
-    if (destination === removeDestination) removals.push(row[0]);
-    else moves.push({ source: row[0], destination });
+    const [key] = row;
+    if (destination === removeDestination)
+      removals.push(globPatternCharacters.test(key) ? new Bun.Glob(key) : key);
+    else moves.push({ source: key, destination });
   }
   return { removals, moves };
 }
@@ -95,7 +102,7 @@ export async function applyPathMap(distRoot: string, platform: Platform): Promis
     if (mapId !== undefined && !appliedMapIds.has(mapId)) {
       const { removals, moves } = await loadPathMap(mapFilePath, platform);
       appliedMapIds.add(mapId);
-      await removeMappedEntries(directory, "", removals);
+      if (removals.length > 0) await removeMappedEntries(directory, removals);
       const hasCrossDirectoryMove = await moveMappedEntries(distRoot, directory, moves);
       if (hasCrossDirectoryMove) return true;
     }
@@ -118,20 +125,34 @@ async function identifyPathMap(mapFilePath: string): Promise<string> {
   return ino === 0n ? `path:${mapFilePath}` : `file:${dev}:${ino}`;
 }
 
-async function removeMappedEntries(
-  distDir: string,
-  relativeParent: string,
-  removals: string[],
-): Promise<void> {
-  for (const entry of await readdir(distDir, { withFileTypes: true })) {
-    const childParent = relativeParent === "" ? entry.name : `${relativeParent}/${entry.name}`;
-    const entryPath = join(distDir, entry.name);
-    if (isIgnoredTarget(childParent, removals, !entry.isDirectory())) {
-      await rm(entryPath, { recursive: true, force: true });
+async function removeMappedEntries(distDir: string, removals: RemovalPattern[]): Promise<void> {
+  const literalPaths = new Set<string>();
+  const literalParents = new Set<string>();
+  const globs: Bun.Glob[] = [];
+  for (const pattern of removals) {
+    if (typeof pattern !== "string") {
+      globs.push(pattern);
       continue;
     }
-    if (entry.isDirectory()) await removeMappedEntries(entryPath, childParent, removals);
+    literalPaths.add(pattern);
+    for (let slash = pattern.indexOf("/"); slash !== -1; slash = pattern.indexOf("/", slash + 1))
+      literalParents.add(pattern.slice(0, slash));
   }
+
+  async function walk(directory: string, pathPrefix: string): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const isDirectory = entry.isDirectory();
+      const targetName = isDirectory ? entry.name.replace(exactDirectorySuffix, "") : entry.name;
+      const targetPath = `${pathPrefix}${targetName}`;
+      if (literalPaths.has(targetPath) || globs.some((glob) => glob.match(targetPath))) {
+        await rm(join(directory, entry.name), { recursive: true, force: true });
+        continue;
+      }
+      if (isDirectory && (globs.length > 0 || literalParents.has(targetPath)))
+        await walk(join(directory, entry.name), `${targetPath}/`);
+    }
+  }
+  await walk(distDir, "");
 }
 
 // Destinations must stay inside dist: the whole dist tree is generated
@@ -230,12 +251,7 @@ export type CopyRouter = {
   exit(): void;
 };
 
-type CopyMapContext = {
-  sourceDir: string;
-  destinationDir: string;
-  removals: string[];
-  moves: Array<{ source: string; destination: string }>;
-};
+type CopyMapContext = PathMap & { sourceDir: string; destinationDir: string };
 
 export async function createCopyRouter(platform: Platform, distRoot: string): Promise<CopyRouter> {
   const sourceDirs: string[] = [];
@@ -278,22 +294,24 @@ export async function createCopyRouter(platform: Platform, distRoot: string): Pr
 
 const globPatternCharacters = /[*?[]/;
 
-function isIgnoredTarget(relativeParent: string, patterns: string[], isFile = false): boolean {
-  if (relativeParent === "") return false;
+function isIgnoredTarget(
+  relativeParent: string,
+  patterns: RemovalPattern[],
+  isFile = false,
+): boolean {
+  if (patterns.length === 0 || relativeParent === "") return false;
   // Source folder names use human-readable .exact suffixes; target paths do not.
   // Files keep their suffix because exact conversion only rewrites directories.
   const segments = relativeParent.split("/");
   const targetSegments = segments.map((name, index) =>
-    isFile && index === segments.length - 1 ? name : name.replace(/\.exact$/, ""),
+    isFile && index === segments.length - 1 ? name : name.replace(exactDirectorySuffix, ""),
   );
   const targetPrefixes: string[] = [];
   for (let index = 1; index <= targetSegments.length; index++)
     targetPrefixes.push(targetSegments.slice(0, index).join("/"));
   return targetPrefixes.some((prefix) =>
     patterns.some((pattern) =>
-      globPatternCharacters.test(pattern)
-        ? new Bun.Glob(pattern).match(prefix)
-        : pattern === prefix,
+      typeof pattern === "string" ? pattern === prefix : pattern.match(prefix),
     ),
   );
 }
