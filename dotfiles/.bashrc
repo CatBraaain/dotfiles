@@ -35,6 +35,8 @@ esac
 [ -f ~/.config/bash/bashrc ] && . ~/.config/bash/bashrc
 [ -f ~/.secrets.sh ] && . ~/.secrets.sh
 
+PS1='\w\$ '
+
 if [ -e /dev/dxg ] && grep -qiE 'microsoft|wsl' /proc/sys/kernel/osrelease; then
   export GALLIUM_DRIVER="d3d12"
 fi
