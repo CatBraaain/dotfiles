@@ -5,7 +5,7 @@
 
 import { $ } from "bun";
 import { randomUUID } from "node:crypto";
-import { link, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, relative } from "node:path";
 import {
@@ -16,6 +16,7 @@ import {
   formatDispatchers,
   listCurrentDispatchers,
   parseDispatchArgs,
+  projectCwd,
   startDispatcher,
   stopDispatcher,
   workerCommand,
@@ -604,6 +605,12 @@ async function createCommand(positional: string[], flags: Flags): Promise<void> 
   if (positional.length !== 1) usageFail();
   const input = parseCreateInput(positional[0]);
   const project = await resolveProject(flags);
+  const cwd = projectCwd(project);
+  const projectEntry = await stat(cwd).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") fail(`project directory not found: ${cwd}`);
+    throw error;
+  });
+  if (!projectEntry.isDirectory()) fail(`not a project directory: ${cwd}`);
   const ticket = await withProjectWrite(
     project,
     async (dir) => {
@@ -858,7 +865,7 @@ async function main(): Promise<void> {
         : await resolveProject(parsed);
     if (parsed.action === "stop") return stopDispatcher(project);
     if (!isWorker && project !== null && parsed.project !== undefined)
-      process.chdir(join(homedir(), "projects", project));
+      process.chdir(projectCwd(project));
     async function loadSnapshot() {
       const projects = project === null ? await allProjects() : [project];
       const snapshots = await Promise.all(

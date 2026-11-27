@@ -18,7 +18,7 @@
 | `-p/--project <name>` | project指定に対応するコマンドで、指定project を使う |
 | project未指定 | project単位の操作では、Gitリポジトリ内なら main worktree の basename、それ以外なら cwd の basename を使う |
 | `-a/--all` | `list` / `check` / `dispatch start`（短縮形を含む）/ `dispatch stop` で全project を横断する。project指定は無視する |
-| 不存在project | `create` は作成し、その他は終了コード1 |
+| 対象project のチケットストアがない | 起票条件を満たす `create` はストアを作成し、その他は終了コード1 |
 | `--json` | 成功時stdout は単一JSON。失敗時stdout は `{ "error": "..." }`、stderr は同じ1行、終了コードは失敗種別に従う。省略時はテキスト出力になり、`check` は `ok` または `file: kind: detail` 行、`list` は 1 ticket = 1行の tab区切り、`show` はフィールド行と本文、`create` / `set` / `edit` は `created` / `updated` 行に共通フィールドを続ける |
 | `--` | 後続を位置引数として扱う |
 | I/O例外 | stderr に 1行を出し終了コード1。書込みトランザクションは復元し、復元不能なら次の書込み前に journal から復元する |
@@ -68,6 +68,8 @@ JSON は `project` と各status名をkeyとする件数を持つオブジェク�
 ID、status、after、title、本文全体を返す。テキスト出力は `id:`、`status:`、`after:`、`title:` の各フィールド行、空行、`body:` 行、本文の順で、本文の末尾空白・改行を保持する。JSON は共通フィールドと末尾空白・改行を保持した `body` を返す。
 
 ### `ticket create <json> [-p|--project <project>] [--json]`
+
+project の指定方法や起票時の status にかかわらず、`~/projects/<project>` がディレクトリであることを起票条件とする。存在しない、ディレクトリでない、または確認できない場合は、対象パスを含むエラーを返して終了コード1で終了する。チケットもチケットストアも作成・変更しない。
 
 JSON は必須の `title` と任意の `status`、`after`、`body` を持つ。作成するファイルでは frontmatter終端と H1 の間に空行を1行置く。body は H1 の後の空行を挟んで置く。after が未解決で status未指定なら blocked で作る。成功時は `created <id>` に status、after、path を続けるテキスト、または JSON共通フィールドを返す。
 

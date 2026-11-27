@@ -366,6 +366,7 @@ describe("ticket dispatch with real pi-mux", () => {
         );
         assert.equal(initialized.status, 0, initialized.stderr);
 
+        mkdirSync(join(fixture.home, "projects", fixture.project), { recursive: true });
         const createArgs = [
           "create",
           "--json",

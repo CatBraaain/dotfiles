@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, describe, it } from "bun:test";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 // The CLI project dir (the source tree compiled by cli.build.ts; the same
@@ -8,9 +9,14 @@ import { basename, join } from "node:path";
 const CLI_DIR = join(import.meta.dir, "..");
 const homes: string[] = [];
 
-async function ticketHome(): Promise<string> {
-  const home = await mkdtemp("/tmp/ticket-cli-");
+async function ticketHome(...projects: string[]): Promise<string> {
+  const home = await mkdtemp(join(tmpdir(), "ticket-cli-"));
   homes.push(home);
+  await Promise.all(
+    [...new Set(["demo", basename(home), ...projects])].map((project) =>
+      mkdir(join(home, "projects", project), { recursive: true }),
+    ),
+  );
   return home;
 }
 
@@ -20,7 +26,7 @@ function runAt(home: string, cwd: string, args: string[], extraEnv: Record<strin
     : [process.execPath, CLI_DIR];
   const result = Bun.spawnSync([...command, ...args], {
     cwd,
-    env: { ...process.env, HOME: home, ...extraEnv },
+    env: { ...process.env, HOME: home, USERPROFILE: home, ...extraEnv },
     stdout: "pipe",
     stderr: "pipe",
     timeout: 3_000,
@@ -66,7 +72,7 @@ describe("ticket list project selection", () => {
   it.each(["demo", "other project", "quote's project", "dotted.project"])(
     "uses either project flag for %j",
     async (project) => {
-      const home = await ticketHome();
+      const home = await ticketHome(project);
       const id = create(home, "selected", project);
       create(home, "wrong", basename(home));
       for (const args of [
@@ -105,8 +111,8 @@ describe("ticket list project selection", () => {
   it.skipIf(process.platform === "win32")(
     "only uses Git output within the size limit",
     async () => {
-      const home = await ticketHome();
       const gitProject = "git-project";
+      const home = await ticketHome(gitProject);
       const gitId = create(home, "from git", gitProject);
       const cwdId = create(home, "from cwd", basename(home));
       const git = join(home, "git");
@@ -145,7 +151,7 @@ describe("ticket list project selection", () => {
   });
 
   it("keeps all-project listing regardless of the ignored project flag", async () => {
-    const home = await ticketHome();
+    const home = await ticketHome("other");
     const first = create(home, "one", "demo");
     const second = create(home, "two", "other");
     for (const args of [[], ["-p", "missing"], ["--project", "missing"], ["-p", "../ignored"]]) {
@@ -209,6 +215,50 @@ describe("ticket CLI", () => {
     assert.equal(result.code, 1);
     assert.match(result.stderr, /invalid project/);
     assert.equal(result.stdout, "");
+  });
+
+  it.each([undefined, "draft", "open", "blocked", "locked", "closed", "cancelled"])(
+    "rejects create with status %j when the explicit project directory is missing",
+    async (status) => {
+      const home = await ticketHome();
+      const project = "missing";
+      const projectDir = join(home, "projects", project);
+      const result = run(home, ["create", JSON.stringify({ title: "New", status }), "-p", project]);
+
+      assert.equal(result.code, 1);
+      assert.ok(result.stderr.includes(projectDir), result.stderr);
+      await assert.rejects(readdir(join(home, ".agents", "tickets")), { code: "ENOENT" });
+    },
+  );
+
+  it("rejects create when the inferred project directory is missing", async () => {
+    const home = await ticketHome();
+    const cwd = join(home, "outside");
+    await mkdir(cwd);
+    const result = runAt(home, cwd, ["create", '{"title":"New"}']);
+
+    assert.equal(result.code, 1);
+    assert.ok(result.stderr.includes(join(home, "projects", basename(cwd))), result.stderr);
+  });
+
+  it("rejects create without changing the ticket store when the project path is a file", async () => {
+    const home = await ticketHome();
+    const project = "not-a-directory";
+    const projectDir = join(home, "projects", project);
+    const ticketDir = join(home, ".agents", "tickets", project);
+    const oldTicket = "20261127-100000.md";
+    const previous = "---\nstatus: draft\n---\n\n# Existing\n";
+    await writeFile(projectDir, "not a directory");
+    await mkdir(ticketDir, { recursive: true });
+    await writeFile(join(ticketDir, oldTicket), previous);
+    const result = run(home, ["create", '{"title":"New"}', "-p", project, "--json"]);
+
+    assert.equal(result.code, 1);
+    const { error } = JSON.parse(result.stdout) as { error: string };
+    assert.equal(result.stderr.trimEnd(), error);
+    assert.ok(error.includes(projectDir), error);
+    assert.deepEqual(await readdir(ticketDir), [oldTicket]);
+    assert.equal(await readFile(join(ticketDir, oldTicket), "utf8"), previous);
   });
 
   it("creates distinct IDs for same-second requests", async () => {
@@ -352,7 +402,7 @@ describe("ticket CLI", () => {
   });
 
   it("returns a controlled JSON error for an I/O failure", async () => {
-    const home = await ticketHome();
+    const home = await ticketHome("broken");
     await mkdir(join(home, ".agents", "tickets"), { recursive: true });
     await writeFile(join(home, ".agents", "tickets", "broken"), "not a directory");
     const result = run(home, ["create", '{"title":"io"}', "--project", "broken", "--json"]);
@@ -445,9 +495,8 @@ describe("ticket CLI", () => {
 
   it("uses the main worktree basename from a subworktree cwd", async () => {
     const home = await ticketHome();
-    const repo = await mkdtemp("/tmp/ticket-repo-");
-    const subParent = await mkdtemp("/tmp/ticket-sub-");
-    homes.push(repo, subParent);
+    const repo = await mkdtemp(join(home, "projects", "ticket-repo-"));
+    const subParent = await mkdtemp(join(home, "ticket-sub-"));
     const git = (args: string[]) => {
       const result = Bun.spawnSync(["git", ...args], {
         cwd: repo,

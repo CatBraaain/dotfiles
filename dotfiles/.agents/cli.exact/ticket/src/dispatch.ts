@@ -57,7 +57,7 @@ function splitTicketKey(key: string): [string, string] {
   return [key.slice(0, separator), key.slice(separator + 1)];
 }
 
-function projectCwd(project: string): string {
+export function projectCwd(project: string): string {
   return join(homedir(), "projects", project);
 }
 
