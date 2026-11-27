@@ -3,6 +3,7 @@ import { isAbsolute } from "node:path";
 import { errorMessage, isEpochMs, isRecord } from "./guards";
 
 const QUERY_TIMEOUT_MS = 10_000;
+const SAVED_HISTORY_TIMEOUT_MS = 180_000;
 const VIEW_TARGET_TIMEOUT_MS = 2_000;
 const SWITCH_TARGET_MISSING_EXIT_CODE = 2;
 const SWITCH_CLIENT_MISSING_EXIT_CODE = 3;
@@ -369,16 +370,18 @@ function isPiMuxHistoryEntry(entry: unknown): entry is PiMuxHistoryEntry {
   );
 }
 
+function commandTimeoutMs([command, mode]: string[]): number {
+  if (command === "list" && mode === "--saved") return SAVED_HISTORY_TIMEOUT_MS;
+  if (command === "metadata" && mode === "--view-target") return VIEW_TARGET_TIMEOUT_MS;
+  return QUERY_COMMANDS.has(command) ? QUERY_TIMEOUT_MS : 0;
+}
+
 async function executePiMux(executable: string, args: string[], cwd?: string): Promise<string> {
+  const timeoutMs = commandTimeoutMs(args);
   return new Promise((resolve, reject) => {
     const child = spawn(executable, args, {
       cwd,
-      timeout:
-        args[0] === "metadata" && args[1] === "--view-target"
-          ? VIEW_TARGET_TIMEOUT_MS
-          : QUERY_COMMANDS.has(args[0])
-            ? QUERY_TIMEOUT_MS
-            : 0,
+      timeout: timeoutMs,
       env: {
         ...process.env,
         COLORTERM: process.env.COLORTERM ?? "truecolor",
@@ -398,16 +401,24 @@ async function executePiMux(executable: string, args: string[], cwd?: string): P
       }
       const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
       reject(
-        Object.assign(new Error(describeFailure(executable, child, stderr)), { exitCode, stderr }),
+        Object.assign(new Error(describeFailure(executable, child, stderr, timeoutMs)), {
+          exitCode,
+          stderr,
+        }),
       );
     });
   });
 }
 
-function describeFailure(executable: string, child: ChildProcess, stderr: string): string {
+function describeFailure(
+  executable: string,
+  child: ChildProcess,
+  stderr: string,
+  timeoutMs: number,
+): string {
   const outcome =
-    child.killed && child.signalCode === "SIGTERM"
-      ? `timed out after ${QUERY_TIMEOUT_MS} ms`
+    timeoutMs > 0 && child.killed && child.signalCode === "SIGTERM"
+      ? `timed out after ${timeoutMs} ms`
       : child.signalCode !== null
         ? `terminated by ${child.signalCode}`
         : `exited with ${child.exitCode}`;

@@ -130,12 +130,14 @@ describe("external command environment", () => {
       timeout: 10_000,
       env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
     });
-    spawnMock.mockClear();
+  });
+
+  it("allows extra time to rebuild the saved history cache", async () => {
     succeedWithStdout("[]\n");
-    await new PiMux().history();
-    expect(spawnMock).toHaveBeenLastCalledWith("pi-mux", ["list", "--saved", "--json"], {
+    expect(await new PiMux().history()).toEqual([]);
+    expect(spawnMock).toHaveBeenCalledExactlyOnceWith("pi-mux", ["list", "--saved", "--json"], {
       cwd: undefined,
-      timeout: 10_000,
+      timeout: 180_000,
       env: expect.objectContaining({ TMUX: undefined, TMUX_PANE: undefined }),
     });
   });
