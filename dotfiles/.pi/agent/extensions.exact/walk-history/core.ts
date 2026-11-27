@@ -9,7 +9,7 @@ export interface BackTarget {
   text: string;
 }
 
-function isUserMessageEntry(entry: SessionEntry): entry is SessionMessageEntry & {
+export function isUserMessageEntry(entry: SessionEntry): entry is SessionMessageEntry & {
   message: UserMessage;
 } {
   return entry.type === "message" && entry.message.role === "user";

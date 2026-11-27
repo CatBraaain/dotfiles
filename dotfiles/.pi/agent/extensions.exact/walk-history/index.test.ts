@@ -314,7 +314,7 @@ describe("undo・redo エイリアス", () => {
 });
 
 describe("forward", () => {
-  it("back の後に放棄した末端の entry へ戻り、エディタを変更しない", async () => {
+  it("back の後に放棄した末端の entry へ戻り、エディタを空にする", async () => {
     const capture = captureWalkHistory({
       branchEntries: [
         userEntry("u1", null, "はじめ"),
@@ -327,6 +327,26 @@ describe("forward", () => {
     await capture.runCommand("forward");
 
     assert.deepEqual(capture.navigateTreeCalls.map((call) => call.entryId), ["u2", "a2"]);
+    assert.equal(capture.editorValue(), "");
+  });
+
+  it("連続 back の後の最初の forward は、次に戻る user発言のテキストをエディタに入れる", async () => {
+    const capture = captureWalkHistory({
+      branchEntries: [
+        userEntry("u1", null, "はじめ"),
+        assistantEntry("a1", "u1"),
+        userEntry("u2", "a1", "やり直したい"),
+        assistantEntry("a2", "u2"),
+      ],
+    });
+
+    await capture.runCommand("back");
+    await capture.runCommand("back");
+    assert.equal(capture.editorValue(), "はじめ");
+
+    await capture.runCommand("forward");
+
+    assert.deepEqual(capture.navigateTreeCalls.map((call) => call.entryId), ["u2", "u1", "a1"]);
     assert.equal(capture.editorValue(), "やり直したい");
   });
 
@@ -393,6 +413,7 @@ describe("forward", () => {
     await capture.runCommand("forward");
 
     assert.deepEqual(capture.navigateTreeCalls.map((call) => call.entryId), ["u2", "u1", "a2"]);
+    assert.equal(capture.editorValue(), "");
   });
 
   it("does not notify or navigate after session_start clears forward targets", async () => {
@@ -408,7 +429,7 @@ describe("forward", () => {
     assert.deepEqual(capture.navigateTreeCalls.map((call) => call.entryId), ["u1"]);
   });
 
-  it("戻る先が user発言のときも、エディタの内容を変えない", async () => {
+  it("戻る先が user発言のときは、その発言のテキストをエディタに入れる", async () => {
     const capture = captureWalkHistory({
       branchEntries: [
         userEntry("u1", null, "はじめ"),
@@ -422,7 +443,7 @@ describe("forward", () => {
     await capture.runCommand("forward");
 
     assert.deepEqual(capture.navigateTreeCalls.map((call) => call.entryId), ["u2", "u2"]);
-    assert.equal(capture.editorValue(), "手直しした");
+    assert.equal(capture.editorValue(), "やり直したい");
   });
 
   it("navigateTree がキャンセルされた forward は対象を積み戻し、再実行で同じ対象へ戻せる", async () => {
@@ -435,6 +456,7 @@ describe("forward", () => {
     await capture.runCommand("forward");
     assert.deepEqual(capture.navigateTreeCalls.map((call) => call.entryId), ["u1", "a1"]);
     assert.equal(capture.notifications.length, 0);
+    assert.equal(capture.editorValue(), "はじめ");
 
     capture.setNavigateCancelled(false);
     await capture.runCommand("forward");

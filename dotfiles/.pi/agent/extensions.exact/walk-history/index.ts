@@ -1,11 +1,16 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { findBackTarget } from "./core.ts";
+import { findBackTarget, isUserMessageEntry } from "./core.ts";
 
 export const BACK_SHORTCUT = "ctrl+up";
 export const FORWARD_SHORTCUT = "ctrl+down";
 
+interface ForwardTarget {
+  leafEntryId: string;
+  undoneMessageText: string;
+}
+
 export default function (pi: ExtensionAPI): void {
-  const forwardTargets: string[] = [];
+  const forwardTargets: ForwardTarget[] = [];
   // pi runs concurrent extension commands without queueing them, so rapid
   // keypresses must be serialized here to act one step at a time.
   let pending: Promise<void> = Promise.resolve();
@@ -33,27 +38,29 @@ export default function (pi: ExtensionAPI): void {
       await waitIdle(ctx);
       const result = await ctx.navigateTree(target.entryId, { summarize: false });
       if (result.cancelled) return;
-      if (abandonedLeafId) forwardTargets.push(abandonedLeafId);
+      if (abandonedLeafId) {
+        forwardTargets.push({ leafEntryId: abandonedLeafId, undoneMessageText: target.text });
+      }
       ctx.ui.setEditorText(target.text);
     });
 
   const forward = (ctx: ExtensionCommandContext): Promise<void> =>
     enqueue(async () => {
       while (forwardTargets.length > 0) {
-        const targetId = forwardTargets.pop() as string;
-        if (!ctx.sessionManager.getEntry(targetId)) continue;
-        const editorTextBefore = ctx.ui.getEditorText();
+        const target = forwardTargets.pop() as ForwardTarget;
+        const abandonedLeaf = ctx.sessionManager.getEntry(target.leafEntryId);
+        if (!abandonedLeaf) continue;
         await waitIdle(ctx);
-        const result = await ctx.navigateTree(targetId, { summarize: false });
+        const result = await ctx.navigateTree(target.leafEntryId, { summarize: false });
         if (result.cancelled) {
-          forwardTargets.push(targetId);
+          forwardTargets.push(target);
           return;
         }
-        // navigateTree writes the target user message's text into the editor;
-        // /forward keeps the editor untouched, so restore what was there.
-        if (ctx.ui.getEditorText() !== editorTextBefore) {
-          ctx.ui.setEditorText(editorTextBefore);
-        }
+        const nextTarget = forwardTargets.at(-1);
+        const nextMessageText = isUserMessageEntry(abandonedLeaf)
+          ? target.undoneMessageText
+          : (nextTarget?.undoneMessageText ?? "");
+        ctx.ui.setEditorText(nextMessageText);
         return;
       }
     });
