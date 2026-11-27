@@ -3,7 +3,6 @@ import { isAbsolute } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import { getPackageDir, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import {
-  sanitizeSandboxEnvironment,
   type ExecutorDescriptor,
   type ExtensionToWorkerMessage,
   type ToolName,
@@ -194,10 +193,10 @@ export class WorkerPool {
     const { command, args } = this.launchCommand(entrypoint, sandboxArgs);
     const child = spawn(command, args, {
       cwd: this.cwd,
-      env: sanitizeSandboxEnvironment({
+      env: {
         ...process.env,
         GUARDRAIL_PI_PACKAGE_DIR: getPackageDir(),
-      }),
+      },
       stdio: ["pipe", "pipe", "pipe"],
     });
     const worker: Worker = {

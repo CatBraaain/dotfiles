@@ -6,7 +6,7 @@ pi の全built-in fsツール（read / write / edit / grep / find / ls / bash）
 
 利用者自身のマシンとリポジトリでの利用を前提とする。信頼できないコードの安全な実行を保証するものではない。
 
-この仕様書は、条件ごとの外部から観測できる結果（ツール結果・エラー・確認ダイアログ・進捗・応答時の残留プロセスの有無）を確定し、実現方法は実装に委ねる。実現方法まで固定するのは、§2.2 と §6.1 の bwrap による bind とマスク、§3 の起動時の glob 展開、§6 の `guardrails.yaml` の記法、§7 の公開APIの形（`createGuardrailsAPI`・`execute(request)`・executor descriptor）、「worker」の構成・再利用条件・プロトコル・ファイル配置、Linux の bash 要求ごとの nested user namespace と PID namespace の作成、「bwrap起動」の bwrap 引数、§7.1 の PATH の作り方である。stderr 進捗の受信方法、キャンセル後の待機時間、bwrap 引数の並び順（本文で順序を指定した箇所を除く）などの手段と値は、振る舞いだけを固定し、実装に委ねる。
+この仕様書は、条件ごとの外部から観測できる結果（ツール結果・エラー・確認ダイアログ・進捗・応答時の残留プロセスの有無）を確定し、実現方法は実装に委ねる。実現方法まで固定するのは、§2.2 と §6.1 の bwrap による bind とマスク、§3 の起動時の glob 展開、§6 の `guardrails.yaml` の記法、§7 の公開APIの形（`createGuardrailsAPI`・`execute(request)`・executor descriptor）、「worker」の構成・再利用条件・プロトコル・ファイル配置、Linux の bash 要求ごとの nested user namespace と PID namespace の作成、「bwrap起動」の bwrap 引数である。stderr 進捗の受信方法、キャンセル後の待機時間、bwrap 引数の並び順（本文で順序を指定した箇所を除く）などの手段と値は、振る舞いだけを固定し、実装に委ねる。
 
 ---
 
@@ -435,7 +435,7 @@ sandbox対象プラットフォームでは、worker の起動時に次の構成
 
 ### sandbox対象外プラットフォームの直実行
 
-bwrap は Linux 固有の機能に依存するため、`process.platform` が `linux` 以外の環境（windows・macOS）では bwrap を起動せず、worker（`bun <entrypoint> --worker`）を host の直接 child process として起動する。`buildSandboxArgs` は構築せず、mount 構成（書き込み制限・denyパス・credentials の隠蔽・bash 用デバイス公開）は適用されない。worker の再利用条件は entrypoint と cwd の一致になる。この環境の実行は認可（§2・§4）とコマンド照合のみで守る。child process 環境の sanitize（§7.1 を含む）は両経路で適用する。キャンセルと timeout の契約は bwrap 起動時と同一である。この環境には PID namespace や subreaper に相当する仕組みがないため、SDK の停止対象（プロセスグループ）から `setsid` 等で離脱した子孫はコマンド終了後も残り得る。これは既知の上限であり、OS が subreaper や PID namespace 相当の仕組みを提供したときに解除する。
+bwrap は Linux 固有の機能に依存するため、`process.platform` が `linux` 以外の環境（windows・macOS）では bwrap を起動せず、worker（`bun <entrypoint> --worker`）を host の直接 child process として起動する。`buildSandboxArgs` は構築せず、mount 構成（書き込み制限・denyパス・credentials の隠蔽・bash 用デバイス公開）は適用されない。worker の再利用条件は entrypoint と cwd の一致になる。この環境の実行は認可（§2・§4）とコマンド照合のみで守る。キャンセルと timeout の契約は bwrap 起動時と同一である。この環境には PID namespace や subreaper に相当する仕組みがないため、SDK の停止対象（プロセスグループ）から `setsid` 等で離脱した子孫はコマンド終了後も残り得る。これは既知の上限であり、OS が subreaper や PID namespace 相当の仕組みを提供したときに解除する。
 
 ### 実行中のキャンセルと timeout
 
@@ -452,16 +452,6 @@ worker で実行する要求のキャンセル契約は、呼び出し経路と�
 Linux の bash worker では、コマンドの正常終了・非ゼロ終了・timeout・キャンセルのいずれの場合も、応答を返す時点でそのコマンドから派生したプロセス（`setsid` 等で SDK の停止対象から離脱した子孫、正常終了後に残る常駐プロセスを含む）は残らない。コマンドのプロセスは次の要求に引き継がれない。worker 自体が異常終了した場合は、この保証の対象外である。
 
 キャンセルによる変更は、通常完了・非ゼロ終了のツール結果、stderr進捗、認可・承認状態、隔離構成、executor の既存の入出力契約を維持する。
-
-### 7.1 WSL の child process環境
-
-WSL上で bwrap を起動するとき、sandboxed child process に渡す `PATH` を次の規則で作る:
-
-- WSL は `WSL_INTEROP` または `WSL_DISTRO_NAME` の環境変数、または kernel release の `microsoft` / `wsl` marker で判定する。native Linux の `/mnt` を理由に WSL と判定しない。
-- WSL と判定したときだけ、`/mnt/<単一の英字ドライブ名>`（例: `/mnt/c/Windows/System32`）で始まるPATH要素を除外する。
-- その他の PATH要素（runtime path、rtk の PATH を含む）は保持する。WSL でない環境の PATH は変更しない。
-- 変更対象は worker と単発実行の bwrap child process の環境だけであり、host の shell・WSL・Git Bash の PATH は変更しない。
-- PATH filtering は bare command の解決に適用する。`/mnt/c/.../*.exe` のような絶対パスの実行を禁止せず、既存の `/mnt` ask と役割を分担する。
 
 ---
 

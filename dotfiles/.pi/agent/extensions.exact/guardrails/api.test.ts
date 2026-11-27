@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, delimiter, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import toolsExtension from "../tools/index";
 import { executeGuardedTool } from "./execute.ts";
 import { WorkerPool } from "./worker-pool.ts";
@@ -46,8 +46,6 @@ import {
   resolvePathAction,
   resolvePathActionMatch,
   splitCommandSegments,
-  isWslEnvironment,
-  sanitizeSandboxEnvironment,
 } from "./config.ts";
 import { startStderrTeeReceiver } from "../tools/run-tools.ts";
 import { realBwrapTest, WORKER_ENTRYPOINT } from "./bwrap-test-support.ts";
@@ -1076,7 +1074,7 @@ describe("§3.a パス文字列の解決", () => {
     );
   });
 
-  it("出荷configは/mntを含むコマンドだけをaskにする", () => {
+  it("出荷configは/mnt配下の書き込みと列挙したWindowsツールの変更操作をaskにする", () => {
     const config = parseGuardrailConfig(
       readFileSync(
         sourcePathFromSymlink(
@@ -1091,14 +1089,14 @@ describe("§3.a パス文字列の解決", () => {
 
     assert.equal(resolvePathAction(readSection, "/mnt/c/Users/me/file.txt"), "allow");
     assert.equal(resolvePathAction(writeSection, "/mnt/c/Users/me/file.txt"), "ask");
-    for (const command of ["/mnt/c/Windows/System32/CMD.EXE /c echo ok"]) {
-      assert.equal(resolveCommandAction(commandEntries, command), "ask", command);
-    }
-    assert.equal(
-      resolveCommandAction(commandEntries, "PowerShell.EXE -NoProfile -Command Get-Date"),
-      "allow",
-    );
-    assert.equal(resolveCommandAction(commandEntries, "printf '%s\\n' ok"), "allow");
+    for (const [command, expected] of [
+      ["/mnt/c/Windows/System32/reg.exe add HKCU\\Example /v Value /d Data", "ask"],
+      ["/mnt/c/Windows/System32/reg.exe query HKCU\\Example", "allow"],
+      ["/mnt/c/Windows/System32/CMD.EXE /c echo ok", "allow"],
+      ["PowerShell.EXE -NoProfile -Command Get-Date", "allow"],
+      ["printf '%s\\n' ok", "allow"],
+    ] as const)
+      assert.equal(resolveCommandAction(commandEntries, command), expected, command);
   });
 
   it("展開後は config ディレクトリの guardrails.yaml を既定設定にする", () => {
@@ -6160,45 +6158,6 @@ describe("§7 bash の stderr 逐次表示", () => {
         .filter((line) => line !== "")
         .sort();
     assert.deepEqual(messageLines(fallbackText), messageLines(plainText));
-  });
-});
-
-describe("§7 WSL の子プロセス PATH", () => {
-  it("WSL の Windows PATH だけを除外し、他の PATH と入力環境を保つ", () => {
-    const originalPath = [
-      "/nix/profile/bin",
-      "/mnt/c/Windows/System32",
-      "/home/user/bin",
-      "/home/user/rtk/bin",
-      "/mnt/d/Program Files/tool",
-      "/mnt/data/bin",
-    ].join(delimiter);
-    const environment = { PATH: originalPath, WSL_INTEROP: "/run/interop" };
-
-    const sanitized = sanitizeSandboxEnvironment(environment, "6.8.0-generic");
-
-    assert.equal(
-      sanitized.PATH,
-      ["/nix/profile/bin", "/home/user/bin", "/home/user/rtk/bin", "/mnt/data/bin"].join(delimiter),
-    );
-    assert.equal(environment.PATH, originalPath);
-  });
-
-  it("WSL でない Linux の /mnt PATH は除外しない", () => {
-    const environment = { PATH: ["/mnt/c/tools", "/mnt/data/bin", "/usr/bin"].join(delimiter) };
-
-    assert.equal(isWslEnvironment(environment, "6.8.0-generic"), false);
-    assert.equal(sanitizeSandboxEnvironment(environment, "6.8.0-generic").PATH, environment.PATH);
-  });
-
-  it("WSL kernel marker でも Windows PATH を除外する", () => {
-    const environment = { PATH: ["/mnt/c/tools", "/usr/bin"].join(delimiter) };
-
-    assert.equal(isWslEnvironment(environment, "5.15.153.1-microsoft-standard-WSL2"), true);
-    assert.equal(
-      sanitizeSandboxEnvironment(environment, "5.15.153.1-microsoft-standard-WSL2").PATH,
-      "/usr/bin",
-    );
   });
 });
 

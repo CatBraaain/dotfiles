@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { getPackageDir, type AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { type ExecutorDescriptor, sanitizeSandboxEnvironment } from "./config.ts";
+import { type ExecutorDescriptor } from "./config.ts";
 import type { SandboxMode } from "./sandbox.ts";
 import type { WorkerPool } from "./worker-pool.ts";
 
@@ -216,10 +216,10 @@ export class SandboxRunner {
       options.signal?.throwIfAborted();
       const child = spawn("bwrap", [...options.sandbox.args, command, ...commandArgs], {
         cwd: this.cwd,
-        env: sanitizeSandboxEnvironment({
+        env: {
           ...process.env,
           GUARDRAIL_PI_PACKAGE_DIR: getPackageDir(),
-        }),
+        },
         stdio: [
           options.input === undefined ? "ignore" : "pipe",
           "pipe",

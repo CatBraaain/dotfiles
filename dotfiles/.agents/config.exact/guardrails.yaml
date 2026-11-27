@@ -148,29 +148,47 @@ commands:
   - "shutdown|reboot|poweroff|halt":
       - deny: []
 
-  - "(?i:/mnt(?:/.*)?)":
+  - '(?i:(?:.*/)?reg\.exe)':
       - ask: []
-  - '(?i:/mnt/c/Windows/System32/(systeminfo|whoami|hostname|tasklist|netstat|nslookup|ping|tracert|nvidia-smi|where)\.exe)':
-      - allow: []
-  - '(?i:/mnt/c/Windows/System32/ipconfig\.exe)':
-      - allow: []
-      - ask: ["(?i:/release6?|/renew6?|/flushdns|/registerdns|/setclassid6?)"]
-  - '(?i:/mnt/c/Windows/System32/reg\.exe)':
       - allow: ["(?i:query|compare)"]
-  - '(?i:/mnt/c/Windows/System32/sc\.exe)':
-      - allow: ["(?i:query|queryex|qc|qdescription|qfailure|qsidtype)"]
-  - '(?i:/mnt/c/Windows/System32/schtasks\.exe)':
+  - '(?i:(?:.*/)?sc\.exe)':
+      - ask: []
+      - allow: ["(?i:q.*|sdshow)"]
+  - '(?i:(?:.*/)?schtasks\.exe)':
+      - ask: []
       - allow: ["(?i:/query)"]
-  - '(?i:/mnt/c/Windows/System32/wevtutil\.exe)':
-      - allow: ["(?i:qe|el)"]
-  - '(?i:/mnt/c/Windows/System32/netsh\.exe)':
-      - allow: ["(?i:show)"]
-  - '(?i:/mnt/c/Windows/System32/wsl\.exe)':
+  - '(?i:(?:.*/)?netsh\.exe)':
+      - ask: []
+      - allow: ['(?i:show|dump|/\?)']
+      - ask:
+          [
+            "(?i:set|add|delete|reset|export|import|install|uninstall|rename|enable|disable|restore|start|stop|attach|commit|init)",
+          ]
+  - '(?i:(?:.*/)?wevtutil\.exe)':
+      - ask: []
+      - allow: ["(?i:qe|el|gl)"]
+  - '(?i:(?:.*/)?net\.exe)':
+      - ask: []
+      - allow: ['(?i:view|session|statistics|help|/\?)']
+  - '(?i:(?:.*/)?bcdedit\.exe)':
+      - ask: []
+      - allow: ['(?i:/enum.*|/\?.*)']
+  - '(?i:(?:.*/)?auditpol\.exe)':
+      - ask: []
+      - allow: ["(?i:/get.*|/list.*)"]
+  - '(?i:(?:.*/)?(?:diskpart|secedit|shutdown|mmc|control|at)\.exe)':
+      - ask: []
+  - '(?i:(?:.*/)?format\.com)':
+      - ask: []
+  - '(?i:(?:.*/)?wsl\.exe)':
+      - ask: []
       - allow: ["--version|--status|-l|--list"]
       - ask:
           [
-            "--exec|-e|--shell-type|--cd|--distribution.*|-d|--distribution-id|-u|--user|--system|--debug-shell|--install|--enable-wsl1|--fixed-vhd|--from-file|--legacy|--unregister|--import|--export|--set-default.*|--set-version|--manage|--mount|--unmount|--update|--terminate|--shutdown",
+            "--exec|-e|--shell-type|--cd|--distribution.*|-d|--distribution-id|-u|--user|--system|--debug-shell|--install|--enable-wsl1|--fixed-vhd|--from-file|--legacy|--unregister|--import|--export|--set-default.*|--set-version|--manage|--mount|--unmount|--update|--terminate|-t|--shutdown",
           ]
+  - '(?i:(?:.*/)?ipconfig\.exe)':
+      - ask: ["(?i:/release6?|/renew6?|/flushdns|/registerdns|/setclassid6?)"]
 
   - pi:
       - ask: []
