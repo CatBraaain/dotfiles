@@ -617,16 +617,22 @@ test.describe("First assistant response through a loopback fixture provider", ()
       let session!: NonNullable<Awaited<ReturnType<PiMux["current"]>>>;
       let runtime!: ReturnType<VSCodeFixture["piProcesses"]>[number];
       let displayPid = 0;
-      const existingSources = new Map<string, string>();
+      const existingEntries = new Map<string, Record<string, unknown>[]>();
 
-      function savedEntries(): Record<string, unknown>[] {
-        if (!existsSync(session.file)) return [];
-        const source = readFileSync(session.file, "utf8");
+      function savedEntries(file: string): Record<string, unknown>[] {
+        if (!existsSync(file)) return [];
+        const source = readFileSync(file, "utf8");
         return source
           .slice(0, source.lastIndexOf("\n"))
           .split("\n")
           .filter(Boolean)
           .map((line) => JSON.parse(line) as Record<string, unknown>);
+      }
+
+      function entriesWithoutViewRecords(file: string): Record<string, unknown>[] {
+        return savedEntries(file).filter(
+          (entry) => !(entry.type === "custom" && entry.customType === "pi-mux-viewed"),
+        );
       }
 
       await test.step("Open a new Pi from its workspace and record its unsaved session ID", async () => {
@@ -663,7 +669,7 @@ test.describe("First assistant response through a loopback fixture provider", ()
         for (const fixture of Object.values(host.sessions)) {
           const source = readFileSync(fixture.session, "utf8");
           expect(source.startsWith(fixture.original)).toBe(true);
-          existingSources.set(fixture.session, source);
+          existingEntries.set(fixture.session, entriesWithoutViewRecords(fixture.session));
         }
       });
 
@@ -674,7 +680,7 @@ test.describe("First assistant response through a loopback fixture provider", ()
         await input.pressSequentially(FIXTURE_PROMPT, { delay: 120 });
         await input.press("Enter");
         await expect
-          .poll(() => savedEntries())
+          .poll(() => savedEntries(session.file))
           .toEqual(
             expect.arrayContaining([
               expect.objectContaining({ type: "session", id: session.id, cwd: folder }),
@@ -732,7 +738,7 @@ test.describe("First assistant response through a loopback fixture provider", ()
       });
 
       await test.step("Switch away and reselect the saved conversation without replacing Pi or its Terminal", async () => {
-        const original = readFileSync(session.file, "utf8");
+        const original = entriesWithoutViewRecords(session.file);
         await host.selectSession("B");
         await expect.poll(async () => (await mux.current(displayPid))?.id).toBe(host.sessions.B.id);
         const frame = await host.sessionFrame();
@@ -765,9 +771,9 @@ test.describe("First assistant response through a loopback fixture provider", ()
         await expect(
           frame.locator(`.session-row.selected [data-session="${session.id}"]`),
         ).toBeVisible();
-        expect(readFileSync(session.file, "utf8")).toBe(original);
-        for (const [file, before] of existingSources)
-          expect(readFileSync(file, "utf8")).toBe(before);
+        expect(entriesWithoutViewRecords(session.file)).toEqual(original);
+        for (const [file, before] of existingEntries)
+          expect(entriesWithoutViewRecords(file)).toEqual(before);
         for (const [cwd, before] of Object.entries(host.gitBefore))
           expect(host.gitState(cwd)).toBe(before);
         await testInfo.attach(
@@ -780,7 +786,7 @@ test.describe("First assistant response through a loopback fixture provider", ()
                 session,
                 runtime,
                 displayPid,
-                entries: savedEntries(),
+                entries: savedEntries(session.file),
                 workspaces: host.listWorkspaces(),
                 snapshot: host.snapshot(),
               },
