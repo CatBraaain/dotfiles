@@ -45,8 +45,6 @@ repos:
   mattpocock/skills:
     destination: .
     entries:
-      # - skills/*/grill-me
-      - skills/*/grilling
       # - skills/*/prototype
       - skills/*/diagnosing-bugs
       # - skills/*/research
@@ -56,18 +54,6 @@ repos:
       skills/engineering/diagnosing-bugs/SKILL.md:
         frontmatter:
           description: 難易度の高いバグ・性能劣化の診断ループ。診断・デバッグを求める依頼、壊れた・エラーで失敗する・遅い等の症状が報告されているタスクで使う。
-      skills/productivity/grilling/SKILL.md:
-        frontmatter:
-          description: 前提と選択を明確にする集中的な質問で、計画・判断・アイデアを問い直す。自分の判断についての厳しい問い詰め・集中的な質問・直接の異論提示を求める依頼で使う。一般的な思考・分析・意思決定の支援には thinking-partner を使う。
-        sections:
-          Local question rounds: |
-            上記の、現時点で回答可能な質問だけを出す進め方と質問テンプレートではなく、この手順を使う。
-
-            独立した質問と、予測できる依存質問を同じラウンドに含める。依存質問では、候補の準備のためだけに親質問の推奨回答を仮定し、その候補を合意済みの仕様として扱わない。予測できる依存関係は可能な限り末端まで展開する。
-
-            質問は `## 質問` の下に置き、メッセージごとに1から番号を振る。質問文自体を yes/no で答えられる形にし、推奨する選択を質問文に含める。各質問の下に `(y) はい` と、`(a)` から始まる代替案をそれぞれ別の行で示す。質問ブロックをコードフェンスで囲まない。依存質問では、番号の直後に `[1=y]` などの条件を置く。
-
-            回答を受け取ったら、親の条件が成立した候補を確定する。条件が成立しない候補は、その子孫と回答も含めて破棄する。新たに必要になった質問は次のラウンドで尋ねる。未回答の質問や、親の回答待ちの質問がなくなるまで続ける。
 
   # github/awesome-copilot:
   #   destination: .
@@ -86,7 +72,7 @@ repos:
     edit_markdown:
       skills/thinking-partner/SKILL.md:
         frontmatter:
-          description: 前提の検討とメンタルモデルの適用で、考えの整理・問題解決・意思決定を支援する。一緒に考える、盲点を探す、アイデアを検証する、選択肢を比較する、SWOT や第一原理などのモデルを適用する依頼で使う。自分の判断について集中的な質問を求める場合は grilling を使う。
+          description: 前提の検討とメンタルモデルの適用で、考えの整理・問題解決・意思決定を支援する。一緒に考える、盲点を探す、アイデアを検証する、選択肢を比較する、SWOT や第一原理などのモデルを適用する依頼で使う。
 
   leonxlnx/taste-skill:
     destination: .
