@@ -682,7 +682,7 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(await page.locator(".session-delay-dot").count()).toBe(1);
     expect(
       await page.locator(`[data-session="${atlasCurrentId}"]`).getAttribute("title"),
-    ).toContain("State update delayed");
+    ).toContain("\nRunning\nState update delayed");
 
     // All mode: the archived row shows the dot without a phase icon.
     await page.click(projectModeSelector);
@@ -693,6 +693,9 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(
       await page.locator('.session-row.archived .session-status[data-delayed="true"]').count(),
     ).toBe(1);
+    expect(
+      await page.locator(`[data-session="${atlasArchivedId}"]`).getAttribute("title"),
+    ).toContain("\nState update delayed");
     await page.close();
   });
 
@@ -2071,6 +2074,18 @@ describe.skipIf(!staticBuildFresh)("storybook static catalog smoke", () => {
     expect(await page.locator(".session-row.archived").count()).toBe(4);
     await page.locator(worktreeModeSelector).press("Space");
     expect(await page.locator(".session-row.archived").count()).toBe(5);
+    const archivedHints = await page
+      .locator(".session-row.archived .session-button")
+      .evaluateAll((buttons) =>
+        buttons.map((button) => ({
+          hint: button.getAttribute("title"),
+          name: button.querySelector(".session-name")?.textContent,
+          id: button.getAttribute("data-session"),
+        })),
+      );
+    for (const { hint, name, id } of archivedHints) {
+      expect(hint).toBe(`${name}\n${id}`);
+    }
     const emptyMode = page.locator('[data-mode-toggle="~/projects/agenda"]');
     await emptyMode.press("Enter");
     expect(await emptyMode.getAttribute("data-mode")).toBe("all");

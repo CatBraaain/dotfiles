@@ -258,7 +258,7 @@ function sessionDescriptor(
   const title = [
     session.displayName,
     session.sessionId,
-    phaseLabel(session.state),
+    phaseLabel(session.isArchived ? undefined : session.state),
     session.publishDelayed ? PUBLISH_DELAYED_HINT : undefined,
     session.reloadPending ? "Reload pending" : undefined,
     session.state === "waiting-user" && session.hasUnread && !session.isArchived

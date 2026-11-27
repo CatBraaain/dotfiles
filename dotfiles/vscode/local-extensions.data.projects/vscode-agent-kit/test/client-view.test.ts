@@ -592,6 +592,21 @@ describe("sessionListView", () => {
     );
   });
 
+  it("keeps delay and reload hints on archived rows without the phase or unread hint", () => {
+    const session = {
+      ...atlasArchived,
+      state: "waiting-user" as const,
+      hasUnread: true,
+      publishDelayed: true,
+      reloadPending: true,
+    };
+    const elements = elementsIn(viewFor("all", [{ ...groups[0], sessions: [session] }]));
+
+    expect(byClass(elements, "session-button")[0].attrs?.title).toBe(
+      `${session.displayName}\n${session.sessionId}\nState update delayed\nReload pending`,
+    );
+  });
+
   it("omits the publish-delay mark for rows without a fresh delay", () => {
     const elements = elementsIn(
       viewFor("all", [
