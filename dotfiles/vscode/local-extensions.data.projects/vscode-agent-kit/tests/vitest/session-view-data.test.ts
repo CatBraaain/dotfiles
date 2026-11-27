@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { SessionSummary } from "../src/session-store";
-import { sessionViewGroups } from "../src/webview/session-view-data";
+import type { SessionSummary } from "../../src/session-store";
+import { sessionViewGroups } from "../../src/webview/session-view-data";
 
 function session(
   sessionId: string,

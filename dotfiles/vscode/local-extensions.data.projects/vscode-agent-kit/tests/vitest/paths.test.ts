@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveAgentDir, resolveConfiguredSessionRoot, resolveSessionDir } from "../src/paths";
+import { resolveAgentDir, resolveConfiguredSessionRoot, resolveSessionDir } from "../../src/paths";
 import { cleanup, tempDir } from "./fixtures";
 
 describe("directory resolution", () => {

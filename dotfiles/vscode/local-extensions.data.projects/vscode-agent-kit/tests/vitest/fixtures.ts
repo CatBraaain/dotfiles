@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PiMuxHistoryEntry } from "../src/pi-mux";
+import type { PiMuxHistoryEntry } from "../../src/pi-mux";
 
 export function combinedHistoryOutput(cwd: string, entries: readonly PiMuxHistoryEntry[]): string {
   const sessions = entries.map(({ source, cwd, title, ...file }) => ({

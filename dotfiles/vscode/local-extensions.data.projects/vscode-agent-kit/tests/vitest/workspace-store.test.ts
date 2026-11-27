@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import { join } from "node:path";
-import { WorkspaceStore } from "../src/workspace-store";
+import { WorkspaceStore } from "../../src/workspace-store";
 import { cleanup, tempDir } from "./fixtures";
 
 vi.mock("node:fs/promises", { spy: true });

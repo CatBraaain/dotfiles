@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { homedir } from "node:os";
 import type * as vscode from "vscode";
 import { TabInputTerminal } from "vscode";
-import { TerminalRegistry } from "../src/terminal-registry";
-import { editorTerminals } from "../src/terminals";
-import type { PiMuxCurrentSession, PiMuxWorkspace, PiSession } from "../src/pi-mux";
+import { TerminalRegistry } from "../../src/terminal-registry";
+import { editorTerminals } from "../../src/terminals";
+import type { PiMuxCurrentSession, PiMuxWorkspace, PiSession } from "../../src/pi-mux";
 import { fakeRuntimes } from "./runtime-fixtures";
 
 const windowMock = vi.hoisted(() => ({

@@ -2,9 +2,9 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { ExtensionMessage, WebviewState } from "../src/webview/protocol";
-import { webviewAppMarkup } from "../src/webview/webview-html";
-import { webviewStyles } from "../src/webview/webview-styles";
+import type { ExtensionMessage, WebviewState } from "../../src/webview/protocol";
+import { webviewAppMarkup } from "../../src/webview/webview-html";
+import { webviewStyles } from "../../src/webview/webview-styles";
 
 const sessionId = "session-1";
 const state: WebviewState = {

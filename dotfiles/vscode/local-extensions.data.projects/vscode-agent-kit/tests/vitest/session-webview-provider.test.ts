@@ -4,21 +4,21 @@ import { homedir } from "node:os";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { webviewAppMarkup } from "../src/webview/webview-html";
-import { SessionLauncher } from "../src/launcher";
-import { WorkspaceStore } from "../src/workspace-store";
-import { PiMux, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../src/pi-mux";
-import { TerminalRegistry } from "../src/terminal-registry";
-import { editorTerminals } from "../src/terminals";
+import { webviewAppMarkup } from "../../src/webview/webview-html";
+import { SessionLauncher } from "../../src/launcher";
+import { WorkspaceStore } from "../../src/workspace-store";
+import { PiMux, type PiMuxHistoryEntry, type PiMuxWorkspace } from "../../src/pi-mux";
+import { TerminalRegistry } from "../../src/terminal-registry";
+import { editorTerminals } from "../../src/terminals";
 import { fakeRuntimes } from "./runtime-fixtures";
 import {
   LIST_REFRESH_INTERVAL_MS,
   SessionWebviewProvider,
-} from "../src/webview/session-webview-provider";
-import * as sessionStore from "../src/session-store";
-import * as workDirectory from "../src/work-directory";
-import type { SessionPhase, WebviewState } from "../src/webview/protocol";
-import { sessionListView, type ElementDescriptor } from "../src/webview/client";
+} from "../../src/webview/session-webview-provider";
+import * as sessionStore from "../../src/session-store";
+import * as workDirectory from "../../src/work-directory";
+import type { SessionPhase, WebviewState } from "../../src/webview/protocol";
+import { sessionListView, type ElementDescriptor } from "../../src/webview/client";
 import {
   cleanup,
   combinedHistoryOutput,

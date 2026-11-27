@@ -5,7 +5,7 @@ import {
   expandWorkDirectoryInput,
   requireWorkDirectory,
   sameWorkDirectory,
-} from "../src/work-directory";
+} from "../../src/work-directory";
 import { cleanup, tempDir } from "./fixtures";
 
 let root: string;

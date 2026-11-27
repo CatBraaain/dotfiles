@@ -8,7 +8,7 @@ import { readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { ClientState } from "../src/webview/client";
+import type { ClientState } from "../../src/webview/client";
 
 const staticDir = join(process.cwd(), "storybook-static");
 const indexFile = join(staticDir, "index.json");

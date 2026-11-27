@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import * as stories from "../stories/sessions.stories";
+import * as stories from "../../stories/sessions.stories";
 
 /** Spec table row (静的プレビュー「データ」) mapped to the story export names. */
 const storyParameters = {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseWebviewRequest } from "../src/webview/protocol";
+import { parseWebviewRequest } from "../../src/webview/protocol";
 
 const sessionId = "00000000-0000-4000-8000-000000000001";
 const otherSessionId = "00000000-0000-4000-8000-000000000002";

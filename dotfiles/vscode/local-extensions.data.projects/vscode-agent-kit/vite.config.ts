@@ -38,6 +38,6 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["test/**/*.test.{ts,mts}"],
+    include: ["tests/vitest/**/*.test.{ts,mts}"],
   },
 });

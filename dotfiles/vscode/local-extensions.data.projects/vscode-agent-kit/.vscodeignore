@@ -1,7 +1,6 @@
 # Keep the VSIX to runtime files only: package.json, dist/, dist-webview/, media/.
 .vscode/**
 src/**
-test/**
 tests/**
 stories/**
 .storybook/**

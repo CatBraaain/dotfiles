@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { webviewHtml } from "../src/webview/webview-html";
+import { webviewHtml } from "../../src/webview/webview-html";
 
 describe("webviewHtml", () => {
   it("binds the given nonce to the CSP, style, and module script", () => {

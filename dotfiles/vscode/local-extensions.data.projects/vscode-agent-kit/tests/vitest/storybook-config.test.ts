@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultViewport, sidebarViewports } from "../.storybook/preview";
+import { defaultViewport, sidebarViewports } from "../../.storybook/preview";
 
 describe("storybook catalog configuration", () => {
   it("exposes the narrow and wide sidebar viewports from the spec", () => {

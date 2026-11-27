@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { chmodSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { sessionFileExists } from "../src/session-store";
+import { sessionFileExists } from "../../src/session-store";
 import { cleanup, tempDir } from "./fixtures";
 
 let root: string;

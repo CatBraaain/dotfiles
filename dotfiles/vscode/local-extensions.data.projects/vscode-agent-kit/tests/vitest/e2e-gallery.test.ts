@@ -14,10 +14,10 @@ import { runInNewContext } from "node:vm";
 import { chromium } from "playwright";
 import type { Browser, Page } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { parseGalleryCases, serializeGalleryRun } from "../tests/support/e2e-gallery";
-import type { GalleryRun, GalleryTest } from "../tests/support/e2e-gallery";
+import { parseGalleryCases, serializeGalleryRun } from "../support/e2e-gallery";
+import type { GalleryRun, GalleryTest } from "../support/e2e-gallery";
 
-const root = resolve(import.meta.dirname, "..");
+const root = resolve(import.meta.dirname, "../..");
 const scratchRoot = "/tmp/work/vscode-agent-kit/unify-e2e-gallery";
 const specSource = readFileSync(join(root, "SPEC.md"), "utf8");
 const viewerSource = readFileSync(join(root, "e2e-gallery.html"), "utf8");

@@ -3,9 +3,9 @@ import { homedir } from "node:os";
 import type * as vscode from "vscode";
 import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { SessionLauncher } from "../src/launcher";
-import { TerminalRegistry } from "../src/terminal-registry";
-import { editorTerminals } from "../src/terminals";
+import { SessionLauncher } from "../../src/launcher";
+import { TerminalRegistry } from "../../src/terminal-registry";
+import { editorTerminals } from "../../src/terminals";
 import { fakeRuntimes } from "./runtime-fixtures";
 import { cleanup, tempDir } from "./fixtures";
 

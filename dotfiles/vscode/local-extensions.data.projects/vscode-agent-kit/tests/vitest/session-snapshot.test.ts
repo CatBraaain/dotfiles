@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { listSessionSnapshot } from "../src/session-store";
-import { groupSessions } from "../src/grouping";
-import { type PiMuxHistoryEntry, type PiMuxSession, type PiMuxWorkspace } from "../src/pi-mux";
+import { listSessionSnapshot } from "../../src/session-store";
+import { groupSessions } from "../../src/grouping";
+import { type PiMuxHistoryEntry, type PiMuxSession, type PiMuxWorkspace } from "../../src/pi-mux";
 
 const ROOT = "/project";
 

@@ -8,7 +8,7 @@ import type {
   PiMuxWorkspace,
   PiRuntime,
   PiSession,
-} from "../src/pi-mux";
+} from "../../src/pi-mux";
 
 /** CLI-shaped runtime fixture: one tmux client whose attachment the mocks move
  * between sessions through `current` and `switch`, mirroring pi-mux behavior. */

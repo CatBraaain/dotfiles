@@ -7,9 +7,9 @@ import {
   FolderSyncEngine,
   UNTITLED_TITLE_TEMPLATE,
   WORKTREE_DETECT_INTERVAL_MS,
-} from "../src/folder-sync";
-import type { UriLike, VscodeLike } from "../src/folder-sync";
-import type { WorktreeEntry } from "../src/git-worktrees";
+} from "../../src/folder-sync";
+import type { UriLike, VscodeLike } from "../../src/folder-sync";
+import type { WorktreeEntry } from "../../src/git-worktrees";
 import {
   createFakeGit,
   FakeVscode,

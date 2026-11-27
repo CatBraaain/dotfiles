@@ -5,7 +5,7 @@ import {
   parseWorktreePorcelain,
   resolveMainRepository,
   worktreeFolderName,
-} from "../src/git-worktrees";
+} from "../../src/git-worktrees";
 import { cleanup, tempDir } from "./fixtures";
 import { wt } from "./folder-sync-fixtures";
 

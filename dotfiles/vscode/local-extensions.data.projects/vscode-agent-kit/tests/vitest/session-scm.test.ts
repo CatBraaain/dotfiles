@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { setImmediate } from "node:timers/promises";
-import { SessionScmSelection } from "../src/session-scm";
-import type { ExecFile } from "../src/git-worktrees";
+import { SessionScmSelection } from "../../src/session-scm";
+import type { ExecFile } from "../../src/git-worktrees";
 
 const MAIN = "/repo";
 const LINKED = "/linked";

@@ -5,9 +5,9 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { ExtensionMessage, WebviewSession, WebviewState } from "../src/webview/protocol";
-import { webviewAppMarkup } from "../src/webview/webview-html";
-import { webviewStyles } from "../src/webview/webview-styles";
+import type { ExtensionMessage, WebviewSession, WebviewState } from "../../src/webview/protocol";
+import { webviewAppMarkup } from "../../src/webview/webview-html";
+import { webviewStyles } from "../../src/webview/webview-styles";
 
 type ChangedField = "displayName" | "updatedAtMs" | "state" | "hasUnread" | "reloadPending";
 type RowLocation = "onscreen" | "offscreen" | "excluded" | "collapsed";

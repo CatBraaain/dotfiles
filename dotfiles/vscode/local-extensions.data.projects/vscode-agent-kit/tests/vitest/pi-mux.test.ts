@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { PiMux, type PiMuxHistoryEntry } from "../src/pi-mux";
+import { PiMux, type PiMuxHistoryEntry } from "../../src/pi-mux";
 import { combinedHistoryOutput } from "./fixtures";
 
 const liveSession = { id: "A", file: "/saved/A.jsonl", state: "running", title: "Title" };
